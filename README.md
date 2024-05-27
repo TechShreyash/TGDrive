@@ -34,7 +34,10 @@ Feel free to test out the features with the provided login credentials.
 
 ## Todo List
 
-- [ ] Add search feature for files/folders.
+1. [ ] Add search feature for files/folders
+2. [ ] Video Player And Image Viewer Support On Website
+3. [ ] Remote url upload support
+4. [ ] Folder/File Sorting according to name/date_uploaded
 
 ## Deploying Your Own
 
