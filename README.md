@@ -5,6 +5,8 @@
 
 Welcome to the Google Drive Clone with Telegram Storage! This project is a web application that replicates Google Drive's functionalities using Telegram as its storage backend. Users can manage folders and files, perform actions like uploading, renaming, and deleting, utilize trash/bin support, enable permanent deletion, and share public links. The application offers admin login and automatically backs up the database to Telegram.
 
+<img src="https://stats.techzbots.co/api/views_badge?page=https%3A%2F%2Fgithub.com%2FTechShreyash%2FTGDrive&color1=394066&color2=fd3201&label=Total%20Repo%20Views&counter_type=1" alt="Total Repo Views">
+
 ## Features
 
 - **File Management:** Upload, rename, and delete files with trash/bin functionality and permanent deletion support.
