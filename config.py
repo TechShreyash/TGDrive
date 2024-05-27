@@ -16,7 +16,7 @@ BOT_TOKENS = ["bot_token"]
 # You can add multiple bot tokens like this: BOT_TOKENS = ["bot_token1", "bot_token2", ...]
 
 # Maximum file size (in bytes) allowed for uploading to Telegram (2GB)
-MAX_FILE_SIZE = 2 * 1024 * 1024 * 1024  # 2GB
+MAX_FILE_SIZE = 1.98 * 1024 * 1024 * 1024  # 2GB
 
 # Chat ID of the Telegram storage channel where files will be stored
 STORAGE_CHANNEL = -1001234567890  # Your storage channel's chat ID
