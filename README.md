@@ -21,6 +21,19 @@ Welcome to the Google Drive Clone with Telegram Storage! This project is a web a
 - **Database:** Data stored locally as a class object, saved to a file using the pickle module.
 - **Storage:** Telegram
 
+## Demo
+
+Explore the live demo of TGDrive:
+
+- **Website:** http://5.161.68.103
+- **Password:** admin
+
+Feel free to test out the features with the provided login credentials.
+
+## Todo List
+
+- [ ] Add search feature for files/folders.
+
 ## Deploying Your Own
 
 1. **Clone the repository:**
