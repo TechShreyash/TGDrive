@@ -53,13 +53,13 @@ Create a `.env` file in the root directory and add the following environment var
 
 #### Required Variables
 
-| Variable Name         | Type    | Example                   | Description                                                                    |
-| --------------------- | ------- | ------------------------- | ------------------------------------------------------------------------------ |
-| `API_ID`              | integer | 123456                    | Your Telegram API ID                                                           |
-| `API_HASH`            | string  | dagsjdhgjfsahgjfh         | Your Telegram API Hash                                                         |
-| `BOT_TOKENS`          | string  | 21413535:gkdshajfhjfakhjf | List of Telegram bot tokens used for file upload/download operations, separated by commas. |
-| `STORAGE_CHANNEL`     | integer | -100123456789             | Chat ID of the Telegram storage channel where files will be stored             |
-| `DATABASE_BACKUP_MSG_ID` | integer | 123                       | Message ID of a file in the storage channel used for storing database backups |
+| Variable Name            | Type    | Example                   | Description                                                                                |
+| ------------------------ | ------- | ------------------------- | ------------------------------------------------------------------------------------------ |
+| `API_ID`                 | integer | 123456                    | Your Telegram API ID                                                                       |
+| `API_HASH`               | string  | dagsjdhgjfsahgjfh         | Your Telegram API Hash                                                                     |
+| `BOT_TOKENS`             | string  | 21413535:gkdshajfhjfakhjf | List of Telegram bot tokens used for file upload/download operations, separated by commas. |
+| `STORAGE_CHANNEL`        | integer | -100123456789             | Chat ID of the Telegram storage channel where files will be stored                         |
+| `DATABASE_BACKUP_MSG_ID` | integer | 123                       | Message ID of a file in the storage channel used for storing database backups              |
 
 > Note: To use multiple bot tokens for file upload/download operations, add multiple bot tokens separated by commas in the `BOT_TOKENS` variable. Example: `bot_token1,bot_token2,bot_token3,...`
 
@@ -69,13 +69,13 @@ Create a `.env` file in the root directory and add the following environment var
 
 #### Optional Variables
 
-| Variable Name        | Type                 | Default | Description                                                                    |
-| -------------------- | -------------------- | ------- | ------------------------------------------------------------------------------ |
-| `ADMIN_PASSWORD`     | string               | admin   | Password used to access the website's admin panel                              |
-| `SLEEP_THRESHOLD`    | integer (in seconds) | 60      | Time delay in seconds before retrying after a Telegram API floodwait error     |
+| Variable Name          | Type                 | Default | Description                                                                                       |
+| ---------------------- | -------------------- | ------- | ------------------------------------------------------------------------------------------------- |
+| `ADMIN_PASSWORD`       | string               | admin   | Password used to access the website's admin panel                                                 |
+| `SLEEP_THRESHOLD`      | integer (in seconds) | 60      | Time delay in seconds before retrying after a Telegram API floodwait error                        |
 | `DATABASE_BACKUP_TIME` | integer (in seconds) | 60      | Database backup interval in seconds. Backups will be sent to the storage channel at this interval |
-| `USE_SESSION_FILE`   | bool (True/False)    | True    | Choose whether to use `.session` files for session persistence or in-memory sessions |
-| `MAX_FILE_SIZE`      | float                | 1.98    | Maximum file size (in GBs) allowed for uploading to Telegram                   |
+| `USE_SESSION_FILE`     | bool (True/False)    | True    | Choose whether to use `.session` files for session persistence or in-memory sessions              |
+| `MAX_FILE_SIZE`        | float                | 1.98    | Maximum file size (in GBs) allowed for uploading to Telegram                                      |
 
 ### 3. Install/Update Dependencies:
 
