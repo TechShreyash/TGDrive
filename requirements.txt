@@ -2,3 +2,4 @@ pyrogram
 tgcrypto
 uvicorn
 fastapi
+python-dotenv
