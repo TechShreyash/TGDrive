@@ -24,7 +24,7 @@ Welcome to TGDrive! This project is a web application that replicates Google Dri
 
 Explore the live demo of TGDrive:
 
-- **Website:** [TGDrive Demo](http://5.161.68.103)
+- **Website:** [TGDrive Demo](https://tgdrive.techzbots.co)
 - **Password:** admin
 
 Feel free to test out the features with the provided login credentials.
