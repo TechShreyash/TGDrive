@@ -24,7 +24,7 @@ async def initialize_clients():
                 api_hash=config.API_HASH,
                 bot_token=token,
                 sleep_threshold=config.SLEEP_THRESHOLD,
-                workdir="cache",
+                workdir="./cache",
                 no_updates=True,
                 in_memory=not config.USE_SESSION_FILE,
             ).start()

@@ -49,36 +49,7 @@ class File:
         self.path = path[:-1] if path[-1] == "/" else path
 
 
-drive_cache = "cache/drive.data"
-
-
-# Function to backup the drive data to telegram
-async def backup_drive_data():
-    global DRIVE_DATA
-    logger.info("Starting backup drive data task")
-
-    while True:
-        await asyncio.sleep(DATABASE_BACKUP_TIME)  # Backup the data every 24 hours
-
-        if DRIVE_DATA.isUpdated == False:
-            continue
-
-        logger.info("Backing up drive data to telegram")
-        client = get_client()
-        time_text = f"📅 **Last Updated :** {get_current_utc_time()} (UTC +00:00)"
-        msg = await client.edit_message_media(
-            STORAGE_CHANNEL,
-            DATABASE_BACKUP_MSG_ID,
-            media=InputMediaDocument(
-                drive_cache,
-                caption=f"🔐 **TG Drive Data Backup File**\n\nDo not edit or delete this message. This is a backup file for the tg drive data.\n\n{time_text}",
-            ),
-            file_name="drive.data",
-        )
-        try:
-            await msg.pin()
-        except:
-            pass
+drive_cache = "./cache/drive.data"
 
 
 class NewDriveData:
@@ -211,6 +182,35 @@ class NewDriveData:
         self.save()
 
 
+# Function to backup the drive data to telegram
+async def backup_drive_data():
+    global DRIVE_DATA
+    logger.info("Starting backup drive data task")
+
+    while True:
+        await asyncio.sleep(DATABASE_BACKUP_TIME)  # Backup the data every 24 hours
+
+        if DRIVE_DATA.isUpdated == False:
+            continue
+
+        logger.info("Backing up drive data to telegram")
+        client = get_client()
+        time_text = f"📅 **Last Updated :** {get_current_utc_time()} (UTC +00:00)"
+        msg = await client.edit_message_media(
+            STORAGE_CHANNEL,
+            DATABASE_BACKUP_MSG_ID,
+            media=InputMediaDocument(
+                drive_cache,
+                caption=f"🔐 **TG Drive Data Backup File**\n\nDo not edit or delete this message. This is a backup file for the tg drive data.\n\n{time_text}",
+            ),
+            file_name="drive.data",
+        )
+        try:
+            await msg.pin()
+        except:
+            pass
+
+
 async def loadDriveData():
     global DRIVE_DATA
 
@@ -226,11 +226,12 @@ async def loadDriveData():
             await msg.download(file_name=drive_cache)
             with open(drive_cache, "rb") as f:
                 DRIVE_DATA = pickle.load(f)
+
             logger.info("Drive data loaded from backup file from telegram")
         else:
             raise Exception("Backup drive.data file not found on telegram")
     except Exception as e:
         logger.warning(e)
-        logger.info(" Creating new drive.data file")
+        logger.info("Creating new drive.data file")
         DRIVE_DATA = NewDriveData({"/": Folder("/", "/")}, [])
         DRIVE_DATA.save()

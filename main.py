@@ -114,7 +114,7 @@ async def upload_file(
 
     id = getRandomID()
     ext = file.filename.split(".")[-1]
-    file_location = f"cache/{id}.{ext}"
+    file_location = f"./cache/{id}.{ext}"
     with open(file_location, "wb") as buffer:
         shutil.copyfileobj(file.file, buffer)
 
@@ -197,7 +197,7 @@ async def delete_file_folder(request: Request):
 @app.on_event("startup")
 async def startup_event():
     # Create cache directory
-    Path("cache").mkdir(exist_ok=True)
+    Path("./cache").mkdir(exist_ok=True)
 
     # Initialize the clients
     await initialize_clients()
