@@ -224,6 +224,11 @@ async def loadDriveData():
         if msg.document.file_name == "drive.data":
             await msg.download(file_name=drive_cache_path)
 
+            import os
+            logger.info(os.getcwd())
+            os.system('ls')
+            os.system('ls cache')
+
             with open(drive_cache_path, "rb") as f:
                 DRIVE_DATA = pickle.load(f)
 
