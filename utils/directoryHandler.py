@@ -226,13 +226,8 @@ async def loadDriveData():
         if msg.document.file_name == "drive.data":
             import os
 
-            os.system("ls cache")
-            await msg.download(file_name=drive_cache_path)
-
-            logger.info(os.getcwd())
-            os.system("ls cache")
-
-            with open(drive_cache_path, "rb") as f:
+            dl_path = await msg.download()
+            with open(dl_path, "rb") as f:
                 DRIVE_DATA = pickle.load(f)
 
             logger.info("Drive data loaded from backup file from telegram")
