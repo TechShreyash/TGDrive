@@ -206,6 +206,7 @@ async def backup_drive_data():
             ),
             file_name="drive.data",
         )
+        DRIVE_DATA.isUpdated = False
         try:
             await msg.pin()
         except:
@@ -224,8 +225,6 @@ async def loadDriveData():
             raise Exception("Failed to get DATABASE_BACKUP_MSG_ID on telegram")
 
         if msg.document.file_name == "drive.data":
-            import os
-
             dl_path = await msg.download()
             with open(dl_path, "rb") as f:
                 DRIVE_DATA = pickle.load(f)
