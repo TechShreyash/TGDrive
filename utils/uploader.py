@@ -23,7 +23,7 @@ async def start_file_uploader(file_path, id, directory_path, filename):
     from utils.directoryHandler import DRIVE_DATA
 
     logger.info(f"Uploading file {file_path} {id}")
-    client: Client = get_client()
+    client: Client = get_client(for_upload=True)
     PROGRESS_CACHE[id] = ("running", 0, 0)
 
     message: Message = await client.send_document(

@@ -1,7 +1,7 @@
 import shutil, asyncio
 from pathlib import Path
 from contextlib import asynccontextmanager
-from fastapi import FastAPI, HTTPException, Request, File, UploadFile, Form
+from fastapi import FastAPI, HTTPException, Request, File, UploadFile, Form, Response
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from config import ADMIN_PASSWORD, MAX_FILE_SIZE, STORAGE_CHANNEL
 from utils.clients import initialize_clients
@@ -45,6 +45,11 @@ async def home_page():
 
 @app.get("/static/{file_path:path}")
 async def static_files(file_path):
+    if "apiHandler.js" in file_path:
+        with open(Path("website/static/js/apiHandler.js")) as f:
+            content = f.read()
+            content = content.replace("MAX_FILE_SIZE__SDGJDG", str(MAX_FILE_SIZE))
+        return Response(content=content, media_type="application/javascript")
     return FileResponse(f"website/static/{file_path}")
 
 

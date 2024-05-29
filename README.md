@@ -6,12 +6,13 @@ Welcome to TGDrive! This project is a web application that replicates Google Dri
 
 ## Features
 
-- **File Management:** Upload, rename, and delete files with trash/bin functionality and permanent deletion support.
-- **Folder Management:** Create, rename, and delete folders effortlessly.
-- **Sharing:** Share public links for files and folders seamlessly.
-- **Admin Support:** Admin login to efficiently manage the application.
-- **Automatic Backups:** Database backups sent to Telegram automatically.
+- **File Management:** Upload, rename, and delete files with integrated trash/bin functionality and support for permanent deletion.
+- **Folder Management:** Create, rename, and delete folders with ease.
+- **Sharing:** Seamlessly share public links for files and folders.
+- **Admin Support:** Secure admin login for efficient application management.
+- **Automatic Backups:** Automated database backups sent directly to Telegram.
 - **Multiple Bots/Clients:** Supports multiple bots/clients for file operations and streaming from Telegram.
+- **Large File Support:** Upload files up to 4GB using Telegram Premium accounts, ensuring you can handle larger data needs.
 
 ## Tech Stack
 
@@ -31,6 +32,7 @@ Feel free to test out the features with the provided login credentials.
 
 ## Todo List
 
+- [x] 4gb file upload using telegram premium account
 - [ ] Add search feature for files/folders
 - [ ] Video player and image viewer support on website
 - [ ] Remote URL upload support
@@ -38,14 +40,14 @@ Feel free to test out the features with the provided login credentials.
 
 ## Deploying Your Own
 
-### 1. Clone the repository:
+### 1. Clone the repository
 
 ```bash
 git clone https://github.com/TechShreyash/TGDrive
 cd TGDrive
 ```
 
-### 2. Set up your environment variables:
+### 2. Set up your environment variables
 
 Create a `.env` file in the root directory and add the following environment variables:
 
@@ -69,21 +71,22 @@ Create a `.env` file in the root directory and add the following environment var
 
 #### Optional Variables
 
-| Variable Name          | Type                 | Default | Description                                                                                       |
-| ---------------------- | -------------------- | ------- | ------------------------------------------------------------------------------------------------- |
-| `ADMIN_PASSWORD`       | string               | admin   | Password used to access the website's admin panel                                                 |
-| `SLEEP_THRESHOLD`      | integer (in seconds) | 60      | Time delay in seconds before retrying after a Telegram API floodwait error                        |
-| `DATABASE_BACKUP_TIME` | integer (in seconds) | 60      | Database backup interval in seconds. Backups will be sent to the storage channel at this interval |
-| `USE_SESSION_FILE`     | bool (True/False)    | True    | Choose whether to use `.session` files for session persistence or in-memory sessions              |
-| `MAX_FILE_SIZE`        | float                | 1.98    | Maximum file size (in GBs) allowed for uploading to Telegram                                      |
+| Variable Name          | Type                 | Default                                    | Description                                                                                        |
+| ---------------------- | -------------------- | ------------------------------------------ | -------------------------------------------------------------------------------------------------- |
+| `ADMIN_PASSWORD`       | string               | admin                                      | Password used to access the website's admin panel                                                  |
+| `STRING_SESSIONS`      | string               | None                                       | List of Premium Telegram Account Pyrogram String Sessions used for file upload/download operations |
+| `SLEEP_THRESHOLD`      | integer (in seconds) | 60                                         | Time delay in seconds before retrying after a Telegram API floodwait error                         |
+| `DATABASE_BACKUP_TIME` | integer (in seconds) | 60                                         | Database backup interval in seconds. Backups will be sent to the storage channel at this interval  |
+| `USE_SESSION_FILE`     | bool (True/False)    | True                                       | Choose whether to use `.session` files for session persistence or in-memory sessions               |
+| `MAX_FILE_SIZE`        | float (in GBs)       | 1.98 (3.98 if `STRING_SESSIONS` are added) | Maximum file size (in GBs) allowed for uploading to Telegram                                       |
 
-### 3. Install/Update Dependencies:
+### 3. Install/Update Dependencies
 
 ```bash
 pip install -U -r requirements.txt
 ```
 
-### 4. Run the FastAPI application:
+### 4. Run the FastAPI application
 
 ```bash
 uvicorn main:app --host 0.0.0.0 --port 8000

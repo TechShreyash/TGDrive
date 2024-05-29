@@ -78,7 +78,8 @@ async function createNewFolder() {
 
 // File Uploader
 
-const MAX_FILE_SIZE = 1.98 * 1024 * 1024 * 1024; // 2GB in bytes
+const MAX_FILE_SIZE = MAX_FILE_SIZE__SDGJDG // Will be replaced by the python
+
 const fileInput = document.getElementById('fileInput');
 const progressBar = document.getElementById('progress-bar');
 const cancelButton = document.getElementById('cancel-file-upload');
