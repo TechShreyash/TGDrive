@@ -20,7 +20,7 @@ from utils.logger import Logger
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # Create cache directory
-    Path("./cache").mkdir(exist_ok=True)
+    Path("./cache").mkdir(parents=True, exist_ok=True)
 
     # Initialize the clients
     await initialize_clients()
@@ -139,6 +139,8 @@ async def upload_file(
     id = getRandomID()
     ext = file.filename.split(".")[-1]
     file_location = Path(f"./cache/{id}.{ext}")
+    file_location.parent.mkdir(parents=True, exist_ok=True)
+
     with open(file_location, "wb") as buffer:
         shutil.copyfileobj(file.file, buffer)
 

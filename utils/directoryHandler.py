@@ -9,6 +9,8 @@ from utils.logger import Logger
 logger = Logger("directoryHandler")
 DRIVE_DATA = None
 drive_cache_path = Path("./cache/drive.data")
+drive_cache_path.parent.mkdir(parents=True, exist_ok=True)
+
 
 def getRandomID():
     global DRIVE_DATA

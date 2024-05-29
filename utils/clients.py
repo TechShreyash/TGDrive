@@ -20,6 +20,9 @@ async def initialize_clients():
         (i, s) for i, s in enumerate(config.STRING_SESSIONS, start=len(all_tokens) + 1)
     )
 
+    session_cache_path = Path(f"./cache")
+    session_cache_path.parent.mkdir(parents=True, exist_ok=True)
+
     async def start_client(client_id, token, type):
         try:
             logger.info(f"Starting - {type.title()} Client {client_id}")
@@ -31,7 +34,7 @@ async def initialize_clients():
                     api_hash=config.API_HASH,
                     bot_token=token,
                     sleep_threshold=config.SLEEP_THRESHOLD,
-                    workdir=Path("./cache"),
+                    workdir=session_cache_path,
                     no_updates=True,
                     in_memory=not config.USE_SESSION_FILE,
                 ).start()
@@ -44,7 +47,7 @@ async def initialize_clients():
                     api_hash=config.API_HASH,
                     session_string=token,
                     sleep_threshold=config.SLEEP_THRESHOLD,
-                    workdir=Path("./cache"),
+                    workdir=session_cache_path,
                     no_updates=True,
                     in_memory=not config.USE_SESSION_FILE,
                 ).start()
