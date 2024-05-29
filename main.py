@@ -1,5 +1,6 @@
 import shutil, asyncio
 from pathlib import Path
+from contextlib import asynccontextmanager
 from fastapi import FastAPI, HTTPException, Request, File, UploadFile, Form
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from config import ADMIN_PASSWORD, MAX_FILE_SIZE, STORAGE_CHANNEL
@@ -14,7 +15,26 @@ from utils.streamer import media_streamer
 from utils.uploader import STOP_TRANSMISSION, PROGRESS_CACHE, start_file_uploader
 from utils.logger import Logger
 
-app = FastAPI(docs_url=None, redoc_url=None)
+
+# Startup Event
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Create cache directory
+    Path("./cache").mkdir(exist_ok=True)
+
+    # Initialize the clients
+    await initialize_clients()
+
+    # Load the drive data
+    await loadDriveData()
+
+    # Start the backup drive data task
+    asyncio.create_task(backup_drive_data())
+
+    yield
+
+
+app = FastAPI(docs_url=None, redoc_url=None, lifespan=lifespan)
 logger = Logger("main")
 
 
@@ -57,7 +77,7 @@ async def api_new_folder(request: Request):
     if data["password"] != ADMIN_PASSWORD:
         return JSONResponse({"status": "Invalid password"})
 
-    print("createNewFolder", data)
+    logger.info(f"createNewFolder {data}")
     folder_data = DRIVE_DATA.get_directory(data["path"]).contents
     for id in folder_data:
         f = folder_data[id]
@@ -82,7 +102,7 @@ async def api_get_directory(request: Request):
     if data["password"] != ADMIN_PASSWORD:
         return JSONResponse({"status": "Invalid password"})
 
-    print("getFolder", data)
+    logger.info(f"getFolder {data}")
 
     if data["path"] == "/trash":
         data = {"contents": DRIVE_DATA.get_trashed_files_folders()}
@@ -91,7 +111,6 @@ async def api_get_directory(request: Request):
     else:
         folder_data = DRIVE_DATA.get_directory(data["path"])
         folder_data = convert_class_to_dict(folder_data, showtrash=False)
-    print(folder_data)
     return JSONResponse({"status": "ok", "data": folder_data})
 
 
@@ -114,7 +133,7 @@ async def upload_file(
 
     id = getRandomID()
     ext = file.filename.split(".")[-1]
-    file_location = f"./cache/{id}.{ext}"
+    file_location = Path(f"./cache/{id}.{ext}")
     with open(file_location, "wb") as buffer:
         shutil.copyfileobj(file.file, buffer)
 
@@ -131,7 +150,7 @@ async def get_upload_progress(request: Request):
     if data["password"] != ADMIN_PASSWORD:
         return JSONResponse({"status": "Invalid password"})
 
-    print("getUploadProgress", data)
+    logger.info(f"getUploadProgress {data}")
     progress = PROGRESS_CACHE.get(data["id"], ("running", 0, 0))
     return JSONResponse({"status": "ok", "data": progress})
 
@@ -144,7 +163,7 @@ async def cancel_upload(request: Request):
     if data["password"] != ADMIN_PASSWORD:
         return JSONResponse({"status": "Invalid password"})
 
-    print("cancelUpload", data)
+    logger.info(f"cancelUpload {data}")
     STOP_TRANSMISSION.append(data["id"])
     return JSONResponse({"status": "ok"})
 
@@ -158,7 +177,7 @@ async def rename_file_folder(request: Request):
     if data["password"] != ADMIN_PASSWORD:
         return JSONResponse({"status": "Invalid password"})
 
-    print("renameFileFolder", data)
+    logger.info(f"renameFileFolder {data}")
     DRIVE_DATA.rename_file_folder(data["path"], data["name"])
     return JSONResponse({"status": "ok"})
 
@@ -172,7 +191,7 @@ async def trash_file_folder(request: Request):
     if data["password"] != ADMIN_PASSWORD:
         return JSONResponse({"status": "Invalid password"})
 
-    print("trashFileFolder", data)
+    logger.info(f"trashFileFolder {data}")
     DRIVE_DATA.trash_file_folder(data["path"], data["trash"])
     return JSONResponse({"status": "ok"})
 
@@ -186,24 +205,6 @@ async def delete_file_folder(request: Request):
     if data["password"] != ADMIN_PASSWORD:
         return JSONResponse({"status": "Invalid password"})
 
-    print("deleteFileFolder", data)
+    logger.info(f"deleteFileFolder {data}")
     DRIVE_DATA.delete_file_folder(data["path"])
     return JSONResponse({"status": "ok"})
-
-
-# Startup Event
-
-
-@app.on_event("startup")
-async def startup_event():
-    # Create cache directory
-    Path("./cache").mkdir(exist_ok=True)
-
-    # Initialize the clients
-    await initialize_clients()
-
-    # Load the drive data
-    await loadDriveData()
-
-    # Start the backup drive data task
-    asyncio.create_task(backup_drive_data())

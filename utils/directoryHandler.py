@@ -1,3 +1,4 @@
+from pathlib import Path
 from config import DATABASE_BACKUP_TIME, STORAGE_CHANNEL, DATABASE_BACKUP_MSG_ID
 from utils.clients import get_client
 from pyrogram.types import InputMediaDocument
@@ -7,7 +8,7 @@ from utils.logger import Logger
 
 logger = Logger("directoryHandler")
 DRIVE_DATA = None
-
+drive_cache_path = Path("./cache/drive.data")
 
 def getRandomID():
     global DRIVE_DATA
@@ -49,9 +50,6 @@ class File:
         self.path = path[:-1] if path[-1] == "/" else path
 
 
-drive_cache = "./cache/drive.data"
-
-
 class NewDriveData:
     def __init__(self, contents: dict, used_ids: list) -> None:
         self.contents = contents
@@ -59,7 +57,7 @@ class NewDriveData:
         self.isUpdated = False
 
     def save(self) -> None:
-        with open(drive_cache, "wb") as f:
+        with open(drive_cache_path, "wb") as f:
             pickle.dump(self, f)
 
         self.isUpdated = True
@@ -175,10 +173,9 @@ class NewDriveData:
         else:
             folder_path = "/"
             file_id = path.strip("/")
+
         folder_data = self.get_directory(folder_path)
-        print(111, folder_data)
         del folder_data.contents[file_id]
-        print(222, folder_data)
         self.save()
 
 
@@ -200,7 +197,7 @@ async def backup_drive_data():
             STORAGE_CHANNEL,
             DATABASE_BACKUP_MSG_ID,
             media=InputMediaDocument(
-                drive_cache,
+                drive_cache_path,
                 caption=f"🔐 **TG Drive Data Backup File**\n\nDo not edit or delete this message. This is a backup file for the tg drive data.\n\n{time_text}",
             ),
             file_name="drive.data",
@@ -223,8 +220,9 @@ async def loadDriveData():
             raise Exception("Failed to get DATABASE_BACKUP_MSG_ID on telegram")
 
         if msg.document.file_name == "drive.data":
-            await msg.download(file_name=drive_cache)
-            with open(drive_cache, "rb") as f:
+            await msg.download(file_name=drive_cache_path)
+
+            with open(drive_cache_path, "rb") as f:
                 DRIVE_DATA = pickle.load(f)
 
             logger.info("Drive data loaded from backup file from telegram")

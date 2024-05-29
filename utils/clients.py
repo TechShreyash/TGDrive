@@ -1,4 +1,5 @@
 import asyncio, config
+from pathlib import Path
 from pyrogram import Client
 from utils.logger import Logger
 
@@ -24,7 +25,7 @@ async def initialize_clients():
                 api_hash=config.API_HASH,
                 bot_token=token,
                 sleep_threshold=config.SLEEP_THRESHOLD,
-                workdir="./cache",
+                workdir=Path("./cache"),
                 no_updates=True,
                 in_memory=not config.USE_SESSION_FILE,
             ).start()
@@ -33,13 +34,21 @@ async def initialize_clients():
             return client_id, client
         except Exception as e:
             logger.error(f"Failed To Start Client - {client_id} Error: {e}")
+            return client_id, None
 
     clients = await asyncio.gather(
-        *[start_client(i, token) for i, token in all_tokens.items()]
+        *[start_client(client_id, client) for client_id, client in all_tokens.items()]
     )
-    multi_clients.update(dict(clients))
+    for client_id, client in clients:
+        if client is not None:
+            multi_clients[client_id] = client
+
+    if len(multi_clients) == 0:
+        logger.error("No Clients Were Initialized")
+        exit(1)
 
     logger.info("Clients Initialized")
+
 
 def get_client() -> Client:
     global multi_clients, work_loads
@@ -47,5 +56,3 @@ def get_client() -> Client:
     index = min(work_loads, key=work_loads.get)
     work_loads[index] += 1
     return multi_clients[index]
-
-
