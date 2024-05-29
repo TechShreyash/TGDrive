@@ -8,8 +8,10 @@ from utils.logger import Logger
 
 logger = Logger("directoryHandler")
 DRIVE_DATA = None
-drive_cache_path = Path("./cache/drive.data")
-drive_cache_path.parent.mkdir(parents=True, exist_ok=True)
+
+cache_dir = Path("./cache")
+cache_dir.mkdir(parents=True, exist_ok=True)
+drive_cache_path = cache_dir / "drive.data"
 
 
 def getRandomID():
@@ -222,12 +224,13 @@ async def loadDriveData():
             raise Exception("Failed to get DATABASE_BACKUP_MSG_ID on telegram")
 
         if msg.document.file_name == "drive.data":
+            import os
+
+            os.system("ls cache")
             await msg.download(file_name=drive_cache_path)
 
-            import os
             logger.info(os.getcwd())
-            os.system('ls')
-            os.system('ls cache')
+            os.system("ls cache")
 
             with open(drive_cache_path, "rb") as f:
                 DRIVE_DATA = pickle.load(f)
