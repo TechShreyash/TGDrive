@@ -224,7 +224,8 @@ async def loadDriveData():
     try:
         try:
             msg = await client.get_messages(STORAGE_CHANNEL, DATABASE_BACKUP_MSG_ID)
-        except:
+        except Exception as e:
+            logger.error(e)
             raise Exception("Failed to get DATABASE_BACKUP_MSG_ID on telegram")
 
         if msg.document.file_name == "drive.data":
