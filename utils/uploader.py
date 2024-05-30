@@ -18,12 +18,18 @@ async def progress_callback(current, total, id, client: Client):
         client.stop_transmission()
 
 
-async def start_file_uploader(file_path, id, directory_path, filename):
+async def start_file_uploader(file_path, id, directory_path, filename, file_size):
     global PROGRESS_CACHE
     from utils.directoryHandler import DRIVE_DATA
 
     logger.info(f"Uploading file {file_path} {id}")
-    client: Client = get_client(for_upload=True)
+
+    if file_size > 1.98 * 1024 * 1024 * 1024:
+        # Use premium client for files larger than 2 GB
+        client: Client = get_client(premium_required=True)
+    else:
+        client: Client = get_client()
+
     PROGRESS_CACHE[id] = ("running", 0, 0)
 
     message: Message = await client.send_document(

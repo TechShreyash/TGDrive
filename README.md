@@ -56,13 +56,13 @@ Create a `.env` file in the root directory and add the following environment var
 
 #### Required Variables
 
-| Variable Name            | Type    | Example                   | Description                                                                                |
-| ------------------------ | ------- | ------------------------- | ------------------------------------------------------------------------------------------ |
-| `API_ID`                 | integer | 123456                    | Your Telegram API ID                                                                       |
-| `API_HASH`               | string  | dagsjdhgjfsahgjfh         | Your Telegram API Hash                                                                     |
-| `BOT_TOKENS`             | string  | 21413535:gkdshajfhjfakhjf | List of Telegram bot tokens for file operations, separated by commas                       |
-| `STORAGE_CHANNEL`        | integer | -100123456789             | Chat ID of the Telegram storage channel                                                    |
-| `DATABASE_BACKUP_MSG_ID` | integer | 123                       | Message ID of a file in the storage channel for database backups                           |
+| Variable Name            | Type    | Example                   | Description                                                          |
+| ------------------------ | ------- | ------------------------- | -------------------------------------------------------------------- |
+| `API_ID`                 | integer | 123456                    | Your Telegram API ID                                                 |
+| `API_HASH`               | string  | dagsjdhgjfsahgjfh         | Your Telegram API Hash                                               |
+| `BOT_TOKENS`             | string  | 21413535:gkdshajfhjfakhjf | List of Telegram bot tokens for file operations, separated by commas |
+| `STORAGE_CHANNEL`        | integer | -100123456789             | Chat ID of the Telegram storage channel                              |
+| `DATABASE_BACKUP_MSG_ID` | integer | 123                       | Message ID of a file in the storage channel for database backups     |
 
 > Note: All bots mentioned in the `BOT_TOKENS` variable must be added as admins in your `STORAGE_CHANNEL`.
 
@@ -70,15 +70,19 @@ Create a `.env` file in the root directory and add the following environment var
 
 #### Optional Variables
 
-| Variable Name          | Type                 | Default                                    | Description                                                                                        |
-| ---------------------- | -------------------- | ------------------------------------------ | -------------------------------------------------------------------------------------------------- |
-| `ADMIN_PASSWORD`       | string               | admin                                      | Password for accessing the admin panel                                                             |
-| `STRING_SESSIONS`      | string               | None                                       | List of Premium Telegram Account Pyrogram String Sessions for file operations                      |
-| `SLEEP_THRESHOLD`      | integer (in seconds) | 60                                         | Delay in seconds before retrying after a Telegram API floodwait error                               |
-| `DATABASE_BACKUP_TIME` | integer (in seconds) | 60                                         | Interval in seconds for database backups to the storage channel                                     |
-| `USE_SESSION_FILE`     | bool (True/False)    | True                                       | Whether to use `.session` files for session persistence                                            |
-| `MAX_FILE_SIZE`        | float (in GBs)       | 1.98 (3.98 if `STRING_SESSIONS` are added) | Maximum file size (in GBs) allowed for uploading to Telegram                                       |
-| `WEBSITE_DOMAIN`       | string               | None                                       | Domain to auto-ping to keep the website active                                                     |
+| Variable Name          | Type                 | Default                                    | Description                                                                   |
+| ---------------------- | -------------------- | ------------------------------------------ | ----------------------------------------------------------------------------- |
+| `ADMIN_PASSWORD`       | string               | admin                                      | Password for accessing the admin panel                                        |
+| `STRING_SESSIONS`      | string               | None                                       | List of Premium Telegram Account Pyrogram String Sessions for file operations |
+| `SLEEP_THRESHOLD`      | integer (in seconds) | 60                                         | Delay in seconds before retrying after a Telegram API floodwait error         |
+| `DATABASE_BACKUP_TIME` | integer (in seconds) | 60                                         | Interval in seconds for database backups to the storage channel               |
+| `USE_SESSION_FILE`     | bool (True/False)    | True                                       | Whether to use `.session` files for session persistence                       |
+| `MAX_FILE_SIZE`        | float (in GBs)       | 1.98 (3.98 if `STRING_SESSIONS` are added) | Maximum file size (in GBs) allowed for uploading to Telegram                  |
+| `WEBSITE_DOMAIN`       | string               | None                                       | Domain to auto-ping to keep the website active                                |
+
+> Note: Premium Client (`STRING_SESSIONS`) will be used only to upload when file size is greater than 2GB.
+
+> Note: File streaming/downloads will be done by bots (`BOT_TOKENS`).
 
 ### 3. Install/Update Dependencies
 

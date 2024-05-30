@@ -146,7 +146,9 @@ async def upload_file(
     with open(file_location, "wb") as buffer:
         shutil.copyfileobj(file.file, buffer)
 
-    asyncio.create_task(start_file_uploader(file_location, id, path, file.filename))
+    asyncio.create_task(
+        start_file_uploader(file_location, id, path, file.filename, file_size)
+    )
 
     return JSONResponse({"id": id, "status": "ok"})
 

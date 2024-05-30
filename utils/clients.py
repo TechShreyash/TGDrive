@@ -81,10 +81,10 @@ async def initialize_clients():
     logger.info("Clients Initialized")
 
 
-def get_client(for_upload=False) -> Client:
+def get_client(premium_required=False) -> Client:
     global multi_clients, work_loads, premium_clients, premium_work_loads
 
-    if for_upload and len(premium_clients) > 0:
+    if premium_required:
         index = min(premium_work_loads, key=premium_work_loads.get)
         premium_work_loads[index] += 1
         return premium_clients[index]
