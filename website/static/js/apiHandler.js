@@ -137,7 +137,6 @@ fileInput.addEventListener('change', async (e) => {
                     uploadID = response['id']
                     uploadStep = 2;
                     handleUpload2(response['id']);
-                    clearInterval(interval);
                 } catch (err) {
                     console.log('Error parsing response:', err);
                 }
