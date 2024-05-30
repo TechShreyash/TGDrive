@@ -92,7 +92,7 @@ fileInput.addEventListener('change', async (e) => {
     const file = fileInput.files[0];
 
     if (file.size > MAX_FILE_SIZE) {
-        alert('File size exceeds 2GB limit');
+        alert(`File size exceeds ${(MAX_FILE_SIZE / (1024 * 1024 * 1024)).toFixed(2)} GB limit`);
         return;
     }
 
