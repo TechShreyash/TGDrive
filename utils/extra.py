@@ -1,5 +1,5 @@
 from datetime import datetime, timezone
-from config import WEBSITE_DOMAIN
+from config import WEBSITE_URL
 import aiohttp, asyncio
 from utils.logger import Logger
 
@@ -40,11 +40,11 @@ def get_current_utc_time():
 
 
 async def auto_ping_website():
-    if WEBSITE_DOMAIN is not None:
+    if WEBSITE_URL is not None:
         async with aiohttp.ClientSession() as session:
             while True:
                 try:
-                    async with session.get(WEBSITE_DOMAIN) as response:
+                    async with session.get(WEBSITE_URL) as response:
                         if response.status == 200:
                             logger.info(f"Pinged website at {get_current_utc_time()}")
                         else:

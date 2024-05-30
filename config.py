@@ -52,4 +52,4 @@ USE_SESSION_FILE = bool(
 
 
 # Domain to auto-ping and keep the website active
-WEBSITE_DOMAIN = os.getenv("WEBSITE_DOMAIN", None)
+WEBSITE_URL = os.getenv("WEBSITE_URL", None)

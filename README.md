@@ -78,7 +78,7 @@ Create a `.env` file in the root directory and add the following environment var
 | `DATABASE_BACKUP_TIME` | integer (in seconds) | 60                                         | Interval in seconds for database backups to the storage channel               |
 | `USE_SESSION_FILE`     | bool (True/False)    | True                                       | Whether to use `.session` files for session persistence                       |
 | `MAX_FILE_SIZE`        | float (in GBs)       | 1.98 (3.98 if `STRING_SESSIONS` are added) | Maximum file size (in GBs) allowed for uploading to Telegram                  |
-| `WEBSITE_DOMAIN`       | string               | None                                       | Domain to auto-ping to keep the website active                                |
+| `WEBSITE_URL`          | string               | None                                       | Website url (with https/http) to auto-ping to keep the website active         |
 
 > Note: Premium Client (`STRING_SESSIONS`) will be used only to upload when file size is greater than 2GB.
 
