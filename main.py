@@ -10,7 +10,7 @@ from utils.directoryHandler import (
     getRandomID,
     loadDriveData,
 )
-from utils.extra import convert_class_to_dict
+from utils.extra import auto_ping_website, convert_class_to_dict
 from utils.streamer import media_streamer
 from utils.uploader import STOP_TRANSMISSION, PROGRESS_CACHE, start_file_uploader
 from utils.logger import Logger
@@ -27,6 +27,9 @@ async def lifespan(app: FastAPI):
 
     # Start the backup drive data task
     asyncio.create_task(backup_drive_data())
+
+    # Start the website auto ping task
+    asyncio.create_task(auto_ping_website())
 
     yield
 
@@ -150,20 +153,25 @@ async def upload_file(
 
 @app.post("/api/getUploadProgress")
 async def get_upload_progress(request: Request):
-    global PROGRESS_CACHE
+    from utils.uploader import PROGRESS_CACHE
+
     data = await request.json()
 
     if data["password"] != ADMIN_PASSWORD:
         return JSONResponse({"status": "Invalid password"})
 
     logger.info(f"getUploadProgress {data}")
-    progress = PROGRESS_CACHE.get(data["id"], ("running", 0, 0))
-    return JSONResponse({"status": "ok", "data": progress})
+    try:
+        progress = PROGRESS_CACHE[data["id"]]
+        return JSONResponse({"status": "ok", "data": progress})
+    except:
+        return JSONResponse({"status": "not found"})
 
 
 @app.post("/api/cancelUpload")
 async def cancel_upload(request: Request):
-    global STOP_TRANSMISSION
+    from utils.uploader import STOP_TRANSMISSION
+
     data = await request.json()
 
     if data["password"] != ADMIN_PASSWORD:

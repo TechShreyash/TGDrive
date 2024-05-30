@@ -1,3 +1,11 @@
+from datetime import datetime, timezone
+from config import WEBSITE_DOMAIN
+import aiohttp, asyncio
+from utils.logger import Logger
+
+logger = Logger(__name__)
+
+
 def convert_class_to_dict(data, showtrash=False):
     if showtrash == False:
         data = data.__dict__.copy()
@@ -27,8 +35,21 @@ def convert_class_to_dict(data, showtrash=False):
     return new_data
 
 
-from datetime import datetime, timezone
-
-
 def get_current_utc_time():
     return datetime.now(timezone.utc).strftime("Date - %Y-%m-%d | Time - %H:%M:%S")
+
+
+async def auto_ping_website():
+    if WEBSITE_DOMAIN is not None:
+        async with aiohttp.ClientSession() as session:
+            while True:
+                try:
+                    async with session.get(WEBSITE_DOMAIN) as response:
+                        if response.status == 200:
+                            logger.info(f"Pinged website at {get_current_utc_time()}")
+                        else:
+                            logger.warning(f"Failed to ping website: {response.status}")
+                except Exception as e:
+                    logger.warning(f"Failed to ping website: {e}")
+
+                await asyncio.sleep(60)  # Ping website every minute

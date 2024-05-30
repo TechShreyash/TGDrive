@@ -10,13 +10,13 @@ API_HASH = os.getenv("API_HASH")  # Your Telegram API Hash
 
 # List of Telegram bot tokens used for file upload/download operations
 BOT_TOKENS = os.getenv("BOT_TOKENS", "").strip(", ").split(",")
-BOT_TOKENS = [token.strip() for token in BOT_TOKENS if token.strip() != ""]  # Clean up any extra spaces
+BOT_TOKENS = [token.strip() for token in BOT_TOKENS if token.strip() != ""]
 
 # List of Premium Telegram Account Pyrogram String Sessions used for file upload/download operations
 STRING_SESSIONS = os.getenv("STRING_SESSIONS", "").strip(", ").split(",")
 STRING_SESSIONS = [
     session.strip() for session in STRING_SESSIONS if session.strip() != ""
-]  # Clean up any extra spaces
+]
 
 # Chat ID of the Telegram storage channel where files will be stored
 STORAGE_CHANNEL = int(os.getenv("STORAGE_CHANNEL"))  # Your storage channel's chat ID
@@ -49,3 +49,7 @@ SLEEP_THRESHOLD = int(os.getenv("SLEEP_THRESHOLD", 60))  # Default to 60 seconds
 USE_SESSION_FILE = bool(
     os.getenv("USE_SESSION_FILE", True)
 )  # Default to True (use .session files)
+
+
+# Domain to auto-ping and keep the website active
+WEBSITE_DOMAIN = os.getenv("WEBSITE_DOMAIN", None)

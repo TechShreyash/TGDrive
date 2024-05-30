@@ -3,3 +3,4 @@ tgcrypto
 uvicorn
 fastapi
 python-dotenv
+aiohttp

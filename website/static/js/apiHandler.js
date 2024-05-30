@@ -128,16 +128,21 @@ fileInput.addEventListener('change', async (e) => {
         progressBar.style.width = '0%';
         uploadPercent.innerText = 'Progress : 0%'
         document.getElementById('upload-status').innerText = 'Status: Processing File On Backend Server';
-        const interval = setInterval(() => {
-            try {
-                const response = JSON.parse(uploadRequest.response)
-                uploadID = response['id']
-                uploadStep = 2;
-                handleUpload2(response['id']);
-                clearInterval(interval);
+
+        const checkResponse = setInterval(() => {
+            if (uploadRequest.readyState === 4) { // DONE
+                clearInterval(checkResponse);
+                try {
+                    const response = JSON.parse(uploadRequest.response)
+                    uploadID = response['id']
+                    uploadStep = 2;
+                    handleUpload2(response['id']);
+                    clearInterval(interval);
+                } catch (err) {
+                    console.log('Error parsing response:', err);
+                }
             }
-            catch (err) { console.log(err) }
-        }, 500)
+        }, 500);
     });
 
     uploadRequest.upload.addEventListener('error', () => {
@@ -166,8 +171,12 @@ async function handleUpload2(id) {
     uploadPercent.innerText = 'Progress : 0%';
 
     const interval = setInterval(async () => {
-        const data = (await postJson('/api/getUploadProgress', { 'id': id }))['data']
-
+        const response = await postJson('/api/getUploadProgress', { 'id': id })
+        if (response.status !== 'ok') {
+            alert('Server Got Restarted, Please Re-Upload The File');
+            window.location.reload();
+        }
+        const data = response['data']
         if (data[0] === 'running') {
             const current = data[1];
             const total = data[2];
