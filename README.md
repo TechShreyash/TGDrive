@@ -100,6 +100,10 @@ Access the application at `http://127.0.0.1:8000`.
 
 > Note: For public deployment, refer to online guides on deploying FastAPI apps.
 
+## Deploy Tutorials
+
+**Deploy To Render.com For Free :** https://youtu.be/S5OIi5Ur3c0?si=feQ-CPR3YhG4s8on
+
 ## Contributing
 
 Contributions are welcome! Fork the repository, make your changes, and create a pull request.
