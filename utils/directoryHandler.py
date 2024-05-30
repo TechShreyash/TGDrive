@@ -5,6 +5,7 @@ from pyrogram.types import InputMediaDocument
 import pickle, os, random, string, asyncio
 from utils.extra import get_current_utc_time
 from utils.logger import Logger
+from datetime import datetime
 
 logger = Logger("directoryHandler")
 DRIVE_DATA = None
@@ -34,6 +35,7 @@ class Folder:
         self.type = "folder"
         self.trash = False
         self.path = path[:-1] if path[-1] == "/" else path
+        self.upload_date = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
 
 class File:
@@ -52,6 +54,7 @@ class File:
         self.type = "file"
         self.trash = False
         self.path = path[:-1] if path[-1] == "/" else path
+        self.upload_date = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
 
 class NewDriveData:

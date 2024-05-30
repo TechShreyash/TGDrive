@@ -125,7 +125,9 @@ fileInput.addEventListener('change', async (e) => {
     });
 
     uploadRequest.upload.addEventListener('load', () => {
-        progressBar.style.width = '100%';
+        progressBar.style.width = '0%';
+        uploadPercent.innerText = 'Progress : 0%'
+        document.getElementById('upload-status').innerText = 'Status: Processing File On Backend Server';
         const interval = setInterval(() => {
             try {
                 const response = JSON.parse(uploadRequest.response)
@@ -134,7 +136,7 @@ fileInput.addEventListener('change', async (e) => {
                 handleUpload2(response['id']);
                 clearInterval(interval);
             }
-            catch (err) { }
+            catch (err) { console.log(err) }
         }, 500)
     });
 

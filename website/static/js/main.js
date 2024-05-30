@@ -4,9 +4,15 @@ function showDirectory(data) {
     const isTrash = getCurrentPath().includes('/trash')
     let html = ''
 
-    for (const key in data) {
-        console.log(key)
-        const item = data[key]
+    // Step 2: Sort the array based on the 'date' values
+    let entries = Object.entries(data);
+    let folders = entries.filter(([key, value]) => value.type === 'folder');
+    let files = entries.filter(([key, value]) => value.type === 'file');
+
+    folders.sort((a, b) => new Date(b[1].upload_date) - new Date(a[1].upload_date));
+    files.sort((a, b) => new Date(b[1].upload_date) - new Date(a[1].upload_date));
+
+    for (const [key, item] of folders) {
         if (item.type === 'folder') {
             html += `<tr data-id="${item.id}" class="body-tr folder-tr"><td><div class="td-align"><img src="static/assets/folder-solid-icon.svg">${item.name}</div></td><td><div class="td-align"></div></td><td><div class="td-align"><a data-id="${item.id}" class="more-btn"><img src="static/assets/more-icon.svg" class="rotate-90"></a></div></td></tr>`
 
@@ -17,7 +23,9 @@ function showDirectory(data) {
                 html += `<div id="more-option-${item.id}" data-name="${item.name}" class="more-options"><input class="more-options-focus" readonly="readonly" style="height:0;width:0;border:none;position:absolute"><div id="restore-${item.id}" data-path="${item.path}"><img src="static/assets/load-icon.svg"> Restore</div><hr><div id="delete-${item.id}" data-path="${item.path}"><img src="static/assets/trash-icon.svg"> Delete</div></div>`
             }
         }
-        else {
+    }
+    for (const [key, item] of files) {
+        if (item.type === 'file') {
             const size = convertBytes(item.size)
             html += `<tr data-id="${item.id}" class="body-tr file-tr"><td><div class="td-align"><img src="static/assets/file-icon.svg">${item.name}</div></td><td><div class="td-align">${size}</div></td><td><div class="td-align"><a data-id="${item.id}" class="more-btn"><img src="static/assets/more-icon.svg" class="rotate-90"></a></div></td></tr>`
 

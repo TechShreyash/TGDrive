@@ -33,10 +33,10 @@ Feel free to test out the features with the provided login credentials.
 ## Todo List
 
 - [x] 4gb file upload using telegram premium account
+- [x] Folder/File sorting according to date/time uploaded (Newest First)
 - [ ] Add search feature for files/folders
 - [ ] Video player and image viewer support on website
 - [ ] Remote URL upload support
-- [ ] Folder/File sorting according to name/date uploaded
 
 ## Deploying Your Own
 
