@@ -102,7 +102,7 @@ Access the application at `http://127.0.0.1:8000`.
 
 ## Deploy Tutorials
 
-**Deploy To Render.com For Free :** https://youtu.be/S5OIi5Ur3c0?si=feQ-CPR3YhG4s8on
+**Deploy To Render.com For Free :** https://youtu.be/S5OIi5Ur3c0
 
 ## Contributing
 
