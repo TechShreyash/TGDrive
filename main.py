@@ -1,6 +1,7 @@
 import shutil, asyncio
 from pathlib import Path
 from contextlib import asynccontextmanager
+import aiofiles
 from fastapi import FastAPI, HTTPException, Request, File, UploadFile, Form, Response
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from config import ADMIN_PASSWORD, MAX_FILE_SIZE, STORAGE_CHANNEL
@@ -126,25 +127,26 @@ async def upload_file(
     if password != ADMIN_PASSWORD:
         return JSONResponse({"status": "Invalid password"})
 
-    # Check the file size
-    file_size = 0
-    for chunk in file.file:
-        file_size += len(chunk)
-        if file_size > MAX_FILE_SIZE:
-            raise HTTPException(status_code=400, detail="File size exceeds 2GB limit")
-
-    # Reset file pointer to the beginning
-    file.file.seek(0)
-
     id = getRandomID()
-    ext = file.filename.split(".")[-1]
+    ext = file.filename.lower().split(".")[-1]
 
     cache_dir = Path("./cache")
     cache_dir.mkdir(parents=True, exist_ok=True)
     file_location = cache_dir / f"{id}.{ext}"
 
-    with open(file_location, "wb") as buffer:
-        shutil.copyfileobj(file.file, buffer)
+    file_size = 0
+
+    async with aiofiles.open(file_location, "wb") as buffer:
+        while chunk := await file.read(1024 * 1024):  # Read file in chunks of 1MB
+            file_size += len(chunk)
+            if file_size > MAX_FILE_SIZE:
+                await buffer.close()
+                file_location.unlink()  # Delete the partially written file
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"File size exceeds {MAX_FILE_SIZE} bytes limit",
+                )
+            await buffer.write(chunk)
 
     asyncio.create_task(
         start_file_uploader(file_location, id, path, file.filename, file_size)

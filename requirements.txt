@@ -4,3 +4,4 @@ uvicorn
 fastapi
 python-dotenv
 aiohttp
+aiofiles
