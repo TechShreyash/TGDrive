@@ -15,6 +15,7 @@ async def progress_callback(current, total, id, client: Client, file_path):
 
     PROGRESS_CACHE[id] = ("running", current, total)
     if id in STOP_TRANSMISSION:
+        logger.info(f"Stopping transmission {id}")
         client.stop_transmission()
         try:
             os.remove(file_path)

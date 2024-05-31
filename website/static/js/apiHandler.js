@@ -163,7 +163,7 @@ async function updateSaveProgress(id) {
             window.location.reload();
         }
         const data = response['data']
-        
+
         if (data[0] === 'running') {
             const current = data[1];
             const total = data[2];
