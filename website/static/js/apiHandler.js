@@ -111,6 +111,9 @@ fileInput.addEventListener('change', async (e) => {
     formData.append('file', file);
     formData.append('path', getCurrentPath());
     formData.append('password', getPassword());
+    const id = getRandomId();
+    formData.append('id', id);
+    formData.append('total_size', file.size);
 
     uploadStep = 1;
     uploadRequest = new XMLHttpRequest();
@@ -124,24 +127,8 @@ fileInput.addEventListener('change', async (e) => {
         }
     });
 
-    uploadRequest.upload.addEventListener('load', () => {
-        progressBar.style.width = '0%';
-        uploadPercent.innerText = 'Progress : 0%'
-        document.getElementById('upload-status').innerText = 'Status: Processing File On Backend Server';
-
-        const checkResponse = setInterval(() => {
-            if (uploadRequest.readyState === 4) { // DONE
-                clearInterval(checkResponse);
-                try {
-                    const response = JSON.parse(uploadRequest.response)
-                    uploadID = response['id']
-                    uploadStep = 2;
-                    handleUpload2(response['id']);
-                } catch (err) {
-                    console.log('Error parsing response:', err);
-                }
-            }
-        }, 500);
+    uploadRequest.upload.addEventListener('load', async () => {
+        await updateSaveProgress(id)
     });
 
     uploadRequest.upload.addEventListener('error', () => {
@@ -162,6 +149,40 @@ cancelButton.addEventListener('click', () => {
     alert('Upload canceled');
     window.location.reload();
 });
+
+async function updateSaveProgress(id) {
+    console.log('save progress')
+    progressBar.style.width = '0%';
+    uploadPercent.innerText = 'Progress : 0%'
+    document.getElementById('upload-status').innerText = 'Status: Processing File On Backend Server';
+
+    const interval = setInterval(async () => {
+        const response = await postJson('/api/getSaveProgress', { 'id': id })
+        if (response.status !== 'ok') {
+            alert('Server Got Restarted, Please Re-Upload The File');
+            window.location.reload();
+        }
+        const data = response['data']
+        
+        if (data[0] === 'running') {
+            const current = data[1];
+            const total = data[2];
+            document.getElementById('upload-filesize').innerText = 'Filesize: ' + (total / (1024 * 1024)).toFixed(2) + ' MB';
+
+            const percentComplete = (current / total) * 100;
+            progressBar.style.width = percentComplete + '%';
+            uploadPercent.innerText = 'Progress : ' + percentComplete.toFixed(2) + '%';
+        }
+        else if (data[0] === 'completed') {
+            clearInterval(interval);
+            uploadPercent.innerText = 'Progress : 100%'
+            progressBar.style.width = '100%';
+
+            await handleUpload2(id)
+        }
+    }, 3000)
+
+}
 
 async function handleUpload2(id) {
     console.log(id)

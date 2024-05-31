@@ -120,14 +120,25 @@ async def api_get_directory(request: Request):
     return JSONResponse({"status": "ok", "data": folder_data})
 
 
+SAVE_PROGRESS = {}
+
+
 @app.post("/api/upload")
 async def upload_file(
-    file: UploadFile = File(...), path: str = Form(...), password: str = Form(...)
+    file: UploadFile = File(...),
+    path: str = Form(...),
+    password: str = Form(...),
+    id: str = Form(...),
+    total_size: str = Form(...),
 ):
+    global SAVE_PROGRESS
+
     if password != ADMIN_PASSWORD:
         return JSONResponse({"status": "Invalid password"})
 
-    id = getRandomID()
+    total_size = int(total_size)
+    SAVE_PROGRESS[id] = ("running", 0, total_size)
+
     ext = file.filename.lower().split(".")[-1]
 
     cache_dir = Path("./cache")
@@ -138,6 +149,7 @@ async def upload_file(
 
     async with aiofiles.open(file_location, "wb") as buffer:
         while chunk := await file.read(1024 * 1024):  # Read file in chunks of 1MB
+            SAVE_PROGRESS[id] = ("running", file_size, total_size)
             file_size += len(chunk)
             if file_size > MAX_FILE_SIZE:
                 await buffer.close()
@@ -148,11 +160,30 @@ async def upload_file(
                 )
             await buffer.write(chunk)
 
+    SAVE_PROGRESS[id] = ("completed", file_size, file_size)
+
     asyncio.create_task(
         start_file_uploader(file_location, id, path, file.filename, file_size)
     )
 
     return JSONResponse({"id": id, "status": "ok"})
+
+
+@app.post("/api/getSaveProgress")
+async def get_save_progress(request: Request):
+    global SAVE_PROGRESS
+
+    data = await request.json()
+
+    if data["password"] != ADMIN_PASSWORD:
+        return JSONResponse({"status": "Invalid password"})
+
+    logger.info(f"getUploadProgress {data}")
+    try:
+        progress = SAVE_PROGRESS[data["id"]]
+        return JSONResponse({"status": "ok", "data": progress})
+    except:
+        return JSONResponse({"status": "not found"})
 
 
 @app.post("/api/getUploadProgress")
@@ -165,6 +196,7 @@ async def get_upload_progress(request: Request):
         return JSONResponse({"status": "Invalid password"})
 
     logger.info(f"getUploadProgress {data}")
+
     try:
         progress = PROGRESS_CACHE[data["id"]]
         return JSONResponse({"status": "ok", "data": progress})

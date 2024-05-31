@@ -10,12 +10,16 @@ PROGRESS_CACHE = {}
 STOP_TRANSMISSION = []
 
 
-async def progress_callback(current, total, id, client: Client):
+async def progress_callback(current, total, id, client: Client, file_path):
     global PROGRESS_CACHE, STOP_TRANSMISSION
 
     PROGRESS_CACHE[id] = ("running", current, total)
     if id in STOP_TRANSMISSION:
         client.stop_transmission()
+        try:
+            os.remove(file_path)
+        except:
+            pass
 
 
 async def start_file_uploader(file_path, id, directory_path, filename, file_size):
@@ -36,12 +40,15 @@ async def start_file_uploader(file_path, id, directory_path, filename, file_size
         STORAGE_CHANNEL,
         file_path,
         progress=progress_callback,
-        progress_args=(id, client),
+        progress_args=(id, client, file_path),
     )
     size = (message.document or message.audio).file_size
 
     DRIVE_DATA.new_file(directory_path, filename, message.id, size)
     PROGRESS_CACHE[id] = ("completed", size, size)
 
-    os.remove(file_path)
+    try:
+        os.remove(file_path)
+    except:
+        pass
     logger.info(f"Uploaded file {file_path} {id}")
