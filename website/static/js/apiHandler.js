@@ -158,10 +158,6 @@ async function updateSaveProgress(id) {
 
     const interval = setInterval(async () => {
         const response = await postJson('/api/getSaveProgress', { 'id': id })
-        if (response.status !== 'ok') {
-            alert('Server Got Restarted, Please Re-Upload The File');
-            window.location.reload();
-        }
         const data = response['data']
 
         if (data[0] === 'running') {
@@ -192,11 +188,8 @@ async function handleUpload2(id) {
 
     const interval = setInterval(async () => {
         const response = await postJson('/api/getUploadProgress', { 'id': id })
-        if (response.status !== 'ok') {
-            alert('Server Got Restarted, Please Re-Upload The File');
-            window.location.reload();
-        }
         const data = response['data']
+
         if (data[0] === 'running') {
             const current = data[1];
             const total = data[2];
