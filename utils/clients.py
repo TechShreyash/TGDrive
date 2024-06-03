@@ -38,6 +38,10 @@ async def initialize_clients():
                     no_updates=True,
                     in_memory=not config.USE_SESSION_FILE,
                 ).start()
+                await client.send_message(
+                    config.STORAGE_CHANNEL,
+                    f"Started - {type.title()} Client {client_id}",
+                )
                 multi_clients[client_id] = client
                 work_loads[client_id] = 0
             elif type == "user":
@@ -51,6 +55,10 @@ async def initialize_clients():
                     no_updates=True,
                     in_memory=not config.USE_SESSION_FILE,
                 ).start()
+                await client.send_message(
+                    config.STORAGE_CHANNEL,
+                    f"Started - {type.title()} Client {client_id}",
+                )
                 premium_clients[client_id] = client
                 premium_work_loads[client_id] = 0
 
