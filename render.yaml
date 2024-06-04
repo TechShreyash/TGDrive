@@ -13,20 +13,14 @@ services:
       - key: PORT
         value: 8000
       - key: ADMIN_PASSWORD
-        generateValue: false
         sync: false
       - key: API_ID
-        generateValue: false
         sync: false
       - key: API_HASH
-        generateValue: false
         sync: false
       - key: BOT_TOKENS
-        generateValue: false
         sync: false
       - key: STORAGE_CHANNEL
-        generateValue: false
         sync: false
       - key: DATABASE_BACKUP_MSG_ID
-        generateValue: false
         sync: false
