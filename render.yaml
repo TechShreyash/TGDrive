@@ -14,7 +14,6 @@ services:
         value: 8000
       - key: ADMIN_PASSWORD
         value: admin
-        sync: false
       - key: API_ID
         sync: false
       - key: API_HASH
