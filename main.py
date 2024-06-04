@@ -15,6 +15,7 @@ from utils.extra import auto_ping_website, convert_class_to_dict
 from utils.streamer import media_streamer
 from utils.uploader import STOP_TRANSMISSION, PROGRESS_CACHE, start_file_uploader
 from utils.logger import Logger
+import urllib.parse
 
 
 # Startup Event
@@ -112,11 +113,19 @@ async def api_get_directory(request: Request):
 
     if data["path"] == "/trash":
         data = {"contents": DRIVE_DATA.get_trashed_files_folders()}
-        folder_data = convert_class_to_dict(data, showtrash=True)
+        folder_data = convert_class_to_dict(data, isObject=False, showtrash=True)
+
+    elif "/search_" in data["path"]:
+        query = urllib.parse.unquote(data["path"].split("_", 1)[1])
+        print(query)
+        data = {"contents": DRIVE_DATA.search_file_folder(query)}
+        print(data)
+        folder_data = convert_class_to_dict(data, isObject=False, showtrash=False)
+        print(folder_data)
 
     else:
         folder_data = DRIVE_DATA.get_directory(data["path"])
-        folder_data = convert_class_to_dict(folder_data, showtrash=False)
+        folder_data = convert_class_to_dict(folder_data, isObject=True, showtrash=False)
     return JSONResponse({"status": "ok", "data": folder_data})
 
 

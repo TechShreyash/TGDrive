@@ -1,11 +1,18 @@
 // Handling New Button On Sidebar Click
+const isTrash = getCurrentPath().startsWith('/trash')
+const isSearch = getCurrentPath().startsWith('/search')
 
-document.getElementById('new-button').addEventListener('click', () => {
-    document.getElementById('new-upload').style.zIndex = '1'
-    document.getElementById('new-upload').style.opacity = '1'
-    document.getElementById('new-upload').style.top = '80px'
-    document.getElementById('new-upload-focus').focus()
-});
+if (!isTrash && !isSearch) {
+    document.getElementById('new-button').addEventListener('click', () => {
+        document.getElementById('new-upload').style.zIndex = '1'
+        document.getElementById('new-upload').style.opacity = '1'
+        document.getElementById('new-upload').style.top = '80px'
+        document.getElementById('new-upload-focus').focus()
+    });
+}
+else {
+    document.getElementById('new-button').style.display = 'none'
+}
 function closeNewUploadFocus() {
     setTimeout(() => {
         document.getElementById('new-upload').style.opacity = '0'

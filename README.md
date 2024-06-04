@@ -35,7 +35,7 @@ Feel free to test the features with the provided login credentials.
 
 - [x] 4GB file upload using Telegram Premium account
 - [x] Folder/File sorting by date/time uploaded (Newest First)
-- [ ] Add search feature for files/folders
+- [x] Add search feature for files/folders
 - [ ] Video player and image viewer support on website
 - [ ] Remote URL upload support
 

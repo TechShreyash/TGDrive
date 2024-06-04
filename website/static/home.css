@@ -387,6 +387,11 @@
     gap: 40px;
 }
 
+#search-form {
+    height: 100%;
+    width: 100%;
+}
+
 .search-bar {
     width: 100%;
     display: flex;

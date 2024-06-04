@@ -1,10 +1,10 @@
 function openFolder() {
-    const path = getCurrentPath() + this.getAttribute('data-id') + '/'
+    const path = this.getAttribute('data-path') + '/' + this.getAttribute('data-id') + '/'
     window.location.href = `/?path=${path}`
 }
 
 function openFile() {
-    const path = '/file?path=' + getCurrentPath() + this.getAttribute('data-id')
+    const path = '/file?path=' + this.getAttribute('data-path') + '/' + this.getAttribute('data-id')
     window.open(path, '_blank')
 }
 
@@ -88,7 +88,8 @@ document.getElementById('rename-create').addEventListener('click', async () => {
     }
 
     const id = document.getElementById('rename-file-folder').getAttribute('data-id')
-    const path = getCurrentPath() + id
+
+    const path = document.getElementById(`more-option-${id}`).getAttribute('data-path') + '/' + id
 
     const data = {
         'name': name,
@@ -111,7 +112,7 @@ document.getElementById('rename-create').addEventListener('click', async () => {
 async function trashFileFolder() {
     const id = this.getAttribute('id').split('-')[1]
     console.log(id)
-    const path = getCurrentPath() + id
+    const path = document.getElementById(`more-option-${id}`).getAttribute('data-path') + '/' + id
     const data = {
         'path': path,
         'trash': true
@@ -164,7 +165,7 @@ async function deleteFileFolder() {
 
 async function shareFile() {
     const id = this.getAttribute('id').split('-')[1]
-    const path = getCurrentPath() + id
+    const path = document.getElementById(`more-option-${id}`).getAttribute('data-path') + '/' + id
     const url = new URL(window.location.href);
     const link = `${getRootUrl()}/file?path=${path}`
 

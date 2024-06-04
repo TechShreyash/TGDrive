@@ -6,8 +6,8 @@ from utils.logger import Logger
 logger = Logger(__name__)
 
 
-def convert_class_to_dict(data, showtrash=False):
-    if showtrash == False:
+def convert_class_to_dict(data,isObject, showtrash=False):
+    if isObject == True:
         data = data.__dict__.copy()
     new_data = {"contents": {}}
 

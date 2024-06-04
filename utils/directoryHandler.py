@@ -8,7 +8,6 @@ from utils.logger import Logger
 from datetime import datetime
 
 logger = Logger("directoryHandler")
-DRIVE_DATA = None
 
 cache_dir = Path("./cache")
 cache_dir.mkdir(parents=True, exist_ok=True)
@@ -19,7 +18,7 @@ def getRandomID():
     global DRIVE_DATA
     while True:
         id = "".join(random.choices(string.ascii_uppercase + string.digits, k=6))
-        
+
         if id not in DRIVE_DATA.used_ids:
             DRIVE_DATA.used_ids.append(id)
             return id
@@ -185,6 +184,23 @@ class NewDriveData:
         folder_data = self.get_directory(folder_path)
         del folder_data.contents[file_id]
         self.save()
+
+    def search_file_folder(self, query: str):
+        root_dir = self.get_directory("/")
+        search_results = {}
+
+        def traverse_directory(folder):
+            for item in folder.contents.values():
+                if query.lower() in item.name.lower():
+                    search_results[item.id] = item
+                if item.type == "folder":
+                    traverse_directory(item)
+
+        traverse_directory(root_dir)
+        return search_results
+
+
+DRIVE_DATA: NewDriveData = None
 
 
 # Function to backup the drive data to telegram
