@@ -44,12 +44,5 @@ DATABASE_BACKUP_TIME = int(
 # Time delay in seconds before retrying after a Telegram API floodwait error
 SLEEP_THRESHOLD = int(os.getenv("SLEEP_THRESHOLD", 60))  # Default to 60 seconds
 
-# Choose whether to use .session files for session persistence or in-memory sessions
-# Set to False to use in-memory sessions instead of .session files
-USE_SESSION_FILE = bool(
-    os.getenv("USE_SESSION_FILE", False)
-)  # Default to True (use .session files)
-
-
 # Domain to auto-ping and keep the website active
 WEBSITE_URL = os.getenv("WEBSITE_URL", None)
