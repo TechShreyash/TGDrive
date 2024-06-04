@@ -1,7 +1,12 @@
 import asyncio, config
+import pyrogram.utils
 from pathlib import Path
 from pyrogram import Client
 from utils.logger import Logger
+import pyrogram
+
+# Bypass "Peer ID Invalid" Error
+pyrogram.utils.MIN_CHANNEL_ID = config.STORAGE_CHANNEL
 
 logger = Logger("clients")
 
@@ -36,7 +41,6 @@ async def initialize_clients():
                     sleep_threshold=config.SLEEP_THRESHOLD,
                     workdir=session_cache_path,
                     no_updates=True,
-                    in_memory=not config.USE_SESSION_FILE,
                 ).start()
                 await client.send_message(
                     config.STORAGE_CHANNEL,
@@ -53,7 +57,6 @@ async def initialize_clients():
                     sleep_threshold=config.SLEEP_THRESHOLD,
                     workdir=session_cache_path,
                     no_updates=True,
-                    in_memory=not config.USE_SESSION_FILE,
                 ).start()
                 await client.send_message(
                     config.STORAGE_CHANNEL,
