@@ -47,7 +47,7 @@ SLEEP_THRESHOLD = int(os.getenv("SLEEP_THRESHOLD", 60))  # Default to 60 seconds
 # Choose whether to use .session files for session persistence or in-memory sessions
 # Set to False to use in-memory sessions instead of .session files
 USE_SESSION_FILE = bool(
-    os.getenv("USE_SESSION_FILE", True)
+    os.getenv("USE_SESSION_FILE", False)
 )  # Default to True (use .session files)
 
 
