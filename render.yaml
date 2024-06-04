@@ -14,3 +14,14 @@ services:
         value: 8000
       - key: ADMIN_PASSWORD
         value: admin
+        sync: false
+      - key: API_ID
+        sync: false
+      - key: API_HASH
+        sync: false
+      - key: BOT_TOKENS
+        sync: false
+      - key: STORAGE_CHANNEL
+        sync: false
+      - key: DATABASE_BACKUP_MSG_ID
+        sync: false
