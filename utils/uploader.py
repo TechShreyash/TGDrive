@@ -42,6 +42,8 @@ async def start_file_uploader(file_path, id, directory_path, filename, file_size
         file_path,
         progress=progress_callback,
         progress_args=(id, client, file_path),
+        force_document=True,
+        disable_notification=True,
     )
     size = (message.document or message.audio).file_size
 
