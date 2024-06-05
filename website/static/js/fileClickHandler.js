@@ -4,7 +4,13 @@ function openFolder() {
 }
 
 function openFile() {
-    const path = '/file?path=' + this.getAttribute('data-path') + '/' + this.getAttribute('data-id')
+    const fileName = this.getAttribute('data-name').toLowerCase()
+    let path = '/file?path=' + this.getAttribute('data-path') + '/' + this.getAttribute('data-id')
+
+    if (fileName.endsWith('.mp4') || fileName.endsWith('.mkv') || fileName.endsWith('.webm') || fileName.endsWith('.mov') || fileName.endsWith('.avi') || fileName.endsWith('.ts') || fileName.endsWith('.ogv')) {
+        path = '/stream?url=' + getRootUrl() + path
+    }
+
     window.open(path, '_blank')
 }
 
@@ -166,8 +172,8 @@ async function deleteFileFolder() {
 async function shareFile() {
     const id = this.getAttribute('id').split('-')[1]
     const path = document.getElementById(`more-option-${id}`).getAttribute('data-path') + '/' + id
-    const url = new URL(window.location.href);
-    const link = `${getRootUrl()}/file?path=${path}`
+    const root_url = getRootUrl()
+    const link = `${root_url}/stream?url=${root_url}/file?path=${path}`
 
     copyTextToClipboard(link)
 }

@@ -45,6 +45,11 @@ async def home_page():
     return FileResponse("website/home.html")
 
 
+@app.get("/stream")
+async def home_page():
+    return FileResponse("website/VideoPlayer.html")
+
+
 @app.get("/static/{file_path:path}")
 async def static_files(file_path):
     if "apiHandler.js" in file_path:

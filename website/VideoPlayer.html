@@ -1,0 +1,123 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>TG Drive - Video Player</title>
+
+    <link href="//vjs.zencdn.net/8.3.0/video-js.min.css" rel="stylesheet">
+    <script src="//vjs.zencdn.net/8.3.0/video.min.js"></script>
+    <style>
+        body {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            height: 100vh;
+            margin: 0;
+            font-family: Arial, sans-serif;
+        }
+
+        .video-container {
+            width: 90%;
+            max-width: 800px;
+        }
+
+        .buttons-container {
+            margin-top: 20px;
+            display: flex;
+            justify-content: space-evenly;
+            width: 90%;
+            max-width: 800px;
+        }
+
+        .copy-button {
+            padding: 10px 20px;
+            font-size: 16px;
+            cursor: pointer;
+            background-color: #007bff;
+            color: white;
+            border: none;
+            border-radius: 5px;
+            transition: background-color 0.3s ease;
+        }
+
+        .copy-button:hover {
+            background-color: #0056b3;
+        }
+    </style>
+</head>
+
+<body>
+
+    <div class="video-container">
+        <video id="my-player" class="video-js vjs-fluid" controls preload="auto" data-setup='{}'>
+            <source id="video-src" src="" type="video/mp4">
+            </source>
+            <p class="vjs-no-js">
+                To view this video please enable JavaScript, and consider upgrading to a
+                web browser that
+                <a href="https://videojs.com/html5-video-support/" target="_blank">
+                    supports HTML5 video
+                </a>
+            </p>
+        </video>
+    </div>
+
+    <div class="buttons-container">
+        <button class="copy-button" onclick="copyStreamUrl()">Copy Stream URL</button>
+        <button class="copy-button" onclick="copyDownloadUrl()">Copy Download URL</button>
+    </div>
+
+    <script>
+        const downloadUrl = (new URL(window.location.href)).searchParams.get('url');
+        document.getElementById('video-src').src = downloadUrl;
+
+
+        function copyTextToClipboard(text) {
+            if (navigator.clipboard && navigator.clipboard.writeText) {
+                navigator.clipboard.writeText(text).then(function () {
+                    alert('Link copied to clipboard!');
+                }).catch(function (err) {
+                    console.error('Could not copy text: ', err);
+                    fallbackCopyTextToClipboard(text);
+                });
+            } else {
+                fallbackCopyTextToClipboard(text);
+            }
+        }
+
+        function fallbackCopyTextToClipboard(text) {
+            const textArea = document.createElement('textarea');
+            textArea.value = text;
+            document.body.appendChild(textArea);
+            textArea.focus();
+            textArea.select();
+
+            try {
+                const successful = document.execCommand('copy');
+                if (successful) {
+                    alert('Link copied to clipboard!');
+                } else {
+                    alert('Failed to copy the link.');
+                }
+            } catch (err) {
+                console.error('Fallback: Oops, unable to copy', err);
+            }
+
+            document.body.removeChild(textArea);
+        }
+
+        function copyStreamUrl() {
+            copyTextToClipboard(window.location.href);
+        }
+
+        function copyDownloadUrl() {
+            copyTextToClipboard(downloadUrl);
+        }
+    </script>
+
+</body>
+
+</html>
