@@ -22,9 +22,15 @@ async def download_file(url, id, path):
         async with aiohttp.ClientSession() as session:
             async with session.get(url) as response:
                 total_size = int(response.headers["Content-Length"])
-                filename = parse_content_disposition(
-                    response.headers["Content-Disposition"]
-                )
+                try:
+                    if response.headers.get("Content-Disposition"):
+                        filename = parse_content_disposition(
+                            response.headers["Content-Disposition"]
+                        )
+                    else:
+                        filename = url.strip("/").split("/")[-1]
+                except:
+                    filename = url.strip("/").split("/")[-1]
                 ext = filename.lower().split(".")[-1]
                 file_location = cache_dir / f"{id}.{ext}"
 
@@ -49,8 +55,9 @@ async def download_file(url, id, path):
                 asyncio.create_task(
                     start_file_uploader(file_location, id, path, filename, total_size)
                 )
-    except:
+    except Exception as e:
         DOWNLOAD_PROGRESS[id] = ("error", 0, 0)
+        logger.error(f"Failed to download file: {url} {e}")
 
 
 async def get_file_info_from_url(url):
