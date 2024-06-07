@@ -60,11 +60,14 @@ async def get_file_info_from_url(url):
         async with session.get(url) as response:
             logger.info(str(response.headers))
             try:
-                filename = parse_content_disposition(
-                    response.headers["Content-Disposition"]
-                )
+                if response.headers.get("Content-Disposition"):
+                    filename = parse_content_disposition(
+                        response.headers["Content-Disposition"]
+                    )
+                else:
+                    filename = url.strip("/").split("/")[-1]
             except:
-                raise Exception("Failed to get filename")
+                filename = url.strip("/").split("/")[-1]
 
             try:
                 size = int(response.headers["Content-Length"])
