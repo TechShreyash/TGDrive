@@ -2,7 +2,7 @@ import aiohttp, aiofiles, asyncio
 from utils.extra import parse_content_disposition
 from utils.logger import Logger
 from pathlib import Path
-
+from urllib.parse import unquote_plus
 from utils.uploader import start_file_uploader
 
 logger = Logger(__name__)
@@ -28,9 +28,10 @@ async def download_file(url, id, path):
                             response.headers["Content-Disposition"]
                         )
                     else:
-                        filename = url.strip("/").split("/")[-1]
+                        filename = unquote_plus(url.strip("/").split("/")[-1])
                 except:
-                    filename = url.strip("/").split("/")[-1]
+                    filename = unquote_plus(url.strip("/").split("/")[-1])
+
                 ext = filename.lower().split(".")[-1]
                 file_location = cache_dir / f"{id}.{ext}"
 
@@ -72,9 +73,9 @@ async def get_file_info_from_url(url):
                         response.headers["Content-Disposition"]
                     )
                 else:
-                    filename = url.strip("/").split("/")[-1]
+                    filename = unquote_plus(url.strip("/").split("/")[-1])
             except:
-                filename = url.strip("/").split("/")[-1]
+                filename = unquote_plus(url.strip("/").split("/")[-1])
 
             try:
                 size = int(response.headers["Content-Length"])
