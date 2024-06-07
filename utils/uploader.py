@@ -44,7 +44,7 @@ async def start_file_uploader(file_path, id, directory_path, filename, file_size
         progress_args=(id, client, file_path),
         force_document=True,
         disable_notification=True,
-        file_name=id
+        file_name=id,
     )
     size = message.document.file_size
 

@@ -76,7 +76,7 @@ async function createNewFolder() {
     }
 }
 
-// File Uploader
+// File Uploader Start
 
 const MAX_FILE_SIZE = MAX_FILE_SIZE__SDGJDG // Will be replaced by the python
 
@@ -212,3 +212,98 @@ async function handleUpload2(id) {
         }
     }, 3000)
 }
+
+// File Uploader End
+
+
+// URL Uploader Start
+
+async function get_file_info_from_url(url) {
+    const data = { 'url': url }
+    const json = await postJson('/api/getFileInfoFromUrl', data)
+    if (json.status === 'ok') {
+        return json.data
+    } else {
+        throw new Error(`Error Getting File Info : ${json.status}`)
+    }
+
+}
+
+async function start_file_download_from_url(url) {
+    const data = { 'url': url, 'path': getCurrentPath() }
+    const json = await postJson('/api/startFileDownloadFromUrl', data)
+    if (json.status === 'ok') {
+        return json.id
+    } else {
+        throw new Error(`Error Starting File Download : ${json.status}`)
+    }
+}
+
+async function download_progress_updater(id, file_name, file_size) {
+    // Showing file uploader
+    document.getElementById('bg-blur').style.zIndex = '2';
+    document.getElementById('bg-blur').style.opacity = '0.1';
+    document.getElementById('file-uploader').style.zIndex = '3';
+    document.getElementById('file-uploader').style.opacity = '1';
+
+    document.getElementById('upload-filename').innerText = 'Filename: ' + file_name;
+    document.getElementById('upload-filesize').innerText = 'Filesize: ' + (file_size / (1024 * 1024)).toFixed(2) + ' MB';
+    document.getElementById('upload-status').innerText = 'Status: Downloading File From Url To Backend Server';
+
+    const interval = setInterval(async () => {
+        const response = await postJson('/api/getFileDownloadProgress', { 'id': id })
+        const data = response['data']
+
+        if (data[0] === 'running') {
+            const current = data[1];
+            const total = data[2];
+
+            const percentComplete = (current / total) * 100;
+            progressBar.style.width = percentComplete + '%';
+            uploadPercent.innerText = 'Progress : ' + percentComplete.toFixed(2) + '%';
+        }
+        else if (data[0] === 'error') {
+            throw new Error('Failed To Download File From URL To Backend Server')
+        }
+        else if (data[0] === 'completed') {
+            clearInterval(interval);
+            uploadPercent.innerText = 'Progress : 100%'
+            progressBar.style.width = '100%';
+
+            await handleUpload2(id)
+        }
+    }, 3000)
+}
+
+
+async function Start_URL_Upload() {
+    try {
+        document.getElementById('new-url-upload').style.opacity = '0';
+        setTimeout(() => {
+            document.getElementById('new-url-upload').style.zIndex = '-1';
+        }, 300)
+
+        const file_url = document.getElementById('remote-url').value
+
+        const file_info = await get_file_info_from_url(file_url)
+        const file_name = file_info.file_name
+        const file_size = file_info.file_size
+
+        if (file_size > MAX_FILE_SIZE) {
+            throw new Error(`File size exceeds ${(MAX_FILE_SIZE / (1024 * 1024 * 1024)).toFixed(2)} GB limit`)
+        }
+
+        const id = await start_file_download_from_url(file_url, file_name, file_size)
+
+        await download_progress_updater(id, file_name, file_size)
+
+    }
+    catch (err) {
+        alert(err)
+        window.location.reload()
+    }
+
+
+}
+
+// URL Uploader End

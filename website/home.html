@@ -42,6 +42,11 @@
                     File Upload
                 </div>
                 <input type="file" id="fileInput" style="height: 0px; width: 0px; border: none; position: absolute" />
+                <hr />
+                <div id="url-upload-btn">
+                    <img src="static/assets/link-icon.svg" />
+                    URL Upload
+                </div>
             </div>
 
             <div class="sidebar-menu">
@@ -74,6 +79,17 @@
             </div>
         </div>
         <!-- File / Folder Rename End -->
+
+        <!-- Remote Upload Start -->
+        <div id="new-url-upload" class="create-new-folder">
+            <span>Url Upload</span>
+            <input type="text" id="remote-url" placeholder="Enter Direct Download Link Of File" autocomplete="off" />
+            <div>
+                <button id="remote-cancel">Cancel</button>
+                <button id="remote-start">Create</button>
+            </div>
+        </div>
+        <!-- Remote Upload End -->
 
         <!-- Get Password Start -->
         <div id="get-password" class="create-new-folder">
@@ -109,7 +125,7 @@
                     <form id="search-form">
                         <input id="file-search" type="text" placeholder="Search in Drive" autocomplete="off" />
                     </form>
-                    
+
                 </div>
             </div>
 

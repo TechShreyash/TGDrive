@@ -13,6 +13,9 @@ if (!isTrash && !isSearch) {
 else {
     document.getElementById('new-button').style.display = 'none'
 }
+
+// New File Upload Start
+
 function closeNewUploadFocus() {
     setTimeout(() => {
         document.getElementById('new-upload').style.opacity = '0'
@@ -28,6 +31,10 @@ document.getElementById('new-upload-focus').addEventListener('focusout', closeNe
 document.getElementById('file-upload-btn').addEventListener('click', () => {
     document.getElementById('fileInput').click()
 });
+
+// New File Upload End
+
+// New Folder Start
 
 document.getElementById('new-folder-btn').addEventListener('click', () => {
     document.getElementById('new-folder-name').value = '';
@@ -54,3 +61,35 @@ document.getElementById('new-folder-cancel').addEventListener('click', () => {
 });
 
 document.getElementById('new-folder-create').addEventListener('click', createNewFolder);
+
+// New Folder End
+
+// New Url Upload Start
+
+document.getElementById('url-upload-btn').addEventListener('click', () => {
+    document.getElementById('remote-url').value = '';
+    document.getElementById('bg-blur').style.zIndex = '2';
+    document.getElementById('bg-blur').style.opacity = '0.1';
+
+    document.getElementById('new-url-upload').style.zIndex = '3';
+    document.getElementById('new-url-upload').style.opacity = '1';
+    setTimeout(() => {
+        document.getElementById('remote-url').focus();
+    }, 300)
+})
+
+document.getElementById('remote-cancel').addEventListener('click', () => {
+    document.getElementById('remote-url').value = '';
+    document.getElementById('bg-blur').style.opacity = '0';
+    setTimeout(() => {
+        document.getElementById('bg-blur').style.zIndex = '-1';
+    }, 300)
+    document.getElementById('new-url-upload').style.opacity = '0';
+    setTimeout(() => {
+        document.getElementById('new-url-upload').style.zIndex = '-1';
+    }, 300)
+});
+
+document.getElementById('remote-start').addEventListener('click', Start_URL_Upload);
+
+// New Url Upload End

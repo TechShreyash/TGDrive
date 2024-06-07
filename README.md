@@ -14,6 +14,7 @@ Welcome to TGDrive! This web application replicates Google Drive's functionaliti
 - **Multiple Bots/Clients:** Support for multiple bots/clients for file operations and streaming from Telegram.
 - **Large File Support:** Upload files up to 4GB using Telegram Premium accounts.
 - **Auto Pinger:** Built-in feature to keep the website active by preventing idle timeouts.
+- **URL Upload Support:** Upload files directly to TG Drive from any direct download link of a file.
 
 ## Tech Stack
 
@@ -33,11 +34,11 @@ Feel free to test the features with the provided login credentials.
 
 ## Todo List
 
-- [x] 4GB file upload using Telegram Premium account
-- [x] Folder/File sorting by date/time uploaded (Newest First)
-- [x] Add search feature for files/folders
-- [x] Video player support on website
-- [ ] Remote URL upload support
+- [x] Implement 4GB file uploads using Telegram Premium accounts.
+- [x] Enable sorting of folders/files by date/time uploaded (Newest First).
+- [x] Add a search feature for files and folders.
+- [x] Integrate video player support on the website.
+- [x] Support remote URL uploads.
 
 ## Deploying Your Own
 
@@ -108,6 +109,8 @@ Access the application at `http://127.0.0.1:8000`.
 [![Deploy to Render](https://render.com/images/deploy-to-render-button.svg)](https://render.com/deploy?repo=https://github.com/TechShreyash/TGDrive)
 
 </div>
+
+> **Note:** After updating the TG Drive code, clear your browser's cache to ensure the latest JavaScript files are loaded and run correctly.
 
 ## Contributing
 

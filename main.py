@@ -1,3 +1,4 @@
+from utils.downloader import download_file, get_file_info_from_url
 import shutil, asyncio
 from pathlib import Path
 from contextlib import asynccontextmanager
@@ -272,3 +273,53 @@ async def delete_file_folder(request: Request):
     logger.info(f"deleteFileFolder {data}")
     DRIVE_DATA.delete_file_folder(data["path"])
     return JSONResponse({"status": "ok"})
+
+
+@app.post("/api/getFileInfoFromUrl")
+async def getFileInfoFromUrl(request: Request):
+
+    data = await request.json()
+
+    if data["password"] != ADMIN_PASSWORD:
+        return JSONResponse({"status": "Invalid password"})
+
+    logger.info(f"getFileInfoFromUrl {data}")
+    try:
+        file_info = await get_file_info_from_url(data["url"])
+        return JSONResponse({"status": "ok", "data": file_info})
+    except Exception as e:
+        return JSONResponse({"status": str(e)})
+
+
+@app.post("/api/startFileDownloadFromUrl")
+async def startFileDownloadFromUrl(request: Request):
+    data = await request.json()
+
+    if data["password"] != ADMIN_PASSWORD:
+        return JSONResponse({"status": "Invalid password"})
+
+    logger.info(f"startFileDownloadFromUrl {data}")
+    try:
+        id = getRandomID()
+        asyncio.create_task(download_file(data["url"], id, data["path"]))
+        return JSONResponse({"status": "ok", "id": id})
+    except Exception as e:
+        return JSONResponse({"status": str(e)})
+
+
+@app.post("/api/getFileDownloadProgress")
+async def getFileDownloadProgress(request: Request):
+    from utils.downloader import DOWNLOAD_PROGRESS
+
+    data = await request.json()
+
+    if data["password"] != ADMIN_PASSWORD:
+        return JSONResponse({"status": "Invalid password"})
+
+    logger.info(f"getFileDownloadProgress {data}")
+
+    try:
+        progress = DOWNLOAD_PROGRESS[data["id"]]
+        return JSONResponse({"status": "ok", "data": progress})
+    except:
+        return JSONResponse({"status": "not found"})
