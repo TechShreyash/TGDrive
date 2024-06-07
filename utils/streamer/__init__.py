@@ -55,11 +55,9 @@ async def media_streamer(channel: int, message_id: int, file_name: str, request)
     body = tg_connect.yield_file(
         file_id, offset, first_part_cut, last_part_cut, part_count, chunk_size
     )
-    mime_type = file_id.mime_type
-    disposition = "attachment"
 
-    if not mime_type:
-        mime_type = mimetypes.guess_type(file_name)[0] or "application/octet-stream"
+    disposition = "attachment"
+    mime_type = mimetypes.guess_type(file_name.lower())[0] or "application/octet-stream"
 
     if (
         "video/" in mime_type
