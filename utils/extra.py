@@ -72,3 +72,36 @@ def reset_cache_dir():
                 file_path.unlink()
             except:
                 pass
+
+
+import re
+import urllib.parse
+
+
+def parse_content_disposition(content_disposition):
+    # Split the content disposition into parts
+    parts = content_disposition.split(";")
+
+    # Initialize filename variable
+    filename = None
+
+    # Loop through parts to find the filename
+    for part in parts:
+        part = part.strip()
+        if part.startswith("filename="):
+            # If filename is found
+            filename = part.split("=", 1)[1]
+        elif part.startswith("filename*="):
+            # If filename* is found
+            match = re.match(r"filename\*=(\S*)''(.*)", part)
+            if match:
+                encoding, value = match.groups()
+                try:
+                    filename = urllib.parse.unquote(value, encoding=encoding)
+                except ValueError:
+                    # Handle invalid encoding
+                    pass
+
+    if filename is None:
+        raise Exception("Failed to get filename")
+    return filename
