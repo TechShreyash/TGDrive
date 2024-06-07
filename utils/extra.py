@@ -6,7 +6,7 @@ from utils.logger import Logger
 logger = Logger(__name__)
 
 
-def convert_class_to_dict(data,isObject, showtrash=False):
+def convert_class_to_dict(data, isObject, showtrash=False):
     if isObject == True:
         data = data.__dict__.copy()
     new_data = {"contents": {}}
@@ -53,3 +53,22 @@ async def auto_ping_website():
                     logger.warning(f"Failed to ping website: {e}")
 
                 await asyncio.sleep(60)  # Ping website every minute
+
+
+from pathlib import Path
+
+
+def reset_cache_dir():
+    cache_dir = Path("./cache")
+    cache_dir.mkdir(parents=True, exist_ok=True)
+
+    for file_path in cache_dir.iterdir():
+        if file_path.is_file() and file_path.suffix not in [
+            ".session",
+            ".session-journal",
+            ".data",
+        ]:
+            try:
+                file_path.unlink()
+            except:
+                pass

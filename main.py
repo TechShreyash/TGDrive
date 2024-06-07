@@ -12,7 +12,7 @@ from utils.directoryHandler import (
     getRandomID,
     loadDriveData,
 )
-from utils.extra import auto_ping_website, convert_class_to_dict
+from utils.extra import auto_ping_website, convert_class_to_dict, reset_cache_dir
 from utils.streamer import media_streamer
 from utils.uploader import STOP_TRANSMISSION, PROGRESS_CACHE, start_file_uploader
 from utils.logger import Logger
@@ -22,6 +22,9 @@ import urllib.parse
 # Startup Event
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    # Reset the cache directory, delete cache files
+    reset_cache_dir()
+
     # Initialize the clients
     await initialize_clients()
 
