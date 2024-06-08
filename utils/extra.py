@@ -46,6 +46,8 @@ async def auto_ping_website():
     if WEBSITE_URL is not None:
         session = create_scraper()
         while True:
+            await asyncio.sleep(60)  # Ping website every minute
+
             try:
                 response = session.get(WEBSITE_URL)
                 if response.status_code == 200:
@@ -54,8 +56,6 @@ async def auto_ping_website():
                     logger.warning(f"Failed to ping website: {response.status_code}")
             except Exception as e:
                 logger.warning(f"Failed to ping website: {e}")
-
-            await asyncio.sleep(60)  # Ping website every minute
 
 
 from pathlib import Path
