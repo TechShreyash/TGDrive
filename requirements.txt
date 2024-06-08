@@ -4,4 +4,4 @@ uvicorn
 fastapi[all]
 python-dotenv
 aiofiles
-cloudscraper
+aiohttp
