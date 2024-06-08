@@ -1,10 +1,10 @@
 from utils.downloader import download_file, get_file_info_from_url
-import shutil, asyncio
+import asyncio
 from pathlib import Path
 from contextlib import asynccontextmanager
 import aiofiles
 from fastapi import FastAPI, HTTPException, Request, File, UploadFile, Form, Response
-from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
+from fastapi.responses import FileResponse,  JSONResponse
 from config import ADMIN_PASSWORD, MAX_FILE_SIZE, STORAGE_CHANNEL
 from utils.clients import initialize_clients
 from utils.directoryHandler import (
@@ -14,7 +14,7 @@ from utils.directoryHandler import (
 )
 from utils.extra import auto_ping_website, convert_class_to_dict, reset_cache_dir
 from utils.streamer import media_streamer
-from utils.uploader import STOP_TRANSMISSION, PROGRESS_CACHE, start_file_uploader
+from utils.uploader import start_file_uploader
 from utils.logger import Logger
 import urllib.parse
 
@@ -35,7 +35,7 @@ async def lifespan(app: FastAPI):
     asyncio.create_task(backup_drive_data())
 
     # Start the website auto ping task
-    asyncio.create_task(auto_ping_website())
+    # asyncio.create_task(auto_ping_website())
 
     yield
 
