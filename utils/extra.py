@@ -48,7 +48,7 @@ async def auto_ping_website():
         while True:
             try:
                 response = session.get(WEBSITE_URL)
-                if response.status == 200:
+                if response.status_code == 200:
                     logger.info(f"Pinged website at {get_current_utc_time()}")
                 else:
                     logger.warning(f"Failed to ping website: {response.status}")
