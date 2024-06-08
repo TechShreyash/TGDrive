@@ -51,7 +51,7 @@ async def auto_ping_website():
                 if response.status_code == 200:
                     logger.info(f"Pinged website at {get_current_utc_time()}")
                 else:
-                    logger.warning(f"Failed to ping website: {response.status}")
+                    logger.warning(f"Failed to ping website: {response.status_code}")
             except Exception as e:
                 logger.warning(f"Failed to ping website: {e}")
 
