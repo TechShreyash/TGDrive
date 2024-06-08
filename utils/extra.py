@@ -1,6 +1,6 @@
 from datetime import datetime, timezone
 from config import WEBSITE_URL
-import aiohttp, asyncio
+import asyncio
 from utils.logger import Logger
 
 logger = Logger(__name__)
@@ -39,20 +39,23 @@ def get_current_utc_time():
     return datetime.now(timezone.utc).strftime("Date - %Y-%m-%d | Time - %H:%M:%S")
 
 
+from cloudscraper import create_scraper
+
+
 async def auto_ping_website():
     if WEBSITE_URL is not None:
-        async with aiohttp.ClientSession() as session:
-            while True:
-                try:
-                    async with session.get(WEBSITE_URL) as response:
-                        if response.status == 200:
-                            logger.info(f"Pinged website at {get_current_utc_time()}")
-                        else:
-                            logger.warning(f"Failed to ping website: {response.status}")
-                except Exception as e:
-                    logger.warning(f"Failed to ping website: {e}")
+        session = create_scraper()
+        while True:
+            try:
+                response = session.get(WEBSITE_URL)
+                if response.status == 200:
+                    logger.info(f"Pinged website at {get_current_utc_time()}")
+                else:
+                    logger.warning(f"Failed to ping website: {response.status}")
+            except Exception as e:
+                logger.warning(f"Failed to ping website: {e}")
 
-                await asyncio.sleep(60)  # Ping website every minute
+            await asyncio.sleep(60)  # Ping website every minute
 
 
 from pathlib import Path

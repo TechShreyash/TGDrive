@@ -1,6 +1,3 @@
-from testerer import main
-
-
 from utils.downloader import download_file, get_file_info_from_url
 import shutil, asyncio
 from pathlib import Path
@@ -25,8 +22,6 @@ import urllib.parse
 # Startup Event
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    await main()
-
     # Reset the cache directory, delete cache files
     reset_cache_dir()
 

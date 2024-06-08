@@ -3,7 +3,5 @@ tgcrypto
 uvicorn
 fastapi
 python-dotenv
-aiohttp
 aiofiles
 cloudscraper
-aiocfscrape
