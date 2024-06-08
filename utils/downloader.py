@@ -4,6 +4,8 @@ from utils.logger import Logger
 from pathlib import Path
 from urllib.parse import unquote_plus
 from utils.uploader import start_file_uploader
+from cloudscraper import create_scraper
+
 
 logger = Logger(__name__)
 
@@ -82,7 +84,9 @@ async def get_file_info_from_url(url):
                 if size == 0:
                     raise Exception("File size is 0")
             except:
-                raise Exception("Failed to get file size")
+                raise Exception(
+                    "Failed to get file size, Content-Length Headers Not Found"
+                )
 
             logger.info(f"Got file info from url: {filename} ({size} bytes)")
             return {"file_size": size, "file_name": filename}

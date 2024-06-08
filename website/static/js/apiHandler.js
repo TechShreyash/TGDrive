@@ -263,7 +263,9 @@ async function download_progress_updater(id, file_name, file_size) {
             uploadPercent.innerText = 'Progress : ' + percentComplete.toFixed(2) + '%';
         }
         else if (data[0] === 'error') {
-            throw new Error('Failed To Download File From URL To Backend Server')
+            clearInterval(interval);
+            alert('Failed To Download File From URL To Backend Server')
+            window.location.reload()
         }
         else if (data[0] === 'completed') {
             clearInterval(interval);
