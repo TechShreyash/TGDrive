@@ -1,7 +1,7 @@
 pyrogram
 tgcrypto
 uvicorn
-fastapi
+fastapi[all]
 python-dotenv
 aiofiles
 cloudscraper
