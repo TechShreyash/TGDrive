@@ -35,7 +35,7 @@ async def lifespan(app: FastAPI):
     asyncio.create_task(backup_drive_data())
 
     # Start the website auto ping task
-    # asyncio.create_task(auto_ping_website())
+    asyncio.create_task(auto_ping_website())
 
     yield
 
