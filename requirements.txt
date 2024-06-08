@@ -5,6 +5,5 @@ fastapi
 python-dotenv
 aiohttp
 aiofiles
-
-requests
 cloudscraper
+aiocfscrape
