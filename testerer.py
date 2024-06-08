@@ -19,7 +19,7 @@ async def main():
     print(response.headers)
 
     print("aiocfscrape")
-    async with CloudflareScraper as session:
+    async with CloudflareScraper() as session:
         async with session.get(
             "https://vadapav.mov/f/e6a15357-f5a3-49e9-a887-c5cd0d29fc35/"
         ) as response:
