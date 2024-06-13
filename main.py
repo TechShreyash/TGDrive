@@ -4,7 +4,7 @@ from pathlib import Path
 from contextlib import asynccontextmanager
 import aiofiles
 from fastapi import FastAPI, HTTPException, Request, File, UploadFile, Form, Response
-from fastapi.responses import FileResponse,  JSONResponse
+from fastapi.responses import FileResponse, JSONResponse
 from config import ADMIN_PASSWORD, MAX_FILE_SIZE, STORAGE_CHANNEL
 from utils.clients import initialize_clients
 from utils.directoryHandler import (
@@ -225,6 +225,7 @@ async def get_upload_progress(request: Request):
 @app.post("/api/cancelUpload")
 async def cancel_upload(request: Request):
     from utils.uploader import STOP_TRANSMISSION
+    from utils.downloader import STOP_DOWNLOAD
 
     data = await request.json()
 
@@ -233,6 +234,7 @@ async def cancel_upload(request: Request):
 
     logger.info(f"cancelUpload {data}")
     STOP_TRANSMISSION.append(data["id"])
+    STOP_DOWNLOAD.append(data["id"])
     return JSONResponse({"status": "ok"})
 
 
@@ -304,7 +306,9 @@ async def startFileDownloadFromUrl(request: Request):
     logger.info(f"startFileDownloadFromUrl {data}")
     try:
         id = getRandomID()
-        asyncio.create_task(download_file(data["url"], id, data["path"]))
+        asyncio.create_task(
+            download_file(data["url"], id, data["path"], data["filename"])
+        )
         return JSONResponse({"status": "ok", "id": id})
     except Exception as e:
         return JSONResponse({"status": str(e)})

@@ -1,18 +1,18 @@
+import os
 import aiohttp, aiofiles, asyncio
-from utils.extra import parse_content_disposition
+from utils.extra import get_filename
 from utils.logger import Logger
 from pathlib import Path
-from urllib.parse import unquote_plus
 from utils.uploader import start_file_uploader
-
 
 logger = Logger(__name__)
 
 DOWNLOAD_PROGRESS = {}
+STOP_DOWNLOAD = []
 
 
-async def download_file(url, id, path):
-    global DOWNLOAD_PROGRESS
+async def download_file(url, id, path, filename):
+    global DOWNLOAD_PROGRESS, STOP_DOWNLOAD
 
     cache_dir = Path("./cache")
     cache_dir.mkdir(parents=True, exist_ok=True)
@@ -23,16 +23,6 @@ async def download_file(url, id, path):
         async with aiohttp.ClientSession() as session:
             async with session.get(url) as response:
                 total_size = int(response.headers["Content-Length"])
-                try:
-                    if response.headers.get("Content-Disposition"):
-                        filename = parse_content_disposition(
-                            response.headers["Content-Disposition"]
-                        )
-                    else:
-                        filename = unquote_plus(url.strip("/").split("/")[-1])
-                except:
-                    filename = unquote_plus(url.strip("/").split("/")[-1])
-
                 ext = filename.lower().split(".")[-1]
                 file_location = cache_dir / f"{id}.{ext}"
 
@@ -40,6 +30,15 @@ async def download_file(url, id, path):
 
                 async with aiofiles.open(file_location, "wb") as f:
                     while True:
+                        if id in STOP_DOWNLOAD:
+                            logger.info(f"Stopping download {id}")
+                            try:
+                                await f.close()
+                                os.remove(file_location)
+                            except:
+                                pass
+                            return
+
                         chunk = await response.content.read(1024)
                         if not chunk:
                             break
@@ -68,15 +67,7 @@ async def get_file_info_from_url(url):
     async with aiohttp.ClientSession() as session:
         async with session.get(url) as response:
             logger.info(str(response.headers))
-            try:
-                if response.headers.get("Content-Disposition"):
-                    filename = parse_content_disposition(
-                        response.headers["Content-Disposition"]
-                    )
-                else:
-                    filename = unquote_plus(url.strip("/").split("/")[-1])
-            except:
-                filename = unquote_plus(url.strip("/").split("/")[-1])
+            filename = get_filename(response.headers, url)
 
             try:
                 size = int(response.headers["Content-Length"])

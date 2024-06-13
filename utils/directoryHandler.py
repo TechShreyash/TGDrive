@@ -3,9 +3,8 @@ from config import DATABASE_BACKUP_TIME, STORAGE_CHANNEL, DATABASE_BACKUP_MSG_ID
 from utils.clients import get_client
 from pyrogram.types import InputMediaDocument
 import pickle, os, random, string, asyncio
-from utils.extra import get_current_utc_time
 from utils.logger import Logger
-from datetime import datetime
+from datetime import datetime, timezone
 
 logger = Logger("directoryHandler")
 
@@ -22,6 +21,10 @@ def getRandomID():
         if id not in DRIVE_DATA.used_ids:
             DRIVE_DATA.used_ids.append(id)
             return id
+
+
+def get_current_utc_time():
+    return datetime.now(timezone.utc).strftime("Date - %Y-%m-%d | Time - %H:%M:%S")
 
 
 class Folder:

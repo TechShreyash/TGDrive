@@ -1,7 +1,11 @@
+import mimetypes
+from urllib.parse import unquote_plus
+import re
+import urllib.parse
 from pathlib import Path
-from datetime import datetime, timezone
 from config import WEBSITE_URL
 import asyncio, aiohttp
+from utils.directoryHandler import get_current_utc_time, getRandomID
 from utils.logger import Logger
 
 logger = Logger(__name__)
@@ -36,10 +40,6 @@ def convert_class_to_dict(data, isObject, showtrash=False):
     return new_data
 
 
-def get_current_utc_time():
-    return datetime.now(timezone.utc).strftime("Date - %Y-%m-%d | Time - %H:%M:%S")
-
-
 async def auto_ping_website():
     if WEBSITE_URL is not None:
         async with aiohttp.ClientSession() as session:
@@ -72,10 +72,6 @@ def reset_cache_dir():
                 pass
 
 
-import re
-import urllib.parse
-
-
 def parse_content_disposition(content_disposition):
     # Split the content disposition into parts
     parts = content_disposition.split(";")
@@ -102,4 +98,24 @@ def parse_content_disposition(content_disposition):
 
     if filename is None:
         raise Exception("Failed to get filename")
+    return filename
+
+
+def get_filename(headers, url):
+    try:
+        if headers.get("Content-Disposition"):
+            filename = parse_content_disposition(headers["Content-Disposition"])
+        else:
+            filename = unquote_plus(url.strip("/").split("/")[-1])
+    except:
+        filename = unquote_plus(url.strip("/").split("/")[-1])
+
+    filename = filename.strip()
+
+    if filename == "" or "." not in filename:
+        if headers.get("Content-Type"):
+            extension = mimetypes.guess_extension(headers["Content-Type"])
+            if extension:
+                filename = f"{getRandomID()}{extension}"
+
     return filename
