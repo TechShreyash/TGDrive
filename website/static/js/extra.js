@@ -9,10 +9,13 @@ function getCurrentPath() {
 }
 
 // Changing sidebar section class
-if (getCurrentPath().includes('/trash')) {
+if (getCurrentPath() !== '/') {
     const sections = document.querySelector('.sidebar-menu').getElementsByTagName('a')
     sections[0].setAttribute('class', 'unselected-item')
-    sections[1].setAttribute('class', 'selected-item')
+
+    if (getCurrentPath().includes('/trash')) {
+        sections[1].setAttribute('class', 'selected-item')
+    }
 }
 
 function convertBytes(bytes) {
