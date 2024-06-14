@@ -1,4 +1,4 @@
-pyrogram
+https://github.com/pyrogrammod/pyrogrammod/archive/main.zip
 tgcrypto
 uvicorn
 fastapi[all]

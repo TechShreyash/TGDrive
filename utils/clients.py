@@ -3,30 +3,27 @@ import pyrogram.utils
 from pathlib import Path
 from pyrogram import Client
 from utils.logger import Logger
-import pyrogram
 
-# Bypass "Peer ID Invalid" Error
-pyrogram.utils.MIN_CHANNEL_ID = config.STORAGE_CHANNEL
-
-logger = Logger("clients")
+logger = Logger(__name__)
 
 multi_clients = {}
 premium_clients = {}
 work_loads = {}
 premium_work_loads = {}
+main_bot = None
 
 
 async def initialize_clients():
     global multi_clients, work_loads, premium_clients, premium_work_loads
     logger.info("Initializing Clients")
 
+    session_cache_path = Path(f"./cache")
+    session_cache_path.parent.mkdir(parents=True, exist_ok=True)
+
     all_tokens = dict((i, t) for i, t in enumerate(config.BOT_TOKENS, start=1))
     all_sessions = dict(
         (i, s) for i, s in enumerate(config.STRING_SESSIONS, start=len(all_tokens) + 1)
     )
-
-    session_cache_path = Path(f"./cache")
-    session_cache_path.parent.mkdir(parents=True, exist_ok=True)
 
     async def start_client(client_id, token, type):
         try:
