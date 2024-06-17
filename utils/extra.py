@@ -107,6 +107,8 @@ def get_filename(headers, url):
             filename = parse_content_disposition(headers["Content-Disposition"])
         else:
             filename = unquote_plus(url.strip("/").split("/")[-1])
+
+        filename = filename.strip(' "')
     except:
         filename = unquote_plus(url.strip("/").split("/")[-1])
 
