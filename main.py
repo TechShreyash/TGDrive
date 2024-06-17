@@ -7,11 +7,7 @@ from fastapi import FastAPI, HTTPException, Request, File, UploadFile, Form, Res
 from fastapi.responses import FileResponse, JSONResponse
 from config import ADMIN_PASSWORD, MAX_FILE_SIZE, STORAGE_CHANNEL
 from utils.clients import initialize_clients
-from utils.directoryHandler import (
-    backup_drive_data,
-    getRandomID,
-    loadDriveData,
-)
+from utils.directoryHandler import getRandomID
 from utils.extra import auto_ping_website, convert_class_to_dict, reset_cache_dir
 from utils.streamer import media_streamer
 from utils.uploader import start_file_uploader
@@ -28,12 +24,6 @@ async def lifespan(app: FastAPI):
     # Initialize the clients
     await initialize_clients()
 
-    # Load the drive data
-    await loadDriveData()
-
-    # Start the backup drive data task
-    asyncio.create_task(backup_drive_data())
-
     # Start the website auto ping task
     asyncio.create_task(auto_ping_website())
 
@@ -41,7 +31,7 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(docs_url=None, redoc_url=None, lifespan=lifespan)
-logger = Logger("main")
+logger = Logger(__name__)
 
 
 @app.get("/")

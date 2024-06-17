@@ -46,3 +46,15 @@ SLEEP_THRESHOLD = int(os.getenv("SLEEP_THRESHOLD", 60))  # Default to 60 seconds
 
 # Domain to auto-ping and keep the website active
 WEBSITE_URL = os.getenv("WEBSITE_URL", None)
+
+
+# For Using TG Drive's Bot Mode
+
+# Main Bot Token for TG Drive's Bot Mode
+MAIN_BOT_TOKEN = os.getenv("MAIN_BOT_TOKEN", "")
+if MAIN_BOT_TOKEN.strip() == "":
+    MAIN_BOT_TOKEN = None
+
+# List of Telegram User IDs who have admin access to the bot mode
+TELEGRAM_ADMIN_IDS = os.getenv("TELEGRAM_ADMIN_IDS", "").strip(", ").split(",")
+TELEGRAM_ADMIN_IDS = [int(id) for id in TELEGRAM_ADMIN_IDS if id.strip() != ""]

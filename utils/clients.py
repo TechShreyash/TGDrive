@@ -1,7 +1,7 @@
 import asyncio, config
-import pyrogram.utils
 from pathlib import Path
 from pyrogram import Client
+from utils.directoryHandler import backup_drive_data, loadDriveData
 from utils.logger import Logger
 
 logger = Logger(__name__)
@@ -87,6 +87,12 @@ async def initialize_clients():
         logger.info("No Premium Clients Were Initialized")
 
     logger.info("Clients Initialized")
+
+    # Load the drive data
+    await loadDriveData()
+
+    # Start the backup drive data task
+    asyncio.create_task(backup_drive_data())
 
 
 def get_client(premium_required=False) -> Client:

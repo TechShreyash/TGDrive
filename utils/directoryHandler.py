@@ -1,12 +1,11 @@
 from pathlib import Path
-from config import DATABASE_BACKUP_TIME, STORAGE_CHANNEL, DATABASE_BACKUP_MSG_ID
-from utils.clients import get_client
+import config
 from pyrogram.types import InputMediaDocument
 import pickle, os, random, string, asyncio
 from utils.logger import Logger
 from datetime import datetime, timezone
 
-logger = Logger("directoryHandler")
+logger = Logger(__name__)
 
 cache_dir = Path("./cache")
 cache_dir.mkdir(parents=True, exist_ok=True)
@@ -203,7 +202,22 @@ class NewDriveData:
         return search_results
 
 
+class NewBotMode:
+    def __init__(self, drive_data: NewDriveData) -> None:
+        self.drive_data = drive_data
+
+        # Set the current folder to root directory by default
+        self.current_folder = "/"
+        self.current_folder_name = "/ (root directory)"
+
+    def set_folder(self, folder_path: str, name: str) -> None:
+        self.current_folder = folder_path
+        self.current_folder_name = name
+        self.drive_data.save()
+
+
 DRIVE_DATA: NewDriveData = None
+BOT_MODE: NewBotMode = None
 
 
 # Function to backup the drive data to telegram
@@ -212,17 +226,21 @@ async def backup_drive_data():
     logger.info("Starting backup drive data task")
 
     while True:
-        await asyncio.sleep(DATABASE_BACKUP_TIME)  # Backup the data every 24 hours
+        await asyncio.sleep(
+            config.DATABASE_BACKUP_TIME
+        )  # Backup the data every 24 hours
 
         if DRIVE_DATA.isUpdated == False:
             continue
 
         logger.info("Backing up drive data to telegram")
+        from utils.clients import get_client
+
         client = get_client()
         time_text = f"📅 **Last Updated :** {get_current_utc_time()} (UTC +00:00)"
         msg = await client.edit_message_media(
-            STORAGE_CHANNEL,
-            DATABASE_BACKUP_MSG_ID,
+            config.STORAGE_CHANNEL,
+            config.DATABASE_BACKUP_MSG_ID,
             media=InputMediaDocument(
                 drive_cache_path,
                 caption=f"🔐 **TG Drive Data Backup File**\n\nDo not edit or delete this message. This is a backup file for the tg drive data.\n\n{time_text}",
@@ -237,13 +255,17 @@ async def backup_drive_data():
 
 
 async def loadDriveData():
-    global DRIVE_DATA
+    global DRIVE_DATA, BOT_MODE
 
     # Checking if the backup file exists on telegram
+    from utils.clients import get_client
+
     client = get_client()
     try:
         try:
-            msg = await client.get_messages(STORAGE_CHANNEL, DATABASE_BACKUP_MSG_ID)
+            msg = await client.get_messages(
+                config.STORAGE_CHANNEL, config.DATABASE_BACKUP_MSG_ID
+            )
         except Exception as e:
             logger.error(e)
             raise Exception("Failed to get DATABASE_BACKUP_MSG_ID on telegram")
@@ -261,3 +283,10 @@ async def loadDriveData():
         logger.info("Creating new drive.data file")
         DRIVE_DATA = NewDriveData({"/": Folder("/", "/")}, [])
         DRIVE_DATA.save()
+
+    # Start Bot Mode
+    if config.MAIN_BOT_TOKEN:
+        from utils.bot_mode import start_bot_mode
+
+        BOT_MODE = NewBotMode(DRIVE_DATA)
+        await start_bot_mode(DRIVE_DATA, BOT_MODE)

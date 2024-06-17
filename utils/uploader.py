@@ -5,7 +5,7 @@ from config import STORAGE_CHANNEL
 import os
 from utils.logger import Logger
 
-logger = Logger("Uploader")
+logger = Logger(__name__)
 PROGRESS_CACHE = {}
 STOP_TRANSMISSION = []
 

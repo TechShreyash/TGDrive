@@ -15,6 +15,7 @@ Welcome to TGDrive! This web application replicates Google Drive's functionaliti
 - **Large File Support:** Upload files up to 4GB using Telegram Premium accounts.
 - **Auto Pinger:** Built-in feature to keep the website active by preventing idle timeouts.
 - **URL Upload Support:** Upload files directly to TG Drive from any direct download link of a file.
+- **Bot Mode:** Upload files directly to any folder in TG Drive by sending the file to the bot on Telegram.
 
 ## Tech Stack
 
@@ -31,14 +32,6 @@ Explore the live demo of TGDrive:
 - **Password:** admin
 
 Feel free to test the features with the provided login credentials.
-
-## Todo List
-
-- [x] Implement 4GB file uploads using Telegram Premium accounts.
-- [x] Enable sorting of folders/files by date/time uploaded (Newest First).
-- [x] Add a search feature for files and folders.
-- [x] Integrate video player support on the website.
-- [x] Support remote URL uploads.
 
 ## Deploying Your Own
 
@@ -71,18 +64,22 @@ Create a `.env` file in the root directory and add the following environment var
 
 #### Optional Variables
 
-| Variable Name          | Type                 | Default                                    | Description                                                                   |
-| ---------------------- | -------------------- | ------------------------------------------ | ----------------------------------------------------------------------------- |
-| `ADMIN_PASSWORD`       | string               | admin                                      | Password for accessing the admin panel                                        |
-| `STRING_SESSIONS`      | string               | None                                       | List of Premium Telegram Account Pyrogram String Sessions for file operations |
-| `SLEEP_THRESHOLD`      | integer (in seconds) | 60                                         | Delay in seconds before retrying after a Telegram API floodwait error         |
-| `DATABASE_BACKUP_TIME` | integer (in seconds) | 60                                         | Interval in seconds for database backups to the storage channel               |
-| `MAX_FILE_SIZE`        | float (in GBs)       | 1.98 (3.98 if `STRING_SESSIONS` are added) | Maximum file size (in GBs) allowed for uploading to Telegram                  |
-| `WEBSITE_URL`          | string               | None                                       | Website url (with https/http) to auto-ping to keep the website active         |
+| Variable Name          | Type                 | Default                                    | Description                                                                          |
+| ---------------------- | -------------------- | ------------------------------------------ | ------------------------------------------------------------------------------------ |
+| `ADMIN_PASSWORD`       | string               | admin                                      | Password for accessing the admin panel                                               |
+| `STRING_SESSIONS`      | string               | None                                       | List of Premium Telegram Account Pyrogram String Sessions for file operations        |
+| `SLEEP_THRESHOLD`      | integer (in seconds) | 60                                         | Delay in seconds before retrying after a Telegram API floodwait error                |
+| `DATABASE_BACKUP_TIME` | integer (in seconds) | 60                                         | Interval in seconds for database backups to the storage channel                      |
+| `MAX_FILE_SIZE`        | float (in GBs)       | 1.98 (3.98 if `STRING_SESSIONS` are added) | Maximum file size (in GBs) allowed for uploading to Telegram                         |
+| `WEBSITE_URL`          | string               | None                                       | Website URL (with https/http) to auto-ping to keep the website active                |
+| `MAIN_BOT_TOKEN`       | string               | None                                       | Your Main Bot Token to use [TG Drive's Bot Mode](#tg-drives-bot-mode)                                       |
+| `TELEGRAM_ADMIN_IDS`   | string               | None                                       | List of Telegram User IDs of admins who can access the [bot mode](#tg-drives-bot-mode), separated by commas |
 
-> Note: Premium Client (`STRING_SESSIONS`) will be used only to upload when file size is greater than 2GB.
+> Note: Premium Client (`STRING_SESSIONS`) will be used only to upload files when file size is greater than 2GB.
 
-> Note: File streaming/downloads will be done by bots (`BOT_TOKENS`).
+> Note: File streaming/downloads will be handled by bots (`BOT_TOKENS`).
+
+> Note: Read more about TG Drive's Bot Mode [here](#tg-drives-bot-mode).
 
 ### 3. Install/Update Dependencies
 
@@ -111,6 +108,27 @@ Access the application at `http://127.0.0.1:8000`.
 </div>
 
 > **Note:** After updating the TG Drive code, clear your browser's cache to ensure the latest JavaScript files are loaded and run correctly.
+
+## TG Drive's Bot Mode
+
+TG Drive's Bot Mode is a new feature that allows you to upload files directly to your TG Drive website from a Telegram bot. Simply send or forward any file to the bot, and it will be uploaded to your TG Drive. You can also specify the folder where you want the files to be uploaded.
+
+To use this feature, you need to set the configuration variables `MAIN_BOT_TOKEN` and `TELEGRAM_ADMIN_IDS`. More information about these variables can be found in the [optional variables section](#optional-variables).
+
+Once these variables are set, users whose IDs are listed in `TELEGRAM_ADMIN_IDS` will have access to the bot.
+
+### Bot Commands
+- `/set_folder` - Set the folder for file uploads
+- `/current_folder` - Check the current folder
+
+### Quick Demo
+
+#### Uploading Files
+1. Open your main bot in Telegram.
+2. Send or forward a file to this bot, and it will be uploaded. By default, the file will be uploaded to the root folder (home page).
+
+#### Changing Folder for Uploading
+1. Send the `/set_folder` command and follow the instructions provided by the bot.
 
 ## Contributing
 

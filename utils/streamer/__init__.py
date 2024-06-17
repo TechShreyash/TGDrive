@@ -7,7 +7,7 @@ from utils.clients import (
     get_client,
 )
 
-logger = Logger("streamer")
+logger = Logger(__name__)
 
 class_cache = {}
 

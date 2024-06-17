@@ -7,7 +7,7 @@ from pyrogram.errors import AuthBytesInvalid
 from pyrogram.file_id import FileId, FileType, ThumbnailSource
 from utils.logger import Logger
 
-logger = Logger("streamer")
+logger = Logger(__name__)
 
 
 class ByteStreamer:
