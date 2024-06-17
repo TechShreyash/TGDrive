@@ -1,4 +1,9 @@
-from utils.downloader import download_file, get_file_info_from_url
+from utils.downloader import (
+    download_file,
+    download_file_using_curl_cffi,
+    get_file_info_from_url,
+    get_file_info_from_url_using_curl_cffi,
+)
 import asyncio
 from pathlib import Path
 from contextlib import asynccontextmanager
@@ -280,7 +285,10 @@ async def getFileInfoFromUrl(request: Request):
 
     logger.info(f"getFileInfoFromUrl {data}")
     try:
-        file_info = await get_file_info_from_url(data["url"])
+        try:
+            file_info = await get_file_info_from_url(data["url"])
+        except Exception as e:
+            file_info = await get_file_info_from_url_using_curl_cffi(data["url"])
         return JSONResponse({"status": "ok", "data": file_info})
     except Exception as e:
         return JSONResponse({"status": str(e)})
@@ -296,9 +304,16 @@ async def startFileDownloadFromUrl(request: Request):
     logger.info(f"startFileDownloadFromUrl {data}")
     try:
         id = getRandomID()
-        asyncio.create_task(
-            download_file(data["url"], id, data["path"], data["filename"])
-        )
+        if data["curl_cffi"] == True:
+            asyncio.create_task(
+                download_file_using_curl_cffi(
+                    data["url"], id, data["path"], data["filename"]
+                )
+            )
+        else:
+            asyncio.create_task(
+                download_file(data["url"], id, data["path"], data["filename"])
+            )
         return JSONResponse({"status": "ok", "id": id})
     except Exception as e:
         return JSONResponse({"status": str(e)})

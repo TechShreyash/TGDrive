@@ -229,8 +229,8 @@ async function get_file_info_from_url(url) {
 
 }
 
-async function start_file_download_from_url(url, filename) {
-    const data = { 'url': url, 'path': getCurrentPath(), 'filename': filename }
+async function start_file_download_from_url(url, filename, curl_cffi) {
+    const data = { 'url': url, 'path': getCurrentPath(), 'filename': filename, 'curl_cffi': curl_cffi }
     const json = await postJson('/api/startFileDownloadFromUrl', data)
     if (json.status === 'ok') {
         return json.id
@@ -291,12 +291,13 @@ async function Start_URL_Upload() {
         const file_info = await get_file_info_from_url(file_url)
         const file_name = file_info.file_name
         const file_size = file_info.file_size
+        const curl_cffi = file_info.curl_cffi
 
         if (file_size > MAX_FILE_SIZE) {
             throw new Error(`File size exceeds ${(MAX_FILE_SIZE / (1024 * 1024 * 1024)).toFixed(2)} GB limit`)
         }
 
-        const id = await start_file_download_from_url(file_url, file_name)
+        const id = await start_file_download_from_url(file_url, file_name, curl_cffi)
 
         await download_progress_updater(id, file_name, file_size)
 

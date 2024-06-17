@@ -61,7 +61,11 @@ def reset_cache_dir():
     cache_dir.mkdir(parents=True, exist_ok=True)
 
     for file_path in cache_dir.iterdir():
-        if file_path.is_file() and ('.session-journal' in file_path.name or '.session' in file_path.name or '.data' in file_path.name):
+        if file_path.is_file() and (
+            ".session-journal" in file_path.name
+            or ".session" in file_path.name
+            or ".data" in file_path.name
+        ):
             try:
                 file_path.unlink()
             except:
@@ -115,5 +119,9 @@ def get_filename(headers, url):
             extension = mimetypes.guess_extension(headers["Content-Type"])
             if extension:
                 filename = f"{getRandomID()}{extension}"
+            else:
+                filename = getRandomID()
+        else:
+            filename = getRandomID()
 
     return filename

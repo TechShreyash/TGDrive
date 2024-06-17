@@ -5,3 +5,4 @@ fastapi[all]
 python-dotenv
 aiofiles
 aiohttp
+curl_cffi
