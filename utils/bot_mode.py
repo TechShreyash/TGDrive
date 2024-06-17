@@ -16,6 +16,8 @@ You can use this bot to upload files to your TG Drive website directly instead o
 /current_folder - Check current folder
 
 📤 **How To Upload Files:** Send a file to this bot and it will be uploaded to your TG Drive website. You can also set a folder for file uploads using /set_folder command.
+
+Read more about [TG Drive's Bot Mode](https://github.com/TechShreyash/TGDrive#tg-drives-bot-mode)
 """
 
 SET_FOLDER_PATH_CACHE = {}  # Cache to store folder path for each folder id
@@ -144,7 +146,13 @@ async def current_folder_handler(client: Client, message: Message):
 @main_bot.on_message(
     filters.private
     & filters.user(config.TELEGRAM_ADMIN_IDS)
-    & (filters.document | filters.video | filters.audio | filters.photo | filters.sticker)
+    & (
+        filters.document
+        | filters.video
+        | filters.audio
+        | filters.photo
+        | filters.sticker
+    )
 )
 async def file_handler(client: Client, message: Message):
     global BOT_MODE, DRIVE_DATA

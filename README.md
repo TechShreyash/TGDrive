@@ -123,6 +123,8 @@ Once these variables are set, users whose IDs are listed in `TELEGRAM_ADMIN_IDS`
 
 ### Quick Demo
 
+Bot Mode - Youtube Video Tutorial : https://youtu.be/XSeY2XcHdGI
+
 #### Uploading Files
 1. Open your main bot in Telegram.
 2. Send or forward a file to this bot, and it will be uploaded. By default, the file will be uploaded to the root folder (home page).
