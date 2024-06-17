@@ -170,6 +170,7 @@ async function deleteFileFolder() {
 }
 
 async function shareFile() {
+    const fileName = this.parentElement.getAttribute('data-name').toLowerCase()
     const id = this.getAttribute('id').split('-')[1]
     const path = document.getElementById(`more-option-${id}`).getAttribute('data-path') + '/' + id
     const root_url = getRootUrl()

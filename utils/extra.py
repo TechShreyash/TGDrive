@@ -61,11 +61,7 @@ def reset_cache_dir():
     cache_dir.mkdir(parents=True, exist_ok=True)
 
     for file_path in cache_dir.iterdir():
-        if file_path.is_file() and file_path.suffix not in [
-            ".session",
-            ".session-journal",
-            ".data",
-        ]:
+        if file_path.is_file() and ('.session-journal' in file_path.name or '.session' in file_path.name or '.data' in file_path.name):
             try:
                 file_path.unlink()
             except:
