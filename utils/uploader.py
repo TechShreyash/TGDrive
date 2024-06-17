@@ -42,11 +42,15 @@ async def start_file_uploader(file_path, id, directory_path, filename, file_size
         file_path,
         progress=progress_callback,
         progress_args=(id, client, file_path),
-        force_document=True,
         disable_notification=True,
-        file_name=id,
     )
-    size = message.document.file_size
+    size = (
+        message.photo
+        or message.document
+        or message.video
+        or message.audio
+        or message.sticker
+    ).file_size
 
     DRIVE_DATA.new_file(directory_path, filename, message.id, size)
     PROGRESS_CACHE[id] = ("completed", size, size)

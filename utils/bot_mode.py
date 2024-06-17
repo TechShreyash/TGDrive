@@ -144,7 +144,7 @@ async def current_folder_handler(client: Client, message: Message):
 @main_bot.on_message(
     filters.private
     & filters.user(config.TELEGRAM_ADMIN_IDS)
-    & (filters.document | filters.video | filters.audio | filters.photo)
+    & (filters.document | filters.video | filters.audio | filters.photo | filters.sticker)
 )
 async def file_handler(client: Client, message: Message):
     global BOT_MODE, DRIVE_DATA
@@ -155,6 +155,7 @@ async def file_handler(client: Client, message: Message):
         or copied_message.video
         or copied_message.audio
         or copied_message.photo
+        or copied_message.sticker
     )
 
     DRIVE_DATA.new_file(
