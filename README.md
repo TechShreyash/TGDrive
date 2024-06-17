@@ -64,14 +64,14 @@ Create a `.env` file in the root directory and add the following environment var
 
 #### Optional Variables
 
-| Variable Name          | Type                 | Default                                    | Description                                                                          |
-| ---------------------- | -------------------- | ------------------------------------------ | ------------------------------------------------------------------------------------ |
-| `ADMIN_PASSWORD`       | string               | admin                                      | Password for accessing the admin panel                                               |
-| `STRING_SESSIONS`      | string               | None                                       | List of Premium Telegram Account Pyrogram String Sessions for file operations        |
-| `SLEEP_THRESHOLD`      | integer (in seconds) | 60                                         | Delay in seconds before retrying after a Telegram API floodwait error                |
-| `DATABASE_BACKUP_TIME` | integer (in seconds) | 60                                         | Interval in seconds for database backups to the storage channel                      |
-| `MAX_FILE_SIZE`        | float (in GBs)       | 1.98 (3.98 if `STRING_SESSIONS` are added) | Maximum file size (in GBs) allowed for uploading to Telegram                         |
-| `WEBSITE_URL`          | string               | None                                       | Website URL (with https/http) to auto-ping to keep the website active                |
+| Variable Name          | Type                 | Default                                    | Description                                                                                                 |
+| ---------------------- | -------------------- | ------------------------------------------ | ----------------------------------------------------------------------------------------------------------- |
+| `ADMIN_PASSWORD`       | string               | admin                                      | Password for accessing the admin panel                                                                      |
+| `STRING_SESSIONS`      | string               | None                                       | List of Premium Telegram Account Pyrogram String Sessions for file operations                               |
+| `SLEEP_THRESHOLD`      | integer (in seconds) | 60                                         | Delay in seconds before retrying after a Telegram API floodwait error                                       |
+| `DATABASE_BACKUP_TIME` | integer (in seconds) | 60                                         | Interval in seconds for database backups to the storage channel                                             |
+| `MAX_FILE_SIZE`        | float (in GBs)       | 1.98 (3.98 if `STRING_SESSIONS` are added) | Maximum file size (in GBs) allowed for uploading to Telegram                                                |
+| `WEBSITE_URL`          | string               | None                                       | Website URL (with https/http) to auto-ping to keep the website active                                       |
 | `MAIN_BOT_TOKEN`       | string               | None                                       | Your Main Bot Token to use [TG Drive's Bot Mode](#tg-drives-bot-mode)                                       |
 | `TELEGRAM_ADMIN_IDS`   | string               | None                                       | List of Telegram User IDs of admins who can access the [bot mode](#tg-drives-bot-mode), separated by commas |
 
@@ -118,6 +118,7 @@ To use this feature, you need to set the configuration variables `MAIN_BOT_TOKEN
 Once these variables are set, users whose IDs are listed in `TELEGRAM_ADMIN_IDS` will have access to the bot.
 
 ### Bot Commands
+
 - `/set_folder` - Set the folder for file uploads
 - `/current_folder` - Check the current folder
 
@@ -126,10 +127,12 @@ Once these variables are set, users whose IDs are listed in `TELEGRAM_ADMIN_IDS`
 Bot Mode - Youtube Video Tutorial : https://youtu.be/XSeY2XcHdGI
 
 #### Uploading Files
+
 1. Open your main bot in Telegram.
 2. Send or forward a file to this bot, and it will be uploaded. By default, the file will be uploaded to the root folder (home page).
 
 #### Changing Folder for Uploading
+
 1. Send the `/set_folder` command and follow the instructions provided by the bot.
 
 ## Contributing
