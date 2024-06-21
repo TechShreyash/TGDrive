@@ -15,7 +15,7 @@ Welcome to TGDrive! This web application replicates Google Drive's functionaliti
 - **Large File Support:** Upload files up to 4GB using Telegram Premium accounts.
 - **Auto Pinger:** Built-in feature to keep the website active by preventing idle timeouts.
 - **URL Upload Support:** Upload files directly to TG Drive from any direct download link of a file.
-- **Bot Mode:** Upload files directly to any folder in TG Drive by sending the file to the bot on Telegram.
+- **Bot Mode:** Upload files directly to any folder in TG Drive by sending the file to the bot on Telegram ([Know More](#tg-drives-bot-mode))
 
 ## Tech Stack
 
@@ -33,20 +33,7 @@ Explore the live demo of TGDrive:
 
 Feel free to test the features with the provided login credentials.
 
-## Deploying Your Own
-
-### 1. Clone the Repository
-
-```bash
-git clone https://github.com/TechShreyash/TGDrive
-cd TGDrive
-```
-
-### 2. Set Up Your Environment Variables
-
-Create a `.env` file in the root directory and add the following environment variables:
-
-> Note: You can also set environment variables directly in some hosting services instead of creating a `.env` file.
+### Environment Variables
 
 #### Required Variables
 
@@ -81,21 +68,56 @@ Create a `.env` file in the root directory and add the following environment var
 
 > Note: Read more about TG Drive's Bot Mode [here](#tg-drives-bot-mode).
 
-### 3. Install/Update Dependencies
+## Deploying Your Own TG Drive Application
+
+### 1. Clone the Repository
+
+First, clone the repository and navigate into the project directory:
 
 ```bash
-pip install -U -r requirements.txt
+git clone https://github.com/TechShreyash/TGDrive
+cd TGDrive
 ```
 
-### 4. Run the FastAPI Application
+### 2. Set Up Your Environment Variables
 
-```bash
-uvicorn main:app --host 0.0.0.0 --port 8000
-```
+Create a `.env` file in the root directory and add the necessary [environment variables](#environment-variables).
 
-Access the application at `http://127.0.0.1:8000`.
+> **Note:** Some hosting services allow you to set environment variables directly through their interface, which may eliminate the need for a `.env` file.
 
-> Note: For public deployment, refer to online guides on deploying FastAPI apps.
+### 3. Running TG Drive
+
+#### Deploying Locally
+
+1. Install the required Python packages:
+
+   ```bash
+   pip install -U -r requirements.txt
+   ```
+
+2. Start the TG Drive application using Uvicorn:
+
+   ```bash
+   uvicorn main:app --host 0.0.0.0 --port 8000
+   ```
+
+#### Deploying Using Docker
+
+1. Build the Docker image:
+
+   ```bash
+   docker build -t tgdrive .
+   ```
+
+2. Run the Docker container:
+
+   ```bash
+   docker run -d -p 8000:8000 tgdrive
+   ```
+
+Access the application at `http://127.0.0.1:8000` or `http://your_ip:8000`.
+
+> **Note:** For more detailed information on deploying FastAPI applications, refer to online guides and resources.
 
 ## Deploy Tutorials
 
