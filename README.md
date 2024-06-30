@@ -157,6 +157,15 @@ Bot Mode - Youtube Video Tutorial : https://youtu.be/XSeY2XcHdGI
 
 1. Send the `/set_folder` command and follow the instructions provided by the bot.
 
+## Important Posts Regarding TG Drive
+
+Stay informed by joining our updates channel on Telegram: [@TechZBots](https://telegram.me/TechZBots). We post updates, guides, and tips about TG Drive there.
+
+- https://telegram.me/TechZBots/891
+- https://telegram.me/TechZBots/876
+- https://telegram.me/TechZBots/874
+- https://telegram.me/TechZBots/870
+
 ## Contributing
 
 Contributions are welcome! Fork the repository, make your changes, and create a pull request.
