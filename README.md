@@ -28,7 +28,7 @@ Welcome to TGDrive! This web application replicates Google Drive's functionaliti
 
 Explore the live demo of TGDrive:
 
-- **Website:** [TGDrive Demo](http://tsowwko.37.44.244.56.sslip.io)
+- **Website:** [TGDrive Demo](http://tgdrive.37.44.244.56.sslip.io)
 - **Password:** admin
 
 Feel free to test the features with the provided login credentials.
