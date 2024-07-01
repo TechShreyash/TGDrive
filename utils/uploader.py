@@ -4,6 +4,7 @@ from pyrogram.types import Message
 from config import STORAGE_CHANNEL
 import os
 from utils.logger import Logger
+from urllib.parse import unquote_plus
 
 logger = Logger(__name__)
 PROGRESS_CACHE = {}
@@ -51,6 +52,8 @@ async def start_file_uploader(file_path, id, directory_path, filename, file_size
         or message.audio
         or message.sticker
     ).file_size
+
+    filename = unquote_plus(filename)
 
     DRIVE_DATA.new_file(directory_path, filename, message.id, size)
     PROGRESS_CACHE[id] = ("completed", size, size)
