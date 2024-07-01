@@ -28,7 +28,7 @@ Welcome to TGDrive! This web application replicates Google Drive's functionaliti
 
 Explore the live demo of TGDrive:
 
-- **Website:** [TGDrive Demo](http://tsowwko.37.44.244.56.sslip.io)
+- **Website:** [TGDrive Demo](http://tgdrive.37.44.244.56.sslip.io)
 - **Password:** admin
 
 Feel free to test the features with the provided login credentials.
@@ -156,6 +156,15 @@ Bot Mode - Youtube Video Tutorial : https://youtu.be/XSeY2XcHdGI
 #### Changing Folder for Uploading
 
 1. Send the `/set_folder` command and follow the instructions provided by the bot.
+
+## Important Posts Regarding TG Drive
+
+Stay informed by joining our updates channel on Telegram: [@TechZBots](https://telegram.me/TechZBots). We post updates, guides, and tips about TG Drive there.
+
+- https://telegram.me/TechZBots/891
+- https://telegram.me/TechZBots/876
+- https://telegram.me/TechZBots/874
+- https://telegram.me/TechZBots/870
 
 ## Contributing
 
