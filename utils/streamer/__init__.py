@@ -6,6 +6,7 @@ from utils.streamer.file_properties import get_name
 from utils.clients import (
     get_client,
 )
+from urllib.parse import quote
 
 logger = Logger(__name__)
 
@@ -74,7 +75,7 @@ async def media_streamer(channel: int, message_id: int, file_name: str, request)
             "Content-Type": f"{mime_type}",
             "Content-Range": f"bytes {from_bytes}-{until_bytes}/{file_size}",
             "Content-Length": str(req_length),
-            "Content-Disposition": f'{disposition}; filename="{file_name}"',
+            "Content-Disposition": f'{disposition}; filename="{quote(file_name)}"',
             "Accept-Ranges": "bytes",
         },
         media_type=mime_type,
