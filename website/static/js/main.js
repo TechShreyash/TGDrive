@@ -2,6 +2,7 @@ function showDirectory(data) {
     data = data['contents']
     document.getElementById('directory-data').innerHTML = ''
     const isTrash = getCurrentPath().startsWith('/trash')
+
     let html = ''
 
     // Step 2: Sort the array based on the 'date' values
@@ -20,10 +21,11 @@ function showDirectory(data) {
                 html += `<div data-path="${item.path}" id="more-option-${item.id}" data-name="${item.name}" class="more-options"><input class="more-options-focus" readonly="readonly" style="height:0;width:0;border:none;position:absolute"><div id="restore-${item.id}" data-path="${item.path}"><img src="static/assets/load-icon.svg"> Restore</div><hr><div id="delete-${item.id}" data-path="${item.path}"><img src="static/assets/trash-icon.svg"> Delete</div></div>`
             }
             else {
-                html += `<div data-path="${item.path}" id="more-option-${item.id}" data-name="${item.name}" class="more-options"><input class="more-options-focus" readonly="readonly" style="height:0;width:0;border:none;position:absolute"><div id="rename-${item.id}"><img src="static/assets/pencil-icon.svg"> Rename</div><hr><div id="trash-${item.id}"><img src="static/assets/trash-icon.svg"> Trash</div></div>`
+                html += `<div data-path="${item.path}" id="more-option-${item.id}" data-name="${item.name}" class="more-options"><input class="more-options-focus" readonly="readonly" style="height:0;width:0;border:none;position:absolute"><div id="rename-${item.id}"><img src="static/assets/pencil-icon.svg"> Rename</div><hr><div id="trash-${item.id}"><img src="static/assets/trash-icon.svg"> Trash</div><hr><div id="folder-share-${item.id}"><img src="static/assets/share-icon.svg"> Share</div></div>`
             }
         }
     }
+
     for (const [key, item] of files) {
         if (item.type === 'file') {
             const size = convertBytes(item.size)
@@ -76,13 +78,18 @@ document.addEventListener('DOMContentLoaded', function () {
     for (let i = 0; i < inputs.length; i++) {
         document.getElementById(inputs[i]).addEventListener('input', validateInput);
     }
-    if (getPassword() === null) {
-        document.getElementById('bg-blur').style.zIndex = '2';
-        document.getElementById('bg-blur').style.opacity = '0.1';
 
-        document.getElementById('get-password').style.zIndex = '3';
-        document.getElementById('get-password').style.opacity = '1';
-    } else {
+    if (getCurrentPath().includes('/share_')) {
         getCurrentDirectory()
+    } else {
+        if (getPassword() === null) {
+            document.getElementById('bg-blur').style.zIndex = '2';
+            document.getElementById('bg-blur').style.opacity = '0.1';
+
+            document.getElementById('get-password').style.zIndex = '3';
+            document.getElementById('get-password').style.opacity = '1';
+        } else {
+            getCurrentDirectory()
+        }
     }
 });

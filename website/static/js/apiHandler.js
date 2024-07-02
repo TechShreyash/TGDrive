@@ -27,15 +27,32 @@ document.getElementById('pass-login').addEventListener('click', async () => {
 })
 
 async function getCurrentDirectory() {
-    const path = getCurrentPath()
+    let path = getCurrentPath()
     if (path === 'redirect') {
         return
     }
     try {
-        const data = { 'path': path }
+        const auth = getFolderAuthFromPath()
+        console.log(path)
+
+        const data = { 'path': path, 'auth': auth }
         const json = await postJson('/api/getDirectory', data)
 
         if (json.status === 'ok') {
+            if (getCurrentPath().startsWith('/share')) {
+                const sections = document.querySelector('.sidebar-menu').getElementsByTagName('a')
+                console.log(path)
+
+                if (removeSlash(json['auth_home_path']) === removeSlash(path.split('_')[1])) {
+                    sections[0].setAttribute('class', 'selected-item')
+
+                } else {
+                    sections[0].setAttribute('class', 'unselected-item')
+                }
+                sections[0].href = `/?path=/share_${removeSlash(json['auth_home_path'])}&auth=${auth}`
+                console.log(`/?path=/share_${removeSlash(json['auth_home_path'])}&auth=${auth}`)
+            }
+
             console.log(json)
             showDirectory(json['data'])
         } else {
@@ -73,6 +90,17 @@ async function createNewFolder() {
         }
     } else {
         alert('Folder Name Cannot Be Empty')
+    }
+}
+
+
+async function getFolderShareAuth(path) {
+    const data = { 'path': path }
+    const json = await postJson('/api/getFolderShareAuth', data)
+    if (json.status === 'ok') {
+        return json.auth
+    } else {
+        alert('Error Getting Folder Share Auth')
     }
 }
 

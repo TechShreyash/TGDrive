@@ -1,5 +1,10 @@
 function openFolder() {
-    const path = this.getAttribute('data-path') + '/' + this.getAttribute('data-id') + '/'
+    let path = (getCurrentPath() + '/' + this.getAttribute('data-id') + '/').replaceAll('//', '/')
+
+    const auth = getFolderAuthFromPath()
+    if (auth) {
+        path = path + '&auth=' + auth
+    }
     window.location.href = `/?path=${path}`
 }
 
@@ -40,6 +45,10 @@ function openMoreButton(div) {
         moreDiv.querySelector(`#trash-${id}`).addEventListener('click', trashFileFolder)
         try {
             moreDiv.querySelector(`#share-${id}`).addEventListener('click', shareFile)
+        }
+        catch { }
+        try {
+            moreDiv.querySelector(`#folder-share-${id}`).addEventListener('click', shareFolder)
         }
         catch { }
     }
@@ -182,6 +191,22 @@ async function shareFile() {
         link = `${root_url}/file?path=${path}`
 
     }
+
+    copyTextToClipboard(link)
+}
+
+
+async function shareFolder() {
+    const id = this.getAttribute('id').split('-')[2]
+    console.log(id)
+    let path = document.getElementById(`more-option-${id}`).getAttribute('data-path') + '/' + id
+    const root_url = getRootUrl()
+
+    const auth = await getFolderShareAuth(path)
+    path = path.slice(1)
+
+    let link = `${root_url}/?path=/share_${path}&auth=${auth}`
+    console.log(link)
 
     copyTextToClipboard(link)
 }

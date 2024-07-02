@@ -38,6 +38,7 @@ class Folder:
         self.trash = False
         self.path = path[:-1] if path[-1] == "/" else path
         self.upload_date = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        self.auth_hashes = []
 
 
 class File:
@@ -103,8 +104,13 @@ class NewDriveData:
 
         self.save()
 
-    def get_directory(self, path: str) -> Folder:
-        folder_data = self.contents["/"]
+    def get_directory(
+        self, path: str, is_admin: bool = True, auth: str = None
+    ) -> Folder:
+        folder_data: Folder = self.contents["/"]
+        auth_success = False
+        auth_home_path = None
+
         if path != "/":
             path = path.strip("/")
 
@@ -115,7 +121,39 @@ class NewDriveData:
 
             for folder in path:
                 folder_data = folder_data.contents[folder]
+
+                if auth in folder_data.auth_hashes:
+                    auth_success = True
+                    auth_home_path = (
+                        "/" + folder_data.path.strip("/") + "/" + folder_data.id
+                    )
+
+        if not is_admin and not auth_success:
+            return None
+
+        if auth_success:
+            return folder_data, auth_home_path
+
         return folder_data
+
+    def get_folder_auth(self, path: str) -> None:
+        auth = getRandomID()
+        folder_data: Folder = self.contents["/"]
+
+        if path != "/":
+            path = path.strip("/")
+
+            if "/" in path:
+                path = path.split("/")
+            else:
+                path = [path]
+
+            for folder in path:
+                folder_data = folder_data.contents[folder]
+
+        folder_data.auth_hashes.append(auth)
+        self.save()
+        return auth
 
     def get_file(self, path) -> File:
         if len(path.strip("/").split("/")) > 0:
@@ -257,6 +295,28 @@ async def backup_drive_data():
             logger.error("Backup Error : " + str(e))
 
 
+async def init_drive_data():
+    # auth_hashes attribute is added to all the folders in the drive data if it doesn't exist
+
+    global DRIVE_DATA
+
+    root_dir = DRIVE_DATA.get_directory("/")
+    if not hasattr(root_dir, "auth_hashes"):
+        root_dir.auth_hashes = []
+
+    def traverse_directory(folder):
+        for item in folder.contents.values():
+            if item.type == "folder":
+                traverse_directory(item)
+
+                if not hasattr(item, "auth_hashes"):
+                    item.auth_hashes = []
+
+    traverse_directory(root_dir)
+
+    DRIVE_DATA.save()
+
+
 async def loadDriveData():
     global DRIVE_DATA, BOT_MODE
 
@@ -286,6 +346,9 @@ async def loadDriveData():
         logger.info("Creating new drive.data file")
         DRIVE_DATA = NewDriveData({"/": Folder("/", "/")}, [])
         DRIVE_DATA.save()
+
+    # For updating the changes in already existing old backup drive.data file
+    await init_drive_data()
 
     # Start Bot Mode
     if config.MAIN_BOT_TOKEN:

@@ -8,6 +8,12 @@ function getCurrentPath() {
     return path
 }
 
+function getFolderAuthFromPath() {
+    const url = new URL(window.location.href);
+    const auth = url.searchParams.get('auth')
+    return auth
+}
+
 // Changing sidebar section class
 if (getCurrentPath() !== '/') {
     const sections = document.querySelector('.sidebar-menu').getElementsByTagName('a')
@@ -104,4 +110,10 @@ function getRandomId() {
         result += characters.charAt(Math.floor(Math.random() * characters.length));
     }
     return result;
+}
+
+function removeSlash(text) {
+    let charactersToRemove = "[/]+"; // Define the characters to remove inside square brackets
+    let trimmedStr = text.replace(new RegExp(`^${charactersToRemove}|${charactersToRemove}$`, 'g'), '');
+    return trimmedStr;
 }

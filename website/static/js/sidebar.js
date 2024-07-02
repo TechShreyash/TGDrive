@@ -1,6 +1,7 @@
 // Handling New Button On Sidebar Click
 const isTrash = getCurrentPath().startsWith('/trash')
 const isSearch = getCurrentPath().startsWith('/search')
+const isShare = getCurrentPath().startsWith('/share')
 
 if (!isTrash && !isSearch) {
     document.getElementById('new-button').addEventListener('click', () => {
@@ -12,6 +13,12 @@ if (!isTrash && !isSearch) {
 }
 else {
     document.getElementById('new-button').style.display = 'none'
+}
+
+if (isShare) {
+    document.getElementById('new-button').style.display = 'none'
+    const sections = document.querySelector('.sidebar-menu').getElementsByTagName('a')
+    sections[1].remove()
 }
 
 // New File Upload Start
