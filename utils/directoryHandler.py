@@ -226,32 +226,35 @@ async def backup_drive_data():
     logger.info("Starting backup drive data task")
 
     while True:
-        await asyncio.sleep(
-            config.DATABASE_BACKUP_TIME
-        )  # Backup the data every 24 hours
-
-        if DRIVE_DATA.isUpdated == False:
-            continue
-
-        logger.info("Backing up drive data to telegram")
-        from utils.clients import get_client
-
-        client = get_client()
-        time_text = f"📅 **Last Updated :** {get_current_utc_time()} (UTC +00:00)"
-        msg = await client.edit_message_media(
-            config.STORAGE_CHANNEL,
-            config.DATABASE_BACKUP_MSG_ID,
-            media=InputMediaDocument(
-                drive_cache_path,
-                caption=f"🔐 **TG Drive Data Backup File**\n\nDo not edit or delete this message. This is a backup file for the tg drive data.\n\n{time_text}",
-            ),
-            file_name="drive.data",
-        )
-        DRIVE_DATA.isUpdated = False
         try:
-            await msg.pin()
-        except:
-            pass
+            await asyncio.sleep(
+                config.DATABASE_BACKUP_TIME
+            )  # Backup the data every 24 hours
+
+            if DRIVE_DATA.isUpdated == False:
+                continue
+
+            logger.info("Backing up drive data to telegram")
+            from utils.clients import get_client
+
+            client = get_client()
+            time_text = f"📅 **Last Updated :** {get_current_utc_time()} (UTC +00:00)"
+            msg = await client.edit_message_media(
+                config.STORAGE_CHANNEL,
+                config.DATABASE_BACKUP_MSG_ID,
+                media=InputMediaDocument(
+                    drive_cache_path,
+                    caption=f"🔐 **TG Drive Data Backup File**\n\nDo not edit or delete this message. This is a backup file for the tg drive data.\n\n{time_text}",
+                ),
+                file_name="drive.data",
+            )
+            DRIVE_DATA.isUpdated = False
+            try:
+                await msg.pin()
+            except:
+                pass
+        except Exception as e:
+            logger.error("Backup Error : " + str(e))
 
 
 async def loadDriveData():
