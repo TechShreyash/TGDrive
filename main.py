@@ -313,7 +313,7 @@ async def startFileDownloadFromUrl(request: Request):
     try:
         id = getRandomID()
         asyncio.create_task(
-            download_file(data["url"], id, data["path"], data["filename"])
+            download_file(data["url"], id, data["path"], data["filename"], data["singleThreaded"])
         )
         return JSONResponse({"status": "ok", "id": id})
     except Exception as e:

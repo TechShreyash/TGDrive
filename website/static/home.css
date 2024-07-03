@@ -172,6 +172,7 @@
 
 /* More Options End */
 
+
 /* Create New Folder Start */
 .create-new-folder {
     position: fixed;
@@ -242,6 +243,34 @@
 }
 
 /* Create New Folder End */
+
+/* Remote URL Upload Start */
+
+#single-threaded-div{
+    display: flex;
+    flex-direction: row;
+    justify-content: start;
+    align-items: center;
+    width: 100%;
+    margin: 10px 0px;
+}
+
+#single-threaded-div input{
+    width: auto;
+    margin: 0px;
+    margin-left: 10px;
+}
+
+#single-threaded-div img{
+    height: 16px;
+    width: 16px;
+}
+#single-threaded-div a{
+    height: 16px;
+    width: 16px;
+}
+
+/* Remote URL Upload End */
 
 /* File Uploader Start */
 

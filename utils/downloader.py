@@ -25,7 +25,7 @@ async def download_progress_callback(status, current, total, id):
     )
 
 
-async def download_file(url, id, path, filename):
+async def download_file(url, id, path, filename, singleThreaded):
     global DOWNLOAD_PROGRESS, STOP_DOWNLOAD
 
     logger.info(f"Downloading file from {url}")
@@ -38,6 +38,7 @@ async def download_file(url, id, path, filename):
             progress_callback=download_progress_callback,
             progress_args=(id,),
             max_retries=5,
+            single_threaded=singleThreaded,
         )
         await downloader.start(in_background=True)
 
