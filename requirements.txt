@@ -6,4 +6,4 @@ python-dotenv
 aiofiles
 aiohttp
 curl_cffi
-techzdl>=1.2.4
+techzdl>=1.2.5
