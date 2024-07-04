@@ -39,7 +39,6 @@ async def download_file(url, id, path, filename, singleThreaded):
             progress_args=(id,),
             max_retries=5,
             single_threaded=singleThreaded,
-            timeout=180,
         )
         await downloader.start(in_background=True)
 
@@ -81,7 +80,6 @@ async def get_file_info_from_url(url):
         progress_callback=download_progress_callback,
         progress_args=(id,),
         max_retries=5,
-        timeout=180,
     )
     file_info = await downloader.get_file_info()
     return {"file_size": file_info["total_size"], "file_name": file_info["filename"]}
