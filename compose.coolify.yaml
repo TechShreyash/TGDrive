@@ -1,0 +1,61 @@
+# Coolify owns the public HTTPS route and creates these named volumes.
+# Select Docker Compose, branch dev, and /compose.coolify.yaml in Coolify.
+services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    init: true
+    expose:
+      - "8000"
+    environment:
+      MONGODB_URI: ${MONGODB_URI:?Set MONGODB_URI}
+      MONGODB_DATABASE: ${MONGODB_DATABASE:-tgdrive}
+      MONGODB_BACKUP_KEY: ${MONGODB_BACKUP_KEY:?Set MONGODB_BACKUP_KEY}
+      MONGODB_BACKUP_SECONDS: ${MONGODB_BACKUP_SECONDS:-3600}
+      API_ID: ${API_ID:?Set API_ID}
+      API_HASH: ${API_HASH:?Set API_HASH}
+      BOT_TOKENS: ${BOT_TOKENS:?Set BOT_TOKENS}
+      STORAGE_CHANNEL: ${STORAGE_CHANNEL:?Set STORAGE_CHANNEL}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:-}
+      ADMIN_PASSWORD_HASH: ${ADMIN_PASSWORD_HASH:-}
+      SESSION_SECRET: ${SESSION_SECRET:?Set SESSION_SECRET}
+      STRING_SESSIONS: ${STRING_SESSIONS:-}
+      MAIN_BOT_TOKEN: ${MAIN_BOT_TOKEN:-}
+      TELEGRAM_ADMIN_IDS: ${TELEGRAM_ADMIN_IDS:-}
+      DATA_DIR: /app/data
+      CACHE_DIR: /app/cache
+      COOKIE_SECURE: "true"
+      INITIALIZE_EMPTY_DRIVE: "false"
+      # Set this to the actual Coolify proxy address/network. No host ports
+      # are published; access is through Coolify's internal proxy network.
+      FORWARDED_ALLOW_IPS: ${FORWARDED_ALLOW_IPS:-127.0.0.1}
+      SESSION_TTL_SECONDS: ${SESSION_TTL_SECONDS:-86400}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      SLEEP_THRESHOLD: ${SLEEP_THRESHOLD:-60}
+      ALLOW_PRIVATE_REMOTE_URLS: ${ALLOW_PRIVATE_REMOTE_URLS:-false}
+      REMOTE_CONNECT_TIMEOUT: ${REMOTE_CONNECT_TIMEOUT:-20}
+      REMOTE_READ_TIMEOUT: ${REMOTE_READ_TIMEOUT:-120}
+      REMOTE_TOTAL_TIMEOUT: ${REMOTE_TOTAL_TIMEOUT:-21600}
+      REMOTE_MAX_REDIRECTS: ${REMOTE_MAX_REDIRECTS:-5}
+      MAX_CONCURRENT_TRANSFERS: ${MAX_CONCURRENT_TRANSFERS:-2}
+      TELEGRAM_UPLOADS_PER_BOT: ${TELEGRAM_UPLOADS_PER_BOT:-1}
+      TRANSFER_TTL_SECONDS: ${TRANSFER_TTL_SECONDS:-3600}
+      STAGING_BUDGET_BYTES: ${STAGING_BUDGET_BYTES:-17179869184}
+      MIN_FREE_BYTES: ${MIN_FREE_BYTES:-1073741824}
+      UPLOAD_SESSION_TTL_SECONDS: ${UPLOAD_SESSION_TTL_SECONDS:-86400}
+      MAX_CONCURRENT_STREAMS: ${MAX_CONCURRENT_STREAMS:-4}
+    volumes:
+      - tgdrive-data:/app/data
+      - tgdrive-cache:/app/cache
+    stop_grace_period: 60s
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    pids_limit: 256
+
+volumes:
+  tgdrive-data:
+  tgdrive-cache:

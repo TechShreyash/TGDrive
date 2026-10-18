@@ -220,6 +220,23 @@ are incompatible.
 
 ## Hosting beyond your machine
 
+### Coolify
+
+Create a public Git application from `https://github.com/TechShreyash/TGDrive`,
+branch `dev`, using **Docker Compose**, base directory `/`, and Compose file
+`/compose.coolify.yaml`. Coolify creates the declared data/cache volumes;
+no manual volume setup or host port mapping is needed. Route the `app` service
+to internal port **8000** with an HTTPS domain.
+
+Fill the required runtime variables with private values from your `.env`.
+Set `FORWARDED_ALLOW_IPS` to the actual Coolify proxy address/network. The
+Compose file forces secure cookies and uses the image's Python health check.
+Keep one instance per drive and stop an old installation before moving the same
+database/channel to Coolify. Existing drives reopen without initialization;
+only a new empty database needs the explicit `python -m tgdrive init` command.
+
+### Other hosting
+
 Start with [HTTPS and private configuration](operations.md#https-and-private-configuration).
 The included Render template is a starting point and has not been validated as
 a live deployment.
