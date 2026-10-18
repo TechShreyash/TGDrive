@@ -15,6 +15,7 @@ from telethon.errors import RPCError
 from tgdrive.file_parts import validate_parts
 from tgdrive.logical_media import read_logical_prefix
 from tgdrive.media_metadata import get_message
+from tgdrive.media_reader import MediaReadCache, stream_pooled_media
 from tgdrive.streaming import TelegramFileNotFound, _media_from_message
 
 TEXT_PREVIEW_BYTES = 256 * 1024
@@ -235,7 +236,20 @@ async def describe_preview(
             actual_size = getattr(media, "file_size", size)
             if isinstance(actual_size, int):
                 base["size"] = actual_size
-            iterator = client.stream_media(message, limit=1, offset=0)
+            if callable(getattr(pool, "download_capacity", None)):
+                if pool._media_read_cache is None:
+                    pool._media_read_cache = MediaReadCache(pool.media_cache_dir)
+                pool._media_read_cache.register_file(
+                    channel_id=channel_id,
+                    message_id=message_id,
+                    size=base["size"],
+                    name=file_name,
+                )
+            # A preview shares the bounded prefix cache, without qualifying as
+            # playback or asking the preparation manager to fetch anything else.
+            iterator = stream_pooled_media(
+                pool, client, message, channel=channel_id, limit=1, offset=0
+            )
             try:
                 data = await anext(iterator, b"")
                 mime_type = getattr(media, "mime_type", None)
