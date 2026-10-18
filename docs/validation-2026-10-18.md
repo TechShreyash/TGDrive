@@ -322,3 +322,43 @@ DC performance, real-device video playback, or the behavior of an implementation
 that has not yet been deployed. HTTP reads can naturally warm the deployed
 disposable media cache; no catalog, share or deployment configuration changes
 were made for validation.
+
+
+## Implementation verification
+
+The implementation remains local on `dev`. Nothing was pushed or deployed.
+The pre-existing four-file working-tree change was restored after integration,
+with its original 193 additions/four deletions kept uncommitted.
+
+| Check | Result |
+| --- | --- |
+| Integrated Python run, including live isolated MongoDB and Node bridge | 921 passed; 15 subtests passed |
+| Final shared-preview/cache regression selection after that run | 93 passed |
+| Revocation during preview/metadata work | 2 passed |
+| Frontend behavior | 176 Vitest tests passed |
+| TypeScript and production frontend build | Passed |
+| Chromium workflows | 60 distinct cases passed across the broad run and focused corrections; final merged-tree selection 13 passed |
+| Python lint/format and Bandit | Passed |
+| Python dependency audit / npm audit | No known vulnerabilities / zero reported vulnerabilities |
+| Public source-package checks | 3 passed; source ZIP and SHA-256 generated |
+
+Live MongoDB tests used disposable, uniquely named databases and removed them.
+The browser set includes real media frames/audio/subtitle cues, keyboard behavior,
+chapters, mobile layouts, device-origin receipts, URL recovery, preload controls,
+portable signed-out downloads and timezone-formatted expiry. HTTP file tests
+cover first-byte admission, queue overflow, lengths, ranges, conditional requests,
+revocation before and during delivery, multipart seams and cancellation cleanup.
+
+Resource tests include twenty slow readers of different files sharing a 4 MiB
+transient budget with retained caching disabled; cancellation releases all frames
+and account leases. A lone reader can use 32 concurrent origin fills when account
+capacity permits. Simulated memory pressure shrinks retained RAM and transient
+limits and allows recovery. Ordinary text preview bytes now use the shared cache
+and inventory without qualifying as playback or starting automatic preloading.
+
+The production frontend build still reports existing third-party Movi bundle-size
+and CommonJS-in-ESM warnings. Real Chromium playback/codec checks passed; those
+warnings are not claimed to be eliminated. Native FDM UI, every browser/device,
+sustained arbitrary public load and the post-deployment proxy configuration remain
+outside the validated scope. The portable URL and HTTP contracts were tested
+without owner cookies, rather than making private authenticated URLs public.

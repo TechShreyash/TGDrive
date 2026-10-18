@@ -87,3 +87,16 @@ FDM compatibility is validated through portable URLs, auth-free client requests,
 HEAD/range/filename contracts and complete byte-integrity checks. Real viewing
 on the owner's device and sustained arbitrary public load cannot be guaranteed
 from server-side tests. No change is pushed or deployed by this work.
+
+
+Final integration verification: 921 Python/MongoDB checks and 15 subtests passed,
+176 frontend tests passed, and 60 distinct Chromium workflows passed across the
+broad run and focused corrections. The restored working tree passed a final
+13-case browser selection. Final preview/cache and revocation selections passed
+93 and two tests respectively. Ruff, Bandit, dependency audits, the frontend
+production build and three release-package checks passed. The source-package
+builder includes this release's public performance and validation documentation.
+
+Implementation stages are committed separately on `dev`; see the local Git log
+for exact hashes. Pre-existing listing-refresh changes are restored uncommitted,
+and their original safety stash remains available. No push or deployment occurred.

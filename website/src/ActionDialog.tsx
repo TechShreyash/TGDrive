@@ -97,7 +97,13 @@ export default function ActionDialog({
             />
           </label>
         )}
-        {link && <p className="muted">{expiry ? "Expires " + formatTimestamp(expiry) : "No expiry. Revoke access in Shared Links."}</p>}
+        {link && (
+          <p className="muted">
+            {expiry
+              ? "Expires " + formatTimestamp(expiry)
+              : "No expiry. Revoke access in Shared Links."}
+          </p>
+        )}
         <ErrorNotice message={error} />
         <div className="dialog-actions">
           <button className="secondary-button" onClick={close} disabled={busy}>
