@@ -30,7 +30,7 @@ class _Request:
 class MediaScheduler:
     """Share concurrency, rate and flood feedback across one account's transfers."""
 
-    def __init__(self, *, limit: int = 8, rate: float = 24) -> None:
+    def __init__(self, *, limit: int = 8, rate: float = 48) -> None:
         self.configure(limit=limit, rate=rate)
         self.active = 0
         self.completed = 0

@@ -403,7 +403,7 @@ class Client:
         self._upload_pipeline = getattr(settings, "telegram_upload_pipeline", 4)
         self._media_scheduler = MediaScheduler(
             limit=getattr(settings, "telegram_request_limit", 8),
-            rate=getattr(settings, "telegram_parts_per_second", 24),
+            rate=getattr(settings, "telegram_parts_per_second", 48),
         )
         self._premium = bool(session_string)
         self.display_name: str | None = None

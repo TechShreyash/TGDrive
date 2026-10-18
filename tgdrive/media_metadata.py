@@ -28,6 +28,12 @@ async def get_message(client: Any, channel: int, message_id: int) -> Any:
         await flight.done.wait()
         flight = flights.get(key)
     if flight is None:
+        from tgdrive.client_pool import MediaQueueFull
+
+        pool = getattr(client, "_identity_pool", None)
+        maximum = getattr(pool, "_max_media_queue", 256)
+        if len(flights) >= maximum:
+            raise MediaQueueFull(retry_after=1)
         task = asyncio.create_task(client.get_messages(channel, message_ids=message_id))
         flight = _Flight(task)
         flights[key] = flight

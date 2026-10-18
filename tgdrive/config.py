@@ -134,7 +134,7 @@ class Settings(BaseSettings):
         default=8, alias="TELEGRAM_REQUEST_LIMIT", ge=1, le=32
     )
     telegram_parts_per_second: int = Field(
-        default=24, alias="TELEGRAM_PARTS_PER_SECOND", ge=1, le=128
+        default=48, alias="TELEGRAM_PARTS_PER_SECOND", ge=1, le=128
     )
     telegram_media_per_bot: int = Field(
         default=3, alias="TELEGRAM_MEDIA_PER_BOT", ge=1, le=16

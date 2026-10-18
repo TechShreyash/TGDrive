@@ -78,3 +78,25 @@ async def test_new_seek_does_not_join_abandoned_metadata_validation():
     assert calls == 2
     with pytest.raises(asyncio.CancelledError):
         await abandoned
+
+
+async def test_distinct_metadata_work_is_bounded_without_rejecting_shared_waiters():
+    gate = asyncio.Event()
+
+    async def fetch(*args, **kwargs):
+        await gate.wait()
+        return kwargs["message_ids"]
+
+    client = SimpleNamespace(
+        get_messages=fetch, _identity_pool=SimpleNamespace(_max_media_queue=2)
+    )
+    tasks = [asyncio.create_task(get_message(client, 1, i)) for i in (1, 2)]
+    await asyncio.sleep(0.01)
+    from tgdrive.client_pool import MediaQueueFull
+
+    with pytest.raises(MediaQueueFull):
+        await get_message(client, 1, 3)
+    shared = asyncio.create_task(get_message(client, 1, 1))
+    gate.set()
+    assert await asyncio.gather(*tasks, shared) == [1, 2, 1]
+    assert await get_message(client, 1, 3) == 3

@@ -211,10 +211,15 @@ async def upload_multipart(manager, record, local_path, destination, file_name, 
                 and item.connected is True
                 for item in await manager.pool.status()
             )
-            premium = bot_limit < size <= premium_limit and healthy_users
-            maximum = premium_limit if premium else bot_limit
             configured = getattr(manager.settings, "upload_split_mib", 2000)
-            part_size = min(maximum, configured * 1024**2) if configured else maximum
+            requested = configured * 1024**2 if configured else premium_limit
+            premium = (
+                bot_limit < size <= premium_limit
+                and healthy_users
+                and requested > bot_limit
+            )
+            maximum = premium_limit if premium else bot_limit
+            part_size = min(maximum, requested)
             # Preserve bounded manifest size even for a deliberately tiny preference.
             part_size = max(part_size, (size + MAX_FILE_PARTS - 1) // MAX_FILE_PARTS)
             part_size = min(maximum, part_size)

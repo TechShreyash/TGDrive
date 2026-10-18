@@ -879,6 +879,7 @@ def create_app(
             )
             headers = {
                 "Accept-Ranges": "bytes",
+                "Content-Encoding": "identity",
                 "ETag": tag,
                 "Cache-Control": "private, no-store, no-transform",
                 "Content-Disposition": _content_disposition(

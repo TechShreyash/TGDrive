@@ -26,7 +26,7 @@ class PerformancePreferences(BaseModel):
     preload_max_jobs: int = Field(default=2, ge=1, le=8)
     telegram_upload_pipeline: int = Field(default=4, ge=1, le=16)
     telegram_request_limit: int = Field(default=8, ge=1, le=32)
-    telegram_parts_per_second: int = Field(default=24, ge=1, le=128)
+    telegram_parts_per_second: int = Field(default=48, ge=1, le=128)
     telegram_media_per_bot: int = Field(default=3, ge=1, le=16)
     telegram_max_queue: int = Field(default=256, ge=1, le=4096)
     upload_split_mib: int = Field(default=2000, ge=0, le=2000)
