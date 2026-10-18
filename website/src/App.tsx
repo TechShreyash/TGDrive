@@ -240,6 +240,15 @@ export default function App() {
   const isSearch = currentPath.startsWith("/search_");
   const view = location.view;
   const isFiles = view === "files" || view === "trash";
+  const listingKey = JSON.stringify([
+    authenticated,
+    view,
+    currentPath,
+    location.auth,
+    isSearch ? searchOffset : 0,
+    isSearch ? searchSort : "",
+  ]);
+  const loadedListing = useRef<string | null>(null);
   const workspace = useRef<HTMLElement>(null);
   useLayoutEffect(() => {
     if (workspace.current) workspace.current.scrollTop = 0;
@@ -439,11 +448,15 @@ export default function App() {
   }, [authenticated, isPublic]);
   useEffect(() => {
     if ((!authenticated && !isPublic) || !isFiles) {
+      loadedListing.current = null;
       setLoading(false);
       return;
     }
     const controller = new AbortController();
-    setLoading(true);
+    // Keep the current table mounted when uploads update the same listing.
+    const background = loadedListing.current === listingKey;
+    if (!background) loadedListing.current = null;
+    setLoading(!background);
     setLoadError("");
     const resultPromise =
       isSearch && !isPublic
@@ -476,6 +489,7 @@ export default function App() {
     void resultPromise
       .then((result) => {
         if (controller.signal.aborted) return;
+        loadedListing.current = listingKey;
         setDirectory(result.data);
         setShareRoot(result.auth_home_path || "");
         if (result.data.name) names.current.set(currentPath, result.data.name);
@@ -483,6 +497,17 @@ export default function App() {
       .catch((error) => {
         if (controller.signal.aborted) return;
         if (error.name !== "AbortError") {
+          if (
+            background &&
+            (!error.status ||
+              error.status === 408 ||
+              error.status === 429 ||
+              error.status >= 500)
+          ) {
+            notify("Could not update your files. " + errorMessage(error), true);
+            return;
+          }
+          loadedListing.current = null;
           if (isSearch) {
             setSearchItems([]);
             setSearchMore(false);
@@ -510,6 +535,8 @@ export default function App() {
     refresh,
     searchOffset,
     searchSort,
+    listingKey,
+    notify,
   ]);
   useEffect(() => {
     if (!isFiles || isSearch || view === "trash") return;
@@ -1178,6 +1205,7 @@ export default function App() {
           {isFiles ? (
             <FileBrowser
               directory={directory}
+              listingKey={listingKey}
               highlightId={location.highlightId}
               loading={loading}
               error={loadError}

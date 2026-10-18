@@ -327,8 +327,9 @@ were made for validation.
 ## Implementation verification
 
 The implementation remains local on `dev`. Nothing was pushed or deployed.
-The pre-existing four-file working-tree change was restored after integration,
-with its original 193 additions/four deletions kept uncommitted.
+The pre-existing four-file listing-refresh change was restored after integration
+with its original 193 additions/four deletions intact, then committed separately
+after the owner requested committing the remaining work.
 
 | Check | Result |
 | --- | --- |

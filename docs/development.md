@@ -415,6 +415,11 @@ Folder upload confirmation contains only the chosen folder, count, total size,
 destination and actions. General picker limitations belong in usage documentation;
 show a skipped-file notice only when the current selection actually contains one.
 
+Upload completion refreshes the current listing in the background, keeping rows,
+scroll position, pagination and surviving selections in place. Loading placeholders
+are reserved for opening a different listing. A temporary background-refresh failure
+keeps the last successful listing visible and reports the error.
+
 Batch aggregation precedes section assignment and page-status filtering.
 Never partition folder members by file status before constructing their batch.
 Running takes priority, then attention, queued work, all-completed, then cancelled.

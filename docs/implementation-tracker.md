@@ -98,5 +98,6 @@ production build and three release-package checks passed. The source-package
 builder includes this release's public performance and validation documentation.
 
 Implementation stages are committed separately on `dev`; see the local Git log
-for exact hashes. Pre-existing listing-refresh changes are restored uncommitted,
-and their original safety stash remains available. No push or deployment occurred.
+for exact hashes. Pre-existing listing-refresh changes were restored after integration and committed
+separately following the owner’s subsequent request. Their original safety stash
+remains available. No push or deployment occurred.

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   AlertCircle,
   Folder,
@@ -67,6 +67,7 @@ function hideItemMenus() {
 }
 export default function FileBrowser({
   directory,
+  listingKey,
   highlightId = "",
   loading,
   error,
@@ -85,6 +86,7 @@ export default function FileBrowser({
   searchItems,
 }: {
   directory: Directory;
+  listingKey: string;
   highlightId?: string;
   loading: boolean;
   error: string;
@@ -162,7 +164,7 @@ export default function FileBrowser({
     setSelected(new Set());
     setSelectionMode(false);
     setPage(0);
-  }, [directory]);
+  }, [listingKey]);
   useEffect(() => {
     const escape = (event: KeyboardEvent) => {
       if (
@@ -209,10 +211,24 @@ export default function FileBrowser({
     return items;
   }, [directory.contents, searchItems, searchPagination, sort]);
   useEffect(() => {
+    // Retain browsing state on refresh, dropping only selections that disappeared.
+    const ids = new Set(allItems.map((item) => item.id));
+    setSelected((current) => {
+      const next = new Set([...current].filter((id) => ids.has(id)));
+      return next.size === current.size ? current : next;
+    });
+    setPage((current) =>
+      Math.min(current, Math.max(0, Math.ceil(allItems.length / 100) - 1)),
+    );
+  }, [allItems]);
+  useEffect(() => {
     document.querySelector(".workspace")?.scrollTo({ top: 0 });
   }, [page]);
+  const highlighted = useRef("");
   useEffect(() => {
     if (loading || !highlightId) return;
+    const target = JSON.stringify([listingKey, highlightId, sort]);
+    if (highlighted.current === target) return;
     const index = allItems.findIndex((item) => item.id === highlightId);
     if (index < 0) return;
     setPage(Math.floor(index / 100));
@@ -220,6 +236,7 @@ export default function FileBrowser({
     setSelectionMode(false);
     let frame = requestAnimationFrame(() => {
       frame = requestAnimationFrame(() => {
+        highlighted.current = target;
         const row = document.querySelector<HTMLElement>(
           '[data-item-id="' + CSS.escape(highlightId) + '"]',
         );
@@ -230,7 +247,7 @@ export default function FileBrowser({
       });
     });
     return () => cancelAnimationFrame(frame);
-  }, [directory, highlightId, loading, sort]);
+  }, [allItems, listingKey, highlightId, loading, sort]);
   const visibleItems = allItems.slice(page * 100, (page + 1) * 100);
   const chosen = allItems.filter((item) => selected.has(item.id));
   const closeItemMenus = () => {

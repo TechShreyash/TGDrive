@@ -1733,6 +1733,145 @@ def test_unsupported_details_are_compact_explicit_and_shared_readonly(
     assert extra_errors == []
 
 
+@pytest.mark.parametrize("width", [1440, 390])
+def test_folder_upload_refresh_keeps_table_selection_page_and_scroll(
+    server: Server, desktop: tuple[Any, Any], tmp_path: Path, width: int
+) -> None:
+    _, page = desktop
+    page.set_viewport_size({"width": width, "height": 960})
+    held: list[tuple[Any, Any, dict[str, Any]]] = []
+    hold = False
+
+    def listing(route: Any) -> None:
+        response = route.fetch()
+        payload = response.json()
+        if route.request.post_data_json["path"] == "/":
+            payload["data"]["contents"].update(
+                {
+                    f"stable-{i}": {
+                        "id": f"stable-{i}",
+                        "name": f"stable-{i:03}.txt",
+                        "type": "file",
+                        "path": "/",
+                        "size": 10,
+                    }
+                    for i in range(130)
+                }
+            )
+        if hold:
+            held.append((route, response, payload))
+        else:
+            route.fulfill(response=response, json=payload)
+
+    page.route("**/api/getDirectory", listing)
+    login(page, server.url)
+    directory = tmp_path / "Stable upload"
+    directory.mkdir()
+    for i in range(3):
+        (directory / f"upload-{i}.txt").write_bytes(b"folder upload contents")
+    dialog = select_folder(page, directory)
+    dialog.get_by_role("button", name="Upload", exact=True).click()
+    expect(dialog).not_to_be_visible()
+    started = server.wait_started(3)
+    expect(page.get_by_role("button", name="Stable upload", exact=True)).to_be_visible()
+    hide = page.get_by_role("button", name="Hide Transfer Details", exact=True)
+    if hide.is_visible():
+        hide.click()
+    page.get_by_role("button", name="Next Page", exact=True).click()
+    select_item(page, "stable-110.txt")
+    page.get_by_label("Select stable-110.txt", exact=True).focus()
+    page.evaluate("""() => {
+      window.stableTable = document.querySelector('.file-table');
+      window.stableRow = document.querySelector('[data-item-id="stable-110"]');
+      window.tableRemovals = 0;
+      new MutationObserver(records => {
+        for (const record of records) for (const removed of record.removedNodes)
+          if (removed === window.stableTable || removed.contains?.(window.stableTable))
+            window.tableRemovals++;
+      }).observe(document.querySelector('.workspace'), {childList:true, subtree:true});
+      document.querySelector('.workspace').scrollTop = 250;
+    }""")
+    scroll = page.locator(".workspace").evaluate("element => element.scrollTop")
+    assert scroll > 0
+    hold = True
+    try:
+        for item in started:
+            server.finish(item["id"])
+            deadline = time.monotonic() + 10
+            while not held and time.monotonic() < deadline:
+                page.wait_for_timeout(50)
+            assert len(held) == 1
+            expect(page.locator(".loading-state")).to_have_count(0)
+            expect(
+                page.get_by_label("Select stable-110.txt", exact=True)
+            ).to_be_checked()
+            route, response, payload = held.pop()
+            route.fulfill(response=response, json=payload)
+            page.evaluate(
+                "() => new Promise(resolve => requestAnimationFrame("
+                "() => requestAnimationFrame(resolve)))"
+            )
+            expect(
+                page.get_by_label("Select stable-110.txt", exact=True)
+            ).to_be_checked()
+            expect(
+                page.get_by_label("Select stable-110.txt", exact=True)
+            ).to_be_focused()
+            expect(page.locator(".pagination")).to_contain_text("Showing 101\u2013")
+            assert (
+                page.locator(".workspace").evaluate("element => element.scrollTop")
+                == scroll
+            )
+            assert page.evaluate(
+                "window.stableTable === document.querySelector('.file-table')"
+            )
+            assert page.evaluate(
+                "window.stableRow === "
+                "document.querySelector('[data-item-id=stable-110]')"
+            )
+            assert page.evaluate("window.tableRemovals") == 0
+        page.screenshot(path=ARTIFACTS / f"stable-folder-upload-{width}.png")
+    finally:
+        hold = False
+        for route, response, payload in held:
+            route.fulfill(response=response, json=payload)
+
+
+def test_background_listing_failure_preserves_files_and_navigation_loads_normally(
+    server: Server, desktop: tuple[Any, Any]
+) -> None:
+    _, page = desktop
+    login(page, server.url)
+    primary = page.get_by_role("button", name="資料 📁", exact=True)
+    expect(primary).to_be_visible()
+    select_item(page, "資料 📁")
+    page.route(
+        "**/api/getDirectory",
+        lambda route: route.fulfill(
+            status=503, json={"detail": "Temporary test failure"}
+        ),
+    )
+    page.evaluate("window.dispatchEvent(new Event('tgdrive:files-changed'))")
+    expect(page.get_by_role("alert")).to_contain_text("Could not update your files")
+    expect(primary).to_be_visible()
+    expect(page.get_by_label("Select 資料 📁", exact=True)).to_be_checked()
+    expect(page.get_by_role("heading", name="Could Not Load Your Files")).to_have_count(
+        0
+    )
+    page.unroute("**/api/getDirectory")
+    held: list[Any] = []
+    page.route("**/api/getDirectory", lambda route: held.append(route))
+    try:
+        primary.dblclick()
+        expect(page.locator(".loading-state")).to_be_visible()
+        expect(page.locator(".file-table")).to_have_count(0)
+    finally:
+        for route in held:
+            route.continue_()
+        page.unroute("**/api/getDirectory")
+    expect(page.get_by_role("button", name="résumé #1.txt", exact=True)).to_be_visible()
+
+
 def test_directory_picker_preserves_nested_paths_and_waits_for_atomic_tree(
     server: Server, desktop: tuple[Any, Any], tmp_path: Path
 ) -> None:
