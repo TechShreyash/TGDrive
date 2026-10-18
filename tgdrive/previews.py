@@ -14,6 +14,7 @@ from telethon.errors import RPCError
 
 from tgdrive.file_parts import validate_parts
 from tgdrive.logical_media import read_logical_prefix
+from tgdrive.media_metadata import get_message
 from tgdrive.streaming import TelegramFileNotFound, _media_from_message
 
 TEXT_PREVIEW_BYTES = 256 * 1024
@@ -154,7 +155,7 @@ async def lease_media(
     client = await lease.__aenter__()
     try:
         try:
-            message = await client.get_messages(channel_id, message_ids=message_id)
+            message = await get_message(client, channel_id, message_id)
             media = _media_from_message(message)
             if message is None or getattr(message, "empty", False) or media is None:
                 raise TelegramFileNotFound(
@@ -168,7 +169,7 @@ async def lease_media(
             replacement = pool.lease()
             client = await replacement.__aenter__()
             lease = replacement
-            message = await client.get_messages(channel_id, message_ids=message_id)
+            message = await get_message(client, channel_id, message_id)
             media = _media_from_message(message)
             if message is None or getattr(message, "empty", False) or media is None:
                 raise TelegramFileNotFound(

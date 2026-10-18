@@ -91,6 +91,9 @@ class Runtime:
             from tgdrive.transfer_preferences import get_transfer_preferences
 
             await get_transfer_preferences(self.settings, self).initialize()
+            from tgdrive.performance_preferences import get_performance_settings
+
+            await get_performance_settings(self.settings, self).initialize()
             check_binding = getattr(self.backup, "check_local_binding", None)
             if check_binding is not None:
                 try:
@@ -207,6 +210,21 @@ class Runtime:
             except Exception:
                 await asyncio.sleep(30)
 
+    async def _close_media_resources(self) -> list[BaseException]:
+        manager = getattr(self, "preloads", None)
+        resource = (
+            manager
+            if manager is not None
+            else getattr(self.pool, "_media_read_cache", None)
+        )
+        if resource is not None:
+            try:
+                await resource.close()
+            except Exception as exc:
+                logger.exception("Failed to stop disposable media resources")
+                return [exc]
+        return []
+
     async def stop(self) -> None:
         self.ready = False
         if self._reconnector is not None:
@@ -214,6 +232,7 @@ class Runtime:
             await asyncio.gather(self._reconnector, return_exceptions=True)
             self._reconnector = None
         failures: list[BaseException] = []
+        failures.extend(await self._close_media_resources())
         if self.bot_mode is not None:
             try:
                 await self.bot_mode.stop()
@@ -281,6 +300,7 @@ class Runtime:
             await self.remote.close()
         except Exception:
             logger.exception("Remote-client cleanup after failed startup failed")
+        await self._close_media_resources()
         try:
             await self.pool.stop(drain_timeout=10)
         except Exception:

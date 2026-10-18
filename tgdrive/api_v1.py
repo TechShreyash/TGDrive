@@ -71,6 +71,15 @@ def register_routes(
     register_management_routes(
         app, settings, require_admin=require_admin, get_runtime=get_runtime
     )
+    from tgdrive.performance_api import register_performance_routes
+
+    register_performance_routes(
+        app,
+        settings,
+        require_admin=require_admin,
+        get_runtime=get_runtime,
+        get_store=get_store,
+    )
     admin = [Depends(require_admin)]
     chunk_receivers = asyncio.Semaphore(settings.max_concurrent_transfers)
 
@@ -269,7 +278,7 @@ def register_routes(
                     raise UploadError("Upload chunk is too large", 413)
                 body.extend(part)
             await require_admin(request)
-            item = await uploads(request).append(upload_id, offset, bytes(body))
+            item = await uploads(request).append(upload_id, offset, body)
         return Response(status_code=204, headers={"Upload-Offset": str(item["offset"])})
 
     @app.post(
@@ -284,10 +293,17 @@ def register_routes(
     async def cancel_upload(upload_id: str, request: Request) -> dict[str, Any]:
         return await uploads(request).cancel(upload_id)
 
-    def job_snapshot(record: Any) -> dict[str, Any]:
+    def job_snapshot(record: Any, request: Request) -> dict[str, Any]:
         return record.as_dict() | {
             "name": record.context.get("name", "Transfer"),
-            "kind": record.context.get("kind", "upload"),
+            "kind": record.context.get(
+                "source_kind", record.context.get("kind", "upload")
+            ),
+            "queue": (
+                get_runtime(request).pool.queue_estimate(record.id)
+                if callable(getattr(get_runtime(request).pool, "queue_estimate", None))
+                else None
+            ),
             "destination": record.context.get("destination", "/"),
         }
 
@@ -295,7 +311,8 @@ def register_routes(
     async def jobs(request: Request) -> dict[str, Any]:
         return {
             "jobs": [
-                job_snapshot(record) for record in get_manager(request).registry.list()
+                job_snapshot(record, request)
+                for record in get_manager(request).registry.list()
             ]
         }
 
@@ -320,6 +337,10 @@ def register_routes(
             limit=limit,
             before=(before, before_id) if before is not None else None,
         )
+        estimate = getattr(get_runtime(request).pool, "queue_estimate", None)
+        if callable(estimate):
+            for row in result["jobs"]:
+                row["queue"] = estimate(row["id"])
         await asyncio.to_thread(enrich_locations, get_store(request), result["jobs"])
         return result
 
@@ -340,12 +361,12 @@ def register_routes(
 
     @app.get("/api/v1/jobs/{job_id}", dependencies=admin)
     async def job(job_id: str, request: Request) -> dict[str, Any]:
-        return job_snapshot(get_manager(request).registry.get(job_id))
+        return job_snapshot(get_manager(request).registry.get(job_id), request)
 
     @app.post("/api/v1/jobs/{job_id}/cancel", dependencies=admin)
     async def cancel_job(job_id: str, request: Request) -> dict[str, Any]:
         try:
-            return job_snapshot(get_manager(request).cancel_job(job_id))
+            return job_snapshot(get_manager(request).cancel_job(job_id), request)
         except ValueError as exc:
             if getattr(exc, "code", None) == "BACKUP_PENDING":
                 raise
@@ -354,7 +375,7 @@ def register_routes(
     @app.post("/api/v1/jobs/{job_id}/retry", dependencies=admin)
     async def retry_job(job_id: str, request: Request) -> dict[str, Any]:
         try:
-            return job_snapshot(get_manager(request).retry_job(job_id))
+            return job_snapshot(get_manager(request).retry_job(job_id), request)
         except ValueError as exc:
             raise HTTPException(409, str(exc)) from exc
 
@@ -407,6 +428,45 @@ def register_routes(
             token_factory=token_factory(settings),
         )
         return {"auth": token, "path": payload.path, "expires_at": expires}
+
+    @app.post("/api/v1/download-links", dependencies=admin)
+    async def download_link(payload: RevokeShare, request: Request) -> Response:
+        def create_or_reuse():
+            store = get_store(request)
+            with store.metadata_batch():
+                path = store.resolve_id(payload.path.rstrip("/").rsplit("/", 1)[-1])
+                store.get_file(path)
+                rows = store.list_shares(path, token_factory=token_factory(settings))
+                if rows:
+                    row = rows[0]
+                    if not row["copyable"]:
+                        raise HTTPException(
+                            409,
+                            "Create a replacement in Shared Links "
+                            "before copying this older link.",
+                        )
+                    token, expires = (
+                        token_factory(settings)(row["id"]),
+                        row["expires_at"],
+                    )
+                else:
+                    expires = (datetime.now(UTC) + timedelta(days=1)).isoformat()
+                    token = store.create_share(
+                        path, expires_at=expires, token_factory=token_factory(settings)
+                    )
+            from urllib.parse import urlencode
+
+            url = (
+                str(request.base_url).rstrip("/")
+                + "/file?"
+                + urlencode({"path": path, "auth": token, "download": "1"})
+            )
+            return {"url": url, "expires_at": expires, "path": path}
+
+        return JSONResponse(
+            await asyncio.to_thread(create_or_reuse),
+            headers={"Cache-Control": "no-store"},
+        )
 
     @app.delete("/api/v1/shares", dependencies=admin)
     async def revoke_share(payload: RevokeShare, request: Request) -> dict[str, Any]:

@@ -329,6 +329,7 @@ class TransferManager:
         record = self.registry.create("downloading")
         record.context.update(
             kind="remote",
+            source_kind="remote",
             url=url,
             destination=destination,
             destination_id=binding["id"],
@@ -550,7 +551,11 @@ class TransferManager:
             )
         elif context.get("kind") == "delete":
             self.registry.spawn(record.id, lambda item: self._delete_intent(item))
-        elif context.get("kind") == "upload":
+        elif context.get("kind") == "upload" or (
+            context.get("source_kind") == "remote"
+            and context.get("local_path")
+            and context.get("size")
+        ):
             self.registry.spawn(
                 record.id,
                 lambda item: self._upload_path(
@@ -719,6 +724,7 @@ class TransferManager:
                             premium=premium,
                             client_name=context.get("sender"),
                             media=True,
+                            request_id=record.id,
                         ) as client,
                     ):
                         context.setdefault("sender", client.name)

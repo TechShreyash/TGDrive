@@ -37,6 +37,8 @@ class MediaScheduler:
         self.failed = 0
         self.floods = 0
         self.bytes = 0
+        self.upload_bytes = 0
+        self.download_bytes = 0
         self._sequence = 0
         self._condition = asyncio.Condition()
         self._waiting: list[_Request] = []
@@ -66,8 +68,12 @@ class MediaScheduler:
             self._cooldown = max(self._cooldown, time.monotonic() + seconds)
             self._condition.notify_all()
 
-    def record_bytes(self, amount: int) -> None:
+    def record_bytes(self, amount: int, *, upload: bool = False) -> None:
         self.bytes += amount
+        if upload:
+            self.upload_bytes += amount
+        else:
+            self.download_bytes += amount
 
     @asynccontextmanager
     async def request(self):
@@ -156,6 +162,8 @@ class MediaScheduler:
             failed=self.failed,
             floods=self.floods,
             bytes=self.bytes,
+            upload_bytes=self.upload_bytes,
+            download_bytes=self.download_bytes,
         )
         if now - self._last_sample >= 1:
             self._history.append(sample)

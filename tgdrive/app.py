@@ -49,7 +49,6 @@ from tgdrive.http_guard import (
     ApiBodyGuardMiddleware,
     SameOriginMiddleware,
     SecurityHeadersMiddleware,
-    StreamConcurrencyMiddleware,
     UploadGuardMiddleware,
 )
 from tgdrive.logging import configure_logging
@@ -299,6 +298,16 @@ def create_app(
     @app.exception_handler(ClientPoolNotRunning)
     @app.exception_handler(NoClientAvailable)
     async def telegram_unavailable(_request: Request, _exc: Exception) -> JSONResponse:
+        if getattr(_exc, "code", None) == "TELEGRAM_QUEUE_FULL":
+            return JSONResponse(
+                {
+                    "detail": "Telegram is busy and its waiting queue is full. "
+                    "Retry shortly.",
+                    "code": "TELEGRAM_QUEUE_FULL",
+                },
+                status_code=503,
+                headers={"Retry-After": str(getattr(_exc, "retry_after", 1))},
+            )
         return _json_error(
             "Telegram is unavailable. Check its connection and accounts, then retry.",
             503,
@@ -395,6 +404,7 @@ def create_app(
             "max_file_size": await current_upload_limit(
                 settings, getattr(_runtime(request), "pool", None)
             ),
+            "timezone": settings.timezone,
         }
 
     @app.post("/api/checkPassword")
@@ -751,7 +761,7 @@ def create_app(
             )
         if path != "/":
             path = store.resolve_id(path.rstrip("/").rsplit("/", 1)[-1])
-        if not _is_admin(request):
+        if auth is not None or not _is_admin(request):
             try:
                 authorized = store.authorize_file(path, auth or "")
             except DriveError:
@@ -808,8 +818,92 @@ def create_app(
         download: bool = False,
         preview: bool = False,
         quality: Annotated[str | None, Query(max_length=128)] = None,
+        request_id: Annotated[
+            str | None, Query(max_length=128, pattern=r"^[A-Za-z0-9_-]+$")
+        ] = None,
     ) -> Response:
         path, file_data = authorized_file(request, path, auth)
+
+        pool = _runtime(request).pool
+        if request_id:
+            requests = getattr(pool, "_request_files", None)
+            if requests is None:
+                requests = {}
+                try:
+                    pool._request_files = requests
+                except AttributeError:
+                    requests = None
+            if requests is not None:
+                requests[request_id] = (
+                    settings.storage_channel,
+                    file_data["message_id"],
+                    file_data["size"],
+                )
+                while len(requests) > 4096:
+                    requests.pop(next(iter(requests)))
+
+        async def authorize():
+            _, current = await asyncio.to_thread(authorized_file, request, path, auth)
+            if any(
+                current.get(key) != file_data.get(key)
+                for key in ("message_id", "size", "parts")
+            ):
+                raise HTTPException(
+                    409, "The stored file changed. Restart the download."
+                )
+
+        if request.method == "HEAD" and quality is None:
+            import mimetypes
+
+            from tgdrive.ranges import (
+                MalformedRange,
+                RangeNotSatisfiable,
+                parse_byte_range,
+            )
+            from tgdrive.streaming import (
+                _content_disposition,
+                _not_modified,
+                _request_range,
+                media_etag,
+            )
+
+            total = file_data["size"]
+            tag = media_etag(
+                settings.storage_channel,
+                file_data["message_id"],
+                total,
+                parts=file_data.get("parts"),
+            )
+            mime = (
+                mimetypes.guess_type(file_data["name"])[0] or "application/octet-stream"
+            )
+            headers = {
+                "Accept-Ranges": "bytes",
+                "ETag": tag,
+                "Cache-Control": "private, no-store, no-transform",
+                "Content-Disposition": _content_disposition(
+                    file_data["name"], mime, download=download, preview=preview
+                ),
+            }
+            if _not_modified(request, tag):
+                return Response(status_code=304, headers=headers)
+            try:
+                selected = parse_byte_range(_request_range(request, tag), total)
+            except MalformedRange:
+                return Response(status_code=400, headers=headers)
+            except RangeNotSatisfiable as exc:
+                return Response(
+                    status_code=416,
+                    headers=headers | {"Content-Range": exc.content_range},
+                )
+            headers["Content-Length"] = str(selected.length)
+            if selected.content_range:
+                headers["Content-Range"] = selected.content_range
+            return Response(
+                status_code=206 if selected.is_partial else 200,
+                headers=headers,
+                media_type=mime,
+            )
         try:
             return await stream_telegram_file(
                 pool=_runtime(request).pool,
@@ -822,6 +916,8 @@ def create_app(
                 download=download,
                 preview=preview,
                 quality=quality,
+                authorize=authorize,
+                request_id=request_id,
             )
         except TelegramVariantNotFound as exc:
             raise HTTPException(404, "This media quality is unavailable") from exc
@@ -829,6 +925,30 @@ def create_app(
             raise HTTPException(
                 status_code=404, detail="Stored file not found"
             ) from exc
+
+    @app.get("/api/v1/file-status")
+    async def file_status(
+        request: Request,
+        path: Annotated[str, Query(min_length=1, max_length=4096)],
+        request_id: Annotated[
+            str, Query(min_length=1, max_length=128, pattern=r"^[A-Za-z0-9_-]+$")
+        ],
+        auth: Annotated[str | None, Query(max_length=512)] = None,
+    ):
+        _, data = authorized_file(request, path, auth)
+        pool = _runtime(request).pool
+        estimate = getattr(pool, "queue_estimate", None)
+        return JSONResponse(
+            {
+                "queue": estimate(request_id)
+                if callable(estimate)
+                and getattr(pool, "_request_files", {}).get(request_id)
+                == (settings.storage_channel, data["message_id"], data["size"])
+                else None,
+                "size": data["size"],
+            },
+            headers={"Cache-Control": "no-store"},
+        )
 
     register_routes(
         app,
@@ -865,9 +985,10 @@ def create_app(
         upload_limit=settings.upload_limit,
         max_concurrent=settings.max_concurrent_transfers,
     )
-    app.add_middleware(
-        StreamConcurrencyMiddleware, max_concurrent=settings.max_concurrent_streams
-    )
+    from tgdrive.traffic import TrafficCounters, TrafficMiddleware
+
+    app.state.traffic = TrafficCounters()
+    app.add_middleware(TrafficMiddleware, counters=app.state.traffic)
     app.add_middleware(SameOriginMiddleware)
     app.add_middleware(ApiBodyGuardMiddleware, sessions=sessions)
     app.add_middleware(SecurityHeadersMiddleware, secure=settings.cookie_secure)

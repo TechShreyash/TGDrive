@@ -127,6 +127,49 @@ class Settings(BaseSettings):
         default=1, alias="TELEGRAM_UPLOADS_PER_BOT", ge=1, le=4
     )
 
+    telegram_upload_pipeline: int = Field(
+        default=4, alias="TELEGRAM_UPLOAD_PIPELINE", ge=1, le=16
+    )
+    telegram_request_limit: int = Field(
+        default=8, alias="TELEGRAM_REQUEST_LIMIT", ge=1, le=32
+    )
+    telegram_parts_per_second: int = Field(
+        default=24, alias="TELEGRAM_PARTS_PER_SECOND", ge=1, le=128
+    )
+    telegram_media_per_bot: int = Field(
+        default=3, alias="TELEGRAM_MEDIA_PER_BOT", ge=1, le=16
+    )
+    telegram_max_queue: int = Field(
+        default=256, alias="TELEGRAM_MAX_QUEUE", ge=1, le=4096
+    )
+    upload_split_mib: int = Field(default=2000, alias="UPLOAD_SPLIT_MIB", ge=0, le=2000)
+    cache_memory_bytes: int = Field(
+        default=256 * 1024**2, alias="CACHE_MEMORY_BYTES", ge=0, le=8 * 1024**3
+    )
+    cache_disk_bytes: int = Field(
+        default=10 * 1024**3, alias="CACHE_DISK_BYTES", ge=0, le=2 * 1024**4
+    )
+    cache_min_free_bytes: int = Field(
+        default=1024**3, alias="CACHE_MIN_FREE_BYTES", ge=0, le=2 * 1024**4
+    )
+    cache_ttl_seconds: int = Field(
+        default=86400, alias="CACHE_TTL_SECONDS", ge=60, le=2678400
+    )
+    auto_preload: bool = Field(default=True, alias="AUTO_PRELOAD")
+    preload_max_jobs: int = Field(default=2, alias="PRELOAD_MAX_JOBS", ge=1, le=8)
+    timezone: str = Field(default="Asia/Kolkata", alias="TIMEZONE")
+
+    @field_validator("timezone")
+    @classmethod
+    def valid_timezone(cls, value: str) -> str:
+        from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+
+        try:
+            ZoneInfo(value)
+        except (ValueError, ZoneInfoNotFoundError) as exc:
+            raise ValueError("Use a valid IANA timezone, such as Asia/Kolkata") from exc
+        return value
+
     staging_budget_bytes: int = Field(
         default=16 * 1024**3, alias="STAGING_BUDGET_BYTES", gt=0
     )

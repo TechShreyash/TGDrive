@@ -1136,6 +1136,37 @@ class DriveStore:
             payload["folder_preparations"] = preparations
         return payload
 
+    def statistics(self) -> dict[str, int]:
+        with self._transaction() as db:
+            row = db.execute(
+                "WITH RECURSIVE tree(id,kind,size,hidden) AS ("
+                "SELECT id,kind,size,trashed FROM nodes WHERE id='root' UNION ALL "
+                "SELECT n.id,n.kind,n.size,(n.trashed OR t.hidden) "
+                "FROM nodes n JOIN tree t ON n.parent_id=t.id) "
+                "SELECT COALESCE(SUM(kind='file' AND NOT hidden),0), "
+                "COALESCE(SUM(kind='folder' AND id!='root' AND NOT hidden),0), "
+                "COALESCE(SUM(CASE WHEN kind='file' AND NOT hidden "
+                "THEN size ELSE 0 END),0), "
+                "COALESCE(SUM(kind='file' AND hidden),0), "
+                "COALESCE(SUM(CASE WHEN kind='file' AND hidden "
+                "THEN size ELSE 0 END),0) "
+                "FROM tree"
+            ).fetchone()
+            shares = db.execute("SELECT COUNT(*) FROM shares").fetchone()[0]
+            return dict(
+                zip(
+                    (
+                        "files",
+                        "folders",
+                        "total_bytes",
+                        "trashed_files",
+                        "trashed_bytes",
+                    ),
+                    row,
+                    strict=True,
+                )
+            ) | {"shares": shares}
+
     def export(self) -> dict[str, Any]:
         with self._transaction() as db:
             return self._payload_locked(db)

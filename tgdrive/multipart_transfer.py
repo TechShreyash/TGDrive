@@ -212,7 +212,12 @@ async def upload_multipart(manager, record, local_path, destination, file_name, 
                 for item in await manager.pool.status()
             )
             premium = bot_limit < size <= premium_limit and healthy_users
-            part_size = premium_limit if premium else bot_limit
+            maximum = premium_limit if premium else bot_limit
+            configured = getattr(manager.settings, "upload_split_mib", 2000)
+            part_size = min(maximum, configured * 1024**2) if configured else maximum
+            # Preserve bounded manifest size even for a deliberately tiny preference.
+            part_size = max(part_size, (size + MAX_FILE_PARTS - 1) // MAX_FILE_PARTS)
+            part_size = min(maximum, part_size)
             if (size + part_size - 1) // part_size > MAX_FILE_PARTS:
                 raise TransferError("File exceeds the maximum number of Telegram parts")
             manager.registry.update(
@@ -305,6 +310,7 @@ async def upload_multipart(manager, record, local_path, destination, file_name, 
                             allow_users=plan["kind"] == "bot",
                             client_name=part.get("sender"),
                             media=True,
+                            request_id=record.id,
                         ) as client,
                     ):
                         if part.get("sender") is None:

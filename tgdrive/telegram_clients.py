@@ -824,7 +824,7 @@ class Client:
                             raise OSError(
                                 "Telegram did not acknowledge the upload part"
                             )
-                    self._media_scheduler.record_bytes(count)
+                    self._media_scheduler.record_bytes(count, upload=True)
                     return count
                 except FloodWaitError as error:
                     await self._media_scheduler.flood(max(1, error.seconds) + 0.25)

@@ -358,7 +358,9 @@ class TransferRegistry:
         """Public summary without source URLs, credentials or payload context."""
         summary = record.as_dict() | {
             "name": record.context.get("name", "Transfer"),
-            "kind": record.context.get("kind", "upload"),
+            "kind": record.context.get(
+                "source_kind", record.context.get("kind", "upload")
+            ),
             "destination": record.context.get("destination", "/"),
             "retained": retained,
         }

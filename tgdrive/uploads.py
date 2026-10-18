@@ -248,7 +248,9 @@ class ResumableUploads:
             raise
         return item
 
-    async def append(self, upload_id: str, offset: int, body: bytes) -> dict[str, Any]:
+    async def append(
+        self, upload_id: str, offset: int, body: bytes | bytearray
+    ) -> dict[str, Any]:
         async with self.slots, self.locks.setdefault(upload_id, asyncio.Lock()):
             item = self.get(upload_id)
             if item["state"] != "receiving":
@@ -279,19 +281,20 @@ class ResumableUploads:
             ):
                 raise UploadError("Temporary storage is full", 507)
 
-            def write() -> None:
+            def write() -> str:
                 with path.open("r+b") as handle:
                     handle.truncate(offset)
                     handle.seek(offset)
                     handle.write(body)
                     handle.flush()
                     os.fsync(handle.fileno())
+                return hashlib.sha256(body).hexdigest()
 
             work = asyncio.get_running_loop().run_in_executor(None, write)
             cancelled = False
             while True:
                 try:
-                    await asyncio.shield(work)
+                    checksum = await asyncio.shield(work)
                     break
                 except asyncio.CancelledError:
                     # Repeated disconnect/shutdown cancellation still cannot
@@ -301,7 +304,7 @@ class ResumableUploads:
                 {
                     "offset": offset,
                     "size": len(body),
-                    "sha256": hashlib.sha256(body).hexdigest(),
+                    "sha256": checksum,
                 }
             )
             item["offset"] += len(body)

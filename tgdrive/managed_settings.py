@@ -15,7 +15,7 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, SecretStr, field_validator
 
-MAX_CLIENTS = 16
+MAX_CLIENTS = 50
 MAX_SETTINGS_BYTES = 64 * 1024
 _BOT = re.compile(r"[1-9][0-9]{4,14}:[A-Za-z0-9_-]{20,}")
 _ID = re.compile(r"[a-z0-9-]{1,80}")
