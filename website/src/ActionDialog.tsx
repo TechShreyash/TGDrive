@@ -1,0 +1,558 @@
+import Preview from "./Preview";
+import { useEffect, useState } from "react";
+import {
+  Folder,
+  ChevronRight,
+  RefreshCw,
+  Move,
+  Link,
+  Copy,
+  Download,
+  AlertCircle,
+} from "lucide-react";
+import { api, ApiError, errorMessage } from "./api";
+import { itemPath, formatDate, type DriveItem } from "./types";
+import { transfers } from "./transfers";
+import { Modal, ErrorNotice, Spinner } from "./components";
+export type ActionDialogState =
+  | { type: "folder" }
+  | { type: "rename"; item: DriveItem }
+  | { type: "url" }
+  | { type: "share"; item: DriveItem }
+  | { type: "move"; items: DriveItem[] }
+  | { type: "delete"; items: DriveItem[] }
+  | { type: "restore"; items: DriveItem[] }
+  | { type: "preview"; item: DriveItem };
+export default function ActionDialog({
+  dialog,
+  destination,
+  auth,
+  onClose,
+  onChanged,
+  onNotice,
+  onDelete,
+  onRestore,
+}: {
+  dialog: ActionDialogState;
+  destination: string;
+  auth: string;
+  onClose: () => void;
+  onChanged: () => void;
+  onNotice: (message: string, error?: boolean) => void;
+  onDelete: (items: DriveItem[]) => Promise<void>;
+  onRestore: (items: DriveItem[]) => Promise<void>;
+}) {
+  const [name, setName] = useState(
+    dialog.type === "rename" ? dialog.item.name : "",
+  );
+  const [url, setUrl] = useState("");
+  const [compat, setCompat] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const [expires, setExpires] = useState("7");
+  const [link, setLink] = useState("");
+  const [expiry, setExpiry] = useState<string | null>(null);
+  const [requestId, setRequestId] = useState(() =>
+    crypto.randomUUID().replaceAll("-", "_"),
+  );
+  const close = () => {
+    if (!busy) onClose();
+  };
+  const run = async (task: () => Promise<void>) => {
+    setBusy(true);
+    setError("");
+    try {
+      await task();
+    } catch (error) {
+      setError(errorMessage(error));
+    } finally {
+      setBusy(false);
+    }
+  };
+  if (dialog.type === "move")
+    return (
+      <MoveDialog
+        items={dialog.items}
+        onClose={onClose}
+        onChanged={onChanged}
+      />
+    );
+  if (dialog.type === "preview")
+    return <Preview item={dialog.item} auth={auth} onClose={onClose} />;
+  if (dialog.type === "restore")
+    return (
+      <Modal title="Restore to a Shared Folder?" onClose={close}>
+        <p>
+          The destination has an active public folder link. Restoring these
+          items will make them accessible to anyone with that link. Previously
+          revoked item links stay revoked.
+        </p>
+        <ErrorNotice message={error} />
+        <div className="dialog-actions">
+          <button className="secondary-button" onClick={close} disabled={busy}>
+            Cancel
+          </button>
+          <button
+            className="primary-button"
+            disabled={busy}
+            onClick={() =>
+              void run(async () => {
+                await onRestore(dialog.items);
+                onChanged();
+              })
+            }
+          >
+            {busy ? <Spinner /> : null} Restore and Allow Public Access
+          </button>
+        </div>
+      </Modal>
+    );
+  if (dialog.type === "delete")
+    return (
+      <Modal title="Delete Permanently?" onClose={close}>
+        <p>
+          This will remove{" "}
+          {dialog.items.length === 1
+            ? "“" + dialog.items[0].name + "”"
+            : dialog.items.length + " selected items"}{" "}
+          and all files inside from your drive and its Telegram storage channel.
+        </p>
+        <p className="muted">
+          This cannot be undone. If deletion fails, the item stays in Trash so
+          you can try again.
+        </p>
+        <ErrorNotice message={error} />
+        <div className="dialog-actions">
+          <button
+            className="secondary-button"
+            disabled={busy}
+            onClick={onClose}
+          >
+            Keep in Trash
+          </button>
+          <button
+            className="danger-button"
+            disabled={busy}
+            onClick={() =>
+              void run(async () => {
+                await onDelete(dialog.items);
+                onChanged();
+              })
+            }
+          >
+            {busy ? (
+              <>
+                <Spinner /> Deleting…
+              </>
+            ) : (
+              "Delete Permanently"
+            )}
+          </button>
+        </div>
+      </Modal>
+    );
+  if (dialog.type === "share")
+    return (
+      <Modal title={"Share “" + dialog.item.name + "”"} onClose={close}>
+        <p>
+          Anyone with the link can{" "}
+          {dialog.item.type === "folder"
+            ? "view and download this folder’s current and future contents"
+            : "download this file"}
+          . They cannot edit your drive.
+        </p>
+        {!link && (
+          <p className="muted">
+            Creating a new link replaces any previous link for this item.
+          </p>
+        )}
+        {!link ? (
+          <form
+            onSubmit={(event) => {
+              event.preventDefault();
+              void run(async () => {
+                const result = await api.share(
+                  itemPath(dialog.item),
+                  expires === "never" ? null : Number(expires),
+                );
+                const params = new URLSearchParams({
+                  path:
+                    dialog.item.type === "folder"
+                      ? "/share_" + dialog.item.id
+                      : itemPath(dialog.item),
+                  auth: result.auth,
+                });
+                setLink(
+                  window.location.origin +
+                    (dialog.item.type === "folder" ? "/" : "/file") +
+                    "?" +
+                    params,
+                );
+                setExpiry(result.expires_at);
+              });
+            }}
+          >
+            <fieldset className="share-expiry-options">
+              <legend>Link Expires</legend>
+              <div>
+                {[
+                  ["1", "1 day"],
+                  ["7", "7 days"],
+                  ["30", "30 days"],
+                  ["never", "Never"],
+                ].map(([value, label]) => (
+                  <button
+                    type="button"
+                    key={value}
+                    aria-pressed={expires === value}
+                    onClick={() => setExpires(value)}
+                  >
+                    {label}
+                  </button>
+                ))}
+              </div>
+            </fieldset>
+            <ErrorNotice message={error} />
+            <div className="dialog-actions">
+              <button
+                className="secondary-button"
+                type="button"
+                onClick={close}
+              >
+                Cancel
+              </button>
+              <button className="primary-button" disabled={busy}>
+                {busy ? <Spinner /> : <Link size={16} />} Create Share Link
+              </button>
+            </div>
+          </form>
+        ) : (
+          <>
+            <label htmlFor="share-link">Share Link</label>
+            <input
+              id="share-link"
+              value={link}
+              readOnly
+              onFocus={(event) => event.target.select()}
+            />
+            <p className="muted">
+              {expiry
+                ? "Expires " + formatDate(expiry) + "."
+                : "This link does not expire."}{" "}
+              Revoke access from Shared Links.
+            </p>
+            <ErrorNotice message={error} />
+            <div className="dialog-actions">
+              <button className="secondary-button" onClick={close}>
+                Done
+              </button>
+              <button
+                className="primary-button"
+                onClick={() =>
+                  void run(async () => {
+                    if (!navigator.clipboard)
+                      throw new Error(
+                        "Clipboard access is unavailable. Select and copy the link above.",
+                      );
+                    await navigator.clipboard.writeText(link);
+                    onNotice("Share Link copied.");
+                  })
+                }
+              >
+                <Copy size={16} /> Copy Link
+              </button>
+            </div>
+          </>
+        )}
+      </Modal>
+    );
+  const isFolder = dialog.type === "folder";
+  const isRename = dialog.type === "rename";
+  return (
+    <Modal
+      title={isFolder ? "New Folder" : isRename ? "Rename" : "Upload from URL"}
+      onClose={close}
+    >
+      <form
+        onSubmit={(event) => {
+          event.preventDefault();
+          void run(async () => {
+            if (isFolder) {
+              await api.folder(destination, name);
+              onNotice("Folder created.");
+              onChanged();
+            } else if (isRename) {
+              await api.rename(itemPath(dialog.item), name);
+              onNotice("Name updated.");
+              onChanged();
+            } else {
+              const result = await api.remote(
+                url,
+                destination,
+                compat,
+                requestId,
+              );
+              transfers.addJob(
+                result.id,
+                new URL(url).pathname.split("/").at(-1) || "URL import",
+                destination,
+              );
+              onNotice("URL import queued. It continues on the server.");
+              onClose();
+            }
+          });
+        }}
+      >
+        {isFolder || isRename ? (
+          <>
+            <label htmlFor="item-name">
+              {isFolder ? "Folder Name" : "Name"}
+            </label>
+            <input
+              id="item-name"
+              required
+              maxLength={255}
+              value={name}
+              onChange={(event) => setName(event.target.value)}
+            />
+          </>
+        ) : (
+          <>
+            <p className="muted">
+              Import a direct HTTP or HTTPS file link. The server downloads it
+              and uploads the original bytes to Telegram.
+            </p>
+            <label htmlFor="remote-url">Direct File URL</label>
+            <input
+              id="remote-url"
+              type="url"
+              required
+              placeholder="https://example.com/file.zip"
+              value={url}
+              onChange={(event) => {
+                setUrl(event.target.value);
+                setRequestId(crypto.randomUUID().replaceAll("-", "_"));
+              }}
+            />
+            <label className="check-field">
+              <input
+                type="checkbox"
+                checked={compat}
+                onChange={(event) => setCompat(event.target.checked)}
+              />
+              <span>
+                Compatibility Mode
+                <small>
+                  Use one connection for servers that reject parallel downloads.
+                </small>
+              </span>
+            </label>
+          </>
+        )}
+        <ErrorNotice message={error} />
+        <div className="dialog-actions">
+          <button
+            className="secondary-button"
+            type="button"
+            disabled={busy}
+            onClick={onClose}
+          >
+            Cancel
+          </button>
+          <button className="primary-button" disabled={busy}>
+            {busy ? <Spinner /> : null}
+            {isFolder
+              ? "Create Folder"
+              : isRename
+                ? "Save Name"
+                : "Start Import"}
+          </button>
+        </div>
+      </form>
+    </Modal>
+  );
+}
+function MoveDialog({
+  items,
+  onClose,
+  onChanged,
+}: {
+  items: DriveItem[];
+  onClose: () => void;
+  onChanged: () => void;
+}) {
+  const [path, setPath] = useState("/");
+  const [folders, setFolders] = useState<DriveItem[]>([]);
+  const [trail, setTrail] = useState([{ path: "/", name: "My Files" }]);
+  const [loading, setLoading] = useState(true);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const [conflict, setConflict] = useState("keep_both");
+  const [exposure, setExposure] = useState(false);
+  const [allow, setAllow] = useState(false);
+  useEffect(() => {
+    let ignore = false;
+    setLoading(true);
+    setExposure(false);
+    setAllow(false);
+    void api
+      .directory(path)
+      .then((result) => {
+        if (!ignore)
+          setFolders(
+            Object.values(result.data.contents).filter(
+              (item) =>
+                item.type === "folder" &&
+                !items.some(
+                  (selected) =>
+                    itemPath(item) === itemPath(selected) ||
+                    itemPath(item).startsWith(itemPath(selected) + "/"),
+                ),
+            ),
+          );
+      })
+      .catch((error) => {
+        if (!ignore) setError(errorMessage(error));
+      })
+      .finally(() => {
+        if (!ignore) setLoading(false);
+      });
+    return () => {
+      ignore = true;
+    };
+  }, [path, items]);
+  const move = async () => {
+    setBusy(true);
+    setError("");
+    try {
+      const result = await api.move(items.map(itemPath), path, conflict, allow);
+      const failed = result.results?.filter(
+        (result) => result.error || result.status === "error",
+      );
+      if (failed?.length)
+        throw new Error(
+          failed.length +
+            " item(s) could not be moved. " +
+            (failed[0].error || "Refresh and try again."),
+        );
+      onChanged();
+    } catch (error) {
+      if (error instanceof ApiError && error.code.includes("PUBLIC_EXPOSURE")) {
+        setExposure(true);
+        setError(
+          "This move would make some files accessible through a public folder link. Confirm below to continue.",
+        );
+      } else setError(errorMessage(error));
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <Modal
+      title={
+        "Move " +
+        (items.length === 1
+          ? "“" + items[0].name + "”"
+          : items.length + " items")
+      }
+      onClose={() => {
+        if (!busy) onClose();
+      }}
+    >
+      <p className="muted">
+        Choose a different destination folder. Existing files are never
+        overwritten.
+      </p>
+      <nav className="move-breadcrumbs" aria-label="Destination breadcrumb">
+        {trail.map((crumb, index) => (
+          <button
+            key={crumb.path}
+            className="text-button"
+            onClick={() => {
+              setPath(crumb.path);
+              setTrail(trail.slice(0, index + 1));
+            }}
+          >
+            {index > 0 && <ChevronRight size={13} />} {crumb.name}
+          </button>
+        ))}
+      </nav>
+      <div className="folder-picker" aria-busy={loading}>
+        {loading ? (
+          <p>
+            <Spinner /> Loading folders…
+          </p>
+        ) : folders.length ? (
+          folders.map((folder) => (
+            <button
+              key={folder.id}
+              onClick={() => {
+                const next = itemPath(folder);
+                setPath(next);
+                setTrail([...trail, { path: next, name: folder.name }]);
+              }}
+            >
+              <Folder size={19} />
+              <span>{folder.name}</span>
+              <ChevronRight size={17} />
+            </button>
+          ))
+        ) : (
+          <p className="muted">No folders inside this destination.</p>
+        )}
+      </div>
+      <fieldset className="dialog-choice-options">
+        <legend>Name Conflicts</legend>
+        <div>
+          <button
+            type="button"
+            aria-pressed={conflict === "keep_both"}
+            onClick={() => setConflict("keep_both")}
+          >
+            Keep Both
+          </button>
+          <button
+            type="button"
+            aria-pressed={conflict === "skip"}
+            onClick={() => setConflict("skip")}
+          >
+            Skip Existing
+          </button>
+        </div>
+        <p className="muted">
+          {conflict === "keep_both"
+            ? "Add a number to the moved item if its name is already used."
+            : "Leave items with matching names in their original location."}
+        </p>
+      </fieldset>
+      <ErrorNotice message={error} />
+      {exposure && (
+        <label className="check-field">
+          <input
+            type="checkbox"
+            checked={allow}
+            onChange={(event) => setAllow(event.target.checked)}
+          />
+          <span>I understand that files moved here may become public.</span>
+        </label>
+      )}
+      <div className="dialog-actions">
+        <button className="secondary-button" onClick={onClose} disabled={busy}>
+          Cancel
+        </button>
+        <button
+          className="primary-button"
+          disabled={
+            busy ||
+            loading ||
+            items.every((item) => (item.path || "/") === path) ||
+            (exposure && !allow)
+          }
+          onClick={() => void move()}
+        >
+          {busy ? <Spinner /> : <Move size={16} />} Move Here
+        </button>
+      </div>
+    </Modal>
+  );
+}

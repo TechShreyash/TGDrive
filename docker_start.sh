@@ -1,3 +1,7 @@
-docker stop tgdrive
-docker build -t tgdrive .
-docker run -d --name tgdrive -p 80:80 tgdrive
+#!/bin/sh
+set -eu
+
+SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+cd "$SCRIPT_DIR"
+
+docker compose up --build -d

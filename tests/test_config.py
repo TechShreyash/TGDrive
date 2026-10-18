@@ -1,0 +1,132 @@
+from __future__ import annotations
+
+import pytest
+from pydantic import ValidationError
+
+from tgdrive.config import Settings
+
+
+def settings_values(**overrides: object) -> dict[str, object]:
+    values: dict[str, object] = {
+        "API_ID": 12345,
+        "API_HASH": "a" * 32,
+        "BOT_TOKENS": "123456:" + "x" * 30,
+        "STORAGE_CHANNEL": -1001234567890,
+        "DATABASE_BACKUP_MSG_ID": 42,
+        "ADMIN_PASSWORD": "correct horse battery staple",
+        "SESSION_SECRET": "s" * 48,
+    }
+    values.update(overrides)
+    return values
+
+
+def test_settings_parse_csv_and_derive_non_premium_limit() -> None:
+    settings = Settings(_env_file=None, **settings_values())
+
+    assert settings.bot_tokens == ("123456:" + "x" * 30,)
+    assert settings.string_sessions == ()
+    assert settings.telegram_admin_ids == ()
+    assert settings.upload_limit == settings.staging_budget_bytes
+    assert settings.bot_upload_limit == 2000 * 1024**2
+    assert len(settings.session_key) == 32
+
+
+def test_premium_sessions_raise_the_available_limit() -> None:
+    settings = Settings(
+        _env_file=None,
+        **settings_values(
+            STRING_SESSIONS="session-one, session-two",
+            TELEGRAM_ADMIN_IDS="123, 456",
+        ),
+    )
+
+    assert settings.string_sessions == ("session-one", "session-two")
+    assert settings.telegram_admin_ids == (123, 456)
+    assert settings.upload_limit == settings.staging_budget_bytes
+    assert settings.premium_upload_limit == 4000 * 1024**2
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("ADMIN_PASSWORD", "admin"),
+        ("ADMIN_PASSWORD", ""),
+        ("ADMIN_PASSWORD", " \t " * 12),
+        ("SESSION_SECRET", "short"),
+        ("API_HASH", "z" * 32),
+        ("BOT_TOKENS", "not-a-token"),
+        ("TELEGRAM_ADMIN_IDS", "123,nope"),
+    ],
+)
+def test_settings_reject_unsafe_values(field: str, value: str) -> None:
+    with pytest.raises(ValidationError):
+        Settings(_env_file=None, **settings_values(**{field: value}))
+
+
+def test_bot_mode_requires_admin_ids() -> None:
+    with pytest.raises(ValidationError, match="TELEGRAM_ADMIN_IDS"):
+        Settings(
+            _env_file=None,
+            **settings_values(MAIN_BOT_TOKEN="654321:" + "y" * 30),
+        )
+
+
+def test_logical_limit_can_exceed_message_limit_but_is_bounded_by_staging() -> None:
+    settings = Settings(_env_file=None, **settings_values(MAX_FILE_SIZE=4 * 1024**3))
+    assert settings.upload_limit == 4 * 1024**3
+    smaller = Settings(
+        _env_file=None,
+        **settings_values(
+            MAX_FILE_SIZE=4 * 1024**3,
+            STAGING_BUDGET_BYTES=3 * 1024**3,
+        ),
+    )
+    assert smaller.upload_limit == 3 * 1024**3
+
+
+@pytest.mark.parametrize("variant", ["i", "d"])
+def test_non_argon2id_owner_hash_is_rejected(variant: str) -> None:
+    from argon2 import PasswordHasher, Type
+
+    algorithm = Type.I if variant == "i" else Type.D
+    encoded = PasswordHasher(type=algorithm).hash("synthetic owner password")
+    with pytest.raises(ValidationError, match="Argon2id"):
+        Settings(
+            _env_file=None,
+            **settings_values(ADMIN_PASSWORD_HASH=encoded),
+        )
+
+
+def test_invalid_configuration_traceback_hides_raw_secret_inputs() -> None:
+    secret = "synthetic-secret-value-that-must-not-be-rendered"
+    with pytest.raises(ValidationError) as captured:
+        Settings(
+            _env_file=None,
+            **settings_values(API_HASH=secret, SESSION_SECRET=secret),
+        )
+    assert secret not in str(captured.value)
+    assert "input_value" not in str(captured.value)
+
+
+def test_blank_plaintext_password_with_owner_hash_is_canonical_empty() -> None:
+    from argon2 import PasswordHasher
+
+    encoded = PasswordHasher().hash("synthetic owner password")
+    settings = Settings(
+        _env_file=None,
+        **settings_values(ADMIN_PASSWORD=" \t " * 12, ADMIN_PASSWORD_HASH=encoded),
+    )
+    assert settings.admin_password.get_secret_value() == ""
+
+
+@pytest.mark.parametrize(
+    "field,value",
+    [
+        ("BOT_TOKENS", ",".join(["123456:" + "x" * 30] * 2)),
+        ("STRING_SESSIONS", "synthetic-session,synthetic-session"),
+    ],
+)
+def test_duplicate_telegram_credentials_are_rejected_without_echo(field, value):
+    with pytest.raises(ValidationError, match="must not repeat") as caught:
+        Settings(_env_file=None, **settings_values(**{field: value}))
+    assert value not in str(caught.value)

@@ -1,0 +1,645 @@
+"""Offline browser fixture using the real application, auth, guard and routes.
+
+Run with ``uv run --group e2e uvicorn --app-dir tests browser_transfer_app:app``.
+Only Telegram/remote transport is synthetic. No .env or real storage is loaded.
+The fixture-only control routes let browser tests advance jobs deterministically.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import io
+import math
+import struct
+import tempfile
+import time
+import wave
+import zlib
+from collections.abc import Awaitable, Callable
+from pathlib import Path
+from types import SimpleNamespace
+from typing import Any
+from urllib.parse import unquote, urlsplit
+
+from fastapi import Request, Response, UploadFile
+from telethon.errors import (
+    PasswordHashInvalidError,
+    PhoneCodeInvalidError,
+    SessionPasswordNeededError,
+)
+
+from tgdrive.app import create_app
+from tgdrive.client_pool import ClientPool
+from tgdrive.config import Settings
+from tgdrive.management import ConnectionManager
+from tgdrive.premium_login import PremiumLoginService
+from tgdrive.remote import RemoteFileInfo
+from tgdrive.security import SESSION_COOKIE
+from tgdrive.store import DriveStore
+from tgdrive.tasks import TransferRecord, TransferRegistry, TransferStatus
+from tgdrive.transfers import TransferCancelled, TransferEmptyFile
+
+PASSWORD = "offline browser test password"
+CONTROL_HEADER = "tgdrive-offline-browser-fixture"
+
+
+class FixtureClient:
+    name = "offline-browser-storage"
+    display_name = "TGDrive Test Bot"
+    username = "tgdrive_fixture_bot"
+
+    def refresh_identity(self):
+        self.display_name = "TGDrive Refreshed Bot"
+
+    is_connected = False
+
+    def __init__(self, payloads: dict[int, bytes]) -> None:
+        self.payloads = payloads
+
+    async def start(self) -> None:
+        self.is_connected = True
+
+    async def stop(self) -> None:
+        self.is_connected = False
+
+    async def get_messages(self, _channel: int, *, message_ids: int) -> Any:
+        from types import SimpleNamespace
+
+        content = self.payloads.get(message_ids)
+        if content is None:
+            return None
+        return SimpleNamespace(
+            id=message_ids,
+            document=SimpleNamespace(file_size=len(content)),
+        )
+
+    def describe_media(self, message: Any) -> dict[str, Any]:
+        original = {
+            "id": "original",
+            "label": "Original",
+            "is_original": True,
+            "size": len(self.payloads[message.id]),
+        }
+        # This source-switch fixture deliberately reuses the real MKV bytes.
+        # It exercises player replacement and HTTP Range, not Telegram encoding.
+        variants = (
+            [
+                {
+                    **original,
+                    "id": "fixture-same-bytes",
+                    "label": "Fixture alternate source",
+                    "is_original": False,
+                }
+            ]
+            if self.payloads[message.id].startswith(b"\x1aE\xdf\xa3")
+            else []
+        )
+        return {"original": original, "variants": variants}
+
+    def select_media_variant(self, message: Any, quality_id: str) -> Any:
+        if quality_id == "fixture-same-bytes" and self.payloads[message.id].startswith(
+            b"\x1aE\xdf\xa3"
+        ):
+            return message
+        raise ValueError("The fixture media variant is unavailable")
+
+    async def stream_media(self, message: Any, *, limit: int, offset: int):
+        content = self.payloads[message.id]
+        chunk = 1024 * 1024
+        for index in range(offset, offset + limit):
+            yield content[index * chunk : (index + 1) * chunk]
+
+
+class FixtureTransfers:
+    def __init__(self, store: DriveStore, payloads: dict[int, bytes]) -> None:
+        self.registry = TransferRegistry(cancel_grace_seconds=0.2)
+        self.store = store
+        self.payloads = payloads
+        self.started: list[dict[str, Any]] = []
+        self.release: dict[str, asyncio.Event] = {}
+        self.fail_deletions: set[str] = set()
+
+    async def receive_browser_upload(
+        self,
+        upload: UploadFile,
+        destination: str,
+        *,
+        is_disconnected: Callable[[], Awaitable[bool]] | None = None,
+        on_created: Callable[[TransferRecord], None] | None = None,
+    ) -> TransferRecord:
+        self.store.get_directory(destination)
+        record = self.registry.create("saving", total=upload.size or 0)
+        record.status = TransferStatus.RUNNING
+        try:
+            if on_created:
+                on_created(record)
+            if record.cancel_event.is_set():
+                raise TransferCancelled("Transfer cancelled")
+            content = await upload.read()
+            if not content:
+                raise TransferEmptyFile("Empty files cannot be uploaded to Telegram")
+            if is_disconnected is not None and await is_disconnected():
+                raise TransferCancelled("Transfer cancelled")
+            self._start(record, upload.filename or "upload.bin", destination, content)
+            return record
+        finally:
+            await upload.close()
+
+    def enqueue_upload(
+        self,
+        local_path: Path,
+        destination: str,
+        file_name: str,
+        size: int,
+        *,
+        transfer_id: str | None = None,
+    ) -> TransferRecord:
+        record = self.registry.create("queued", total=size, transfer_id=transfer_id)
+        if record.task is not None or record.terminal:
+            return record
+        record.context.update(kind="upload", name=file_name, destination=destination)
+        self._start(record, file_name, destination, local_path.read_bytes())
+        return record
+
+    def cancel_job(self, job_id: str) -> TransferRecord:
+        return self.registry.cancel(job_id)
+
+    def start_deletion(self, path: str) -> TransferRecord:
+        intent = self.store.begin_deletion(path)
+        record = self.registry.create(
+            "deleting", total=len(intent["message_ids"]), transfer_id=intent["id"]
+        )
+        record.context.update(
+            kind="delete",
+            name=self.store.get_directory(path, include_trashed=True)["name"],
+            path=path,
+        )
+        self.release[record.id] = asyncio.Event()
+
+        async def delete(item: TransferRecord) -> None:
+            await self.release[item.id].wait()
+            if item.id in self.fail_deletions:
+                self.fail_deletions.remove(item.id)
+                raise RuntimeError("Synthetic Telegram deletion confirmation failed")
+            await self.delete_telegram_messages(intent["message_ids"])
+            self.store.confirm_deletion_messages(intent["id"], intent["message_ids"])
+            self.store.finish_deletion(intent["id"])
+            self.registry.update(
+                item.id, status=TransferStatus.COMPLETED, phase="completed"
+            )
+
+        self.registry.spawn(record.id, delete)
+        return record
+
+    def retry_job(self, job_id: str) -> TransferRecord:
+        record = self.registry.get(job_id)
+        if record.context.get("kind") != "delete":
+            raise ValueError("Only fixture deletion retries are supported")
+        self.registry.retry(job_id)
+        return self.start_deletion(record.context["path"])
+
+    async def inspect_remote(self, url: str) -> RemoteFileInfo:
+        await asyncio.sleep(0.05)
+        return RemoteFileInfo(
+            url=url,
+            filename=unquote(urlsplit(url).path.rsplit("/", 1)[-1]) or "remote.bin",
+            size=12,
+            content_type="application/octet-stream",
+            etag=None,
+        )
+
+    def start_remote(
+        self, *, url: str, destination: str, filename: str | None
+    ) -> TransferRecord:
+        self.store.get_directory(destination)
+        record = self.registry.create("downloading", total=12)
+        name = filename or unquote(urlsplit(url).path.rsplit("/", 1)[-1])
+        self._start(record, name, destination, b"remote-bytes")
+        return record
+
+    def _start(
+        self, record: TransferRecord, name: str, destination: str, content: bytes
+    ) -> None:
+        self.release[record.id] = asyncio.Event()
+        self.started.append({"id": record.id, "name": name, "destination": destination})
+        self.registry.spawn(
+            record.id,
+            lambda transfer: self._simulate(transfer, name, destination, content),
+        )
+
+    async def _simulate(
+        self, record: TransferRecord, name: str, destination: str, content: bytes
+    ) -> None:
+        total = len(content)
+        for numerator in (0, 1, 2, 3):
+            if record.cancel_event.is_set():
+                return
+            self.registry.update(
+                record.id,
+                status=TransferStatus.RUNNING,
+                phase="uploading",
+                current=total * numerator // 4,
+                total=total,
+            )
+            await asyncio.sleep(0.15)
+        released = asyncio.create_task(self.release[record.id].wait())
+        cancelled = asyncio.create_task(record.cancel_event.wait())
+        try:
+            await asyncio.wait(
+                {released, cancelled}, return_when=asyncio.FIRST_COMPLETED
+            )
+        finally:
+            released.cancel()
+            cancelled.cancel()
+            await asyncio.gather(released, cancelled, return_exceptions=True)
+        if record.cancel_event.is_set():
+            return
+        self.registry.update(record.id, phase="finalizing", current=total, total=total)
+        await asyncio.sleep(0.15)
+        if record.cancel_event.is_set():
+            return
+        message_id = max(self.payloads, default=100) + 1
+        self.payloads[message_id] = content
+        self.store.add_file(
+            destination, name, message_id, total, operation_id=record.id
+        )
+        self.registry.update(
+            record.id,
+            status=TransferStatus.COMPLETED,
+            phase="completed",
+            current=total,
+            total=total,
+        )
+
+    async def delete_telegram_messages(self, message_ids: list[int]) -> None:
+        for message_id in message_ids:
+            self.payloads.pop(message_id, None)
+
+
+def _preview_pdf(page_count: int = 3) -> bytes:
+    """Real portrait pages for continuous scrolling and bounded PDF rendering."""
+    font_id = page_count + 3
+    content_start = font_id + 1
+    kids = " ".join(f"{number + 3} 0 R" for number in range(page_count))
+    objects = [
+        b"<< /Type /Catalog /Pages 2 0 R >>",
+        f"<< /Type /Pages /Kids [{kids}] /Count {page_count} >>".encode(),
+    ]
+    for number in range(page_count):
+        objects.append(
+            (
+                "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 420 594] "
+                f"/Resources << /Font << /F1 {font_id} 0 R >> >> "
+                f"/Contents {content_start + number} 0 R >>"
+            ).encode()
+        )
+    objects.append(b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>")
+    for number in range(1, page_count + 1):
+        stream = (
+            f"BT /F1 22 Tf 24 540 Td (TGDrive PDF preview page {number}) Tj ET".encode()
+        )
+        objects.append(
+            b"<< /Length "
+            + str(len(stream)).encode()
+            + b" >>\nstream\n"
+            + stream
+            + b"\nendstream"
+        )
+    result = b"%PDF-1.4\n"
+    offsets = [0]
+    for identity, body in enumerate(objects, 1):
+        offsets.append(len(result))
+        result += str(identity).encode() + b" 0 obj\n" + body + b"\nendobj\n"
+    start = len(result)
+    size = len(objects) + 1
+    result += f"xref\n0 {size}\n0000000000 65535 f \n".encode()
+    result += b"".join(f"{offset:010d} 00000 n \n".encode() for offset in offsets[1:])
+    return (
+        result
+        + f"trailer\n<< /Size {size} /Root 1 0 R >>\nstartxref\n{start}\n%%EOF".encode()
+    )
+
+
+def _preview_png() -> bytes:
+    """A generated RGB image without an external image or font dependency."""
+
+    def chunk(kind: bytes, data: bytes) -> bytes:
+        return (
+            struct.pack(">I", len(data))
+            + kind
+            + data
+            + struct.pack(">I", zlib.crc32(kind + data))
+        )
+
+    pixels = b"".join(b"\x00" + bytes([40 + y * 5, 90, 150]) * 16 for y in range(16))
+    return (
+        b"\x89PNG\r\n\x1a\n"
+        + chunk(b"IHDR", struct.pack(">IIBBBBB", 16, 16, 8, 2, 0, 0, 0))
+        + chunk(b"IDAT", zlib.compress(pixels))
+        + chunk(b"IEND", b"")
+    )
+
+
+def _preview_wav() -> bytes:
+    """A short locally generated PCM tone for native audio controls."""
+    stream = io.BytesIO()
+    with wave.open(stream, "wb") as output:
+        output.setnchannels(1)
+        output.setsampwidth(2)
+        output.setframerate(8000)
+        output.writeframes(
+            b"".join(
+                struct.pack("<h", round(4000 * math.sin(index * math.tau * 220 / 8000)))
+                for index in range(2000)
+            )
+        )
+    return stream.getvalue()
+
+
+class FixtureBackup:
+    """Checkpoint transport state for owner UI tests; never contacts Telegram."""
+
+    def __init__(self, store: DriveStore) -> None:
+        self.protected_revision = store.revision
+        self.error: str | None = None
+        self.state_override: str | None = None
+        self.fail_next = False
+        self.calls = 0
+
+    def history(self) -> list[dict[str, Any]]:
+        return []
+
+    def protection_status(self, store: DriveStore) -> dict[str, Any]:
+        status = {
+            "state": self.state_override
+            or (
+                "error"
+                if self.error
+                else "protected"
+                if self.protected_revision >= store.revision
+                else "pending"
+            ),
+            "metadata_revision": store.revision,
+            "protected_revision": self.protected_revision,
+            "checkpoint_message_id": 9000 + self.calls,
+            "last_success_at": "2026-10-16T00:00:00+00:00",
+        }
+        if self.error:
+            status["error"] = self.error
+        return status
+
+    async def ensure_revision(self, store: DriveStore, required_revision: int) -> int:
+        self.calls += 1
+        await asyncio.sleep(0.05)
+        self.state_override = None
+        if self.fail_next:
+            self.fail_next = False
+            self.error = "Synthetic Telegram checkpoint confirmation failed."
+            raise RuntimeError(self.error)
+        self.error = None
+        self.protected_revision = max(store.revision, required_revision)
+        return 9000 + self.calls
+
+    def set_scenario(self, scenario: str, store: DriveStore) -> None:
+        self.error = None
+        self.state_override = None
+        self.fail_next = False
+        self.protected_revision = store.revision
+        if scenario in {"pending", "error", "stale", "fail-next"}:
+            self.protected_revision = max(0, store.revision - 1)
+        if scenario == "error":
+            self.error = "Synthetic Telegram checkpoint confirmation failed."
+        elif scenario == "stale":
+            self.state_override = "protected"
+        elif scenario == "fail-next":
+            self.fail_next = True
+        elif scenario not in {"protected", "pending"}:
+            raise ValueError("Unknown fixture backup scenario")
+
+
+class FixtureLoginClient:
+    """Synthetic Telegram login transport; never connects to a real account."""
+
+    def __init__(self) -> None:
+        self.session = SimpleNamespace(
+            save=lambda: "synthetic-premium-session-for-browser-tests"
+        )
+
+    async def connect(self) -> None:
+        pass
+
+    async def disconnect(self) -> None:
+        pass
+
+    async def log_out(self) -> None:
+        pass
+
+    async def send_code_request(self, _phone: str) -> Any:
+        return SimpleNamespace(phone_code_hash="synthetic-browser-code-hash")
+
+    async def sign_in(self, *, code=None, password=None, **_kwargs) -> None:
+        if code is not None:
+            if code != "12345":
+                raise PhoneCodeInvalidError(request=None)
+            raise SessionPasswordNeededError(request=None)
+        if password != "synthetic-two-step-password":
+            raise PasswordHashInvalidError(request=None)
+
+    async def get_me(self) -> Any:
+        return SimpleNamespace(id=987654321, bot=False, premium=True)
+
+
+async def fixture_verify_connection(_api_id, _api_hash, row, _channel):
+    """Keep the real private persistence/API; replace only Telegram preflight."""
+    if row.kind == "user":
+        return "synthetic-premium-account"
+    prefix = row.credential.get_secret_value().split(":", 1)[0]
+    return (
+        "offline-browser-storage" if prefix == "123456" else "synthetic-bot-" + prefix
+    )
+
+
+class FixtureRuntime:
+    def __init__(self) -> None:
+        self.store = DriveStore.create()
+        self.payloads = {101: b"public content", 102: b"private content"}
+        folder = self.store.create_folder("/", "資料 📁")
+        private = self.store.create_folder("/", "Private folder")
+        self.folder_path = f"/{folder['id']}"
+        self.private_path = f"/{private['id']}"
+        shared_file = self.store.add_file(self.folder_path, "résumé #1.txt", 101, 14)
+        private_file = self.store.add_file(self.private_path, "private.txt", 102, 15)
+        self.shared_file_path = f"{self.folder_path}/{shared_file['id']}"
+        self.private_file_path = f"{self.private_path}/{private_file['id']}"
+        preview = self.store.create_folder("/", "Preview samples")
+        preview_path = f"/{preview['id']}"
+        self.preview_path = preview_path
+        samples = {
+            "sample.json": b'{"message":"<img src=x onerror=alert(1)>","count":3}',
+            "reports.csv": b"name,value\nalpha,3\nbeta,4\n",
+            "source.html": b"<script>window.previewExecuted=true</script>",
+            "sample.pdf": _preview_pdf(),
+            "long.pdf": _preview_pdf(12),
+            "sample.png": _preview_png(),
+            "sample.svg": (
+                b'<svg xmlns="http://www.w3.org/2000/svg" width="120" height="80">'
+                b"<style>rect{fill:rgb(24,160,88)}</style>"
+                b'<rect width="120" height="80"/>'
+                b"<script>parent.svgPreviewExecuted=true</script>"
+                b'<image href="https://svg-external.invalid/track.png" '
+                b'width="1" height="1"/>'
+                b"</svg>"
+            ),
+            "sample.wav": _preview_wav(),
+            "archive.bin": bytes(range(256)),
+            "setup.exe": b"Synthetic fixture bytes; never an executable.",
+            "empty.exe": b"",
+            "installer-"
+            + "very-long-file-name-" * 5
+            + "setup.exe": b"Long-name fixture.",
+            # Self-generated FFmpeg testsrc2 ASF containers distinguish the
+            # suffix from real decoder support: MPEG4 works; MSMPEG4v3 does not
+            # exist in the pinned published WASM decoder build.
+            "software-mpeg4.wmv": (
+                Path(__file__).parent / "fixtures" / "software-mpeg4.wmv"
+            ).read_bytes(),
+            "unsupported-msmpeg4.wmv": (
+                Path(__file__).parent / "fixtures" / "unsupported-msmpeg4.wmv"
+            ).read_bytes(),
+            # Self-generated 8s H264/AAC MP4 with English/Hindi mov_text samples;
+            # testsrc2 + sine, FFmpeg libx264/crf30 and AAC32k, no third-party media.
+            # One same-length subtitle payload patch preserves literal inert markup
+            # (the SRT encoder otherwise strips tags); MP4 offsets stay unchanged.
+            "movtext-subtitles.mp4": (
+                Path(__file__).parent / "fixtures" / "movtext-subtitles.mp4"
+            ).read_bytes(),
+            "multitrack.mkv": (
+                Path(__file__).parent / "fixtures" / "multitrack.mkv"
+            ).read_bytes(),
+        }
+        for identity, (name, content) in enumerate(samples.items(), 110):
+            self.payloads[identity] = content
+            self.store.add_file(preview_path, name, identity, len(content))
+        self.pool = ClientPool([FixtureClient(self.payloads)])
+        self.transfers = FixtureTransfers(self.store, self.payloads)
+        self.backup = FixtureBackup(self.store)
+        self.ready = False
+
+    async def start(self) -> None:
+        await self.pool.start()
+        self.ready = True
+
+    async def stop(self) -> None:
+        self.ready = False
+        await self.transfers.registry.shutdown()
+        await self.pool.stop(drain_timeout=1)
+
+
+_temporary = tempfile.TemporaryDirectory(prefix="tgdrive-browser-fixture-")
+runtime = FixtureRuntime()
+settings = Settings(
+    _env_file=None,
+    API_ID=12345,
+    API_HASH="a" * 32,
+    BOT_TOKENS="123456:" + "x" * 30,
+    STORAGE_CHANNEL=-1001234567890,
+    DATABASE_BACKUP_MSG_ID=42,
+    ADMIN_PASSWORD=PASSWORD,
+    SESSION_SECRET="synthetic-browser-test-secret-" * 2,
+    STRING_SESSIONS="",
+    MAIN_BOT_TOKEN="",
+    TELEGRAM_ADMIN_IDS="",
+    DATA_DIR=Path(_temporary.name) / "data",
+    CACHE_DIR=Path(_temporary.name) / "cache",
+    COOKIE_SECURE=False,
+    MAX_FILE_SIZE=32 * 1024 * 1024,
+)
+runtime.connection_manager = ConnectionManager(
+    settings, runtime, verifier=fixture_verify_connection
+)
+app = create_app(settings, runtime=runtime)
+app.state.premium_login_service = PremiumLoginService(
+    runtime.connection_manager.login_api,
+    runtime.connection_manager.add_authenticated_session,
+    client_factory=lambda _api_id, _api_hash: FixtureLoginClient(),
+)
+
+
+def _control(request: Request) -> None:
+    from fastapi import HTTPException
+
+    if request.headers.get("x-fixture-control") != CONTROL_HEADER:
+        raise HTTPException(
+            403, "Fixture controls are only available to the test runner"
+        )
+
+
+@app.get("/__test__/state")
+async def state(request: Request) -> dict[str, Any]:
+    _control(request)
+    return {
+        "started": runtime.transfers.started,
+        "records": {
+            record.id: record.as_dict()
+            for record in runtime.transfers.registry._records.values()
+        },
+        "seed": {
+            "folder": runtime.folder_path,
+            "private_folder": runtime.private_path,
+            "file": runtime.shared_file_path,
+            "private_file": runtime.private_file_path,
+            "preview_folder": runtime.preview_path,
+        },
+    }
+
+
+@app.post("/__test__/backup/{scenario}")
+async def backup_scenario(request: Request, scenario: str) -> dict[str, Any]:
+    _control(request)
+    runtime.backup.set_scenario(scenario, runtime.store)
+    return {
+        "recovery": runtime.backup.protection_status(runtime.store),
+        "calls": runtime.backup.calls,
+    }
+
+
+@app.get("/__test__/backup")
+async def backup_state(request: Request) -> dict[str, Any]:
+    _control(request)
+    return {
+        "recovery": runtime.backup.protection_status(runtime.store),
+        "calls": runtime.backup.calls,
+    }
+
+
+@app.post("/__test__/finish/{transfer_id}")
+async def finish(request: Request, transfer_id: str) -> dict[str, str]:
+    _control(request)
+    runtime.transfers.release[transfer_id].set()
+    return {"status": "ok"}
+
+
+@app.post("/__test__/expire-session")
+async def expire_session(request: Request, response: Response) -> dict[str, str]:
+    _control(request)
+    response.set_cookie(
+        SESSION_COOKIE,
+        app.state.sessions.create(
+            now=int(time.time()) - settings.session_ttl_seconds - 2
+        ),
+        httponly=True,
+        samesite="strict",
+        path="/",
+    )
+    return {"status": "ok"}
+
+
+@app.post("/__test__/fail-deletion/{transfer_id}")
+async def fail_deletion(request: Request, transfer_id: str) -> dict[str, str]:
+    _control(request)
+    record = runtime.transfers.registry.get(transfer_id)
+    if record.context.get("kind") != "delete":
+        raise ValueError("The fixture failure must target a deletion")
+    runtime.transfers.fail_deletions.add(transfer_id)
+    runtime.transfers.release[transfer_id].set()
+    return {"status": "ok"}

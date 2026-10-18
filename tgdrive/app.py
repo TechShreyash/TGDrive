@@ -1,0 +1,874 @@
+"""FastAPI application factory and compatibility HTTP API."""
+
+from __future__ import annotations
+
+import asyncio
+import logging
+from contextlib import asynccontextmanager
+from pathlib import Path
+from typing import Annotated, Any, cast
+
+from argon2 import PasswordHasher
+from fastapi import (
+    Depends,
+    FastAPI,
+    File,
+    Form,
+    HTTPException,
+    Query,
+    Request,
+    Response,
+    UploadFile,
+)
+from fastapi.exceptions import RequestValidationError
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
+from fastapi.staticfiles import StaticFiles
+
+from tgdrive.api_v1 import register_routes
+from tgdrive.backup import RecoveryConflict
+from tgdrive.client_pool import (
+    ClientPoolNotRunning,
+    NoClientAvailable,
+    current_upload_limit,
+)
+from tgdrive.config import Settings, get_settings
+from tgdrive.errors import (
+    DriveError,
+    DuplicateNameError,
+    InvalidPathError,
+    NotDirectoryError,
+    NotFileError,
+    NotFoundError,
+    RootMutationError,
+    TrashedItemError,
+)
+from tgdrive.errors import (
+    ValidationError as DriveValidationError,
+)
+from tgdrive.http_guard import (
+    ApiBodyGuardMiddleware,
+    SameOriginMiddleware,
+    SecurityHeadersMiddleware,
+    StreamConcurrencyMiddleware,
+    UploadGuardMiddleware,
+)
+from tgdrive.logging import configure_logging
+from tgdrive.previews import describe_media, describe_preview
+from tgdrive.remote import RemoteError, RemoteTooLarge, UnsafeRemoteURL
+from tgdrive.request_ids import (
+    RequestCapacityError,
+    RequestIdCancelled,
+    RequestIdConflict,
+    RequestIdNotFound,
+    TransferStart,
+    TransferStarts,
+)
+from tgdrive.runtime import Runtime
+from tgdrive.schemas import (
+    DirectoryRequest,
+    FolderCreateRequest,
+    ItemPathRequest,
+    LoginRequest,
+    RemoteInspectRequest,
+    RemoteStartRequest,
+    RenameRequest,
+    TransferCancelRequest,
+    TransferLookupRequest,
+    TransferRequest,
+    TrashRequest,
+)
+from tgdrive.security import (
+    SESSION_COOKIE,
+    InvalidSession,
+    LoginLimiter,
+    SessionManager,
+    verify_password,
+)
+from tgdrive.store import DriveStore
+from tgdrive.streaming import (
+    TelegramFileNotFound,
+    TelegramVariantNotFound,
+    stream_telegram_file,
+)
+from tgdrive.tasks import TransferNotFound, TransferRecord
+from tgdrive.transfers import (
+    BackupPending,
+    TransferCancelled,
+    TransferEmptyFile,
+    TransferManager,
+    TransferTooLarge,
+)
+
+logger = logging.getLogger(__name__)
+PROJECT_DIR = Path(__file__).resolve().parent.parent
+WEBSITE_DIR = PROJECT_DIR / "website"
+STATIC_DIR = (
+    WEBSITE_DIR / "dist" / "static"
+    if (WEBSITE_DIR / "dist" / "static").exists()
+    else WEBSITE_DIR / "public" / "static"
+)
+
+
+def _json_error(detail: str, status_code: int) -> JSONResponse:
+    return JSONResponse(
+        status_code=status_code,
+        content={"status": detail, "detail": detail},
+    )
+
+
+def _runtime(request: Request) -> Any:
+    return request.app.state.runtime
+
+
+def _store(request: Request) -> DriveStore:
+    store = getattr(_runtime(request), "store", None)
+    if store is None:
+        raise HTTPException(status_code=503, detail="TGDrive is not ready")
+    return cast(DriveStore, store)
+
+
+def _transfers(request: Request) -> TransferManager:
+    manager = getattr(_runtime(request), "transfers", None)
+    if manager is None:
+        raise HTTPException(status_code=503, detail="TGDrive is not ready")
+    return cast(TransferManager, manager)
+
+
+def _is_admin(request: Request) -> bool:
+    token = request.cookies.get(SESSION_COOKIE)
+    if not token:
+        return False
+    try:
+        request.app.state.sessions.verify(token)
+        return True
+    except InvalidSession:
+        return False
+
+
+async def require_admin(request: Request) -> None:
+    if not _is_admin(request):
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    runtime = _runtime(request)
+    connections = getattr(runtime, "connection_manager", None)
+    if connections is not None and connections.restart_required:
+        allowed = (
+            request.method in {"GET", "HEAD", "OPTIONS"}
+            or request.url.path
+            in {"/api/checkPassword", "/api/logout", "/api/getDirectory"}
+            or request.url.path == "/api/v1/settings"
+            or request.url.path.startswith("/api/v1/settings/premium-login/")
+            or request.url.path.endswith("/cancel")
+        )
+        if not allowed:
+            from tgdrive.managed_settings import SettingsProblem
+
+            raise SettingsProblem(
+                "Restart TGDrive to apply the saved connection settings "
+                "before making changes.",
+                code="SETTINGS_RESTART_REQUIRED",
+                status=409,
+            )
+    service = getattr(runtime, "backup", None)
+    if not getattr(service, "recovery_required", False):
+        return
+    path = request.url.path
+    read_posts = {
+        "/api/getDirectory",
+        "/api/getFileInfoFromUrl",
+        "/api/getTransferByRequest",
+        "/api/getTransferProgress",
+        "/api/getSaveProgress",
+        "/api/getUploadProgress",
+        "/api/getFileDownloadProgress",
+        "/api/logout",
+    }
+    if request.method in {"GET", "HEAD", "OPTIONS"} or path in read_posts:
+        return
+    if path == "/api/cancelUpload" or path.endswith("/cancel"):
+        return
+    raise RecoveryConflict(
+        "This installation needs recovery before changes are allowed. "
+        "Preserve its local data and recover the latest Telegram checkpoint."
+    )
+
+
+Admin = Annotated[None, Depends(require_admin)]
+
+
+def create_app(
+    settings: Settings | None = None,
+    *,
+    runtime: Any | None = None,
+) -> FastAPI:
+    settings = settings or get_settings()
+    configure_logging(settings.log_level)
+    app_runtime = runtime or Runtime(settings)
+    sessions = SessionManager(
+        settings.session_key,
+        settings.session_ttl_seconds,
+        settings.resolved_data_dir / "auth.sqlite3",
+    )
+    password_hash = (
+        settings.admin_password_hash.get_secret_value()
+        if settings.admin_password_hash
+        else PasswordHasher().hash(settings.admin_password.get_secret_value())
+    )
+    limiter = LoginLimiter()
+
+    @asynccontextmanager
+    async def lifespan(_app: FastAPI):
+        try:
+            await app_runtime.start()
+            try:
+                yield
+            finally:
+                login_service = getattr(_app.state, "premium_login_service", None)
+                if login_service is not None:
+                    await login_service.close()
+                connection_manager = getattr(app_runtime, "connection_manager", None)
+                if connection_manager is not None:
+                    await connection_manager.close()
+                await app_runtime.stop()
+        finally:
+            sessions.close()
+
+    app = FastAPI(
+        title="TGDrive",
+        version="2.0.0",
+        docs_url=None,
+        redoc_url=None,
+        openapi_url=None,
+        lifespan=lifespan,
+    )
+    app.state.settings = settings
+    app.state.runtime = app_runtime
+    app.state.sessions = sessions
+    app.state.login_limiter = limiter
+    starts = TransferStarts(ttl_seconds=settings.transfer_ttl_seconds)
+    app.state.transfer_starts = starts
+
+    from tgdrive.mongo import DatabaseUnavailable
+
+    @app.exception_handler(DatabaseUnavailable)
+    async def database_unavailable(_request: Request, _error: DatabaseUnavailable):
+        return JSONResponse(
+            {
+                "detail": "MongoDB is unavailable. Check its connection and retry.",
+                "code": "DATABASE_UNAVAILABLE",
+            },
+            status_code=503,
+        )
+
+    from pymongo.errors import PyMongoError
+
+    app.add_exception_handler(PyMongoError, database_unavailable)
+
+    @app.exception_handler(RecoveryConflict)
+    async def recovery_conflict(
+        _request: Request, exc: RecoveryConflict
+    ) -> JSONResponse:
+        return JSONResponse({"detail": str(exc), "code": exc.code}, status_code=409)
+
+    @app.exception_handler(BackupPending)
+    async def checkpoint_pending(_request: Request, exc: BackupPending) -> JSONResponse:
+        return JSONResponse({"detail": str(exc), "code": exc.code}, status_code=409)
+
+    @app.exception_handler(DriveError)
+    async def drive_error_handler(_request: Request, exc: DriveError) -> JSONResponse:
+        if isinstance(exc, DuplicateNameError):
+            code = 409
+        elif isinstance(
+            exc,
+            (NotFoundError, NotDirectoryError, NotFileError, TrashedItemError),
+        ):
+            code = 404
+        elif isinstance(
+            exc,
+            (DriveValidationError, InvalidPathError, RootMutationError),
+        ):
+            code = 400
+        else:
+            code = 500
+            logger.error(
+                "Unexpected drive error type: %s",
+                type(exc).__name__,
+                exc_info=(type(exc), exc, exc.__traceback__),
+            )
+        return _json_error(str(exc), code)
+
+    @app.exception_handler(ClientPoolNotRunning)
+    @app.exception_handler(NoClientAvailable)
+    async def telegram_unavailable(_request: Request, _exc: Exception) -> JSONResponse:
+        return _json_error(
+            "Telegram is unavailable. Check its connection and accounts, then retry.",
+            503,
+        )
+
+    @app.exception_handler(RemoteError)
+    async def remote_error_handler(_request: Request, exc: RemoteError) -> JSONResponse:
+        if isinstance(exc, RemoteTooLarge):
+            code = 413
+        elif isinstance(exc, UnsafeRemoteURL):
+            code = 400
+        else:
+            code = 502
+        return _json_error(str(exc), code)
+
+    @app.exception_handler(TransferNotFound)
+    @app.exception_handler(RequestIdNotFound)
+    async def transfer_not_found_handler(
+        _request: Request, _exc: TransferNotFound
+    ) -> JSONResponse:
+        return _json_error("Transfer not found", 404)
+
+    @app.exception_handler(RequestIdConflict)
+    @app.exception_handler(RequestIdCancelled)
+    async def transfer_start_conflict(
+        _request: Request, exc: RequestIdConflict | RequestIdCancelled
+    ) -> JSONResponse:
+        return _json_error(str(exc), 409)
+
+    @app.exception_handler(RequestCapacityError)
+    async def transfer_capacity_error(
+        _request: Request, exc: RequestCapacityError
+    ) -> JSONResponse:
+        return _json_error(str(exc), 503)
+
+    @app.exception_handler(RequestValidationError)
+    async def request_validation_handler(
+        _request: Request, exc: RequestValidationError
+    ) -> JSONResponse:
+        # SecretStr values stay hidden; avoid echoing rejected input as well.
+        message = "; ".join(error["msg"] for error in exc.errors())
+        return _json_error(message or "Invalid request", 422)
+
+    @app.get("/")
+    async def home_page() -> Response:
+        index = WEBSITE_DIR / "dist" / "index.html"
+        if index.exists():
+            return FileResponse(index, headers={"Cache-Control": "no-store"})
+        return HTMLResponse(
+            "<!doctype html><html lang='en'><meta charset='utf-8'>"
+            "<meta name='viewport' content='width=device-width,initial-scale=1'>"
+            "<title>TGDrive setup</title><main><h1>Build the TGDrive interface</h1>"
+            "<p>In the website folder, run <code>npm ci</code>, then "
+            "<code>npm run build</code>, and restart TGDrive.</p></main></html>",
+            headers={"Cache-Control": "no-store"},
+        )
+
+    @app.get("/stream")
+    async def video_player(
+        path: Annotated[str, Query(min_length=1, max_length=4096)],
+        auth: Annotated[str | None, Query(max_length=512)] = None,
+    ) -> FileResponse:
+        # Authorization happens when the native player requests /file.
+        del path, auth
+        return FileResponse(
+            WEBSITE_DIR / "dist" / "VideoPlayer.html"
+            if (WEBSITE_DIR / "dist" / "VideoPlayer.html").exists()
+            else WEBSITE_DIR / "public" / "VideoPlayer.html",
+            headers={"Cache-Control": "no-store"},
+        )
+
+    @app.get("/health/live")
+    async def health_live() -> dict[str, str]:
+        return {"status": "ok"}
+
+    @app.get("/health/ready")
+    @app.get("/healthz")
+    async def health_ready(request: Request) -> JSONResponse:
+        current_runtime = _runtime(request)
+        ready = bool(getattr(current_runtime, "ready", False))
+        pool_health = getattr(getattr(current_runtime, "pool", None), "health", None)
+        if ready and callable(pool_health):
+            health = await pool_health()
+            ready = bool(health.ready)
+        return JSONResponse(
+            status_code=200 if ready else 503,
+            content={"status": "ok" if ready else "not ready"},
+        )
+
+    @app.get("/api/config")
+    async def public_config(request: Request) -> dict[str, int | str]:
+        return {
+            "status": "ok",
+            "max_file_size": await current_upload_limit(
+                settings, getattr(_runtime(request), "pool", None)
+            ),
+        }
+
+    @app.post("/api/checkPassword")
+    async def check_password(payload: LoginRequest, request: Request) -> JSONResponse:
+        client_key = request.client.host if request.client else "unknown"
+        decision = limiter.check(client_key)
+        if not decision.allowed:
+            return JSONResponse(
+                status_code=429,
+                headers={"Retry-After": str(decision.retry_after)},
+                content={
+                    "status": "Too many login attempts",
+                    "detail": "Too many login attempts",
+                },
+            )
+        expected = password_hash
+        if not verify_password(payload.password, expected):
+            limiter.failure(client_key)
+            return _json_error("Invalid password", 401)
+        limiter.success(client_key)
+        response = JSONResponse({"status": "ok"})
+        response.set_cookie(
+            SESSION_COOKIE,
+            await asyncio.to_thread(sessions.create),
+            max_age=settings.session_ttl_seconds,
+            httponly=True,
+            secure=settings.cookie_secure,
+            samesite="strict",
+            path="/",
+        )
+        return response
+
+    @app.post("/api/logout")
+    async def logout(request: Request) -> JSONResponse:
+        await asyncio.to_thread(
+            sessions.revoke, request.cookies.get(SESSION_COOKIE, "")
+        )
+        response = JSONResponse({"status": "ok"})
+        response.delete_cookie(
+            SESSION_COOKIE,
+            secure=settings.cookie_secure,
+            httponly=True,
+            samesite="strict",
+            path="/",
+        )
+        return response
+
+    @app.post("/api/getDirectory")
+    async def get_directory(
+        payload: DirectoryRequest, request: Request
+    ) -> JSONResponse:
+        store = _store(request)
+        requested = payload.path
+        auth_home_path: str | None = None
+        if requested == "/trash":
+            await require_admin(request)
+            data: dict[str, Any] = {"contents": store.list_trash()}
+        elif requested.startswith("/search_"):
+            await require_admin(request)
+            query = requested.removeprefix("/search_")
+            page = store.search_page(query, limit=500)
+            data = {
+                "contents": {row["id"]: row for row in page["items"]},
+                "search": {key: value for key, value in page.items() if key != "items"},
+            }
+        elif requested.startswith("/share_"):
+            if getattr(
+                getattr(_runtime(request), "backup", None), "recovery_required", False
+            ):
+                raise RecoveryConflict(
+                    "Shared access is paused until recovery completes"
+                )
+            real_path = "/" + requested.removeprefix("/share_").lstrip("/")
+            if real_path != "/":
+                real_path = store.resolve_id(real_path.rstrip("/").rsplit("/", 1)[-1])
+            auth_home_path = store.authorize_directory(real_path, payload.auth or "")
+            if auth_home_path is None:
+                raise HTTPException(status_code=403, detail="Invalid share link")
+            data = store.get_directory(real_path)
+        else:
+            await require_admin(request)
+            data = store.get_directory(requested)
+        return JSONResponse(
+            {
+                "status": "ok",
+                "data": data,
+                "auth_home_path": auth_home_path,
+            }
+        )
+
+    @app.post("/api/createNewFolder")
+    async def create_folder(
+        payload: FolderCreateRequest,
+        request: Request,
+        _admin: Admin,
+    ) -> dict[str, str]:
+        await asyncio.to_thread(
+            _store(request).create_folder, payload.path, payload.name
+        )
+        return {"status": "ok"}
+
+    @app.post("/api/renameFileFolder")
+    async def rename_item(
+        payload: RenameRequest,
+        request: Request,
+        _admin: Admin,
+    ) -> dict[str, str]:
+        await asyncio.to_thread(_store(request).rename, payload.path, payload.name)
+        return {"status": "ok"}
+
+    @app.post("/api/trashFileFolder")
+    async def trash_item(
+        payload: TrashRequest,
+        request: Request,
+        _admin: Admin,
+    ) -> dict[str, str]:
+        await asyncio.to_thread(
+            _store(request).set_trashed, payload.path, payload.trash
+        )
+        return {"status": "ok"}
+
+    @app.post("/api/deleteFileFolder")
+    async def delete_item(
+        payload: ItemPathRequest,
+        request: Request,
+        _admin: Admin,
+    ) -> dict[str, str]:
+        store = _store(request)
+        manager = _transfers(request)
+        normalized_path = "/" + payload.path.strip("/")
+        trash_paths = {
+            (
+                f"{item['path'].rstrip('/')}/{item['id']}"
+                if item["path"] != "/"
+                else f"/{item['id']}"
+            )
+            for item in store.list_trash().values()
+        }
+        if normalized_path not in trash_paths:
+            raise HTTPException(
+                status_code=409,
+                detail="Item must be in trash before permanent deletion",
+            )
+        record = manager.start_deletion(payload.path)
+        return JSONResponse({"status": "ok", "id": record.id}, status_code=202)
+
+    async def create_share(
+        payload: ItemPathRequest,
+        request: Request,
+        expected_type: str,
+    ) -> dict[str, str]:
+        store = _store(request)
+        if expected_type == "folder":
+            store.get_directory(payload.path)
+        else:
+            store.get_file(payload.path)
+        from tgdrive.share_links import token_factory
+
+        token = await asyncio.to_thread(
+            store.create_share, payload.path, token_factory=token_factory(settings)
+        )
+        return {"status": "ok", "auth": token}
+
+    @app.post("/api/getFolderShareAuth")
+    async def folder_share(
+        payload: ItemPathRequest,
+        request: Request,
+        _admin: Admin,
+    ) -> dict[str, str]:
+        return await create_share(payload, request, "folder")
+
+    @app.post("/api/getFileShareAuth")
+    async def file_share(
+        payload: ItemPathRequest,
+        request: Request,
+        _admin: Admin,
+    ) -> dict[str, str]:
+        return await create_share(payload, request, "file")
+
+    @app.post("/api/upload")
+    async def upload_file(
+        request: Request,
+        _admin: Admin,
+        file: Annotated[UploadFile, File()],
+        path: Annotated[str, Form(min_length=1, max_length=4096)],
+        client_request_id: Annotated[
+            str | None,
+            Form(min_length=16, max_length=128, pattern=r"^[A-Za-z0-9_-]+$"),
+        ] = None,
+    ) -> JSONResponse:
+        manager = _transfers(request)
+        entry: TransferStart | None = None
+        if client_request_id:
+            entry, created = starts.claim(
+                client_request_id,
+                ("local", path, file.filename or "", str(file.size)),
+            )
+            if not created:
+                await file.close()
+                snapshot = entry.snapshot()
+                return JSONResponse(
+                    {"status": "ok", "id": snapshot["id"], "data": snapshot}
+                )
+
+        def bind_created(record: TransferRecord) -> None:
+            if entry is not None and starts.bind(entry, record):
+                manager.registry.cancel(record.id)
+
+        try:
+            record = await manager.receive_browser_upload(
+                file,
+                path,
+                is_disconnected=request.is_disconnected,
+                on_created=bind_created,
+            )
+        except TransferTooLarge as exc:
+            if entry:
+                starts.fail(entry, str(exc))
+            return _json_error(str(exc), 413)
+        except TransferEmptyFile as exc:
+            if entry:
+                starts.fail(entry, str(exc))
+            return _json_error(str(exc), 422)
+        except TransferCancelled as exc:
+            if entry:
+                starts.cancel(entry.request_id)
+            return _json_error(str(exc), 409)
+        except Exception as exc:
+            if entry:
+                starts.fail(entry, str(exc) or type(exc).__name__)
+            raise
+        if entry and entry.record is None:
+            bind_created(record)
+        return JSONResponse({"status": "ok", "id": record.id})
+
+    @app.post("/api/getFileInfoFromUrl")
+    async def inspect_remote(
+        payload: RemoteInspectRequest,
+        request: Request,
+        _admin: Admin,
+    ) -> dict[str, Any]:
+        info = await _transfers(request).inspect_remote(str(payload.url))
+        return {
+            "status": "ok",
+            "data": {
+                "file_name": info.filename,
+                "file_size": info.size if info.size is not None else -1,
+                "content_type": info.content_type,
+            },
+        }
+
+    @app.post("/api/startFileDownloadFromUrl")
+    async def start_remote(
+        payload: RemoteStartRequest,
+        request: Request,
+        _admin: Admin,
+    ) -> dict[str, Any]:
+        entry: TransferStart | None = None
+        if payload.client_request_id:
+            entry, created = starts.claim(
+                payload.client_request_id,
+                ("remote", payload.path, str(payload.url), payload.filename or ""),
+            )
+            if not created:
+                snapshot = entry.snapshot()
+                return {"status": "ok", "id": snapshot["id"], "data": snapshot}
+        try:
+            manager = _transfers(request)
+            await manager.inspect_remote(str(payload.url))
+            await require_admin(request)
+            record = manager.start_remote(
+                url=str(payload.url),
+                destination=payload.path,
+                filename=payload.filename,
+            )
+        except Exception as exc:
+            if entry:
+                starts.fail(entry, str(exc) or type(exc).__name__)
+            raise
+        if entry:
+            starts.bind(entry, record)
+        return {"status": "ok", "id": record.id}
+
+    @app.post("/api/getTransferByRequest")
+    async def transfer_by_request(
+        payload: TransferLookupRequest, request: Request, _admin: Admin
+    ) -> dict[str, Any]:
+        del request
+        snapshot = starts.get(payload.client_request_id).snapshot()
+        return {"status": "ok", "id": snapshot["id"], "data": snapshot}
+
+    @app.post("/api/getTransferProgress")
+    async def transfer_progress(
+        payload: TransferRequest,
+        request: Request,
+        _admin: Admin,
+    ) -> dict[str, Any]:
+        record = _transfers(request).registry.get(payload.id)
+        return {"status": "ok", "data": record.as_dict()}
+
+    @app.post("/api/cancelUpload")
+    async def cancel_transfer(
+        payload: TransferCancelRequest,
+        request: Request,
+        _admin: Admin,
+    ) -> dict[str, Any]:
+        manager = _transfers(request)
+        cancel = getattr(manager, "cancel_job", manager.registry.cancel)
+        if payload.client_request_id:
+            try:
+                existing = starts.get(payload.client_request_id)
+            except RequestIdNotFound:
+                existing = None
+            # Refuse a committed upload before setting any cancellation intent.
+            if existing is not None and existing.record is not None:
+                cancel(existing.record.id)
+            entry = starts.cancel(payload.client_request_id)
+            snapshot = entry.snapshot()
+        else:
+            assert payload.id is not None
+            snapshot = cancel(payload.id).as_dict()
+        return {"status": "ok", "id": snapshot["id"], "data": snapshot}
+
+    # Compatibility aliases for older clients, now backed by one state machine.
+    app.add_api_route(
+        "/api/getSaveProgress",
+        transfer_progress,
+        methods=["POST"],
+        include_in_schema=False,
+    )
+    app.add_api_route(
+        "/api/getUploadProgress",
+        transfer_progress,
+        methods=["POST"],
+        include_in_schema=False,
+    )
+    app.add_api_route(
+        "/api/getFileDownloadProgress",
+        transfer_progress,
+        methods=["POST"],
+        include_in_schema=False,
+    )
+
+    def authorized_file(
+        request: Request, path: str, auth: str | None
+    ) -> tuple[str, dict[str, Any]]:
+        store = _store(request)
+        if getattr(
+            getattr(_runtime(request), "backup", None), "recovery_required", False
+        ):
+            raise RecoveryConflict(
+                "File access is paused until this installation is recovered. "
+                "Preserve local data and recover the latest Telegram checkpoint."
+            )
+        if path != "/":
+            path = store.resolve_id(path.rstrip("/").rsplit("/", 1)[-1])
+        if not _is_admin(request):
+            try:
+                authorized = store.authorize_file(path, auth or "")
+            except DriveError:
+                authorized = False
+            if not authorized:
+                raise HTTPException(status_code=403, detail="Invalid share link")
+        return path, store.get_file(path)
+
+    @app.get("/api/v1/preview")
+    async def file_preview(
+        request: Request,
+        path: Annotated[str, Query(min_length=1, max_length=4096)],
+        auth: Annotated[str | None, Query(max_length=512)] = None,
+    ) -> dict[str, Any]:
+        path, file_data = authorized_file(request, path, auth)
+        try:
+            return await describe_preview(
+                pool=_runtime(request).pool,
+                channel_id=settings.storage_channel,
+                message_id=file_data["message_id"],
+                parts=file_data.get("parts"),
+                file_name=file_data["name"],
+                size=file_data["size"],
+                path=path,
+                auth=auth,
+            )
+        except TelegramFileNotFound as exc:
+            raise HTTPException(404, "Stored file not found") from exc
+
+    @app.get("/api/v1/media")
+    async def file_media(
+        request: Request,
+        path: Annotated[str, Query(min_length=1, max_length=4096)],
+        auth: Annotated[str | None, Query(max_length=512)] = None,
+    ) -> dict[str, Any]:
+        _path, file_data = authorized_file(request, path, auth)
+        try:
+            return await describe_media(
+                pool=_runtime(request).pool,
+                channel_id=settings.storage_channel,
+                message_id=file_data["message_id"],
+                parts=file_data.get("parts"),
+                file_name=file_data["name"],
+                size=file_data["size"],
+            )
+        except TelegramFileNotFound as exc:
+            raise HTTPException(404, "Stored file not found") from exc
+
+    @app.api_route("/file", methods=["GET", "HEAD"])
+    async def download_file(
+        request: Request,
+        path: Annotated[str, Query(min_length=1, max_length=4096)],
+        auth: Annotated[str | None, Query(max_length=512)] = None,
+        download: bool = False,
+        preview: bool = False,
+        quality: Annotated[str | None, Query(max_length=128)] = None,
+    ) -> Response:
+        path, file_data = authorized_file(request, path, auth)
+        try:
+            return await stream_telegram_file(
+                pool=_runtime(request).pool,
+                channel_id=settings.storage_channel,
+                message_id=file_data["message_id"],
+                parts=file_data.get("parts"),
+                file_name=file_data["name"],
+                expected_size=file_data["size"],
+                request=request,
+                download=download,
+                preview=preview,
+                quality=quality,
+            )
+        except TelegramVariantNotFound as exc:
+            raise HTTPException(404, "This media quality is unavailable") from exc
+        except TelegramFileNotFound as exc:
+            raise HTTPException(
+                status_code=404, detail="Stored file not found"
+            ) from exc
+
+    register_routes(
+        app,
+        settings,
+        require_admin=require_admin,
+        is_admin=_is_admin,
+        get_store=_store,
+        get_manager=_transfers,
+        get_runtime=_runtime,
+    )
+    if (WEBSITE_DIR / "dist" / "assets").exists():
+        app.mount(
+            "/assets",
+            StaticFiles(directory=WEBSITE_DIR / "dist" / "assets"),
+            name="assets",
+        )
+    app.mount(
+        "/static",
+        StaticFiles(directory=STATIC_DIR, check_dir=True),
+        name="static",
+    )
+    notices = WEBSITE_DIR / "dist" / "third-party"
+    if not notices.is_dir():
+        notices = WEBSITE_DIR / "public" / "third-party"
+    if notices.is_dir():
+        app.mount(
+            "/third-party",
+            StaticFiles(directory=notices, check_dir=True),
+            name="third-party",
+        )
+    app.add_middleware(
+        UploadGuardMiddleware,
+        sessions=sessions,
+        upload_limit=settings.upload_limit,
+        max_concurrent=settings.max_concurrent_transfers,
+    )
+    app.add_middleware(
+        StreamConcurrencyMiddleware, max_concurrent=settings.max_concurrent_streams
+    )
+    app.add_middleware(SameOriginMiddleware)
+    app.add_middleware(ApiBodyGuardMiddleware, sessions=sessions)
+    app.add_middleware(SecurityHeadersMiddleware, secure=settings.cookie_secure)
+    return app

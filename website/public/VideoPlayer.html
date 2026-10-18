@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="color-scheme" content="dark">
+    <meta name="theme-color" content="#0d1424">
+    <meta name="description" content="Stream a video from TGDrive.">
+    <title>Video · TGDrive</title>
+    <link rel="stylesheet" href="/static/player.css?v=2.0.0-r2">
+    <script type="module" src="/static/js/video-player.js?v=2.0.0-r2"></script>
+</head>
+<body>
+    <main class="player-shell">
+        <header class="player-header">
+            <a class="player-brand" href="/?path=/" aria-label="Back to TGDrive">
+                <span aria-hidden="true"><img src="/static/assets/folder-solid-icon.svg" alt=""></span>
+                <strong>TGDrive</strong>
+            </a>
+            <a class="back-link" href="/?path=/">Back to files</a>
+        </header>
+
+        <section class="player-card" aria-labelledby="player-title">
+            <div class="video-frame">
+                <video id="video-player" controls playsinline preload="metadata">
+                    Your browser does not support HTML video playback.
+                </video>
+                <div class="player-error" id="player-error" role="alert" hidden>
+                    <strong>Video unavailable</strong>
+                    <p id="player-error-message">This video could not be loaded.</p>
+                </div>
+            </div>
+
+            <div class="player-details">
+                <div>
+                    <p class="eyebrow">TGDrive stream</p>
+                    <h1 id="player-title">Video player</h1>
+                    <p id="player-status" role="status">Preparing your video…</p>
+                </div>
+                <div class="player-actions">
+                    <button id="copy-stream" type="button">Copy stream link</button>
+                    <button id="copy-file" type="button">Copy file link</button>
+                    <a id="download-link" href="#" download>Download original</a>
+                </div>
+            </div>
+        </section>
+    </main>
+
+    <div class="player-toast" id="player-toast" role="status" aria-live="polite" hidden></div>
+</body>
+</html>

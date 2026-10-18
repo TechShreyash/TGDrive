@@ -1,0 +1,372 @@
+"""Typed, fail-fast application configuration."""
+
+from __future__ import annotations
+
+import hashlib
+import re
+from functools import lru_cache
+from pathlib import Path
+
+from argon2 import Type, extract_parameters
+from argon2.exceptions import InvalidHashError
+from pydantic import Field, SecretStr, ValidationInfo, field_validator, model_validator
+from pydantic_settings import BaseSettings, SettingsConfigDict
+
+_BOT_TOKEN_RE = re.compile(r"^[1-9][0-9]{4,14}:[A-Za-z0-9_-]{20,}$")
+# Conservative per-account media limits in binary MiB. Runtime admission
+# also checks whether a usable Premium account is actually connected.
+_DEFAULT_BOT_LIMIT = 2000 * 1024**2
+_DEFAULT_PREMIUM_LIMIT = 4000 * 1024**2
+
+
+def _csv(value: str) -> tuple[str, ...]:
+    return tuple(part.strip() for part in value.split(",") if part.strip())
+
+
+class Settings(BaseSettings):
+    """Configuration loaded from environment variables or ``.env``.
+
+    Secret values are represented by :class:`~pydantic.SecretStr`, which keeps
+    accidental logging and validation errors from exposing credentials.
+    """
+
+    model_config = SettingsConfigDict(
+        env_file=".env",
+        env_file_encoding="utf-8",
+        extra="ignore",
+        case_sensitive=False,
+        validate_default=True,
+        hide_input_in_errors=True,
+    )
+
+    mongodb_uri: SecretStr | None = Field(default=None, alias="MONGODB_URI")
+    mongodb_database: str = Field(
+        default="tgdrive", alias="MONGODB_DATABASE", pattern=r"^[A-Za-z0-9_-]{1,63}$"
+    )
+    mongodb_backup_seconds: int = Field(
+        default=3600, alias="MONGODB_BACKUP_SECONDS", ge=60, le=604800
+    )
+    mongodb_backup_key: SecretStr | None = Field(
+        default=None, alias="MONGODB_BACKUP_KEY"
+    )
+
+    @field_validator("mongodb_backup_key")
+    @classmethod
+    def valid_backup_key(cls, value):
+        if value is not None and not re.fullmatch(
+            r"[0-9a-fA-F]{64}", value.get_secret_value()
+        ):
+            raise ValueError(
+                "MONGODB_BACKUP_KEY must contain 64 hexadecimal characters"
+            )
+        return value
+
+    @field_validator("mongodb_uri")
+    @classmethod
+    def valid_mongodb_uri(cls, value):
+        if value is not None and not value.get_secret_value().startswith(
+            ("mongodb://", "mongodb+srv://")
+        ):
+            raise ValueError("MONGODB_URI must be a MongoDB connection string")
+        return value
+
+    api_id: int = Field(alias="API_ID", gt=0)
+    api_hash: SecretStr = Field(alias="API_HASH")
+    bot_tokens_csv: SecretStr = Field(alias="BOT_TOKENS")
+    storage_channel: int = Field(alias="STORAGE_CHANNEL", lt=0)
+    database_backup_msg_id: int | None = Field(
+        default=None, alias="DATABASE_BACKUP_MSG_ID", gt=0
+    )
+    admin_password: SecretStr = Field(default=SecretStr(""), alias="ADMIN_PASSWORD")
+    session_secret: SecretStr = Field(alias="SESSION_SECRET")
+
+    string_sessions_csv: SecretStr = Field(
+        default=SecretStr(""), alias="STRING_SESSIONS"
+    )
+    main_bot_token: SecretStr | None = Field(default=None, alias="MAIN_BOT_TOKEN")
+    telegram_admin_ids_csv: str = Field(default="", alias="TELEGRAM_ADMIN_IDS")
+
+    database_backup_time: int = Field(
+        default=60, alias="DATABASE_BACKUP_TIME", ge=10, le=86400
+    )
+    sleep_threshold: int = Field(default=60, alias="SLEEP_THRESHOLD", ge=0, le=3600)
+    max_file_size: int | None = Field(default=None, alias="MAX_FILE_SIZE", gt=0)
+    cache_dir: Path = Field(default=Path("cache"), alias="CACHE_DIR")
+    data_dir: Path = Field(default=Path("data"), alias="DATA_DIR")
+    log_level: str = Field(default="INFO", alias="LOG_LEVEL")
+
+    session_ttl_seconds: int = Field(
+        default=86400, alias="SESSION_TTL_SECONDS", ge=300, le=2592000
+    )
+    cookie_secure: bool = Field(default=True, alias="COOKIE_SECURE")
+    initialize_empty_drive: bool = Field(default=False, alias="INITIALIZE_EMPTY_DRIVE")
+    allow_private_remote_urls: bool = Field(
+        default=False, alias="ALLOW_PRIVATE_REMOTE_URLS"
+    )
+    remote_connect_timeout: float = Field(
+        default=20.0, alias="REMOTE_CONNECT_TIMEOUT", gt=0, le=300
+    )
+    remote_read_timeout: float = Field(
+        default=120.0, alias="REMOTE_READ_TIMEOUT", gt=0, le=3600
+    )
+    remote_total_timeout: float = Field(
+        default=21600.0, alias="REMOTE_TOTAL_TIMEOUT", gt=0, le=86400
+    )
+    remote_max_redirects: int = Field(
+        default=5, alias="REMOTE_MAX_REDIRECTS", ge=0, le=20
+    )
+    transfer_ttl_seconds: int = Field(
+        default=3600, alias="TRANSFER_TTL_SECONDS", ge=60, le=86400
+    )
+    max_concurrent_transfers: int = Field(
+        default=2, alias="MAX_CONCURRENT_TRANSFERS", ge=1, le=32
+    )
+
+    telegram_uploads_per_bot: int = Field(
+        default=1, alias="TELEGRAM_UPLOADS_PER_BOT", ge=1, le=4
+    )
+
+    staging_budget_bytes: int = Field(
+        default=16 * 1024**3, alias="STAGING_BUDGET_BYTES", gt=0
+    )
+    min_free_bytes: int = Field(default=1024**3, alias="MIN_FREE_BYTES", ge=0)
+    upload_session_ttl_seconds: int = Field(
+        default=86400, alias="UPLOAD_SESSION_TTL_SECONDS", ge=60
+    )
+    max_concurrent_streams: int = Field(
+        default=4, alias="MAX_CONCURRENT_STREAMS", ge=1, le=64
+    )
+    admin_password_hash: SecretStr | None = Field(
+        default=None, alias="ADMIN_PASSWORD_HASH"
+    )
+
+    # Internal startup provenance is never exported as configuration or backup.
+    managed_revision: int = Field(default=0, exclude=True, ge=0)
+    managed_client_ids: tuple[str, ...] = Field(default=(), exclude=True)
+    managed_client_labels: tuple[str, ...] = Field(default=(), exclude=True)
+
+    @classmethod
+    def settings_customise_sources(
+        cls,
+        settings_cls,
+        init_settings,
+        env_settings,
+        dotenv_settings,
+        file_secret_settings,
+    ):
+        def managed_source():
+            from tgdrive.managed_settings import read_document
+
+            explicit = init_settings()
+            credential_fields = {"API_ID", "API_HASH", "BOT_TOKENS", "STRING_SESSIONS"}
+            # Explicit injected configurations remain isolated (tests/embedding).
+            if credential_fields.intersection(explicit):
+                return {}
+            base = {**dotenv_settings(), **env_settings(), **explicit}
+            directory = Path(base.get("DATA_DIR", "data")).expanduser().resolve()
+            bootstrap = {}
+            uri = base.get("MONGODB_URI")
+            if uri:
+                from tgdrive.mongo import configure
+
+                backend = configure(
+                    directory,
+                    uri.get_secret_value() if isinstance(uri, SecretStr) else str(uri),
+                    str(base.get("MONGODB_DATABASE", "tgdrive")),
+                )
+                row = backend.db.settings.find_one({"_id": "bootstrap"})
+                bootstrap = (
+                    {
+                        key: value
+                        for key, value in row["document"].items()
+                        if key not in base
+                    }
+                    if row
+                    else {}
+                )
+            document = read_document(directory)
+            if document is None:
+                return bootstrap
+            rows = [
+                row
+                for kind in ("bot", "user")
+                for row in document.clients
+                if row.kind == kind and row.enabled
+            ]
+            return {
+                **bootstrap,
+                "API_ID": document.api_id,
+                "API_HASH": document.api_hash,
+                "BOT_TOKENS": ",".join(
+                    row.credential.get_secret_value()
+                    for row in rows
+                    if row.kind == "bot"
+                ),
+                "STRING_SESSIONS": ",".join(
+                    row.credential.get_secret_value()
+                    for row in rows
+                    if row.kind == "user"
+                ),
+                "managed_revision": document.revision,
+                "managed_client_ids": tuple(row.id for row in rows),
+                "managed_client_labels": tuple(row.label for row in rows),
+            }
+
+        return (
+            init_settings,
+            managed_source,
+            env_settings,
+            dotenv_settings,
+            file_secret_settings,
+        )
+
+    @field_validator("database_backup_msg_id", mode="before")
+    @classmethod
+    def optional_backup_id(cls, value):
+        return None if value in ("", None) else value
+
+    @field_validator("api_hash")
+    @classmethod
+    def validate_api_hash(cls, value: SecretStr) -> SecretStr:
+        raw = value.get_secret_value().strip()
+        if not re.fullmatch(r"[0-9a-fA-F]{32}", raw):
+            raise ValueError("API hash must contain exactly 32 hexadecimal characters")
+        return SecretStr(raw)
+
+    @field_validator("admin_password", "session_secret")
+    @classmethod
+    def validate_non_empty_secret(
+        cls, value: SecretStr, info: ValidationInfo
+    ) -> SecretStr:
+        raw = value.get_secret_value().strip()
+        if raw.startswith("<"):
+            raise ValueError("Replace the example placeholder with a generated secret")
+        if info.field_name == "admin_password" and not raw:
+            return SecretStr("")
+        minimum = 12 if info.field_name == "admin_password" else 32
+        if len(raw) < minimum:
+            label = info.field_name.replace("_", " ")
+            raise ValueError(f"{label} must contain at least {minimum} characters")
+        return SecretStr(raw)
+
+    @field_validator("log_level")
+    @classmethod
+    def validate_log_level(cls, value: str) -> str:
+        normalized = value.strip().upper()
+        if normalized not in {"DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"}:
+            raise ValueError("must be DEBUG, INFO, WARNING, ERROR, or CRITICAL")
+        return normalized
+
+    @field_validator("telegram_admin_ids_csv")
+    @classmethod
+    def validate_admin_ids(cls, value: str) -> str:
+        for raw_id in _csv(value):
+            if not raw_id.isdecimal() or int(raw_id) <= 0:
+                raise ValueError("must be a comma-separated list of positive integers")
+        return value
+
+    @model_validator(mode="after")
+    def validate_related_settings(self) -> Settings:
+        if (
+            not self.admin_password.get_secret_value()
+            and self.admin_password_hash is None
+        ):
+            raise ValueError("ADMIN_PASSWORD or ADMIN_PASSWORD_HASH is required")
+        if self.admin_password_hash is not None:
+            try:
+                parameters = extract_parameters(
+                    self.admin_password_hash.get_secret_value()
+                )
+                if parameters.type is not Type.ID:
+                    raise ValueError("ADMIN_PASSWORD_HASH must use Argon2id")
+                if parameters.memory_cost < 19456 or parameters.time_cost < 2:
+                    raise ValueError(
+                        "Owner password hash is below the supported security floor"
+                    )
+            except InvalidHashError as exc:
+                raise ValueError(
+                    "ADMIN_PASSWORD_HASH must be a valid Argon2id hash"
+                ) from exc
+        if not self.bot_tokens:
+            raise ValueError("BOT_TOKENS must contain at least one bot token")
+        if len(set(self.bot_tokens)) != len(self.bot_tokens):
+            raise ValueError("BOT_TOKENS must not repeat a storage bot")
+        if len(set(self.string_sessions)) != len(self.string_sessions):
+            raise ValueError("STRING_SESSIONS must not repeat an account session")
+        invalid_tokens = [
+            token for token in self.bot_tokens if not _BOT_TOKEN_RE.fullmatch(token)
+        ]
+        if invalid_tokens:
+            raise ValueError("BOT_TOKENS contains an invalid Telegram bot token")
+        if self.main_bot_token is not None:
+            token = self.main_bot_token.get_secret_value().strip()
+            if token and not _BOT_TOKEN_RE.fullmatch(token):
+                raise ValueError("MAIN_BOT_TOKEN is not a valid Telegram bot token")
+            if token and not self.telegram_admin_ids:
+                raise ValueError(
+                    "TELEGRAM_ADMIN_IDS is required when MAIN_BOT_TOKEN is set"
+                )
+        return self
+
+    @property
+    def bot_tokens(self) -> tuple[str, ...]:
+        return _csv(self.bot_tokens_csv.get_secret_value())
+
+    @property
+    def string_sessions(self) -> tuple[str, ...]:
+        return _csv(self.string_sessions_csv.get_secret_value())
+
+    @property
+    def telegram_admin_ids(self) -> tuple[int, ...]:
+        return tuple(int(value) for value in _csv(self.telegram_admin_ids_csv))
+
+    @property
+    def main_bot_token_value(self) -> str | None:
+        if self.main_bot_token is None:
+            return None
+        value = self.main_bot_token.get_secret_value().strip()
+        return value or None
+
+    @property
+    def available_upload_limit(self) -> int:
+        return _DEFAULT_PREMIUM_LIMIT if self.string_sessions else _DEFAULT_BOT_LIMIT
+
+    @property
+    def bot_upload_limit(self) -> int:
+        return _DEFAULT_BOT_LIMIT
+
+    @property
+    def premium_upload_limit(self) -> int:
+        return _DEFAULT_PREMIUM_LIMIT
+
+    @property
+    def upload_limit(self) -> int:
+        """Logical file ceiling; Telegram message limits apply to individual parts."""
+        return min(
+            self.staging_budget_bytes,
+            self.max_file_size or self.staging_budget_bytes,
+            self.bot_upload_limit * 4096,
+        )
+
+    def upload_limit_for(self, premium_available: bool) -> int:
+        """Multipart uploads work with bots; Premium only changes message sizing."""
+        return self.upload_limit
+
+    @property
+    def session_key(self) -> bytes:
+        return hashlib.sha256(self.session_secret.get_secret_value().encode()).digest()
+
+    @property
+    def resolved_cache_dir(self) -> Path:
+        return self.cache_dir.expanduser().resolve()
+
+    @property
+    def resolved_data_dir(self) -> Path:
+        return self.data_dir.expanduser().resolve()
+
+
+@lru_cache(maxsize=1)
+def get_settings() -> Settings:
+    """Return the process-wide validated settings instance."""
+
+    return Settings()  # type: ignore[call-arg]

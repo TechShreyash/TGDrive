@@ -1,0 +1,80 @@
+# Status and roadmap
+
+[Docs home](README.md) · [What has been tested](development.md#ci-and-release-evidence)
+
+**Implemented** means the feature exists. It does not mean every device, file
+or failure scenario has been tested.
+
+## What works now
+
+| Feature | Current behavior |
+| --- | --- |
+| Web file manager | Light/dark/system themes, folders, selection, move, rename and search |
+| File and folder uploads | Preserved hierarchy, combined batches, retry/resume and bounded concurrency |
+| Transfer history | Status filters and paged persistent server history, independent of floating-panel dismissal |
+| Files above 2 GB | Automatic ordered parts; one item for download, preview and seeking |
+| Previews | Full-window images/PDFs/text/video; useful download fallback for unsupported files |
+| Multiple bots | Balanced work, account limits and persisted Telegram waits |
+| Connections page | Add/manage bots, Premium login, refresh names and verify credentials/channel access |
+| Sharing | Scoped links, expiry, rotation and revocation |
+| Trash and deletion | Reversible Trash; confirmed remote permanent deletion with retry |
+| MongoDB persistence | Reopen the same drive after reinstalling the app |
+| Telegram database backups | Complete encrypted copies, separate recovery key and empty-database restore |
+| Guided installation | Docker setup wizard; source installation is also supported |
+
+The default logical-file limit is 16 GiB, subject to configuration and disk.
+Large-file support does not require Premium.
+
+## Before public release
+
+The MongoDB version is available for **public beta testing on `dev`**. The
+automated baseline passed on 2026-10-18; live/platform checks remain below.
+
+| Remaining check | Status |
+| --- | --- |
+| Full regression and Chrome workflows after the database switch | Passed: 819 Python, 156 frontend and 48 Chromium tests; 82.39% Python coverage |
+| Repeat live above-2-GB integrity/streaming tests on MongoDB | Pending |
+| Rebuild and validate current source ZIP and container artifacts | Passed: clean source ZIP install/build/tests and AMD64 container build/runtime smoke |
+| Near-cap Premium uploads and actual Premium acceleration | Unverified; no Premium test account |
+| Deletion of a disposable message older than 48 hours | Unverified; no suitable message |
+| Prolonged multi-bot outages and crashes during a real Telegram send | Further live coverage needed |
+| Full deployment move, physical ARM and Render hosting | Not certified |
+
+Earlier 2.16 GB upload/download/playback evidence is useful but predates MongoDB.
+The [validation record](development.md#ci-and-release-evidence) separates those
+results from current tests. GitHub workflow results are tracked separately from
+local validation. A public beta branch does not imply a hosted deployment.
+
+## Known correctness and recovery gaps
+
+- **Optional client recovery:** a failed additional account in an otherwise
+  running pool may need a restart after repair.
+- **Bot-mode imports:** do not use the web queue's full durable job model.
+- **History cleanup:** operation/receipt history needs reviewed compaction that
+  preserves unresolved effects and retry identities.
+- **Large folders:** current listing slices an in-memory result; database cursor
+  pagination is a follow-up.
+- **Older APIs:** request-start mappings can be process-local and error formats vary.
+- **Changing storage channels:** needs an explicit migration design.
+
+For current recovery actions, use [Troubleshooting](operations.md#troubleshooting).
+
+## Next improvements
+
+| Area | Useful follow-up |
+| --- | --- |
+| Video startup | Measure first-frame delay, initial reads and memory before tuning |
+| Folder uploads | Investigate preserving empty directories the picker cannot see |
+| Recovery | Make emergency restore easier through a guided interface |
+| Previews | Broaden safe formats and test more real devices/files |
+| Backup safety | Consider independent file export/redundancy and optional payload encryption |
+| File details | Consider real modification timestamps |
+
+Prioritize integrity, recovery, useful speed and understandable status.
+A new feature needs clear limits and retry/cancel/restart behavior, as well as
+appropriate tests and updated docs.
+
+## Outside the current scope
+
+Multi-user accounts, teams, tenant permissions and clustered workers.
+The current product is a single-owner, self-hosted drive.

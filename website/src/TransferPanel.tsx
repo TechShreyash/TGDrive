@@ -1,0 +1,1005 @@
+import { useEffect, useId, useRef, useState } from "react";
+import {
+  Upload,
+  ChevronDown,
+  ChevronRight,
+  ChevronUp,
+  X,
+  RotateCcw,
+  Check,
+  Pause,
+  AlertCircle,
+  Folder,
+  FolderOpen,
+  Clock3,
+  FileUp,
+  Files,
+} from "lucide-react";
+import {
+  transfers,
+  isTransferActive,
+  canCancelTransfer,
+  type Transfer,
+} from "./transfers";
+import { historyStatus } from "./transferHistory";
+import {
+  summarizeBatches,
+  batchCategory,
+  type TransferBatch,
+} from "./transferBatches";
+import {
+  formatLocationLabel,
+  formatBytes,
+  formatByteProgress,
+  remainingBytesHint,
+} from "./types";
+import { errorMessage } from "./api";
+import { Modal, Spinner } from "./components";
+import { transferDetails, transferProgress, formatDuration } from "./progress";
+
+export default function TransferPanel({
+  items,
+  onError,
+  expandedPage = false,
+  onLocate,
+  pageContext = "files",
+}: {
+  items: Transfer[];
+  onError: (message: string) => void;
+  expandedPage?: boolean;
+  pageContext?: string;
+  onLocate?: (item: Transfer, folder?: boolean) => void;
+}) {
+  const [collapsed, setCollapsed] = useState(
+    () =>
+      !!window.history.state?.tgdriveReveal ||
+      window.matchMedia("(max-width: 720px)").matches ||
+      pageContext !== "files",
+  );
+  const [notice, setNotice] = useState("");
+  const [expandedBatches, setExpandedBatches] = useState<Set<string>>(
+    new Set(),
+  );
+  const [cancelKeys, setCancelKeys] = useState<string[] | null>(null);
+  const input = useRef<HTMLInputElement>(null);
+  const bulkInput = useRef<HTMLInputElement>(null);
+  const folderInput = useRef<HTMLInputElement>(null);
+  const resumeKey = useRef("");
+  const resumeBatch = useRef("");
+  const active = items.filter(isTransferActive).length;
+  const unresolved = active > 0 || items.some((item) => item.state === "error");
+  const [floatingVisible, setFloatingVisible] = useState(unresolved);
+  useEffect(() => {
+    if (expandedPage) return;
+    if (unresolved) {
+      setFloatingVisible(true);
+      return;
+    }
+    // A recent upload may show its completion briefly; fetched history stays quiet.
+    const timer = setTimeout(() => setFloatingVisible(false), 5000);
+    return () => clearTimeout(timer);
+  }, [unresolved, expandedPage]);
+  useEffect(() => {
+    if (!expandedPage && pageContext !== "files") setCollapsed(true);
+  }, [pageContext, expandedPage]);
+  const [now, setNow] = useState(Date.now);
+  useEffect(() => {
+    if (!active) return;
+    const timer = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(timer);
+  }, [active]);
+  const batches = summarizeBatches(items, now);
+  const categories = [
+    { key: "running", label: "Running" },
+    { key: "queued", label: "Queued" },
+    { key: "error", label: "Needs Attention" },
+    { key: "completed", label: "Completed" },
+    { key: "cancelled", label: "Cancelled" },
+  ] as const;
+  const groups = categories
+    .map((category) => {
+      const groupedBatches = batches.filter(
+        (batch) => batchCategory(batch) === category.key,
+      );
+      return {
+        ...category,
+        batches: groupedBatches,
+        count: groupedBatches.reduce((sum, batch) => sum + batch.count, 0),
+      };
+    })
+    .filter((group) => group.count > 0);
+
+  const cancellable = items.filter(canCancelTransfer);
+  const cancelCount = cancelKeys
+    ? cancellable.filter((item) => cancelKeys.includes(item.key)).length
+    : 0;
+  const pending = batches.filter((batch) => batch.pending).length;
+  const heading = batches.some((batch) => batch.active > 0)
+    ? pending + (pending === 1 ? " upload in progress" : " uploads in progress")
+    : batches.some((batch) => batch.queued > 0)
+      ? pending + (pending === 1 ? " upload waiting" : " uploads waiting")
+      : batches.some((batch) => batch.failed || batch.awaiting)
+        ? "Uploads Need Attention"
+        : "Transfers";
+  const folderPickerSupported =
+    "webkitdirectory" in document.createElement("input");
+  const run = (task: Promise<unknown>) => {
+    void task.catch((error) => onError(errorMessage(error)));
+  };
+  const reselect = async (files: File[]) => {
+    const result = await transfers.resumeBatchFiles(resumeBatch.current, files);
+    setNotice(
+      result.matched +
+        (result.matched === 1 ? " file" : " files") +
+        " queued for verification." +
+        (result.remaining
+          ? " " + result.remaining + " still need their original files."
+          : "") +
+        (result.unmatched
+          ? " " +
+            result.unmatched +
+            " selected files did not match this upload."
+          : "") +
+        (result.errors.length ? " " + result.errors[0] : ""),
+    );
+  };
+  if (!expandedPage && !floatingVisible) return null;
+  if (!items.length)
+    return expandedPage ? (
+      <div className="empty-state">
+        <Upload size={40} />
+        <h2>No Transfers Yet</h2>
+        <p>Uploads started from a folder in My Files appear here.</p>
+      </div>
+    ) : null;
+  return (
+    <section
+      id="transfer-dialog"
+      className={"transfer-center " + (expandedPage ? "transfer-page" : "")}
+      aria-label="Transfers"
+    >
+      <header
+        className="transfer-heading"
+        hidden={expandedPage && !cancellable.length}
+      >
+        <h2
+          id="transfer-summary"
+          className={expandedPage ? "sr-only" : undefined}
+        >
+          <Upload size={18} />
+          {expandedPage
+            ? items.length +
+              (items.length === 1 ? " transfer shown" : " transfers shown")
+            : heading}
+        </h2>
+        <div className="inline-actions">
+          {cancellable.length > 0 && (
+            <button
+              className="text-button"
+              onClick={() => setCancelKeys(cancellable.map((item) => item.key))}
+            >
+              Cancel All
+            </button>
+          )}
+          {!expandedPage && (
+            <button
+              id="transfer-toggle"
+              className="text-button"
+              onClick={() => setCollapsed(!collapsed)}
+              aria-expanded={!collapsed}
+              aria-controls="transfer-list"
+              aria-label={
+                collapsed ? "Show Transfer Details" : "Hide Transfer Details"
+              }
+              title={
+                collapsed
+                  ? "Show Transfer Details"
+                  : "Hide details; uploads keep running"
+              }
+            >
+              {collapsed ? "Show" : "Hide"}
+              {collapsed ? <ChevronUp size={15} /> : <ChevronDown size={15} />}
+            </button>
+          )}
+        </div>
+      </header>
+      {notice && (
+        <p className="transfer-notice" role="status">
+          {notice}
+        </p>
+      )}
+      <div
+        id="transfer-list"
+        className="transfer-list"
+        hidden={collapsed && !expandedPage}
+      >
+        {groups.map((group) => (
+          <section
+            className="transfer-category"
+            data-category={group.key}
+            key={group.key}
+            aria-label={group.label}
+          >
+            <h3
+              className="transfer-category-title"
+              hidden={!expandedPage && groups.length === 1}
+            >
+              {group.label}
+              <span>{group.count}</span>
+            </h3>
+            <div role="list">
+              {group.batches.map((batch) => (
+                <BatchTransfer
+                  key={batch.id}
+                  batch={batch}
+                  expanded={expandedBatches.has(batch.id)}
+                  onToggleExpanded={() =>
+                    setExpandedBatches((previous) => {
+                      const next = new Set(
+                        [...previous].filter((id) =>
+                          batches.some((current) => current.id === id),
+                        ),
+                      );
+                      if (next.has(batch.id)) next.delete(batch.id);
+                      else next.add(batch.id);
+                      return next;
+                    })
+                  }
+                  onLocate={
+                    onLocate
+                      ? (item, folder) => {
+                          setCollapsed(true);
+                          onLocate(item, folder);
+                        }
+                      : undefined
+                  }
+                  showTimestamp={expandedPage}
+                  now={now}
+                  run={run}
+                  onChooseFile={(key) => {
+                    resumeKey.current = key;
+                    input.current?.click();
+                  }}
+                  onChooseBatch={() => {
+                    resumeBatch.current = batch.id;
+                    if (batch.items.some((item) => item.relativePath))
+                      folderInput.current?.click();
+                    else bulkInput.current?.click();
+                  }}
+                  folderPickerSupported={folderPickerSupported}
+                />
+              ))}
+            </div>
+          </section>
+        ))}
+      </div>
+      {!expandedPage &&
+        !collapsed &&
+        batches.some((batch) => !batch.pending) && (
+          <div className="transfer-footer">
+            <button
+              id="transfer-clear"
+              className="text-button"
+              onClick={() => transfers.clearFinished()}
+              title="Remove completed and cancelled groups from this list"
+            >
+              Clear Finished
+            </button>
+          </div>
+        )}
+      {cancelKeys !== null && (
+        <Modal
+          title="Cancel All Uploads?"
+          initialFocus="[data-keep-uploading]"
+          onClose={() => setCancelKeys(null)}
+        >
+          <p>
+            Cancel {cancelCount} unfinished{" "}
+            {cancelCount === 1 ? "upload" : "uploads"}? Files already in your
+            drive will be kept.
+          </p>
+          <div className="dialog-actions">
+            <button
+              className="secondary-button"
+              data-keep-uploading
+              onClick={() => setCancelKeys(null)}
+            >
+              Keep Uploading
+            </button>
+            <button
+              className="danger-button"
+              disabled={!cancelCount}
+              onClick={() => {
+                const keys = cancelKeys;
+                setCancelKeys(null);
+                run(transfers.cancelAll(keys));
+              }}
+            >
+              Cancel Uploads
+            </button>
+          </div>
+        </Modal>
+      )}
+      {transfers.recoveryWarning && (
+        <p className="transfer-help transfer-storage-warning" role="status">
+          {transfers.recoveryWarning}
+        </p>
+      )}
+      <input
+        ref={input}
+        type="file"
+        hidden
+        aria-label="Choose Original File to Resume"
+        onChange={(event) => {
+          const file = event.target.files?.[0];
+          if (file) run(transfers.resume(resumeKey.current, file));
+          event.target.value = "";
+        }}
+      />
+      <input
+        ref={bulkInput}
+        type="file"
+        multiple
+        hidden
+        aria-label="Choose Original Files to Resume"
+        onChange={(event) => {
+          const files = Array.from(event.target.files || []);
+          if (files.length) run(reselect(files));
+          event.target.value = "";
+        }}
+      />
+      <input
+        ref={(node) => {
+          folderInput.current = node;
+          node?.setAttribute("webkitdirectory", "");
+        }}
+        type="file"
+        multiple
+        hidden
+        aria-label="Choose Original Folder to Resume"
+        onChange={(event) => {
+          const files = Array.from(event.target.files || []);
+          if (files.length) run(reselect(files));
+          event.target.value = "";
+        }}
+      />
+    </section>
+  );
+}
+
+function batchStatus(batch: TransferBatch) {
+  if (batch.count === 1) return batch.items[0].phase;
+  const counts = [batch.completed + " of " + batch.count + " files uploaded"];
+  if (batch.active) counts.push(batch.active + " active");
+  if (batch.queued) counts.push(batch.queued + " queued");
+  if (batch.failed) counts.push(batch.failed + " failed");
+  if (batch.awaiting) counts.push(batch.awaiting + " need originals");
+  if (batch.cancelled) counts.push(batch.cancelled + " cancelled");
+  return counts.join(" · ");
+}
+
+function BatchTransfer({
+  batch,
+  expanded,
+  onToggleExpanded,
+  now,
+  run,
+  onChooseFile,
+  onChooseBatch,
+  folderPickerSupported,
+  showTimestamp = false,
+  onLocate,
+}: {
+  onLocate?: (item: Transfer, folder?: boolean) => void;
+  batch: TransferBatch;
+  expanded: boolean;
+  onToggleExpanded: () => void;
+  showTimestamp?: boolean;
+  now: number;
+  run: (task: Promise<unknown>) => void;
+  onChooseFile: (key: string) => void;
+  onChooseBatch: () => void;
+  folderPickerSupported: boolean;
+}) {
+  const [filter, setFilter] = useState("all");
+  const [limit, setLimit] = useState(20);
+  const listId = useId();
+  const hasFolder = batch.items.some((item) => item.relativePath);
+  if (batch.count === 1 && !hasFolder)
+    return (
+      <TransferRow
+        item={batch.items[0]}
+        onLocate={onLocate}
+        showTimestamp={showTimestamp}
+        now={now}
+        run={run}
+        onChooseFile={onChooseFile}
+      />
+    );
+  const folderItem = batch.items.find((item) => item.state === "completed");
+  const canShowFolder =
+    hasFolder &&
+    !!onLocate &&
+    !!folderItem &&
+    batch.items.every((item) => item.state === "completed");
+  const finishedTimes = batch.items
+    .map((item) => item.finishedAt)
+    .filter(
+      (value): value is number =>
+        typeof value === "number" &&
+        Number.isFinite(value) &&
+        value > 0 &&
+        value <= 8.64e15,
+    );
+  const finishedAt =
+    !batch.pending && finishedTimes.length === batch.count
+      ? Math.max(...finishedTimes)
+      : undefined;
+  const locations = [
+    ...new Set(
+      batch.items
+        .map((item) =>
+          item.location?.available
+            ? formatLocationLabel(item.location.folder_label)
+            : undefined,
+        )
+        .filter((label): label is string => !!label),
+    ),
+  ];
+  let locationLabel =
+    locations.length === 1
+      ? locations[0]
+      : locations.length > 1
+        ? locations.length + " folders"
+        : batch.items.every((item) => item.destination === "/")
+          ? "My Files"
+          : "";
+  if (hasFolder) {
+    const source = batch.items.find(
+      (item) => item.location?.available && item.location.folder_label,
+    );
+    if (source?.location?.folder_label) {
+      const depth = Math.max(
+        0,
+        (source.relativePath || "").split("/").length - 2,
+      );
+      const names = formatLocationLabel(source.location.folder_label).split(
+        " / ",
+      );
+      locationLabel = names
+        .slice(0, Math.max(1, names.length - depth))
+        .join(" / ");
+    }
+  }
+  if (batch.cancelled === batch.count) locationLabel = "";
+  const showProgress = batch.pending && batch.active + batch.queued > 0;
+  const batchRemaining =
+    batch.pending && batch.active > 0
+      ? batch.count === 1
+        ? remainingBytesHint(
+            transferProgress(batch.items[0]).current,
+            transferProgress(batch.items[0]).total,
+          )
+        : remainingBytesHint(batch.uploadedBytes, batch.totalBytes || 0)
+      : "";
+  const mixedStatuses =
+    [
+      batch.active + batch.queued,
+      batch.failed + batch.awaiting,
+      batch.completed,
+      batch.cancelled,
+    ].filter((count) => count > 0).length > 1;
+  const canCancel = batch.items.some(
+    (item) =>
+      canCancelTransfer(item) &&
+      (isTransferActive(item) || item.state === "error"),
+  );
+  const needsFiles = batch.items.some(
+    (item) =>
+      item.state === "awaiting_file" ||
+      (item.state === "error" && !item.jobId && !item.file),
+  );
+  const filtered = batch.items.filter(
+    (item) =>
+      !mixedStatuses ||
+      filter === "all" ||
+      (filter === "active" &&
+        isTransferActive(item) &&
+        item.state !== "awaiting_file") ||
+      (filter === "attention" &&
+        (item.state === "error" || item.state === "awaiting_file")) ||
+      (filter === "completed" && item.state === "completed") ||
+      (filter === "cancelled" && item.state === "cancelled"),
+  );
+  const filters = [
+    { key: "all", label: "All", count: batch.count },
+    { key: "active", label: "Active", count: batch.active + batch.queued },
+    {
+      key: "attention",
+      label: "Needs Attention",
+      count: batch.failed + batch.awaiting,
+    },
+    { key: "completed", label: "Done", count: batch.completed },
+    { key: "cancelled", label: "Cancelled", count: batch.cancelled },
+  ].filter(
+    (entry) => entry.key === "all" || entry.count > 0 || entry.key === filter,
+  );
+  return (
+    <article
+      className="transfer-batch"
+      role="listitem"
+      data-batch-id={batch.id}
+      data-cancelled={batch.cancelled === batch.count || undefined}
+      data-folder={hasFolder || undefined}
+      data-expanded={expanded}
+      data-status={
+        !batch.pending
+          ? "finished"
+          : batch.failed || batch.awaiting
+            ? "attention"
+            : "active"
+      }
+    >
+      <div className="transfer-batch-summary">
+        <div className="transfer-batch-title">
+          <button
+            type="button"
+            className="transfer-batch-toggle"
+            aria-label={expanded ? "Hide Files" : "Show Files"}
+            aria-describedby={listId + "-name"}
+            aria-expanded={expanded}
+            aria-controls={listId}
+            onClick={onToggleExpanded}
+            onDoubleClick={(event) => {
+              event.preventDefault();
+              event.stopPropagation();
+            }}
+          >
+            {expanded ? <ChevronDown size={15} /> : <ChevronRight size={15} />}
+            <span className="transfer-group-icon" aria-hidden="true">
+              {hasFolder ? <Folder size={20} /> : <Files size={20} />}
+            </span>
+            <strong
+              id={listId + "-name"}
+              className="transfer-batch-name"
+              title={batch.name}
+            >
+              {batch.name}
+            </strong>
+            {hasFolder && (
+              <span className="transfer-batch-count">
+                {batch.count} {batch.count === 1 ? "file" : "files"}
+              </span>
+            )}
+          </button>
+          {showProgress && batch.progress !== undefined && (
+            <span className="transfer-batch-percent">
+              {Math.floor(batch.progress * 100)}%
+            </span>
+          )}
+        </div>
+        {locationLabel && (
+          <span className="transfer-batch-location" title={locationLabel}>
+            {locationLabel}
+          </span>
+        )}
+        {batch.pending && (
+          <p className="transfer-batch-status" aria-live="polite">
+            {batchStatus(batch)}
+          </p>
+        )}
+        {showTimestamp && finishedAt && (
+          <time
+            className="transfer-batch-time"
+            dateTime={new Date(finishedAt).toISOString()}
+            title={new Intl.DateTimeFormat(undefined, {
+              dateStyle: "full",
+              timeStyle: "short",
+            }).format(finishedAt)}
+          >
+            {new Intl.DateTimeFormat(undefined, {
+              dateStyle: "medium",
+              timeStyle: "short",
+            }).format(finishedAt)}
+          </time>
+        )}
+        {canShowFolder && folderItem && onLocate && (
+          <button
+            className="icon-button transfer-batch-locate"
+            aria-label={"Show " + batch.name + " folder"}
+            title="Show Folder"
+            onClick={() => onLocate(folderItem, true)}
+          >
+            <FolderOpen size={18} />
+          </button>
+        )}
+        {canCancel && (
+          <button
+            className="icon-button transfer-batch-cancel"
+            aria-label="Cancel Upload"
+            title="Cancel Upload"
+            onClick={() => run(transfers.cancelBatch(batch.id))}
+          >
+            <X size={18} />
+          </button>
+        )}
+        {showProgress && (
+          <progress
+            aria-label={"Overall progress for " + batch.name}
+            max={1}
+            value={batch.progress}
+          />
+        )}
+        <div className="transfer-batch-metrics">
+          {batch.totalBytes !== undefined && (
+            <span className="transfer-batch-size">
+              {batch.count === 1 && batch.pending ? (
+                <>
+                  {formatByteProgress(
+                    transferProgress(batch.items[0]).current,
+                    transferProgress(batch.items[0]).total,
+                  )}
+                </>
+              ) : batch.pending ? (
+                <>
+                  {formatByteProgress(batch.uploadedBytes, batch.totalBytes)}{" "}
+                  sent to Telegram
+                </>
+              ) : (
+                formatBytes(batch.totalBytes)
+              )}
+            </span>
+          )}
+          <span className="transfer-batch-throughput">
+            {batchRemaining && <span>{batchRemaining}</span>}
+            {batch.deviceRate ? (
+              <span>Device {formatBytes(batch.deviceRate)}/s</span>
+            ) : null}
+            {batch.telegramRate ? (
+              <span>Telegram {formatBytes(batch.telegramRate)}/s</span>
+            ) : null}
+            {batch.eta !== undefined && (
+              <span title="Estimated from current Telegram throughput after device transfer has finished.">
+                About {formatDuration(Math.max(1, Math.ceil(batch.eta)))}{" "}
+                remaining
+              </span>
+            )}
+          </span>
+        </div>
+        {(needsFiles ||
+          batch.items.some(
+            (item) =>
+              item.state === "error" &&
+              !item.historyOnly &&
+              (item.jobId || item.file),
+          )) && (
+          <div className="transfer-batch-actions">
+            {needsFiles && (!hasFolder || folderPickerSupported) && (
+              <button
+                type="button"
+                className="secondary-button transfer-recovery-button"
+                onClick={onChooseBatch}
+              >
+                <FileUp size={15} />
+                {hasFolder ? "Choose Folder" : "Choose Files"}
+              </button>
+            )}
+            {batch.items.some(
+              (item) =>
+                item.state === "error" &&
+                !item.historyOnly &&
+                (item.jobId || item.file),
+            ) && (
+              <button
+                type="button"
+                className="text-button"
+                onClick={() => run(transfers.retryBatch(batch.id))}
+              >
+                <RotateCcw size={14} />
+                Retry Failed
+              </button>
+            )}
+          </div>
+        )}
+      </div>
+      {expanded && (
+        <div className="transfer-batch-files" id={listId}>
+          {mixedStatuses && (
+            <div className="transfer-files-toolbar">
+              <div
+                className="transfer-filters"
+                role="group"
+                aria-label={"Files shown for " + batch.name}
+              >
+                {filters.map((entry) => (
+                  <button
+                    key={entry.key}
+                    type="button"
+                    data-filter={entry.key}
+                    aria-pressed={filter === entry.key}
+                    onClick={() => {
+                      setFilter(entry.key);
+                      setLimit(20);
+                    }}
+                  >
+                    {entry.label} <span>{entry.count}</span>
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+          <div role="list">
+            {filtered.slice(0, limit).map((item) => (
+              <TransferRow
+                key={item.key}
+                item={item}
+                onLocate={onLocate}
+                compactChild
+                groupLocation={hasFolder ? locationLabel : undefined}
+                showTimestamp={false}
+                now={now}
+                run={run}
+                onChooseFile={onChooseFile}
+              />
+            ))}
+          </div>
+          {!filtered.length && (
+            <p className="transfer-no-files">No files in this view.</p>
+          )}
+          {filtered.length > limit && (
+            <button
+              type="button"
+              className="text-button transfer-show-more"
+              onClick={() => setLimit((value) => value + 20)}
+            >
+              Show more ({filtered.length - limit} remaining)
+            </button>
+          )}
+        </div>
+      )}
+    </article>
+  );
+}
+
+function TransferRow({
+  item,
+  now,
+  showTimestamp = false,
+  compactChild = false,
+  groupLocation,
+  onLocate,
+  run,
+  onChooseFile,
+}: {
+  compactChild?: boolean;
+  groupLocation?: string;
+  onLocate?: (item: Transfer, folder?: boolean) => void;
+  item: Transfer;
+  now: number;
+  showTimestamp?: boolean;
+  run: (task: Promise<unknown>) => void;
+  onChooseFile: (key: string) => void;
+}) {
+  const fullLocation = item.location?.available
+    ? formatLocationLabel(item.location.folder_label)
+    : item.location?.reason || "";
+  const displayLocation =
+    groupLocation && fullLocation === groupLocation
+      ? ""
+      : groupLocation && fullLocation.startsWith(groupLocation + " / ")
+        ? fullLocation.slice(groupLocation.length + 3)
+        : fullLocation;
+  const relativeDirectory = item.relativePath
+    ?.split("/")
+    .slice(1, -1)
+    .join(" / ");
+  const meter = transferProgress(item);
+  const status = historyStatus(item);
+  const finished = status === "completed" || status === "cancelled";
+  const needsOriginal =
+    item.state === "awaiting_file" ||
+    (item.state === "error" && !item.jobId && !item.file);
+  const canLocate =
+    !!onLocate &&
+    item.state === "completed" &&
+    item.location?.available !== false;
+  const recordedAt = item.finishedAt || item.createdAt;
+  const validRecordedAt =
+    typeof recordedAt === "number" &&
+    Number.isFinite(recordedAt) &&
+    recordedAt > 0 &&
+    recordedAt <= 8.64e15;
+  return (
+    <article
+      className={"transfer-item" + (compactChild ? " transfer-child" : "")}
+      role="listitem"
+      data-status={item.state}
+      onDoubleClick={(event) => {
+        if (
+          canLocate &&
+          !(event.target as HTMLElement).closest("button,input,a")
+        )
+          onLocate?.(item);
+      }}
+    >
+      <div className="transfer-state-icon">
+        {item.state === "completed" ? (
+          <Check size={19} />
+        ) : item.state === "error" ? (
+          <AlertCircle size={19} />
+        ) : item.state === "awaiting_file" ? (
+          <Pause size={19} />
+        ) : item.state === "cancelled" ? (
+          <X size={19} />
+        ) : status === "queued" ? (
+          <Clock3 size={19} />
+        ) : (
+          <Upload size={19} />
+        )}
+      </div>
+      <div className="transfer-copy">
+        <div className="transfer-item-title">
+          <strong className="transfer-item-name" title={item.name}>
+            {item.name}
+          </strong>
+          {!finished && status !== "queued" && meter.fraction !== undefined && (
+            <span className="transfer-batch-percent">
+              {Math.floor(meter.fraction * 100)}%
+            </span>
+          )}
+        </div>
+        {item.relativePath &&
+          !item.location?.available &&
+          (!compactChild || !!relativeDirectory) && (
+            <span className="transfer-relative-path" title={item.relativePath}>
+              {compactChild ? relativeDirectory : item.relativePath}
+            </span>
+          )}
+        {needsOriginal ? (
+          <div className="transfer-recovery">
+            <span className="transfer-recovery-message">
+              Choose the original file to resume
+            </span>
+            <button
+              className="secondary-button transfer-recovery-button"
+              onClick={() => onChooseFile(item.key)}
+            >
+              <FileUp size={16} aria-hidden="true" /> Choose File
+            </button>
+          </div>
+        ) : (
+          !finished && (
+            <span
+              className={
+                "transfer-phase" +
+                (item.state === "verifying" ? " transfer-verification" : "")
+              }
+            >
+              {item.state === "verifying" && <Spinner />}
+              {item.phase}
+            </span>
+          )
+        )}
+        {item.state !== "cancelled" && item.location && displayLocation && (
+          <span
+            className="transfer-location"
+            title={
+              formatLocationLabel(item.location.display_path) ||
+              item.location.reason
+            }
+          >
+            {displayLocation}
+          </span>
+        )}
+        {status !== "queued" &&
+          !["completed", "cancelled", "error", "awaiting_file"].includes(
+            item.state,
+          ) && (
+            <progress
+              aria-label={item.phase + " for " + item.name}
+              max={1}
+              value={meter.fraction}
+            />
+          )}
+        <div className="transfer-row-details">
+          <span
+            className="transfer-bytes"
+            title={
+              item.jobId &&
+              ["uploading", "finalizing"].includes(item.stage || "") &&
+              !finished
+                ? "Bytes sent to Telegram, including parts still uploading. Each part appears in the channel after it finishes."
+                : undefined
+            }
+          >
+            {finished || status === "queued"
+              ? formatBytes(item.size || item.total)
+              : formatByteProgress(meter.current, meter.total)}
+          </span>
+          {!finished && status !== "queued" && (
+            <TransferMetrics item={item} now={now} />
+          )}
+          {showTimestamp && finished && validRecordedAt && (
+            <time
+              className="transfer-history-time"
+              dateTime={new Date(recordedAt).toISOString()}
+              title={new Intl.DateTimeFormat(undefined, {
+                dateStyle: "full",
+                timeStyle: "short",
+              }).format(recordedAt)}
+            >
+              {new Intl.DateTimeFormat(undefined, {
+                dateStyle: "medium",
+                timeStyle: "short",
+              }).format(recordedAt)}
+            </time>
+          )}
+        </div>
+        {item.state !== "cancelled" && item.error && (
+          <span className="transfer-error">{item.error}</span>
+        )}
+      </div>
+      <div className="transfer-item-actions">
+        {canLocate && (
+          <button
+            className="icon-button"
+            aria-label={"Show " + item.name + " in folder"}
+            title="Show in Folder"
+            onClick={() => onLocate?.(item)}
+          >
+            <FolderOpen size={18} />
+          </button>
+        )}
+        {item.state === "error" && !item.historyOnly && !needsOriginal && (
+          <button
+            className="icon-button"
+            aria-label={"Retry " + item.name}
+            onClick={() => run(transfers.retry(item.key))}
+          >
+            <RotateCcw size={17} />
+          </button>
+        )}
+        {canCancelTransfer(item) &&
+          (isTransferActive(item) || item.state === "error") && (
+            <button
+              className="icon-button"
+              aria-label={"Cancel " + item.name}
+              onClick={() => run(transfers.cancel(item.key))}
+            >
+              <X size={18} />
+            </button>
+          )}
+      </div>
+    </article>
+  );
+}
+function TransferMetrics({ item, now }: { item: Transfer; now: number }) {
+  const details = transferDetails(item, now);
+  const meter = transferProgress(item);
+  const remaining =
+    ["receiving", "uploading"].includes(item.state) &&
+    !["queued", "retry_wait", "waiting_for_telegram"].includes(item.stage || "")
+      ? remainingBytesHint(meter.current, meter.total)
+      : "";
+  return (
+    <span className="transfer-metrics">
+      {remaining && <span>{remaining}</span>}
+      {details.rate ? (
+        <span>
+          {item.state === "receiving"
+            ? "Device "
+            : item.stage === "uploading"
+              ? "Telegram "
+              : ""}
+          {formatBytes(details.rate)}/s
+        </span>
+      ) : null}
+      {details.eta !== undefined && (
+        <span title="Estimate for this stage only. Other stages may follow.">
+          About {formatDuration(Math.max(1, Math.ceil(details.eta)))} left in
+          this stage
+        </span>
+      )}
+    </span>
+  );
+}

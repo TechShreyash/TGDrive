@@ -1,0 +1,406 @@
+"""Durable browser receipts with bounded staging and verified resumable chunks."""
+
+from __future__ import annotations
+
+import asyncio
+import hashlib
+import json
+import os
+import re
+import secrets
+import shutil
+import sqlite3
+import time
+import weakref
+from contextlib import suppress
+from pathlib import Path
+from typing import Any
+
+from tgdrive.errors import DriveError
+from tgdrive.security import safe_name
+
+CHUNK_SIZE = 8 * 1024 * 1024
+_ACTIVE = {"receiving", "queued", "cancelling"}
+_ID = re.compile(r"[0-9a-f]{32}")
+
+
+class UploadError(ValueError):
+    def __init__(self, message: str, status: int = 409) -> None:
+        super().__init__(message)
+        self.status = status
+
+
+class ResumableUploads:
+    def __init__(self, settings: Any, manager: Any) -> None:
+        self.settings = settings
+        self.manager = manager
+        self.root = settings.resolved_cache_dir / "receipts"
+        self.root.mkdir(parents=True, exist_ok=True, mode=0o700)
+        settings.resolved_data_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
+        from tgdrive.mongo import for_settings
+
+        backend = for_settings(settings)
+        self._mongo_backend = backend
+        self._mongo = backend.db.receipts if backend else None
+        self._items = (
+            {row["_id"]: row["data"] for row in self._mongo.find({})}
+            if self._mongo is not None
+            else {}
+        )
+        self.db = None
+        self._finalizer = lambda: None
+        if self._mongo is None:
+            database = settings.resolved_data_dir / "uploads.sqlite3"
+            self.db = sqlite3.connect(database, timeout=5, check_same_thread=False)
+            self._finalizer = weakref.finalize(self, self.db.close)
+            database.chmod(0o600)
+            self.db.execute("PRAGMA journal_mode=WAL")
+            self.db.execute("PRAGMA synchronous=FULL")
+            self.db.execute("PRAGMA busy_timeout=5000")
+            self.db.execute(
+                "CREATE TABLE IF NOT EXISTS uploads "
+                "(id TEXT PRIMARY KEY, data TEXT NOT NULL)"
+            )
+        self.locks: dict[str, asyncio.Lock] = {}
+        self.slots = asyncio.Semaphore(settings.max_concurrent_transfers)
+        self._reconcile_finished()
+
+    def close(self) -> None:
+        self._finalizer()
+
+    def _all(self):
+        if self._mongo is not None:
+            import copy
+
+            return copy.deepcopy(list(self._items.values()))
+        return [
+            json.loads(row[0]) for row in self.db.execute("SELECT data FROM uploads")
+        ]
+
+    def _save(self, item: dict[str, Any]) -> None:
+        if self._mongo is not None:
+            import copy
+            from datetime import UTC, datetime
+
+            document = {"_id": item["id"], "data": item}
+            if item["state"] in {"finished", "cancelled"}:
+                document["purge_at"] = datetime.fromtimestamp(
+                    max(item["expires_at"], time.time() + 86400), UTC
+                )
+            self._mongo_backend.write(
+                self._mongo, "replace_one", {"_id": item["id"]}, document, upsert=True
+            )
+            self._items[item["id"]] = copy.deepcopy(item)
+            return
+        with self.db:
+            self.db.execute(
+                "INSERT INTO uploads VALUES (?,?) ON CONFLICT(id) DO UPDATE SET "
+                "data=excluded.data",
+                (item["id"], json.dumps(item, allow_nan=False)),
+            )
+
+    def _existing_job(self, upload_id: str) -> Any | None:
+        try:
+            return self.manager.registry.get(upload_id)
+        except KeyError:
+            return None
+
+    def _reconcile_finished(self) -> None:
+        for item in self._all():
+            if item["state"] not in _ACTIVE:
+                continue
+            record = self._existing_job(item["id"])
+            if record is not None and item["state"] == "receiving":
+                # A crash can occur after enqueue committed but before the
+                # receipt's queued state committed. The job owns its bytes now.
+                item["state"] = "queued"
+                self._save(item)
+            if record is not None and str(record.status) in {"completed", "cancelled"}:
+                path = self.root / (item["id"] + ".part")
+                path.unlink(missing_ok=True)
+                item["state"] = (
+                    "cancelled" if str(record.status) == "cancelled" else "finished"
+                )
+                self._save(item)
+
+    def get_unchecked(self, upload_id: str) -> dict[str, Any]:
+        if not isinstance(upload_id, str) or not _ID.fullmatch(upload_id):
+            raise UploadError("Upload session not found", 404)
+        if self._mongo is not None:
+            import copy
+
+            item = copy.deepcopy(self._items.get(upload_id))
+        else:
+            row = self.db.execute(
+                "SELECT data FROM uploads WHERE id=?", (upload_id,)
+            ).fetchone()
+            item = json.loads(row[0]) if row is not None else None
+        if item is None:
+            raise UploadError("Upload session not found", 404)
+        if item.get("id") != upload_id or item.get("state") not in _ACTIVE | {
+            "finished",
+            "cancelled",
+        }:
+            raise UploadError("Stored upload session is invalid", 500)
+        return item
+
+    def _destination(self, item: dict[str, Any]) -> str:
+        try:
+            binding = self.manager.store.upload_destination(
+                item["parent_id"],
+                directory_id=item.get("parent_node_id"),
+                recover_legacy_identity="parent_node_id" not in item,
+            )
+        except DriveError as exc:
+            raise UploadError(
+                "The destination folder is unavailable. "
+                "Restore it or cancel this upload."
+            ) from exc
+        if (
+            item.get("parent_node_id") != binding["id"]
+            or item["parent_id"] != binding["path"]
+        ):
+            item.update(parent_node_id=binding["id"], parent_id=binding["path"])
+            self._save(item)
+        return binding["path"]
+
+    def get(self, upload_id: str) -> dict[str, Any]:
+        item = self.get_unchecked(upload_id)
+        # Inspection remains available when a folder is trashed/deleted, so owners
+        # can cancel the receipt; active chunks/complete enforce the binding below.
+        with suppress(UploadError):
+            self._destination(item)
+        if item["state"] == "receiving" and item["expires_at"] <= time.time():
+            lock = self.locks.get(upload_id)
+            if lock is None or not lock.locked():
+                self._cancel_receiving(item)
+            raise UploadError("Upload session expired. Select the file again.", 410)
+        return item
+
+    def path(self, upload_id: str) -> Path:
+        self.get_unchecked(upload_id)
+        return self.root / (upload_id + ".part")
+
+    def create(self, name: str, parent_id: str, total_size: int) -> dict[str, Any]:
+        binding = self.manager.store.upload_destination(parent_id)
+        parent_id = binding["path"]
+        if type(total_size) is not int or total_size <= 0:
+            raise UploadError("File size must be a positive integer", 422)
+        if total_size > self.settings.upload_limit:
+            raise UploadError("File exceeds the configured upload limit", 413)
+        self._reconcile_finished()
+        active = self._all()
+        for item in active:
+            lock = self.locks.get(item["id"])
+            if (
+                item["state"] == "receiving"
+                and item["expires_at"] <= time.time()
+                and (lock is None or not lock.locked())
+            ):
+                self._cancel_receiving(item)
+        active = self._all()
+        active = [item for item in active if item["state"] in _ACTIVE]
+        if len(active) >= 1000:
+            raise UploadError("Too many unfinished upload sessions", 429)
+        reserved = sum(item["total_size"] for item in active)
+        remaining = sum(
+            item["total_size"] - item["offset"]
+            for item in active
+            if item["state"] == "receiving"
+        )
+        if reserved + total_size > self.settings.staging_budget_bytes:
+            raise UploadError(
+                "Temporary storage budget is full. Finish or cancel a transfer.", 507
+            )
+        if (
+            shutil.disk_usage(self.root).free - remaining - total_size
+            < self.settings.min_free_bytes
+        ):
+            raise UploadError("Not enough free disk space for this upload", 507)
+        upload_id = secrets.token_hex(16)
+        item = {
+            "id": upload_id,
+            "name": safe_name(name),
+            "parent_id": parent_id,
+            "parent_node_id": binding["id"],
+            "total_size": total_size,
+            "offset": 0,
+            "checksums": [],
+            "chunk_size": CHUNK_SIZE,
+            "state": "receiving",
+            "expires_at": time.time() + self.settings.upload_session_ttl_seconds,
+        }
+        path = self.root / (upload_id + ".part")
+        descriptor = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+        try:
+            os.fsync(descriptor)
+        finally:
+            os.close(descriptor)
+        try:
+            directory = os.open(self.root, os.O_RDONLY | os.O_DIRECTORY)
+            try:
+                os.fsync(directory)
+            finally:
+                os.close(directory)
+            self._save(item)
+        except BaseException:
+            path.unlink(missing_ok=True)
+            raise
+        return item
+
+    async def append(self, upload_id: str, offset: int, body: bytes) -> dict[str, Any]:
+        async with self.slots, self.locks.setdefault(upload_id, asyncio.Lock()):
+            item = self.get(upload_id)
+            if item["state"] != "receiving":
+                raise UploadError("This upload no longer accepts chunks")
+            self._destination(item)
+            if type(offset) is not int or offset != item["offset"]:
+                raise UploadError(
+                    "Upload offset changed. Read the current offset and resume."
+                )
+            if (
+                not body
+                or len(body) > CHUNK_SIZE
+                or offset + len(body) > item["total_size"]
+            ):
+                raise UploadError("Invalid upload chunk length", 413)
+            if len(body) != CHUNK_SIZE and offset + len(body) != item["total_size"]:
+                raise UploadError(
+                    "Only the last chunk may be smaller than chunk_size", 422
+                )
+            path = self.path(upload_id)
+            if not path.exists() or path.stat().st_size < offset:
+                raise UploadError(
+                    "Staged bytes are missing. Cancel and select the file again."
+                )
+            if (
+                shutil.disk_usage(self.root).free - len(body)
+                < self.settings.min_free_bytes
+            ):
+                raise UploadError("Temporary storage is full", 507)
+
+            def write() -> None:
+                with path.open("r+b") as handle:
+                    handle.truncate(offset)
+                    handle.seek(offset)
+                    handle.write(body)
+                    handle.flush()
+                    os.fsync(handle.fileno())
+
+            work = asyncio.get_running_loop().run_in_executor(None, write)
+            cancelled = False
+            while True:
+                try:
+                    await asyncio.shield(work)
+                    break
+                except asyncio.CancelledError:
+                    # Repeated disconnect/shutdown cancellation still cannot
+                    # release this lock while an OS write is in progress.
+                    cancelled = True
+            item["checksums"].append(
+                {
+                    "offset": offset,
+                    "size": len(body),
+                    "sha256": hashlib.sha256(body).hexdigest(),
+                }
+            )
+            item["offset"] += len(body)
+            item["expires_at"] = time.time() + self.settings.upload_session_ttl_seconds
+            self._save(item)
+            if cancelled:
+                raise asyncio.CancelledError
+            return item
+
+    @staticmethod
+    def _verify(item: dict[str, Any], path: Path) -> None:
+        if not path.is_file() or path.stat().st_size != item["total_size"]:
+            raise UploadError(
+                "Staged bytes are missing or incomplete. Select the file again."
+            )
+        expected_offset = 0
+        with path.open("rb") as handle:
+            for chunk in item["checksums"]:
+                if (
+                    chunk["offset"] != expected_offset
+                    or not 0 < chunk["size"] <= CHUNK_SIZE
+                ):
+                    raise UploadError("Upload checksum journal is inconsistent")
+                content = handle.read(chunk["size"])
+                if (
+                    len(content) != chunk["size"]
+                    or hashlib.sha256(content).hexdigest() != chunk["sha256"]
+                ):
+                    raise UploadError(
+                        "Staged file checksum failed. Select the file again."
+                    )
+                expected_offset += len(content)
+        if expected_offset != item["total_size"]:
+            raise UploadError("Upload checksum journal is incomplete")
+
+    async def complete(self, upload_id: str) -> Any:
+        async with self.locks.setdefault(upload_id, asyncio.Lock()):
+            item = self.get(upload_id)
+            if item["state"] in {"cancelled", "cancelling"}:
+                raise UploadError("Upload was cancelled")
+            existing = self._existing_job(upload_id)
+            if existing is not None:
+                if item["state"] == "receiving":
+                    item["state"] = "queued"
+                    self._save(item)
+                return existing
+            if item["state"] == "finished":
+                raise UploadError("Completed upload history expired", 410)
+            if item["offset"] != item["total_size"]:
+                raise UploadError("Upload is incomplete")
+            self._destination(item)
+            await asyncio.to_thread(self._verify, item, self.path(upload_id))
+            # A folder may move while disk verification yields. Resolve its UUID
+            # immediately before enqueue, rather than reusing the old ancestry.
+            destination = self._destination(item)
+            record = self.manager.enqueue_upload(
+                self.path(upload_id),
+                destination,
+                item["name"],
+                item["total_size"],
+                transfer_id=upload_id,
+            )
+            item["state"] = "queued"
+            self._save(item)
+            return record
+
+    def _cancel_receiving(self, item: dict[str, Any]) -> None:
+        (self.root / (item["id"] + ".part")).unlink(missing_ok=True)
+        item["state"] = "cancelled"
+        self._save(item)
+
+    async def cancel(self, upload_id: str) -> dict[str, Any]:
+        async with self.locks.setdefault(upload_id, asyncio.Lock()):
+            item = self.get_unchecked(upload_id)
+            if item["state"] in {"finished", "cancelled"}:
+                return item
+            if item["state"] == "receiving" and self._existing_job(upload_id) is None:
+                self._cancel_receiving(item)
+            else:
+                cancel = getattr(
+                    self.manager, "cancel_job", self.manager.registry.cancel
+                )
+                # The manager checks committed metadata before mutating the
+                # receipt or job; a protected file must never enter cleanup.
+                record = cancel(upload_id)
+                item["state"] = (
+                    "cancelled" if str(record.status) == "cancelled" else "cancelling"
+                )
+                self._save(item)
+            return item
+
+    def release(self, upload_id: str) -> None:
+        try:
+            item = self.get_unchecked(upload_id)
+        except UploadError as exc:
+            if exc.status == 404:
+                return
+            raise
+        item["state"] = (
+            "cancelled" if item["state"] in {"cancelled", "cancelling"} else "finished"
+        )
+        self._save(item)

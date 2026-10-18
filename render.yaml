@@ -1,17 +1,30 @@
+# Optional blueprint: not validated against a live Render deployment.
 services:
-  # A Docker web service
   - type: web
     name: tgdrive
-    repo: https://github.com/TechShreyash/TGDrive
-    runtime: python
-    branch: main
-    plan: free
-    autoDeploy: false
-    buildCommand: pip install -r requirements.txt
-    startCommand: uvicorn main:app --host 0.0.0.0 --port $PORT
+    runtime: docker
+    # Paid, always-on compute. Review Render pricing before applying this file.
+    plan: 0.5c-512mb
+    numInstances: 1
+    dockerfilePath: ./Dockerfile
+    autoDeployTrigger: checksPass
+    healthCheckPath: /healthz
+    maxShutdownDelaySeconds: 60
+    disk:
+      name: tgdrive-data
+      mountPath: /var/tgdrive
+      sizeGB: 25
     envVars:
-      - key: ADMIN_PASSWORD
+      - key: PORT
+        value: "8000"
+      - key: MONGODB_URI
         sync: false
+      - key: MONGODB_DATABASE
+        value: tgdrive
+      - key: MONGODB_BACKUP_KEY
+        sync: false
+      - key: MONGODB_BACKUP_SECONDS
+        value: "3600"
       - key: API_ID
         sync: false
       - key: API_HASH
@@ -20,5 +33,39 @@ services:
         sync: false
       - key: STORAGE_CHANNEL
         sync: false
-      - key: DATABASE_BACKUP_MSG_ID
+      - key: ADMIN_PASSWORD_HASH
         sync: false
+      - key: ADMIN_PASSWORD
+        sync: false
+      - key: SESSION_SECRET
+        sync: false
+      - key: INITIALIZE_EMPTY_DRIVE
+        sync: false
+      - key: STRING_SESSIONS
+        sync: false
+      - key: MAIN_BOT_TOKEN
+        sync: false
+      - key: TELEGRAM_ADMIN_IDS
+        sync: false
+      - key: COOKIE_SECURE
+        value: "true"
+      # Render terminates public TLS at its managed proxy. Do not copy this
+      # wildcard to a server with a directly reachable, untrusted app port.
+      - key: FORWARDED_ALLOW_IPS
+        value: "*"
+      - key: DATA_DIR
+        value: /var/tgdrive/data
+      - key: CACHE_DIR
+        value: /var/tgdrive/cache
+      - key: SLEEP_THRESHOLD
+        value: "60"
+      - key: SESSION_TTL_SECONDS
+        value: "86400"
+      - key: ALLOW_PRIVATE_REMOTE_URLS
+        value: "false"
+      - key: MAX_CONCURRENT_TRANSFERS
+        value: "2"
+      - key: TRANSFER_TTL_SECONDS
+        value: "3600"
+      - key: LOG_LEVEL
+        value: INFO

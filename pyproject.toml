@@ -1,0 +1,71 @@
+[project]
+name = "tgdrive"
+version = "2.0.0"
+description = "A secure Telegram-backed personal file drive"
+readme = "README.md"
+requires-python = ">=3.11,<3.15"
+license = "MIT"
+dependencies = [
+    "aiofiles==25.1.0",
+    "aiohttp==3.14.5",
+    "argon2-cffi==25.1.0",
+    "cryptg==0.6.0",
+    "cryptography==50.0.2",
+    "fastapi==0.143.2",
+    "pydantic-settings==2.16.0",
+    "pymongo==4.19.0",
+    "python-multipart==0.0.32",
+    "telethon==1.45.0",
+    "uvicorn[standard]==0.54.0",
+]
+
+[dependency-groups]
+dev = [
+    "bandit[toml]==1.9.4",
+    "httpx2==2.13.1",
+    "pip-audit==2.10.1",
+    "pytest==9.1.1",
+    "pytest-asyncio==1.4.0",
+    "pytest-cov==7.1.0",
+    "ruff==0.17.1",
+]
+e2e = [
+    "playwright==1.64.0",
+]
+
+[tool.uv]
+package = false
+
+[tool.pytest.ini_options]
+addopts = "-ra --strict-config --strict-markers"
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+testpaths = ["tests"]
+markers = ["e2e: opt-in browser tests against a local synthetic backend"]
+
+[tool.coverage.run]
+branch = true
+source = ["tgdrive"]
+
+[tool.coverage.report]
+fail_under = 80
+show_missing = true
+skip_covered = true
+
+[tool.ruff]
+target-version = "py311"
+line-length = 88
+extend-exclude = [".venv", "cache", "data"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "ASYNC", "S", "SIM", "RUF"]
+ignore = [
+    "S101", # Assertions are appropriate in tests and internal invariants.
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["S105", "S106", "S311", "ASYNC109", "ASYNC240"]
+
+[tool.bandit]
+exclude_dirs = [".venv", "tests"]
+skips = ["B101"]

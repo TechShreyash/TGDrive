@@ -1,0 +1,112 @@
+import { describe, expect, it } from "vitest";
+import { historyStatus, mergeHistory } from "./transferHistory";
+import { canCancelTransfer, type Transfer } from "./transfers";
+import type { Job } from "./types";
+
+function local(change: Partial<Transfer> = {}): Transfer {
+  return {
+    key: "local",
+    name: "file.bin",
+    size: 100,
+    total: 100,
+    current: 0,
+    lastModified: 0,
+    destination: "/",
+    state: "queued",
+    phase: "Waiting",
+    ...change,
+  };
+}
+function job(change: Partial<Job> = {}): Job {
+  return {
+    id: "server",
+    name: "old.bin",
+    kind: "upload",
+    status: "completed",
+    phase: "completed",
+    total: 100,
+    current: 100,
+    created_at: 1000,
+    finished_at: 1100,
+    ...change,
+  };
+}
+describe("history merged with live browser work", () => {
+  it("keeps cleared server records and unfinished browser-only transfers visible", () => {
+    const rows = mergeHistory([job()], [local()], "all");
+    expect(rows).toHaveLength(2);
+    const past = rows.find((item) => item.jobId === "server")!;
+    expect(past.state).toBe("completed");
+    expect(past.phase).toBe("Upload completed");
+    expect(past.historyOnly).toBe(true);
+    expect(canCancelTransfer(past)).toBe(false);
+    expect(mergeHistory([job()], [], "completed")).toHaveLength(1);
+  });
+  it("uses current retry/progress state without duplicating a history entry", () => {
+    const current = local({
+      jobId: "server",
+      state: "uploading",
+      stage: "uploading",
+      current: 40,
+    });
+    const rows = mergeHistory([job({ status: "error" })], [current], "running");
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toBe(current);
+    expect(
+      mergeHistory([job({ status: "error" })], [current], "error"),
+    ).toEqual([]);
+  });
+  it("distinguishes browser/server queue, active work, failures and cancellations", () => {
+    expect(historyStatus(local())).toBe("queued");
+    expect(historyStatus(local({ state: "receiving" }))).toBe("running");
+    expect(
+      historyStatus(local({ state: "uploading", serverStatus: "queued" })),
+    ).toBe("queued");
+    expect(historyStatus(local({ state: "cancelling" }))).toBe("running");
+    expect(historyStatus(local({ state: "awaiting_file" }))).toBe("error");
+    expect(historyStatus(local({ state: "cancelled" }))).toBe("cancelled");
+    expect(mergeHistory([job({ kind: "delete" })], [], "all")).toEqual([]);
+  });
+});
+
+it("retains the current catalog destination when live progress replaces history", () => {
+  const location = {
+    available: true,
+    folder_path: "/moved",
+    folder_label: "My Files / Saved",
+    item_id: "exact",
+  };
+  const rows = mergeHistory(
+    [job({ location })],
+    [local({ jobId: "server", state: "completed" })],
+    "all",
+  );
+  expect(rows).toHaveLength(1);
+  expect(rows[0].location).toEqual(location);
+});
+
+it("filters whole folders instead of extracting matching children into duplicate groups", () => {
+  const items = [
+    local({
+      key: "one",
+      batchId: "folder",
+      state: "uploading",
+      stage: "uploading",
+    }),
+    local({ key: "two", batchId: "folder", state: "queued" }),
+    local({ key: "three", batchId: "folder", state: "completed" }),
+  ];
+  expect(mergeHistory([], items, "running")).toHaveLength(3);
+  expect(mergeHistory([], items, "completed")).toEqual([]);
+  expect(mergeHistory([], items, "queued")).toEqual([]);
+  const waiting = items.map((item) =>
+    item.key === "one" ? { ...item, state: "queued" as const } : item,
+  );
+  expect(mergeHistory([], waiting, "queued")).toHaveLength(3);
+  expect(mergeHistory([], waiting, "completed")).toEqual([]);
+  const finished = items.map((item) => ({
+    ...item,
+    state: "completed" as const,
+  }));
+  expect(mergeHistory([], finished, "completed")).toHaveLength(3);
+});

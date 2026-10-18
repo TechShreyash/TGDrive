@@ -1,0 +1,289 @@
+# How TGDrive works
+
+[Docs home](README.md) · For contributors · [API reference](reference.md#http-api)
+
+## The short version
+
+~~~text
+Browser → TGDrive server → Telegram: file contents
+                         → MongoDB: file list and app state
+
+MongoDB → encrypted database copy → Telegram, in the background
+~~~
+
+TGDrive runs one FastAPI process with its own supervised background work.
+Use **one installation and one worker per drive**.
+There is no separate task broker or Redis requirement.
+
+## Components
+
+| Part | Responsibility | Main files |
+| --- | --- | --- |
+| Web interface | File manager, previews and transfer display | `website/src/` |
+| HTTP layer | Routes, authentication, request limits and file responses | `app.py`, `api_v1.py`, `http_guard.py` |
+| Database | Transactions, ownership and committed read cache | `mongo.py`, `mongo_store.py` |
+| Browser uploads | Received offsets, checksums and staging reservations | `uploads.py` |
+| Jobs | Upload, retry, cancellation and deletion supervision | `tasks.py`, `transfers.py` |
+| Large files | Ordered Telegram parts and logical byte ranges | `multipart_transfer.py`, `multipart_streaming.py`, `logical_media.py` |
+| Telegram connections | Telethon adapter, account selection and bounded requests | `telegram_clients.py`, `client_pool.py` |
+| Previews/downloads | Authorized ranges, format inspection and rendering descriptors | `streaming.py`, `ranges.py`, `previews.py` |
+| URL import | Bounded HTTP fetching and destination checks | `remote.py` |
+| Database backups | Encrypted snapshots and empty-database restore | `mongo_backup.py` |
+| Web connection management | Private settings, preflight and Premium login | `management.py`, `managed_settings.py`, `premium_login.py` |
+| Lifecycle and setup | Startup, shutdown, CLI and Docker wizard | `runtime.py`, `__main__.py`, `setup.py`, `scripts/setup.py` |
+
+Backend filenames are under `tgdrive/` unless shown otherwise.
+
+## Authoritative data and identity
+
+**MongoDB is the source of truth.** The in-memory catalog is a read cache,
+not a second database.
+
+| Record | Why it exists |
+| --- | --- |
+| Catalog and nodes | Drive/channel identity, schema, folders, files and ordered file parts |
+| Shares | Scoped link access and expiry |
+| Operations and preparations | Retry the same upload/folder request without duplicating it |
+| Jobs and receipts | Resume known work and track acknowledged bytes; archived jobs retain compact transfer history |
+| Deletions | Remember which Telegram messages still need confirmed deletion |
+| Settings, sessions and identities | Owner access, Telegram credentials, names and preferences |
+| Backups | Snapshot publication and retry history |
+| Runtime lease | Prevent competing installations from writing the same drive |
+
+Key rules:
+
+- Item paths contain stable **IDs**, not names. Moves retain item identity.
+- Names use Unicode normalization and case-insensitive sibling checks.
+- A file stores one message reference or an ordered list of part references,
+  offsets, sizes and checksums. Public listings hide those Telegram locations.
+- Schema version 4 tracks catalog revision and commit generation.
+- Current catalog bounds are 128 levels and 250,000 items.
+- MongoDB mode never opens a local SQLite catalog. Legacy code remains for
+  compatibility tests and earlier maintenance paths.
+
+### How a write becomes visible
+
+1. A mutation changes an isolated working copy.
+2. A MongoDB transaction checks ownership and catalog generation.
+3. Changed records commit together with majority acknowledgement.
+4. Only then does the new immutable read cache become visible.
+
+A failed transaction keeps earlier visible state. An uncertain acknowledgement
+reloads MongoDB authority before more work. Unique indexes enforce active
+sibling names.
+
+## Lifecycle
+
+| Event | Behavior |
+| --- | --- |
+| Startup | Validate configuration, take local/cloud ownership, load the existing catalog, start clients and eligible jobs |
+| Missing catalog | Stop; never silently create an empty replacement |
+| Lost database ownership | Stop admitting writes; require a safe restart after repair |
+| Shutdown | Persist interrupted work, stop owned tasks and release resources/ownership |
+| Reinstall | Reconnect to the same MongoDB database |
+
+The expiring cloud lease renews in the background and is checked inside writes.
+Local unfinished file bytes are still needed after a restart.
+
+## Account identity and selection
+
+- Bots are balanced by active work and recent selection.
+- Each bot has one media slot by default; the owner can choose 1–4 in
+  **Settings → Uploads**. Premium clients retain one slot each. Multipart parts
+  use these same slots, with FIFO admission and least-active client selection.
+- Slots scale with connected bots, independently of the local I/O semaphore.
+  Lower limits drain existing leases; increasing a limit wakes eligible waiters.
+- Shared publishing pacing and persisted account/channel FloodWait deadlines
+  still bound requests. More bots do not promise unlimited bandwidth.
+- Upload preferences live in MongoDB's settings collection, are included in full
+  database backups, and load before recovered transfers start.
+- Large files use bot-sized parts. A healthy Premium account may send an eligible
+  above-bot-limit file as one larger message.
+- Downloads prefer healthy Premium users, then bots. A failed optional-user
+  lookup may fall back before response headers; an in-progress response does
+  not switch accounts.
+- Bot sessions use stable account IDs. Reordering tokens does not change sender identity.
+- Each dispatched part keeps its recorded sender and request ID during retry.
+
+### Names and Refresh
+
+Startup uses the existing authenticated account response to populate missing
+names in the background. Cached names are stored in MongoDB.
+
+**Connections → Refresh** separately verifies saved credentials and channel
+permissions using temporary sessions:
+
+- Maximum two checks at once; repeated clicks share in-progress work.
+- No test messages are sent or deleted.
+- Transient errors retry up to three attempts. Account waits apply to checks
+  and transfers; provider deadlines persist across restart.
+- Last known names survive failures. Probe results remain distinct from live
+  socket health.
+- Changes cancel outdated checks; shutdown cancels all owned check tasks.
+
+## Connection management
+
+1. The owner submits a full candidate with its expected revision.
+2. Temporary clients verify enabled accounts and channel permissions.
+3. The private settings document commits atomically.
+4. New mutations pause until a restart applies that revision.
+
+Secrets are write-only. Omitted replacements retain their saved value.
+Editing requires settled jobs/receipts and valid database ownership.
+A Telegram database backup is not a save prerequisite.
+
+Premium login uses owner-bound, in-memory five-minute challenges.
+Codes and two-step passwords are not stored. Successful sessions go directly
+to private settings; the browser never receives a StringSession.
+Cancelled/expired/unsaved authorizations are revoked.
+
+## Transfer pipeline
+
+Browser receiving and Telegram dispatch are independent. One browser receive
+runs at a time; its completed receipt immediately creates a durable server job.
+There is no four-job browser backlog gate. Staging reservations, free-disk
+headroom and the 1,000 unfinished receipt bound control admission; a 429/507
+queues the next device file for automatic retry without discarding its original.
+
+### From a browser to one drive file
+
+1. **Receive:** accept fixed-size HTTP chunks into local staging.
+2. **Acknowledge:** flush bytes, then save the offset and checksum in MongoDB.
+3. **Queue:** verify received chunks and create or reuse one durable job.
+4. **Send:** upload one Telegram document or ordered parts.
+5. **Commit:** publish the logical file once, using its stable operation ID.
+6. **Finish:** confirm MongoDB state, report completion and release staging.
+
+After a lost response, resume from the acknowledged offset.
+Names and sizes alone never prove that a reselected file has matching bytes.
+
+### Bounds and retries
+
+- One browser receive runs at a time, independently of Telegram's upload backlog.
+  Temporary-storage admission can pause/retry the next receipt.
+- The controller retains up to 2,000 rows in unfinished batches.
+- Media leases default to one upload per bot, configurable to 1–4; each Premium
+  client has one slot. Multipart workers scale to eligible client capacity, with
+  a one-second check for live limit increases. Database backups are separately serialized.
+- Bot-compatible parts can use both bot and Premium clients. Parts requiring a
+  Premium-sized document stay on Premium clients. Retry and cleanup retain the
+  original sender; fair leases and shared channel pacing apply to every part.
+- Folder upload prepares an atomic, repeatable tree before queuing file bytes.
+  Later file uploads can succeed or fail independently.
+- Confirmed remote identities survive retry. The catalog operation lookup closes
+  the gap between a file commit and its job-journal update.
+- MongoDB finalization never waits for an encrypted Telegram snapshot.
+- Completed catalog entries cannot be cancelled as if they were unsent media.
+
+### Cancellation and destination changes
+
+| Situation | Result |
+| --- | --- |
+| Cancel before dispatch | Stop and reclaim local work |
+| Cancel after dispatch | Reconcile the remote outcome and clean up before confirming cancellation |
+| Move the destination | Accepted work follows its stable folder ID |
+| Trash a receiving destination | Keep acknowledged bytes; restore or cancel |
+| Destination disappears before catalog commit | Cancel/reconcile unpublished remote work |
+| Database persistence fails | Retain staged bytes and remote identities for retry |
+| URL retrieval is interrupted | Retry may fetch from byte zero |
+| Bot-mode ingestion | Separate path; lacks the browser queue's full durability contract |
+
+Permanent deletion records intent and each remote confirmation before removing
+the final catalog entry. Remote effects are not atomic across multiple items.
+
+### Finished history
+
+Live terminal jobs may expire or be evicted to keep the worker registry bounded.
+Resolved upload/import records become compact summaries instead of disappearing.
+
+- MongoDB stores archived summaries in the jobs collection, outside the live loader.
+- Archived summaries omit private source/recovery context and cannot be retried as live jobs.
+- The owner history API merges fresh live progress with indexed, cursor-paged archives.
+- Reads are bounded per request; old records are not all loaded into startup memory.
+- Deletion notices remain outside upload history.
+- Floating-panel dismissal does not affect server history.
+- Owner history responses resolve the current destination through the upload
+  operation's stable node identity. Resolution uses the native catalog read
+  cache in MongoDB mode, without extra database queries per file.
+- Show-in-folder resolves again at activation, follows moves/renames, and rejects
+  trashed/deleted identities. Browser navigation selects and reveals the correct
+  file-list page without automatically opening a preview.
+- Complete database backups include the archived records.
+
+## Telegram transport and file responses
+
+Telethon with cryptg provides MTProto transport. Hosted HTTP Bot API limits
+do not directly describe this adapter.
+
+- Authorization is checked before Telegram access or cached bytes.
+- One HTTP range maps to the required logical file parts, including boundaries.
+- Full part reads verify checksums; partial reads validate stored identity/size.
+- Expired file references refresh from the stored message with bounded retries.
+- Streams close iterators and leases on failure, cancellation or disconnect.
+- Missing Telegram messages or failures after headers can interrupt a download.
+
+## Media and performance
+
+| Area | Implementation |
+| --- | --- |
+| Original bytes | Browser uploads remain documents; preview choices do not change originals |
+| Text | Bounded 256 KiB read-only preview |
+| PDF | Local PDF.js, up to 20 MiB, continuous rendering with memory bounds |
+| SVG | Passive image element; never inject uploaded markup into the page |
+| Video | Lazy local Movi/WASM decoder using the same authorized range endpoint |
+| Unsupported format | Compact details and original download |
+| Quality choices | Only representations actually present in Telegram |
+
+File responses read ahead by up to 32 ordered 1 MiB windows, scaled to client
+count. Both ordinary and multipart files spread windows across healthy bots and
+Premium clients. At most two remote windows per account and twelve shared cache
+loads run together; upload slots remain independent. Account FloodWait deadlines
+also gate reads, with bounded retry through another eligible account.
+
+A shared 64 MiB RAM cache retains blocks for ten minutes. A disposable 512 MiB
+disk cache under DATA_DIR/media-cache retains blocks for up to 24 hours, including
+across restarts; it has a 1,024-file bound and evicts least-recently-used blocks.
+Disk failure falls back to Telegram. Atomic writes and block digests reject
+partial/corrupt entries. Neither cache contains credentials or access decisions.
+
+Each HTTP request still authenticates and validates the Telegram message before
+using cached data. Workers fetch account-specific references and verify immutable
+document/rendition identity and size before sharing bytes across accounts.
+Concurrent requests share in-flight reads; the last cancelled reader stops their
+remote work. Seeking or closing a response drains its pending read-ahead.
+The transport's older per-account 24 MiB/30-second cache remains a bounded inner
+layer with eight native downloads.
+
+Movi's requested 32 MiB source buffer applies after initial loading.
+Decoder/demux caches can use more memory. Neither this setting nor extra bots
+guarantee a particular speed or codec's real-time playback.
+
+## Database safety copies and security
+
+Database copies run independently of uploads:
+
+1. Read a consistent set of durable collections.
+2. Compress and encrypt using AES-256-GCM.
+3. Persist the encrypted source identity before sending it to Telegram.
+4. Verify the received ciphertext before confirming the backup.
+
+Restore needs the matching key and an empty database. It revokes browser
+sessions. Original Telegram files and unfinished local payloads are not copied
+inside the database archive.
+
+[Operations](operations.md#encrypted-telegram-backups) covers recovery.
+[Reference](reference.md#security-and-privacy) covers security.
+[Development](development.md) covers tests and release preparation.
+
+
+### Shared-link identity and re-copying
+
+- Shares reference stable item IDs. Public file/folder requests resolve the
+  current location before checking scope, so explicit links survive moves/renames.
+- Owner listing includes current names, parent directories and expired entries.
+  Access checks and exposure warnings still use only active shares.
+- New share capabilities derive from a random share ID and the persistent owner
+  secret using domain-separated HMAC-SHA256. The catalog still stores hashes only.
+  The owner copy endpoint verifies the derived token against that hash.
+- Legacy random-token links remain usable; re-copy requires explicit replacement.
+  Secret rotation also makes existing links unreconstructable, without revoking them.

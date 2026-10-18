@@ -1,0 +1,102 @@
+.file-table .name-cell {
+  padding-inline-start: 12px;
+}
+.name-cell-content,
+.name-header-content {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+}
+.name-cell-content {
+  min-height: 48px;
+}
+.file-selection-slot {
+  width: 32px;
+  height: 32px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 32px;
+}
+.file-name-details {
+  flex: 1;
+  min-width: 0;
+}
+.file-name-details .file-name {
+  display: block;
+  max-width: 100%;
+}
+.search-result-location {
+  display: block;
+  margin-top: -8px;
+  padding: 0 5px 8px;
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.5;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.file-toolbar-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+@media (max-width: 720px) {
+  .name-cell-content {
+    min-height: 60px;
+  }
+  .file-table .name-cell {
+    padding-inline-start: 0;
+  }
+  .search-result-location {
+    font-size: 11px;
+  }
+}
+
+.action-menu[popover] {
+  position: fixed;
+  inset: auto;
+  margin: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+/* Keep the access indicator attached to the name, including truncated names. */
+.file-title-line {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+}
+.file-title-line .file-name {
+  flex: 0 1 auto;
+  min-width: 0;
+}
+.file-table th:first-child {
+  padding-inline-start: 12px;
+}
+.column-sort-button {
+  min-height: 32px;
+  padding-block: 6px;
+}
+.file-row {
+  touch-action: manipulation;
+}
+@media (max-width: 720px) {
+  .file-table th:first-child {
+    padding-inline-start: 0;
+  }
+  .column-sort-button {
+    min-height: 44px;
+  }
+  .actions-cell {
+    width: 44px;
+  }
+  .file-table .item-actions > summary {
+    width: 44px;
+    height: 44px;
+  }
+}

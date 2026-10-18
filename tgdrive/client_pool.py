@@ -1,0 +1,758 @@
+"""Lifecycle-safe leasing for Telegram bot and user clients."""
+
+from __future__ import annotations
+
+import asyncio
+import inspect
+import time
+from collections.abc import AsyncIterator, Awaitable, Callable, Iterable
+from contextlib import asynccontextmanager
+from dataclasses import dataclass
+from enum import StrEnum
+from typing import TYPE_CHECKING, Any, Literal, Protocol, TypeAlias
+
+if TYPE_CHECKING:
+    from tgdrive.config import Settings
+
+ClientKind: TypeAlias = Literal["bot", "user"]
+
+
+class TelegramClientLifecycle(Protocol):
+    """The small portion of the Telegram client lifecycle used by the pool."""
+
+    def start(self) -> Any | Awaitable[Any]: ...
+
+    def stop(self) -> Any | Awaitable[Any]: ...
+
+
+ClientFactory: TypeAlias = Callable[
+    [], TelegramClientLifecycle | Awaitable[TelegramClientLifecycle]
+]
+ClientSource: TypeAlias = TelegramClientLifecycle | ClientFactory
+
+
+class PoolState(StrEnum):
+    NEW = "new"
+    STARTING = "starting"
+    RUNNING = "running"
+    STOPPING = "stopping"
+    STOPPED = "stopped"
+    FAILED = "failed"
+
+
+class ClientPoolError(RuntimeError):
+    """Base class for client-pool failures."""
+
+
+class ClientPoolNotRunning(ClientPoolError):
+    """A lease was requested while the pool was not accepting work."""
+
+
+class NoClientAvailable(ClientPoolError):
+    """No started, healthy client satisfies a lease request."""
+
+
+class DuplicateClientIdentity(ClientPoolError):
+    """A second configured connection resolves to an already pooled account."""
+
+
+class NoPremiumClientAvailable(NoClientAvailable):
+    """A premium lease was requested without a usable user client."""
+
+
+class ClientPoolStartError(ClientPoolError):
+    """One or more clients failed to start.
+
+    All clients that were materialized are asked to stop before this exception
+    is raised.  The original exceptions remain available in ``failures``.
+    """
+
+    def __init__(
+        self,
+        failures: tuple[tuple[str, BaseException], ...],
+        cleanup_failures: tuple[tuple[str, BaseException], ...] = (),
+    ) -> None:
+        self.failures = failures
+        self.cleanup_failures = cleanup_failures
+        labels = ", ".join(
+            f"{name} ({type(error).__name__})" for name, error in failures
+        )
+        message = f"failed to start client pool: {labels}"
+        if cleanup_failures:
+            message += f"; {len(cleanup_failures)} cleanup operation(s) also failed"
+        super().__init__(message)
+
+
+@dataclass(frozen=True, slots=True)
+class ClientStatus:
+    name: str
+    kind: ClientKind
+    started: bool
+    healthy: bool
+    connected: bool | None
+    active_leases: int
+    last_error_type: str | None
+    display_name: str | None = None
+    username: str | None = None
+    identity_refreshing: bool = False
+    identity_retry_at: float | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class PoolHealth:
+    state: PoolState
+    ready: bool
+    total_clients: int
+    started_clients: int
+    healthy_clients: int
+    active_leases: int
+    bot_clients: int
+    premium_clients: int
+
+
+@dataclass(slots=True)
+class _ClientSlot:
+    source: ClientSource
+    kind: ClientKind
+    index: int
+    is_factory: bool
+    client: TelegramClientLifecycle | None = None
+    started: bool = False
+    healthy: bool = False
+    active: int = 0
+    selected_at: int = 0
+    media_active: int = 0
+    download_active: int = 0
+    cooldown_until: float = 0
+    error: BaseException | None = None
+    needs_stop: bool = False
+
+    @property
+    def fallback_name(self) -> str:
+        return f"{self.kind}-{self.index + 1}"
+
+    @property
+    def name(self) -> str:
+        value = getattr(self.client, "name", None)
+        return str(value) if value not in (None, "") else self.fallback_name
+
+
+async def _maybe_await(value: Any) -> Any:
+    return await value if inspect.isawaitable(value) else value
+
+
+class ClientPool:
+    """Own and fairly lease bot and premium-user clients.
+
+    Sources may be already-created Telegram clients or zero-argument
+    synchronous/asynchronous factories.  ``start`` and ``stop`` are
+    idempotent; clients start and stop concurrently.
+    """
+
+    def __init__(
+        self,
+        bot_clients: Iterable[ClientSource] = (),
+        user_clients: Iterable[ClientSource] = (),
+        *,
+        allow_partial_start: bool = False,
+        media_send_interval: float = 0.0,
+        uploads_per_bot: int = 1,
+        media_cache_dir: Any = None,
+    ) -> None:
+        self._allow_partial_start = allow_partial_start
+        self.media_cache_dir = media_cache_dir
+        self._media_read_cache: Any = None
+        self._validate_upload_limit(uploads_per_bot)
+        self._uploads_per_bot = uploads_per_bot
+        self._slots: list[_ClientSlot] = []
+        for kind, sources in (("bot", bot_clients), ("user", user_clients)):
+            for index, source in enumerate(sources):
+                is_factory = callable(source) and not callable(
+                    getattr(source, "start", None)
+                )
+                self._slots.append(
+                    _ClientSlot(
+                        source=source,
+                        kind=kind,
+                        index=index,
+                        is_factory=is_factory,
+                        client=None if is_factory else source,
+                    )
+                )
+
+        self._state = PoolState.NEW
+        self._lifecycle_lock = asyncio.Lock()
+        self._leases = asyncio.Condition()
+        self._selection_counter = 0
+        self._media_waiters: list[tuple[object, ClientKind | None, str | None]] = []
+        self._send_interval = max(0.0, media_send_interval)
+        self._send_lock = asyncio.Lock()
+        self._next_send = 0.0
+        self._channel_cooldown_until = 0.0
+        self._account_cooldowns: dict[str, float] = {}
+
+    @staticmethod
+    def _validate_upload_limit(value: int) -> None:
+        if type(value) is not int or not 1 <= value <= 4:
+            raise ValueError("Uploads per bot must be between 1 and 4")
+
+    @property
+    def uploads_per_bot(self) -> int:
+        return self._uploads_per_bot
+
+    async def set_uploads_per_bot(self, value: int) -> None:
+        """Change admission without cancelling leases already in progress."""
+        self._validate_upload_limit(value)
+        async with self._leases:
+            self._uploads_per_bot = value
+            self._leases.notify_all()
+
+    @property
+    def state(self) -> PoolState:
+        return self._state
+
+    async def __aenter__(self) -> ClientPool:
+        return await self.start()
+
+    async def __aexit__(self, *_exc_info: object) -> None:
+        await self.stop()
+
+    async def start(self) -> ClientPool:
+        """Materialize and concurrently start every configured client."""
+
+        async with self._lifecycle_lock:
+            if self._state is PoolState.RUNNING:
+                return self
+
+            self._state = PoolState.STARTING
+            for slot in self._slots:
+                slot.error = None
+                slot.healthy = False
+
+            try:
+                results = await asyncio.gather(
+                    *(self._start_slot(slot) for slot in self._slots),
+                    return_exceptions=True,
+                )
+            except BaseException:
+                await self._stop_materialized()
+                self._state = PoolState.FAILED
+                raise
+
+            failures = tuple(
+                (slot.name, result)
+                for slot, result in zip(self._slots, results, strict=True)
+                if isinstance(result, BaseException)
+            )
+            if failures:
+                usable_bot = any(
+                    slot.kind == "bot" and slot.started and self._slot_is_healthy(slot)
+                    for slot in self._slots
+                )
+                if self._allow_partial_start and usable_bot:
+                    # Optional accounts must not take working storage bots down.
+                    # Failed clients may have opened connections before failing.
+                    await asyncio.gather(
+                        *(
+                            self._stop_slot(slot)
+                            for slot, result in zip(self._slots, results, strict=True)
+                            if isinstance(result, BaseException) and slot.needs_stop
+                        ),
+                        return_exceptions=True,
+                    )
+                else:
+                    cleanup_failures = await self._stop_materialized()
+                    self._state = PoolState.FAILED
+                    raise ClientPoolStartError(failures, cleanup_failures)
+
+            seen: dict[str, _ClientSlot] = {}
+            for slot in self._slots:
+                if not slot.started or not self._slot_is_healthy(slot):
+                    continue
+                previous = seen.get(slot.name)
+                if previous is None:
+                    seen[slot.name] = slot
+                    continue
+                error = DuplicateClientIdentity(
+                    "This Telegram account already has a usable connection"
+                )
+                if slot.client is previous.client:
+                    # A shared instance must only be stopped by its owning slot.
+                    slot.started = False
+                    slot.needs_stop = False
+                else:
+                    # Failed disconnects remain unhealthy and are retried at stop.
+                    await asyncio.gather(self._stop_slot(slot), return_exceptions=True)
+                slot.healthy = False
+                slot.error = error
+
+            self._state = PoolState.RUNNING
+            return self
+
+    async def stop(
+        self,
+        *,
+        drain_timeout: float | None = None,
+    ) -> tuple[tuple[str, BaseException], ...]:
+        """Stop accepting leases, drain active leases, and stop all clients.
+
+        The returned tuple contains any stop errors after every client has
+        been attempted.  Repeated calls after shutdown are no-ops.
+        """
+
+        async with self._lifecycle_lock:
+            if self._state in (PoolState.NEW, PoolState.STOPPED):
+                self._state = PoolState.STOPPED
+                return ()
+
+            previous_state = self._state
+            self._state = PoolState.STOPPING
+            async with self._leases:
+                self._leases.notify_all()
+            try:
+                wait_for_leases = self._wait_for_all_leases()
+                if drain_timeout is None:
+                    await wait_for_leases
+                else:
+                    await asyncio.wait_for(wait_for_leases, timeout=drain_timeout)
+            except TimeoutError:
+                self._state = (
+                    PoolState.RUNNING
+                    if previous_state is PoolState.RUNNING
+                    else previous_state
+                )
+                raise
+
+            failures = await self._stop_materialized()
+            self._state = PoolState.STOPPED
+            return failures
+
+    @asynccontextmanager
+    async def lease(
+        self,
+        *,
+        premium: bool = False,
+        premium_required: bool | None = None,
+        prefer_premium: bool = False,
+        client_name: str | None = None,
+        media: bool = False,
+        allow_users: bool = False,
+        download: bool = False,
+        respect_cooldown: bool = False,
+    ) -> AsyncIterator[TelegramClientLifecycle]:
+        """Lease a healthy client and always release its count.
+
+        premium requires a user account, as for larger uploads.
+        prefer_premium first considers healthy users and otherwise bots,
+        so reads continue when no usable optional user is present.
+        allow_users admits both account kinds for bot-compatible media parts;
+        premium-required documents remain restricted to user accounts.
+        """
+
+        if premium_required is not None:
+            premium = premium_required
+        kind: ClientKind = "user" if premium else "bot"
+
+        async with self._leases:
+            ticket = object()
+            if media:
+                self._media_waiters.append(
+                    (ticket, None if allow_users and not premium else kind, client_name)
+                )
+            try:
+                while True:
+                    if self._state is not PoolState.RUNNING:
+                        raise ClientPoolNotRunning(
+                            f"client pool is {self._state.value}; not accepting leases"
+                        )
+
+                    def available(candidate_kind: ClientKind) -> list[_ClientSlot]:
+                        return [
+                            slot
+                            for slot in self._slots
+                            if slot.kind == candidate_kind
+                            and slot.client is not None
+                            and slot.started
+                            and self._slot_is_healthy(slot)
+                            and (client_name is None or slot.name == client_name)
+                        ]
+
+                    candidates = available(kind)
+                    if allow_users and not premium:
+                        candidates += available("user")
+                    elif prefer_premium and not premium:
+                        preferred = available("user")
+                        if download or respect_cooldown:
+                            # A cooling Premium account must not strand idle bots.
+                            now = time.time()
+                            ready_users = [
+                                slot for slot in preferred if slot.cooldown_until <= now
+                            ]
+                            ready_bots = [
+                                slot
+                                for slot in candidates
+                                if slot.cooldown_until <= now
+                            ]
+                            candidates = (
+                                ready_users or ready_bots or (preferred + candidates)
+                            )
+                        else:
+                            candidates = preferred or candidates
+                    if not candidates:
+                        if premium and not any(
+                            slot.kind == kind for slot in self._slots
+                        ):
+                            raise NoPremiumClientAvailable(
+                                "no premium user clients are configured"
+                            )
+                        raise NoClientAvailable(
+                            "no healthy matching Telegram clients are available"
+                        )
+                    now = time.time()
+
+                    def earlier_waiter_for(candidate: _ClientSlot) -> bool:
+                        for queued, queued_kind, queued_name in self._media_waiters:
+                            if queued is ticket:
+                                return False
+                            if queued_kind in (None, candidate.kind) and (
+                                queued_name is None or queued_name == candidate.name
+                            ):
+                                return True
+                        return False
+
+                    eligible = [
+                        slot
+                        for slot in candidates
+                        if (not download or slot.download_active < 2)
+                        and (
+                            not (download or respect_cooldown)
+                            or slot.cooldown_until <= now
+                        )
+                        and (
+                            not media
+                            or (
+                                slot.media_active
+                                < (self._uploads_per_bot if slot.kind == "bot" else 1)
+                                and not earlier_waiter_for(slot)
+                                and max(
+                                    slot.cooldown_until, self._channel_cooldown_until
+                                )
+                                <= now
+                            )
+                        )
+                    ]
+                    if eligible:
+                        slot = min(
+                            eligible,
+                            key=lambda item: (
+                                item.download_active
+                                if download
+                                else item.media_active
+                                if media
+                                else item.active,
+                                item.selected_at,
+                                item.index,
+                            ),
+                        )
+                        self._selection_counter += 1
+                        slot.selected_at = self._selection_counter
+                        slot.active += 1
+                        if download:
+                            slot.download_active += 1
+                        if media:
+                            slot.media_active += 1
+                        client = slot.client
+                        break
+                    deadlines = [
+                        max(
+                            slot.cooldown_until,
+                            self._channel_cooldown_until if media else 0,
+                        )
+                        for slot in candidates
+                        if max(
+                            slot.cooldown_until,
+                            self._channel_cooldown_until if media else 0,
+                        )
+                        > now
+                    ]
+                    timeout = max(0.001, min(deadlines) - now) if deadlines else None
+                    try:
+                        if timeout is None:
+                            await self._leases.wait()
+                        else:
+                            await asyncio.wait_for(self._leases.wait(), timeout)
+                    except TimeoutError:
+                        pass
+            finally:
+                if media:
+                    self._media_waiters = [
+                        row for row in self._media_waiters if row[0] is not ticket
+                    ]
+                    self._leases.notify_all()
+
+        try:
+            yield client
+        finally:
+            async with self._leases:
+                if slot.active <= 0:
+                    raise RuntimeError("client lease accounting underflow")
+                slot.active -= 1
+                if download:
+                    slot.download_active -= 1
+                if media:
+                    slot.media_active -= 1
+                self._leases.notify_all()
+
+    async def download_capacity(self) -> int:
+        """Two read windows per healthy account, independent of upload slots."""
+        async with self._leases:
+            return sum(
+                2
+                for slot in self._slots
+                if slot.started and self._slot_is_healthy(slot)
+            )
+
+    async def media_capacity(self, *, premium=False, allow_users=False) -> int:
+        """Potential media slots; leases enforce occupancy, fairness and cooldowns.
+
+        Include occupied/cooling slots so a coordinator does not permanently
+        shrink when another transfer temporarily owns them.
+        """
+        async with self._leases:
+            if self._state is not PoolState.RUNNING:
+                return 0
+            return sum(
+                self._uploads_per_bot if slot.kind == "bot" else 1
+                for slot in self._slots
+                if slot.started
+                and self._slot_is_healthy(slot)
+                and (
+                    slot.kind == "user"
+                    if premium
+                    else allow_users or slot.kind == "bot"
+                )
+            )
+
+    async def defer_client(self, client_name: str, deadline: float) -> None:
+        """Apply a persisted account FloodWait to every new media lease."""
+        async with self._leases:
+            self._account_cooldowns[client_name] = max(
+                self._account_cooldowns.get(client_name, 0),
+                deadline,
+            )
+            for slot in self._slots:
+                if slot.name == client_name:
+                    slot.cooldown_until = max(slot.cooldown_until, deadline)
+            self._leases.notify_all()
+
+    async def account_retry_at(self, client_name: str) -> float:
+        """Share account waits with isolated owner-initiated connection checks."""
+        async with self._leases:
+            return max(
+                self._account_cooldowns.get(client_name, 0),
+                *(
+                    slot.cooldown_until
+                    for slot in self._slots
+                    if slot.name == client_name
+                ),
+                0,
+            )
+
+    async def defer_channel(self, deadline: float) -> None:
+        """Message-publishing FloodWait is shared across channel writers."""
+        async with self._leases:
+            self._channel_cooldown_until = max(self._channel_cooldown_until, deadline)
+            self._leases.notify_all()
+
+    async def pace_send(self, channel: int) -> None:
+        """Conservative shared pacing; server FloodWait always takes precedence."""
+        async with self._send_lock:
+            while True:
+                remaining = (
+                    max(self._next_send, self._channel_cooldown_until) - time.time()
+                )
+                if remaining <= 0:
+                    self._next_send = time.time() + self._send_interval
+                    return
+                await asyncio.sleep(remaining)
+
+    def kind_of(self, client: TelegramClientLifecycle) -> ClientKind:
+        """Return the configured account kind without exposing credentials."""
+
+        return self._find_slot(client).kind
+
+    async def mark_unhealthy(
+        self,
+        client: TelegramClientLifecycle,
+        error: BaseException | None = None,
+    ) -> None:
+        """Exclude ``client`` from future leases until marked healthy again."""
+
+        async with self._leases:
+            slot = self._find_slot(client)
+            slot.healthy = False
+            slot.error = error
+
+    async def mark_healthy(self, client: TelegramClientLifecycle) -> None:
+        async with self._leases:
+            slot = self._find_slot(client)
+            if not slot.started:
+                raise ClientPoolError("cannot mark a stopped client healthy")
+            slot.healthy = True
+            slot.error = None
+
+    async def status(self) -> tuple[ClientStatus, ...]:
+        """Return a stable snapshot without exposing credential values."""
+
+        async with self._leases:
+            return tuple(
+                ClientStatus(
+                    name=slot.name,
+                    kind=slot.kind,
+                    started=slot.started,
+                    healthy=self._slot_is_healthy(slot),
+                    connected=self._connected_state(slot.client),
+                    active_leases=slot.active,
+                    last_error_type=(
+                        type(slot.error).__name__ if slot.error is not None else None
+                    ),
+                    display_name=getattr(slot.client, "display_name", None),
+                    username=getattr(slot.client, "username", None),
+                    identity_refreshing=bool(
+                        getattr(slot.client, "identity_refreshing", False)
+                    ),
+                    identity_retry_at=getattr(slot.client, "identity_retry_at", None),
+                )
+                for slot in self._slots
+            )
+
+    def refresh_identities(self) -> None:
+        """Schedule optional lookups without delaying requests or replacing clients."""
+        for slot in self._slots:
+            refresh = getattr(slot.client, "refresh_identity", None)
+            if slot.started and callable(refresh):
+                refresh()
+
+    async def health(self) -> PoolHealth:
+        statuses = await self.status()
+        started = sum(item.started for item in statuses)
+        healthy = sum(item.healthy for item in statuses)
+        total = len(statuses)
+        return PoolHealth(
+            state=self._state,
+            ready=(
+                self._state is PoolState.RUNNING
+                and (
+                    any(item.kind == "bot" and item.healthy for item in statuses)
+                    if self._allow_partial_start
+                    else total > 0 and started == total and healthy == total
+                )
+            ),
+            total_clients=total,
+            started_clients=started,
+            healthy_clients=healthy,
+            active_leases=sum(item.active_leases for item in statuses),
+            bot_clients=sum(item.kind == "bot" for item in statuses),
+            premium_clients=sum(item.kind == "user" for item in statuses),
+        )
+
+    async def _start_slot(self, slot: _ClientSlot) -> None:
+        try:
+            if slot.is_factory:
+                slot.client = await _maybe_await(slot.source())  # type: ignore[operator]
+            if slot.client is None:
+                raise TypeError(f"{slot.fallback_name} factory returned None")
+            slot.needs_stop = True
+
+            starter = getattr(slot.client, "start", None)
+            stopper = getattr(slot.client, "stop", None)
+            if not callable(starter) or not callable(stopper):
+                raise TypeError(
+                    f"{slot.fallback_name} must provide callable start() and stop()"
+                )
+
+            binder = getattr(slot.client, "bind_send_gate", None)
+            if callable(binder):
+                binder(self.pace_send, self.defer_channel)
+            identity_binder = getattr(slot.client, "bind_identity_pool", None)
+            if callable(identity_binder):
+                identity_binder(self)
+            await _maybe_await(starter())
+            slot.started = True
+            slot.healthy = True
+            slot.cooldown_until = max(
+                slot.cooldown_until,
+                self._account_cooldowns.get(slot.name, 0),
+            )
+            slot.error = None
+        except BaseException as error:
+            slot.error = error
+            slot.healthy = False
+            raise
+
+    async def _stop_materialized(
+        self,
+    ) -> tuple[tuple[str, BaseException], ...]:
+        slots = [
+            slot for slot in self._slots if slot.client is not None and slot.needs_stop
+        ]
+        results = await asyncio.gather(
+            *(self._stop_slot(slot) for slot in slots),
+            return_exceptions=True,
+        )
+        return tuple(
+            (slot.name, result)
+            for slot, result in zip(slots, results, strict=True)
+            if isinstance(result, BaseException)
+        )
+
+    async def _stop_slot(self, slot: _ClientSlot) -> None:
+        client = slot.client
+        stopped = False
+        try:
+            if client is not None:
+                stopper = getattr(client, "stop", None)
+                if callable(stopper):
+                    await _maybe_await(stopper())
+            stopped = True
+        except BaseException as error:
+            slot.error = error
+            raise
+        finally:
+            slot.started = False
+            slot.healthy = False
+            slot.active = 0
+            slot.media_active = 0
+            if stopped:
+                slot.needs_stop = False
+            if slot.is_factory and stopped:
+                slot.client = None
+
+    async def _wait_for_all_leases(self) -> None:
+        async with self._leases:
+            await self._leases.wait_for(
+                lambda: all(slot.active == 0 for slot in self._slots)
+            )
+
+    def _find_slot(self, client: TelegramClientLifecycle) -> _ClientSlot:
+        for slot in self._slots:
+            if slot.client is client:
+                return slot
+        raise ValueError("client does not belong to this pool")
+
+    @staticmethod
+    def _connected_state(client: TelegramClientLifecycle | None) -> bool | None:
+        if client is None:
+            return None
+        connected = getattr(client, "is_connected", None)
+        return connected if isinstance(connected, bool) else None
+
+    def _slot_is_healthy(self, slot: _ClientSlot) -> bool:
+        connected = self._connected_state(slot.client)
+        return slot.healthy and connected is not False
+
+
+async def current_upload_limit(settings: Settings, pool: Any) -> int:
+    """Admit logical files independently of optional Premium availability."""
+
+    return settings.upload_limit
