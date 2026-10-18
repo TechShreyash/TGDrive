@@ -12,7 +12,9 @@ from test_streaming import make_request, response_body
 from test_telegram_cache import message
 
 from tgdrive.client_pool import ClientPool, MediaQueueFull
+from tgdrive.media_policy import MediaCachePolicy
 from tgdrive.media_reader import BLOCK
+from tgdrive.preloading import PreloadManager
 from tgdrive.streaming import _not_modified, media_etag, stream_telegram_file
 from tgdrive.telegram_clients import TelegramMessage
 
@@ -51,6 +53,7 @@ async def test_strong_etag_if_range_and_no_transform_preserve_exact_bytes(tmp_pa
         etag = first.headers["etag"]
         assert etag.startswith('"tg-')
         assert "no-transform" in first.headers["cache-control"]
+        assert first.headers["content-encoding"] == "identity"
         assert await response_body(first) == payload
         partial = await response(pool, payload, request("bytes=2-5", if_range=etag))
         assert partial.status_code == 206
@@ -282,6 +285,7 @@ async def test_multipart_if_range_uses_catalog_manifest_tag():
             request=request("bytes=2-3", if_range=tag),
         )
         assert selected.headers["etag"] == tag
+        assert selected.headers["content-encoding"] == "identity"
         assert selected.status_code == 206
         assert await response_body(selected) == b"cd"
         full = await stream_telegram_file(
@@ -333,4 +337,34 @@ async def test_multipart_demand_cache_inventory_is_one_logical_file(tmp_path):
     finally:
         if pool._media_read_cache is not None:
             await pool._media_read_cache.close()
+        await pool.stop()
+
+
+@pytest.mark.asyncio
+async def test_tiny_http_range_probes_do_not_count_whole_telegram_blocks_as_playback(
+    tmp_path,
+):
+    payload = b"x" * (8 * BLOCK)
+    client = account("bot", payload)
+    pool = ClientPool([client], media_cache_dir=tmp_path)
+    await pool.start()
+    manager = PreloadManager(
+        pool, policy=MediaCachePolicy(auto_preload=True, min_free_bytes=0)
+    )
+    try:
+        for index in range(5):
+            offset = index * BLOCK
+            probe = await response(
+                pool,
+                payload,
+                request(f"bytes={offset}-{offset}"),
+                request_id="same-video",
+            )
+            assert await response_body(probe) == b"x"
+        assert not manager._jobs and not manager._auto_tasks
+        row = next(iter(manager._observed.values()))
+        assert not row["runs"]
+        assert all(not viewer["active"] for viewer in row["viewers"].values())
+    finally:
+        await manager.close()
         await pool.stop()

@@ -14,6 +14,7 @@ from tgdrive.logical_media import PartLease, part_ranges
 from tgdrive.ranges import MalformedRange, RangeNotSatisfiable, parse_byte_range
 from tgdrive.streaming import (
     TelegramVariantNotFound,
+    _ActivityBody,
     _content_disposition,
     _not_modified,
     _observe_media_request,
@@ -80,7 +81,7 @@ async def stream_multipart_file(
             status_code=304,
             headers={"ETag": etag, "Cache-Control": "private, no-store, no-transform"},
         )
-    _observe_media_request(
+    activity = _observe_media_request(
         pool,
         channel_id=channel_id,
         message_id=message_id,
@@ -91,10 +92,12 @@ async def stream_multipart_file(
         start=selected.start,
         end=selected.end + 1,
         authorize=authorize,
+        request_id=request_id,
     )
     headers = {
         "Accept-Ranges": "bytes",
         "Content-Length": str(selected.length),
+        "Content-Encoding": "identity",
         "Content-Disposition": _content_disposition(
             file_name, mime_type, download=download, preview=preview
         ),
@@ -151,6 +154,15 @@ async def stream_multipart_file(
                     async for chunk in iterator:
                         emitted += len(chunk)
                         yield chunk
+                        if activity is not None:
+                            manager, _identity, viewer = activity
+                            manager.delivered(
+                                channel_id=channel_id,
+                                message_id=message_id,
+                                offset=selected.start + emitted - len(chunk),
+                                length=len(chunk),
+                                request_id=viewer,
+                            )
                 finally:
                     try:
                         await iterator.aclose()
@@ -164,7 +176,7 @@ async def stream_multipart_file(
             await first.close()
 
     return await _prime_response(
-        body(),
+        _ActivityBody(body(), activity),
         release=first.close,
         status=status,
         mime_type=mime_type,

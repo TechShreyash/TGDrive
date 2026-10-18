@@ -324,7 +324,10 @@ async def test_inventory_poll_during_queued_fills_preserves_later_readiness(tmp_
     ]
     try:
         for _ in range(100):
-            if len(cache.memory.flights) == 12 and len(cache._active_keys) == 25:
+            if (
+                len(cache.memory.flights) == min(25, cache.scratch.limit)
+                and len(cache._active_keys) == 25
+            ):
                 break
             await asyncio.sleep(0.001)
         assert (await cache.snapshot())["files"] == []
@@ -334,4 +337,52 @@ async def test_inventory_poll_during_queued_fills_preserves_later_readiness(tmp_
     finally:
         gate.set()
         await asyncio.gather(*tasks, return_exceptions=True)
+        await cache.close()
+
+
+@pytest.mark.asyncio
+async def test_current_availability_refresh_shrinks_and_recovers_retention_and_scratch(
+    tmp_path, monkeypatch
+):
+    available, now = [8 * BLOCK], [0.0]
+    monkeypatch.setattr(
+        "tgdrive.media_reader._effective_memory", lambda value: min(value, available[0])
+    )
+    cache = MediaReadCache(
+        tmp_path,
+        MediaCachePolicy(
+            memory_max_bytes=8 * BLOCK, disk_max_bytes=0, scratch_max_bytes=8 * BLOCK
+        ),
+        clock=lambda: now[0],
+    )
+    try:
+        for index in range(4):
+            await cache.get(
+                key(index, size=4 * BLOCK),
+                BLOCK,
+                lambda: asyncio.sleep(0, result=b"x" * BLOCK),
+            )
+        assert (await cache.snapshot())["memory"]["bytes"] == 4 * BLOCK
+        for _ in range(4):
+            await cache.scratch.acquire()
+        available[0] = 2 * BLOCK
+        now[0] = 4
+        assert (await cache.snapshot())["memory"]["effective_max_bytes"] == 8 * BLOCK
+        now[0] = 5
+        reduced = await cache.snapshot()
+        assert reduced["memory"]["bytes"] <= 2 * BLOCK
+        assert reduced["memory"]["effective_max_bytes"] == 2 * BLOCK
+        assert reduced["memory"]["max_fills"] == 2
+        assert reduced["scratch"]["max_bytes"] == 2 * BLOCK
+        assert reduced["scratch"]["bytes"] == 4 * BLOCK  # Existing frames drain.
+        for _ in range(4):
+            cache.scratch.release()
+        available[0] = 8 * BLOCK
+        now[0] = 10
+        recovered = await cache.snapshot()
+        assert recovered["memory"]["effective_max_bytes"] == 8 * BLOCK
+        assert recovered["memory"]["max_fills"] == 8
+        assert recovered["scratch"]["max_bytes"] == 8 * BLOCK
+        assert recovered["scratch"]["bytes"] == 0
+    finally:
         await cache.close()

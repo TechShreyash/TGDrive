@@ -23,6 +23,48 @@ BLOCK = 1024**2
 READ_AHEAD = 32  # MiB per response, including currently requested windows.
 
 
+class _ScratchBudget:
+    """Global MiB reservations; acquire a response head before speculative work.
+
+    Reservations include completed futures and the currently yielded block, and
+    remain owned until the consumer resumes or closes. Cache retention is a
+    separate budget. Waiting response heads take precedence over new read-ahead.
+    """
+
+    def __init__(self, maximum):
+        self.limit = max(2, maximum // BLOCK)
+        self.used = self.peak = self.waiters = 0
+        self.changed = asyncio.Event()
+
+    def try_acquire(self):
+        if self.waiters or self.used >= self.limit:
+            return False
+        self.used += 1
+        self.peak = max(self.peak, self.used)
+        return True
+
+    async def acquire(self):
+        self.waiters += 1
+        try:
+            while self.used >= self.limit:
+                self.changed.clear()
+                await self.changed.wait()
+            self.used += 1
+            self.peak = max(self.peak, self.used)
+        finally:
+            self.waiters -= 1
+
+    def release(self):
+        if self.used <= 0:
+            raise RuntimeError("Media scratch reservation underflow")
+        self.used -= 1
+        self.changed.set()
+
+    def resize(self, maximum):
+        self.limit = max(2, maximum // BLOCK)
+        self.changed.set()
+
+
 class _PayloadCache(_BlockCache):
     """Shared-flight cache whose protected segment survives one-time scans."""
 
@@ -97,16 +139,24 @@ def _effective_memory(configured):
 
 
 class MediaReadCache:
-    def __init__(self, directory=None, policy=None):
+    def __init__(self, directory=None, policy=None, *, clock=None):
         self.policy = policy or MediaCachePolicy()
+        self._capacity_clock = clock or time.monotonic
+        self._last_capacity_check = self._capacity_clock()
         self.deferred_writes = policy is not None
         self.effective_memory_bytes = _effective_memory(self.policy.memory_max_bytes)
+        self.scratch = _ScratchBudget(_effective_memory(self.policy.scratch_max_bytes))
+        self._active_streams = 0
         self.memory = _PayloadCache(
             max_bytes=max(1, self.effective_memory_bytes),
             max_entries=max(256, self.effective_memory_bytes // BLOCK + 32),
             ttl=self.policy.memory_ttl_seconds,
-            read_slots=12,
+            read_slots=self.scratch.limit,
         )
+        # This resizable gate is independent of retained payloads; every real
+        # pooled load also owns one global scratch frame. Reconfigure the same
+        # gate object so old waiters/releases cannot inflate a new semaphore.
+        self.memory._slots = _ScratchBudget(self.scratch.limit * BLOCK)
         self.memory.max_bytes = self.effective_memory_bytes
         self.memory.protected_fraction = self.policy.protected_fraction
         self.directory = Path(directory) if directory is not None else None
@@ -141,6 +191,18 @@ class MediaReadCache:
         self._hits = self._misses = 0
         self._index_dirty = False
         self._load_index()
+
+    def _refresh_capacity(self, *, force=False):
+        now = self._capacity_clock()
+        if not force and now - self._last_capacity_check < 5:
+            return
+        self._last_capacity_check = now
+        self.effective_memory_bytes = _effective_memory(self.policy.memory_max_bytes)
+        maximum = _effective_memory(self.policy.scratch_max_bytes)
+        self.scratch.resize(maximum)
+        self.memory._slots.resize(maximum)
+        self.memory.max_entries = max(256, self.effective_memory_bytes // BLOCK + 32)
+        self._adjust_memory()
 
     def _load_index(self):
         if self.directory is None:
@@ -283,6 +345,7 @@ class MediaReadCache:
         self._index_dirty = True
 
     async def get(self, key, expected, remote, *, background=False, retain_hot=False):
+        self._refresh_capacity()
         bound = (
             self.memory.max_entries
             + (self.disk.max_entries if self.disk is not None else 0)
@@ -463,11 +526,9 @@ class MediaReadCache:
     async def reconfigure(self, policy):
         await self.flush()
         self.policy = policy
-        self.effective_memory_bytes = _effective_memory(policy.memory_max_bytes)
         self.memory.ttl = policy.memory_ttl_seconds
         self.memory.protected_fraction = policy.protected_fraction
-        self.memory.max_entries = max(256, self.effective_memory_bytes // BLOCK + 32)
-        self._adjust_memory()
+        self._refresh_capacity(force=True)
         if self.disk is not None:
             await asyncio.to_thread(
                 self.disk.reconfigure,
@@ -508,6 +569,7 @@ class MediaReadCache:
         await self.flush()
 
     async def snapshot(self):
+        self._refresh_capacity()
         self.memory._hit(())  # Expire idle RAM entries before reporting readiness.
         disk = (
             await asyncio.to_thread(self.disk.snapshot)
@@ -561,10 +623,20 @@ class MediaReadCache:
                 "entries": len(memory_keys),
                 "hits": self._hits,
                 "misses": self._misses,
+                "active_fills": self.memory._slots.used,
+                "max_fills": self.memory._slots.limit,
             },
             "disk": disk,
             "files": files,
             "pending_writes": len(self._pending),
+            "scratch": {
+                "bytes": self.scratch.used * BLOCK,
+                "max_bytes": self.scratch.limit * BLOCK,
+                "configured_max_bytes": self.policy.scratch_max_bytes,
+                "peak_bytes": self.scratch.peak * BLOCK,
+                "waiting_heads": self.scratch.waiters,
+                "active_streams": self._active_streams,
+            },
         }
 
     async def close(self):
@@ -610,6 +682,7 @@ async def stream_pooled_media(
     if pool._media_read_cache is None:
         pool._media_read_cache = MediaReadCache(pool.media_cache_dir)
     cache = pool._media_read_cache
+    cache._refresh_capacity()
     source = getattr(message, "native", message)
     message_id = source.id
     quality = getattr(message, "variant_id", None)
@@ -690,11 +763,15 @@ async def stream_pooled_media(
     pending: deque[asyncio.Task[bytes]] = deque()
     tasks: set[asyncio.Task[bytes]] = set()
     next_index, end = offset, offset + limit
-    delivered_index = offset
+    scratch = cache.scratch
 
     def schedule():
         nonlocal next_index
-        task = asyncio.create_task(read(next_index))
+        try:
+            task = asyncio.create_task(read(next_index))
+        except BaseException:
+            scratch.release()
+            raise
         pending.append(task)
         tasks.add(task)
         next_index += 1
@@ -702,31 +779,51 @@ async def stream_pooled_media(
     maximum = (
         cache.policy.background_blocks if background else cache.policy.read_ahead_blocks
     )
-    window = min(maximum, max(4, await pool.download_capacity() * 4), limit)
-    try:
-        for _ in range(window):
+    window = min(
+        maximum,
+        max(4, await pool.download_capacity() * 4),
+        limit,
+    )
+
+    def refill():
+        quota = min(window, max(1, scratch.limit // max(1, cache._active_streams)))
+        while next_index < end and len(tasks) < quota and scratch.try_acquire():
             schedule()
+
+    cache._active_streams += 1
+    try:
+        await scratch.acquire()
+        schedule()
+        refill()
         while pending:
             task = pending.popleft()
             data = await task
-            tasks.discard(task)
-            # Refill before yielding so read-ahead progresses while ASGI sends.
-            if next_index < end:
-                schedule()
             if authorize is not None:
                 await authorize()
-            manager = getattr(pool, "_preload_manager", None)
-            if not background and manager is not None:
-                manager.delivered(
-                    channel_id=channel,
-                    message_id=message_id,
-                    offset=delivered_index * BLOCK,
-                    length=len(data),
-                )
-            delivered_index += 1
             yield data
+            tasks.discard(task)
+            scratch.release()
+            refill()
+            if not pending and next_index < end:
+                await scratch.acquire()
+                schedule()
+                refill()
     finally:
         for task in tasks:
             task.cancel()
-        if tasks:
-            await asyncio.gather(*tasks, return_exceptions=True)
+        interrupted = False
+        try:
+            if tasks:
+                cleanup = asyncio.gather(*tasks, return_exceptions=True)
+                while not cleanup.done():
+                    try:
+                        await asyncio.shield(cleanup)
+                    except asyncio.CancelledError:
+                        interrupted = True
+                cleanup.result()
+        finally:
+            for _ in tasks:
+                scratch.release()
+            cache._active_streams -= 1
+        if interrupted:
+            raise asyncio.CancelledError

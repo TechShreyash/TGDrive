@@ -20,10 +20,16 @@ class MediaCachePolicy:
     background_blocks: int = 2
     max_file_fraction: float = 0.5
     read_ahead_blocks: int = 32
+    scratch_max_bytes: int = 32 * MIB
     auto_preload: bool = False
 
     def __post_init__(self):
-        for name in ("disk_max_bytes", "memory_max_bytes", "min_free_bytes"):
+        for name in (
+            "disk_max_bytes",
+            "memory_max_bytes",
+            "min_free_bytes",
+            "scratch_max_bytes",
+        ):
             value = getattr(self, name)
             if type(value) is not int or value < 0:
                 raise ValueError(f"{name} must be a nonnegative integer")

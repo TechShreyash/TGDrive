@@ -24,7 +24,7 @@ class PreloadCapacityError(ValueError):
 
 
 class PreloadManager:
-    def __init__(self, pool, *, policy=None):
+    def __init__(self, pool, *, policy=None, clock=None):
         self.pool = pool
         self.policy = policy or MediaCachePolicy()
         if pool._media_read_cache is None:
@@ -37,6 +37,8 @@ class PreloadManager:
         self._closed = False
         self._condition = asyncio.Condition()
         self._active = 0
+        self._clock = clock or time.monotonic
+        self._fill_rate = 0.0
         pool._preload_manager = self
 
     def register_file(self, **kwargs):
@@ -54,6 +56,7 @@ class PreloadManager:
         end=None,
         method="GET",
         authorize=None,
+        request_id=None,
     ):
         """Record a request; only delivered sequential bytes can trigger warming."""
         identity = self.register_file(
@@ -73,22 +76,65 @@ class PreloadManager:
                 "size": size,
                 "name": name,
                 "parts": parts,
-                "last_end": None,
-                "sequential": 0,
-                "last_auto": 0,
+                "last_auto": float("-inf"),
+                "last_auto_mode": None,
                 "authorize": authorize,
                 "requests": 0,
+                "viewers": {},
+                "runs": [],
+                "hot_until": 0,
             }
             self._observed[identity] = row
         row["authorize"] = authorize
         row["requests"] += 1
+        row["viewers"].setdefault(request_id or "default", self._viewer())
         self._observed.move_to_end(identity)
         # Observations do not retain payloads; bound idle request metadata too.
         while len(self._observed) > 1024:
             self._observed.popitem(last=False)
         return identity
 
-    def delivered(self, *, channel_id, message_id, offset, length):
+    @staticmethod
+    def _viewer():
+        return {
+            "last_end": None,
+            "sequential": 0,
+            "run_start": 0,
+            "run": None,
+            "at": None,
+            "rate": 0.0,
+            "active": 0,
+        }
+
+    def begin(self, file_id, request_id):
+        row = self._observed.get(file_id)
+        if row is not None:
+            viewer = row["viewers"].setdefault(request_id or "default", self._viewer())
+            viewer["active"] += 1
+
+    def finished(self, file_id, request_id):
+        row = self._observed.get(file_id)
+        if row is None:
+            return
+        viewer = row["viewers"].get(request_id or "default")
+        if viewer is not None:
+            viewer["active"] = max(0, viewer["active"] - 1)
+        if not any(viewer["active"] for viewer in row["viewers"].values()):
+            existing = self._existing(file_id)
+            if (
+                existing is not None
+                and existing["mode"] == "auto"
+                and existing["target_bytes"] < existing["size"]
+            ):
+                task = self._tasks.get(existing["id"])
+                if task is not None:
+                    task.cancel()
+            if row["hot_until"] <= self._clock():
+                task = self._auto_tasks.get(file_id)
+                if task is not None:
+                    task.cancel()
+
+    def delivered(self, *, channel_id, message_id, offset, length, request_id=None):
         if not self.policy.auto_preload or self._closed:
             return
         for identity, row in list(self._observed.items()):
@@ -104,10 +150,21 @@ class PreloadManager:
                 logical_offset += part["offset"]
             elif row["message_id"] != message_id:
                 continue
-            if row["last_end"] == logical_offset:
-                row["sequential"] += length
+            viewer_id = request_id or "default"
+            viewer = row["viewers"].setdefault(viewer_id, self._viewer())
+            now = self._clock()
+            if viewer["at"] is not None and now > viewer["at"]:
+                rate = length / (now - viewer["at"])
+                viewer["rate"] = (
+                    rate if not viewer["rate"] else 0.75 * viewer["rate"] + 0.25 * rate
+                )
+            viewer["at"] = now
+            if viewer["last_end"] == logical_offset:
+                viewer["sequential"] += length
             else:
-                row["sequential"] = length
+                viewer["sequential"] = length
+                viewer["run_start"] = logical_offset
+                viewer["run"] = None
                 # A distant seek abandons only speculative ahead work; shared
                 # fill subscribers belonging to other viewers remain alive.
                 existing = self._existing(identity)
@@ -115,37 +172,96 @@ class PreloadManager:
                     existing is not None
                     and existing["mode"] == "auto"
                     and existing["target_bytes"] < existing["size"]
+                    and existing.get("viewer_id") == viewer_id
                     and not existing["start"] <= logical_offset < existing["end"]
                 ):
                     task = self._tasks.get(existing["id"])
                     if task is not None:
                         task.cancel()
-            row["last_end"] = logical_offset + length
-            if (
-                row["sequential"] < 4 * BLOCK
-                or time.monotonic() - row["last_auto"] < 30
-            ):
+            viewer["last_end"] = logical_offset + length
+            if viewer["sequential"] < 4 * BLOCK:
                 continue
-            if identity in self._auto_tasks or self._existing(identity):
+            row["runs"] = [run for run in row["runs"] if now - run["at"] <= 600]
+            run = viewer["run"]
+            if run is None:
+                run = {
+                    "viewer": viewer_id,
+                    "start": viewer["run_start"],
+                    "end": viewer["last_end"],
+                    "at": now,
+                }
+                if any(
+                    min(previous["end"], run["end"])
+                    - max(previous["start"], run["start"])
+                    >= 4 * BLOCK
+                    for previous in row["runs"]
+                ):
+                    row["hot_until"] = now + 600
+                row["runs"].append(run)
+                row["runs"] = row["runs"][-32:]
+                viewer["run"] = run
+            else:
+                run.update(end=viewer["last_end"], at=now)
+            hot = row["hot_until"] > now
+            promote = hot and row["last_auto_mode"] != "full"
+            if now - row["last_auto"] < 30 and not promote:
                 continue
+            existing = self._existing(identity)
+            if existing is not None:
+                if (
+                    not promote
+                    or existing["mode"] != "auto"
+                    or existing["target_bytes"] == existing["size"]
+                ):
+                    continue
+                task = self._tasks.get(existing["id"])
+                if task is not None:
+                    existing["state"] = "cancelled"
+                    task.cancel()
+            if identity in self._auto_tasks:
+                if not promote:
+                    continue
+                self._auto_tasks[identity].cancel()
             if len(self._auto_tasks) >= self.policy.max_background_jobs:
                 continue
-            row["last_auto"] = time.monotonic()
-            task = asyncio.create_task(self._auto(identity, dict(row)))
+            row["last_auto"] = now
+            context = dict(row) | {
+                "last_end": viewer["last_end"],
+                "rate": viewer["rate"],
+                "viewer_id": viewer_id,
+                "hot": hot,
+            }
+            task = asyncio.create_task(self._auto(identity, context))
             self._auto_tasks[identity] = task
-            task.add_done_callback(
-                lambda done, key=identity: self._auto_tasks.pop(key, None)
-            )
+
+            def completed(done, key=identity):
+                if self._auto_tasks.get(key) is done:
+                    self._auto_tasks.pop(key, None)
+
+            task.add_done_callback(completed)
+
+    def _ahead_window(self, capacity, consumption_rate):
+        seconds = 16 if self._fill_rate and self._fill_rate < consumption_rate else 8
+        desired = max(4 * BLOCK, int(consumption_rate * seconds))
+        return min(32 * BLOCK, int(capacity * 0.25), desired)
 
     async def _auto(self, identity, row):
         try:
             capacity = await self._capacity()
             full = (
-                row["size"] + ((row["size"] + BLOCK - 1) // BLOCK) * 32
+                row["hot"]
+                and row["size"] + ((row["size"] + BLOCK - 1) // BLOCK) * 32
                 <= capacity * self.policy.max_file_fraction
             )
             start = 0 if full else row["last_end"]
-            ahead = min(32 * BLOCK, int(capacity * 0.25))
+            ahead = self._ahead_window(capacity, row["rate"])
+            current = self._observed.get(identity)
+            if not full and (
+                ahead < 4 * BLOCK
+                or current is None
+                or not any(viewer["active"] for viewer in current["viewers"].values())
+            ):
+                return
             end = row["size"] if full else min(row["size"], start + ahead)
             if end > start:
                 await self.prepare(
@@ -158,7 +274,10 @@ class PreloadManager:
                     mode="auto",
                     start=start,
                     end=end,
+                    viewer_id=row["viewer_id"],
                 )
+                if current is not None:
+                    current["last_auto_mode"] = "full" if full else "ahead"
         except Exception:
             # Speculation is best effort and cannot fail an active response.
             return
@@ -199,6 +318,7 @@ class PreloadManager:
         mode="manual",
         start=0,
         end=None,
+        viewer_id=None,
     ):
         if self._closed:
             raise ValueError("Media preparation is stopped")
@@ -259,6 +379,7 @@ class PreloadManager:
             "name": name,
             "state": "queued",
             "mode": mode,
+            "viewer_id": viewer_id,
             "bytes_done": 0,
             "size": size,
             "target_bytes": end - start,
@@ -302,6 +423,7 @@ class PreloadManager:
                 self._active += 1
                 acquired = True
             row["state"] = "preparing"
+            previous_fill = self._clock()
             manifest = parts or [{"message_id": message_id, "offset": 0, "size": size}]
             for part in manifest:
                 lo, hi = (
@@ -345,6 +467,15 @@ class PreloadManager:
                 )
                 try:
                     async for data in stream:
+                        now = self._clock()
+                        if now > previous_fill:
+                            rate = len(data) / (now - previous_fill)
+                            self._fill_rate = (
+                                rate
+                                if not self._fill_rate
+                                else 0.75 * self._fill_rate + 0.25 * rate
+                            )
+                        previous_fill = now
                         if digest is not None:
                             digest.update(data)
                         row["bytes_done"] = min(

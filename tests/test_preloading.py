@@ -133,7 +133,8 @@ async def test_auto_completes_hot_file_only_after_sequential_delivery(tmp_path):
         tmp_path, b"x" * (8 * BLOCK), auto_preload=True
     )
     try:
-        manager.observe(channel_id=CHANNEL, message_id=77, size=8 * BLOCK)
+        identity = manager.observe(channel_id=CHANNEL, message_id=77, size=8 * BLOCK)
+        manager.begin(identity, None)
         for index in range(3):
             manager.delivered(
                 channel_id=CHANNEL, message_id=77, offset=index * BLOCK, length=BLOCK
@@ -148,8 +149,19 @@ async def test_auto_completes_hot_file_only_after_sequential_delivery(tmp_path):
                 break
             await asyncio.sleep(0.001)
         job = next(iter(manager._jobs.values()))
-        assert job["mode"] == "auto" and job["target_bytes"] == 8 * BLOCK
+        assert job["mode"] == "auto" and job["target_bytes"] == 4 * BLOCK
         assert (await finish(manager, job))["state"] == "ready"
+        for index in range(4):
+            manager.delivered(
+                channel_id=CHANNEL, message_id=77, offset=index * BLOCK, length=BLOCK
+            )
+        for _ in range(100):
+            if len(manager._jobs) == 2:
+                break
+            await asyncio.sleep(0.001)
+        replay = list(manager._jobs.values())[-1]
+        assert replay["target_bytes"] == 8 * BLOCK
+        assert (await finish(manager, replay))["state"] == "ready"
     finally:
         await manager.close()
         await pool.stop()
@@ -249,7 +261,8 @@ async def test_far_seek_cancels_obsolete_automatic_ahead_job(tmp_path):
         auto_preload=True,
     )
     try:
-        manager.observe(channel_id=CHANNEL, message_id=77, size=64 * BLOCK)
+        identity = manager.observe(channel_id=CHANNEL, message_id=77, size=64 * BLOCK)
+        manager.begin(identity, None)
         for index in range(4):
             manager.delivered(
                 channel_id=CHANNEL, message_id=77, offset=index * BLOCK, length=BLOCK
@@ -288,5 +301,125 @@ async def test_explicit_full_prepare_can_replace_old_protected_bytes(tmp_path):
         assert (await finish(manager, job))["state"] == "ready"
         assert (await manager.snapshot())["cache"]["files"][0]["complete"]
     finally:
+        await manager.close()
+        await pool.stop()
+
+
+@pytest.mark.asyncio
+async def test_first_cold_view_only_preloads_ahead_and_stops_when_viewer_leaves(
+    tmp_path,
+):
+    gate = asyncio.Event()
+    manager, pool, _client = await manager_for(
+        tmp_path,
+        b"x" * (64 * BLOCK),
+        gate,
+        disk_max_bytes=256 * BLOCK,
+        auto_preload=True,
+    )
+    try:
+        identity = manager.observe(
+            channel_id=CHANNEL, message_id=77, size=64 * BLOCK, request_id="first-view"
+        )
+        manager.begin(identity, "first-view")
+        for index in range(4):
+            manager.delivered(
+                channel_id=CHANNEL,
+                message_id=77,
+                offset=index * BLOCK,
+                length=BLOCK,
+                request_id="first-view",
+            )
+        for _ in range(100):
+            if manager._jobs:
+                break
+            await asyncio.sleep(0.001)
+        row = next(iter(manager._jobs.values()))
+        assert 4 * BLOCK <= row["target_bytes"] <= 32 * BLOCK
+        assert row["target_bytes"] < row["size"]
+        manager.finished(identity, "first-view")
+        task = manager._tasks.get(row["id"])
+        if task is not None:
+            await asyncio.gather(task, return_exceptions=True)
+        assert row["state"] == "cancelled"
+    finally:
+        gate.set()
+        await manager.close()
+        await pool.stop()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "interval,fill,window", [(1, 2, 8), (1, 0.5, 16), (0.05, 40, 32)]
+)
+async def test_ahead_window_uses_consumption_and_fill_speed(
+    tmp_path, interval, fill, window
+):
+    gate = asyncio.Event()
+    manager, pool, _client = await manager_for(
+        tmp_path,
+        b"x" * (64 * BLOCK),
+        gate,
+        disk_max_bytes=256 * BLOCK,
+        auto_preload=True,
+    )
+    now = [0.0]
+    manager._clock = lambda: now[0]
+    manager._fill_rate = fill * BLOCK
+    try:
+        identity = manager.observe(channel_id=CHANNEL, message_id=77, size=64 * BLOCK)
+        manager.begin(identity, None)
+        for index in range(4):
+            now[0] = index * interval
+            manager.delivered(
+                channel_id=CHANNEL, message_id=77, offset=index * BLOCK, length=BLOCK
+            )
+        for _ in range(100):
+            if manager._jobs:
+                break
+            await asyncio.sleep(0.001)
+        row = next(iter(manager._jobs.values()))
+        assert row["start"] == 4 * BLOCK
+        assert row["target_bytes"] == window * BLOCK
+    finally:
+        gate.set()
+        await manager.close()
+        await pool.stop()
+
+
+@pytest.mark.asyncio
+async def test_two_qualified_overlapping_viewers_earn_full_completion(tmp_path):
+    gate = asyncio.Event()
+    manager, pool, _client = await manager_for(
+        tmp_path, b"x" * (8 * BLOCK), gate, auto_preload=True
+    )
+    try:
+        identity = None
+        for viewer in ("friend-one", "friend-two"):
+            identity = manager.observe(
+                channel_id=CHANNEL, message_id=77, size=8 * BLOCK, request_id=viewer
+            )
+            manager.begin(identity, viewer)
+            for index in range(4):
+                manager.delivered(
+                    channel_id=CHANNEL,
+                    message_id=77,
+                    offset=index * BLOCK,
+                    length=BLOCK,
+                    request_id=viewer,
+                )
+            for _ in range(100):
+                expected = 1 if viewer == "friend-one" else 2
+                if len(manager._jobs) >= expected:
+                    break
+                await asyncio.sleep(0.001)
+        full = list(manager._jobs.values())[-1]
+        assert full["target_bytes"] == 8 * BLOCK
+        manager.finished(identity, "friend-one")
+        manager.finished(identity, "friend-two")
+        gate.set()
+        assert (await finish(manager, full))["state"] == "ready"
+    finally:
+        gate.set()
         await manager.close()
         await pool.stop()

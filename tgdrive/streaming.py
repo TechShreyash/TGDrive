@@ -7,6 +7,7 @@ import hashlib
 import logging
 import mimetypes
 import re
+import secrets
 import time
 from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import AbstractAsyncContextManager
@@ -111,6 +112,38 @@ class _PrimedBody:
         await self.iterator.aclose()
 
 
+class _ActivityBody:
+    """Track one HTTP consumer across a logical multipart response."""
+
+    def __init__(self, iterator, activity):
+        self.iterator, self.activity = iterator, activity
+        self.started = self.closed = False
+
+    def __aiter__(self):
+        return self
+
+    async def __anext__(self):
+        if not self.started:
+            self.started = True
+            if self.activity is not None:
+                manager, identity, viewer = self.activity
+                manager.begin(identity, viewer)
+        try:
+            return await anext(self.iterator)
+        except BaseException:
+            await self.aclose()
+            raise
+
+    async def aclose(self):
+        try:
+            await self.iterator.aclose()
+        finally:
+            if self.started and not self.closed and self.activity is not None:
+                self.closed = True
+                manager, identity, viewer = self.activity
+                manager.finished(identity, viewer)
+
+
 def _media_etag(identity):
     return '"tg-' + hashlib.sha256(repr(identity).encode()).hexdigest() + '"'
 
@@ -165,10 +198,12 @@ def _observe_media_request(
     end,
     parts=None,
     authorize=None,
+    request_id=None,
 ):
     manager = getattr(pool, "_preload_manager", None)
     if manager is not None:
-        manager.observe(
+        viewer = request_id or secrets.token_urlsafe(12)
+        identity = manager.observe(
             channel_id=channel_id,
             message_id=message_id,
             size=size,
@@ -178,7 +213,9 @@ def _observe_media_request(
             end=end,
             method=request.method,
             authorize=authorize,
+            request_id=viewer,
         )
+        return (manager, identity, viewer) if request.method == "GET" else None
     elif callable(getattr(pool, "download_capacity", None)):
         from tgdrive.media_reader import MediaReadCache
 
@@ -414,7 +451,7 @@ async def stream_telegram_file(
             await release()
             return Response(status_code=413, content="PDF preview limit is 20 MiB")
 
-        _observe_media_request(
+        activity = _observe_media_request(
             pool,
             channel_id=channel_id,
             message_id=message_id,
@@ -424,6 +461,7 @@ async def stream_telegram_file(
             start=byte_range.start,
             end=byte_range.end + 1,
             authorize=authorize,
+            request_id=request_id,
         )
         # Pooled reads own their origin leases. A long warm response must not
         # retain the account used for its short, fresh metadata validation.
@@ -460,6 +498,15 @@ async def stream_telegram_file(
                     chunk_index += 1
                     if selected:
                         yield selected
+                        if activity is not None:
+                            manager, _identity, viewer = activity
+                            manager.delivered(
+                                channel_id=channel_id,
+                                message_id=message_id,
+                                offset=byte_range.start + emitted - len(selected),
+                                length=len(selected),
+                                request_id=viewer,
+                            )
                 if emitted != plan.requested_length:
                     raise OSError(
                         "Telegram stream ended early "
@@ -477,6 +524,7 @@ async def stream_telegram_file(
         headers = {
             "Accept-Ranges": "bytes",
             "Content-Length": str(byte_range.length),
+            "Content-Encoding": "identity",
             "Content-Disposition": _content_disposition(
                 file_name, mime_type, download=download, preview=preview
             ),
@@ -516,7 +564,7 @@ async def stream_telegram_file(
             )
 
         return await _prime_response(
-            body(),
+            _ActivityBody(body(), activity),
             release=release,
             status=206 if byte_range.is_partial else 200,
             mime_type=mime_type,
