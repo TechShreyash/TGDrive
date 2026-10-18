@@ -296,7 +296,16 @@ class SecurityHeadersMiddleware:
 
         async def with_headers(message: Message) -> None:
             if message["type"] == "http.response.start":
+                message["headers"] = [
+                    (name, value)
+                    for name, value in message.get("headers", [])
+                    if name.lower() != b"alt-svc"
+                ]
                 headers = MutableHeaders(scope=message)
+                # Keep the established HTTPS route instead of advertising an
+                # alternative whose UDP path may be unavailable. The deployment
+                # edge must preserve this policy after proxy-generated headers.
+                headers["Alt-Svc"] = "clear"
                 headers.setdefault("X-Content-Type-Options", "nosniff")
                 headers.setdefault("X-Frame-Options", "DENY")
                 headers.setdefault("Referrer-Policy", "no-referrer")

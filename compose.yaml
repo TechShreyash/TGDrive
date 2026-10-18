@@ -24,6 +24,10 @@ services:
       COOKIE_SECURE: "true"
       TGDRIVE_AUTO_SECRETS: "true"
       TGDRIVE_PROXY_HOSTS: coolify-proxy
+    # Coolify attaches declared middleware to its generated domain routers.
+    # Apply at the edge too: Traefik can append HTTP/3 advertisements to app headers.
+    labels:
+      - "traefik.http.middlewares.tgdrive-alt-svc.headers.customresponseheaders.Alt-Svc=clear"
     volumes:
       - tgdrive-data:/app/data
       - tgdrive-cache:/app/cache

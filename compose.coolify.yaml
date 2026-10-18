@@ -45,6 +45,9 @@ services:
       MIN_FREE_BYTES: ${MIN_FREE_BYTES:-1073741824}
       UPLOAD_SESSION_TTL_SECONDS: ${UPLOAD_SESSION_TTL_SECONDS:-86400}
       MAX_CONCURRENT_STREAMS: ${MAX_CONCURRENT_STREAMS:-4}
+    # Coolify discovers this middleware and preserves it on generated HTTPS routes.
+    labels:
+      - "traefik.http.middlewares.tgdrive-alt-svc.headers.customresponseheaders.Alt-Svc=clear"
     volumes:
       - tgdrive-data:/app/data
       - tgdrive-cache:/app/cache

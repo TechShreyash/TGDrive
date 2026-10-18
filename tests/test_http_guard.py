@@ -11,7 +11,11 @@ from starlette.exceptions import HTTPException
 from starlette.requests import Request
 from starlette.responses import JSONResponse
 
-from tgdrive.http_guard import StreamConcurrencyMiddleware, UploadGuardMiddleware
+from tgdrive.http_guard import (
+    SecurityHeadersMiddleware,
+    StreamConcurrencyMiddleware,
+    UploadGuardMiddleware,
+)
 from tgdrive.security import SESSION_COOKIE, SessionManager
 
 
@@ -182,3 +186,74 @@ async def test_stream_capacity_covers_body_and_releases_after_disconnect() -> No
     assert await asyncio.wait_for(entered.get(), 1) == "waiting"
     finish.set()
     await asyncio.gather(second, unrelated)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("path", "status"),
+    [("/", 200), ("/file", 206), ("/api/missing", 404), ("/api/failure", 500)],
+)
+@pytest.mark.parametrize("advertise", [False, True])
+async def test_alt_svc_default_preserves_streaming_payload_and_file_headers(
+    path, status, advertise
+):
+    messages = []
+    payload = [b"first", b"second"]
+
+    async def app(scope, receive, send):
+        headers = [
+            (b"content-length", b"11"),
+            (b"content-range", b"bytes 5-15/50"),
+            (b"accept-ranges", b"bytes"),
+            (b"content-encoding", b"identity"),
+        ]
+        if advertise:
+            headers.extend(
+                [(b"alt-svc", b'h3=":443"; ma=86400'), (b"Alt-Svc", b'h3-29=":443"')]
+            )
+        await send(
+            {"type": "http.response.start", "status": status, "headers": headers}
+        )
+        for index, chunk in enumerate(payload):
+            await send(
+                {"type": "http.response.body", "body": chunk, "more_body": index == 0}
+            )
+            assert messages[-1]["body"] is chunk  # passed through immediately
+
+    middleware = SecurityHeadersMiddleware(app, secure=True)
+
+    async def send(value):
+        messages.append(value)
+
+    await middleware({"type": "http", "path": path}, None, send)
+    headers = dict(messages[0]["headers"])
+    assert messages[0]["status"] == status
+    assert headers[b"alt-svc"] == b"clear"
+    assert sum(name.lower() == b"alt-svc" for name, _ in messages[0]["headers"]) == 1
+    assert headers[b"content-length"] == b"11"
+    assert headers[b"content-range"] == b"bytes 5-15/50"
+    assert headers[b"accept-ranges"] == b"bytes"
+    assert headers[b"content-encoding"] == b"identity"
+    assert headers[b"x-content-type-options"] == b"nosniff"
+    assert (
+        headers[b"strict-transport-security"] == b"max-age=31536000; includeSubDomains"
+    )
+    assert b"default-src 'self'" in headers[b"content-security-policy"]
+    assert b"".join(value["body"] for value in messages[1:]) == b"firstsecond"
+
+
+@pytest.mark.asyncio
+async def test_alt_svc_policy_passes_non_http_scope_and_messages_unchanged():
+    scope = {"type": "websocket", "path": "/"}
+    accept = {"type": "websocket.accept", "headers": [(b"alt-svc", b"unchanged")]}
+    sent = []
+
+    async def app(actual_scope, receive, send):
+        assert actual_scope is scope
+        await send(accept)
+
+    async def send(message):
+        sent.append(message)
+
+    await SecurityHeadersMiddleware(app, secure=True)(scope, None, send)
+    assert sent == [accept] and sent[0] is accept
