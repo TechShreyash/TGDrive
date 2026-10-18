@@ -8,8 +8,8 @@ import json
 import os
 import secrets
 import time
-from collections import deque
 from collections.abc import AsyncIterator
+from contextlib import suppress
 from pathlib import Path
 from typing import Any
 
@@ -24,17 +24,19 @@ READ_AHEAD = 32  # MiB per response, including currently requested windows.
 
 
 class _ScratchBudget:
-    """Global MiB reservations; acquire a response head before speculative work.
+    """Global MiB reservations with FIFO heads and reclaimable read-ahead.
 
-    Reservations include completed futures and the currently yielded block, and
-    remain owned until the consumer resumes or closes. Cache retention is a
-    separate budget. Waiting response heads take precedence over new read-ahead.
+    An awaited or yielded head stays owned until its consumer advances or closes.
+    Speculative frames can be reclaimed from a suspended reader when a new head
+    needs space. In-flight frames release only after their cancellation cleanup.
     """
 
     def __init__(self, maximum):
         self.limit = max(2, maximum // BLOCK)
         self.used = self.peak = self.waiters = 0
         self.changed = asyncio.Event()
+        self._heads = []
+        self._streams = set()
 
     def try_acquire(self):
         if self.waiters or self.used >= self.limit:
@@ -44,15 +46,33 @@ class _ScratchBudget:
         return True
 
     async def acquire(self):
+        ticket = object()
+        self._heads.append(ticket)
         self.waiters += 1
         try:
-            while self.used >= self.limit:
+            while True:
                 self.changed.clear()
+                if self._heads[0] is ticket:
+                    if self.used >= self.limit:
+                        # Prefer the largest speculative window and reclaim its
+                        # farthest block. Never revoke its awaited/yielded head.
+                        streams = sorted(
+                            self._streams,
+                            key=lambda stream: stream.speculative_count,
+                            reverse=True,
+                        )
+                        for stream in streams:
+                            if stream.reclaim_one():
+                                break
+                    if self.used < self.limit:
+                        self.used += 1
+                        self.peak = max(self.peak, self.used)
+                        return
                 await self.changed.wait()
-            self.used += 1
-            self.peak = max(self.peak, self.used)
         finally:
+            self._heads.remove(ticket)
             self.waiters -= 1
+            self.changed.set()
 
     def release(self):
         if self.used <= 0:
@@ -63,6 +83,88 @@ class _ScratchBudget:
     def resize(self, maximum):
         self.limit = max(2, maximum // BLOCK)
         self.changed.set()
+
+
+class _StreamFrames:
+    """Own stream tasks independently of a suspended generator's consumer."""
+
+    def __init__(self, scratch, read):
+        self.scratch, self.read = scratch, read
+        self.frames = {}
+        self.retiring = set()
+        scratch._streams.add(self)
+
+    @property
+    def speculative_count(self):
+        return sum(not frame.head for frame in self.frames.values())
+
+    def schedule(self, index, *, head=False):
+        try:
+            task = asyncio.create_task(self.read(index))
+        except BaseException:
+            self.scratch.release()
+            raise
+        frame = _StreamFrame(self, index, task, head)
+        self.frames[index] = frame
+        return frame
+
+    def reclaim_one(self):
+        for index in sorted(self.frames, reverse=True):
+            frame = self.frames[index]
+            if not frame.head:
+                self.retire(frame)
+                return True
+        return False
+
+    def release(self, frame):
+        if self.frames.get(frame.index) is frame:
+            del self.frames[frame.index]
+        frame.task = None
+        if not frame.released:
+            frame.released = True
+            self.scratch.release()
+
+    def retire(self, frame):
+        self.frames.pop(frame.index, None)
+        task = frame.task
+        if task.done():
+            frame.finish(task)
+        else:
+            self.retiring.add(frame)
+            task.add_done_callback(frame.finish)
+            task.cancel()
+
+    async def close(self):
+        self.scratch._streams.discard(self)
+        for frame in list(self.frames.values()):
+            self.retire(frame)
+        interrupted = False
+        if self.retiring:
+            cleanup = asyncio.gather(
+                *(frame.task for frame in self.retiring), return_exceptions=True
+            )
+            while not cleanup.done():
+                try:
+                    await asyncio.shield(cleanup)
+                except asyncio.CancelledError:
+                    interrupted = True
+            cleanup.result()
+        if interrupted:
+            raise asyncio.CancelledError
+
+
+class _StreamFrame:
+    def __init__(self, owner, index, task, head):
+        self.owner, self.index, self.task = owner, index, task
+        self.head, self.released = head, False
+
+    def finish(self, task):
+        # Consume speculative errors without making them escape a different
+        # request. The original reader retries that offset if it needs it later.
+        with suppress(BaseException):
+            task.result()
+        self.owner.retiring.discard(self)
+        self.owner.release(self)
 
 
 class _PayloadCache(_BlockCache):
@@ -760,22 +862,8 @@ async def stream_pooled_media(
             retain_hot=retain_hot,
         )
 
-    pending: deque[asyncio.Task[bytes]] = deque()
-    tasks: set[asyncio.Task[bytes]] = set()
-    next_index, end = offset, offset + limit
+    end = offset + limit
     scratch = cache.scratch
-
-    def schedule():
-        nonlocal next_index
-        try:
-            task = asyncio.create_task(read(next_index))
-        except BaseException:
-            scratch.release()
-            raise
-        pending.append(task)
-        tasks.add(task)
-        next_index += 1
-
     maximum = (
         cache.policy.background_blocks if background else cache.policy.read_ahead_blocks
     )
@@ -784,46 +872,43 @@ async def stream_pooled_media(
         max(4, await pool.download_capacity() * 4),
         limit,
     )
+    frames = _StreamFrames(scratch, read)
 
-    def refill():
+    def refill(index):
         quota = min(window, max(1, scratch.limit // max(1, cache._active_streams)))
-        while next_index < end and len(tasks) < quota and scratch.try_acquire():
-            schedule()
+        for following in range(index + 1, min(end, index + window)):
+            if len(frames.frames) >= quota:
+                break
+            if following in frames.frames:
+                continue
+            if not scratch.try_acquire():
+                break
+            frames.schedule(following)
 
     cache._active_streams += 1
+    data = frame = None
     try:
-        await scratch.acquire()
-        schedule()
-        refill()
-        while pending:
-            task = pending.popleft()
-            data = await task
+        for index in range(offset, end):
+            frame = frames.frames.get(index)
+            if frame is None:
+                await scratch.acquire()
+                frame = frames.schedule(index, head=True)
+            else:
+                frame.head = True
+            refill(index)
+            data = await frame.task
             if authorize is not None:
                 await authorize()
             yield data
-            tasks.discard(task)
-            scratch.release()
-            refill()
-            if not pending and next_index < end:
-                await scratch.acquire()
-                schedule()
-                refill()
+            # A suspended consumer owns exactly its yielded head, plus only
+            # reclaimable read-ahead. Drop our payload references before freeing
+            # the reservation so a new head cannot exceed the aggregate bound.
+            data = None
+            frames.release(frame)
+            frame = None
     finally:
-        for task in tasks:
-            task.cancel()
-        interrupted = False
+        del data, frame
         try:
-            if tasks:
-                cleanup = asyncio.gather(*tasks, return_exceptions=True)
-                while not cleanup.done():
-                    try:
-                        await asyncio.shield(cleanup)
-                    except asyncio.CancelledError:
-                        interrupted = True
-                cleanup.result()
+            await frames.close()
         finally:
-            for _ in tasks:
-                scratch.release()
             cache._active_streams -= 1
-        if interrupted:
-            raise asyncio.CancelledError

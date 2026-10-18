@@ -54,8 +54,8 @@ async def test_twenty_slow_distinct_readers_share_bounded_scratch_and_release_on
         cache = pool._media_read_cache
         await wait_until(lambda: any(task.done() for task in readers))
         await wait_until(lambda: cache._active_streams == 20)
+        await wait_until(lambda: sum(task.done() for task in readers) == 4)
         completed = sum(task.done() for task in readers)
-        assert 1 <= completed <= 4
         assert cache._active_streams == 20
         state = await cache.snapshot()
         assert state["memory"]["bytes"] == state["disk"]["bytes"] == 0
@@ -158,4 +158,248 @@ async def test_single_reader_uses_full_scratch_and_more_than_twelve_origin_fills
         assert pool._media_read_cache.scratch.used == 0
         assert all(client.native.active == 0 for client in accounts)
         await pool._media_read_cache.close()
+        await pool.stop()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("tier", ["ram", "disk"])
+async def test_paused_warm_reader_relinquishes_ahead_to_new_heads_and_resumes_in_order(
+    tmp_path, monkeypatch, tier
+):
+    monkeypatch.setattr("tgdrive.media_reader._effective_memory", lambda value: value)
+    payload = b"".join(bytes([index]) * BLOCK for index in range(24)) + b"tail"
+    client = account("bot", payload)
+    pool = ClientPool([client], media_cache_dir=tmp_path)
+    cache = pool._media_read_cache = MediaReadCache(
+        tmp_path,
+        MediaCachePolicy(
+            memory_max_bytes=64 * BLOCK if tier == "ram" else 0,
+            disk_max_bytes=64 * BLOCK if tier == "disk" else 0,
+            scratch_max_bytes=8 * BLOCK,
+            min_free_bytes=0,
+        ),
+    )
+    await pool.start()
+    source = await client.get_messages(CHANNEL, message_ids=77)
+
+    def stream(offset=0, limit=25):
+        return stream_pooled_media(
+            pool, client, source, channel=CHANNEL, offset=offset, limit=limit
+        )
+
+    paused, seeks, readers = stream(), [], []
+    try:
+        assert b"".join([data async for data in stream()]) == payload
+        await cache.flush()
+        requests = sum(client.native.requests.values())
+        first = await anext(paused)
+        assert first == payload[:BLOCK]
+        await wait_until(lambda: cache.scratch.used == 8)
+        # None of these consumers advance the original reader. Its suspended
+        # read-ahead must make room for new beginning/end/seek probes itself.
+        for index in (24, 10, 3, 20):
+            seek = stream(index, 1)
+            seeks.append(seek)
+            readers.append(asyncio.create_task(anext(seek)))
+        async with asyncio.timeout(2):
+            results = await asyncio.gather(*readers)
+        for index, result in zip((24, 10, 3, 20), results, strict=True):
+            assert result == payload[index * BLOCK : (index + 1) * BLOCK]
+        assert cache.scratch.used <= cache.scratch.peak == 8
+        assert sum(client.native.requests.values()) == requests
+        assert cache.scratch.waiters == 0
+        for seek in seeks:
+            await seek.aclose()
+        # Reclaimed offsets are loaded again from shared retention, without
+        # losing/duplicating any bytes or losing a newer frame's reservation.
+        async with asyncio.timeout(3):
+            assert first + b"".join([data async for data in paused]) == payload
+        assert sum(client.native.requests.values()) == requests
+    finally:
+        for reader in readers:
+            reader.cancel()
+        await asyncio.gather(*readers, return_exceptions=True)
+        for iterator in [paused, *seeks]:
+            await iterator.aclose()
+        assert cache.scratch.used == cache._active_streams == 0
+        assert cache.scratch._streams == set()
+        assert not cache.memory.flights
+        assert all(row.active_leases == 0 for row in await pool.status())
+        await cache.close()
+        await pool.stop()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("cancel_waiter", [False, True])
+async def test_cold_ahead_reclamation_keeps_payload_reserved_until_remote_cleanup(
+    tmp_path, monkeypatch, cancel_waiter
+):
+    monkeypatch.setattr("tgdrive.media_reader._effective_memory", lambda value: value)
+    payload = b"".join(bytes([index]) * BLOCK for index in range(16))
+    client = account("bot", payload)
+    release_data, release_cleanup, cancelling = (
+        asyncio.Event(),
+        asyncio.Event(),
+        asyncio.Event(),
+    )
+    active = set()
+
+    async def remote(_source, *, offset, limit, **_kwargs):
+        assert limit == 1
+        active.add(offset)
+        try:
+            if 1 <= offset <= 7:
+                try:
+                    await release_data.wait()
+                except asyncio.CancelledError:
+                    cancelling.set()
+                    await release_cleanup.wait()
+                    raise
+            yield payload[offset * BLOCK : (offset + 1) * BLOCK]
+        finally:
+            active.discard(offset)
+
+    client.stream_media = remote
+    pool = ClientPool([client], media_cache_dir=tmp_path, media_per_bot=16)
+    cache = pool._media_read_cache = MediaReadCache(
+        tmp_path,
+        MediaCachePolicy(
+            memory_max_bytes=0,
+            disk_max_bytes=0,
+            scratch_max_bytes=8 * BLOCK,
+            min_free_bytes=0,
+        ),
+    )
+    await pool.start()
+    source = await client.get_messages(CHANNEL, message_ids=77)
+
+    def stream(offset=0, limit=16):
+        return stream_pooled_media(
+            pool, client, source, channel=CHANNEL, offset=offset, limit=limit
+        )
+
+    paused, seek = stream(), stream(15, 1)
+    reader = None
+    try:
+        first = await anext(paused)
+        await wait_until(lambda: active == set(range(1, 8)))
+        assert cache.scratch.used == 8
+        reader = asyncio.create_task(anext(seek))
+        await asyncio.wait_for(cancelling.wait(), 2)
+        assert not reader.done()
+        assert cache.scratch.used == 8  # cancelled I/O still owns its frame
+        assert 15 not in active
+        if cancel_waiter:
+            reader.cancel()
+            await asyncio.sleep(0)
+            reader.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await reader
+            await seek.aclose()
+            seek = stream(15, 1)
+            reader = asyncio.create_task(anext(seek))
+            await wait_until(lambda: cache.scratch.waiters == 1)
+        release_cleanup.set()
+        assert await asyncio.wait_for(reader, 2) == payload[15 * BLOCK :]
+        assert cache.scratch.peak == 8
+        await seek.aclose()
+        release_data.set()
+        async with asyncio.timeout(3):
+            assert first + b"".join([data async for data in paused]) == payload
+    finally:
+        release_cleanup.set()
+        release_data.set()
+        if reader is not None:
+            reader.cancel()
+            await asyncio.gather(reader, return_exceptions=True)
+        await seek.aclose()
+        await paused.aclose()
+        assert cache.scratch.used == cache._active_streams == 0
+        assert not cache.memory.flights
+        assert not active
+        assert all(row.active_leases == 0 for row in await pool.status())
+        await cache.close()
+        await pool.stop()
+
+
+@pytest.mark.asyncio
+async def test_reclaiming_shared_ahead_keeps_another_viewers_origin_fill_alive(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setattr("tgdrive.media_reader._effective_memory", lambda value: value)
+    payload = b"".join(bytes([index]) * BLOCK for index in range(16))
+    client = account("bot", payload)
+    release_data = asyncio.Event()
+    calls, cancelled = [], []
+
+    async def remote(_source, *, offset, limit, **_kwargs):
+        assert limit == 1
+        calls.append(offset)
+        try:
+            if offset in (1, 2):
+                await release_data.wait()
+            yield payload[offset * BLOCK : (offset + 1) * BLOCK]
+        except asyncio.CancelledError:
+            cancelled.append(offset)
+            raise
+
+    client.stream_media = remote
+    pool = ClientPool([client], media_cache_dir=tmp_path, media_per_bot=16)
+    cache = pool._media_read_cache = MediaReadCache(
+        tmp_path,
+        MediaCachePolicy(
+            memory_max_bytes=64 * BLOCK,
+            disk_max_bytes=0,
+            scratch_max_bytes=6 * BLOCK,
+            read_ahead_blocks=3,
+            min_free_bytes=0,
+        ),
+    )
+    await pool.start()
+    source = await client.get_messages(CHANNEL, message_ids=77)
+
+    def stream(offset=0, limit=16):
+        return stream_pooled_media(
+            pool, client, source, channel=CHANNEL, offset=offset, limit=limit
+        )
+
+    paused, follower, probe = stream(), stream(2, 1), stream(15, 1)
+    holders = [stream(10, 1), stream(11, 1)]
+    reader = None
+    try:
+        first = await anext(paused)
+        reader = asyncio.create_task(anext(follower))
+        await wait_until(
+            lambda: any(flight.waiters == 2 for flight in cache.memory.flights.values())
+        )
+        for holder in holders:
+            await anext(holder)
+        assert cache.scratch.used == 6
+        assert await asyncio.wait_for(anext(probe), 2) == payload[15 * BLOCK :]
+        # The original reader's farthest ahead was reclaimed, but the shared
+        # fill for block two remains owned by the still-waiting follower.
+        assert calls.count(2) == 1
+        assert 2 not in cancelled
+        assert not reader.done()
+        assert cache.scratch.peak == 6
+        await probe.aclose()
+        for holder in holders:
+            await holder.aclose()
+        release_data.set()
+        assert await asyncio.wait_for(reader, 2) == payload[2 * BLOCK : 3 * BLOCK]
+        await follower.aclose()
+        async with asyncio.timeout(3):
+            assert first + b"".join([data async for data in paused]) == payload
+        assert calls.count(2) == 1
+    finally:
+        release_data.set()
+        if reader is not None:
+            reader.cancel()
+            await asyncio.gather(reader, return_exceptions=True)
+        for iterator in [paused, follower, probe, *holders]:
+            await iterator.aclose()
+        assert cache.scratch.used == cache._active_streams == 0
+        assert not cache.memory.flights
+        assert all(row.active_leases == 0 for row in await pool.status())
+        await cache.close()
         await pool.stop()
