@@ -132,14 +132,21 @@ export function ToastNotice({
 }) {
   const [container, setContainer] = useState<HTMLElement>(document.body);
   const notice = useRef<HTMLDivElement>(null);
+  const closeNotice = useRef(close);
+  closeNotice.current = close;
   useEffect(() => {
-    const update = () => {
+    const modal = () => {
       const dialogs =
         document.querySelectorAll<HTMLDialogElement>("dialog[open]");
-      setContainer(dialogs[dialogs.length - 1] || document.body);
+      return dialogs[dialogs.length - 1] || document.body;
     };
-    update();
-    const observer = new MutationObserver(update);
+    const anchor = modal();
+    setContainer(anchor);
+    const observer = new MutationObserver(() => {
+      // A notice belongs to the action that created it. Do not reannounce old
+      // feedback inside a different task's newly opened modal.
+      if (modal() !== anchor || !anchor.isConnected) closeNotice.current();
+    });
     observer.observe(document.body, {
       subtree: true,
       childList: true,
@@ -147,7 +154,7 @@ export function ToastNotice({
       attributeFilter: ["open"],
     });
     return () => observer.disconnect();
-  }, []);
+  }, [toast.message, toast.error]);
   useEffect(() => {
     const node = notice.current;
     // Closing a dialog can detach its portal before the observer relocates it.
