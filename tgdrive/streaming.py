@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import logging
 import mimetypes
 import re
@@ -13,11 +14,12 @@ from typing import Any
 from urllib.parse import quote
 
 from fastapi import Request
-from fastapi.responses import Response, StreamingResponse
+from fastapi.responses import JSONResponse, Response, StreamingResponse
 from starlette.types import Receive, Scope, Send
 from telethon.errors import FloodWaitError, RPCError
 
-from tgdrive.client_pool import ClientPool
+from tgdrive.client_pool import ClientPool, MediaQueueFull
+from tgdrive.media_metadata import get_message
 from tgdrive.ranges import (
     MalformedRange,
     RangeNotSatisfiable,
@@ -57,13 +59,20 @@ class TelegramFileNotFound(FileNotFoundError):
 
 class _LeasedStreamingResponse(StreamingResponse):
     def __init__(
-        self, *args: Any, release: Callable[[], Awaitable[None]], **kwargs: Any
+        self,
+        *args: Any,
+        release: Callable[[], Awaitable[None]],
+        authorize=None,
+        **kwargs: Any,
     ) -> None:
         super().__init__(*args, **kwargs)
         self._release = release
+        self._authorize = authorize
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         try:
+            if self._authorize is not None:
+                await self._authorize()
             await super().__call__(scope, receive, send)
         finally:
             # ASGI send can fail while the body is suspended at a yield.
@@ -74,6 +83,151 @@ class _LeasedStreamingResponse(StreamingResponse):
                     await close()
             finally:
                 await self._release()
+
+
+class _PrimedBody:
+    """Own a started iterator even if ASGI fails before its first body send."""
+
+    def __init__(self, iterator, first, authorize=None):
+        self.iterator, self.first, self.authorize = iterator, first, authorize
+
+    def __aiter__(self):
+        return self
+
+    async def __anext__(self):
+        try:
+            if self.authorize is not None:
+                await self.authorize()
+            if self.first is not None:
+                first, self.first = self.first, None
+                return first
+            return await anext(self.iterator)
+        except BaseException:
+            await self.aclose()
+            raise
+
+    async def aclose(self):
+        self.first = None
+        await self.iterator.aclose()
+
+
+def _media_etag(identity):
+    return '"tg-' + hashlib.sha256(repr(identity).encode()).hexdigest() + '"'
+
+
+def media_etag(
+    channel_id, message_id, total, parts=None, quality=None, document_identity=None
+):
+    quality = quality if quality not in (None, "") else "original"
+    if parts is not None:
+        manifest = tuple(
+            (
+                p["index"],
+                p["offset"],
+                p["size"],
+                p["message_id"],
+                p["sha256"],
+                p.get("document_id"),
+            )
+            for p in parts
+        )
+        return _media_etag((channel_id, message_id, total, quality, manifest))
+    tag = _media_etag((channel_id, message_id, total, quality, document_identity))
+    # A catalog-only HEAD cannot prove the immutable Telegram document identity.
+    return tag if document_identity is not None else "W/" + tag
+
+
+def _request_range(request, etag):
+    value = request.headers.get("if-range")
+    # A weak tag or an unverifiable date cannot prove byte identity.
+    if value is not None and (value.strip().startswith("W/") or value.strip() != etag):
+        return None
+    return request.headers.get("range")
+
+
+def _not_modified(request, etag):
+    value = request.headers.get("if-none-match")
+    return value is not None and any(
+        tag.strip() == "*" or tag.strip().removeprefix("W/") == etag.removeprefix("W/")
+        for tag in value.split(",")
+    )
+
+
+def _observe_media_request(
+    pool,
+    *,
+    channel_id,
+    message_id,
+    size,
+    name,
+    request,
+    start,
+    end,
+    parts=None,
+    authorize=None,
+):
+    manager = getattr(pool, "_preload_manager", None)
+    if manager is not None:
+        manager.observe(
+            channel_id=channel_id,
+            message_id=message_id,
+            size=size,
+            name=name,
+            parts=parts,
+            start=start,
+            end=end,
+            method=request.method,
+            authorize=authorize,
+        )
+    elif callable(getattr(pool, "download_capacity", None)):
+        from tgdrive.media_reader import MediaReadCache
+
+        if pool._media_read_cache is None:
+            pool._media_read_cache = MediaReadCache(pool.media_cache_dir)
+        pool._media_read_cache.register_file(
+            channel_id=channel_id,
+            message_id=message_id,
+            size=size,
+            name=name,
+            parts=parts,
+        )
+
+
+async def _prime_response(
+    iterator, *, release, status, mime_type, headers, authorize=None
+):
+    try:
+        try:
+            first = await anext(iterator)
+        except StopAsyncIteration:
+            first = None
+    except BaseException as error:
+        try:
+            await iterator.aclose()
+        finally:
+            await release()
+        if isinstance(error, MediaQueueFull):
+            return JSONResponse(
+                {
+                    "detail": str(error),
+                    "code": error.code,
+                    "retry_after": error.retry_after,
+                },
+                status_code=503,
+                headers={
+                    "Retry-After": str(error.retry_after),
+                    "Cache-Control": "no-store",
+                },
+            )
+        raise
+    return _LeasedStreamingResponse(
+        _PrimedBody(iterator, first, authorize),
+        release=release,
+        authorize=authorize,
+        status_code=status,
+        media_type=mime_type,
+        headers=headers,
+    )
 
 
 def _media_from_message(message: Any) -> Any | None:
@@ -115,8 +269,12 @@ async def stream_telegram_file(
     preview: bool = False,
     quality: str | None = None,
     parts: list[dict[str, Any]] | None = None,
+    authorize=None,
+    request_id: str | None = None,
 ) -> Response:
     """Stream with an optional Premium user and a balanced client lease."""
+    if authorize is not None:
+        await authorize()
     if parts is not None:
         from tgdrive.multipart_streaming import stream_multipart_file
 
@@ -131,6 +289,8 @@ async def stream_telegram_file(
             download=download,
             preview=preview,
             quality=quality,
+            authorize=authorize,
+            request_id=request_id,
         )
 
     lease: AbstractAsyncContextManager[Any] = pool.lease(
@@ -148,7 +308,7 @@ async def stream_telegram_file(
     try:
 
         async def fetch_media() -> tuple[Any, Any]:
-            message = await client.get_messages(channel_id, message_ids=message_id)
+            message = await get_message(client, channel_id, message_id)
             media = _media_from_message(message)
             if message is None or getattr(message, "empty", False) or media is None:
                 raise TelegramFileNotFound(
@@ -193,8 +353,31 @@ async def stream_telegram_file(
         if total < 0:
             raise TelegramFileNotFound("Telegram media has an invalid size")
 
+        from tgdrive.telegram_clients import _block_identity
+
+        immutable = _block_identity(message, 0)
+        selected_quality = quality if not download else "original"
+        etag = media_etag(
+            channel_id,
+            message_id,
+            total,
+            quality=selected_quality,
+            document_identity=immutable[0][2:-1] if immutable else None,
+        )
+        if _not_modified(request, etag):
+            if authorize is not None:
+                await authorize()
+            await release()
+            return Response(
+                status_code=304,
+                headers={
+                    "ETag": etag,
+                    "Cache-Control": "private, no-store, no-transform",
+                },
+            )
+
         try:
-            byte_range = parse_byte_range(request.headers.get("range"), total)
+            byte_range = parse_byte_range(_request_range(request, etag), total)
         except MalformedRange as exc:
             await release()
             return Response(
@@ -231,6 +414,22 @@ async def stream_telegram_file(
             await release()
             return Response(status_code=413, content="PDF preview limit is 20 MiB")
 
+        _observe_media_request(
+            pool,
+            channel_id=channel_id,
+            message_id=message_id,
+            size=total,
+            name=file_name,
+            request=request,
+            start=byte_range.start,
+            end=byte_range.end + 1,
+            authorize=authorize,
+        )
+        # Pooled reads own their origin leases. A long warm response must not
+        # retain the account used for its short, fresh metadata validation.
+        if immutable is not None:
+            await release()
+
         async def body() -> AsyncIterator[bytes]:
             emitted = 0
             from tgdrive.media_reader import stream_pooled_media
@@ -242,6 +441,8 @@ async def stream_telegram_file(
                 channel=channel_id,
                 limit=plan.part_count,
                 offset=plan.offset // plan.chunk_size,
+                authorize=authorize,
+                request_id=request_id,
             )
             try:
                 chunk_index = 0
@@ -282,7 +483,8 @@ async def stream_telegram_file(
             "X-Content-Type-Options": "nosniff",
             "Referrer-Policy": "no-referrer",
             "Content-Security-Policy": "sandbox; default-src 'none'",
-            "Cache-Control": "private, no-store",
+            "Cache-Control": "private, no-store, no-transform",
+            "ETag": etag,
         }
         if (
             mime_type.startswith(("audio/", "video/"))
@@ -304,6 +506,8 @@ async def stream_telegram_file(
             headers["Content-Range"] = byte_range.content_range
 
         if request.method == "HEAD":
+            if authorize is not None:
+                await authorize()
             await release()
             return Response(
                 status_code=206 if byte_range.is_partial else 200,
@@ -311,12 +515,13 @@ async def stream_telegram_file(
                 headers=headers,
             )
 
-        return _LeasedStreamingResponse(
+        return await _prime_response(
             body(),
             release=release,
-            status_code=206 if byte_range.is_partial else 200,
-            media_type=mime_type,
+            status=206 if byte_range.is_partial else 200,
+            mime_type=mime_type,
             headers=headers,
+            authorize=authorize,
         )
     except BaseException:
         await release()

@@ -15,7 +15,11 @@ from tgdrive.ranges import MalformedRange, RangeNotSatisfiable, parse_byte_range
 from tgdrive.streaming import (
     TelegramVariantNotFound,
     _content_disposition,
-    _LeasedStreamingResponse,
+    _not_modified,
+    _observe_media_request,
+    _prime_response,
+    _request_range,
+    media_etag,
 )
 
 
@@ -31,12 +35,17 @@ async def stream_multipart_file(
     download: bool = False,
     preview: bool = False,
     quality: str | None = None,
+    authorize=None,
+    request_id: str | None = None,
 ) -> Response:
+    if authorize is not None:
+        await authorize()
     manifest = validate_parts(parts, size=expected_size, message_id=message_id)
     if quality not in (None, "", "original") and not download:
         raise TelegramVariantNotFound("Separate file parts have no alternate rendition")
+    etag = media_etag(channel_id, message_id, expected_size, parts=manifest)
     try:
-        selected = parse_byte_range(request.headers.get("range"), expected_size)
+        selected = parse_byte_range(_request_range(request, etag), expected_size)
     except MalformedRange as error:
         return Response(
             status_code=400, content=str(error), headers={"Accept-Ranges": "bytes"}
@@ -58,7 +67,31 @@ async def stream_multipart_file(
     ):
         return Response(status_code=413, content="PDF preview limit is 20 MiB")
     spans = part_ranges(manifest, selected)
-    first = await PartLease(pool, channel_id, spans[0][0]).open()
+    first = await PartLease(
+        pool, channel_id, spans[0][0], authorize=authorize, request_id=request_id
+    ).open()
+    if _not_modified(request, etag):
+        try:
+            if authorize is not None:
+                await authorize()
+        finally:
+            await first.close()
+        return Response(
+            status_code=304,
+            headers={"ETag": etag, "Cache-Control": "private, no-store, no-transform"},
+        )
+    _observe_media_request(
+        pool,
+        channel_id=channel_id,
+        message_id=message_id,
+        size=expected_size,
+        name=file_name,
+        parts=manifest,
+        request=request,
+        start=selected.start,
+        end=selected.end + 1,
+        authorize=authorize,
+    )
     headers = {
         "Accept-Ranges": "bytes",
         "Content-Length": str(selected.length),
@@ -68,7 +101,8 @@ async def stream_multipart_file(
         "X-Content-Type-Options": "nosniff",
         "Referrer-Policy": "no-referrer",
         "Content-Security-Policy": "sandbox; default-src 'none'",
-        "Cache-Control": "private, no-store",
+        "Cache-Control": "private, no-store, no-transform",
+        "ETag": etag,
     }
     # Retain the original streamer's safe document policy for passive media.
     from tgdrive.streaming import _SAFE_INLINE_IMAGE_TYPES
@@ -90,7 +124,11 @@ async def stream_multipart_file(
         headers["Content-Range"] = selected.content_range
     status = 206 if selected.is_partial else 200
     if request.method == "HEAD":
-        await first.close()
+        try:
+            if authorize is not None:
+                await authorize()
+        finally:
+            await first.close()
         return Response(status_code=status, media_type=mime_type, headers=headers)
 
     async def body() -> AsyncIterator[bytes]:
@@ -100,7 +138,13 @@ async def stream_multipart_file(
                 lease = (
                     first
                     if index == 0
-                    else await PartLease(pool, channel_id, part).open()
+                    else await PartLease(
+                        pool,
+                        channel_id,
+                        part,
+                        authorize=authorize,
+                        request_id=request_id,
+                    ).open()
                 )
                 iterator = lease.read(interval)
                 try:
@@ -119,10 +163,11 @@ async def stream_multipart_file(
         finally:
             await first.close()
 
-    return _LeasedStreamingResponse(
+    return await _prime_response(
         body(),
         release=first.close,
-        status_code=status,
-        media_type=mime_type,
+        status=status,
+        mime_type=mime_type,
         headers=headers,
+        authorize=authorize,
     )

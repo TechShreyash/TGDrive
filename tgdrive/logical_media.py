@@ -10,6 +10,7 @@ from typing import Any
 
 from telethon.errors import FloodWaitError, RPCError
 
+from tgdrive.media_metadata import get_message
 from tgdrive.ranges import ByteRange, plan_telegram_chunks
 from tgdrive.streaming import TelegramFileNotFound, _media_from_message
 
@@ -42,17 +43,27 @@ def part_ranges(
 class PartLease:
     """One selected part, with owned release even if HTTP cancellation repeats."""
 
-    def __init__(self, pool: Any, channel: int, part: dict[str, Any]):
+    def __init__(
+        self,
+        pool: Any,
+        channel: int,
+        part: dict[str, Any],
+        *,
+        authorize=None,
+        request_id=None,
+    ):
         self.pool, self.channel, self.part = pool, channel, part
+        self.authorize, self.request_id = authorize, request_id
         self.lease: Any = None
         self.client: Any = None
         self.message: Any = None
         self._release_task: asyncio.Task | None = None
 
     async def _fetch(self) -> None:
-        self.message = await self.client.get_messages(
-            self.channel,
-            message_ids=self.part["message_id"],
+        if self.authorize is not None:
+            await self.authorize()
+        self.message = await get_message(
+            self.client, self.channel, self.part["message_id"]
         )
         media = _media_from_message(self.message)
         if (
@@ -99,6 +110,10 @@ class PartLease:
                     await self.close()
                     self.lease = None
                     await self._acquire()
+            from tgdrive.telegram_clients import _block_identity
+
+            if _block_identity(self.message, 0) is not None:
+                await self.close()
             return self
         except BaseException:
             await self.close()
@@ -121,7 +136,9 @@ class PartLease:
         if interrupted:
             raise asyncio.CancelledError
 
-    async def read(self, selected: ByteRange) -> AsyncIterator[bytes]:
+    async def read(
+        self, selected: ByteRange, *, authorize=None, request_id=None
+    ) -> AsyncIterator[bytes]:
         plan = plan_telegram_chunks(selected)
         from tgdrive.media_reader import stream_pooled_media
 
@@ -132,6 +149,8 @@ class PartLease:
             channel=self.channel,
             limit=plan.part_count,
             offset=plan.offset // plan.chunk_size,
+            authorize=authorize or self.authorize,
+            request_id=request_id or self.request_id,
         )
         emitted = 0
         count = 0
