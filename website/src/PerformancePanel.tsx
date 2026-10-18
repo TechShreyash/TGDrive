@@ -3,6 +3,7 @@ import { RefreshCw } from "lucide-react";
 import { errorMessage } from "./api";
 import { ErrorNotice, Spinner } from "./components";
 import { formatBytes } from "./types";
+import StreamMemoryFact from "./StreamMemoryFact";
 import {
   performanceApi,
   type LoadSample,
@@ -502,6 +503,7 @@ export default function PerformancePanel() {
                 </dd>
                 <small>Shared cache observations</small>
               </div>
+              <StreamMemoryFact scratch={snapshot.cache.scratch} />
             </dl>
           </section>
         </>

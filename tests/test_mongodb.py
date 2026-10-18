@@ -503,3 +503,42 @@ def test_share_listing_copyability_expiry_and_move(store, backend, monkeypatch):
     assert len(reopened.list_shares(include_expired=True)) == 1
     assert not reopened.authorize_file(record["path"], token)
     reopened.close()
+
+
+async def test_operator_performance_policy_survives_new_service_with_mongodb(
+    backend, tmp_path
+):
+    from unittest.mock import AsyncMock
+
+    from tgdrive.performance_preferences import PerformanceSettings
+
+    def state():
+        return SimpleNamespace(
+            mongo=backend,
+            pool=SimpleNamespace(
+                _slots=[],
+                set_media_per_bot=AsyncMock(),
+                set_media_queue_limit=AsyncMock(),
+            ),
+        )
+
+    settings = SimpleNamespace(resolved_data_dir=tmp_path / "policy-data")
+    first, second = state(), state()
+    service = PerformanceSettings(settings, first)
+    try:
+        before = await service.snapshot()
+        saved = await service.save(
+            {"timezone": "UTC", "telegram_media_per_bot": 4},
+            expected=before["revision"],
+        )
+        restarted = PerformanceSettings(settings, second)
+        observed = await restarted.snapshot()
+        assert observed["revision"] == saved["revision"]
+        assert observed["timezone"] == "UTC"
+        assert observed["telegram_media_per_bot"] == 4
+        assert not service.path.exists()
+    finally:
+        for runtime in (first, second):
+            manager = getattr(runtime, "preloads", None)
+            if manager is not None:
+                await manager.close()

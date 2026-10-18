@@ -3,6 +3,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { ApiError } from "./api";
 import { CacheCoverage, coverageRanges } from "./Preloads";
 import { httpRates, loadPoints, queueWait } from "./PerformancePanel";
+import StreamMemoryFact from "./StreamMemoryFact";
 import {
   GIB,
   MIB,
@@ -144,6 +145,25 @@ describe("performance settings and HTTP boundaries", () => {
 });
 
 describe("cache coverage and observed queue estimates", () => {
+  it("shows the separate effective stream memory budget and tolerates older snapshots", () => {
+    expect(renderToStaticMarkup(<StreamMemoryFact />)).toBe("");
+    const html = renderToStaticMarkup(
+      <StreamMemoryFact
+        scratch={{
+          bytes: MIB,
+          max_bytes: 2 * MIB,
+          configured_max_bytes: 32 * MIB,
+          peak_bytes: 2 * MIB,
+          active_streams: 4,
+          waiting_heads: 2,
+        }}
+      />,
+    );
+    expect(html).toContain("1 / 2 MB");
+    expect(html).not.toContain("32 MB");
+    expect(html).toContain("4 streams · 2 waiting for memory");
+    expect(html).toContain("separate from retained cache");
+  });
   it("merges verified coverage, clips EOF and ignores invalid ranges", () => {
     expect(
       coverageRanges(

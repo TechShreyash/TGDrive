@@ -192,7 +192,16 @@ export interface CachedFile {
   memory_ranges?: [number, number][];
   disk_ranges?: [number, number][];
 }
+export interface ScratchSnapshot {
+  bytes: number;
+  max_bytes: number;
+  configured_max_bytes: number;
+  peak_bytes: number;
+  waiting_heads: number;
+  active_streams: number;
+}
 export interface CacheSnapshot {
+  scratch?: ScratchSnapshot;
   memory: {
     bytes: number;
     max_bytes: number;

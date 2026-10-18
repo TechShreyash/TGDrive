@@ -3,6 +3,7 @@ import { Database, RefreshCw, Trash2, X, AlertCircle } from "lucide-react";
 import { errorMessage } from "./api";
 import { ErrorNotice, Spinner } from "./components";
 import { formatBytes, formatByteProgress } from "./types";
+import StreamMemoryFact from "./StreamMemoryFact";
 import {
   performanceApi,
   type CachedFile,
@@ -262,6 +263,7 @@ export default function Preloads({
               </dd>
               <small>Active viewers have priority</small>
             </div>
+            <StreamMemoryFact scratch={cache.scratch} />
           </dl>
           <p className="settings-help">
             Cached content can expire or be evicted. Preparation does not pin a
