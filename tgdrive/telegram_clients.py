@@ -5,6 +5,9 @@ from __future__ import annotations
 import asyncio
 import copy
 import hashlib
+import inspect
+import logging
+import math
 import mimetypes
 import secrets
 import time
@@ -24,6 +27,7 @@ from telethon.errors import (
     FileReferenceInvalidError,
     FilerefUpgradeNeededError,
     FloodWaitError,
+    RPCError,
 )
 from telethon.sessions import StringSession
 
@@ -31,6 +35,9 @@ from tgdrive.client_identity import IdentityCache, account_identity
 from tgdrive.client_pool import ClientPool
 from tgdrive.config import Settings
 from tgdrive.file_window import FileWindow
+from tgdrive.media_scheduler import MediaScheduler
+
+log = logging.getLogger(__name__)
 
 _DOWNLOAD_BLOCK = 1024**2
 _DOWNLOAD_REQUEST = 512 * 1024
@@ -393,6 +400,11 @@ class Client:
         updates: bool = False,
     ) -> None:
         self._token = bot_token
+        self._upload_pipeline = getattr(settings, "telegram_upload_pipeline", 4)
+        self._media_scheduler = MediaScheduler(
+            limit=getattr(settings, "telegram_request_limit", 8),
+            rate=getattr(settings, "telegram_parts_per_second", 24),
+        )
         self._premium = bool(session_string)
         self.display_name: str | None = None
         self.username: str | None = None
@@ -459,10 +471,69 @@ class Client:
             session_name = getattr(self.native.session, "filename", None)
             if session_name:
                 await asyncio.to_thread(Path(session_name).chmod, 0o600)
+            if isinstance(self.native, TelegramClient):
+                await self._refresh_main_endpoint()
             self._start_identity_refresh(seed=me)
         except BaseException:
             await self.native.disconnect()
             raise
+
+    async def _refresh_main_endpoint(self) -> None:
+        """Refresh a stale same-DC address only during startup, with rollback.
+
+        Never choose media-only endpoints for the main RPC connection. Telethon
+        continues to own exported senders and migration for file downloads.
+        """
+        session = self.native.session
+        if not all(
+            hasattr(session, name) for name in ("dc_id", "server_address", "port")
+        ):
+            return
+        previous = (session.dc_id, session.server_address, session.port)
+        try:
+            async with asyncio.timeout(8):
+                config = await self.native(functions.help.GetConfigRequest())
+            options = [
+                option
+                for option in config.dc_options
+                if option.id == previous[0]
+                and not option.media_only
+                and not option.cdn
+                and bool(option.ipv6) == (":" in previous[1])
+                and not getattr(option, "tcpo_only", False)
+            ]
+        except (OSError, RPCError, TimeoutError):
+            return  # A failed optional refresh cannot prevent startup.
+        if not options:
+            return
+        selected = options[0]
+        replacement = (previous[0], selected.ip_address, selected.port)
+        if replacement == previous:
+            return
+        await self.native.disconnect()
+        try:
+            session.set_dc(*replacement)
+            session.save()
+            async with asyncio.timeout(15):
+                await self.native.connect()
+                if not await self.native.is_user_authorized():
+                    raise RuntimeError("Refreshed Telegram endpoint lost authorization")
+        except BaseException as error:
+            await self.native.disconnect()
+            session.set_dc(*previous)
+            session.save()
+            await self.native.connect()
+            if isinstance(error, asyncio.CancelledError):
+                raise
+            log.warning("Telegram endpoint refresh failed; restored previous address")
+
+    def configure_transport(
+        self, *, upload_pipeline: int, request_limit: int, parts_per_second: float
+    ) -> None:
+        if type(upload_pipeline) is not int or not 1 <= upload_pipeline <= 16:
+            raise ValueError("Upload pipeline must be between 1 and 16")
+        self._media_scheduler.configure(limit=request_limit, rate=parts_per_second)
+        self._upload_pipeline = upload_pipeline
 
     @property
     def identity_refreshing(self) -> bool:
@@ -583,9 +654,16 @@ class Client:
                 await asyncio.to_thread(cache.defer, self.name, deadline)
 
     async def get_messages(self, channel: int, *, message_ids: Any) -> Any:
+        scheduler = getattr(self, "_media_scheduler", None)
         try:
-            result = await self.native.get_messages(channel, ids=message_ids)
+            if scheduler is None:
+                result = await self.native.get_messages(channel, ids=message_ids)
+            else:
+                async with scheduler.request():
+                    result = await self.native.get_messages(channel, ids=message_ids)
         except FloodWaitError as error:
+            if scheduler is not None:
+                await scheduler.flood(max(1, error.seconds) + 0.25)
             await self._defer_read(error)
             raise
         if isinstance(result, list):
@@ -678,13 +756,19 @@ class Client:
             else size
         )
         with FileWindow(path, offset, length, name=file_name) as source:
-            uploaded = await self.native.upload_file(
-                source,
-                file_name=file_name,
-                file_size=length,
-                part_size_kb=512,
-                progress_callback=progress,
-            )
+            if hasattr(self, "_media_scheduler"):
+                uploaded = await self._upload_parts(
+                    source, length=length, file_name=file_name, progress=progress
+                )
+            else:
+                # Compatibility for externally supplied legacy adapter doubles.
+                uploaded = await self.native.upload_file(
+                    source,
+                    file_name=file_name,
+                    file_size=length,
+                    part_size_kb=512,
+                    progress_callback=progress,
+                )
             if expected_sha256 is not None:
                 source.verify(expected_sha256)
         media = types.InputMediaUploadedDocument(
@@ -717,6 +801,108 @@ class Client:
                 await defer(time.time() + exc.seconds + 0.25)
             raise
         return await self._sent(channel, result)
+
+    async def _upload_parts(
+        self, source: FileWindow, *, length: int, file_name: str, progress: Any
+    ) -> Any:
+        """Pipeline bounded idempotent protocol parts; publish only after all ACKs."""
+        part_size = 512 * 1024
+        part_count = math.ceil(length / part_size)
+        file_id = secrets.randbits(63)
+        big = length > 10 * 1024 * 1024
+        digest = hashlib.md5(usedforsecurity=False) if not big else None
+        pending: set[asyncio.Task[int]] = set()
+        acknowledged = 0
+
+        async def send(request: Any, count: int) -> int:
+            attempt = 0
+            while True:
+                try:
+                    async with self._media_scheduler.request():
+                        accepted = await self.native(request)
+                        if not accepted:
+                            raise OSError(
+                                "Telegram did not acknowledge the upload part"
+                            )
+                    self._media_scheduler.record_bytes(count)
+                    return count
+                except FloodWaitError as error:
+                    await self._media_scheduler.flood(max(1, error.seconds) + 0.25)
+                    await self._defer_read(error)
+                    # The shared scheduler, not each worker, observes the wait.
+                    # Flood waits do not consume the transient network retry
+                    # budget or discard successfully acknowledged sibling parts.
+                except (OSError, TimeoutError, RPCError) as error:
+                    if isinstance(error, RPCError) and getattr(error, "code", 0) < 500:
+                        raise
+                    attempt += 1
+                    if attempt >= 3:
+                        raise
+                    await asyncio.sleep(0.25 * (2 ** (attempt - 1)))
+
+        async def collect() -> None:
+            nonlocal pending, acknowledged
+            done, pending = await asyncio.wait(
+                pending, return_when=asyncio.FIRST_COMPLETED
+            )
+            # Retrieve every outcome even if another completed part failed.
+            results = await asyncio.gather(*done, return_exceptions=True)
+            for result in results:
+                if isinstance(result, BaseException):
+                    raise result
+                acknowledged += result
+            if progress is not None:
+                value = progress(acknowledged, length)
+                if inspect.isawaitable(value):
+                    await value
+
+        try:
+            for index in range(part_count):
+                if len(pending) >= self._upload_pipeline:
+                    await collect()
+                read = asyncio.create_task(asyncio.to_thread(source.read, part_size))
+                try:
+                    payload = await asyncio.shield(read)
+                except asyncio.CancelledError:
+                    # FileWindow must outlive an already running filesystem read.
+                    await read
+                    raise
+                expected = min(part_size, length - index * part_size)
+                if len(payload) != expected:
+                    raise OSError("Staged file ended before the declared upload length")
+                if digest is not None:
+                    digest.update(payload)
+                request = (
+                    functions.upload.SaveBigFilePartRequest(
+                        file_id=file_id,
+                        file_part=index,
+                        file_total_parts=part_count,
+                        bytes=payload,
+                    )
+                    if big
+                    else functions.upload.SaveFilePartRequest(
+                        file_id=file_id,
+                        file_part=index,
+                        bytes=payload,
+                    )
+                )
+                pending.add(asyncio.create_task(send(request, len(payload))))
+            while pending:
+                await collect()
+            source.verify(None)
+        finally:
+            for task in pending:
+                task.cancel()
+            if pending:
+                await asyncio.gather(*pending, return_exceptions=True)
+        if big:
+            return types.InputFileBig(id=file_id, parts=part_count, name=file_name)
+        return types.InputFile(
+            id=file_id,
+            parts=part_count,
+            name=file_name,
+            md5_checksum=digest.hexdigest(),
+        )
 
     async def send_document(
         self, channel: int, document: Any, **options: Any
@@ -800,7 +986,11 @@ class Client:
                 return TelegramMediaSelection(message, descriptor, media)
         raise ValueError("The requested media quality is unavailable for this file")
 
-    async def stream_media(self, message: Any, *, limit: int, offset: int):
+    supports_uncached_media = True
+
+    async def stream_media(
+        self, message: Any, *, limit: int, offset: int, use_cache: bool = True
+    ):
         """Yield ordered MiB blocks with at most four windows of read-ahead."""
         if limit <= 0:
             return
@@ -841,12 +1031,30 @@ class Client:
                     // _DOWNLOAD_REQUEST,
                 )
                 try:
-                    async for part in iterator:
+                    while len(data) < _DOWNLOAD_BLOCK:
+                        scheduler = getattr(self, "_media_scheduler", None)
+                        if scheduler is None:
+                            try:
+                                part = await anext(iterator)
+                            except StopAsyncIteration:
+                                break
+                        else:
+                            async with scheduler.request():
+                                try:
+                                    part = await anext(iterator)
+                                except StopAsyncIteration:
+                                    part = None
+                            if part is None:
+                                break
+                            scheduler.record_bytes(len(part))
                         data.extend(part[: _DOWNLOAD_BLOCK - len(data)])
                         if len(data) == _DOWNLOAD_BLOCK:
                             break
                     return bytes(data)
                 except FloodWaitError as error:
+                    scheduler = getattr(self, "_media_scheduler", None)
+                    if scheduler is not None:
+                        await scheduler.flood(max(1, error.seconds) + 0.25)
                     await self._defer_read(error)
                     raise
                 except (
@@ -881,6 +1089,8 @@ class Client:
             return bytes(data)
 
         async def read_block(index: int) -> bytes:
+            if not use_cache:
+                return await read_remote_block(index)
             identity = _block_identity(message, index)
             if identity is None:
                 return await read_remote_block(index)
@@ -984,6 +1194,8 @@ def build_client_pool(settings: Settings) -> ClientPool:
         media_send_interval=1.0,
         uploads_per_bot=settings.telegram_uploads_per_bot,
         media_cache_dir=settings.resolved_data_dir / "media-cache",
+        media_per_bot=getattr(settings, "telegram_media_per_bot", 3),
+        max_media_queue=getattr(settings, "telegram_max_queue", 256),
     )
 
 

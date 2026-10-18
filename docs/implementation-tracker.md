@@ -40,3 +40,8 @@ changes are preserved separately and restored after integration.
 Implementation commits and their validation results are recorded below as stages
 complete. The final handoff lists every commit and any remaining validation
 limits. No request is considered complete solely because a UI control exists.
+
+- Transport stage: bounded Telethon part pipelining, long flood-wait retries,
+  shared per-account budgets, priority origin leases, request queue estimates and
+  live same-DC endpoint refresh. Root verification: 52 targeted tests passed and
+  Ruff passed; broader transport verification by subagent: 139 passed.

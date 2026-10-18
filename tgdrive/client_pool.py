@@ -5,11 +5,14 @@ from __future__ import annotations
 import asyncio
 import inspect
 import time
+from collections import deque
 from collections.abc import AsyncIterator, Awaitable, Callable, Iterable
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from enum import StrEnum
 from typing import TYPE_CHECKING, Any, Literal, Protocol, TypeAlias
+
+from tgdrive.media_scheduler import MediaPriority
 
 if TYPE_CHECKING:
     from tgdrive.config import Settings
@@ -50,6 +53,16 @@ class ClientPoolNotRunning(ClientPoolError):
 
 class NoClientAvailable(ClientPoolError):
     """No started, healthy client satisfies a lease request."""
+
+
+class MediaQueueFull(NoClientAvailable):
+    """Retryable origin overload; cached delivery does not enter this queue."""
+
+    code = "TELEGRAM_QUEUE_FULL"
+
+    def __init__(self, retry_after: int = 1) -> None:
+        self.retry_after = max(1, retry_after)
+        super().__init__("Telegram origin queue is full; retry shortly")
 
 
 class DuplicateClientIdentity(ClientPoolError):
@@ -158,12 +171,24 @@ class ClientPool:
         media_send_interval: float = 0.0,
         uploads_per_bot: int = 1,
         media_cache_dir: Any = None,
+        media_per_bot: int = 3,
+        max_media_queue: int = 256,
     ) -> None:
         self._allow_partial_start = allow_partial_start
         self.media_cache_dir = media_cache_dir
         self._media_read_cache: Any = None
         self._validate_upload_limit(uploads_per_bot)
         self._uploads_per_bot = uploads_per_bot
+        self._validate_media_limit(media_per_bot)
+        self._media_per_bot = media_per_bot
+        self._validate_queue_limit(max_media_queue)
+        self._max_media_queue = max_media_queue
+        self._origin_waiters: list[dict[str, Any]] = []
+        self._origin_active: dict[object, dict[str, Any]] = {}
+        self._origin_sequence = 0
+        self._origin_durations: deque[float] = deque(maxlen=128)
+        self._load_history: deque[dict[str, Any]] = deque(maxlen=120)
+        self._last_load_sample = 0.0
         self._slots: list[_ClientSlot] = []
         for kind, sources in (("bot", bot_clients), ("user", user_clients)):
             for index, source in enumerate(sources):
@@ -199,6 +224,32 @@ class ClientPool:
     @property
     def uploads_per_bot(self) -> int:
         return self._uploads_per_bot
+
+    @staticmethod
+    def _validate_media_limit(value: int) -> None:
+        if type(value) is not int or not 1 <= value <= 32:
+            raise ValueError("Combined media activity must be between 1 and 32")
+
+    @property
+    def media_per_bot(self) -> int:
+        return self._media_per_bot
+
+    async def set_media_per_bot(self, value: int) -> None:
+        self._validate_media_limit(value)
+        async with self._leases:
+            self._media_per_bot = value
+            self._leases.notify_all()
+
+    @staticmethod
+    def _validate_queue_limit(value: int) -> None:
+        if type(value) is not int or not 1 <= value <= 4096:
+            raise ValueError("Telegram queue limit must be between 1 and 4096")
+
+    async def set_media_queue_limit(self, value: int) -> None:
+        self._validate_queue_limit(value)
+        async with self._leases:
+            self._max_media_queue = value
+            self._leases.notify_all()
 
     async def set_uploads_per_bot(self, value: int) -> None:
         """Change admission without cancelling leases already in progress."""
@@ -339,6 +390,8 @@ class ClientPool:
         allow_users: bool = False,
         download: bool = False,
         respect_cooldown: bool = False,
+        priority: MediaPriority = "demand",
+        request_id: str | None = None,
     ) -> AsyncIterator[TelegramClientLifecycle]:
         """Lease a healthy client and always release its count.
 
@@ -349,12 +402,34 @@ class ClientPool:
         premium-required documents remain restricted to user accounts.
         """
 
+        if priority not in ("demand", "preload"):
+            raise ValueError("Unknown media priority")
         if premium_required is not None:
             premium = premium_required
         kind: ClientKind = "user" if premium else "bot"
 
         async with self._leases:
             ticket = object()
+            if media or download:
+                if len(self._origin_waiters) >= self._max_media_queue:
+                    mean = (
+                        sum(self._origin_durations) / len(self._origin_durations)
+                        if self._origin_durations
+                        else 1.0
+                    )
+                    raise MediaQueueFull(retry_after=int(mean) + 1)
+                self._origin_sequence += 1
+                self._origin_waiters.append(
+                    dict(
+                        ticket=ticket,
+                        kind=None if allow_users and not premium else kind,
+                        name=client_name,
+                        priority=priority,
+                        download=download,
+                        queued_at=time.monotonic(),
+                        request_id=request_id or f"media-{self._origin_sequence}",
+                    )
+                )
             if media:
                 self._media_waiters.append(
                     (ticket, None if allow_users and not premium else kind, client_name)
@@ -420,10 +495,43 @@ class ClientPool:
                                 return True
                         return False
 
+                    def earlier_origin_for(candidate: _ClientSlot) -> bool:
+                        own_rank = priority == "preload"
+                        for queued in sorted(
+                            self._origin_waiters,
+                            key=lambda waiter: waiter["priority"] == "preload",
+                        ):
+                            if queued["ticket"] is ticket:
+                                return False
+                            if (queued["priority"] == "preload") > own_rank:
+                                continue
+                            if queued["kind"] not in (None, candidate.kind) or (
+                                queued["name"] is not None
+                                and queued["name"] != candidate.name
+                            ):
+                                continue
+                            # A full upload lane must not strand a free read lane.
+                            if queued["download"]:
+                                if candidate.download_active < 2:
+                                    return True
+                            elif candidate.media_active < (
+                                self._uploads_per_bot if candidate.kind == "bot" else 1
+                            ):
+                                return True
+                        return False
+
                     eligible = [
                         slot
                         for slot in candidates
                         if (not download or slot.download_active < 2)
+                        and (
+                            not (download or media)
+                            or (
+                                slot.media_active + slot.download_active
+                                < self._media_per_bot
+                                and not earlier_origin_for(slot)
+                            )
+                        )
                         and (
                             not (download or respect_cooldown)
                             or slot.cooldown_until <= now
@@ -462,6 +570,19 @@ class ClientPool:
                         if media:
                             slot.media_active += 1
                         client = slot.client
+                        if media or download:
+                            own = next(
+                                row
+                                for row in self._origin_waiters
+                                if row["ticket"] is ticket
+                            )
+                            self._origin_active[ticket] = dict(
+                                request_id=own["request_id"],
+                                name=slot.name,
+                                priority=priority,
+                                operation="download" if download else "upload",
+                                started_at=time.monotonic(),
+                            )
                         break
                     deadlines = [
                         max(
@@ -484,12 +605,20 @@ class ClientPool:
                     except TimeoutError:
                         pass
             finally:
+                if media or download:
+                    self._origin_waiters = [
+                        row
+                        for row in self._origin_waiters
+                        if row["ticket"] is not ticket
+                    ]
+                    self._leases.notify_all()
                 if media:
                     self._media_waiters = [
                         row for row in self._media_waiters if row[0] is not ticket
                     ]
                     self._leases.notify_all()
 
+        started = time.monotonic()
         try:
             yield client
         finally:
@@ -501,16 +630,160 @@ class ClientPool:
                     slot.download_active -= 1
                 if media:
                     slot.media_active -= 1
+                if media or download:
+                    self._origin_active.pop(ticket, None)
+                    self._origin_durations.append(time.monotonic() - started)
                 self._leases.notify_all()
 
     async def download_capacity(self) -> int:
-        """Two read windows per healthy account, independent of upload slots."""
+        """Potential read windows; upload/read admission shares the media ceiling."""
         async with self._leases:
             return sum(
-                2
+                min(2, self._media_per_bot)
                 for slot in self._slots
                 if slot.started and self._slot_is_healthy(slot)
             )
+
+    def performance_snapshot(self) -> dict[str, Any]:
+        """Event-loop-local, bounded observations; queue ETAs are estimates."""
+        now = time.monotonic()
+        mean = (
+            sum(self._origin_durations) / len(self._origin_durations)
+            if self._origin_durations
+            else None
+        )
+        queue = sorted(
+            self._origin_waiters, key=lambda row: row["priority"] == "preload"
+        )
+        accounts = []
+        for slot in self._slots:
+            scheduler = getattr(slot.client, "_media_scheduler", None)
+            accounts.append(
+                dict(
+                    name=slot.name,
+                    kind=slot.kind,
+                    uploads=slot.media_active,
+                    downloads=slot.download_active,
+                    combined_limit=self._media_per_bot,
+                    cooldown_seconds=max(0.0, slot.cooldown_until - time.time()),
+                    requests=scheduler.snapshot() if scheduler is not None else None,
+                )
+            )
+        sample = dict(
+            at=time.time(),
+            queued=len(queue),
+            active=sum(
+                slot.media_active + slot.download_active for slot in self._slots
+            ),
+        )
+        if now - self._last_load_sample >= 1:
+            self._load_history.append(sample)
+            self._last_load_sample = now
+        capacity = max(
+            1,
+            sum(
+                self._media_per_bot
+                for slot in self._slots
+                if slot.started and self._slot_is_healthy(slot)
+            ),
+        )
+        return dict(
+            **sample,
+            max_queue=self._max_media_queue,
+            estimates=True,
+            mean_activity_seconds=mean,
+            queue=[
+                dict(
+                    position=index + 1,
+                    priority=row["priority"],
+                    request_id=row["request_id"],
+                    operation="download" if row["download"] else "upload",
+                    client_name=row["name"],
+                    waiting_seconds=round(now - row["queued_at"], 3),
+                    estimated_wait_seconds=(
+                        ((sample["active"] + index) // capacity) * mean
+                        if mean is not None
+                        else None
+                    ),
+                )
+                for index, row in enumerate(queue[:128])
+            ],
+            accounts=accounts,
+            active_requests=[
+                dict(
+                    request_id=row["request_id"],
+                    client_name=row["name"],
+                    priority=row["priority"],
+                    operation=row["operation"],
+                    elapsed_seconds=round(now - row["started_at"], 3),
+                )
+                for row in list(self._origin_active.values())[:128]
+            ],
+            history=list(self._load_history),
+        )
+
+    def queue_estimate(self, request_id: str) -> dict[str, Any] | None:
+        """Find a request without exposing other visitors' queue identifiers."""
+        now = time.monotonic()
+        active = sum(
+            row["request_id"] == request_id for row in self._origin_active.values()
+        )
+        queue = sorted(
+            self._origin_waiters, key=lambda row: row["priority"] == "preload"
+        )
+        matches = [
+            (index, row)
+            for index, row in enumerate(queue)
+            if row["request_id"] == request_id
+        ]
+        if not matches:
+            return (
+                dict(
+                    request_id=request_id,
+                    position=0,
+                    estimated_wait_seconds=0.0,
+                    active_operations=active,
+                    queued_operations=0,
+                    estimates=True,
+                )
+                if active
+                else None
+            )
+        index, row = matches[0]
+        candidates = [
+            slot
+            for slot in self._slots
+            if slot.started
+            and self._slot_is_healthy(slot)
+            and row["kind"] in (None, slot.kind)
+            and row["name"] in (None, slot.name)
+        ]
+        mean = (
+            sum(self._origin_durations) / len(self._origin_durations)
+            if self._origin_durations
+            else None
+        )
+        capacity = max(1, len(candidates) * self._media_per_bot)
+        occupancy = sum(slot.media_active + slot.download_active for slot in candidates)
+        cooldown = min(
+            (max(0, slot.cooldown_until - time.time()) for slot in candidates),
+            default=0.0,
+        )
+        estimate = (
+            cooldown + ((occupancy + index) // capacity) * mean
+            if mean is not None
+            else None
+        )
+        return dict(
+            request_id=request_id,
+            position=index + 1,
+            priority=row["priority"],
+            estimated_wait_seconds=estimate,
+            waiting_seconds=round(now - row["queued_at"], 3),
+            active_operations=active,
+            queued_operations=len(matches),
+            estimates=True,
+        )
 
     async def media_capacity(self, *, premium=False, allow_users=False) -> int:
         """Potential media slots; leases enforce occupancy, fairness and cooldowns.
