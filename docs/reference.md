@@ -12,6 +12,7 @@ Detailed tables and examples are expandable.
 | --- | --- |
 | Credentials and defaults | [Configuration](#configuration) |
 | File-size and concurrency limits | [Capacity](#file-capacity-staging-and-work-limits) |
+| Cache, preloads and media admission | [Performance settings](#performance-and-cache-settings) |
 | CLI commands | [Maintenance](#owner-maintenance-commands) |
 | Routes and request/response rules | [HTTP API](#http-api) |
 | Access, privacy and safe deployment | [Security](#security-and-privacy) |
@@ -92,6 +93,57 @@ connectivity, not merely a nonempty STRING_SESSIONS value. See
 [Telegram behavior](setup.md#additional-bots-and-premium-accounts) for account selection and recovery limits.
 
 </details>
+
+### Performance and cache settings
+
+Saved owner performance preferences override their startup defaults and apply
+to new work without replacing Telegram credentials. MongoDB stores them in the
+settings collection, included in encrypted database backups. Environment
+changes require process/container restart; recreating a container does not
+override a saved preference. The separate connection editor still requires a
+restart after credential changes.
+
+| Variable | Default | Meaning and bounds |
+| --- | --- | --- |
+| `CACHE_MEMORY_BYTES` | 268435456 | RAM payload budget, 0–8 GiB. Effective retained RAM is further bounded by available host/container memory. |
+| `CACHE_DISK_BYTES` | 10737418240 | Disk budget, 0–2 TiB. Zero disables disk retention. It does not reserve that amount of disk in advance. |
+| `CACHE_MIN_FREE_BYTES` | 1073741824 | Free-disk floor for cache writes, 0–2 TiB. |
+| `CACHE_TTL_SECONDS` | 86400 | Sliding disk retention, 60–2678400 seconds. Eviction or disk failure can remove bytes sooner. |
+| `AUTO_PRELOAD` | true | Enable bounded speculation after delivered sequential bytes; never bulk preload from HEAD or metadata alone. |
+| `PRELOAD_MAX_JOBS` | 2 | Concurrent preparation jobs, 1–8; foreground work has priority. |
+| `TELEGRAM_UPLOAD_PIPELINE` | 4 | Outstanding upload-part requests per document, 1–16. |
+| `TELEGRAM_REQUEST_LIMIT` | 8 | Shared per-account media/metadata request concurrency, 1–32. |
+| `TELEGRAM_PARTS_PER_SECOND` | 48 | Application request pacing ceiling, 1–128, including scheduled metadata work. This is not a Telegram-provided bandwidth limit. |
+| `TELEGRAM_MEDIA_PER_BOT` | 3 | Shared concurrent origin media operations per account, 1–16. Uploads also retain their separate per-bot/user lane limits. |
+| `TELEGRAM_MAX_QUEUE` | 256 | Global queued origin operations, 1–4096; overflow returns retry guidance. |
+| `UPLOAD_SPLIT_MIB` | 2000 | 0 uses the safe account/document maximum: 2000 MiB bots, or an eligible 4000 MiB Premium document. Explicit 1–2000 values choose a smaller preferred cap. The minimum grows when needed to stay within 4096 parts. Persisted plans keep their original boundaries. |
+| `TIMEZONE` | Asia/Kolkata | IANA timezone for the owner's displayed dates/times; use a valid zone name. |
+
+The memory budget also covers the bounded asynchronous disk write backlog.
+Active responses share an additional transient payload budget, default 32 MiB,
+clamped by available memory with a 2 MiB streaming floor. A response's read-ahead
+window scales with active consumers; a single consumer can use the full budget.
+This is an internal policy, not an
+additional owner setting. `cache.scratch` reports current/effective/configured
+bytes, peak reservations, waiting heads and active streams. Transport and
+server buffers are outside retained payload-cache and scratch budgets.
+RAM/disk can hold duplicate hot blocks; summing the tiers is not a whole-file
+retention guarantee. Disk-backed manual preparation includes per-block integrity overhead
+and competing active reservations when checking capacity.
+
+Automatic preparation starts after at least 4 MiB of delivered sequential data.
+A first viewing warms a bounded ahead region. Whole-file preparation additionally
+requires two sequential runs of at least 4 MiB overlapping by at least 4 MiB
+within ten minutes, and the file plus overhead must fit half an effective tier.
+Read-ahead adapts to consumption and fill rates within 4–32 MiB, or a quarter
+of effective capacity if smaller. Leaving the final viewer stops ahead work;
+a preparation justified by repeated use may finish. Metadata and small probes
+do not qualify. See the [automatic policy](performance.md#automatic-read-ahead).
+
+Background jobs and block reads are bounded separately. Cache admission, TTL and eviction
+remain active during and after preparation.
+
+See [performance policy and tuning](performance.md) before raising these values.
 
 ### Owner authentication
 
@@ -175,7 +227,7 @@ settings. Initialization/restore refuses existing catalog state.
 | `UPLOAD_SESSION_TTL_SECONDS` | 86400 | Integer at least 60; incomplete receipt idle lifetime in seconds, refreshed after each committed chunk. There is no declared upper bound in configuration. |
 | `MAX_CONCURRENT_TRANSFERS` | 2 | Integer 1–32; bounds local fingerprinting, URL retrieval and legacy receive work. Receipt handlers have a separate bound from this value. It does not cap Telegram uploads across bots. |
 | `TELEGRAM_UPLOADS_PER_BOT` | 1 | Integer 1–4; initial per-bot Telegram media limit. **Settings → Uploads** saves an override in MongoDB and applies it immediately. Premium clients remain limited to one media upload each. |
-| `MAX_CONCURRENT_STREAMS` | 4 | Integer 1-64 inclusive; bounds concurrent file response lifetimes, including slow or stalled clients. |
+| `MAX_CONCURRENT_STREAMS` | 4 | Compatibility configuration; the file-response path uses bounded origin/media admission instead of a fixed viewer-count gate. It does not cap cached viewers at four. |
 | `TRANSFER_TTL_SECONDS` | 3600 | Integer 60-86400 inclusive; live terminal-job/context retention. Compact server-transfer history is kept separately from this cleanup; files are unaffected. |
 
 The conservative per-document ceilings are 2000 MiB (2,097,152,000 bytes) for
@@ -186,8 +238,10 @@ parts; the default is therefore 16 GiB. Sufficient free disk is still required.
 
 - Files above the bot document limit use ordered bot-sized messages while retaining one
   drive item and logical progress.
-- If a healthy connected Premium account is available, an eligible file above 2000 MiB
-  and at most 4000 MiB may use a single Premium document.
+- With automatic split size 0 and a healthy connected Premium account, an eligible
+  file above 2000 MiB and at most 4000 MiB may use a single Premium document.
+- An explicit split cap of 1–2000 MiB keeps parts bot-compatible and can use bots
+  or eligible optional users rather than forcing the Premium-only lane.
 - Unknown/disconnected accounts do not unlock that optimization.
 - Larger files remain multipart; the logical cap does not depend on Premium.
 - Multipart worker count follows healthy eligible account capacity, including live
@@ -419,9 +473,11 @@ credential. Omitted existing rows are removed; omitting clients keeps the entire
 list. api_hash omission also preserves its secret. Empty-string replacement is
 not the keep-secret protocol.
 
-- Limits: at most 16 rows, at least one enabled bot, labels 1–80 visible trimmed
+- Limits: at most 50 managed account rows, at least one enabled bot, labels 1–80 visible trimmed
   characters, credentials 1–8192 trimmed characters without whitespace, API ID
   1–2147483647, and a 32-hex-character API hash.
+- Fifty accounts is TGDrive's management bound, not a promise that Telegram
+  allows every bot/account combination or scales throughput linearly.
 - Storage-bot tokens and imported Telethon sessions receive structural checks.
 - Enabled accounts receive read-only Telegram identity/Premium/channel-permission
   preflight through isolated temporary sessions.
@@ -629,6 +685,52 @@ provide the v1 exposure-confirmation flow.
 
 </details>
 
+### Performance, cache inventory and preparation
+
+These are owner-session endpoints; public shares do not grant operator access.
+Responses expose bounded operational state rather than credentials or raw
+Telegram authorization references. Mutations use the usual same-origin checks.
+
+| Method and route | Purpose |
+| --- | --- |
+| `GET /api/v1/settings/performance` | Saved live performance preferences, revision, and documentation link. |
+| `PATCH /api/v1/settings/performance` | Partial lowercase preferences, with returned revision in `If-Match`; persist and apply to new work. |
+| `GET /api/v1/performance` | Account activity, bounded queues/history, request pacing/cooldowns and cache diagnostics. |
+| `GET /api/v1/preloads` | Owner cache/preparation inventory, current coverage, and bounded job state. |
+| `POST /api/v1/preloads` | `{"path":"/<file-id>"}`; prepare an authorized file within effective capacity. |
+| `POST /api/v1/preloads/clear` | `{"file_id":"<inventory-id>"}` evicts one file; `{}` clears cached bytes. |
+| `POST /api/v1/preloads/{id}/cancel` | Cancel the named preparation, preserving work other subscribers still need. |
+
+Preference fields use the lowercase names corresponding to the environment
+table, such as `cache_disk_bytes`, `telegram_request_limit` and `auto_preload`.
+Unknown fields are rejected. Keep and send the returned revision when editing
+from multiple tabs; a stale update returns a conflict rather than silently
+overwriting another edit.
+
+Inventory reports current ready-byte coverage with half-open intervals
+`[start, end)`, including observed ordinary downloads. A ready preparation is
+not an indefinite pin. The effective memory limit can be below configuration;
+current cache coverage, active reservations and integrity overhead decide
+whether a preparation fits.
+
+Queue wait estimates are nullable until recent duration samples exist. They
+are explicitly estimates, can change with cooldowns or connection changes,
+and do not promise completion time. Queue snapshots are bounded rather than a
+permanent telemetry database. Public request-specific queue status must not
+expose unrelated visitors' identifiers.
+
+The performance snapshot's `traffic` object counts HTTP body bytes and request
+activity on `/file` and resumable-upload endpoints. Sent/received counters
+include cached file responses and receipt protocol bodies, and exclude settings
+polling/assets. Directional account request counters describe Telegram origin
+traffic separately. Both histories are process-local and reset on restart;
+derived rates are differences between measured samples.
+
+The preparation queue and ordinary media queues have separate bounds.
+Cancelling/clearing a preparation leaves originals intact and does not abort
+shared work belonging to other authorized subscribers. See
+[cache behavior](performance.md#prepare-a-file-before-sharing).
+
 ### Resumable browser receipts
 
 <details>
@@ -714,6 +816,7 @@ capability. Supply path (an ID path) and optional auth query, just as for /file.
 | --- | --- |
 | GET /api/v1/preview | name, size and kind:text/pdf/video/unsupported. Text includes text, language, truncated and preview_bytes; PDF includes an authorized local URL; unsupported includes a reason. |
 | GET /api/v1/media | original descriptor and variants list from the actual stored message. Each descriptor has id, label, is_original, size, mime_type, width, height and duration where applicable. |
+| GET /api/v1/file-status | Authorized `path`, opaque `request_id`, optional `auth`; request-specific queue estimate and logical size, without listing other callers. |
 
 - Text/code/JSON/CSV and related allowlisted formats return at most the first 256 KiB of
   source text, with a truncation indicator.
@@ -772,6 +875,8 @@ All routes below require the owner.
   name/kind/destination/retry_at.
 - It also includes created_at, updated_at, started_at, finished_at, progress_updated_at
   (Unix seconds), elapsed_seconds, speed_bytes_per_second and eta_seconds.
+- `queue` adds request-specific origin admission state and nullable wait estimates;
+  it is not a reserved start time or a multi-stage completion deadline.
 - The UI does not show an elapsed clock for wholly queued uploads.
 - Rate/ETA are nullable current-phase estimates, not total multi-stage completion
   promises; paused/non-byte/deletion/stale progress has no invented rate.
@@ -780,6 +885,8 @@ All routes below require the owner.
   publication; the private lineage_retry_at context survives restart.
 - A pre-send cancellation can wake a lineage wait.
 - Kinds include upload/remote/delete.
+- A URL import retains `remote` origin through local staging and Telegram
+  upload, including after a restart. A URL job is not a browser file receipt.
 - Statuses are queued, running, cancelling, completed, error, cancelled.
 - Phase gives detail such as uploading, finalizing, retry_wait, waiting_for_telegram or
   cleanup_pending; clients must tolerate new phases.
@@ -825,6 +932,8 @@ cannot be reconstructed.
 The floating panel's **Clear finished** only dismisses browser display rows.
 It does not erase server history or stored files. Browser-only queued work is
 not a durable server history record until a job exists.
+The floating panel only displays browser-initiated receipts; the global history
+continues to show server jobs initiated on other devices.
 
 </details>
 
@@ -838,6 +947,7 @@ not a durable server history record until a job exists.
 | `GET /api/v1/shares` | Owner | None | `{"shares":[...]}` includes active and expired entries, IDs, current path/name/type/size, folder_path/folder_label, created_at/expires_at and copyable. No bearer tokens. |
 | `POST /api/v1/shares` | Owner | `{"path":"/<id>","expires_in_days":7}` | `201 {"auth":"<bearer-token>","path":"...","expires_at":"<ISO-date>"}`. |
 | `POST /api/v1/shares/link` | Owner | `{"path":"/<id>"}` | Existing active link auth/path/type/node_id; no rotation. `409` if unrecoverable, `410` if expired/revoked. No-store response. |
+| `POST /api/v1/download-links` | Owner | `{"path":"/<id>"}` | Signed attachment `url`, canonical `path`, and `expires_at`; reuse an active copyable file share or create one expiring in one day. Visible in Shared Links; no-store response. |
 | `DELETE /api/v1/shares` | Owner | `{"path":"/<id>"}` | `{"status":"ok"}`. |
 | `POST /api/getFolderShareAuth` | Owner | `{"path":"/<folder-id>"}` | Compatibility creation: status and auth. |
 | `POST /api/getFileShareAuth` | Owner | `{"path":"/<file-id>"}` | Same, for a file. |
@@ -862,6 +972,16 @@ The UI creates links from the stable folder ID alone; nested shared browsing
 can use ID paths beneath that root.
 Authorization resolves stable final IDs after a move; inherited folder access
 depends on the new location.
+
+An owner-only file URL without `auth` needs the owner session cookie. Copying
+it into another browser or a download tool does not make it public. The owner's
+**Copy download link** action explicitly creates or reuses a share capability;
+a newly created link lasts one day and is visible/revocable in Shared Links.
+
+When `auth` is supplied, it must be valid for the requested scope even if an
+owner cookie is also present. Warm caches do not bypass expiry or revocation.
+Active shared streams check access again before future blocks; already sent
+or browser-buffered bytes cannot be recalled.
 
 - Downloads support full `200` and a single `206` range: `bytes=0-1023`, `bytes=1024-`,
   `bytes=-1024`.
@@ -976,8 +1096,8 @@ hash and SESSION_SECRET, restart and verify old sessions fail. Full old-volume
 restore can roll authentication back.
 
 Mutations check browser Origin/Fetch Metadata; private routes authenticate
-before body processing. JSON is capped at 64 KiB, receipt PATCH at 8 MiB, and
-stream slots span response lifetime. These are not distributed abuse protection
+before body processing. JSON is capped at 64 KiB and receipt PATCH at 8 MiB.
+Telegram admission and shared memory budgets bound media work. These are not distributed abuse protection
 or per-share quotas. Login limits are process-local.
 
 Shares are bearer credentials stored as hashes, with scoped access, rotation,

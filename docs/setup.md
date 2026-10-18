@@ -14,7 +14,7 @@ This guide gets a new personal drive running on your machine.
 | Python 3.10 or newer on the host | Runs the setup wizard |
 | A MongoDB database | Remembers files, folders and app settings |
 | A Telegram account and storage bot | Connects TGDrive to your private channel |
-| Free disk space | Holds files while they are uploading |
+| Free disk space | Holds unfinished uploads and the configured disposable media cache |
 
 Run the commands below in a Linux/WSL terminal, **inside the TGDrive project folder**.
 You do not need Node or an app Python environment when using Docker.
@@ -97,6 +97,13 @@ the wizard will not overwrite it.
    somewhere separate from this installation.
 
 You are ready to [upload your first file](usage.md#upload-files-or-folders).
+
+Before importing large files, review temporary-storage and cache limits.
+The default upload staging budget is 16 GiB; the media cache defaults to
+10 GiB disk and 256 MiB RAM, with free-space and effective-memory safeguards.
+Budgets are upper bounds, not space allocated in advance. Leave room for the
+operating system, database tools, logs, and encrypted backup staging.
+[Performance and cache setup](performance.md) explains how to size them.
 
 ## Start or stop it later
 
@@ -212,6 +219,8 @@ All storage accounts need access to the same channel.
 - **Refresh** checks saved credentials, channel permissions and Telegram names.
 - Saved connection changes apply after an app restart.
 - Premium is optional; bots already support larger files through splitting.
+- More accounts can add transfer capacity, but cannot guarantee faster Telegram
+  routing or remove provider cooldowns. Start with conservative live limits.
 
 See [manage connections](usage.md#settings-and-connections) for the web flow.
 For a private local Premium login, use `uv run --frozen python -m tgdrive login`.

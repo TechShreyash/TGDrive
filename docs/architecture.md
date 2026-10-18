@@ -27,6 +27,7 @@ There is no separate task broker or Redis requirement.
 | Large files | Ordered Telegram parts and logical byte ranges | `multipart_transfer.py`, `multipart_streaming.py`, `logical_media.py` |
 | Telegram connections | Telethon adapter, account selection and bounded requests | `telegram_clients.py`, `client_pool.py` |
 | Previews/downloads | Authorized ranges, format inspection and rendering descriptors | `streaming.py`, `ranges.py`, `previews.py` |
+| Media cache and preloads | Shared verified block fills, resource budgets, inventory, eviction and background preparation | `media_reader.py`, `media_cache.py`, `media_policy.py`, `preloading.py` |
 | URL import | Bounded HTTP fetching and destination checks | `remote.py` |
 | Database backups | Encrypted snapshots and empty-database restore | `mongo_backup.py` |
 | Web connection management | Private settings, preflight and Premium login | `management.py`, `managed_settings.py`, `premium_login.py` |
@@ -97,11 +98,16 @@ Local unfinished file bytes are still needed after a restart.
   still bound requests. More bots do not promise unlimited bandwidth.
 - Upload preferences live in MongoDB's settings collection, are included in full
   database backups, and load before recovered transfers start.
-- Large files use bot-sized parts. A healthy Premium account may send an eligible
-  above-bot-limit file as one larger message.
-- Downloads prefer healthy Premium users, then bots. A failed optional-user
-  lookup may fall back before response headers; an in-progress response does
-  not switch accounts.
+- Large files use bot-compatible parts with the default 2000 MiB split cap.
+  Automatic sizing (0) can use a healthy Premium account for an eligible
+  above-bot-limit file as one larger message. Explicit smaller caps keep parts
+  eligible for the bot-compatible pool, including optional user accounts.
+- Initial media lookup can prefer healthy Premium users, then bots. Independent
+  payload windows bind the same immutable media through each selected account;
+  the pooled reader may use different healthy accounts for different windows.
+- Upload/download origin activities share a combined per-account budget, while
+  uploads retain their additional per-bot/user lane limits. Demand waiters precede preload waiters;
+  running work is not preempted. The media wait queue has a global upper bound.
 - Bot sessions use stable account IDs. Reordering tokens does not change sender identity.
 - Each dispatched part keeps its recorded sender and request ID during retry.
 
@@ -172,6 +178,13 @@ Names and sizes alone never prove that a reselected file has matching bytes.
   Later file uploads can succeed or fail independently.
 - Confirmed remote identities survive retry. The catalog operation lookup closes
   the gap between a file commit and its job-journal update.
+- The Telethon transport pipelines a bounded number of 512 KiB upload RPCs.
+  A shared per-account scheduler caps concurrency and request rate for upload,
+  download and metadata work. Provider waits reduce pressure rather than being
+  bypassed with replacement identities.
+- A confirmed Telegram document survives process restart. A partially uploaded
+  unfinished document can retain protocol acknowledgements during an in-process
+  retry, but its payload is uploaded again after process restart.
 - MongoDB finalization never waits for an encrypted Telegram snapshot.
 - Completed catalog entries cannot be cancelled as if they were unsent media.
 
@@ -202,6 +215,12 @@ Resolved upload/import records become compact summaries instead of disappearing.
 - Reads are bounded per request; old records are not all loaded into startup memory.
 - Deletion notices remain outside upload history.
 - Floating-panel dismissal does not affect server history.
+- A browser-only `initiatedHere` receipt marker scopes floating panels to the
+  initiating browser. Global server history and owner transfer snapshots retain
+  jobs started elsewhere; polling does not turn those into local receipts.
+- URL imports retain their server-job identity and remote origin through
+  upload-stage transitions and browser reloads. They never require a local
+  browser file to resume a server-owned job.
 - Owner history responses resolve the current destination through the upload
   operation's stable node identity. Resolution uses the native catalog read
   cache in MongoDB mode, without extra database queries per file.
@@ -234,29 +253,74 @@ do not directly describe this adapter.
 | Unsupported format | Compact details and original download |
 | Quality choices | Only representations actually present in Telegram |
 
-File responses read ahead by up to 32 ordered 1 MiB windows, scaled to client
-count. Both ordinary and multipart files spread windows across healthy bots and
-Premium clients. At most two remote windows per account and twelve shared cache
-loads run together; upload slots remain independent. Account FloodWait deadlines
-also gate reads, with bounded retry through another eligible account.
+File responses read ahead through ordered 1 MiB blocks, scaled to client
+capacity and their share of the instance-wide transient payload budget. A
+single consumer can use the default 32 MiB budget; concurrent consumers share
+it. The 32-block policy is an additional ceiling. Waiting response heads take priority
+over further prefetch. Both ordinary and multipart files spread reads across healthy bots and
+Premium clients. Download activities scale within the configured shared media
+budget instead of a fixed two-read cap. Part RPCs and metadata also use the shared request/rate
+scheduler. Account FloodWait deadlines gate eligible work.
 
-A shared 64 MiB RAM cache retains blocks for ten minutes. A disposable 512 MiB
-disk cache under DATA_DIR/media-cache retains blocks for up to 24 hours, including
-across restarts; it has a 1,024-file bound and evicts least-recently-used blocks.
-Disk failure falls back to Telegram. Atomic writes and block digests reject
-partial/corrupt entries. Neither cache contains credentials or access decisions.
+The application configures a shared 256 MiB RAM cache and 10 GiB disk cache by
+default. Effective RAM is clamped to a quarter of available host/container
+memory. Disk caching respects a separate free-space floor, sliding retention,
+and an entry bound that scales with the byte budget. A probation/protected
+policy favors reuse over one-time scans. Atomic files and block digests reject
+partial or corrupt entries. The pooled path bypasses the old per-client payload
+cache so it does not silently duplicate its own retained-byte budgets.
 
-Each HTTP request still authenticates and validates the Telegram message before
-using cached data. Workers fetch account-specific references and verify immutable
-document/rendition identity and size before sharing bytes across accounts.
-Concurrent requests share in-flight reads; the last cancelled reader stops their
-remote work. Seeking or closing a response drains its pending read-ahead.
-The transport's older per-account 24 MiB/30-second cache remains a bounded inner
-layer with eight native downloads.
+Disk writes use a bounded asynchronous queue inside the RAM budget. Failure
+falls back to origin where possible; explicit whole-file preparation fails if
+verified retained coverage cannot be achieved. The shared inventory tracks
+observed ordinary downloads as well as preloads, with half-open ready ranges
+and current complete/ready-byte state. Disk inventory survives clean restarts.
+
+Transient source blocks have a separate shared scratch budget, default 32 MiB,
+availability-clamped with a 2 MiB streaming floor even if retained RAM is zero.
+Reservations cover queued, completed and yielded blocks until consumer resume,
+closure or failure. This bounds payload retention across different files and
+viewers without a fixed HTTP response count. Transport/server/kernel buffers
+remain outside these retained-cache and scratch budgets.
+
+Every request authenticates before cached bytes. Workers bind account-specific
+references and verify immutable document/rendition identity and size before
+sharing content. Supplied capabilities must validate even alongside an owner
+cookie. Shared-stream access is checked again before future blocks so revocation
+can stop an active response without pretending to recall bytes already sent.
+
+Concurrent foreground and preload requests share in-flight fills. The final
+subscriber's cancellation drains remote work; cancelling a preload does not
+abort another authorized subscriber. Closing or seeking drains unused read-ahead.
+
+Automatic preloading requires 4 MiB of sequential data actually delivered to a
+viewer. First use warms only an adaptive 4–32 MiB ahead region, further limited
+by effective capacity. Two qualified runs overlapping by 4 MiB within ten
+minutes establish repeated use; only then can a whole file fitting half an
+effective tier be prepared. Consumption and background fill rates adjust the
+ahead window. The last viewer leaving cancels ahead work; justified whole-file
+work may finish. HEAD, metadata and tiny probes never establish that evidence.
+Manual preparation reserves capacity,
+verifies range coverage and checks full multipart checksums where applicable.
+Demand is prioritized over queued speculative work, with bounded background
+jobs and block concurrency. Preloads are disposable acceleration, not catalog
+commits or persistent copies of source files.
+
+Owner diagnostics expose account activity, queues, cooldowns, request metrics,
+effective budgets and cache coverage. Queue ETAs derive from bounded recent
+duration samples and are explicitly estimates; no samples produce no fabricated
+wait estimate. See [performance](performance.md) for operational interpretation.
 
 Movi's requested 32 MiB source buffer applies after initial loading.
 Decoder/demux caches can use more memory. Neither this setting nor extra bots
 guarantee a particular speed or codec's real-time playback.
+
+The React preview reconciles buffering feedback against advancing playback.
+Chapter navigation uses container titles/times directly instead of blocking on
+remote thumbnails; its controls are portaled into the player's shadow root in
+fullscreen. Constructed stylesheets preserve strict CSP without remote fonts.
+Native player audio/subtitle menus remain the controls for supported tracks,
+and focused-player keyboard shortcuts are enabled.
 
 ## Database safety copies and security
 

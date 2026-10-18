@@ -17,10 +17,28 @@ this candidate.
   database ownership conflicts without resetting existing state.
 - Retain `/compose.coolify.yaml` for existing applications.
 
+### Reliability and Performance Controls
+
+- Add operator-owned RAM/disk budgets, free-space reserves, frequency-aware
+  retention, shared block fills and bounded demand-first adaptive preloading.
+- Prepare complete files manually and inspect all retained byte ranges in
+  Preloads; cancel work or clear selected data without deleting originals.
+- Pipeline Telethon upload parts with shared per-account request budgets,
+  adaptive FloodWait feedback and retries of individual unfinished parts.
+- Queue origin work with demand priority and estimated waits, while cached
+  viewers do not consume Telegram origin slots. Add process-local traffic,
+  server/cache and per-account diagnostics in Performance.
+- Add resumable manager links, accurate range/length/filename headers,
+  stronger conditional requests and fresh revocation checks during delivery.
+- Correct false player buffering, chapter labels, keyboard controls, modal
+  copy notices, mobile layout and device-local floating upload notices.
+- Preserve URL source identity across staging/recovery, support configurable
+  future split sizes, default displayed times to IST and explain all controls.
+
 ### Playback Performance
 
 - Stripe ordered stream windows across healthy bots and Premium clients, with
-  two reads per account and bounded read-ahead for ordinary and multipart files.
+  configured reads per account and bounded read-ahead for ordinary and multipart files.
 - Share cached blocks across accounts and requests; retain a bounded private disk
   cache across restarts while checking authorization and message identity.
 - Respect read FloodWaits instead of treating them as expired file references.

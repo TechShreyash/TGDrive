@@ -12,10 +12,12 @@ Other people can view or download only what you share with them.
 | **My Files** | Browse, search and organize files |
 | **Transfers** | See queued/running work and past completed, failed or cancelled transfers |
 | **Shared Links** | Review or revoke links |
+| **Preloads** | Inspect cached coverage, stop preparation, or evict cached bytes |
+| **Performance** | Inspect current server resources, Telegram activity and measured traffic |
 | **Trash** | Restore files or delete them permanently |
 | **Connections** | Manage Telegram bots, Premium accounts and API credentials |
 | **Storage & Backups** | Check saved data, temporary storage and database backups |
-| **Settings** | Choose appearance or sign out |
+| **Settings** | Choose appearance and timezone, tune transfer/cache limits, or sign out |
 
 Choose **Light**, **Dark** or **System** from the appearance menu.
 System follows your device's preference.
@@ -58,6 +60,12 @@ those files have reached the server.
 
 Changes apply immediately. Reducing the limit lets running uploads finish.
 Telegram wait limits still apply; a higher setting does not guarantee more speed.
+
+Upload chunk pipelining and file splitting are separate controls. A smaller
+split can use more available account slots for one file, while pipelining
+overlaps part requests within a Telegram document. Keep conservative limits
+and compare actual throughput before increasing concurrency.
+See [performance and caching](performance.md) for the tradeoffs.
 
 ### Files above 2 GB
 
@@ -163,6 +171,9 @@ Open **Transfers** and choose **All**, **Queued**, **Running**, **Completed**,
 **Failed** or **Cancelled**.
 
 - Current progress and past server transfers appear together.
+- The floating upload panel shows work started from this browser. Uploads
+  discovered from another device remain visible in **Transfers**, without
+  opening a new floating completion panel on this device.
 - Finished records include dates and sizes. **Show older transfers** loads more.
 - Clearing the floating panel does not erase this history.
 - Completed/cancelled server records stay in MongoDB after live-job cleanup and restart.
@@ -227,12 +238,37 @@ Use the header's **Download** action for the original file.
 
 - **Escape** or browser **Back** closes the preview.
 - Video starts after you choose to play; loading and buffering show feedback.
-- TGDrive reads ahead using available clients and reuses recently fetched data.\n  Replaying or seeking within cached content avoids downloading those bytes again.\n- If playback fails, try **Reload video** or download the original.
+- TGDrive reads ahead using available clients and reuses recently fetched data.
+  Replaying or seeking within cached content avoids fetching those bytes again.
+- Real chapters list their titles and times immediately, without waiting for
+  preview thumbnails. Chapter navigation also works in fullscreen.
+- Focus the player for **K/Space** to play/pause, **M** to mute, and arrow-key
+  seeking. Audio/subtitle menus show the tracks available in that file.
+- For a slow start, try **Reload Video** or **Use Compatibility Playback**.
+  Compatibility mode uses native browser playback and may expose fewer tracks.
+- Download the original if your device cannot decode the file.
 - Codec support depends on the file and your device.
 - **Preview quality** appears only when Telegram actually provides alternatives.
   It never changes the original download.
 - Web uploads preserve their source bytes. TGDrive does not promise that
   Telegram will create lower-quality versions.
+
+### Cache and prepare playback
+
+The server keeps verified media blocks within your configured RAM/disk budgets.
+Repeated viewing and popular shared files reuse those bytes. Background work
+gives priority to people actively watching or downloading.
+
+Choose **Prepare for Download / Streaming** from the file's actions before a
+screening or a large share. Open **Preloads** to check current ready bytes/ranges
+and completion, then share it.
+Preparation must fit an effective cache tier; increase the budget or free space
+if it is rejected. You can cancel preparation or evict cached bytes without
+deleting the original.
+
+Cached bytes can expire or be evicted. A file being prepared once does not
+guarantee that it stays fully cached forever. Cache access still requires a
+valid owner session or share link. [See how caching works](performance.md).
 
 ## Share and revoke
 
@@ -266,6 +302,16 @@ for confirmation. Moving it out removes inherited access, but an explicit
 file link may still work. Trash revokes links for the affected subtree.
 Revocation cannot remove copies someone already downloaded.
 
+An owner-only download address can depend on your signed-in browser cookie.
+Copying that address into an incognito window or a download tool does not
+grant access. Use **Copy download link** to create or reuse an explicit shared
+capability; a newly created download link lasts one day and appears in
+**Shared Links**, where you can revoke it. Treat the copied URL as a secret.
+
+A supplied invalid, expired, or revoked token is rejected even if the same
+browser is signed in as the owner. Revocation also stops future authorized
+blocks of an active stream; bytes already delivered remain with the recipient.
+
 ## Trash and permanent deletion
 
 - **Move to Trash:** hides the item while keeping its Telegram files.
@@ -284,6 +330,11 @@ TGDrive downloads it to the server, then sends it to Telegram.
 
 Use the existing transfer's Retry action after an error. URL imports may restart
 from the beginning. Private network URLs are blocked by default.
+
+After submission, a URL import is a server job and continues when the tab is
+closed. Refreshing the browser retains that job's identity and URL-import kind;
+it must not ask you to choose a local original. If the server job no longer
+exists, start a new URL import rather than selecting an unrelated device file.
 
 ## Settings and connections
 

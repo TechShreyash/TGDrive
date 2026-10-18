@@ -12,6 +12,8 @@ and MongoDB remembers their names, folders and sharing settings.
 | Install TGDrive for the first time | [Setup](setup.md) |
 | Upload, organize, preview or share files | [Using TGDrive](usage.md) |
 | Restart, upgrade, fix a problem or recover my drive | [Operations](operations.md) |
+| Improve streaming, control cache budgets or prepare shared downloads | [Performance and caching](performance.md) |
+| Review measured transfer speeds and integrity checks | [Server validation](validation-2026-10-18.md) |
 | Check what works and what still needs work | [Roadmap](roadmap.md) |
 
 ## For contributors
@@ -37,5 +39,5 @@ This is an **unreleased development version**. Focused MongoDB and live Chrome
 checks have passed; final release testing and packaging remain pending.
 See [tested versus unverified](development.md#ci-and-release-evidence).
 
-These eight pages are the maintained documentation. Behavior changes should
+These pages are the maintained documentation. Behavior changes should
 update the relevant page, rather than add another overlapping guide.

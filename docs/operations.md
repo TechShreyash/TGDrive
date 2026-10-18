@@ -19,6 +19,11 @@ Keep one app instance and one worker per drive.
 Use **Connections** for Telegram health and **Storage & Backups** for database,
 disk and backup status. The public `/health/ready` endpoint reports readiness.
 
+Use the owner's performance controls to inspect cache usage, active media
+operations, queued work, and account cooldowns. Queue waits are estimates from
+recent activity, not promised start or completion times. The
+[performance guide](performance.md) explains each layer and its limits.
+
 ## What is saved where
 
 | Place | What it holds |
@@ -195,7 +200,13 @@ they are not the documented MongoDB storage path.
 | Backup needs attention | Check the recovery key, channel posting access, temporary disk and displayed retry time |
 | Backup will not decrypt | Use its matching key and an intact archive |
 | Upload paused or cannot resume | Reselect the original in the existing transfer; missing staging may require a new upload |
-| Video will not play | Try Reload video or download the original; device/codec support varies |
+| Video will not play | Try Reload Video or Use Compatibility Playback; download the original if the device cannot decode it |
+| Repeat viewing still slow | Check current cached coverage, hit/miss counters, eviction, disk headroom and server egress |
+| Preload rejected or incomplete | Increase the effective cache tier or free space; the complete range must remain cached, including integrity overhead |
+| Downloads waiting under load | Inspect account/media queues and cooldowns; reduce competing work before increasing limits |
+| A copied URL fails outside your browser | Use Copy download link or an explicit share link; private owner URLs need the owner cookie |
+| A revoked link still appears in an open player | Revoke blocks future authorized data; the browser may still play bytes it already received |
+| URL upload asks for a local file | Refresh and find the original server job in Transfers; retry it, or submit the URL again if that job no longer exists |
 | File download also fails | Check connections and whether the Telegram document still exists |
 | Database is full | Review catalog/index/history growth or increase the database plan |
 
@@ -204,9 +215,43 @@ unsafe writes. Restore connectivity, stop any competing app, then restart.
 Do not delete internal records or temporary files just to clear an error.
 
 
-### Disposable media cache
+## Disposable media cache and preloads
 
-Recently streamed bytes are kept in DATA_DIR/media-cache, capped at 512 MiB and
-24 hours. The cache can be removed while TGDrive is stopped; it rebuilds on demand.
-It is separate from unfinished uploads, which must be kept. Access checks still
-apply when bytes come from cache. Cache files are private to the service account.
+Recently streamed bytes live under `DATA_DIR/media-cache`. Application defaults
+are 256 MiB RAM, 10 GiB disk and a 1 GiB free-disk reserve. Effective RAM can be
+smaller because of host/container headroom. Reused blocks normally remain on
+disk for up to 24 hours after reuse; eviction can remove them sooner.
+
+Use the owner controls to inspect files, ready byte ranges, current completion,
+cache hits/misses, active preloads and errors. Cancel preparation to stop its
+background work. Evict one file or clear cached data to reclaim disposable
+bytes; other readers retain work they still share.
+
+A successful preload verifies retained coverage, but does not pin it forever.
+Full-file preparation needs to fit an individual effective cache tier, including
+integrity overhead. RAM plus disk is not one additive whole-file capacity.
+Shrinking a budget, running out of disk or consuming memory elsewhere can make
+current cached coverage smaller than an earlier preparation result.
+
+You can remove the media cache directory while TGDrive is stopped; it rebuilds
+on demand. **Do not remove upload receipts, staged payloads or encrypted backup
+sources to clear a media cache.** Missing unfinished bytes require recovery from
+their original source. Cache files are private to the service account; anyone
+with host-level access to those files may still read cached file contents.
+
+All cache hits continue to require current authorization. A copied private
+owner URL is not a share capability, and a revoked/expired token cannot be
+made usable by a warm cache. For shared streams, revocation applies to future
+authorized blocks; it cannot recall data already sent or buffered by a viewer.
+
+### Tune a busy installation
+
+1. Check effective RAM and disk headroom before raising a cache budget.
+2. Let demand reads outrank preloads; stop unnecessary background preparations.
+3. Watch shared account operation/request limits and provider cooldowns.
+4. Compare warm and cold downloads, and same-file versus unrelated-file viewers.
+5. Raise one limit at a time and watch whether streaming or errors get worse.
+
+Performance preferences saved through the owner settings apply live where
+supported. Changes made to container environment values need container
+recreation. Connection credentials still follow the separate restart workflow.
