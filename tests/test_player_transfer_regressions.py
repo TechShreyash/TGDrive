@@ -210,3 +210,47 @@ def test_url_receipt_remains_a_server_job_after_refresh(
     receipt = next(item for item in saved if item["jobId"] == "url-server-job")
     assert receipt["kind"] == "remote"
     assert receipt["state"] == "uploading"
+
+
+def test_custom_player_timeline_shows_engine_buffered_regions_after_real_seek(
+    server: Server, desktop: tuple[Any, Any]
+) -> None:
+    _, page = desktop
+    login(page, server.url)
+    page.get_by_role("button", name="Preview samples", exact=True).dblclick()
+    page.get_by_role("button", name="multitrack.mkv", exact=True).dblclick()
+    dialog = preview_dialog(page)
+    player = dialog.locator("movi-player")
+    expect(dialog.locator(".advanced-state")).to_have_count(0, timeout=30000)
+    for target in (0, 3):
+        player.evaluate(
+            """async (element,time)=>{
+              await element.pause();await element.player.seek(time);
+            }""",
+            target,
+        )
+        # Read real engine TimeRanges rather than projecting server byte cache
+        # offsets onto VBR media time. A fully fetched tiny fixture may retain all.
+        page.wait_for_function(
+            """()=>{
+          const player=document.querySelector('movi-player');
+          const buffer=player?.shadowRoot?.querySelector('[part="progress-buffer"]');
+          if(!player?.buffered.length||!buffer||!player.duration) return false;
+          const start=player.buffered.start(0);
+          const end=player.buffered.end(0),duration=player.duration;
+          const left=parseFloat(buffer.style.left),width=parseFloat(buffer.style.width);
+          return width>0 && Math.abs(left-start/duration*100)<1 &&
+            Math.abs(width-(end-start)/duration*100)<1;
+        }""",
+            timeout=15000,
+        )
+    segment = player.locator('[part="progress-buffer"]')
+    expect(segment).to_be_visible()
+    color = segment.evaluate("element=>getComputedStyle(element).backgroundColor")
+    assert color == "rgb(171, 183, 206)"
+    page.set_viewport_size({"width": 390, "height": 844})
+    player.hover()
+    expect(segment).to_be_visible()
+    expect(player.locator("button.movi-play-pause")).to_be_visible()
+    expect(dialog.locator(".preview-surface > video")).to_have_count(0)
+    assert page.evaluate("document.documentElement.scrollWidth<=innerWidth")

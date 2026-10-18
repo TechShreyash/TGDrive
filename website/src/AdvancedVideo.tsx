@@ -1,9 +1,9 @@
 import { useEffect, useReducer, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { RefreshCw, Play, ListVideo } from "lucide-react";
+import { RefreshCw, ListVideo } from "lucide-react";
 import type { MoviElement } from "movi-player/element/slim";
 import wasmUrl from "movi-player/movi.wasm?url";
-import { Spinner } from "./components";
+import { formatBytes } from "./types";
 import MovTextRenderer, { isMovTextCodec } from "./MovTextRenderer";
 import "./AdvancedVideo.css";
 import advancedStyles from "./AdvancedVideo.css?inline";
@@ -186,39 +186,95 @@ export function unavailableVideoCodec(core: unknown): string | null {
     ? video.codec
     : "unknown";
 }
+export type VideoBufferSnapshot = {
+  ranges: { start: number; end: number }[];
+  percent: number | null;
+  ahead: number;
+  received: number;
+  bytesPerSecond: number;
+};
+/** Read the engine's media-time ranges; server byte offsets cannot locate VBR frames. */
+export function videoBufferSnapshot(player: {
+  duration: number;
+  currentTime: number;
+  buffered: TimeRanges;
+  player?: { getSource?: () => unknown } | null;
+}): VideoBufferSnapshot {
+  const duration = player.duration;
+  const bounded = Number.isFinite(duration) && duration > 0;
+  const ranges: VideoBufferSnapshot["ranges"] = [];
+  for (let index = 0; index < player.buffered.length; index++) {
+    const start = Math.max(0, player.buffered.start(index));
+    const rawEnd = player.buffered.end(index);
+    const end = bounded ? Math.min(duration, rawEnd) : rawEnd;
+    if (Number.isFinite(start) && Number.isFinite(end) && end > start)
+      ranges.push({ start, end });
+  }
+  ranges.sort((left, right) => left.start - right.start);
+  const merged: typeof ranges = [];
+  for (const range of ranges) {
+    const last = merged.at(-1);
+    if (last && range.start <= last.end)
+      last.end = Math.max(last.end, range.end);
+    else merged.push({ ...range });
+  }
+  const coverage = merged.reduce(
+    (total, range) => total + range.end - range.start,
+    0,
+  );
+  const current = Number.isFinite(player.currentTime)
+    ? Math.max(0, player.currentTime)
+    : 0;
+  const active = merged.find(
+    (range) => range.start <= current + 0.1 && range.end > current,
+  );
+  const source = player.player?.getSource?.() as {
+    getNetworkStats?: () => { totalBytes?: number; currentSpeed?: number };
+  } | null;
+  const stats = source?.getNetworkStats?.();
+  const positive = (value: number | undefined) =>
+    value !== undefined && Number.isFinite(value) && value > 0 ? value : 0;
+  return {
+    ranges: merged,
+    percent: bounded ? Math.min(100, (coverage / duration) * 100) : null,
+    ahead: active ? Math.max(0, active.end - current) : 0,
+    received: positive(stats?.totalBytes),
+    bytesPerSecond: positive(stats?.currentSpeed),
+  };
+}
+const emptyBuffer: VideoBufferSnapshot = {
+  ranges: [],
+  percent: null,
+  ahead: 0,
+  received: 0,
+  bytesPerSecond: 0,
+};
 const phaseCopy = {
-  player: {
-    title: "Loading player",
-    description: "Loading the playback tools for this video.",
-  },
+  player: { title: "Loading player", description: "Loading playback tools…" },
   opening: {
     title: "Opening video",
-    description: "Reading the video and its available tracks.",
+    description: "Reading video data and tracks…",
   },
   preparing: {
     title: "Preparing playback",
-    description: "Preparing the video for playback.",
+    description: "Reading video data and tracks…",
   },
   buffering: {
     title: "Buffering video",
-    description: "Waiting for more video data. Playback will continue shortly.",
+    description: "Receiving more video data…",
   },
   seeking: {
     title: "Moving to this position",
-    description: "Loading the video at the selected time.",
+    description: "Receiving video data at this position…",
   },
 };
 export default function AdvancedVideo({
   src,
   name,
-  onFallback,
-  onUnsupported,
   playback,
 }: {
   src: string;
   name: string;
-  onFallback: () => void;
-  onUnsupported: (codec: string) => void;
   playback: { current: { time: number; playing: boolean } | null };
 }) {
   const host = useRef<HTMLDivElement>(null);
@@ -229,16 +285,12 @@ export default function AdvancedVideo({
   );
   const [attempt, setAttempt] = useState(0);
   const [slow, setSlow] = useState(false);
-  const [engineAvailable, setEngineAvailable] = useState(false);
   const [playRequested, setPlayRequested] = useState(false);
-  const [playMessage, setPlayMessage] = useState("");
+  const [playbackError, setPlaybackError] = useState("");
+  const [buffer, setBuffer] = useState<VideoBufferSnapshot>(emptyBuffer);
   const [visible, setVisible] = useState(!document.hidden);
   const [chapters, setChapters] = useState<VideoChapter[]>([]);
   const [chapterSurface, setChapterSurface] = useState<ShadowRoot | null>(null);
-  const fallback = useRef(onFallback);
-  fallback.current = onFallback;
-  const unsupported = useRef(onUnsupported);
-  unsupported.current = onUnsupported;
   useEffect(() => {
     const update = () => setVisible(!document.hidden);
     document.addEventListener("visibilitychange", update);
@@ -271,6 +323,7 @@ export default function AdvancedVideo({
     let previousTime = Number.NaN;
     let waitTime = Number.NaN;
     let latestProgressAt = 0;
+    let receivedBaseline = 0;
     const updateChapters = () => {
       if (!player || cancelled) return;
       setChapters(
@@ -301,9 +354,9 @@ export default function AdvancedVideo({
     let pendingWait: "waiting" | "seeking" = "waiting";
     const listeners: [string, EventListener][] = [];
     dispatch("reset");
-    setEngineAvailable(false);
     setPlayRequested(false);
-    setPlayMessage("");
+    setPlaybackError("");
+    setBuffer(emptyBuffer);
     setChapters([]);
     const clearWaiting = () => {
       clearTimeout(waitingTimer);
@@ -313,7 +366,9 @@ export default function AdvancedVideo({
       if (!cancelled && !failed) {
         failed = true;
         clearWaiting();
-        fallback.current();
+        setPlaybackError(
+          "Video playback could not load. Reload the video to try again.",
+        );
       }
     };
     const updateStartPosition = () => {
@@ -329,6 +384,28 @@ export default function AdvancedVideo({
       resume.positionApplied = true;
       if (playback.current === resume.source) playback.current = null;
     };
+    const updateBuffer = () => {
+      if (!player || cancelled || failed) return;
+      const sample = videoBufferSnapshot(player);
+      setBuffer({
+        ...sample,
+        received: Math.max(0, sample.received - receivedBaseline),
+      });
+      // Pinned Movi 0.4.1 can leave this documented CSS part at zero while
+      // paused, even with a ready buffer. Paint its own public TimeRanges,
+      // including the seek origin, instead of converting server byte offsets.
+      const bar = player.shadowRoot?.querySelector<HTMLElement>(
+        '[part~="progress-buffer"]',
+      );
+      const range = sample.ranges[0]; // This engine exposes one contiguous source window.
+      if (bar && Number.isFinite(player.duration) && player.duration > 0) {
+        bar.style.left =
+          (range ? (range.start / player.duration) * 100 : 0) + "%";
+        bar.style.width =
+          (range ? ((range.end - range.start) / player.duration) * 100 : 0) +
+          "%";
+      }
+    };
     const ready = (
       event: "loadedmetadata" | "loadeddata" | "canplay" | "ready" | "playing",
     ) => {
@@ -338,17 +415,22 @@ export default function AdvancedVideo({
         if (codec) {
           failed = true;
           clearWaiting();
-          unsupported.current(codec);
+          setPlaybackError(
+            "This video’s codec" +
+              (codec === "unknown" ? "" : " (" + codec + ")") +
+              " is not supported by the player on this device. Download the original to open it in a video app.",
+          );
           return;
         }
       }
       usable = true;
+      updateBuffer();
       updateChapters();
       updateSubtitleRenderer();
       clearWaiting();
       dispatch(event);
       setPlayRequested(false);
-      setPlayMessage("");
+
       updateStartPosition();
       if (resume && player && !resume.playRequested) {
         resume.playRequested = true;
@@ -365,6 +447,10 @@ export default function AdvancedVideo({
         return;
       }
       if (kind === "waiting" && player?.paused) return;
+      if (kind === "seeking" && player) {
+        receivedBaseline = videoBufferSnapshot(player).received;
+        setBuffer(emptyBuffer);
+      }
       pendingWait = kind;
       waitTime = player?.currentTime ?? Number.NaN;
       if (waitingTimer !== undefined) return;
@@ -439,6 +525,9 @@ export default function AdvancedVideo({
         // TrackManager emits this synchronously before choosing the decoder.
         // Install the public extension in time to receive raw MP4 text packets.
         listen("subtitletrackchange", updateSubtitleRenderer);
+        listen("play", () => {
+          if (!usable && !cancelled) setPlayRequested(true);
+        });
         listen("loadedmetadata", () => ready("loadedmetadata"));
         listen("loadeddata", () => ready("loadeddata"));
         listen("canplay", () => ready("canplay"));
@@ -453,6 +542,7 @@ export default function AdvancedVideo({
         const observeProgress = () => {
           if (!player || cancelled || failed) return;
           observeResumePosition();
+          updateBuffer();
           if (
             videoIsAdvancing(
               previousTime,
@@ -468,6 +558,7 @@ export default function AdvancedVideo({
           previousTime = player.currentTime;
         };
         listen("timeupdate", observeProgress);
+        listen("progress", observeProgress);
         listen("durationchange", updateStartPosition);
         listen("pause", () => settle("pause"));
         listen("ended", () => settle("ended"));
@@ -484,7 +575,6 @@ export default function AdvancedVideo({
         listen("errordisplay", fail);
         dispatch("engine-loaded");
         host.current.append(player);
-        setEngineAvailable(true);
         player.src = new URL(src, window.location.origin).href;
         // Some engines resume their clock without repeating `playing` after a stall.
         progressTimer = window.setInterval(observeProgress, 250);
@@ -517,7 +607,11 @@ export default function AdvancedVideo({
       }
     };
   }, [src, name, playback, attempt]);
-  const copy = state.phase !== "ready" ? phaseCopy[state.phase] : null;
+  const copy = playbackError
+    ? { title: "Playback unavailable", description: playbackError }
+    : state.phase !== "ready"
+      ? phaseCopy[state.phase]
+      : null;
   const chapterControls =
     state.ready && chapters.length > 0 ? (
       <details
@@ -555,80 +649,78 @@ export default function AdvancedVideo({
         </nav>
       </details>
     ) : null;
+  const loadingStatus = copy ? (
+    <div
+      className="advanced-state advanced-state-buffering"
+      data-phase={state.phase}
+      data-hidden={!visible}
+      data-error={Boolean(playbackError)}
+    >
+      <div className="advanced-state-content">
+        <div
+          role={playbackError ? "alert" : "status"}
+          aria-live="polite"
+          aria-atomic="true"
+        >
+          <h3>{copy.title}</h3>
+          <p>
+            {playbackError ||
+              (playRequested
+                ? "Playback will start when the video is ready."
+                : copy.description)}
+          </p>
+        </div>
+        {!playbackError && (
+          <div className="advanced-buffer-progress">
+            <progress
+              aria-label="Estimated video buffered on this device"
+              max={100}
+              value={buffer.percent ?? undefined}
+            />
+            <p className="advanced-buffer-metrics" aria-live="off">
+              {buffer.percent !== null
+                ? "About " +
+                  Math.floor(buffer.percent) +
+                  "% buffered · " +
+                  Math.floor(buffer.ahead) +
+                  "s ahead"
+                : buffer.received > 0
+                  ? formatBytes(buffer.received) + " received"
+                  : "Waiting for video data…"}
+              {buffer.percent !== null &&
+                buffer.received > 0 &&
+                " · " + formatBytes(buffer.received) + " received"}
+              {buffer.bytesPerSecond > 0 &&
+                " · " + formatBytes(buffer.bytesPerSecond) + "/s"}
+            </p>
+          </div>
+        )}
+        {(slow || playbackError) && (
+          <div className="advanced-state-actions">
+            <button
+              type="button"
+              onClick={() => setAttempt((value) => value + 1)}
+            >
+              <RefreshCw size={16} /> Reload Video
+            </button>
+          </div>
+        )}
+      </div>
+    </div>
+  ) : null;
   return (
     <div className="advanced-video" data-phase={state.phase}>
       <div
         ref={host}
         className="advanced-player-host"
-        inert={!state.ready}
-        aria-hidden={!state.ready}
-        aria-busy={!state.ready}
+        aria-busy={!state.ready && !playbackError}
       />
       {chapterSurface
         ? createPortal(chapterControls, chapterSurface)
         : chapterControls}
-      {copy && (
-        <div
-          className={
-            "advanced-state" + (state.ready ? " advanced-state-buffering" : "")
-          }
-          data-phase={state.phase}
-          data-hidden={!visible}
-        >
-          <div className="advanced-state-content">
-            <div role="status" aria-live="polite" aria-atomic="true">
-              <div className="advanced-state-indicator" aria-hidden="true">
-                <Spinner />
-              </div>
-              <h3>{copy.title}</h3>
-              <p>
-                {playMessage ||
-                  (playRequested
-                    ? "Playback will start when the video is ready."
-                    : slow
-                      ? "This is taking longer than usual. You can keep waiting or reload the video."
-                      : copy.description)}
-              </p>
-            </div>
-            {slow && (
-              <div className="advanced-state-actions">
-                {!state.ready && engineAvailable && (
-                  <button
-                    type="button"
-                    className="advanced-start"
-                    disabled={playRequested}
-                    onClick={() => {
-                      const current = activePlayer.current;
-                      if (!current) return;
-                      setPlayRequested(true);
-                      setPlayMessage("");
-                      void current.play().catch(() => {
-                        if (activePlayer.current !== current) return;
-                        setPlayRequested(false);
-                        setPlayMessage(
-                          "Playback cannot start yet. Keep waiting or reload the video.",
-                        );
-                      });
-                    }}
-                  >
-                    <Play size={16} />
-                    {playRequested ? "Play requested" : "Start Playback"}
-                  </button>
-                )}
-                <button
-                  type="button"
-                  onClick={() => setAttempt((value) => value + 1)}
-                >
-                  <RefreshCw size={16} /> Reload Video
-                </button>
-                <button type="button" onClick={() => fallback.current()}>
-                  Use Compatibility Playback
-                </button>
-              </div>
-            )}
-          </div>
-        </div>
-      )}
+      {chapterSurface
+        ? createPortal(loadingStatus, chapterSurface)
+        : loadingStatus}
     </div>
   );
 }

@@ -235,13 +235,6 @@ export default function Preview({
     };
   }, [item.id]);
   const [failed, setFailed] = useState(false);
-  const [enhancedFailed, setEnhancedFailed] = useState(false);
-  const [unsupportedVideo, setUnsupportedVideo] = useState<{
-    path: string;
-    codec: string;
-  } | null>(null);
-  const unsupportedCodec =
-    unsupportedVideo?.path === path ? unsupportedVideo.codec : null;
   const [preview, setPreview] = useState<{
     path: string;
     value: PreviewDescriptor;
@@ -254,7 +247,6 @@ export default function Preview({
   const [wrap, setWrap] = useState(true);
   const [variants, setVariants] = useState<{ id: string; label: string }[]>([]);
   const [quality, setQuality] = useState("original");
-  const video = useRef<HTMLVideoElement>(null);
   const playback = useRef<{ time: number; playing: boolean } | null>(null);
   const src =
     fileUrl(path, auth) +
@@ -314,8 +306,7 @@ export default function Preview({
   const pdf =
     descriptor?.kind === "pdf" ? safePdfUrl(descriptor.url) : undefined;
   const details =
-    Boolean(unsupportedCodec) ||
-    (!kind && !error && (loading || descriptor?.kind === "unsupported"));
+    !kind && !error && (loading || descriptor?.kind === "unsupported");
   const suffix = item.name.includes(".")
     ? item.name.slice(item.name.lastIndexOf(".") + 1)
     : "";
@@ -404,14 +395,8 @@ export default function Preview({
             </p>
           ) : (
             <p id="file-details-reason">
-              {unsupportedCodec
-                ? "This video’s codec" +
-                  (unsupportedCodec === "unknown"
-                    ? ""
-                    : " (" + unsupportedCodec + ")") +
-                  " is not supported by the preview player. Download the original to play it in a video app."
-                : descriptor?.reason ||
-                  "Download this file to open it on your device."}
+              {descriptor?.reason ||
+                "Download this file to open it on your device."}
             </p>
           )}
           <dl className="file-details-metadata">
@@ -439,22 +424,12 @@ export default function Preview({
         </section>
       ) : (
         <>
-          {kind === "video" && enhancedFailed && (
-            <p className="preview-limit" role="status">
-              Using compatibility playback for this video.
-            </p>
-          )}
           {variants.length > 0 && (
             <label className="preview-quality">
               Preview Quality
               <select
                 value={quality}
                 onChange={(event) => {
-                  if (video.current)
-                    playback.current = {
-                      time: video.current.currentTime,
-                      playing: !video.current.paused,
-                    };
                   setFailed(false);
                   setQuality(event.target.value);
                 }}
@@ -505,7 +480,6 @@ export default function Preview({
                   className="secondary-button"
                   onClick={() => {
                     setFailed(false);
-                    setEnhancedFailed(false);
                     setAttempt((value) => value + 1);
                   }}
                 >
@@ -519,44 +493,13 @@ export default function Preview({
                 alt={item.name}
                 onError={() => setFailed(true)}
               />
-            ) : kind === "video" && !enhancedFailed ? (
+            ) : kind === "video" ? (
               <AdvancedVideo
                 key={attempt}
                 src={src}
                 name={item.name}
                 playback={playback}
-                onUnsupported={(codec) => setUnsupportedVideo({ path, codec })}
-                onFallback={() => {
-                  setEnhancedFailed(true);
-                  setFailed(false);
-                }}
               />
-            ) : kind === "video" ? (
-              <video
-                ref={video}
-                key={attempt}
-                src={src}
-                controls
-                playsInline
-                preload="metadata"
-                onLoadedMetadata={() => {
-                  const restore = playback.current;
-                  if (restore && video.current) {
-                    video.current.currentTime = Math.min(
-                      restore.time,
-                      Number.isFinite(video.current.duration)
-                        ? Math.max(0, video.current.duration - 0.1)
-                        : restore.time,
-                    );
-                    if (restore.playing)
-                      void video.current.play().catch(() => {});
-                    playback.current = null;
-                  }
-                }}
-                onError={() => setFailed(true)}
-              >
-                Your browser does not support this video format.
-              </video>
             ) : kind === "audio" ? (
               <audio
                 key={attempt}

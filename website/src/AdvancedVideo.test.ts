@@ -6,6 +6,7 @@ import {
   videoResumeTime,
   videoIsAdvancing,
   videoChapters,
+  videoBufferSnapshot,
   chapterTime,
   type VideoLoadState,
 } from "./AdvancedVideo";
@@ -144,5 +145,68 @@ describe("settled video decoder availability", () => {
         }),
       ).toBeNull();
     }
+  });
+});
+
+describe("measured player buffer", () => {
+  function snapshot(
+    ranges: [number, number][],
+    duration = 100,
+    currentTime = 45,
+  ) {
+    return videoBufferSnapshot({
+      duration,
+      currentTime,
+      buffered: {
+        length: ranges.length,
+        start: (index) => ranges[index][0],
+        end: (index) => ranges[index][1],
+      },
+      player: {
+        getSource: () => ({
+          getNetworkStats: () => ({
+            totalBytes: 4194304,
+            currentSpeed: 524288,
+          }),
+        }),
+      },
+    });
+  }
+  it("uses engine time ranges and measured delivery, including disjoint regions", () => {
+    expect(
+      snapshot([
+        [0, 10],
+        [40, 60],
+      ]),
+    ).toEqual({
+      ranges: [
+        { start: 0, end: 10 },
+        { start: 40, end: 60 },
+      ],
+      percent: 30,
+      ahead: 15,
+      received: 4194304,
+      bytesPerSecond: 524288,
+    });
+  });
+  it("does not invent a percentage when the duration is unknown", () => {
+    expect(snapshot([[40, 50]], Number.NaN).percent).toBeNull();
+    expect(snapshot([], 0).received).toBe(4194304);
+  });
+  it("does not mark an unfetched seek gap as available", () => {
+    const afterSeek = snapshot([[80, 90]], 100, 80);
+    expect(afterSeek.percent).toBe(10);
+    expect(afterSeek.ahead).toBe(10);
+    expect(snapshot([[0, 10]], 100, 80).ahead).toBe(0);
+  });
+  it("merges overlap, clamps the duration and ignores invalid ranges", () => {
+    const result = snapshot([
+      [40, 60],
+      [50, 120],
+      [90, 80],
+      [NaN, 3],
+    ]);
+    expect(result.ranges).toEqual([{ start: 40, end: 100 }]);
+    expect(result.percent).toBe(60);
   });
 });

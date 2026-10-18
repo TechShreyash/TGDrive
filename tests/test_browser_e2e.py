@@ -1037,6 +1037,12 @@ def test_enhanced_mkv_real_audio_subtitles_and_local_assets(
     more_button = player.get_by_role("button", name="More Settings", exact=True)
     expect(more_button).to_be_visible()
     expandable_controls = player.locator(".movi-mobile-expandable")
+    # Desktop audio/subtitle menu state can carry into the compact layout.
+    # Establish a closed tray before verifying the actual mobile toggle.
+    if expandable_controls.evaluate(
+        "element=>element.closest('.movi-controls-right').classList.contains('expanded')"
+    ):
+        more_button.click()
     expect(expandable_controls).to_have_css("pointer-events", "none")
     more_button.click()
     expect(expandable_controls).to_have_css("pointer-events", "auto")
@@ -1386,8 +1392,9 @@ def test_low_zoom_tall_pdf_renders_every_intersecting_page(
     expect(dialog.locator(".pdf-page")).to_have_count(len(frames))
 
 
+@pytest.mark.parametrize("play_during_open", [False, True])
 def test_enhanced_video_delayed_startup_shows_status_and_recovers(
-    server: Server, desktop: tuple[Any, Any]
+    server: Server, desktop: tuple[Any, Any], play_during_open: bool
 ) -> None:
     _, page = desktop
     pending: list[Any] = []
@@ -1415,10 +1422,23 @@ def test_enhanced_video_delayed_startup_shows_status_and_recovers(
         player = dialog.locator("movi-player")
         expect(player).to_be_visible(timeout=30000)
         player_host = dialog.locator(".advanced-player-host")
-        expect(player_host).to_have_attribute("inert", "")
-        expect(player_host).to_have_attribute("aria-hidden", "true")
-        assert player.evaluate(
-            "element=>element.closest('[inert]')?.classList.contains('advanced-player-host')"
+        expect(player_host).not_to_have_attribute("inert", "")
+        expect(player_host).not_to_have_attribute("aria-hidden", "true")
+        expect(player.locator("button.movi-play-pause")).to_be_visible()
+        assert player.evaluate("element=>element.closest('[inert]')===null")
+        expect(
+            dialog.get_by_role("button", name="Start Playback", exact=True)
+        ).to_have_count(0)
+        expect(
+            dialog.get_by_role("button", name="Use Compatibility Playback", exact=True)
+        ).to_have_count(0)
+        expect(dialog.locator(".preview-surface > video")).to_have_count(0)
+        progress = status.get_by_role(
+            "progressbar", name="Estimated video buffered on this device"
+        )
+        expect(progress).to_be_visible()
+        assert progress.evaluate("element=>!element.hasAttribute('value')"), (
+            "Unknown duration must not manufacture a loading percentage"
         )
         expect(
             status.get_by_role("button", name="Reload Video", exact=True)
@@ -1436,18 +1456,24 @@ def test_enhanced_video_delayed_startup_shows_status_and_recovers(
         page.screenshot(
             path=ARTIFACTS / "video-startup-delayed-mobile.png", full_page=False
         )
+        if play_during_open:
+            player.locator("button.movi-play-pause").click()
+            expect(status).to_contain_text(
+                "Playback will start when the video is ready."
+            )
         holding = False
         for route in pending:
             route.continue_()
         pending.clear()
         expect(status).to_have_count(0, timeout=30000)
         expect(player_host).not_to_have_attribute("inert", "")
-        expect(player_host).to_have_attribute("aria-hidden", "false")
+        expect(player_host).not_to_have_attribute("aria-hidden", "true")
         assert player.evaluate("element=>element.closest('[inert]')===null")
-        assert player.evaluate("element=>element.paused"), (
-            "Readiness must not force autoplay"
-        )
-        player.locator("button.movi-play-pause").click()
+        if not play_during_open:
+            assert player.evaluate("element=>element.paused"), (
+                "Readiness must not force autoplay"
+            )
+            player.locator("button.movi-play-pause").click()
         deadline = time.monotonic() + 15
         while (
             player.evaluate("element=>element.currentTime") <= 0.25
@@ -2408,21 +2434,24 @@ def test_supported_asf_wmv_software_decode_has_real_frames_pixels_seek_and_origi
     assert console_csp == []
 
 
-def test_actual_unavailable_wmv_codec_has_clear_details_and_original_download(
+def test_actual_unavailable_wmv_codec_stays_in_custom_player_with_original_download(
     server: Server, desktop: tuple[Any, Any]
 ) -> None:
     _, page = desktop
     login(page, server.url)
     page.get_by_role("button", name="Preview samples", exact=True).dblclick()
     page.get_by_role("button", name="unsupported-msmpeg4.wmv", exact=True).dblclick()
-    dialog = page.locator("dialog.file-details")
-    expect(dialog).to_be_visible(timeout=30000)
-    expect(dialog.locator("#file-details-reason")).to_contain_text("msmpeg4v3")
-    expect(dialog.locator("#file-details-reason")).to_contain_text(
-        "is not supported by the preview player"
+    dialog = preview_dialog(page)
+    expect(dialog.locator("movi-player")).to_be_visible(timeout=30000)
+    expect(dialog.get_by_role("alert")).to_contain_text("msmpeg4v3", timeout=30000)
+    expect(dialog.get_by_role("alert")).to_contain_text(
+        "is not supported by the player on this device"
     )
+    expect(
+        dialog.get_by_role("button", name="Reload Video", exact=True)
+    ).to_be_visible()
     assert dialog.evaluate("element => element.matches(':modal')")
-    expect(dialog.locator("movi-player,video")).to_have_count(0)
+    expect(dialog.locator(".preview-surface > video")).to_have_count(0)
     with page.expect_download() as result:
         dialog.get_by_role("link", name="Download Original", exact=True).click()
     assert (

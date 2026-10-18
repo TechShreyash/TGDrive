@@ -5,9 +5,7 @@
 .advanced-player-host {
   z-index: 0;
 }
-.advanced-video:not([data-phase="ready"])
-  movi-player:not(:fullscreen)::part(center-button),
-.advanced-video movi-player:not(:fullscreen)::part(spinner) {
+.advanced-video movi-player::part(spinner) {
   visibility: hidden;
 }
 .advanced-state {
@@ -17,24 +15,12 @@
   display: grid;
   place-items: center;
   padding: 24px;
-  background: #080a0d;
+  background: transparent;
   color: #eef2fa;
 }
 .advanced-state-content {
   width: min(100%, 390px);
   text-align: center;
-}
-.advanced-state-indicator {
-  display: flex;
-  justify-content: center;
-  margin-bottom: 22px;
-  color: #b8caff;
-}
-.advanced-state-indicator .spinner {
-  width: 36px;
-  height: 36px;
-  stroke-width: 1.5px;
-  animation: advanced-loading-turn 1.3s linear infinite;
 }
 .advanced-state h3 {
   margin: 0;
@@ -56,7 +42,7 @@
   flex-wrap: wrap;
   justify-content: center;
   gap: 10px;
-  margin-top: 24px;
+  margin-top: 12px;
   pointer-events: auto;
 }
 .advanced-state-actions button {
@@ -86,15 +72,6 @@
   opacity: 0.6;
   cursor: default;
 }
-.advanced-state-actions .advanced-start {
-  border-color: #b8caff;
-  background: #b8caff;
-  color: #142447;
-}
-.advanced-state-actions .advanced-start:hover {
-  border-color: #d2deff;
-  background: #d2deff;
-}
 .advanced-state-buffering {
   pointer-events: none;
   inset: 16px 16px auto auto;
@@ -103,16 +80,9 @@
   background: transparent;
 }
 .advanced-state-buffering .advanced-state-content {
-  padding: 14px 18px;
-  border-radius: 10px;
+  padding: 12px 16px;
+  border-radius: 7px;
   background: rgb(8 10 13 / 90%);
-}
-.advanced-state-buffering .advanced-state-indicator {
-  margin-bottom: 8px;
-}
-.advanced-state-buffering .advanced-state-indicator .spinner {
-  width: 22px;
-  height: 22px;
 }
 .advanced-state-buffering h3 {
   font-size: 15px;
@@ -187,19 +157,6 @@
   outline: 2px solid #b6c9ff;
   outline-offset: 2px;
 }
-.advanced-state[data-hidden="true"] .spinner {
-  animation-play-state: paused;
-}
-@keyframes advanced-loading-turn {
-  to {
-    transform: rotate(360deg);
-  }
-}
-@media (prefers-reduced-motion: reduce) {
-  .advanced-state-indicator .spinner {
-    animation: none;
-  }
-}
 @media (max-width: 480px) {
   .advanced-state {
     padding: 20px;
@@ -210,5 +167,55 @@
   }
   .advanced-chapters {
     inset: 12px auto auto 12px;
+  }
+}
+
+.advanced-video movi-player::part(progress-buffer) {
+  background: #abb7ce;
+  opacity: 0.65;
+}
+.advanced-video movi-player::part(error-screen) {
+  display: none;
+}
+.advanced-buffer-progress {
+  margin-top: 10px;
+}
+.advanced-buffer-progress progress {
+  display: block;
+  width: 100%;
+  height: 4px;
+  overflow: hidden;
+  border: 0;
+  border-radius: 2px;
+  color: #b8caff;
+  background: #354154;
+  accent-color: #b8caff;
+}
+.advanced-buffer-progress progress::-webkit-progress-bar {
+  background: #354154;
+}
+.advanced-buffer-progress progress::-webkit-progress-value {
+  background: #b8caff;
+}
+.advanced-buffer-progress progress::-moz-progress-bar {
+  background: #b8caff;
+}
+.advanced-state-buffering .advanced-buffer-metrics {
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Movi's controls-visible blanket rule otherwise makes its collapsed tray
+   interactive. Keep hidden compact controls out of pointer and keyboard paths. */
+@container movi-host (max-width: 720px) {
+  :host(:not(.movi-single-extra))
+    .movi-controls-right:not(.expanded)
+    .movi-mobile-expandable,
+  :host(:not(.movi-single-extra))
+    .movi-controls-right:not(.expanded)
+    .movi-mobile-expandable
+    * {
+    pointer-events: none !important;
+    visibility: hidden !important;
   }
 }
