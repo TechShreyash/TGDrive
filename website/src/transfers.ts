@@ -253,6 +253,12 @@ export function fromJob(job: Job, previousKind?: string): Partial<Transfer> {
     const { stored, total } = job.telegram_parts;
     phase += " · " + stored + "/" + total + " Parts in Channel";
   }
+  if (job.queue && job.queue.position > 0) {
+    phase += " · Queue position " + job.queue.position;
+    if (job.queue.estimated_wait_seconds != null)
+      phase +=
+        " · about " + Math.ceil(job.queue.estimated_wait_seconds) + "s wait";
+  }
   return {
     state,
     phase,

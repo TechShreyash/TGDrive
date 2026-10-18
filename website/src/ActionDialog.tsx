@@ -10,8 +10,8 @@ import {
   Download,
   AlertCircle,
 } from "lucide-react";
-import { api, ApiError, errorMessage } from "./api";
-import { itemPath, formatDate, type DriveItem } from "./types";
+import { api, request, ApiError, errorMessage } from "./api";
+import { itemPath, formatTimestamp, type DriveItem } from "./types";
 import { transfers } from "./transfers";
 import { Modal, ErrorNotice, Spinner } from "./components";
 export type ActionDialogState =
@@ -22,7 +22,9 @@ export type ActionDialogState =
   | { type: "move"; items: DriveItem[] }
   | { type: "delete"; items: DriveItem[] }
   | { type: "restore"; items: DriveItem[] }
-  | { type: "preview"; item: DriveItem };
+  | { type: "preview"; item: DriveItem }
+  | { type: "download-link"; item: DriveItem }
+  | { type: "prepare"; item: DriveItem };
 export default function ActionDialog({
   dialog,
   destination,
@@ -69,6 +71,69 @@ export default function ActionDialog({
       setBusy(false);
     }
   };
+  if (dialog.type === "download-link" || dialog.type === "prepare")
+    return (
+      <Modal
+        title={
+          dialog.type === "prepare"
+            ? "Prepare for Download or Streaming"
+            : "Copy Download Link"
+        }
+        onClose={close}
+      >
+        <p>{dialog.item.name}</p>
+        <p>
+          {dialog.type === "prepare"
+            ? "Save this file in the server cache for faster playback and downloads. It uses your instance cache budget and waits behind on-demand requests. Prepared bytes can later be evicted to respect limits."
+            : "Anyone with this link can download the file without logging in. An active link is reused, or a new one-day link is created. Revoke it in Shared Links."}
+        </p>
+        {link && (
+          <label>
+            Download link
+            <input
+              readOnly
+              value={link}
+              onFocus={(e) => e.currentTarget.select()}
+            />
+          </label>
+        )}
+        {expiry && <p className="muted">Expires {formatTimestamp(expiry)}</p>}
+        <ErrorNotice message={error} />
+        <div className="dialog-actions">
+          <button className="secondary-button" onClick={close} disabled={busy}>
+            Close
+          </button>
+          <button
+            className="primary-button"
+            disabled={busy}
+            onClick={() =>
+              void run(async () => {
+                if (dialog.type === "prepare") {
+                  await request("/api/v1/preloads", {
+                    path: itemPath(dialog.item),
+                  });
+                  onNotice("Preparation queued. View progress in Preloads.");
+                  onClose();
+                } else {
+                  const result = await request<{
+                    url: string;
+                    expires_at: string | null;
+                  }>("/api/v1/download-links", { path: itemPath(dialog.item) });
+                  setLink(result.url);
+                  setExpiry(result.expires_at);
+                  onChanged();
+                  await navigator.clipboard.writeText(result.url);
+                  onNotice("Download link copied.");
+                }
+              })
+            }
+          >
+            {busy ? <Spinner /> : null}
+            {dialog.type === "prepare" ? "Prepare File" : "Create or Copy Link"}
+          </button>
+        </div>
+      </Modal>
+    );
   if (dialog.type === "move")
     return (
       <MoveDialog
@@ -237,7 +302,7 @@ export default function ActionDialog({
             />
             <p className="muted">
               {expiry
-                ? "Expires " + formatDate(expiry) + "."
+                ? "Expires " + formatTimestamp(expiry) + "."
                 : "This link does not expire."}{" "}
               Revoke access from Shared Links.
             </p>

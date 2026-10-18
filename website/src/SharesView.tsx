@@ -4,7 +4,7 @@ import { api, errorMessage } from "./api";
 import {
   formatLocationLabel,
   formatBytes,
-  formatDate,
+  formatTimestamp,
   type Share,
   type DriveItem,
 } from "./types";
@@ -267,7 +267,7 @@ export default function SharesView({
                       : formatBytes(share.size)}
                   </span>
                   <span title={new Date(share.created_at).toLocaleString()}>
-                    Created {formatDate(share.created_at)}
+                    Created {formatTimestamp(share.created_at)}
                   </span>
                 </div>
                 <div className={"share-expiry" + (ended ? " ended" : "")}>
@@ -280,7 +280,7 @@ export default function SharesView({
                   </span>
                   {share.expires_at && (
                     <span title={new Date(share.expires_at).toLocaleString()}>
-                      {formatDate(share.expires_at)}
+                      {formatTimestamp(share.expires_at)}
                     </span>
                   )}
                 </div>

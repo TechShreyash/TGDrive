@@ -21,6 +21,7 @@ export interface TransferLocation {
   reason?: string;
 }
 export interface Job {
+  queue?: { position: number; estimated_wait_seconds: number | null } | null;
   telegram_parts?: { total: number; stored: number };
   location?: TransferLocation;
   id: string;
@@ -72,6 +73,7 @@ export interface Share {
 }
 export interface PublicConfig {
   max_file_size: number;
+  timezone?: string;
 }
 export interface DriveProtection {
   backend?: "mongodb" | "sqlite";
@@ -101,7 +103,9 @@ export type View =
   | "activity"
   | "connections"
   | "storage"
-  | "settings";
+  | "settings"
+  | "preloads"
+  | "performance";
 export function itemPath(item: DriveItem): string {
   const parent = item.path.endsWith("/") ? item.path.slice(0, -1) : item.path;
   return parent + "/" + item.id;
@@ -126,15 +130,53 @@ export function formatBytes(value: number | undefined): string {
     ["B", "KB", "MB", "GB", "TB"][exponent]
   );
 }
+let instanceTimezone = "Asia/Kolkata";
+export function setTimezone(value: string) {
+  try {
+    new Intl.DateTimeFormat(undefined, { timeZone: value });
+    instanceTimezone = value;
+  } catch {
+    instanceTimezone = "Asia/Kolkata";
+  }
+}
+export function formatTimestamp(
+  value: string | number | null | undefined,
+): string {
+  if (!value) return "—";
+  const date = new Date(typeof value === "number" ? value * 1000 : value);
+  return Number.isNaN(date.getTime())
+    ? "—"
+    : new Intl.DateTimeFormat(undefined, {
+        dateStyle: "medium",
+        timeStyle: "long",
+        timeZone: instanceTimezone,
+      }).format(date);
+}
 export function formatDate(value: string | number | null | undefined): string {
   if (!value) return "—";
   const date = new Date(typeof value === "number" ? value * 1000 : value);
   return Number.isNaN(date.getTime())
     ? "—"
-    : new Intl.DateTimeFormat(undefined, { dateStyle: "medium" }).format(date);
+    : new Intl.DateTimeFormat(undefined, {
+        dateStyle: "medium",
+        timeZone: instanceTimezone,
+      }).format(date);
+}
+const mediaRequests = new Map<string, string>();
+export function mediaRequestId(path: string, auth = ""): string {
+  const key = path + "\0" + auth;
+  let id = mediaRequests.get(key);
+  if (!id) {
+    id = crypto.randomUUID().replaceAll("-", "_");
+    mediaRequests.set(key, id);
+    if (mediaRequests.size > 256)
+      mediaRequests.delete(mediaRequests.keys().next().value!);
+  }
+  return id;
 }
 export function fileUrl(path: string, auth = "", download = false): string {
   const search = new URLSearchParams({ path });
+  search.set("request_id", mediaRequestId(path, auth));
   if (auth) search.set("auth", auth);
   if (download) search.set("download", "1");
   return "/file?" + search.toString();

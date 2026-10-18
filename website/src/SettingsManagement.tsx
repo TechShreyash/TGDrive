@@ -533,7 +533,7 @@ export default function SettingsManagement() {
                   disabled={
                     Boolean(draft) ||
                     premiumOpen ||
-                    settings.clients.length >= 16
+                    settings.clients.length >= 50
                   }
                   onClick={() => addClient("bot")}
                 >
@@ -546,7 +546,7 @@ export default function SettingsManagement() {
                     Boolean(draft) ||
                     premiumOpen ||
                     blocked ||
-                    settings.clients.length >= 16
+                    settings.clients.length >= 50
                   }
                   onClick={() => {
                     setPremiumOpen(true);
@@ -792,7 +792,7 @@ export default function SettingsManagement() {
                 type="button"
                 className="secondary-button"
                 disabled={
-                  Boolean(draft) || premiumOpen || settings.clients.length >= 16
+                  Boolean(draft) || premiumOpen || settings.clients.length >= 50
                 }
                 onClick={() => addClient("user")}
               >

@@ -686,13 +686,35 @@ export default function FileBrowser({
                                   <Eye size={16} /> Open
                                 </button>
                                 {item.type === "file" && (
-                                  <a
-                                    href={fileUrl(itemPath(item), "", true)}
-                                    download={item.name}
-                                    onClick={closeItemMenus}
-                                  >
-                                    <Download size={16} /> Download
-                                  </a>
+                                  <>
+                                    <a
+                                      href={fileUrl(itemPath(item), "", true)}
+                                      download={item.name}
+                                      onClick={closeItemMenus}
+                                    >
+                                      <Download size={16} /> Download
+                                    </a>
+                                    <button
+                                      role="menuitem"
+                                      onClick={() =>
+                                        showDialog({
+                                          type: "download-link",
+                                          item,
+                                        })
+                                      }
+                                    >
+                                      <Link size={16} /> Copy Download Link
+                                    </button>
+                                    <button
+                                      role="menuitem"
+                                      onClick={() =>
+                                        showDialog({ type: "prepare", item })
+                                      }
+                                    >
+                                      <Download size={16} /> Prepare for
+                                      Download / Streaming
+                                    </button>
+                                  </>
                                 )}
                                 <button
                                   onClick={() =>

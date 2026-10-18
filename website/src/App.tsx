@@ -30,14 +30,18 @@ import { api, ApiError, errorMessage } from "./api";
 import {
   itemPath,
   formatBytes,
+  setTimezone,
   type DriveItem,
   type Directory,
   type View,
 } from "./types";
 import { transfers, type Transfer } from "./transfers";
-import { Spinner } from "./components";
+import { Spinner, ToastNotice as Toast } from "./components";
 import { Login, SharesView, SettingsView, StorageView } from "./Screens";
 import SettingsManagement from "./SettingsManagement";
+import PerformanceSettings from "./PerformanceSettings";
+import Preloads from "./Preloads";
+import PerformancePanel from "./PerformancePanel";
 import FileBrowser from "./FileBrowser";
 import type { FileSort } from "./SortMenu";
 import ActionDialog, { type ActionDialogState } from "./ActionDialog";
@@ -54,9 +58,15 @@ function getLocation() {
     ? "files"
     : path === "/trash"
       ? "trash"
-      : ["activity", "shares", "connections", "storage", "settings"].includes(
-            requested || "",
-          )
+      : [
+            "activity",
+            "shares",
+            "connections",
+            "storage",
+            "settings",
+            "preloads",
+            "performance",
+          ].includes(requested || "")
         ? (requested as View)
         : "files";
   return {
@@ -288,7 +298,10 @@ export default function App() {
   useEffect(() => {
     void api
       .config()
-      .then(setConfig)
+      .then((value) => {
+        setConfig(value);
+        setTimezone(value.timezone || "Asia/Kolkata");
+      })
       .catch(() => {});
     if (isPublic) {
       setAuthenticated(false);
@@ -571,27 +584,31 @@ export default function App() {
     }
   };
   const title =
-    view === "trash"
-      ? "Trash"
-      : view === "activity"
-        ? "Transfers"
-        : view === "shares"
-          ? "Shared Links"
-          : view === "connections"
-            ? "Connections"
-            : view === "storage"
-              ? "Storage & Backups"
-              : view === "settings"
-                ? "Settings"
-                : isSearch
-                  ? "Search Results"
-                  : isPublic
-                    ? directory.name && directory.name !== "/"
-                      ? directory.name
-                      : "Shared Files"
-                    : currentPath === "/"
-                      ? "My Files"
-                      : directory.name || "Folder";
+    view === "preloads"
+      ? "Preloads"
+      : view === "performance"
+        ? "Performance"
+        : view === "trash"
+          ? "Trash"
+          : view === "activity"
+            ? "Transfers"
+            : view === "shares"
+              ? "Shared Links"
+              : view === "connections"
+                ? "Connections"
+                : view === "storage"
+                  ? "Storage & Backups"
+                  : view === "settings"
+                    ? "Settings"
+                    : isSearch
+                      ? "Search Results"
+                      : isPublic
+                        ? directory.name && directory.name !== "/"
+                          ? directory.name
+                          : "Shared Files"
+                        : currentPath === "/"
+                          ? "My Files"
+                          : directory.name || "Folder";
   useEffect(() => {
     document.title = title + " · TGDrive";
   }, [title]);
@@ -890,6 +907,18 @@ export default function App() {
                   view: "shares",
                   label: "Shared Links",
                   icon: Link,
+                  path: "/",
+                },
+                {
+                  view: "preloads",
+                  label: "Preloads",
+                  icon: HardDrive,
+                  path: "/",
+                },
+                {
+                  view: "performance",
+                  label: "Performance",
+                  icon: Activity,
                   path: "/",
                 },
                 { view: "trash", label: "Trash", icon: Trash2, path: "/trash" },
@@ -1206,6 +1235,13 @@ export default function App() {
               }
               onShare={(item) => setDialog({ type: "share", item })}
             />
+          ) : view === "preloads" ? (
+            <Preloads
+              onError={(message) => notify(message, true)}
+              onNotice={notify}
+            />
+          ) : view === "performance" ? (
+            <PerformancePanel />
           ) : view === "connections" ? (
             <SettingsManagement />
           ) : view === "storage" ? (
@@ -1215,13 +1251,22 @@ export default function App() {
               onTrash={() => navigate("/trash", "trash")}
             />
           ) : view === "settings" ? (
-            <SettingsView
-              onLogout={async () => {
-                await api.logout();
-                setAuthenticated(false);
-                notify("Logged out. Server transfers continue.");
-              }}
-            />
+            <>
+              <SettingsView
+                onLogout={async () => {
+                  await api.logout();
+                  setAuthenticated(false);
+                  notify("Logged out. Server transfers continue.");
+                }}
+              />
+              <PerformanceSettings
+                onSaved={(value) => {
+                  setTimezone(value.timezone);
+                  notify("Performance settings saved.");
+                  reload();
+                }}
+              />
+            </>
           ) : (
             <TransferHistory
               items={items}
@@ -1355,7 +1400,7 @@ export default function App() {
           onClose={closeDialog}
           onChanged={() => {
             reload();
-            setDialog(null);
+            if (dialog.type !== "download-link") setDialog(null);
           }}
           onNotice={notify}
           onDelete={(targets) => action("delete", targets)}
@@ -1363,29 +1408,6 @@ export default function App() {
         />
       )}
       {toast && <Toast toast={toast} close={() => setToast(null)} />}
-    </div>
-  );
-}
-function Toast({
-  toast,
-  close,
-}: {
-  toast: { message: string; error: boolean };
-  close: () => void;
-}) {
-  return (
-    <div
-      className={"toast " + (toast.error ? "toast-error" : "")}
-      role={toast.error ? "alert" : "status"}
-    >
-      <span>{toast.message}</span>
-      <button
-        className="icon-button"
-        aria-label="Dismiss Notification"
-        onClick={close}
-      >
-        <X size={17} />
-      </button>
     </div>
   );
 }

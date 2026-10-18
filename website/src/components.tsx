@@ -150,10 +150,12 @@ export function ToastNotice({
   }, []);
   useEffect(() => {
     const node = notice.current;
-    if (typeof node?.showPopover !== "function") return;
+    // Closing a dialog can detach its portal before the observer relocates it.
+    // The next container render raises the same notice without stealing focus.
+    if (!node?.isConnected || typeof node.showPopover !== "function") return;
     node.showPopover();
     return () => {
-      if (node.matches(":popover-open")) node.hidePopover();
+      if (node.isConnected && node.matches(":popover-open")) node.hidePopover();
     };
   }, [container, toast.message, toast.error]);
   return createPortal(

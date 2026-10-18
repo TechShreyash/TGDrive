@@ -2,12 +2,13 @@ import AdvancedVideo from "./AdvancedVideo";
 import { readBoundedResponse, PreviewLimitError } from "./previewIO";
 import { lazy, Suspense, useEffect, useRef, useState } from "react";
 import { AlertCircle, ArrowLeft, Download, RefreshCw, X } from "lucide-react";
-import { errorMessage } from "./api";
+import { request, errorMessage } from "./api";
 import {
   itemPath,
   fileUrl,
   formatBytes,
   formatDate,
+  mediaRequestId,
   type DriveItem,
   type PreviewDescriptor,
 } from "./types";
@@ -167,6 +168,37 @@ export default function Preview({
   const nativeKind = nativePreviewKind(item.name);
   const path = itemPath(item);
   const viewer = useRef<HTMLDialogElement>(null);
+  const [queue, setQueue] = useState<{
+    position: number;
+    estimated_wait_seconds: number | null;
+  } | null>(null);
+  useEffect(() => {
+    const controller = new AbortController();
+    const params = new URLSearchParams({
+      path,
+      request_id: mediaRequestId(path, auth),
+    });
+    if (auth) params.set("auth", auth);
+    let timer: ReturnType<typeof setTimeout>;
+    const poll = async () => {
+      try {
+        const data = await request<{ queue: typeof queue }>(
+          "/api/v1/file-status?" + params,
+          undefined,
+          { signal: controller.signal },
+        );
+        if (!controller.signal.aborted) setQueue(data.queue);
+      } catch {
+        /* Playback remains usable if queue diagnostics are unavailable. */
+      }
+      if (!controller.signal.aborted) timer = setTimeout(poll, 2500);
+    };
+    void poll();
+    return () => {
+      controller.abort();
+      clearTimeout(timer);
+    };
+  }, [path, auth]);
   const [toolbarTarget, setToolbarTarget] = useState<HTMLDivElement | null>(
     null,
   );
@@ -348,6 +380,14 @@ export default function Preview({
           </>
         )}
       </header>
+      {queue && queue.position > 0 && (
+        <p className="preview-limit" role="status">
+          Waiting for Telegram · Queue position {queue.position}
+          {queue.estimated_wait_seconds != null
+            ? " · About " + Math.ceil(queue.estimated_wait_seconds) + " seconds"
+            : " · Estimating wait…"}
+        </p>
+      )}
       {details ? (
         <section className="file-details-body">
           <div className="file-details-icon">
