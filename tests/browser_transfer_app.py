@@ -16,12 +16,14 @@ import time
 import wave
 import zlib
 from collections.abc import Awaitable, Callable
+from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 from urllib.parse import unquote, urlsplit
 
 from fastapi import Request, Response, UploadFile
+from telethon import types
 from telethon.errors import (
     PasswordHashInvalidError,
     PhoneCodeInvalidError,
@@ -37,6 +39,7 @@ from tgdrive.remote import RemoteFileInfo
 from tgdrive.security import SESSION_COOKIE
 from tgdrive.store import DriveStore
 from tgdrive.tasks import TransferRecord, TransferRegistry, TransferStatus
+from tgdrive.telegram_clients import TelegramMessage
 from tgdrive.transfers import TransferCancelled, TransferEmptyFile
 
 PASSWORD = "offline browser test password"
@@ -62,16 +65,31 @@ class FixtureClient:
     async def stop(self) -> None:
         self.is_connected = False
 
-    async def get_messages(self, _channel: int, *, message_ids: int) -> Any:
-        from types import SimpleNamespace
-
+    async def get_messages(self, channel: int, *, message_ids: int) -> Any:
         content = self.payloads.get(message_ids)
         if content is None:
             return None
-        return SimpleNamespace(
+        # Real immutable Telegram document identities exercise production pooled
+        # RAM/disk reads. A size-only namespace bypasses that path entirely.
+        native = SimpleNamespace(
             id=message_ids,
-            document=SimpleNamespace(file_size=len(content)),
+            chat_id=channel,
+            sender_id=1,
+            raw_text="",
+            photo=None,
+            file=SimpleNamespace(size=len(content), name="fixture.bin"),
+            document=types.Document(
+                id=message_ids + 100000,
+                access_hash=2,
+                file_reference=b"offline-fixture",
+                date=datetime(2026, 10, 18, tzinfo=UTC),
+                mime_type="application/octet-stream",
+                size=len(content),
+                dc_id=2,
+                attributes=[],
+            ),
         )
+        return TelegramMessage(self, native)
 
     def describe_media(self, message: Any) -> dict[str, Any]:
         original = {
@@ -526,12 +544,16 @@ class FixtureRuntime:
         self.ready = False
 
     async def start(self) -> None:
+        from tgdrive.performance_preferences import get_performance_settings
+
+        await get_performance_settings(settings, self).initialize()
         await self.pool.start()
         self.ready = True
 
     async def stop(self) -> None:
         self.ready = False
         await self.transfers.registry.shutdown()
+        await self.preloads.close()
         await self.pool.stop(drain_timeout=1)
 
 
