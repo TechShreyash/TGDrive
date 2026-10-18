@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import weakref
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 
@@ -12,6 +12,8 @@ from typing import Any
 class _Flight:
     task: asyncio.Task[Any]
     waiters: int = 0
+    abandoned: bool = False
+    done: asyncio.Event = field(default_factory=asyncio.Event)
 
 
 _FLIGHTS: weakref.WeakKeyDictionary = weakref.WeakKeyDictionary()
@@ -22,6 +24,9 @@ async def get_message(client: Any, channel: int, message_id: int) -> Any:
     flights = _FLIGHTS.setdefault(loop, {})
     key = (id(client), channel, message_id)
     flight = flights.get(key)
+    while flight is not None and flight.abandoned:
+        await flight.done.wait()
+        flight = flights.get(key)
     if flight is None:
         task = asyncio.create_task(client.get_messages(channel, message_ids=message_id))
         flight = _Flight(task)
@@ -30,6 +35,7 @@ async def get_message(client: Any, channel: int, message_id: int) -> Any:
         def completed(_task):
             if flights.get(key) is flight:
                 flights.pop(key, None)
+            flight.done.set()
 
         task.add_done_callback(completed)
     flight.waiters += 1
@@ -38,5 +44,12 @@ async def get_message(client: Any, channel: int, message_id: int) -> Any:
     finally:
         flight.waiters -= 1
         if not flight.waiters and not flight.task.done():
+            flight.abandoned = True
             flight.task.cancel()
-            await asyncio.gather(flight.task, return_exceptions=True)
+            while not flight.task.done():
+                try:
+                    await asyncio.shield(flight.task)
+                except asyncio.CancelledError:
+                    continue
+                except Exception:
+                    break
