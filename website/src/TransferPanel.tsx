@@ -50,6 +50,10 @@ export default function TransferPanel({
   pageContext?: string;
   onLocate?: (item: Transfer, folder?: boolean) => void;
 }) {
+  // The Transfers page is global; the floating receipt belongs to this browser.
+  items = expandedPage
+    ? items
+    : items.filter((item) => item.initiatedHere === true);
   const [collapsed, setCollapsed] = useState(
     () =>
       !!window.history.state?.tgdriveReveal ||
@@ -797,8 +801,9 @@ function TransferRow({
   const status = historyStatus(item);
   const finished = status === "completed" || status === "cancelled";
   const needsOriginal =
-    item.state === "awaiting_file" ||
-    (item.state === "error" && !item.jobId && !item.file);
+    item.kind !== "remote" &&
+    (item.state === "awaiting_file" ||
+      (item.state === "error" && !item.jobId && !item.file));
   const canLocate =
     !!onLocate &&
     item.state === "completed" &&

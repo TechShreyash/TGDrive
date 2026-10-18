@@ -1181,6 +1181,9 @@ progress::-moz-progress-bar {
 }
 .toast {
   position: fixed;
+  inset: auto;
+  margin: 0;
+  border: 0;
   bottom: 24px;
   left: 50%;
   transform: translateX(-50%);
@@ -1195,6 +1198,9 @@ progress::-moz-progress-bar {
   max-width: calc(100vw - 32px);
   box-shadow: 0 5px 22px #14243b22;
   font-size: 13px;
+}
+.toast[popover]:not(:popover-open) {
+  display: none;
 }
 .toast .icon-button {
   color: inherit;
@@ -1630,6 +1636,31 @@ progress::-moz-progress-bar {
 }
 .preview-download:hover {
   background: #30343c;
+}
+.preview-quality {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 12px;
+  min-height: 52px;
+  padding: 6px 16px;
+  border-bottom: 1px solid #373b43;
+  background: #181b20;
+  color: #c3cbd7;
+  font-size: 14px;
+}
+.preview-quality select {
+  width: auto;
+  min-width: 120px;
+  max-width: min(60vw, 300px);
+  min-height: 40px;
+  margin: 0;
+  border-color: #505b6d;
+  background: #252d39;
+  color: #eef2fa;
+  color-scheme: dark;
+  font-size: 16px;
 }
 .preview-surface {
   flex: 1 1 auto;

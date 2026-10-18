@@ -7,8 +7,7 @@
 }
 .advanced-video:not([data-phase="ready"])
   movi-player:not(:fullscreen)::part(center-button),
-.advanced-video:not([data-phase="ready"])
-  movi-player:not(:fullscreen)::part(spinner) {
+.advanced-video movi-player:not(:fullscreen)::part(spinner) {
   visibility: hidden;
 }
 .advanced-state {
@@ -98,13 +97,95 @@
 }
 .advanced-state-buffering {
   pointer-events: none;
-  padding-bottom: 90px;
-  background: rgb(8 10 13 / 58%);
+  inset: 16px 16px auto auto;
+  width: min(340px, calc(100% - 32px));
+  padding: 0;
+  background: transparent;
 }
 .advanced-state-buffering .advanced-state-content {
-  padding: 22px;
+  padding: 14px 18px;
   border-radius: 10px;
   background: rgb(8 10 13 / 90%);
+}
+.advanced-state-buffering .advanced-state-indicator {
+  margin-bottom: 8px;
+}
+.advanced-state-buffering .advanced-state-indicator .spinner {
+  width: 22px;
+  height: 22px;
+}
+.advanced-state-buffering h3 {
+  font-size: 15px;
+}
+.advanced-state-buffering p {
+  margin-top: 4px;
+}
+.advanced-chapters {
+  position: absolute;
+  z-index: 1;
+  inset: 16px auto auto 16px;
+  max-width: calc(100% - 32px);
+  color: #eef2fa;
+  font-size: 14px;
+}
+.advanced-chapters summary {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 44px;
+  padding: 10px 14px;
+  border-radius: 7px;
+  background: rgb(8 10 13 / 90%);
+  cursor: pointer;
+  list-style: none;
+}
+.advanced-chapters summary::-webkit-details-marker {
+  display: none;
+}
+.advanced-chapters summary > span {
+  color: #b8c1d0;
+  font-variant-numeric: tabular-nums;
+}
+.advanced-chapters nav {
+  width: min(360px, calc(100vw - 64px));
+  max-height: min(50dvh, 360px);
+  overflow-y: auto;
+  margin-top: 6px;
+  padding: 6px;
+  border-radius: 8px;
+  background: #151b24;
+  box-shadow: 0 8px 24px rgb(0 0 0 / 35%);
+}
+.advanced-chapters button {
+  display: flex;
+  width: 100%;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
+  min-height: 44px;
+  padding: 10px;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: inherit;
+  text-align: start;
+  cursor: pointer;
+}
+.advanced-chapters button > span {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.advanced-chapters time {
+  flex-shrink: 0;
+  color: #b8c1d0;
+  font-variant-numeric: tabular-nums;
+}
+.advanced-chapters button:hover {
+  background: #283346;
+}
+.advanced-chapters :focus-visible {
+  outline: 2px solid #b6c9ff;
+  outline-offset: 2px;
 }
 .advanced-state[data-hidden="true"] .spinner {
   animation-play-state: paused;
@@ -124,6 +205,10 @@
     padding: 20px;
   }
   .advanced-state-buffering {
-    padding-bottom: 80px;
+    inset: 66px 12px auto;
+    width: auto;
+  }
+  .advanced-chapters {
+    inset: 12px auto auto 12px;
   }
 }

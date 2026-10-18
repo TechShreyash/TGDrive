@@ -1,4 +1,5 @@
-import { useEffect, useId, useRef, type ReactNode } from "react";
+import { useEffect, useId, useRef, useState, type ReactNode } from "react";
+import { createPortal } from "react-dom";
 import {
   X,
   LoaderCircle,
@@ -118,4 +119,60 @@ export function ErrorNotice({ message }: { message: string }) {
       {message}
     </p>
   ) : null;
+}
+
+/** Native modal dialogs live above CSS z-index. Keep notices in their focus tree
+ * and raise a manual popover without moving the user's keyboard focus. */
+export function ToastNotice({
+  toast,
+  close,
+}: {
+  toast: { message: string; error: boolean };
+  close: () => void;
+}) {
+  const [container, setContainer] = useState<HTMLElement>(document.body);
+  const notice = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const update = () => {
+      const dialogs =
+        document.querySelectorAll<HTMLDialogElement>("dialog[open]");
+      setContainer(dialogs[dialogs.length - 1] || document.body);
+    };
+    update();
+    const observer = new MutationObserver(update);
+    observer.observe(document.body, {
+      subtree: true,
+      childList: true,
+      attributes: true,
+      attributeFilter: ["open"],
+    });
+    return () => observer.disconnect();
+  }, []);
+  useEffect(() => {
+    const node = notice.current;
+    if (typeof node?.showPopover !== "function") return;
+    node.showPopover();
+    return () => {
+      if (node.matches(":popover-open")) node.hidePopover();
+    };
+  }, [container, toast.message, toast.error]);
+  return createPortal(
+    <div
+      ref={notice}
+      popover="manual"
+      className={"toast " + (toast.error ? "toast-error" : "")}
+      role={toast.error ? "alert" : "status"}
+      aria-live={toast.error ? "assertive" : "polite"}
+    >
+      <span>{toast.message}</span>
+      <button
+        className="icon-button"
+        aria-label="Dismiss Notification"
+        onClick={close}
+      >
+        <X size={17} />
+      </button>
+    </div>,
+    container,
+  );
 }

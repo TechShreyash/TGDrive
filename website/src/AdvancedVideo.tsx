@@ -1,10 +1,12 @@
 import { useEffect, useReducer, useRef, useState } from "react";
-import { RefreshCw, Play } from "lucide-react";
+import { createPortal } from "react-dom";
+import { RefreshCw, Play, ListVideo } from "lucide-react";
 import type { MoviElement } from "movi-player/element/slim";
 import wasmUrl from "movi-player/movi.wasm?url";
 import { Spinner } from "./components";
 import MovTextRenderer, { isMovTextCodec } from "./MovTextRenderer";
 import "./AdvancedVideo.css";
+import advancedStyles from "./AdvancedVideo.css?inline";
 
 let stylesInstalled = false;
 /** Compatibility adapter for pinned 0.4.1: retain strict style CSP and local fonts. */
@@ -43,7 +45,8 @@ function installLocalStyles(constructor: typeof MoviElement) {
     original.call(this, target as unknown as ShadowRoot);
     const focus = new CSSStyleSheet();
     focus.replaceSync(
-      "button:focus-visible,input:focus-visible,select:focus-visible,[tabindex]:focus-visible{outline:2px solid #b9c6ff!important;outline-offset:3px!important}",
+      "button:focus-visible,input:focus-visible,select:focus-visible,[tabindex]:focus-visible{outline:2px solid #b9c6ff!important;outline-offset:3px!important}" +
+        advancedStyles,
     );
     shadow.adoptedStyleSheets = [
       ...shadow.adoptedStyleSheets,
@@ -94,7 +97,7 @@ export function videoLoadTransition(
     case "canplay":
     case "ready":
     case "playing":
-      return { phase: "ready", ready: true };
+      return state.phase === "ready" ? state : { phase: "ready", ready: true };
     case "waiting":
       return state.ready
         ? { phase: "buffering", ready: true }
@@ -108,6 +111,53 @@ export function videoLoadTransition(
     case "ended":
       return state.ready ? { phase: "ready", ready: true } : state;
   }
+}
+export type VideoChapter = { title: string; start: number };
+/** Container metadata is enough to offer chapters; never wait for remote artwork. */
+export function videoChapters(
+  chapters: VideoChapter[],
+  duration: number,
+): VideoChapter[] {
+  return chapters
+    .filter(
+      (chapter) =>
+        Number.isFinite(chapter.start) &&
+        chapter.start >= 0 &&
+        (!Number.isFinite(duration) ||
+          duration <= 0 ||
+          chapter.start < duration),
+    )
+    .map((chapter, index) => ({
+      start: chapter.start,
+      title: chapter.title.trim() || "Chapter " + (index + 1),
+    }));
+}
+export function chapterTime(time: number): string {
+  const seconds = Math.max(0, Math.floor(time));
+  const minutes = Math.floor(seconds / 60);
+  return (
+    (minutes >= 60
+      ? Math.floor(minutes / 60) + ":" + String(minutes % 60).padStart(2, "0")
+      : String(minutes)) +
+    ":" +
+    String(seconds % 60).padStart(2, "0")
+  );
+}
+/** Advancing pictures clear a stale buffering event; a seek jump is not playback. */
+export function videoIsAdvancing(
+  previous: number,
+  current: number,
+  paused: boolean,
+  seeking: boolean,
+): boolean {
+  return (
+    !paused &&
+    !seeking &&
+    Number.isFinite(previous) &&
+    Number.isFinite(current) &&
+    current - previous > 0.015 &&
+    current - previous < 2
+  );
 }
 /** Saved positions can come from a longer rendition; never seek past its end. */
 export function videoResumeTime(time: number, duration?: number): number {
@@ -183,6 +233,8 @@ export default function AdvancedVideo({
   const [playRequested, setPlayRequested] = useState(false);
   const [playMessage, setPlayMessage] = useState("");
   const [visible, setVisible] = useState(!document.hidden);
+  const [chapters, setChapters] = useState<VideoChapter[]>([]);
+  const [chapterSurface, setChapterSurface] = useState<ShadowRoot | null>(null);
   const fallback = useRef(onFallback);
   fallback.current = onFallback;
   const unsupported = useRef(onUnsupported);
@@ -191,6 +243,16 @@ export default function AdvancedVideo({
     const update = () => setVisible(!document.hidden);
     document.addEventListener("visibilitychange", update);
     return () => document.removeEventListener("visibilitychange", update);
+  }, []);
+  useEffect(() => {
+    const update = () =>
+      setChapterSurface(
+        document.fullscreenElement === activePlayer.current
+          ? activePlayer.current?.shadowRoot || null
+          : null,
+      );
+    document.addEventListener("fullscreenchange", update);
+    return () => document.removeEventListener("fullscreenchange", update);
   }, []);
   useEffect(() => {
     setSlow(false);
@@ -205,6 +267,16 @@ export default function AdvancedVideo({
     let usable = false;
     let player: MoviElement | null = null;
     let subtitleRenderer: MovTextRenderer | null = null;
+    let progressTimer: number | undefined;
+    let previousTime = Number.NaN;
+    let waitTime = Number.NaN;
+    let latestProgressAt = 0;
+    const updateChapters = () => {
+      if (!player || cancelled) return;
+      setChapters(
+        videoChapters(player.player?.getChapters() || [], player.duration),
+      );
+    };
     const updateSubtitleRenderer = () => {
       if (!player || cancelled) return;
       const track = player.player?.trackManager.getActiveSubtitleTrack();
@@ -232,6 +304,7 @@ export default function AdvancedVideo({
     setEngineAvailable(false);
     setPlayRequested(false);
     setPlayMessage("");
+    setChapters([]);
     const clearWaiting = () => {
       clearTimeout(waitingTimer);
       waitingTimer = undefined;
@@ -270,6 +343,7 @@ export default function AdvancedVideo({
         }
       }
       usable = true;
+      updateChapters();
       updateSubtitleRenderer();
       clearWaiting();
       dispatch(event);
@@ -292,11 +366,25 @@ export default function AdvancedVideo({
       }
       if (kind === "waiting" && player?.paused) return;
       pendingWait = kind;
+      waitTime = player?.currentTime ?? Number.NaN;
       if (waitingTimer !== undefined) return;
       waitingTimer = window.setTimeout(() => {
         waitingTimer = undefined;
-        if (!cancelled && !failed) dispatch(pendingWait);
-      }, 180);
+        if (cancelled || failed || !player) return;
+        if (
+          pendingWait === "waiting" &&
+          (player.paused ||
+            videoIsAdvancing(
+              waitTime,
+              player.currentTime,
+              player.paused,
+              player.seeking,
+            ) ||
+            performance.now() - latestProgressAt < 500)
+        )
+          return;
+        dispatch(pendingWait);
+      }, 700);
     };
     const settle = (event: "pause" | "seeked" | "ended") => {
       if (cancelled || failed) return;
@@ -319,7 +407,10 @@ export default function AdvancedVideo({
         player.setAttribute("preload", "metadata");
         player.setAttribute("theme", "dark");
         player.setAttribute("themecolor", "#647dff");
-        player.setAttribute("nohotkeys", "");
+        player.setAttribute("fastseek", "keys gestures");
+        // Chapter titles and times work immediately, even on a slow Telegram link.
+        // notimeline disables thumbnail generation, not the normal seek/progress bar.
+        player.setAttribute("controlslist", "notimeline");
         player.setAttribute("aria-label", "Enhanced video player for " + name);
         const saved = playback.current;
         if (saved) {
@@ -341,7 +432,10 @@ export default function AdvancedVideo({
           clearWaiting();
           dispatch("loadstart");
         });
-        listen("trackschange", () => dispatch("trackschange"));
+        listen("trackschange", () => {
+          updateChapters();
+          dispatch("trackschange");
+        });
         // TrackManager emits this synchronously before choosing the decoder.
         // Install the public extension in time to receive raw MP4 text packets.
         listen("subtitletrackchange", updateSubtitleRenderer);
@@ -356,7 +450,24 @@ export default function AdvancedVideo({
           observeResumePosition();
           settle("seeked");
         });
-        listen("timeupdate", observeResumePosition);
+        const observeProgress = () => {
+          if (!player || cancelled || failed) return;
+          observeResumePosition();
+          if (
+            videoIsAdvancing(
+              previousTime,
+              player.currentTime,
+              player.paused,
+              player.seeking,
+            )
+          ) {
+            latestProgressAt = performance.now();
+            clearWaiting();
+            dispatch("playing");
+          }
+          previousTime = player.currentTime;
+        };
+        listen("timeupdate", observeProgress);
         listen("durationchange", updateStartPosition);
         listen("pause", () => settle("pause"));
         listen("ended", () => settle("ended"));
@@ -375,11 +486,14 @@ export default function AdvancedVideo({
         host.current.append(player);
         setEngineAvailable(true);
         player.src = new URL(src, window.location.origin).href;
+        // Some engines resume their clock without repeating `playing` after a stall.
+        progressTimer = window.setInterval(observeProgress, 250);
       })
       .catch(fail);
     return () => {
       cancelled = true;
       clearWaiting();
+      clearInterval(progressTimer);
       if (player) {
         if (resume && !resume.positionApplied)
           playback.current = {
@@ -404,6 +518,43 @@ export default function AdvancedVideo({
     };
   }, [src, name, playback, attempt]);
   const copy = state.phase !== "ready" ? phaseCopy[state.phase] : null;
+  const chapterControls =
+    state.ready && chapters.length > 0 ? (
+      <details
+        className="advanced-chapters"
+        onKeyDown={(event) => {
+          // The fullscreen portal lives inside Movi; chapter navigation must
+          // not also trigger its playback shortcuts.
+          event.stopPropagation();
+          if (event.key !== "Escape" || !event.currentTarget.open) return;
+          event.preventDefault();
+          event.currentTarget.open = false;
+          event.currentTarget.querySelector("summary")?.focus();
+        }}
+      >
+        <summary>
+          <ListVideo size={17} /> Chapters <span>{chapters.length}</span>
+        </summary>
+        <nav aria-label="Video chapters">
+          {chapters.map((chapter, index) => (
+            <button
+              key={index}
+              type="button"
+              onClick={(event) => {
+                const player = activePlayer.current;
+                if (!player) return;
+                player.currentTime = chapter.start;
+                event.currentTarget.closest("details")?.removeAttribute("open");
+                player.focus({ preventScroll: true });
+              }}
+            >
+              <span>{chapter.title}</span>
+              <time>{chapterTime(chapter.start)}</time>
+            </button>
+          ))}
+        </nav>
+      </details>
+    ) : null;
   return (
     <div className="advanced-video" data-phase={state.phase}>
       <div
@@ -413,6 +564,9 @@ export default function AdvancedVideo({
         aria-hidden={!state.ready}
         aria-busy={!state.ready}
       />
+      {chapterSurface
+        ? createPortal(chapterControls, chapterSurface)
+        : chapterControls}
       {copy && (
         <div
           className={
@@ -466,6 +620,9 @@ export default function AdvancedVideo({
                   onClick={() => setAttempt((value) => value + 1)}
                 >
                   <RefreshCw size={16} /> Reload Video
+                </button>
+                <button type="button" onClick={() => fallback.current()}>
+                  Use Compatibility Playback
                 </button>
               </div>
             )}

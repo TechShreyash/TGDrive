@@ -42,6 +42,8 @@ export interface Transfer {
   progressUpdatedAt?: number | null;
   serverObservedAt?: number;
   historyOnly?: boolean;
+  /** Browser-only receipt: server-discovered jobs never open this device's popup. */
+  initiatedHere?: boolean;
   location?: TransferLocation;
 }
 const STORAGE_KEY = "tgdrive.uploads.v2";
@@ -74,6 +76,7 @@ export function safeTransferMetadata(transfers: Transfer[]) {
       uploadId,
       jobId,
       kind,
+      initiatedHere,
       createdAt,
       startedAt,
       finishedAt,
@@ -94,6 +97,7 @@ export function safeTransferMetadata(transfers: Transfer[]) {
       uploadId,
       jobId,
       kind,
+      initiatedHere,
       createdAt,
       startedAt,
       finishedAt,
@@ -307,6 +311,12 @@ export class TransferManager {
         )
         .map((item) => ({
           ...safeTransferMetadata([item])[0],
+          initiatedHere:
+            item.initiatedHere ??
+            Boolean(
+              item.uploadId ||
+              (item.batchId && !/^(server:|history:)/.test(item.batchId)),
+            ),
           batchId: transferBatchId(item),
           batchName: item.batchName || item.name,
           batchCreatedAt: item.batchCreatedAt || item.createdAt || Date.now(),
@@ -314,12 +324,16 @@ export class TransferManager {
             ? item.state
             : terminal.has(item.state)
               ? item.state
-              : "awaiting_file",
+              : item.kind === "remote"
+                ? "error"
+                : "awaiting_file",
           phase: item.jobId
             ? item.phase
             : terminal.has(item.state)
               ? item.phase
-              : "Choose the original file to resume",
+              : item.kind === "remote"
+                ? "URL transfer is missing its server job. Start a new URL upload."
+                : "Choose the original file to resume",
         }));
     } catch {
       this.recoveryWarning =
@@ -466,6 +480,7 @@ export class TransferManager {
     for (const { file, destination, relativePath } of accepted)
       this.items.push({
         key: crypto.randomUUID(),
+        initiatedHere: true,
         createdAt: Date.now(),
         batchId,
         batchName,
@@ -492,6 +507,7 @@ export class TransferManager {
     }
     this.items.push({
       key: crypto.randomUUID(),
+      initiatedHere: true,
       createdAt: Date.now(),
       name,
       batchId: crypto.randomUUID(),
@@ -513,6 +529,10 @@ export class TransferManager {
   async resume(key: string, file: File) {
     const item = this.items.find((item) => item.key === key);
     if (!item) return;
+    if (item.kind === "remote")
+      throw new Error(
+        "URL uploads resume on the server. Retry the transfer instead.",
+      );
     if (
       file.name.normalize("NFC") !== item.name.normalize("NFC") ||
       file.size !== item.size
@@ -629,7 +649,11 @@ export class TransferManager {
         phase: "Waiting to resume",
       });
       void this.startNext();
-    } else
+    } else if (item.kind === "remote")
+      throw new Error(
+        "This URL transfer has no server job. Start a new URL upload.",
+      );
+    else
       this.update(key, {
         state: "awaiting_file",
         error: undefined,

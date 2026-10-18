@@ -104,6 +104,77 @@ describe("safe resume and browser persistence", () => {
     );
     const manager = new TransferManager();
     expect(manager.snapshot()[0].state).toBe("awaiting_file");
+    expect(manager.snapshot()[0].initiatedHere).toBe(true);
+  });
+  it("keeps URL jobs server-owned across a browser reload", async () => {
+    const manager = new TransferManager();
+    manager.addJob("url-server-job", "URL file", "/", "remote");
+    const restored = new TransferManager();
+    expect(restored.snapshot()[0]).toMatchObject({
+      jobId: "url-server-job",
+      kind: "remote",
+      state: "uploading",
+      initiatedHere: true,
+    });
+    await expect(
+      restored.resume(
+        restored.snapshot()[0].key,
+        new File(["data"], "URL file"),
+      ),
+    ).rejects.toThrow("resume on the server");
+  });
+  it("never requests a local original for a URL receipt missing its server job", async () => {
+    localStorage.setItem(
+      "tgdrive.uploads.v2",
+      JSON.stringify([
+        {
+          key: "missing",
+          name: "URL file",
+          size: 4,
+          lastModified: 0,
+          destination: "/",
+          kind: "remote",
+          state: "uploading",
+          phase: "Sending",
+          current: 1,
+          total: 4,
+        },
+      ]),
+    );
+    const restored = new TransferManager();
+    expect(restored.snapshot()[0].state).toBe("error");
+    expect(restored.snapshot()[0].phase).not.toContain("original");
+    await expect(restored.retry("missing")).rejects.toThrow("no server job");
+  });
+  it("does not turn globally discovered transfers into local popup receipts", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () =>
+        Response.json({
+          jobs: [
+            {
+              id: "another-device",
+              kind: "upload",
+              status: "running",
+              phase: "uploading",
+              current: 1,
+              total: 4,
+            },
+          ],
+        }),
+      ),
+    );
+    const manager = new TransferManager();
+    try {
+      manager.setEnabled(true);
+      await vi.waitFor(() => expect(manager.snapshot()).toHaveLength(1));
+      expect(manager.snapshot()[0].initiatedHere).not.toBe(true);
+      const restored = new TransferManager();
+      expect(restored.snapshot()[0].initiatedHere).toBe(false);
+      expect(restored.snapshot()[0].jobId).toBe("another-device");
+    } finally {
+      manager.setEnabled(false);
+    }
   });
 });
 describe("resumable HTTP upload protocol", () => {

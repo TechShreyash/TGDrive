@@ -4,8 +4,40 @@ import {
   unavailableVideoCodec,
   videoLoadTransition,
   videoResumeTime,
+  videoIsAdvancing,
+  videoChapters,
+  chapterTime,
   type VideoLoadState,
 } from "./AdvancedVideo";
+
+describe("stale buffering recovery", () => {
+  it("accepts advancing playback, but not paused clocks or seek jumps", () => {
+    expect(videoIsAdvancing(12, 12.25, false, false)).toBe(true);
+    expect(videoIsAdvancing(12, 12, false, false)).toBe(false);
+    expect(videoIsAdvancing(12, 12.25, true, false)).toBe(false);
+    expect(videoIsAdvancing(12, 12.25, false, true)).toBe(false);
+    expect(videoIsAdvancing(12, 90, false, false)).toBe(false);
+    expect(videoIsAdvancing(Number.NaN, 12, false, false)).toBe(false);
+  });
+  it("offers chapter names and times without any thumbnail operation", () => {
+    expect(
+      videoChapters(
+        [
+          { title: "Opening", start: 0 },
+          { title: "", start: 12.5 },
+          { title: "Invalid", start: Number.NaN },
+          { title: "Past end", start: 40 },
+        ],
+        30,
+      ),
+    ).toEqual([
+      { title: "Opening", start: 0 },
+      { title: "Chapter 2", start: 12.5 },
+    ]);
+    expect(chapterTime(0)).toBe("0:00");
+    expect(chapterTime(3665.2)).toBe("1:01:05");
+  });
+});
 
 describe("video startup and buffering states", () => {
   it("uses actual engine and track events for startup phases", () => {
