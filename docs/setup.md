@@ -228,7 +228,17 @@ branch `dev`, using **Docker Compose**, base directory `/`, and Compose file
 no manual volume setup or host port mapping is needed. Route the `app` service
 to internal port **8000** with an HTTPS domain.
 
+Use a domain you control, with its DNS record pointing to the deployment server.
+Coolify's generated `sslip.io` domains are intended for HTTP previews; shared
+certificate rate limits can prevent HTTPS issuance.
+
 Fill the required runtime variables with private values from your `.env`.
+Keep credentials available only at runtime, and select **Literal** for values
+containing `$` characters. On Coolify 4.4.6, managed Compose deployments also
+required doubling each `$` to `$$` in the Coolify `ADMIN_PASSWORD_HASH` value
+to preserve the original Argon2 hash. This escaping applies only to Coolify's
+stored value: leave the original `.env` hash unchanged and verify that the
+running container receives it exactly before opening public access.
 Set `FORWARDED_ALLOW_IPS` to the actual Coolify proxy address/network. The
 Compose file forces secure cookies and uses the image's Python health check.
 Keep one instance per drive and stop an old installation before moving the same
