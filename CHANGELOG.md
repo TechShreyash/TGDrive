@@ -6,6 +6,17 @@ This release rebuilds TGDrive as a self-hosted, single-owner drive. Run one
 service instance and one Uvicorn worker. No public deployment is implied by
 this candidate.
 
+### Deployment
+
+- Use `/compose.yaml` directly in Coolify with six initial credential fields;
+  local Docker commands automatically load the loopback-port override.
+- Discover the internal Coolify proxy without hardcoded Docker subnets.
+- Generate private deployment keys once for new drives and reuse existing
+  MongoDB bootstrap keys, owner hashes and browser sessions during migration.
+- Keep new containers accessible for explicit initialization and explain
+  database ownership conflicts without resetting existing state.
+- Retain `/compose.coolify.yaml` for existing applications.
+
 ### Playback Performance
 
 - Stripe ordered stream windows across healthy bots and Premium clients, with

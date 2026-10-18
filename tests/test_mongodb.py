@@ -66,6 +66,54 @@ def path(row):
     return row["path"].rstrip("/") + "/" + row["id"]
 
 
+def test_container_keys_and_owner_survive_move_without_local_volume(
+    backend, tmp_path, monkeypatch
+):
+    from argon2 import PasswordHasher
+
+    from tgdrive.config import Settings
+    from tgdrive.mongo import save_bootstrap
+
+    fixture = {
+        "TGDRIVE_AUTO_SECRETS": "true",
+        "MONGODB_URI": mongo_uri(),
+        "MONGODB_DATABASE": backend.db.name,
+        "DATA_DIR": str(tmp_path / "first-server"),
+        "API_ID": "12345",
+        "API_HASH": "a" * 32,
+        "BOT_TOKENS": "123456:" + "x" * 30,
+        "STORAGE_CHANNEL": "-1001234567890",
+        "ADMIN_PASSWORD": "synthetic deployment owner password",
+    }
+    for key, value in fixture.items():
+        monkeypatch.setenv(key, value)
+    for key in ("SESSION_SECRET", "MONGODB_BACKUP_KEY", "ADMIN_PASSWORD_HASH"):
+        monkeypatch.delenv(key, raising=False)
+    first = Settings(_env_file=None)
+    catalog = MongoStore.create(backend)
+    catalog.bind_storage_channel(first.storage_channel)
+    drive_id = catalog.drive_id
+    save_bootstrap(first, backend)
+    browser_session = SessionManager(
+        first.session_key, 3600, first.resolved_data_dir / "auth.sqlite3"
+    ).create()
+    for key in ("API_ID", "API_HASH", "BOT_TOKENS", "STORAGE_CHANNEL"):
+        monkeypatch.delenv(key)
+    monkeypatch.setenv("ADMIN_PASSWORD", "")
+    monkeypatch.setenv("DATA_DIR", str(tmp_path / "second-server"))
+    reopened = Settings(_env_file=None)
+    assert reopened.session_secret == first.session_secret
+    assert reopened.mongodb_backup_key == first.mongodb_backup_key
+    assert PasswordHasher().verify(
+        reopened.admin_password_hash.get_secret_value(), fixture["ADMIN_PASSWORD"]
+    )
+    assert MongoStore(backend).drive_id == drive_id
+    assert SessionManager(
+        reopened.session_key, 3600, reopened.resolved_data_dir / "auth.sqlite3"
+    ).verify(browser_session)
+    assert not (tmp_path / "second-server" / "deployment-secrets.json").exists()
+
+
 def test_catalog_roundtrip_without_local_sqlite(store, backend, monkeypatch):
     import sqlite3
 

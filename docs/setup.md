@@ -224,26 +224,63 @@ are incompatible.
 
 Create a public Git application from `https://github.com/TechShreyash/TGDrive`,
 branch `dev`, using **Docker Compose**, base directory `/`, and Compose file
-`/compose.coolify.yaml`. Coolify creates the declared data/cache volumes;
-no manual volume setup or host port mapping is needed. Route the `app` service
-to internal port **8000** with an HTTPS domain.
+`/compose.yaml`. Fill these six fields for a new drive:
+
+| Variable | Value |
+| --- | --- |
+| `MONGODB_URI` | Your private Atlas/replica-set connection URI |
+| `API_ID` | Telegram application ID |
+| `API_HASH` | Telegram application hash |
+| `BOT_TOKENS` | Your storage bot token |
+| `STORAGE_CHANNEL` | The private channel's negative numeric ID |
+| `ADMIN_PASSWORD` | Owner password, at least 12 characters |
+
+Keep credentials runtime-only. If a value contains `$`, choose **Literal** in
+Coolify's variable editor. You do not need to generate a password hash for this
+setup. Additional limits and optional bot-mode/Premium settings can be added as
+runtime variables later; defaults are already supplied by the application.
+
+Coolify creates the data/cache volumes. The app generates its session secret
+and backup key once, saves them in a private file in `/app/data`, and stores them
+in MongoDB when the drive is initialized. Existing drives reuse their saved
+keys and owner hash. The container discovers `coolify-proxy` on its Docker
+network and trusts only its resolved private IPs; there is no subnet to enter.
+
+Route the `app` service to internal port **8000** with an HTTPS domain. No host
+port mapping is needed, so Coolify's own port 8000 cannot conflict with TGDrive.
 
 Use a domain you control, with its DNS record pointing to the deployment server.
 Coolify's generated `sslip.io` domains are intended for HTTP previews; shared
 certificate rate limits can prevent HTTPS issuance.
 
-Fill the required runtime variables with private values from your `.env`.
-Keep credentials available only at runtime, and select **Literal** for values
-containing `$` characters. On Coolify 4.4.6, managed Compose deployments also
-required doubling each `$` to `$$` in the Coolify `ADMIN_PASSWORD_HASH` value
-to preserve the original Argon2 hash. This escaping applies only to Coolify's
-stored value: leave the original `.env` hash unchanged and verify that the
-running container receives it exactly before opening public access.
-Set `FORWARDED_ALLOW_IPS` to the actual Coolify proxy address/network. The
-Compose file forces secure cookies and uses the image's Python health check.
-Keep one instance per drive and stop an old installation before moving the same
-database/channel to Coolify. Existing drives reopen without initialization;
-only a new empty database needs the explicit `python -m tgdrive init` command.
+Deploy the app. For a **brand-new, empty database only**, use the application's
+terminal to run `python -m tgdrive init` once, then restart. An uninitialized
+database does not pass the health check until this explicit step is complete.
+For an existing drive, skip initialization and sign in with its original owner
+password. Download **Storage & Backups → Save recovery key** and keep it separate.
+
+The standard local `docker compose up` command still works: Docker automatically
+loads `compose.override.yaml`, which reads your private `.env` and publishes the
+local loopback port. Coolify selects `compose.yaml` explicitly and does not load
+that local override.
+
+#### Existing deployments and server moves
+
+- `/compose.coolify.yaml` remains available for existing applications. Keep
+  their environment values when upgrading; there is no required live migration.
+- Stop the old app before starting the same drive on another server. Keep the
+  same database, channel and original keys/password; never run `init` again.
+- Copy both persistent volumes if unfinished uploads must continue. Completed
+  files and the catalog remain in Telegram and MongoDB respectively.
+- Allow the new server in Atlas Network Access and update the domain's DNS.
+- When using proxy discovery, remove a legacy `FORWARDED_ALLOW_IPS` override,
+  or set it to `auto`. Explicit overrides remain supported. Restart the app if
+  the proxy is recreated with a different IP.
+- Existing `ADMIN_PASSWORD_HASH` values remain supported. In Coolify 4.4.6,
+  managed Compose requires **Literal** and doubled `$$` characters to preserve
+  the original hash. Keep that escaping in Coolify only. Existing drives can
+  instead reuse the owner hash already saved in their MongoDB bootstrap settings;
+  removing an environment override does not change that saved password.
 
 ### Other hosting
 

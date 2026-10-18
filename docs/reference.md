@@ -56,7 +56,7 @@ and Python dotenv parse the file themselves.
 
 Optional does not always mean that a blank value is accepted:
 
-- Omit ADMIN_PASSWORD_HASH when unused; ADMIN_PASSWORD_HASH= is invalid.
+- Omit ADMIN_PASSWORD_HASH when unused; a blank value is treated as absent.
 - ADMIN_PASSWORD= is allowed only when a valid hash is supplied.
 - DATABASE_BACKUP_MSG_ID= means no historical reference.
 - STRING_SESSIONS=, MAIN_BOT_TOKEN=, and TELEGRAM_ADMIN_IDS= disable their
@@ -147,6 +147,13 @@ settings. Encrypted MongoDB restore needs only database access and the recovery 
 
 DATA_DIR and CACHE_DIR must be writable distinct sibling paths, not a filesystem
 root or account home, equal or nested. Compose sets /app/data and /app/cache.
+
+The standard Compose deployment enables `TGDRIVE_AUTO_SECRETS=true`. Missing
+`SESSION_SECRET` and `MONGODB_BACKUP_KEY` values are generated once for a new
+drive and saved as mode 0600 in `DATA_DIR/deployment-secrets.json`. Explicit
+values and existing MongoDB bootstrap settings take precedence. Existing drives
+with missing keys fail rather than silently receiving replacement keys. Source
+installations retain explicit-secret configuration unless this mode is enabled.
 
 The storage_channel_id binding is a nonzero signed 64-bit integer. Switching
 channels cannot silently reinterpret message IDs. Use a MongoDB replica set;
@@ -247,7 +254,8 @@ are in [transfers](architecture.md#transfer-pipeline) and [security](reference.m
 | --- | --- |
 | `BIND_ADDRESS` | Compose interpolation only; defaults to 127.0.0.1 for the host binding. It is not a Settings field. |
 | `PORT` | Compose's host port defaults to 8000; the supplied container command always listens on internal port 8000. A source launch uses its explicit --port argument. |
-| `FORWARDED_ALLOW_IPS` | Uvicorn proxy trust configuration, not a Settings field. Compose passes its .env value or 127.0.0.1. Use only the real reverse proxy source IP/network. |
+| `FORWARDED_ALLOW_IPS` | Optional explicit Uvicorn proxy trust override. The container launcher defaults to loopback plus the private IPs resolved from `TGDRIVE_PROXY_HOSTS`; the hosted Compose file sets that hostname to `coolify-proxy`. Unset or `auto` enables discovery. |
+| `TGDRIVE_PROXY_HOSTS` | Deployment-owned, comma-separated internal proxy hostnames. Only their resolved private IPs are trusted. A DNS failure retains loopback trust and logs an actionable warning; it never enables wildcard trust. |
 | --workers | Must remain 1. This is a launch argument, not an environment feature for scaling the drive. |
 
 A .env entry read only by Pydantic does not automatically export variables to

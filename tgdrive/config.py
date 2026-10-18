@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import os
 import re
 from functools import lru_cache
 from pathlib import Path
@@ -165,6 +166,7 @@ class Settings(BaseSettings):
             base = {**dotenv_settings(), **env_settings(), **explicit}
             directory = Path(base.get("DATA_DIR", "data")).expanduser().resolve()
             bootstrap = {}
+            backend = None
             uri = base.get("MONGODB_URI")
             if uri:
                 from tgdrive.mongo import configure
@@ -184,6 +186,27 @@ class Settings(BaseSettings):
                     if row
                     else {}
                 )
+            if os.environ.get("TGDRIVE_AUTO_SECRETS") == "true":
+                from tgdrive.deployment import SECRET_FIELDS, installation_secrets
+
+                known = {}
+                for key in SECRET_FIELDS:
+                    value = base.get(key, bootstrap.get(key))
+                    if value is not None:
+                        known[key] = (
+                            value.get_secret_value()
+                            if isinstance(value, SecretStr)
+                            else str(value)
+                        )
+                existing = bool(
+                    backend is not None
+                    and not all(known.get(key) for key in SECRET_FIELDS)
+                    and backend.db.catalog.find_one({"_id": "catalog"})
+                )
+                bootstrap = {
+                    **bootstrap,
+                    **installation_secrets(directory, known, existing_drive=existing),
+                }
             document = read_document(directory)
             if document is None:
                 return bootstrap
@@ -224,6 +247,14 @@ class Settings(BaseSettings):
     @classmethod
     def optional_backup_id(cls, value):
         return None if value in ("", None) else value
+
+    @field_validator("admin_password_hash", mode="before")
+    @classmethod
+    def optional_password_hash(cls, value):
+        raw = value.get_secret_value() if isinstance(value, SecretStr) else value
+        return (
+            None if raw is None or (isinstance(raw, str) and not raw.strip()) else value
+        )
 
     @field_validator("api_hash")
     @classmethod

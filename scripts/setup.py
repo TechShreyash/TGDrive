@@ -154,7 +154,13 @@ def preflight(commands: Commands) -> None:
             "Run setup on the Docker host itself using its local Unix socket. Remote "
             "Docker contexts need manual setup."
         )
-    for name in ("Dockerfile", "compose.yaml", ".dockerignore", "tgdrive"):
+    for name in (
+        "Dockerfile",
+        "compose.yaml",
+        "compose.override.yaml",
+        ".dockerignore",
+        "tgdrive",
+    ):
         if not (commands.root / name).exists():
             raise SetupError(
                 "Run the wizard from a complete TGDrive source checkout/release."

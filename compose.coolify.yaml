@@ -1,5 +1,5 @@
-# Coolify owns the public HTTPS route and creates these named volumes.
-# Select Docker Compose, branch dev, and /compose.coolify.yaml in Coolify.
+# Compatibility file for existing Coolify applications. New applications can
+# use /compose.yaml directly. Keep existing variables when upgrading this file.
 services:
   app:
     build:
@@ -12,7 +12,7 @@ services:
     environment:
       MONGODB_URI: ${MONGODB_URI:?Set MONGODB_URI}
       MONGODB_DATABASE: ${MONGODB_DATABASE:-tgdrive}
-      MONGODB_BACKUP_KEY: ${MONGODB_BACKUP_KEY:?Set MONGODB_BACKUP_KEY}
+      MONGODB_BACKUP_KEY: ${MONGODB_BACKUP_KEY:?Keep the existing MONGODB_BACKUP_KEY}
       MONGODB_BACKUP_SECONDS: ${MONGODB_BACKUP_SECONDS:-3600}
       API_ID: ${API_ID:?Set API_ID}
       API_HASH: ${API_HASH:?Set API_HASH}
@@ -28,9 +28,8 @@ services:
       CACHE_DIR: /app/cache
       COOKIE_SECURE: "true"
       INITIALIZE_EMPTY_DRIVE: "false"
-      # Set this to the actual Coolify proxy address/network. No host ports
-      # are published; access is through Coolify's internal proxy network.
-      FORWARDED_ALLOW_IPS: ${FORWARDED_ALLOW_IPS:-127.0.0.1}
+      TGDRIVE_PROXY_HOSTS: coolify-proxy
+      FORWARDED_ALLOW_IPS: ${FORWARDED_ALLOW_IPS:-auto}
       SESSION_TTL_SECONDS: ${SESSION_TTL_SECONDS:-86400}
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
       SLEEP_THRESHOLD: ${SLEEP_THRESHOLD:-60}

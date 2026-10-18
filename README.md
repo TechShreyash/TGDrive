@@ -22,6 +22,12 @@ The wizard checks access, creates private configuration and starts the app.
 **[Follow the setup guide](docs/setup.md)** for prerequisites and steps.
 Then read **[Using TGDrive](docs/usage.md)**.
 
+For **Coolify**, use the standard `/compose.yaml` and follow the
+[short hosted setup](docs/setup.md#coolify). It asks for your MongoDB URI,
+Telegram credentials/channel, and owner password. Persistent volumes, private
+deployment keys, proxy discovery, health checks, and other defaults are handled
+by the application.
+
 ## Keep your drive accessible
 
 - Reinstalling can reopen the same MongoDB database.

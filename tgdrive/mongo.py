@@ -153,13 +153,15 @@ class MongoBackend:
             )
         except DuplicateKeyError:
             raise DatabaseUnavailable(
-                "Another TGDrive installation is using this MongoDB database."
+                "Another TGDrive installation is using this MongoDB database. "
+                "Stop the old installation before starting this one; do not run init."
             ) from None
         except PyMongoError:
             raise DatabaseUnavailable("Could not acquire MongoDB ownership.") from None
         if not result or result.get("token") != token:
             raise DatabaseUnavailable(
-                "Another TGDrive installation owns this MongoDB database."
+                "Another TGDrive installation owns this MongoDB database. "
+                "Stop the old installation before starting this one; do not run init."
             )
         self.token = token
         self._lost = False

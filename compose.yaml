@@ -1,21 +1,29 @@
+# Coolify: choose Docker Compose and /compose.yaml. No host ports are published.
+# Local docker compose commands also load compose.override.yaml automatically.
 name: tgdrive
 
 services:
   app:
-    image: tgdrive:local
     build:
       context: .
       dockerfile: Dockerfile
     restart: unless-stopped
     init: true
-    env_file:
-      - .env
+    expose:
+      - "8000"
     environment:
+      MONGODB_URI: ${MONGODB_URI:?Set MONGODB_URI}
+      API_ID: ${API_ID:?Set API_ID}
+      API_HASH: ${API_HASH:?Set API_HASH}
+      BOT_TOKENS: ${BOT_TOKENS:?Set BOT_TOKENS}
+      STORAGE_CHANNEL: ${STORAGE_CHANNEL:?Set STORAGE_CHANNEL}
+      # Required for a new drive; existing drives can reuse their saved hash.
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:-}
       DATA_DIR: /app/data
       CACHE_DIR: /app/cache
-      FORWARDED_ALLOW_IPS: ${FORWARDED_ALLOW_IPS:-127.0.0.1}
-    ports:
-      - "${BIND_ADDRESS:-127.0.0.1}:${PORT:-8000}:8000"
+      COOKIE_SECURE: "true"
+      TGDRIVE_AUTO_SECRETS: "true"
+      TGDRIVE_PROXY_HOSTS: coolify-proxy
     volumes:
       - tgdrive-data:/app/data
       - tgdrive-cache:/app/cache
