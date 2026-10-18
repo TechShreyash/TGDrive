@@ -123,6 +123,9 @@ The memory budget also covers the bounded asynchronous disk write backlog.
 Active responses share an additional transient payload budget, default 32 MiB,
 clamped by available memory with a 2 MiB streaming floor. A response's read-ahead
 window scales with active consumers; a single consumer can use the full budget.
+New response heads reclaim suspended readers' speculative blocks; only their
+awaited/yielded heads stay protected. Pending cancellation drains before a
+reservation is released, and shared fills continue for remaining subscribers.
 This is an internal policy, not an
 additional owner setting. `cache.scratch` reports current/effective/configured
 bytes, peak reservations, waiting heads and active streams. Transport and
@@ -1137,8 +1140,13 @@ routes.
   setting; it is not a total browser-memory cap or a guarantee of buffered seconds or
   realtime decoding on every device.
 - All video previews use it by default; audio/subtitle selection stays in its own menus.
-- Native playback is an automatic compatibility fallback, and original download remains
-  available. [Viewer notices and source access](../website/public/third-party/README.txt) are served under /third-party; the source/relink archive is a manual
+- The custom player remains visible and operable while opening/seeking; there is
+  no native-browser compatibility fallback or separate Start Playback gate.
+- Buffer feedback uses measured received bytes/rate and the engine's approximate
+  buffered time ranges, including a loaded-section timeline. Server preload byte
+  coverage is separate from device buffering and decode readiness.
+- Original download remains available for unsupported codecs.
+  [Viewer notices and source access](../website/public/third-party/README.txt) are served under /third-party; the source/relink archive is a manual
   download, not an initial-page dependency.
 
 Remote requests validate public addresses and redirects, reject URL credentials,

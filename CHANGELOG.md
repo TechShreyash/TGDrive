@@ -37,12 +37,25 @@ this candidate.
 
 ### Playback Performance
 
+- Clear alternative-service advertisements by default so normal installations
+  avoid the reproduced slow HTTP/3 route without manual proxy rules. Preserve
+  HTTPS, byte-range delivery and application authorization.
 - Stripe ordered stream windows across healthy bots and Premium clients, with
   configured reads per account and bounded read-ahead for ordinary and multipart files.
 - Share cached blocks across accounts and requests; retain a bounded private disk
   cache across restarts while checking authorization and message identity.
 - Respect read FloodWaits instead of treating them as expired file references.
 - Increase the player's requested source buffer to 32 MiB.
+- Reclaim suspended responses' speculative frames so fully cached seeks and
+  metadata reads cannot be starved by an older download's read-ahead. Keep
+  shared origin fills and cancellation cleanup inside the global payload bound.
+- Keep the custom player visible while opening/seeking; remove the separate
+  Start Playback gate and native-browser Compatibility Playback fallback.
+- Show measured receive progress, estimated buffered coverage/ahead time and
+  loaded timeline sections, including while paused. Keep mobile collapsed
+  track controls out of the touch/focus path.
+- Exercise actual pooled RAM/disk delivery in browser fixtures and add stalled
+  TCP/ASGI, concurrent-range, disconnect/resume and multipart regressions.
 
 ### UI Audit
 

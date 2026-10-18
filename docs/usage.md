@@ -237,15 +237,18 @@ Use the header's **Download** action for the original file.
 | Unsupported formats | Compact file details and a download button |
 
 - **Escape** or browser **Back** closes the preview.
-- Video starts after you choose to play; loading and buffering show feedback.
+- Every video uses the custom player. Its normal play control remains available
+  while opening; your browser may require a tap before playback with sound.
+- The timeline highlights estimated buffered time ranges. Loading status shows
+  received bytes/speed and estimated coverage/ahead seconds when available.
+  This device buffer is separate from the server's preload coverage.
 - TGDrive reads ahead using available clients and reuses recently fetched data.
   Replaying or seeking within cached content avoids fetching those bytes again.
 - Real chapters list their titles and times immediately, without waiting for
   preview thumbnails. Chapter navigation also works in fullscreen.
 - Focus the player for **K/Space** to play/pause, **M** to mute, and arrow-key
   seeking. Audio/subtitle menus show the tracks available in that file.
-- For a slow start, try **Reload Video** or **Use Compatibility Playback**.
-  Compatibility mode uses native browser playback and may expose fewer tracks.
+- For a slow start, use **Reload Video** within the custom player.
 - Download the original if your device cannot decode the file.
 - Codec support depends on the file and your device.
 - **Preview quality** appears only when Telegram actually provides alternatives.

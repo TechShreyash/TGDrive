@@ -257,7 +257,11 @@ File responses read ahead through ordered 1 MiB blocks, scaled to client
 capacity and their share of the instance-wide transient payload budget. A
 single consumer can use the default 32 MiB budget; concurrent consumers share
 it. The 32-block policy is an additional ceiling. Waiting response heads take priority
-over further prefetch. Both ordinary and multipart files spread reads across healthy bots and
+over further prefetch and can revoke another suspended response's speculative
+frames. Its awaited/yielded head remains protected. A revoked in-flight frame
+retains its reservation until cancellation cleanup finishes; a completed frame
+can release immediately. The original reader reloads any reclaimed gaps in
+order, and a shared fill stays alive while another subscriber needs it. Both ordinary and multipart files spread reads across healthy bots and
 Premium clients. Download activities scale within the configured shared media
 budget instead of a fixed two-read cap. Part RPCs and metadata also use the shared request/rate
 scheduler. Account FloodWait deadlines gate eligible work.
@@ -319,8 +323,15 @@ The React preview reconciles buffering feedback against advancing playback.
 Chapter navigation uses container titles/times directly instead of blocking on
 remote thumbnails; its controls are portaled into the player's shadow root in
 fullscreen. Constructed stylesheets preserve strict CSP without remote fonts.
-Native player audio/subtitle menus remain the controls for supported tracks,
-and focused-player keyboard shortcuts are enabled.
+Movi's own audio/subtitle menus remain the controls for supported tracks,
+and focused-player keyboard shortcuts are enabled. Every video preview stays
+in this custom player, including loading and codec errors; no native video
+fallback is mounted. Its public buffered TimeRanges drive estimated timeline
+coverage and ahead-time feedback, while public source network counters provide
+received bytes/rate. A pinned UI adapter paints Movi's documented buffer part
+while paused, because its ordinary UI tick can otherwise leave ready ranges
+invisible. These ranges are estimates for some HTTP source modes and remain
+separate from server preload byte coverage.
 
 ## Database safety copies and security
 

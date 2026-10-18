@@ -75,6 +75,7 @@ PUBLIC_DOCS = (
     "docs/reference.md",
     "docs/performance.md",
     "docs/validation-2026-10-18.md",
+    "docs/streaming-validation-2026-10-18.md",
     "website/PRODUCT.md",
     "website/DESIGN.md",
 )

@@ -15,7 +15,7 @@ links from one responsive web interface.
 | --- | --- |
 | **Files and folders** | Upload from your device, drag and drop, or import a public HTTP(S) URL. Search names, move, rename, sort, and restore from Trash. |
 | **Large files** | Split across Telegram documents while retaining one drive item, exact original downloads, and video byte-range seeking. Premium is optional. |
-| **Media playback** | Locally bundled enhanced video player with supported embedded audio/subtitle tracks, chapter navigation, keyboard controls, and compatibility playback. |
+| **Media playback** | Locally bundled enhanced video player with supported embedded audio/subtitle tracks, chapter navigation, keyboard controls, and buffered timeline feedback. |
 | **Document previews** | Images, PDFs up to 20 MiB, and read-only text/code previews. Original downloads remain available. |
 | **Cache and preload** | Reuse recently streamed blocks, prepare a file before sharing, and limit RAM, disk, and background work. Inspect ready bytes and evict cached data. |
 | **Transfers** | Resumable device uploads, server-side URL jobs, batch progress, cancellation, retries, and durable history. Floating upload receipts stay scoped to the initiating browser. |

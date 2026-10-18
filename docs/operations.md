@@ -200,8 +200,9 @@ they are not the documented MongoDB storage path.
 | Backup needs attention | Check the recovery key, channel posting access, temporary disk and displayed retry time |
 | Backup will not decrypt | Use its matching key and an intact archive |
 | Upload paused or cannot resume | Reselect the original in the existing transfer; missing staging may require a new upload |
-| Video will not play | Try Reload Video or Use Compatibility Playback; download the original if the device cannot decode it |
+| Video will not play | Check Performance for scratch waiters, source requests and cache readiness; use Reload Video in the custom player, and download the original if its codec is unsupported |
 | Repeat viewing still slow | Check current cached coverage, hit/miss counters, eviction, disk headroom and server egress |
+| Browser slow but a server/Python download is fast | Compare the actual browser protocol and cache state; see [HTTP delivery](#http-delivery-and-proxy-configuration) |
 | Preload rejected or incomplete | Increase the effective cache tier or free space; the complete range must remain cached, including integrity overhead |
 | Downloads waiting under load | Inspect account/media queues and cooldowns; reduce competing work before increasing limits |
 | A copied URL fails outside your browser | Use Copy download link or an explicit share link; private owner URLs need the owner cookie |
@@ -255,3 +256,39 @@ authorized blocks; it cannot recall data already sent or buffered by a viewer.
 Performance preferences saved through the owner settings apply live where
 supported. Changes made to container environment values need container
 recreation. Connection credentials still follow the separate restart workflow.
+
+## HTTP delivery and proxy configuration
+
+TGDrive's standard response policy sends `Alt-Svc: clear`. Browsers clear cached
+alternative-service advertisements and use the origin's normal HTTPS transport,
+ordinarily HTTP/2 through Coolify/Traefik. Source installs receive the app policy.
+TLS, authorization, range delivery and resumability remain enabled. No extra
+environment value or manual proxy rule is required.
+
+Both supported Compose files also declare the matching edge response middleware.
+Coolify automatically attaches it to the domain routes it generates, preserving
+normal upstream discovery, HTTPS and gzip configuration across redeploys. This is
+necessary because Traefik can append its own advertisement to backend headers;
+the edge middleware ensures a single `Alt-Svc: clear` reaches the browser.
+
+This default follows a reproduced deployment where a fully cached 17 MB file
+transferred in about 94 seconds over HTTP/3 and about one second over HTTP/2.
+That result describes the tested path, not all QUIC connections. See the
+[streaming validation report](streaming-validation-2026-10-18.md).
+
+An external CDN/proxy can replace or append application headers; configure that
+edge to preserve the final policy if necessary. Preserve range/length headers, forward bytes
+without waiting for an entire response, and avoid compressing byte-addressed
+file responses. TGDrive supplies `Content-Encoding: identity` for those responses.
+
+A temporary domain-scoped proxy rule can help an old app while an upgrade is
+pending. Remove it after the updated Compose/app supplies the policy. Ordinary new
+installations use the standard Compose/source instructions instead. Redundant
+custom routers can need maintenance when domain/service names change.
+
+Coolify watches custom dynamic files without a proxy restart. Main proxy Compose
+edits require a restart and must be saved through Coolify's configuration UI to
+survive later restarts. References:
+[Coolify Traefik configuration](https://coolify.io/docs/core/networking/proxy/traefik/overview),
+[Traefik HTTP/3 entrypoints](https://doc.traefik.io/traefik/reference/install-configuration/entrypoints/#http3),
+and the [Alt-Svc clear specification](https://www.rfc-editor.org/rfc/rfc7838.html#section-3.1).

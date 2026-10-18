@@ -50,7 +50,12 @@ Active responses also share a separate transient payload budget: **32 MiB** by
 default, reduced with available host/container memory, with a **2 MiB minimum**
 to keep streaming possible when retained RAM caching is disabled. Queued,
 completed and currently yielded source blocks hold reservations until consumed
-or cancelled. This is additional to retained cache RAM. Transport, ASGI, TLS,
+or cancelled. New response heads can reclaim another reader's speculative
+read-ahead, including when its consumer is suspended. Awaited/yielded heads
+stay protected; cancelled I/O retains its reservation until cleanup finishes.
+A stalled download therefore cannot monopolize the entire budget with unused
+ahead blocks and block a cached metadata/seek request. This is additional to
+retained cache RAM. Transport, ASGI, TLS,
 kernel and browser decoder buffers are outside these payload budgets.
 
 Blocks first enter a probation area. Reused blocks enter a protected area,
@@ -190,9 +195,22 @@ editing behavior. Chapter controls are keyboard accessible.
 
 Startup and buffering are distinct. Advancing playback clears stale buffering
 feedback, and short interruptions do not immediately cover the picture.
-For a slow start, choose **Reload Video**, **Use Compatibility Playback**, or
-download the original. Compatibility playback depends on native browser codec
-support and may offer fewer embedded-track options.
+The custom player and its normal controls remain visible during opening and
+seeking. There is no separate Start Playback screen or native-browser
+compatibility mode. A mobile browser may still require a tap on the player's
+normal play control before it permits playback with sound. For a slow start,
+choose **Reload Video**. An unsupported codec stays in the custom player with
+a useful error; **Download Original** remains available in the header.
+
+The loading panel shows measured received bytes and transfer rate when
+available, with an estimated buffered percentage and seconds ahead once the
+engine has a duration. Unknown totals remain indeterminate rather than showing
+a fabricated percentage. The timeline highlights the engine's buffered time
+ranges, including before playback and after a seek. Movi estimates some HTTP
+time ranges from its source window and media rate, so these are approximate.
+They describe the player's current buffer, not the server's preload inventory
+or a promise that every frame can decode in real time. Server-cached bytes
+can still require network transfer to the device and local decoding.
 
 ## Operator checklist
 
@@ -221,3 +239,13 @@ settings polling and static assets are excluded. Throughput plots use actual
 counter differences between samples. These are process-local application
 observations, not a physical network-interface speed test or permanent history.
 Restart resets the counters and bounded sample history.
+
+### Browser transport with a full cache
+
+A ready server cache removes Telegram payload work; it does not measure delivery
+to the viewer. Browser-selected HTTP/3 can behave differently from Python/curl
+HTTP/1.1 or HTTP/2 on a particular connection. TGDrive defaults to clearing
+alternative-service advertisements for predictable HTTPS delivery. See
+[proxy operation](operations.md#http-delivery-and-proxy-configuration) and the
+[fresh-browser validation](streaming-validation-2026-10-18.md) before attributing
+a warm-cache stall to Telegram or raising cache budgets.

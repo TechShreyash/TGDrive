@@ -14,6 +14,7 @@ and MongoDB remembers their names, folders and sharing settings.
 | Restart, upgrade, fix a problem or recover my drive | [Operations](operations.md) |
 | Improve streaming, control cache budgets or prepare shared downloads | [Performance and caching](performance.md) |
 | Review measured transfer speeds and integrity checks | [Server validation](validation-2026-10-18.md) |
+| Review fresh-browser playback, protocol and cached-seek checks | [Streaming validation](streaming-validation-2026-10-18.md) |
 | Check what works and what still needs work | [Roadmap](roadmap.md) |
 
 ## For contributors

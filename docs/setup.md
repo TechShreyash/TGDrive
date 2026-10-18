@@ -117,6 +117,37 @@ docker compose stop
 Use one running installation per drive. Do not start a second copy against
 the same database.
 
+## Apply updates to an existing drive
+
+The streaming fixes ship with the application. They do not require a benchmark
+script, a replacement player, new required environment values, or manual cache
+conversion. The Docker build includes the custom player and its local decoder
+assets; browsers do not need an extension or a separately installed decoder.
+
+- **Coolify:** redeploy the updated revision using the application's existing
+  Compose file. Keep its environment values, database, and persistent volumes.
+  Docker builds both the frontend and backend automatically.
+- **Local Docker:** obtain the updated source in the same project folder, then
+  run `docker compose up -d --build`.
+- **Source installation:** after updating the checkout, run the commands below,
+  then restart the existing single-worker server using its normal service manager.
+
+~~~bash
+uv sync --frozen --no-dev
+npm ci --prefix website
+npm run build --prefix website
+~~~
+
+Keep the existing `.env`; skip the setup wizard and `init`. Saved dashboard
+settings continue to apply. Cache blocks on the persistent disk volume remain
+usable; RAM-only cache repopulates after a restart. A deployment interrupts active
+playback, so reopen the player afterward. Refresh the browser to load the new UI.
+
+The app sends its file-response policy directly. Both included Compose files
+also supply the proxy response policy automatically; Coolify adds it to generated
+domain routes. No manual labels or proxy edits are needed. If another proxy/CDN
+overwrites those headers, see [HTTP delivery](operations.md#http-delivery-and-proxy-configuration).
+
 ## If setup stops
 
 | Problem | What to check |
@@ -186,7 +217,7 @@ Use supported Python 3.11–3.14, [uv](https://docs.astral.sh/uv/), and Node 24 
 Exact tool versions: [Development](development.md#version-baseline-and-dependency-policy).
 
 ~~~bash
-uv sync --frozen --all-groups
+uv sync --frozen --no-dev
 npm ci --prefix website
 npm run build --prefix website
 cp .env.example .env
@@ -197,8 +228,8 @@ Fill `.env` using the manual configuration table above.
 Initialize a **new database only**, then start:
 
 ~~~bash
-uv run --frozen python -m tgdrive init
-COOKIE_SECURE=false uv run --frozen uvicorn main:app --host 127.0.0.1 --port 8000 --workers 1 --timeout-graceful-shutdown 45
+uv run --frozen --no-dev python -m tgdrive init
+COOKIE_SECURE=false uv run --frozen --no-dev uvicorn main:app --host 127.0.0.1 --port 8000 --workers 1 --timeout-graceful-shutdown 45
 ~~~
 
 For an existing database, skip `init`.
