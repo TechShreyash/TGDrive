@@ -778,7 +778,7 @@ def create_app(
     ) -> dict[str, Any]:
         path, file_data = authorized_file(request, path, auth)
         try:
-            return await describe_preview(
+            result = await describe_preview(
                 pool=_runtime(request).pool,
                 channel_id=settings.storage_channel,
                 message_id=file_data["message_id"],
@@ -788,6 +788,8 @@ def create_app(
                 path=path,
                 auth=auth,
             )
+            authorized_file(request, path, auth)
+            return result
         except TelegramFileNotFound as exc:
             raise HTTPException(404, "Stored file not found") from exc
 
@@ -799,7 +801,7 @@ def create_app(
     ) -> dict[str, Any]:
         _path, file_data = authorized_file(request, path, auth)
         try:
-            return await describe_media(
+            result = await describe_media(
                 pool=_runtime(request).pool,
                 channel_id=settings.storage_channel,
                 message_id=file_data["message_id"],
@@ -807,6 +809,8 @@ def create_app(
                 file_name=file_data["name"],
                 size=file_data["size"],
             )
+            authorized_file(request, _path, auth)
+            return result
         except TelegramFileNotFound as exc:
             raise HTTPException(404, "Stored file not found") from exc
 
