@@ -4,7 +4,6 @@ import asyncio
 
 import pytest
 from test_pooled_media import account
-from test_telegram_cache import wait_for
 
 from tgdrive.client_pool import ClientPool
 from tgdrive.media_policy import MediaCachePolicy
@@ -95,14 +94,27 @@ async def test_preview_prefix_appears_in_shared_inventory_without_preload(tmp_pa
 
 
 @pytest.mark.asyncio
-async def test_cancelled_preview_drains_shared_fill_and_reservations(tmp_path):
+async def test_cancelled_preview_drains_shared_fill_and_reservations(
+    tmp_path, monkeypatch
+):
     gate = asyncio.Event()
     manager, pool, client, payload = await setup_preview(
         tmp_path, enabled=True, gate=gate
     )
+    entered = asyncio.Event()
+    make_iterator = client.native.iter_download
+
+    def observe_origin(*args, **kwargs):
+        iterator = make_iterator(*args, **kwargs)
+        entered.set()
+        return iterator
+
+    monkeypatch.setattr(client.native, "iter_download", observe_origin)
     task = asyncio.create_task(preview(pool, len(payload)))
     try:
-        await wait_for(lambda: client.native.active > 0)
+        # Cache admission can consult the real filesystem in a worker thread.
+        # Await actual origin entry rather than a fixed number of loop turns.
+        await asyncio.wait_for(entered.wait(), 2)
         task.cancel()
         with pytest.raises(asyncio.CancelledError):
             await asyncio.wait_for(task, 1)
