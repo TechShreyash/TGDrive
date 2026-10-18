@@ -423,3 +423,21 @@ async def test_two_qualified_overlapping_viewers_earn_full_completion(tmp_path):
         gate.set()
         await manager.close()
         await pool.stop()
+
+
+@pytest.mark.asyncio
+async def test_manual_prepare_exact_ram_budget_does_not_charge_disk_digest_overhead(
+    tmp_path,
+):
+    manager, pool, _client = await manager_for(
+        tmp_path, b"x" * (4 * BLOCK), memory_max_bytes=4 * BLOCK, disk_max_bytes=0
+    )
+    try:
+        job = await manager.prepare(channel_id=CHANNEL, message_id=77, size=4 * BLOCK)
+        assert (await finish(manager, job))["state"] == "ready"
+        state = await manager.snapshot()
+        assert state["cache"]["files"][0]["complete"]
+        assert state["cache"]["memory"]["bytes"] == 4 * BLOCK
+    finally:
+        await manager.close()
+        await pool.stop()

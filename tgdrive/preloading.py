@@ -351,14 +351,19 @@ class PreloadManager:
         capacity = await self._capacity()
         if self._closed:
             raise ValueError("Media preparation is stopped")
-        overhead = ((end - start + BLOCK - 1) // BLOCK) * 32
+        # RAM stores payloads directly; only disk entries need digest prefixes.
+        overhead = (
+            ((end - start + BLOCK - 1) // BLOCK) * 32
+            if capacity > self.cache.effective_memory_bytes
+            else 0
+        )
         if end - start + overhead > capacity:
             raise PreloadCapacityError(
                 "This preparation exceeds the available cache budget; "
                 "increase the budget or free space"
             )
         reserved = sum(
-            job["target_bytes"]
+            job["target_bytes"] + job.get("reservation_overhead", 0)
             for job in self._jobs.values()
             if job["state"] in {"queued", "preparing"}
         )
@@ -383,6 +388,7 @@ class PreloadManager:
             "bytes_done": 0,
             "size": size,
             "target_bytes": end - start,
+            "reservation_overhead": overhead,
             "start": start,
             "end": end,
             "created_at": time.time(),
