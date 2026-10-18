@@ -50,7 +50,7 @@ async def test_all_accounts_share_ordered_reads_and_repeated_ranges_hit_cache(tm
 
         assert await response_body(await request()) == payload
         assert all(client.native.requests for client in accounts)
-        assert all(client.native.peak <= 2 for client in accounts)
+        assert all(client.native.peak <= 3 for client in accounts)
         assert all(client.native.active == 0 for client in accounts)
         reads = sum(sum(client.native.requests.values()) for client in accounts)
         assert reads == 25  # One remote fetch per block, exact final tail.
@@ -86,7 +86,7 @@ async def test_two_same_bot_responses_do_not_deadlock_or_duplicate_remote_reads(
         a, b = await asyncio.wait_for(asyncio.gather(request(), request()), 2)
         assert a == b == payload
         assert sum(client.native.requests.values()) == 12
-        assert client.native.peak <= 2
+        assert client.native.peak <= 3
         assert all(row.active_leases == 0 for row in await pool.status())
     finally:
         await pool.stop()
@@ -110,7 +110,7 @@ async def test_read_ahead_is_bounded_and_disconnect_drains_workers():
         assert await anext(iterator) == payload[:MIB]
         await asyncio.sleep(0.03)
         fetched = sum(sum(c.native.requests.values()) for c in clients)
-        assert 8 < fetched <= 50  # Up to 24 ahead + the yielded MiB; never whole movie.
+        assert 8 < fetched <= 66  # Up to 32 ahead + yielded MiB; never whole movie.
         await iterator.aclose()
         assert all(c.native.active == 0 for c in clients)
         assert all(row.active_leases == 0 for row in await pool.status())
@@ -142,7 +142,7 @@ async def test_flood_wait_defers_account_and_other_account_continues():
         )
         assert await asyncio.wait_for(response_body(response), 2) == payload
         assert await pool.account_retry_at("flooded") > time.time() + 50
-        assert healthy.native.requests and healthy.native.peak <= 2
+        assert healthy.native.requests and healthy.native.peak <= 3
     finally:
         await pool.stop()
 

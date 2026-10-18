@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import time
 
 import pytest
 
@@ -152,3 +153,121 @@ async def test_bounded_origin_queue_is_retryable_and_does_not_block_metadata():
     assert pool.queue_estimate("visitor-range") is None
     assert pool.performance_snapshot()["active_requests"] == []
     await pool.stop()
+
+
+@pytest.mark.asyncio
+async def test_configured_media_capacity_allows_four_reads_and_bounds_fifth():
+    pool = ClientPool([Account()], media_per_bot=4)
+    await pool.start()
+    release = asyncio.Event()
+    acquired = []
+
+    async def read(index):
+        async with pool.lease(download=True):
+            acquired.append(index)
+            await release.wait()
+
+    tasks = [asyncio.create_task(read(index)) for index in range(5)]
+    try:
+        await wait_until(lambda: len(acquired) == 4)
+        snapshot = pool.performance_snapshot()
+        assert await pool.download_capacity() == 4
+        assert snapshot["accounts"][0]["downloads"] == 4
+        assert snapshot["active"] == 4 and snapshot["queued"] == 1
+    finally:
+        release.set()
+        await asyncio.gather(*tasks)
+        await pool.stop()
+
+
+@pytest.mark.asyncio
+async def test_waiting_upload_gets_released_combined_slot_before_later_read():
+    pool = ClientPool([Account()], media_per_bot=4)
+    await pool.start()
+    gates = [asyncio.Event() for _ in range(5)]
+    order = []
+
+    async def work(label, gate=None, *, upload=False):
+        async with pool.lease(media=upload, download=not upload):
+            order.append(label)
+            if gate is not None:
+                await gate.wait()
+
+    readers = [
+        asyncio.create_task(work(str(index), gates[index])) for index in range(4)
+    ]
+    upload = later = None
+    try:
+        await wait_until(lambda: len(order) == 4)
+        upload = asyncio.create_task(work("upload", gates[4], upload=True))
+        await wait_until(lambda: pool.performance_snapshot()["queued"] == 1)
+        later = asyncio.create_task(work("later-read"))
+        await wait_until(lambda: pool.performance_snapshot()["queued"] == 2)
+        gates[0].set()
+        await wait_until(lambda: "upload" in order)
+        assert "later-read" not in order
+        account = pool.performance_snapshot()["accounts"][0]
+        assert account["downloads"] == 3 and account["uploads"] == 1
+        gates[4].set()
+        await wait_until(lambda: "later-read" in order)
+        assert order.index("upload") < order.index("later-read")
+    finally:
+        for gate in gates:
+            gate.set()
+        await asyncio.gather(
+            *readers, *[task for task in (upload, later) if task is not None]
+        )
+        await pool.stop()
+
+
+@pytest.mark.asyncio
+async def test_demand_upload_overtakes_preload_upload_without_fifo_deadlock():
+    pool = ClientPool([Account()], media_per_bot=1)
+    await pool.start()
+    release = asyncio.Event()
+    order = []
+
+    async def work(label, priority="demand"):
+        async with pool.lease(media=True, priority=priority):
+            order.append(label)
+            if label == "active":
+                await release.wait()
+
+    active = asyncio.create_task(work("active"))
+    await wait_until(lambda: order == ["active"])
+    preload = asyncio.create_task(work("preload", "preload"))
+    await wait_until(lambda: pool.performance_snapshot()["queued"] == 1)
+    demand = asyncio.create_task(work("demand"))
+    await wait_until(lambda: pool.performance_snapshot()["queued"] == 2)
+    try:
+        release.set()
+        await asyncio.wait_for(asyncio.gather(active, preload, demand), 2)
+        assert order == ["active", "demand", "preload"]
+    finally:
+        release.set()
+        for task in (active, preload, demand):
+            task.cancel()
+        await asyncio.gather(active, preload, demand, return_exceptions=True)
+        await pool.stop()
+
+
+@pytest.mark.asyncio
+async def test_channel_upload_cooldown_does_not_strand_ready_read_lane():
+    pool = ClientPool([Account()], media_per_bot=4)
+    await pool.start()
+    await pool.defer_channel(time.time() + 60)
+
+    async def upload():
+        async with pool.lease(media=True):
+            pytest.fail("Channel cooldown must still gate uploads")
+
+    pending = asyncio.create_task(upload())
+    try:
+        await wait_until(lambda: pool.performance_snapshot()["queued"] == 1)
+        async with asyncio.timeout(1):
+            async with pool.lease(download=True):
+                assert pool.performance_snapshot()["active"] == 1
+    finally:
+        pending.cancel()
+        await asyncio.gather(pending, return_exceptions=True)
+        await pool.stop()

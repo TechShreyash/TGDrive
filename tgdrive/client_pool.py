@@ -209,7 +209,6 @@ class ClientPool:
         self._lifecycle_lock = asyncio.Lock()
         self._leases = asyncio.Condition()
         self._selection_counter = 0
-        self._media_waiters: list[tuple[object, ClientKind | None, str | None]] = []
         self._send_interval = max(0.0, media_send_interval)
         self._send_lock = asyncio.Lock()
         self._next_send = 0.0
@@ -430,10 +429,6 @@ class ClientPool:
                         request_id=request_id or f"media-{self._origin_sequence}",
                     )
                 )
-            if media:
-                self._media_waiters.append(
-                    (ticket, None if allow_users and not premium else kind, client_name)
-                )
             try:
                 while True:
                     if self._state is not PoolState.RUNNING:
@@ -485,17 +480,7 @@ class ClientPool:
                         )
                     now = time.time()
 
-                    def earlier_waiter_for(candidate: _ClientSlot) -> bool:
-                        for queued, queued_kind, queued_name in self._media_waiters:
-                            if queued is ticket:
-                                return False
-                            if queued_kind in (None, candidate.kind) and (
-                                queued_name is None or queued_name == candidate.name
-                            ):
-                                return True
-                        return False
-
-                    def earlier_origin_for(candidate: _ClientSlot) -> bool:
+                    def earlier_origin_for(candidate: _ClientSlot, now=now) -> bool:
                         own_rank = priority == "preload"
                         for queued in sorted(
                             self._origin_waiters,
@@ -512,10 +497,23 @@ class ClientPool:
                                 continue
                             # A full upload lane must not strand a free read lane.
                             if queued["download"]:
-                                if candidate.download_active < 2:
+                                if (
+                                    candidate.download_active < self._media_per_bot
+                                    and candidate.cooldown_until <= now
+                                ):
                                     return True
-                            elif candidate.media_active < (
-                                self._uploads_per_bot if candidate.kind == "bot" else 1
+                            elif (
+                                candidate.media_active
+                                < (
+                                    self._uploads_per_bot
+                                    if candidate.kind == "bot"
+                                    else 1
+                                )
+                                and max(
+                                    candidate.cooldown_until,
+                                    self._channel_cooldown_until,
+                                )
+                                <= now
                             ):
                                 return True
                         return False
@@ -523,7 +521,7 @@ class ClientPool:
                     eligible = [
                         slot
                         for slot in candidates
-                        if (not download or slot.download_active < 2)
+                        if (not download or slot.download_active < self._media_per_bot)
                         and (
                             not (download or media)
                             or (
@@ -541,7 +539,6 @@ class ClientPool:
                             or (
                                 slot.media_active
                                 < (self._uploads_per_bot if slot.kind == "bot" else 1)
-                                and not earlier_waiter_for(slot)
                                 and max(
                                     slot.cooldown_until, self._channel_cooldown_until
                                 )
@@ -612,11 +609,6 @@ class ClientPool:
                         if row["ticket"] is not ticket
                     ]
                     self._leases.notify_all()
-                if media:
-                    self._media_waiters = [
-                        row for row in self._media_waiters if row[0] is not ticket
-                    ]
-                    self._leases.notify_all()
 
         started = time.monotonic()
         try:
@@ -639,7 +631,7 @@ class ClientPool:
         """Potential read windows; upload/read admission shares the media ceiling."""
         async with self._leases:
             return sum(
-                min(2, self._media_per_bot)
+                self._media_per_bot
                 for slot in self._slots
                 if slot.started and self._slot_is_healthy(slot)
             )
