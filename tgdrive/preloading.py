@@ -36,6 +36,7 @@ class PreloadManager:
         self._auto_tasks = {}
         self._closed = False
         self._condition = asyncio.Condition()
+        self._admission_lock = asyncio.Lock()
         self._active = 0
         self._clock = clock or time.monotonic
         self._fill_rate = 0.0
@@ -66,7 +67,7 @@ class PreloadManager:
             name=name,
             parts=parts,
         )
-        if method != "GET" or self._closed:
+        if method != "GET" or self._closed or not self.policy.auto_preload:
             return identity
         row = self._observed.get(identity)
         if row is None:
@@ -87,7 +88,7 @@ class PreloadManager:
             self._observed[identity] = row
         row["authorize"] = authorize
         row["requests"] += 1
-        row["viewers"].setdefault(request_id or "default", self._viewer())
+        self._get_viewer(row, request_id)
         self._observed.move_to_end(identity)
         # Observations do not retain payloads; bound idle request metadata too.
         while len(self._observed) > 1024:
@@ -106,10 +107,35 @@ class PreloadManager:
             "active": 0,
         }
 
+    def _get_viewer(self, row, request_id):
+        viewers = row["viewers"]
+        key = request_id or "default"
+        viewer = viewers.pop(key, None)
+        if viewer is None:
+            viewer = self._viewer()
+        viewer["last_seen"] = self._clock()
+        viewers[key] = viewer
+        self._prune_viewers(row, keep=key)
+        return viewer
+
+    def _prune_viewers(self, row, *, keep=None):
+        # Viewer IDs are request observations, not permanent analytics. Keep
+        # recent range/replay continuity without retaining every past visitor.
+        # Active HTTP consumers stay tracked even beyond the idle-history cap.
+        viewers = row["viewers"]
+        cutoff = self._clock() - 600
+        for key, viewer in list(viewers.items()):
+            if (
+                key != keep
+                and not viewer["active"]
+                and (viewer.get("last_seen", 0) < cutoff or len(viewers) > 128)
+            ):
+                viewers.pop(key)
+
     def begin(self, file_id, request_id):
         row = self._observed.get(file_id)
         if row is not None:
-            viewer = row["viewers"].setdefault(request_id or "default", self._viewer())
+            viewer = self._get_viewer(row, request_id)
             viewer["active"] += 1
 
     def finished(self, file_id, request_id):
@@ -119,6 +145,8 @@ class PreloadManager:
         viewer = row["viewers"].get(request_id or "default")
         if viewer is not None:
             viewer["active"] = max(0, viewer["active"] - 1)
+            viewer["last_seen"] = self._clock()
+        self._prune_viewers(row)
         if not any(viewer["active"] for viewer in row["viewers"].values()):
             existing = self._existing(file_id)
             if (
@@ -151,7 +179,7 @@ class PreloadManager:
             elif row["message_id"] != message_id:
                 continue
             viewer_id = request_id or "default"
-            viewer = row["viewers"].setdefault(viewer_id, self._viewer())
+            viewer = self._get_viewer(row, viewer_id)
             now = self._clock()
             if viewer["at"] is not None and now > viewer["at"]:
                 rate = length / (now - viewer["at"])
@@ -331,89 +359,94 @@ class PreloadManager:
             raise ValueError("Preparation range is outside the file")
         if authorize is not None:
             await authorize()
-        identity = self.register_file(
-            channel_id=channel_id,
-            message_id=message_id,
-            size=size,
-            name=name,
-            parts=parts,
-        )
-        existing = self._existing(identity)
-        if existing is not None:
-            if (
-                mode == "manual"
-                and existing["mode"] == "auto"
-                and existing["target_bytes"] < size
-            ):
-                await self.cancel(existing["id"])
-            else:
-                return dict(existing)
-        capacity = await self._capacity()
-        if self._closed:
-            raise ValueError("Media preparation is stopped")
-        # RAM stores payloads directly; only disk entries need digest prefixes.
-        overhead = (
-            ((end - start + BLOCK - 1) // BLOCK) * 32
-            if capacity > self.cache.effective_memory_bytes
-            else 0
-        )
-        if end - start + overhead > capacity:
-            raise PreloadCapacityError(
-                "This preparation exceeds the available cache budget; "
-                "increase the budget or free space"
+        # Capacity checks yield to disk I/O. Serialize job admission so two
+        # simultaneous preparations cannot create duplicate jobs/reservations.
+        async with self._admission_lock:
+            identity = self.register_file(
+                channel_id=channel_id,
+                message_id=message_id,
+                size=size,
+                name=name,
+                parts=parts,
             )
-        reserved = sum(
-            job["target_bytes"] + job.get("reservation_overhead", 0)
-            for job in self._jobs.values()
-            if job["state"] in {"queued", "preparing"}
-        )
-        if reserved + end - start + overhead > capacity:
-            raise PreloadCapacityError(
-                "Active preparations have reserved the available cache budget; "
-                "try again later"
+            existing = self._existing(identity)
+            if existing is not None:
+                if (
+                    mode == "manual"
+                    and existing["mode"] == "auto"
+                    and existing["target_bytes"] < size
+                ):
+                    await self.cancel(existing["id"])
+                else:
+                    return dict(existing)
+            capacity = await self._capacity()
+            if self._closed:
+                raise ValueError("Media preparation is stopped")
+            # RAM stores payloads directly; only disk entries need digest prefixes.
+            overhead = (
+                ((end - start + BLOCK - 1) // BLOCK) * 32
+                if capacity > self.cache.effective_memory_bytes
+                else 0
             )
-        pending = sum(
-            row["state"] in {"queued", "preparing"} for row in self._jobs.values()
-        )
-        if pending >= self.policy.max_background_jobs * 4:
-            raise PreloadCapacityError("The preparation queue is full; try again later")
-        job_id = secrets.token_urlsafe(12)
-        row = {
-            "id": job_id,
-            "file_id": identity,
-            "name": name,
-            "state": "queued",
-            "mode": mode,
-            "viewer_id": viewer_id,
-            "bytes_done": 0,
-            "size": size,
-            "target_bytes": end - start,
-            "reservation_overhead": overhead,
-            "start": start,
-            "end": end,
-            "created_at": time.time(),
-            "error": None,
-        }
-        self._jobs[job_id] = row
-        # Keep bounded completed history without forgetting active work.
-        for old in list(self._jobs):
-            if len(self._jobs) <= 128:
-                break
-            if self._jobs[old]["state"] not in {"queued", "preparing"}:
-                self._jobs.pop(old)
-        task = asyncio.create_task(
-            self._run(row, channel_id, message_id, size, parts, authorize)
-        )
-        self._tasks[job_id] = task
+            if end - start + overhead > capacity:
+                raise PreloadCapacityError(
+                    "This preparation exceeds the available cache budget; "
+                    "increase the budget or free space"
+                )
+            reserved = sum(
+                job["target_bytes"] + job.get("reservation_overhead", 0)
+                for job in self._jobs.values()
+                if job["state"] in {"queued", "preparing"}
+            )
+            if reserved + end - start + overhead > capacity:
+                raise PreloadCapacityError(
+                    "Active preparations have reserved the available cache budget; "
+                    "try again later"
+                )
+            pending = sum(
+                row["state"] in {"queued", "preparing"} for row in self._jobs.values()
+            )
+            if pending >= self.policy.max_background_jobs * 4:
+                raise PreloadCapacityError(
+                    "The preparation queue is full; try again later"
+                )
+            job_id = secrets.token_urlsafe(12)
+            row = {
+                "id": job_id,
+                "file_id": identity,
+                "name": name,
+                "state": "queued",
+                "mode": mode,
+                "viewer_id": viewer_id,
+                "bytes_done": 0,
+                "size": size,
+                "target_bytes": end - start,
+                "reservation_overhead": overhead,
+                "start": start,
+                "end": end,
+                "created_at": time.time(),
+                "error": None,
+            }
+            self._jobs[job_id] = row
+            # Keep bounded completed history without forgetting active work.
+            for old in list(self._jobs):
+                if len(self._jobs) <= 128:
+                    break
+                if self._jobs[old]["state"] not in {"queued", "preparing"}:
+                    self._jobs.pop(old)
+            task = asyncio.create_task(
+                self._run(row, channel_id, message_id, size, parts, authorize)
+            )
+            self._tasks[job_id] = task
 
-        def completed(done, key=job_id):
-            if done.cancelled() and row["state"] in {"queued", "preparing"}:
-                row["state"] = "cancelled"
-                row["finished_at"] = time.time()
-            self._tasks.pop(key, None)
+            def completed(done, key=job_id):
+                if done.cancelled() and row["state"] in {"queued", "preparing"}:
+                    row["state"] = "cancelled"
+                    row["finished_at"] = time.time()
+                self._tasks.pop(key, None)
 
-        task.add_done_callback(completed)
-        return dict(row)
+            task.add_done_callback(completed)
+            return dict(row)
 
     async def _run(self, row, channel_id, message_id, size, parts, authorize):
         acquired = False
@@ -444,8 +477,15 @@ class PreloadManager:
                     priority="preload", respect_cooldown=True
                 ) as client:
                     from tgdrive.media_metadata import get_message
+                    from tgdrive.media_scheduler import media_priority
 
-                    message = await get_message(client, channel_id, part["message_id"])
+                    token = media_priority.set("preload")
+                    try:
+                        message = await get_message(
+                            client, channel_id, part["message_id"]
+                        )
+                    finally:
+                        media_priority.reset(token)
                 identity = _block_identity(message, 0) if message is not None else None
                 if identity is None or identity[0][-2] != part["size"]:
                     raise OSError("Stored Telegram media is missing or changed")
@@ -554,6 +594,7 @@ class PreloadManager:
     async def reconfigure(self, policy):
         self.policy = policy
         if not policy.auto_preload:
+            self._observed.clear()
             for task in list(self._auto_tasks.values()):
                 task.cancel()
             await asyncio.gather(

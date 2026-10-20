@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, suppress
 from pathlib import Path
 from typing import Annotated, Any, cast
 
@@ -218,9 +218,20 @@ def create_app(
     async def lifespan(_app: FastAPI):
         try:
             await app_runtime.start()
+            from tgdrive.traffic import sample_performance
+
+            sampler = asyncio.create_task(
+                sample_performance(
+                    _app.state.traffic, getattr(app_runtime, "pool", None)
+                ),
+                name="tgdrive-performance-sampler",
+            )
             try:
                 yield
             finally:
+                sampler.cancel()
+                with suppress(asyncio.CancelledError):
+                    await sampler
                 login_service = getattr(_app.state, "premium_login_service", None)
                 if login_service is not None:
                     await login_service.close()

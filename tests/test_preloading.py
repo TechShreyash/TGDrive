@@ -441,3 +441,85 @@ async def test_manual_prepare_exact_ram_budget_does_not_charge_disk_digest_overh
     finally:
         await manager.close()
         await pool.stop()
+
+
+@pytest.mark.asyncio
+async def test_finished_viewer_history_is_bounded_without_forgetting_active_playback(
+    tmp_path,
+):
+    manager, pool, _client = await manager_for(
+        tmp_path, b"x" * (8 * BLOCK), auto_preload=True
+    )
+    try:
+        identity = manager.observe(
+            channel_id=CHANNEL,
+            message_id=77,
+            size=8 * BLOCK,
+            request_id="still-playing",
+        )
+        manager.begin(identity, "still-playing")
+        for index in range(1024):
+            viewer = f"finished-{index}"
+            manager.observe(
+                channel_id=CHANNEL, message_id=77, size=8 * BLOCK, request_id=viewer
+            )
+            manager.begin(identity, viewer)
+            manager.finished(identity, viewer)
+        viewers = manager._observed[identity]["viewers"]
+        assert len(viewers) <= 128
+        assert viewers["still-playing"]["active"] == 1
+        manager.finished(identity, "still-playing")
+        assert not any(viewer["active"] for viewer in viewers.values())
+        assert not manager._jobs and not manager._auto_tasks
+    finally:
+        await manager.close()
+        await pool.stop()
+
+
+@pytest.mark.asyncio
+async def test_disabled_automatic_preloading_keeps_inventory_without_viewer_history(
+    tmp_path,
+):
+    manager, pool, _client = await manager_for(tmp_path, b"x" * (8 * BLOCK))
+    try:
+        for index in range(1024):
+            identity = manager.observe(
+                channel_id=CHANNEL, message_id=77, size=8 * BLOCK, request_id=str(index)
+            )
+            manager.begin(identity, str(index))
+            manager.finished(identity, str(index))
+        assert not manager._observed
+        assert len(manager.cache._files) == 1
+        assert not manager._jobs and not manager._auto_tasks
+    finally:
+        await manager.close()
+        await pool.stop()
+
+
+@pytest.mark.asyncio
+async def test_concurrent_manual_prepare_admits_one_shared_job(tmp_path, monkeypatch):
+    gate = asyncio.Event()
+    manager, pool, _client = await manager_for(
+        tmp_path, b"x" * (4 * BLOCK), gate, disk_max_bytes=64 * BLOCK
+    )
+    original_capacity = manager._capacity
+
+    async def capacity():
+        await asyncio.sleep(0)
+        return await original_capacity()
+
+    monkeypatch.setattr(manager, "_capacity", capacity)
+    try:
+        first, second = await asyncio.gather(
+            *(
+                manager.prepare(channel_id=CHANNEL, message_id=77, size=4 * BLOCK)
+                for _ in range(2)
+            )
+        )
+        assert first["id"] == second["id"]
+        assert len(manager._jobs) == 1
+        assert len(manager._tasks) == 1
+    finally:
+        gate.set()
+        await manager.close()
+        await pool.stop()

@@ -9,13 +9,51 @@ from __future__ import annotations
 import asyncio
 import time
 from collections import deque
+from collections.abc import Callable
 from contextlib import asynccontextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass
 from typing import Literal
 
 MediaPriority = Literal["demand", "preload"]
-media_priority: ContextVar[MediaPriority] = ContextVar(
+
+
+class MediaPriorityScope:
+    """Let foreground subscribers promote one shared fill without restarting it."""
+
+    def __init__(self, priority: MediaPriority):
+        self.priority = priority
+        self._conditions: list[asyncio.Condition] = []
+        self._updates: list[Callable[[], None]] = []
+
+    def subscribe(self, condition: asyncio.Condition, on_promote=None):
+        self._conditions.append(condition)
+        if on_promote is not None:
+            self._updates.append(on_promote)
+
+        def unsubscribe():
+            self._conditions.remove(condition)
+            if on_promote is not None:
+                self._updates.remove(on_promote)
+
+        return unsubscribe
+
+    async def promote(self):
+        if self.priority == "demand":
+            return
+        self.priority = "demand"
+        for update in self._updates:
+            update()
+        for condition in set(self._conditions):
+            async with condition:
+                condition.notify_all()
+
+
+def effective_priority(value: MediaPriority | MediaPriorityScope) -> MediaPriority:
+    return value.priority if isinstance(value, MediaPriorityScope) else value
+
+
+media_priority: ContextVar[MediaPriority | MediaPriorityScope] = ContextVar(
     "media_priority", default="demand"
 )
 
@@ -23,7 +61,7 @@ media_priority: ContextVar[MediaPriority] = ContextVar(
 @dataclass(slots=True)
 class _Request:
     number: int
-    priority: MediaPriority
+    priority: MediaPriority | MediaPriorityScope
     queued_at: float
 
 
@@ -82,12 +120,25 @@ class MediaScheduler:
             self._sequence += 1
             ticket = _Request(self._sequence, media_priority.get(), queued_at)
             self._waiting.append(ticket)
+
+            def promote_waiter():
+                self._sequence += 1
+                ticket.number = self._sequence
+
+            unsubscribe = (
+                ticket.priority.subscribe(self._condition, promote_waiter)
+                if isinstance(ticket.priority, MediaPriorityScope)
+                else None
+            )
             try:
                 while True:
                     now = time.monotonic()
                     first = min(
                         self._waiting,
-                        key=lambda item: (item.priority == "preload", item.number),
+                        key=lambda item: (
+                            effective_priority(item.priority) == "preload",
+                            item.number,
+                        ),
                     )
                     deadline = max(self._cooldown, self._next_request)
                     if (
@@ -112,6 +163,9 @@ class MediaScheduler:
                 self._waiting.remove(ticket)
                 self._condition.notify_all()
                 raise
+            finally:
+                if unsubscribe is not None:
+                    unsubscribe()
         started = time.monotonic()
         succeeded = False
         try:
@@ -136,7 +190,11 @@ class MediaScheduler:
         now = time.monotonic()
         mean = sum(self._durations) / len(self._durations) if self._durations else None
         waiting = sorted(
-            self._waiting, key=lambda item: (item.priority == "preload", item.number)
+            self._waiting,
+            key=lambda item: (
+                effective_priority(item.priority) == "preload",
+                item.number,
+            ),
         )
         queue = []
         for position, ticket in enumerate(waiting, 1):
@@ -149,7 +207,7 @@ class MediaScheduler:
             queue.append(
                 dict(
                     position=position,
-                    priority=ticket.priority,
+                    priority=effective_priority(ticket.priority),
                     waiting_seconds=round(now - ticket.queued_at, 3),
                     estimated_wait_seconds=estimated,
                 )

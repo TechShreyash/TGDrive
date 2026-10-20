@@ -321,7 +321,7 @@ def register_routes(
         request: Request,
         response: Response,
         status: Literal[
-            "all", "queued", "running", "completed", "error", "cancelled"
+            "all", "finished", "queued", "running", "completed", "error", "cancelled"
         ] = "all",
         limit: int = Query(default=50, ge=1, le=200),
         before: float | None = Query(default=None, ge=0, allow_inf_nan=False),

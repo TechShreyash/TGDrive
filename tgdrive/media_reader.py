@@ -17,6 +17,7 @@ from telethon.errors import FloodWaitError, RPCError
 
 from tgdrive.media_cache import DiskMediaCache
 from tgdrive.media_policy import MediaCachePolicy, merge_ranges
+from tgdrive.media_scheduler import MediaPriorityScope
 from tgdrive.telegram_clients import _block_identity, _BlockCache
 
 BLOCK = 1024**2
@@ -277,6 +278,7 @@ class MediaReadCache:
         self._demand_idle.set()
         self._background_slots = asyncio.Semaphore(2)
         self._foreground = {}
+        self._fill_priorities = {}
         self._active_keys = {}
         self._pending = {}
         self._hot_keys = set()
@@ -475,6 +477,9 @@ class MediaReadCache:
         self._active_keys[key] = self._active_keys.get(key, 0) + 1
         if retain_hot:
             self._hot_keys.add(key)
+        priority_scope = self._fill_priorities.setdefault(
+            key, MediaPriorityScope("preload" if background else "demand")
+        )
         if not background:
             self._foreground[key] = self._foreground.get(key, 0) + 1
             self._demand_idle.clear()
@@ -516,6 +521,8 @@ class MediaReadCache:
 
         generation = self._generation
         try:
+            if not background:
+                await priority_scope.promote()
             if self.memory._hit(key) is not None or key in self._pending:
                 self._hits += 1
             else:
@@ -546,6 +553,7 @@ class MediaReadCache:
                 self._active_keys[key] = active
             else:
                 self._active_keys.pop(key, None)
+                self._fill_priorities.pop(key, None)
             if key not in self._pending:
                 self._hot_keys.discard(key)
             if not background:
@@ -808,10 +816,14 @@ async def stream_pooled_media(
             return bindings[key]
 
     async def fetch_remote(index):
+        from tgdrive.media_scheduler import media_priority
+
         for attempt in range(3):
-            kwargs = {"download": True, "allow_users": True}
-            if background:
-                kwargs["priority"] = "preload"
+            kwargs = {
+                "download": True,
+                "allow_users": True,
+                "priority": media_priority.get(),
+            }
             if request_id is not None:
                 kwargs["request_id"] = request_id
             async with pool.lease(**kwargs) as account:
@@ -843,7 +855,9 @@ async def stream_pooled_media(
     async def remote(index):
         from tgdrive.media_scheduler import media_priority
 
-        token = media_priority.set("preload" if background else "demand")
+        block = _block_identity(message, index)
+        scope = cache._fill_priorities.get(block[0]) if block is not None else None
+        token = media_priority.set(scope or ("preload" if background else "demand"))
         try:
             return await fetch_remote(index)
         finally:

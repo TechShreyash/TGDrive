@@ -122,3 +122,35 @@ def test_owner_api_resource_policy_and_share_capability(tmp_path):
     finally:
         app_runtime.transfers.registry.close()
         store.close()
+
+
+@pytest.mark.parametrize(
+    "method,path,body",
+    [
+        ("GET", "/api/v1/settings/performance", None),
+        ("PATCH", "/api/v1/settings/performance", {"cache_disk_bytes": 0}),
+        ("GET", "/api/v1/preloads", None),
+        ("POST", "/api/v1/preloads", {"path": "/file-placeholder"}),
+        ("POST", "/api/v1/preloads/clear", {}),
+        ("POST", "/api/v1/preloads/job-placeholder/cancel", {}),
+        ("GET", "/api/v1/performance", None),
+    ],
+)
+def test_valid_public_share_cannot_inspect_or_control_operator_resources(
+    tmp_path, method, path, body
+):
+    settings = make_settings(tmp_path)
+    store = DriveStore.create(tmp_path / "drive.sqlite3")
+    item = store.add_file("/", "public.txt", 123, 12)["id"]
+    token = store.create_share("/" + item)
+    assert store.authorize_file("/" + item, token)
+    state = FakeRuntime(store)
+    app = create_app(settings, runtime=state)
+    try:
+        with TestClient(app, base_url="https://testserver") as client:
+            response = client.request(method, path, params={"auth": token}, json=body)
+            assert response.status_code == 401
+            assert not hasattr(state, "performance_settings")
+    finally:
+        state.transfers.registry.close()
+        store.close()

@@ -107,6 +107,10 @@ def test_history_http_owner_boundary_and_validation(tmp_path):
             assert response.status_code == 200
             assert response.headers["cache-control"] == "no-store"
             assert response.json()["jobs"][0]["id"] == record.id
+            assert (
+                client.get(route, params={"status": "finished"}).json()["jobs"][0]["id"]
+                == record.id
+            )
             assert client.get(route, params={"limit": 201}).status_code == 422
             assert client.get(route, params={"status": "unknown"}).status_code == 422
             assert client.get(route, params={"before": 1000}).status_code == 400
@@ -119,3 +123,37 @@ def test_history_http_owner_boundary_and_validation(tmp_path):
     finally:
         runtime.transfers.registry.close()
         store.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("persistent", [False, True])
+async def test_finished_history_pages_mix_terminal_outcomes_without_active_jobs(
+    tmp_path, persistent
+):
+    registry = TransferRegistry(
+        database_path=tmp_path / "jobs.sqlite3" if persistent else None,
+        ttl_seconds=1,
+    )
+    try:
+        add(registry, "success", TransferStatus.COMPLETED, created=1000)
+        add(registry, "cancelled", TransferStatus.CANCELLED, created=1001)
+        registry.prune(now=time.time() + 2)
+        add(registry, "failed", TransferStatus.ERROR, created=1002)
+        add(registry, "running", TransferStatus.RUNNING, created=1003)
+        add(registry, "queued", TransferStatus.QUEUED, created=1004)
+        first = await registry.history(status="finished", limit=2)
+        assert [job["name"] for job in first["jobs"]] == ["failed", "cancelled"]
+        assert first["has_more"]
+        second = await registry.history(
+            status="finished",
+            limit=2,
+            before=(first["next_before"], first["next_before_id"]),
+        )
+        assert [job["name"] for job in second["jobs"]] == ["success"]
+        assert not second["has_more"]
+        registry.retry(first["jobs"][0]["id"])
+        assert [
+            job["name"] for job in (await registry.history(status="finished"))["jobs"]
+        ] == ["cancelled", "success"]
+    finally:
+        registry.close()

@@ -7,7 +7,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock
 
 import pytest
-from telethon import functions
+from telethon import functions, types
 from telethon.errors import FloodWaitError
 
 from tgdrive.media_scheduler import MediaScheduler
@@ -111,6 +111,53 @@ async def test_pipeline_retries_only_failed_part_and_preserves_window_hash_and_d
     )
     boundary.assert_called_once()
     assert progress.await_args.args == (len(payload), len(payload))
+
+
+@pytest.mark.asyncio
+async def test_big_file_pipeline_retries_one_part_without_resending_acked_parts(
+    tmp_path,
+):
+    # Telegram uses SaveBigFilePart/InputFileBig above 10MiB. Keep a nonaligned
+    # window/tail so total-parts and neighboring staged bytes are both checked.
+    payload = bytes(range(256)) * (10 * 1024 * 1024 // 256) + b"last-part" * 57
+    total_parts = (len(payload) + PART - 1) // PART
+    path = tmp_path / "large-stage"
+    path.write_bytes(b"prefix" + payload + b"suffix")
+
+    class BigNative(Native):
+        async def __call__(self, request):
+            if isinstance(request, functions.upload.SaveBigFilePartRequest):
+                assert request.file_total_parts == total_parts
+            assert not isinstance(request, functions.upload.SaveFilePartRequest)
+            return await super().__call__(request)
+
+    native = BigNative()
+    native.fail_part = 7
+    adapter = client(native, limit=3)
+    progress = AsyncMock()
+    await adapter.send_staged(
+        123,
+        path,
+        file_name="large.bin",
+        offset=6,
+        size=len(payload),
+        expected_sha256=hashlib.sha256(payload).hexdigest(),
+        random_id=987,
+        progress=progress,
+    )
+    assert b"".join(native.parts[index] for index in range(total_parts)) == payload
+    assert native.calls == {
+        index: 2 if index == native.fail_part else 1 for index in range(total_parts)
+    }
+    assert 1 < native.maximum <= 3
+    assert len(native.published) == 1
+    uploaded = native.published[0].media.file
+    assert isinstance(uploaded, types.InputFileBig)
+    assert uploaded.parts == total_parts
+    assert uploaded.name == "large.bin"
+    assert progress.await_args.args == (len(payload), len(payload))
+    assert adapter._media_scheduler.active == 0
+    assert adapter._media_scheduler.snapshot()["queued"] == 0
 
 
 @pytest.mark.asyncio

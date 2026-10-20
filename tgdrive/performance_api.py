@@ -60,9 +60,19 @@ def system_snapshot(settings):
         load = list(os.getloadavg())
     except (OSError, AttributeError):
         load = []
+    current_rss = None
+    try:
+        for line in Path("/proc/self/status").read_text().splitlines():
+            if line.startswith("VmRSS:"):
+                current_rss = int(line.split()[1]) * 1024
+                break
+    except (OSError, ValueError, IndexError):
+        pass
     return {
         "at": time.time(),
         "memory": memory,
+        "process_rss_bytes": current_rss,
+        "cpu_count": os.cpu_count(),
         "process_peak_rss_bytes": resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
         * 1024,
         "load_average": load,
@@ -197,6 +207,8 @@ def register_performance_routes(
                 "server": await asyncio.to_thread(system_snapshot, settings),
                 "drive": drive,
                 "traffic": request.app.state.traffic.snapshot(),
-                "history_scope": "Process-local bounded samples; resets on restart.",
+                "history_scope": (
+                    "Last 5 minutes; sampled every 3 seconds; resets on restart."
+                ),
             }
         )

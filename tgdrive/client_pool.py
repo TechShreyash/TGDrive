@@ -12,7 +12,11 @@ from dataclasses import dataclass
 from enum import StrEnum
 from typing import TYPE_CHECKING, Any, Literal, Protocol, TypeAlias
 
-from tgdrive.media_scheduler import MediaPriority
+from tgdrive.media_scheduler import (
+    MediaPriority,
+    MediaPriorityScope,
+    effective_priority,
+)
 
 if TYPE_CHECKING:
     from tgdrive.config import Settings
@@ -389,7 +393,7 @@ class ClientPool:
         allow_users: bool = False,
         download: bool = False,
         respect_cooldown: bool = False,
-        priority: MediaPriority = "demand",
+        priority: MediaPriority | MediaPriorityScope = "demand",
         request_id: str | None = None,
     ) -> AsyncIterator[TelegramClientLifecycle]:
         """Lease a healthy client and always release its count.
@@ -401,7 +405,7 @@ class ClientPool:
         premium-required documents remain restricted to user accounts.
         """
 
-        if priority not in ("demand", "preload"):
+        if effective_priority(priority) not in ("demand", "preload"):
             raise ValueError("Unknown media priority")
         if premium_required is not None:
             premium = premium_required
@@ -409,6 +413,7 @@ class ClientPool:
 
         async with self._leases:
             ticket = object()
+            unsubscribe = None
             if media or download:
                 if len(self._origin_waiters) >= self._max_media_queue:
                     mean = (
@@ -423,12 +428,26 @@ class ClientPool:
                         ticket=ticket,
                         kind=None if allow_users and not premium else kind,
                         name=client_name,
-                        priority=priority,
+                        priority=effective_priority(priority),
                         download=download,
                         queued_at=time.monotonic(),
                         request_id=request_id or f"media-{self._origin_sequence}",
                     )
                 )
+                if isinstance(priority, MediaPriorityScope):
+                    own = self._origin_waiters[-1]
+
+                    def promote_waiter():
+                        # Its demand arrival is now, not when background work
+                        # originally queued. Keep existing demand ahead of it.
+                        own["priority"] = "demand"
+                        self._origin_waiters.remove(own)
+                        self._origin_waiters.append(own)
+
+                    unsubscribe = priority.subscribe(
+                        self._leases,
+                        promote_waiter,
+                    )
             try:
                 while True:
                     if self._state is not PoolState.RUNNING:
@@ -481,7 +500,7 @@ class ClientPool:
                     now = time.time()
 
                     def earlier_origin_for(candidate: _ClientSlot, now=now) -> bool:
-                        own_rank = priority == "preload"
+                        own_rank = effective_priority(priority) == "preload"
                         for queued in sorted(
                             self._origin_waiters,
                             key=lambda waiter: waiter["priority"] == "preload",
@@ -576,7 +595,7 @@ class ClientPool:
                             self._origin_active[ticket] = dict(
                                 request_id=own["request_id"],
                                 name=slot.name,
-                                priority=priority,
+                                priority=effective_priority(priority),
                                 operation="download" if download else "upload",
                                 started_at=time.monotonic(),
                             )
@@ -602,6 +621,8 @@ class ClientPool:
                     except TimeoutError:
                         pass
             finally:
+                if unsubscribe is not None:
+                    unsubscribe()
                 if media or download:
                     self._origin_waiters = [
                         row
@@ -668,17 +689,18 @@ class ClientPool:
                 slot.media_active + slot.download_active for slot in self._slots
             ),
         )
+        wall_now = sample["at"]
+        if (
+            self._load_history
+            and not 0 <= wall_now - self._load_history[-1]["at"] <= 30
+        ):
+            self._load_history.clear()
+            self._last_load_sample = 0
+        while self._load_history and self._load_history[0]["at"] < wall_now - 300:
+            self._load_history.popleft()
         if now - self._last_load_sample >= 1:
             self._load_history.append(sample)
             self._last_load_sample = now
-        capacity = max(
-            1,
-            sum(
-                self._media_per_bot
-                for slot in self._slots
-                if slot.started and self._slot_is_healthy(slot)
-            ),
-        )
         return dict(
             **sample,
             max_queue=self._max_media_queue,
@@ -692,11 +714,7 @@ class ClientPool:
                     operation="download" if row["download"] else "upload",
                     client_name=row["name"],
                     waiting_seconds=round(now - row["queued_at"], 3),
-                    estimated_wait_seconds=(
-                        ((sample["active"] + index) // capacity) * mean
-                        if mean is not None
-                        else None
-                    ),
+                    estimated_wait_seconds=self._estimate_origin_wait(row, index, mean),
                 )
                 for index, row in enumerate(queue[:128])
             ],
@@ -712,6 +730,34 @@ class ClientPool:
                 for row in list(self._origin_active.values())[:128]
             ],
             history=list(self._load_history),
+            history_window_seconds=300,
+        )
+
+    def _estimate_origin_wait(self, row, index, mean):
+        candidates = [
+            slot
+            for slot in self._slots
+            if slot.started
+            and self._slot_is_healthy(slot)
+            and row["kind"] in (None, slot.kind)
+            and row["name"] in (None, slot.name)
+        ]
+        capacity = max(1, len(candidates) * self._media_per_bot)
+        occupancy = sum(slot.media_active + slot.download_active for slot in candidates)
+        channel_deadline = 0 if row["download"] else self._channel_cooldown_until
+        cooldown = min(
+            (
+                max(
+                    0, slot.cooldown_until - time.time(), channel_deadline - time.time()
+                )
+                for slot in candidates
+            ),
+            default=0.0,
+        )
+        return (
+            cooldown + ((occupancy + index) // capacity) * mean
+            if mean is not None
+            else None
         )
 
     def queue_estimate(self, request_id: str) -> dict[str, Any] | None:
@@ -742,30 +788,12 @@ class ClientPool:
                 else None
             )
         index, row = matches[0]
-        candidates = [
-            slot
-            for slot in self._slots
-            if slot.started
-            and self._slot_is_healthy(slot)
-            and row["kind"] in (None, slot.kind)
-            and row["name"] in (None, slot.name)
-        ]
         mean = (
             sum(self._origin_durations) / len(self._origin_durations)
             if self._origin_durations
             else None
         )
-        capacity = max(1, len(candidates) * self._media_per_bot)
-        occupancy = sum(slot.media_active + slot.download_active for slot in candidates)
-        cooldown = min(
-            (max(0, slot.cooldown_until - time.time()) for slot in candidates),
-            default=0.0,
-        )
-        estimate = (
-            cooldown + ((occupancy + index) // capacity) * mean
-            if mean is not None
-            else None
-        )
+        estimate = self._estimate_origin_wait(row, index, mean)
         return dict(
             request_id=request_id,
             position=index + 1,

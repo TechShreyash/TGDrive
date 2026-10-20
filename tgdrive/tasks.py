@@ -475,6 +475,7 @@ class TransferRegistry:
     async def history(self, *, status="all", before=None, limit=50):
         statuses = {
             "all": (),
+            "finished": ("completed", "error", "cancelled"),
             "queued": ("queued",),
             "running": ("running", "cancelling"),
             "completed": ("completed",),

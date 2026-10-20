@@ -7,10 +7,17 @@ import weakref
 from dataclasses import dataclass, field
 from typing import Any
 
+from tgdrive.media_scheduler import (
+    MediaPriorityScope,
+    effective_priority,
+    media_priority,
+)
+
 
 @dataclass
 class _Flight:
     task: asyncio.Task[Any]
+    priority: MediaPriorityScope
     waiters: int = 0
     abandoned: bool = False
     done: asyncio.Event = field(default_factory=asyncio.Event)
@@ -34,8 +41,20 @@ async def get_message(client: Any, channel: int, message_id: int) -> Any:
         maximum = getattr(pool, "_max_media_queue", 256)
         if len(flights) >= maximum:
             raise MediaQueueFull(retry_after=1)
-        task = asyncio.create_task(client.get_messages(channel, message_ids=message_id))
-        flight = _Flight(task)
+        inherited = media_priority.get()
+        priority = (
+            inherited
+            if isinstance(inherited, MediaPriorityScope)
+            else MediaPriorityScope(inherited)
+        )
+        token = media_priority.set(priority)
+        try:
+            task = asyncio.create_task(
+                client.get_messages(channel, message_ids=message_id)
+            )
+        finally:
+            media_priority.reset(token)
+        flight = _Flight(task, priority)
         flights[key] = flight
 
         def completed(_task):
@@ -46,6 +65,8 @@ async def get_message(client: Any, channel: int, message_id: int) -> Any:
         task.add_done_callback(completed)
     flight.waiters += 1
     try:
+        if effective_priority(media_priority.get()) == "demand":
+            await flight.priority.promote()
         return await asyncio.shield(flight.task)
     finally:
         flight.waiters -= 1

@@ -271,3 +271,31 @@ async def test_channel_upload_cooldown_does_not_strand_ready_read_lane():
         pending.cancel()
         await asyncio.gather(pending, return_exceptions=True)
         await pool.stop()
+
+
+@pytest.mark.asyncio
+async def test_upload_queue_estimate_includes_known_channel_cooldown():
+    pool = ClientPool([Account()], media_per_bot=3)
+    await pool.start()
+    pool._origin_durations.append(2.0)
+    await pool.defer_channel(time.time() + 60)
+
+    async def upload():
+        async with pool.lease(media=True, request_id="cooling-upload"):
+            pytest.fail("Channel cooldown must still gate this upload")
+
+    pending = asyncio.create_task(upload())
+    try:
+        await wait_until(lambda: pool.performance_snapshot()["queued"] == 1)
+        estimate = pool.queue_estimate("cooling-upload")
+        assert 59 <= estimate["estimated_wait_seconds"] <= 60
+        owner_queue = pool.performance_snapshot()["queue"][0]
+        assert owner_queue["request_id"] == "cooling-upload"
+        assert 59 <= owner_queue["estimated_wait_seconds"] <= 60
+        # Upload-only cooldowns cannot add latency to a ready download lane.
+        async with pool.lease(download=True, request_id="ready-read"):
+            assert pool.queue_estimate("ready-read")["estimated_wait_seconds"] == 0
+    finally:
+        pending.cancel()
+        await asyncio.gather(pending, return_exceptions=True)
+        await pool.stop()
