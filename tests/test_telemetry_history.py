@@ -5,6 +5,7 @@ from __future__ import annotations
 import math
 import sqlite3
 import time
+from contextlib import closing
 
 import pytest
 from fastapi.testclient import TestClient
@@ -273,7 +274,7 @@ def test_sqlite_history_uses_existing_data_directory_and_private_file(tmp_path):
     storage = HistoryStorage(tmp_path)
     storage.load(960)
     assert (tmp_path / "telemetry.sqlite3").stat().st_mode & 0o777 == 0o600
-    with sqlite3.connect(storage.path) as db:
+    with closing(sqlite3.connect(storage.path)) as db:
         assert db.execute("SELECT count(*) FROM minutes").fetchone()[0] == 0
 
 

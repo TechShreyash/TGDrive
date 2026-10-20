@@ -8,6 +8,7 @@ import hmac
 import json
 import secrets
 import sqlite3
+import threading
 import time
 import unicodedata
 import weakref
@@ -47,6 +48,8 @@ class SessionManager:
         self._key = key
         self._ttl_seconds = ttl_seconds
         self._db = None
+        # Range authorization runs in worker threads; share one connection safely.
+        self._db_lock = threading.RLock()
         from tgdrive.mongo import for_directory
 
         backend = for_directory(database_path.parent) if database_path else None
@@ -73,8 +76,9 @@ class SessionManager:
             self._finalizer = weakref.finalize(self, self._db.close)
 
     def close(self) -> None:
-        if self._finalizer is not None:
-            self._finalizer()
+        with self._db_lock:
+            if self._finalizer is not None:
+                self._finalizer()
 
     def revoke(self, token: str) -> None:
         if self._mongo is not None:
@@ -83,7 +87,7 @@ class SessionManager:
             self._mongo_sessions.pop(digest, None)
             return
         if self._db is not None:
-            with self._db:
+            with self._db_lock, self._db:
                 self._db.execute(
                     "DELETE FROM sessions WHERE hash=?",
                     (hashlib.sha256(token.encode()).hexdigest(),),
@@ -105,7 +109,7 @@ class SessionManager:
         )
         token = f"{encoded}.{signature}"
         if self._db is not None:
-            with self._db:
+            with self._db_lock, self._db:
                 self._db.execute("DELETE FROM sessions WHERE expires<=?", (issued_at,))
                 self._db.execute(
                     "INSERT INTO sessions VALUES (?, ?)",
@@ -149,15 +153,14 @@ class SessionManager:
                 raise InvalidSession("invalid session timestamp")
             if not isinstance(payload.get("nonce"), str):
                 raise InvalidSession("invalid session nonce")
-            if (
-                self._db is not None
-                and self._db.execute(
-                    "SELECT 1 FROM sessions WHERE hash=? AND expires>?",
-                    (hashlib.sha256(token.encode()).hexdigest(), current_time),
-                ).fetchone()
-                is None
-            ):
-                raise InvalidSession("Session was revoked")
+            if self._db is not None:
+                with self._db_lock:
+                    active = self._db.execute(
+                        "SELECT 1 FROM sessions WHERE hash=? AND expires>?",
+                        (hashlib.sha256(token.encode()).hexdigest(), current_time),
+                    ).fetchone()
+                if active is None:
+                    raise InvalidSession("Session was revoked")
             if (
                 self._mongo is not None
                 and self._mongo_sessions.get(

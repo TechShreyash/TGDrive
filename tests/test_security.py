@@ -71,3 +71,33 @@ def test_safe_name_removes_paths_controls_and_dangerous_empty_names() -> None:
 def test_password_comparison() -> None:
     assert verify_password("secret", "secret")
     assert not verify_password("secret", "other")
+
+
+def test_persistent_sessions_support_concurrent_range_checks_and_logins(tmp_path):
+    from concurrent.futures import ThreadPoolExecutor
+    from threading import Barrier
+
+    manager = SessionManager(
+        b"k" * 32, ttl_seconds=300, database_path=tmp_path / "sessions.sqlite3"
+    )
+    existing = manager.create(now=1_000)
+    start = Barrier(16)
+
+    def check_and_login(_worker):
+        start.wait(timeout=10)
+        for _ in range(40):
+            assert manager.verify(existing, now=1_001)["iat"] == 1_000
+            token = manager.create(now=1_001)
+            assert manager.verify(token, now=1_002)["iat"] == 1_001
+            manager.revoke(token)
+            with pytest.raises(InvalidSession, match="revoked"):
+                manager.verify(token, now=1_002)
+
+    try:
+        with ThreadPoolExecutor(max_workers=16) as workers:
+            list(workers.map(check_and_login, range(16)))
+        manager.revoke(existing)
+        with pytest.raises(InvalidSession, match="revoked"):
+            manager.verify(existing, now=1_002)
+    finally:
+        manager.close()
