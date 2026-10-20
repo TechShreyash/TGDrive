@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { historyStatus, mergeHistory } from "./transferHistory";
+import { historyStatus, mergeHistory, visibleHistory } from "./transferHistory";
 import { canCancelTransfer, type Transfer } from "./transfers";
 import type { Job } from "./types";
 
@@ -32,6 +32,72 @@ function job(change: Partial<Job> = {}): Job {
   };
 }
 describe("history merged with live browser work", () => {
+  it("keeps live running and queued batches above every finished filter", () => {
+    const active = local({ key: "active", state: "receiving" });
+    const queued = local({ key: "queued", state: "queued" });
+    const rows = visibleHistory(
+      [job(), job({ id: "failure", status: "error" })],
+      [active, queued],
+      "error",
+      true,
+    );
+    expect(rows.map((row) => row.jobId || row.key).sort()).toEqual([
+      "active",
+      "failure",
+      "queued",
+    ]);
+  });
+  it("does not prepend unrelated recent completions to an older cursor page", () => {
+    const rows = visibleHistory(
+      [job({ id: "older" })],
+      [
+        local({ key: "recent", state: "completed" }),
+        local({ key: "live", state: "receiving" }),
+      ],
+      "all",
+      false,
+    );
+    expect(rows.map((row) => row.jobId || row.key).sort()).toEqual([
+      "live",
+      "older",
+    ]);
+  });
+  it("keeps the first server page bounded when older job-backed completions remain locally", () => {
+    const rows = visibleHistory(
+      [job({ id: "newest" })],
+      [
+        local({
+          key: "old-local",
+          jobId: "archived-older",
+          state: "completed",
+        }),
+        local({ key: "receipt", state: "error" }),
+      ],
+      "all",
+      true,
+    );
+    expect(rows.map((row) => row.jobId || row.key).sort()).toEqual([
+      "newest",
+      "receipt",
+    ]);
+  });
+  it("preserves completed siblings inside a live folder on older pages", () => {
+    const rows = visibleHistory(
+      [job({ id: "older" })],
+      [
+        local({ key: "live", batchId: "folder", state: "receiving" }),
+        local({ key: "sibling", batchId: "folder", state: "completed" }),
+        local({ key: "unrelated", state: "completed" }),
+      ],
+      "all",
+      false,
+    );
+    expect(rows.map((row) => row.jobId || row.key).sort()).toEqual([
+      "live",
+      "older",
+      "sibling",
+    ]);
+  });
   it("keeps cleared server records and unfinished browser-only transfers visible", () => {
     const rows = mergeHistory([job()], [local()], "all");
     expect(rows).toHaveLength(2);

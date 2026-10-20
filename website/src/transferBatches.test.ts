@@ -526,6 +526,11 @@ it("keeps one folder category until every child completes", () => {
   const completed = item({ key: "done", state: "completed" });
   expect(batchCategory(summary([running, queued, completed]))).toBe("running");
   expect(batchCategory(summary([queued, completed]))).toBe("queued");
+  expect(
+    batchCategory(
+      summary([queued, item({ key: "failed-sibling", state: "error" })]),
+    ),
+  ).toBe("queued");
   expect(batchCategory(summary([queued]))).toBe("queued");
   expect(batchCategory(summary([completed]))).toBe("completed");
   expect(

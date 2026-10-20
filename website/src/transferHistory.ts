@@ -3,8 +3,16 @@ import type { Job } from "./types";
 import { fromJob, type Transfer } from "./transfers";
 
 export type HistoryFilter =
-  "all" | "queued" | "running" | "completed" | "error" | "cancelled";
-export function historyStatus(item: Transfer): Exclude<HistoryFilter, "all"> {
+  | "all"
+  | "queued"
+  | "running"
+  | "finished"
+  | "completed"
+  | "error"
+  | "cancelled";
+export function historyStatus(
+  item: Transfer,
+): Exclude<HistoryFilter, "all" | "finished"> {
   if (item.state === "completed" || item.state === "cancelled")
     return item.state;
   if (item.state === "error" || item.state === "awaiting_file") return "error";
@@ -20,6 +28,7 @@ export function mergeHistory(
   jobs: Job[],
   local: Transfer[],
   filter: HistoryFilter,
+  includeLocalFinished = true,
 ): Transfer[] {
   const records = new Map<string, Transfer>();
   for (const job of jobs) {
@@ -44,10 +53,21 @@ export function mergeHistory(
   }
   // Browser receipts have not reached the server job list yet; live records
   // also replace stale history samples with current progress/retry state.
+  const liveKeys = new Set(
+    summarizeBatches(local, Date.now())
+      .filter((batch) => ["running", "queued"].includes(batchCategory(batch)))
+      .flatMap((batch) => batch.items.map((item) => item.key)),
+  );
   for (const item of local) {
     if (item.kind !== "delete") {
       const key = item.jobId || item.uploadId || item.key;
       const historical = records.get(key);
+      if (
+        (!includeLocalFinished || item.jobId) &&
+        !historical &&
+        !liveKeys.has(item.key)
+      )
+        continue;
       records.set(
         key,
         historical?.location
@@ -59,7 +79,13 @@ export function mergeHistory(
   const all = [...records.values()];
   const matching = new Set(
     summarizeBatches(all, Date.now())
-      .filter((batch) => filter === "all" || batchCategory(batch) === filter)
+      .filter(
+        (batch) =>
+          filter === "all" ||
+          (filter === "finished"
+            ? !["running", "queued"].includes(batchCategory(batch))
+            : batchCategory(batch) === filter),
+      )
       .flatMap((batch) => batch.items.map((item) => item.key)),
   );
   return all
@@ -69,4 +95,28 @@ export function mergeHistory(
         ? { ...item, phase: "Upload completed" }
         : item,
     );
+}
+
+/** Keep current batches above the selected terminal history page. */
+export function visibleHistory(
+  jobs: Job[],
+  local: Transfer[],
+  filter: HistoryFilter,
+  firstPage: boolean,
+): Transfer[] {
+  const rows = mergeHistory(jobs, local, "all", firstPage);
+  const matching = new Set(
+    summarizeBatches(rows, Date.now())
+      .filter((batch) => {
+        const category = batchCategory(batch);
+        return (
+          category === "running" ||
+          category === "queued" ||
+          filter === "all" ||
+          category === filter
+        );
+      })
+      .flatMap((batch) => batch.items.map((item) => item.key)),
+  );
+  return rows.filter((item) => matching.has(item.key));
 }

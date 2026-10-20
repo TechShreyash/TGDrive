@@ -213,7 +213,7 @@ export function batchCategory(
   batch: TransferBatch,
 ): "running" | "queued" | "error" | "completed" | "cancelled" {
   if (batch.active > 0) return "running";
-  if (batch.failed + batch.awaiting > 0) return "error";
   if (batch.queued > 0) return "queued";
+  if (batch.failed + batch.awaiting > 0) return "error";
   return batch.completed === batch.count ? "completed" : "cancelled";
 }
