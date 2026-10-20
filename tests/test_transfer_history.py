@@ -193,3 +193,50 @@ async def test_finished_history_pages_mix_terminal_outcomes_without_active_jobs(
         ] == ["cancelled", "success"]
     finally:
         registry.close()
+
+
+@pytest.mark.asyncio
+async def test_history_search_reads_can_overlap_archive_writes_without_connection_races(
+    tmp_path,
+):
+    import asyncio
+
+    registry = TransferRegistry(
+        database_path=tmp_path / "concurrent.sqlite3", ttl_seconds=1
+    )
+    done = asyncio.Event()
+    reads = 0
+
+    async def reader():
+        nonlocal reads
+        while not done.is_set():
+            page = await registry.history(status="finished", query="résumé", limit=200)
+            assert all("Résumé" in item["name"] for item in page["jobs"])
+            reads += 1
+
+    workers = [asyncio.create_task(reader()) for _ in range(8)]
+    try:
+        for index in range(100):
+            add(
+                registry,
+                f"Résumé {index}",
+                TransferStatus.COMPLETED,
+                created=1000 + index,
+            )
+            registry.prune(now=time.time() + 2)
+            await asyncio.sleep(0)
+        done.set()
+        await asyncio.gather(*workers)
+        assert reads >= 8
+        assert (
+            len(
+                (await registry.history(status="finished", query="RÉSUMÉ", limit=200))[
+                    "jobs"
+                ]
+            )
+            == 100
+        )
+    finally:
+        done.set()
+        await asyncio.gather(*workers)
+        registry.close()

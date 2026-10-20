@@ -10,6 +10,7 @@ import math
 import re
 import secrets
 import sqlite3
+import threading
 import time
 import unicodedata
 import weakref
@@ -161,6 +162,7 @@ class TransferRegistry:
         self._mongo = mongo
         self._mongo_backend = mongo_backend
         self._db: sqlite3.Connection | None = None
+        self._db_lock = threading.RLock()
         self._durable: dict[str, dict[str, Any]] = {}
         self._last_progress_commit: dict[str, float] = {}
         self._history: dict[str, dict[str, Any]] = {}
@@ -299,7 +301,7 @@ class TransferRegistry:
                         upsert=True,
                     )
             else:
-                with self._db:
+                with self._db_lock, self._db:
                     self._db.execute(
                         "INSERT INTO jobs VALUES (?, ?) ON CONFLICT(id) DO UPDATE SET "
                         "data=excluded.data",
@@ -412,7 +414,7 @@ class TransferRegistry:
             else:
                 self._mongo.delete_one({"_id": transfer_id})
         if self._db is not None:
-            with self._db:
+            with self._db_lock, self._db:
                 if summary is not None:
                     self._db.execute(
                         "INSERT OR REPLACE INTO transfer_history VALUES(?,?,?,?)",
@@ -509,31 +511,32 @@ class TransferRegistry:
             return rows
         if self._db is not None:
             at, identity = before if before is not None else (None, "")
-            return [
-                json.loads(row[0])
-                for row in self._db.execute(
-                    "SELECT data FROM transfer_history "
-                    "WHERE (? OR status IN (SELECT value FROM json_each(?))) "
-                    "AND (? IS NULL OR created_at < ? "
-                    "OR (created_at = ? AND id < ?)) "
-                    "AND instr(casefold(json_extract(data,'$.name')),?) > 0 "
-                    "ORDER BY created_at DESC,id DESC LIMIT ?",
-                    (
-                        not statuses,
-                        json.dumps(statuses),
-                        at,
-                        at,
-                        at,
-                        identity,
-                        term,
-                        limit,
-                    ),
-                ).fetchall()
-            ]
+            with self._db_lock:
+                return [
+                    json.loads(row[0])
+                    for row in self._db.execute(
+                        "SELECT data FROM transfer_history "
+                        "WHERE (? OR status IN (SELECT value FROM json_each(?))) "
+                        "AND (? IS NULL OR created_at < ? "
+                        "OR (created_at = ? AND id < ?)) "
+                        "AND instr(casefold(json_extract(data,'$.name')),?) > 0 "
+                        "ORDER BY created_at DESC,id DESC LIMIT ?",
+                        (
+                            not statuses,
+                            json.dumps(statuses),
+                            at,
+                            at,
+                            at,
+                            identity,
+                            term,
+                            limit,
+                        ),
+                    ).fetchall()
+                ]
         return sorted(
             (
                 row
-                for row in self._history.values()
+                for row in list(self._history.values())
                 if self._history_matches(row, statuses, before, term)
             ),
             key=lambda row: (row["created_at"], row["id"]),
@@ -589,9 +592,10 @@ class TransferRegistry:
     def close(self) -> None:
         if self._tasks:
             raise RuntimeError("Drain transfer tasks before closing the journal")
-        if self._finalizer is not None:
-            self._finalizer()
-            self._db = None
+        with self._db_lock:
+            if self._finalizer is not None:
+                self._finalizer()
+                self._db = None
 
     def list(self) -> list[TransferRecord]:
         return sorted(

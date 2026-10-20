@@ -239,13 +239,13 @@ class TelemetryHistory:
             ):
                 self._count(key, "process", source)
             for account in (telegram or {}).get("accounts", []):
-                requests = account.get("requests") or {}
+                account_requests = account.get("requests") or {}
                 identity = (sources or {}).get(account["name"], account["name"])
                 for direction in ("upload", "download"):
                     self._count(
                         f"telegram_{direction}_bytes",
                         identity,
-                        requests.get(direction + "_bytes"),
+                        account_requests.get(direction + "_bytes"),
                     )
             previous = self._previous
             if (
