@@ -77,12 +77,16 @@ def test_chapters_are_immediate_keyboard_accessible_and_mobile_bounded(
       ]);
       element.dispatchEvent(new Event('loadedmetadata'));
     }""")
-    chapters = dialog.locator(".advanced-chapters")
-    expect(chapters).to_be_visible()
-    summary = chapters.locator("summary")
-    summary.focus()
-    summary.press("Enter")
-    expect(chapters.get_by_role("button", name="Opening 0:00")).to_be_visible()
+    control = player.get_by_role("button", name="Chapters", exact=True)
+    expect(control).to_be_visible()
+    assert control.evaluate("element=>!!element.closest('.movi-controls-bar')")
+    chapters = player.get_by_role("region", name="Video chapters", exact=True)
+    expect(chapters).to_have_count(0)
+    control.focus()
+    control.press("Enter")
+    opening = chapters.get_by_role("button", name="Opening 0:00", exact=True)
+    expect(opening).to_be_visible()
+    expect(opening).to_be_focused()
     expect(chapters).not_to_contain_text("Generating")
     page.screenshot(path=ARTIFACTS / "chapters-immediate-desktop.png")
     page.set_viewport_size({"width": 390, "height": 844})
@@ -97,21 +101,41 @@ def test_chapters_are_immediate_keyboard_accessible_and_mobile_bounded(
     button.focus()
     button.press("Enter")
     page.wait_for_function("()=>document.querySelector('movi-player').currentTime>=0.9")
-    expect(chapters).not_to_have_attribute("open", "")
+    expect(chapters).to_have_count(0)
     expect(player).to_be_focused()
     player.evaluate("element=>element.requestFullscreen()")
     page.wait_for_function("()=>!!document.fullscreenElement")
+    expect(chapters).to_have_count(0)
+    player.hover()
+    # Narrow players fold supplementary controls into their existing settings tray.
+    # Reach Chapters through that keyboard-operable control instead of forcing a
+    # hidden bar button into view or duplicating it over the video.
+    more = player.get_by_role("button", name="More Settings", exact=True)
+    if more.is_visible():
+        more.focus()
+        more.press("Enter")
+    expect(control).to_be_visible()
+    control.focus()
+    control.press("Space")
     expect(chapters).to_be_visible()
     assert chapters.evaluate("element=>element.getRootNode() instanceof ShadowRoot")
-    chapters.locator("summary").focus()
-    chapters.locator("summary").press("Space")
-    expect(chapters.get_by_role("button", name="Opening 0:00")).to_be_visible()
+    expect(opening).to_be_visible()
+    expect(opening).to_be_focused()
     assert player.evaluate("element=>element.paused")
-    chapters.get_by_role("button", name="Opening 0:00").focus()
-    chapters.get_by_role("button", name="Opening 0:00").press("Escape")
-    expect(chapters).not_to_have_attribute("open", "")
+    opening.press("Escape")
+    expect(chapters).to_have_count(0)
+    expect(player).to_be_focused()
     assert page.evaluate("!!document.fullscreenElement")
     page.evaluate("document.exitFullscreen()")
+    page.wait_for_function("()=>!document.fullscreenElement")
+    player.focus()
+    player.press("Space")
+    page.wait_for_function(
+        """()=>{
+          const player=document.querySelector('movi-player');
+          return !player.paused && player.currentTime>1.2;
+        }"""
+    )
 
 
 def test_share_copy_notice_is_above_native_dialog_without_stealing_focus(

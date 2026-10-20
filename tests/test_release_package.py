@@ -51,6 +51,9 @@ def test_source_archive_excludes_local_state_and_private_documents(
     frontend_source = source / "website" / "src" / "App.tsx"
     frontend_source.parent.mkdir(parents=True, exist_ok=True)
     frontend_source.write_text("export default function App() { return null; }\n")
+    patch_script = source / "website" / "scripts" / "patch-movi-player.js"
+    patch_script.parent.mkdir(parents=True, exist_ok=True)
+    patch_script.write_text("// reviewed portable seek fix\n", encoding="utf-8")
     archive_path, checksum_path = build_release(source, tmp_path / "output")
     with zipfile.ZipFile(archive_path) as archive:
         names = archive.namelist()
@@ -58,9 +61,11 @@ def test_source_archive_excludes_local_state_and_private_documents(
         assert "tgdrive-2.0.0/.env.example" in names
         assert "tgdrive-2.0.0/website/src/App.tsx" in names
         assert "tgdrive-2.0.0/website/package-lock.json" in names
+        assert "tgdrive-2.0.0/website/scripts/patch-movi-player.js" in names
         for public_asset in (
             "website/public/third-party/README.txt",
             "website/public/third-party/movi-player-LICENSE.txt",
+            "website/public/third-party/movi-player-TGDrive-patch-NOTICE.txt",
             "website/public/third-party/movi-player-0.4.1-sources.tar.gz",
             "website/public/third-party/FFmpeg-LGPL-2.1.txt",
             "website/public/third-party/pdfjs-LICENSE.txt",

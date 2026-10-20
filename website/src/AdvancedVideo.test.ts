@@ -14,6 +14,7 @@ import {
 describe("stale buffering recovery", () => {
   it("accepts advancing playback, but not paused clocks or seek jumps", () => {
     expect(videoIsAdvancing(12, 12.25, false, false)).toBe(true);
+    expect(videoIsAdvancing(12, 12 + 1 / 120, false, false)).toBe(true);
     expect(videoIsAdvancing(12, 12, false, false)).toBe(false);
     expect(videoIsAdvancing(12, 12.25, true, false)).toBe(false);
     expect(videoIsAdvancing(12, 12.25, false, true)).toBe(false);
@@ -183,21 +184,22 @@ describe("measured player buffer", () => {
         { start: 0, end: 10 },
         { start: 40, end: 60 },
       ],
-      percent: 30,
-      ahead: 15,
       received: 4194304,
       bytesPerSecond: 524288,
     });
   });
-  it("does not invent a percentage when the duration is unknown", () => {
-    expect(snapshot([[40, 50]], Number.NaN).percent).toBeNull();
+  it("keeps source ranges as estimates without claiming decoded readiness", () => {
+    const result = snapshot([[40, 50]], Number.NaN);
+    expect(result).not.toHaveProperty("percent");
+    expect(result).not.toHaveProperty("ahead");
     expect(snapshot([], 0).received).toBe(4194304);
   });
   it("does not mark an unfetched seek gap as available", () => {
     const afterSeek = snapshot([[80, 90]], 100, 80);
-    expect(afterSeek.percent).toBe(10);
-    expect(afterSeek.ahead).toBe(10);
-    expect(snapshot([[0, 10]], 100, 80).ahead).toBe(0);
+    expect(afterSeek.ranges).toEqual([{ start: 80, end: 90 }]);
+    expect(snapshot([[0, 10]], 100, 80).ranges).toEqual([
+      { start: 0, end: 10 },
+    ]);
   });
   it("merges overlap, clamps the duration and ignores invalid ranges", () => {
     const result = snapshot([
@@ -207,6 +209,5 @@ describe("measured player buffer", () => {
       [NaN, 3],
     ]);
     expect(result.ranges).toEqual([{ start: 40, end: 100 }]);
-    expect(result.percent).toBe(60);
   });
 });

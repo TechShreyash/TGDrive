@@ -23,6 +23,11 @@ including FFmpeg LGPL-2.1-or-later, dav1d BSD-2-Clause, and Signalsmith MIT.
 FFmpeg-LGPL-2.1.txt supplies the full LGPL-2.1 text from upstream FFmpeg.
 Preserve these notices when redistributing the emitted JS and WASM assets.
 
+TGDrive applies a reviewed JavaScript seek-resume correction to the slim player
+bundle before dev/test/build. The original license and WASM remain unchanged.
+See movi-player-TGDrive-patch-NOTICE.txt and website/scripts/patch-movi-player.js
+for the modification, exact upstream bundle hash and automatic build guard.
+
 Source and relinking archive (served from the same TGDrive origin):
 /third-party/movi-player-0.4.1-sources.tar.gz
 

@@ -1,0 +1,17 @@
+TGDrive modification to Movi Player 0.4.1, 20 October 2026
+
+Movi Player is Copyright Ujjawal Kashyap and its contributors, licensed under
+Apache License 2.0. The original license is distributed alongside this notice
+as movi-player-LICENSE.txt. Upstream: https://github.com/mrujjwalg/movi-player
+
+TGDrive modifies the slim JavaScript bundle's seek-completion condition to use
+the existing coordinated audio/video buffering path when playable audio is
+still priming. This prevents high-latency audio outputs from starting silent
+video and then moving the media clock backward when audio arrives. Deliberately
+dropped audio, absent/disabled audio and media after the audio tail retain the
+upstream behavior.
+
+The exact version and original bundle SHA256 are checked by
+website/scripts/patch-movi-player.js. The patch is applied automatically before
+development, tests and production builds, including Docker builds. An unknown
+or changed bundle fails clearly instead of receiving an unreviewed patch.

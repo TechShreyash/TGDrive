@@ -10,6 +10,8 @@ __pycache__
 htmlcov
 dist
 scripts
+!website/scripts
+!website/scripts/*.js
 docs
 tests
 testfiles

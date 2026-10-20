@@ -1,6 +1,6 @@
 import { useEffect, useReducer, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { RefreshCw, ListVideo } from "lucide-react";
+import { RefreshCw } from "lucide-react";
 import type { MoviElement } from "movi-player/element/slim";
 import wasmUrl from "movi-player/movi.wasm?url";
 import { formatBytes } from "./types";
@@ -155,7 +155,7 @@ export function videoIsAdvancing(
     !seeking &&
     Number.isFinite(previous) &&
     Number.isFinite(current) &&
-    current - previous > 0.015 &&
+    current - previous > 0 &&
     current - previous < 2
   );
 }
@@ -188,12 +188,10 @@ export function unavailableVideoCodec(core: unknown): string | null {
 }
 export type VideoBufferSnapshot = {
   ranges: { start: number; end: number }[];
-  percent: number | null;
-  ahead: number;
   received: number;
   bytesPerSecond: number;
 };
-/** Read the engine's media-time ranges; server byte offsets cannot locate VBR frames. */
+/** Movi's source-window time ranges are estimates, not decoded readiness. */
 export function videoBufferSnapshot(player: {
   duration: number;
   currentTime: number;
@@ -218,16 +216,6 @@ export function videoBufferSnapshot(player: {
       last.end = Math.max(last.end, range.end);
     else merged.push({ ...range });
   }
-  const coverage = merged.reduce(
-    (total, range) => total + range.end - range.start,
-    0,
-  );
-  const current = Number.isFinite(player.currentTime)
-    ? Math.max(0, player.currentTime)
-    : 0;
-  const active = merged.find(
-    (range) => range.start <= current + 0.1 && range.end > current,
-  );
   const source = player.player?.getSource?.() as {
     getNetworkStats?: () => { totalBytes?: number; currentSpeed?: number };
   } | null;
@@ -236,16 +224,12 @@ export function videoBufferSnapshot(player: {
     value !== undefined && Number.isFinite(value) && value > 0 ? value : 0;
   return {
     ranges: merged,
-    percent: bounded ? Math.min(100, (coverage / duration) * 100) : null,
-    ahead: active ? Math.max(0, active.end - current) : 0,
     received: positive(stats?.totalBytes),
     bytesPerSecond: positive(stats?.currentSpeed),
   };
 }
 const emptyBuffer: VideoBufferSnapshot = {
   ranges: [],
-  percent: null,
-  ahead: 0,
   received: 0,
   bytesPerSecond: 0,
 };
@@ -261,11 +245,11 @@ const phaseCopy = {
   },
   buffering: {
     title: "Buffering video",
-    description: "Receiving more video data…",
+    description: "Waiting for audio and video to be ready…",
   },
   seeking: {
     title: "Moving to this position",
-    description: "Receiving video data at this position…",
+    description: "Preparing audio and video at this position…",
   },
 };
 export default function AdvancedVideo({
@@ -289,7 +273,6 @@ export default function AdvancedVideo({
   const [playbackError, setPlaybackError] = useState("");
   const [buffer, setBuffer] = useState<VideoBufferSnapshot>(emptyBuffer);
   const [visible, setVisible] = useState(!document.hidden);
-  const [chapters, setChapters] = useState<VideoChapter[]>([]);
   const [chapterSurface, setChapterSurface] = useState<ShadowRoot | null>(null);
   useEffect(() => {
     const update = () => setVisible(!document.hidden);
@@ -320,15 +303,111 @@ export default function AdvancedVideo({
     let player: MoviElement | null = null;
     let subtitleRenderer: MovTextRenderer | null = null;
     let progressTimer: number | undefined;
+    let frameCallback: number | undefined;
     let previousTime = Number.NaN;
-    let waitTime = Number.NaN;
     let latestProgressAt = 0;
     let receivedBaseline = 0;
+    let chapterEntries: VideoChapter[] = [];
+    let chapterRegistered = false;
+    const chapterKeyboardGuard = (event: KeyboardEvent) => {
+      if (
+        (event.key === " " || event.key === "Enter") &&
+        event
+          .composedPath()
+          .some(
+            (node) =>
+              node instanceof HTMLButtonElement &&
+              node.dataset.customControl === "tgdrive-chapters",
+          )
+      )
+        // Preserve native button activation, but keep Space out of the player's
+        // global play shortcut. Delegation survives compact-control rebuilding.
+        event.stopPropagation();
+    };
+    const hideChapters = () => player?.hideOverlay("tgdrive-chapters");
+    const showChapters = () => {
+      if (!player || cancelled) return;
+      if (player.isOverlayVisible("tgdrive-chapters")) {
+        hideChapters();
+        return;
+      }
+      const panel = document.createElement("section");
+      panel.className = "advanced-chapters";
+      panel.setAttribute("aria-label", "Video chapters");
+      const header = document.createElement("header");
+      const title = document.createElement("h3");
+      title.textContent = "Chapters";
+      const close = document.createElement("button");
+      close.type = "button";
+      close.className = "advanced-chapters-close";
+      close.textContent = "Close";
+      close.setAttribute("aria-label", "Close chapters");
+      close.addEventListener("click", hideChapters);
+      header.append(title, close);
+      const nav = document.createElement("nav");
+      nav.setAttribute("aria-label", "Choose a chapter");
+      for (const chapter of chapterEntries) {
+        const button = document.createElement("button");
+        button.type = "button";
+        const label = document.createElement("span");
+        label.textContent = chapter.title;
+        const time = document.createElement("time");
+        time.textContent = chapterTime(chapter.start);
+        button.append(label, time);
+        button.addEventListener("click", () => {
+          if (!player) return;
+          player.currentTime = chapter.start;
+          hideChapters();
+          player.focus({ preventScroll: true });
+        });
+        nav.append(button);
+      }
+      panel.append(header, nav);
+      panel.addEventListener("click", (event) => event.stopPropagation());
+      panel.addEventListener("keydown", (event) => {
+        event.stopPropagation();
+        if (event.key === "Escape") {
+          event.preventDefault();
+          hideChapters();
+          player?.focus({ preventScroll: true });
+        }
+      });
+      player.showOverlay({
+        id: "tgdrive-chapters",
+        content: panel,
+        placement: "bottom-end",
+        dismissOn: ["seek", "escape"],
+        onDismiss: () =>
+          player?.updateControl("tgdrive-chapters", { active: false }),
+      });
+      nav.querySelector("button")?.focus({ preventScroll: true });
+    };
     const updateChapters = () => {
       if (!player || cancelled) return;
-      setChapters(
-        videoChapters(player.player?.getChapters() || [], player.duration),
+      chapterEntries = videoChapters(
+        player.player?.getChapters() || [],
+        player.duration,
       );
+      if (!chapterEntries.length) {
+        if (chapterRegistered) player.removeControl("tgdrive-chapters");
+        chapterRegistered = false;
+        hideChapters();
+        return;
+      }
+      if (!chapterRegistered) {
+        chapterRegistered = true;
+        player.addControl({
+          id: "tgdrive-chapters",
+          label: "Chapters",
+          title: null,
+          icon: '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 5h18M3 12h7M3 19h7"/><path d="m16 11 5 4-5 4z"/></svg>',
+          placement: "both",
+          side: "right",
+          before: ["audio", "cc", "settings"],
+          toggle: true,
+          onSelect: showChapters,
+        });
+      }
     };
     const updateSubtitleRenderer = () => {
       if (!player || cancelled) return;
@@ -357,7 +436,6 @@ export default function AdvancedVideo({
     setPlayRequested(false);
     setPlaybackError("");
     setBuffer(emptyBuffer);
-    setChapters([]);
     const clearWaiting = () => {
       clearTimeout(waitingTimer);
       waitingTimer = undefined;
@@ -399,6 +477,8 @@ export default function AdvancedVideo({
       );
       const range = sample.ranges[0]; // This engine exposes one contiguous source window.
       if (bar && Number.isFinite(player.duration) && player.duration > 0) {
+        bar.title =
+          "Estimated loaded source range; audio and video may still need decoding";
         bar.style.left =
           (range ? (range.start / player.duration) * 100 : 0) + "%";
         bar.style.width =
@@ -427,6 +507,14 @@ export default function AdvancedVideo({
       updateBuffer();
       updateChapters();
       updateSubtitleRenderer();
+      const engineState = player?.player?.getState();
+      if (
+        event !== "playing" &&
+        (engineState === "buffering" || engineState === "seeking")
+      ) {
+        waiting(engineState === "seeking" ? "seeking" : "waiting");
+        return;
+      }
       clearWaiting();
       dispatch(event);
       setPlayRequested(false);
@@ -448,25 +536,19 @@ export default function AdvancedVideo({
       }
       if (kind === "waiting" && player?.paused) return;
       if (kind === "seeking" && player) {
+        previousTime = Number.NaN;
+        latestProgressAt = 0;
         receivedBaseline = videoBufferSnapshot(player).received;
         setBuffer(emptyBuffer);
       }
       pendingWait = kind;
-      waitTime = player?.currentTime ?? Number.NaN;
       if (waitingTimer !== undefined) return;
       waitingTimer = window.setTimeout(() => {
         waitingTimer = undefined;
         if (cancelled || failed || !player) return;
         if (
           pendingWait === "waiting" &&
-          (player.paused ||
-            videoIsAdvancing(
-              waitTime,
-              player.currentTime,
-              player.paused,
-              player.seeking,
-            ) ||
-            performance.now() - latestProgressAt < 500)
+          (player.paused || performance.now() - latestProgressAt < 500)
         )
           return;
         dispatch(pendingWait);
@@ -483,6 +565,7 @@ export default function AdvancedVideo({
         installLocalStyles(MoviElement);
         player = document.createElement("movi-player");
         activePlayer.current = player;
+        player.addEventListener("keydown", chapterKeyboardGuard, true);
         player.setAttribute("wasmurl", wasmUrl);
         player.setAttribute("engine", "wasm");
         player.setAttribute("sw", "auto");
@@ -538,24 +621,14 @@ export default function AdvancedVideo({
         listen("seeked", () => {
           observeResumePosition();
           settle("seeked");
+          // A new position can be available before its audio/video refill is ready.
+          // Keep the actual engine wait visible instead of treating seeked as play.
+          if (player?.player?.getState() === "buffering") waiting("waiting");
         });
         const observeProgress = () => {
           if (!player || cancelled || failed) return;
           observeResumePosition();
           updateBuffer();
-          if (
-            videoIsAdvancing(
-              previousTime,
-              player.currentTime,
-              player.paused,
-              player.seeking,
-            )
-          ) {
-            latestProgressAt = performance.now();
-            clearWaiting();
-            dispatch("playing");
-          }
-          previousTime = player.currentTime;
         };
         listen("timeupdate", observeProgress);
         listen("progress", observeProgress);
@@ -576,7 +649,28 @@ export default function AdvancedVideo({
         dispatch("engine-loaded");
         host.current.append(player);
         player.src = new URL(src, window.location.origin).href;
-        // Some engines resume their clock without repeating `playing` after a stall.
+        const presentedFrame = (_now: number, metadata: unknown) => {
+          if (!player || cancelled || failed) return;
+          const mediaTime = (metadata as { mediaTime?: number } | null)
+            ?.mediaTime;
+          // A clock jump or prefetched source range is not proof of moving pictures.
+          // Reset at every seek and require successive presented frames instead.
+          if (
+            videoIsAdvancing(
+              previousTime,
+              mediaTime ?? Number.NaN,
+              player.paused,
+              player.seeking,
+            )
+          ) {
+            latestProgressAt = performance.now();
+            clearWaiting();
+            dispatch("playing");
+          }
+          previousTime = mediaTime ?? Number.NaN;
+          frameCallback = player.requestVideoFrameCallback(presentedFrame);
+        };
+        frameCallback = player.requestVideoFrameCallback(presentedFrame);
         progressTimer = window.setInterval(observeProgress, 250);
       })
       .catch(fail);
@@ -585,6 +679,9 @@ export default function AdvancedVideo({
       clearWaiting();
       clearInterval(progressTimer);
       if (player) {
+        player.removeEventListener("keydown", chapterKeyboardGuard, true);
+        if (frameCallback !== undefined)
+          player.cancelVideoFrameCallback(frameCallback);
         if (resume && !resume.positionApplied)
           playback.current = {
             time: resume.target,
@@ -612,43 +709,6 @@ export default function AdvancedVideo({
     : state.phase !== "ready"
       ? phaseCopy[state.phase]
       : null;
-  const chapterControls =
-    state.ready && chapters.length > 0 ? (
-      <details
-        className="advanced-chapters"
-        onKeyDown={(event) => {
-          // The fullscreen portal lives inside Movi; chapter navigation must
-          // not also trigger its playback shortcuts.
-          event.stopPropagation();
-          if (event.key !== "Escape" || !event.currentTarget.open) return;
-          event.preventDefault();
-          event.currentTarget.open = false;
-          event.currentTarget.querySelector("summary")?.focus();
-        }}
-      >
-        <summary>
-          <ListVideo size={17} /> Chapters <span>{chapters.length}</span>
-        </summary>
-        <nav aria-label="Video chapters">
-          {chapters.map((chapter, index) => (
-            <button
-              key={index}
-              type="button"
-              onClick={(event) => {
-                const player = activePlayer.current;
-                if (!player) return;
-                player.currentTime = chapter.start;
-                event.currentTarget.closest("details")?.removeAttribute("open");
-                player.focus({ preventScroll: true });
-              }}
-            >
-              <span>{chapter.title}</span>
-              <time>{chapterTime(chapter.start)}</time>
-            </button>
-          ))}
-        </nav>
-      </details>
-    ) : null;
   const loadingStatus = copy ? (
     <div
       className="advanced-state advanced-state-buffering"
@@ -672,24 +732,11 @@ export default function AdvancedVideo({
         </div>
         {!playbackError && (
           <div className="advanced-buffer-progress">
-            <progress
-              aria-label="Estimated video buffered on this device"
-              max={100}
-              value={buffer.percent ?? undefined}
-            />
+            <progress aria-label="Preparing audio and video frames" />
             <p className="advanced-buffer-metrics" aria-live="off">
-              {buffer.percent !== null
-                ? "About " +
-                  Math.floor(buffer.percent) +
-                  "% buffered · " +
-                  Math.floor(buffer.ahead) +
-                  "s ahead"
-                : buffer.received > 0
-                  ? formatBytes(buffer.received) + " received"
-                  : "Waiting for video data…"}
-              {buffer.percent !== null &&
-                buffer.received > 0 &&
-                " · " + formatBytes(buffer.received) + " received"}
+              {buffer.received > 0
+                ? formatBytes(buffer.received) + " received"
+                : "Preparing audio and video frames…"}
               {buffer.bytesPerSecond > 0 &&
                 " · " + formatBytes(buffer.bytesPerSecond) + "/s"}
             </p>
@@ -715,9 +762,6 @@ export default function AdvancedVideo({
         className="advanced-player-host"
         aria-busy={!state.ready && !playbackError}
       />
-      {chapterSurface
-        ? createPortal(chapterControls, chapterSurface)
-        : chapterControls}
       {chapterSurface
         ? createPortal(loadingStatus, chapterSurface)
         : loadingStatus}

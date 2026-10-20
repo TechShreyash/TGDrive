@@ -7,10 +7,13 @@
     "node": ">=24.22.0 <25"
   },
   "scripts": {
+    "predev": "node scripts/patch-movi-player.js",
     "dev": "vite --host 127.0.0.1",
     "typecheck": "tsc --noEmit",
     "check": "npm run typecheck",
+    "prebuild": "node scripts/patch-movi-player.js",
     "build": "tsc --noEmit && vite build",
+    "pretest": "node scripts/patch-movi-player.js && node --test scripts/check-movi-player.js",
     "test": "vitest run"
   },
   "dependencies": {
