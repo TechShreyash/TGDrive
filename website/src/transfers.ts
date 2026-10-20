@@ -1,6 +1,7 @@
 import { api, ApiError, errorMessage, request } from "./api";
 import type { Job, UploadSnapshot, TransferLocation } from "./types";
 import { sampleProgress, type ProgressSample } from "./progress";
+import { sendUploadChunk, type UploadChunkTransport } from "./uploadTransport";
 export type TransferState =
   | "queued"
   | "verifying"
@@ -24,6 +25,8 @@ export interface Transfer {
   state: TransferState;
   phase: string;
   current: number;
+  /** Transient browser-observed bytes; current remains the confirmed resume offset. */
+  sentCurrent?: number;
   total: number;
   uploadId?: string;
   jobId?: string;
@@ -296,7 +299,9 @@ export class TransferManager {
   private capacityKnown = false;
   private stagingRetryAt = 0;
   private dismissed = new Set<string>();
-  constructor() {
+  constructor(
+    private readonly sendChunk: UploadChunkTransport = sendUploadChunk,
+  ) {
     try {
       this.dismissed = new Set(
         JSON.parse(localStorage.getItem("tgdrive.dismissed-jobs.v1") || "[]"),
@@ -366,7 +371,12 @@ export class TransferManager {
     await request("/api/v1/jobs/" + encodeURIComponent(id) + "/retry", {});
     await this.poll();
   }
-  private publish() {
+  private publish(persist = true) {
+    if (!persist) {
+      this.items = [...this.items];
+      for (const listener of this.listeners) listener();
+      return;
+    }
     const retained = retainTransferBatches(this.items);
     const retainedKeys = new Set(retained.map((item) => item.key));
     for (const item of this.items)
@@ -393,6 +403,7 @@ export class TransferManager {
     const item = this.items.find((item) => item.key === key);
     if (item) {
       Object.assign(item, values);
+      if (item.state !== "receiving") item.sentCurrent = undefined;
       if (["receiving", "verifying"].includes(item.state))
         item.startedAt ??= Date.now();
       if (values.state && !terminal.has(values.state))
@@ -401,12 +412,12 @@ export class TransferManager {
       if (item.state === "receiving")
         item.meter = sampleProgress(
           item.meter,
-          item.state + ":" + item.phase,
-          item.current,
+          item.state,
+          item.sentCurrent ?? item.current,
           Date.now(),
         );
       else item.meter = undefined;
-      this.publish();
+      this.publish(Object.keys(values).some((key) => key !== "sentCurrent"));
     }
   }
   setEnabled(enabled: boolean) {
@@ -819,6 +830,12 @@ export class TransferManager {
     const file = item.file!;
     const controller = new AbortController();
     item.controller = controller;
+    this.update(item.key, {
+      state: "receiving",
+      stage: "preparing",
+      phase: "Preparing device upload",
+      sentCurrent: undefined,
+    });
     if (!item.uploadId) {
       const created = await api.createUpload(
         item.name,
@@ -887,7 +904,9 @@ export class TransferManager {
     this.update(item.key, {
       state: "receiving",
       phase: "Sending from this device",
+      stage: "sending",
       current: offset,
+      sentCurrent: offset,
       total: file.size,
       error: undefined,
     });
@@ -895,7 +914,7 @@ export class TransferManager {
       if (controller.signal.aborted)
         throw new DOMException("Upload paused", "AbortError");
       const end = Math.min(offset + chunkSize, file.size);
-      const response = await fetch(
+      const response = await this.sendChunk(
         "/api/v1/uploads/" + encodeURIComponent(id),
         {
           method: "PATCH",
@@ -906,6 +925,18 @@ export class TransferManager {
           },
           body: file.slice(offset, end),
           signal: controller.signal,
+        },
+        (sent) => {
+          if (controller.signal.aborted || item.state !== "receiving") return;
+          this.update(item.key, {
+            sentCurrent: Math.max(item.sentCurrent ?? offset, offset + sent),
+            ...(offset + sent >= file.size
+              ? {
+                  stage: "confirming",
+                  phase: "Sent from device. Waiting for server confirmation",
+                }
+              : {}),
+          });
         },
       );
       if (!response.ok) {
@@ -935,11 +966,12 @@ export class TransferManager {
           "The server did not confirm this file chunk. Retry to check the upload position.",
         );
       offset = nextOffset;
-      this.update(item.key, { current: offset });
+      this.update(item.key, { current: offset, sentCurrent: offset });
     }
     if (controller.signal.aborted) return;
     this.update(item.key, {
       phase: "Receipt complete. Preparing Telegram upload",
+      stage: "confirming",
     });
     const result = await api.completeUpload(id);
     this.update(item.key, {

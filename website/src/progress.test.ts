@@ -3,10 +3,17 @@ import {
   sampleProgress,
   currentRate,
   formatDuration,
+  formatProgressPercent,
   transferDetails,
   transferProgress,
 } from "./progress";
 describe("truthful stage timing", () => {
+  it("shows measured progress below one percent without rounding it up", () => {
+    expect(formatProgressPercent(16 / (1.62 * 1024))).toBe("0.9%");
+    expect(formatProgressPercent(0.00001)).toBe("<0.1%");
+    expect(formatProgressPercent(0)).toBe("0%");
+    expect(formatProgressPercent(0.25)).toBe("25%");
+  });
   it("smooths acknowledged byte samples and expires stalled speed", () => {
     const first = sampleProgress(undefined, "receipt", 0, 1000);
     const second = sampleProgress(first, "receipt", 1000, 2000);
@@ -171,6 +178,20 @@ describe("stage-local byte and percentage display", () => {
     expect(
       transferProgress({ ...item, total: Infinity }).fraction,
     ).toBeUndefined();
+  });
+  it("shows measured in-flight bytes without treating them as a saved resume offset", () => {
+    const observed = { ...item, current: 20, sentCurrent: 45 };
+    expect(transferProgress(observed)).toMatchObject({
+      current: 45,
+      fraction: 0.45,
+    });
+    expect(transferProgress({ ...observed, state: "error" }).current).toBe(20);
+    expect(transferProgress({ ...observed, state: "uploading" }).current).toBe(
+      20,
+    );
+    expect(
+      transferDetails({ ...observed, stage: "confirming" }, 1000),
+    ).toMatchObject({ rate: undefined, eta: undefined });
   });
 });
 

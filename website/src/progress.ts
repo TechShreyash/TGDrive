@@ -5,7 +5,7 @@ export interface ProgressSample {
   advancedAt: number;
   rate?: number;
 }
-/** Rate uses acknowledged bytes; it never counts bytes merely handed to fetch. */
+/** Rate uses observed transport bytes; it never extrapolates stalled progress. */
 export function sampleProgress(
   previous: ProgressSample | undefined,
   stage: string,
@@ -60,12 +60,21 @@ export function formatDuration(seconds: number): string {
   );
 }
 
+/** Keep small measured transfers visible instead of rounding received data to 0%. */
+export function formatProgressPercent(fraction: number): string {
+  if (!Number.isFinite(fraction) || fraction <= 0) return "0%";
+  const percent = Math.floor(Math.min(1, fraction) * 1000) / 10;
+  if (percent === 0) return "<0.1%";
+  return (percent < 10 ? percent.toFixed(1) : Math.floor(percent)) + "%";
+}
+
 export interface ProgressTransfer {
   state: string;
   kind?: string;
   stage?: string;
   phase: string;
   current: number;
+  sentCurrent?: number;
   total: number;
   createdAt?: number;
   startedAt?: number;
@@ -79,7 +88,9 @@ export interface ProgressTransfer {
   serverObservedAt?: number;
 }
 export function transferDetails(item: ProgressTransfer, now: number) {
-  const local = item.state === "receiving";
+  const local =
+    item.state === "receiving" &&
+    !["preparing", "confirming"].includes(item.stage || "");
   const server =
     item.state === "uploading" &&
     item.serverStatus !== "queued" &&
@@ -98,7 +109,9 @@ export function transferDetails(item: ProgressTransfer, now: number) {
       ? item.speedBytesPerSecond
       : undefined;
   const remaining =
-    item.total > 0 ? Math.max(0, item.total - item.current) : undefined;
+    item.total > 0
+      ? Math.max(0, item.total - transferProgress(item).current)
+      : undefined;
   const eta = rate && remaining && (local ? remaining / rate : item.etaSeconds);
   const end = item.finishedAt || now;
   return {
@@ -119,12 +132,16 @@ export function transferProgress(item: ProgressTransfer) {
     item.state === "queued" ||
     (item.state === "uploading" &&
       (item.stage === "queued" || item.serverStatus === "queued"));
+  const observed =
+    item.state === "receiving" && Number.isFinite(item.sentCurrent)
+      ? Math.max(item.current, item.sentCurrent!)
+      : item.current;
   const current =
     item.state === "completed"
       ? total
-      : queued || !Number.isFinite(item.current)
+      : queued || !Number.isFinite(observed)
         ? 0
-        : Math.max(0, Math.min(item.current, total || item.current));
+        : Math.max(0, Math.min(observed, total || observed));
   return {
     current,
     total,

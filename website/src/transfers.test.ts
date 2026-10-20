@@ -15,6 +15,9 @@ import {
   formatByteProgress,
   remainingBytesHint,
 } from "./types";
+const managerForTest = () =>
+  new TransferManager((url, options) => fetch(url, options));
+
 async function hash(data: string) {
   return [
     ...new Uint8Array(
@@ -102,14 +105,14 @@ describe("safe resume and browser persistence", () => {
         },
       ]),
     );
-    const manager = new TransferManager();
+    const manager = managerForTest();
     expect(manager.snapshot()[0].state).toBe("awaiting_file");
     expect(manager.snapshot()[0].initiatedHere).toBe(true);
   });
   it("keeps URL jobs server-owned across a browser reload", async () => {
-    const manager = new TransferManager();
+    const manager = managerForTest();
     manager.addJob("url-server-job", "URL file", "/", "remote");
-    const restored = new TransferManager();
+    const restored = managerForTest();
     expect(restored.snapshot()[0]).toMatchObject({
       jobId: "url-server-job",
       kind: "remote",
@@ -141,7 +144,7 @@ describe("safe resume and browser persistence", () => {
         },
       ]),
     );
-    const restored = new TransferManager();
+    const restored = managerForTest();
     expect(restored.snapshot()[0].state).toBe("error");
     expect(restored.snapshot()[0].phase).not.toContain("original");
     await expect(restored.retry("missing")).rejects.toThrow("no server job");
@@ -164,12 +167,12 @@ describe("safe resume and browser persistence", () => {
         }),
       ),
     );
-    const manager = new TransferManager();
+    const manager = managerForTest();
     try {
       manager.setEnabled(true);
       await vi.waitFor(() => expect(manager.snapshot()).toHaveLength(1));
       expect(manager.snapshot()[0].initiatedHere).not.toBe(true);
-      const restored = new TransferManager();
+      const restored = managerForTest();
       expect(restored.snapshot()[0].initiatedHere).toBe(false);
       expect(restored.snapshot()[0].jobId).toBe("another-device");
     } finally {
@@ -178,6 +181,75 @@ describe("safe resume and browser persistence", () => {
   });
 });
 describe("resumable HTTP upload protocol", () => {
+  it("publishes in-flight device bytes without persisting or resuming unconfirmed bytes", async () => {
+    let report: ((bytes: number) => void) | undefined;
+    let receipt: ((response: Response) => void) | undefined;
+    const offsets: string[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: string, options: RequestInit = {}) => {
+        if (input === "/api/v1/jobs") return Response.json({ jobs: [] });
+        if (input.endsWith("/complete")) return Response.json({ id: "job" });
+        if (options.method === "HEAD")
+          return new Response(null, {
+            headers: { "Upload-Offset": "0", "Upload-Length": "8" },
+          });
+        return Response.json({
+          id: "u",
+          offset: 0,
+          total_size: 8,
+          chunk_size: 8,
+          checksums: [],
+        });
+      }),
+    );
+    const manager = new TransferManager(async (_url, options, progress) => {
+      offsets.push(new Headers(options.headers).get("Upload-Offset")!);
+      report = progress;
+      return new Promise<Response>((resolve) => {
+        receipt = resolve;
+      });
+    });
+    try {
+      manager.setEnabled(true);
+      manager.add([new File(["abcdefgh"], "source.txt")], "/", 10);
+      await vi.waitFor(() => expect(report).toBeDefined());
+      report!(3);
+      expect(manager.snapshot()[0]).toMatchObject({
+        current: 0,
+        sentCurrent: 3,
+        state: "receiving",
+      });
+      report!(6);
+      expect(manager.snapshot()[0].sentCurrent).toBe(6);
+      const saved = JSON.parse(localStorage.getItem("tgdrive.uploads.v2")!)[0];
+      expect(saved.current).toBe(0);
+      expect(saved.sentCurrent).toBeUndefined();
+      receipt!(new Response(null, { status: 409 }));
+      await vi.waitFor(() => expect(manager.snapshot()[0].state).toBe("error"));
+      expect(manager.snapshot()[0].sentCurrent).toBeUndefined();
+      const key = manager.snapshot()[0].key;
+      report = undefined;
+      await manager.retry(key);
+      await vi.waitFor(() => expect(report).toBeDefined());
+      expect(offsets).toEqual(["0", "0"]);
+      expect(manager.snapshot()[0]).toMatchObject({
+        current: 0,
+        sentCurrent: 0,
+      });
+      report!(8);
+      expect(manager.snapshot()[0].phase).toContain(
+        "Waiting for server confirmation",
+      );
+      receipt!(
+        new Response(null, { status: 204, headers: { "Upload-Offset": "8" } }),
+      );
+      await vi.waitFor(() => expect(manager.snapshot()[0].jobId).toBe("job"));
+      expect(manager.snapshot()[0].sentCurrent).toBeUndefined();
+    } finally {
+      manager.setEnabled(false);
+    }
+  });
   it("sends each chunk at its acknowledged offset, then tracks the independent Telegram job", async () => {
     const calls: { method: string; offset: string | null; size: number }[] = [];
     let offset = 0;
@@ -225,7 +297,7 @@ describe("resumable HTTP upload protocol", () => {
         });
       }),
     );
-    const manager = new TransferManager();
+    const manager = managerForTest();
     try {
       manager.setEnabled(true);
       manager.add([new File(["abcdefgh"], "source.txt")], "/", 1024);
@@ -273,7 +345,7 @@ describe("resumable HTTP upload protocol", () => {
         });
       }),
     );
-    const manager = new TransferManager();
+    const manager = managerForTest();
     try {
       manager.setEnabled(true);
       manager.add([new File(["abcd"], "a")], "/", 10);
@@ -353,7 +425,7 @@ describe("ambiguous completion and verification cancellation", () => {
         });
       }),
     );
-    const manager = new TransferManager();
+    const manager = managerForTest();
     try {
       manager.setEnabled(true);
       manager.add([new File(["abcd"], "original.bin")], "/", 10);
@@ -417,7 +489,7 @@ it("shows the server's actionable chunk error without persisting its details", a
       });
     }),
   );
-  const manager = new TransferManager();
+  const manager = managerForTest();
   try {
     manager.setEnabled(true);
     manager.add([new File(["abcd"], "quota.bin")], "/", 10);
@@ -435,7 +507,7 @@ it("shows the server's actionable chunk error without persisting its details", a
 
 describe("whole-batch recovery and bounded admission", () => {
   it("retains completed siblings in an unfinished batch beyond the old hundred-row limit", () => {
-    const manager = new TransferManager();
+    const manager = managerForTest();
     manager.add(
       Array.from({ length: 150 }, (_, i) => new File(["x"], "file-" + i)),
       "/",
@@ -448,7 +520,7 @@ describe("whole-batch recovery and bounded admission", () => {
     }
     manager.clearFinished();
     expect(manager.snapshot()).toHaveLength(150);
-    const reloaded = new TransferManager().snapshot();
+    const reloaded = managerForTest().snapshot();
     expect(reloaded).toHaveLength(150);
     expect(reloaded.filter((item) => item.state === "completed")).toHaveLength(
       149,
@@ -492,7 +564,7 @@ describe("whole-batch recovery and bounded admission", () => {
       ).toHaveLength(2);
   });
   it("caps unfinished-batch rows at 2000 including retained completed siblings", () => {
-    const manager = new TransferManager();
+    const manager = managerForTest();
     manager.add(
       Array.from({ length: 2000 }, (_, i) => new File(["x"], "" + i)),
       "/",
@@ -511,7 +583,7 @@ describe("whole-batch recovery and bounded admission", () => {
       Object.defineProperty(file, "webkitRelativePath", { value: path });
       return file;
     };
-    const manager = new TransferManager();
+    const manager = managerForTest();
     manager.addEntries(
       [
         {
@@ -529,7 +601,7 @@ describe("whole-batch recovery and bounded admission", () => {
       true,
       { name: "Root" },
     );
-    const reloaded = new TransferManager();
+    const reloaded = managerForTest();
     const id = reloaded.snapshot()[0].batchId!;
     const result = await reloaded.resumeBatchFiles(id, [
       file("Root/b/notes.txt"),
@@ -543,10 +615,10 @@ describe("whole-batch recovery and bounded admission", () => {
     );
   });
   it("does not guess when ordinary bulk resume has ambiguous name/size/modified signatures", async () => {
-    const manager = new TransferManager();
+    const manager = managerForTest();
     const source = new File(["same"], "same.txt", { lastModified: 42 });
     manager.add([source, source], "/", 10);
-    const reloaded = new TransferManager();
+    const reloaded = managerForTest();
     const result = await reloaded.resumeBatchFiles(
       reloaded.snapshot()[0].batchId!,
       [source],
@@ -628,7 +700,7 @@ describe("independent browser receiving and Telegram backlog", () => {
         });
       }),
     );
-    const manager = new TransferManager();
+    const manager = managerForTest();
     try {
       manager.add(
         Array.from({ length: 5 }, (_, i) => new File(["data"], "" + i)),
@@ -662,7 +734,7 @@ describe("independent browser receiving and Telegram backlog", () => {
         }),
       ),
     );
-    const manager = new TransferManager();
+    const manager = managerForTest();
     manager.addJob("remote", "URL file", "/", "remote");
     try {
       manager.setEnabled(true);
@@ -683,7 +755,7 @@ it("warns when browser storage cannot retain recovery metadata while allowing up
       throw new DOMException("full", "QuotaExceededError");
     },
   });
-  const manager = new TransferManager();
+  const manager = managerForTest();
   expect(manager.add([new File(["data"], "file")], "/", 10)).toEqual([]);
   expect(manager.snapshot()).toHaveLength(1);
   expect(manager.recoveryWarning).toContain("could not save");
@@ -709,7 +781,7 @@ it("continues device receipts while four recovered Telegram jobs are busy", asyn
       throw new Error("synthetic stopped receipt");
     }),
   );
-  const manager = new TransferManager();
+  const manager = managerForTest();
   try {
     manager.add([new File(["data"], "new")], "/", 10);
     manager.setEnabled(true);
@@ -738,7 +810,7 @@ describe("Telegram backup protection", () => {
       }),
     );
     vi.stubGlobal("fetch", fetchMock);
-    const manager = new TransferManager();
+    const manager = managerForTest();
     try {
       manager.setEnabled(true);
       await vi.waitFor(() =>
@@ -768,7 +840,7 @@ describe("Telegram backup protection", () => {
         ),
       ),
     );
-    const manager = new TransferManager();
+    const manager = managerForTest();
     manager.addJob("raced-job", "safe.txt", "/");
     await manager.cancel(manager.snapshot()[0].key);
     expect(manager.snapshot()[0].stage).toBe("backup_pending");
@@ -793,7 +865,7 @@ describe("Telegram backup protection", () => {
         }),
       ),
     );
-    const manager = new TransferManager();
+    const manager = managerForTest();
     try {
       manager.setEnabled(true);
       await vi.waitFor(() =>
@@ -888,7 +960,7 @@ describe("deletion operation tracking", () => {
       "fetch",
       vi.fn(async () => Response.json({ jobs })),
     );
-    const manager = new TransferManager();
+    const manager = managerForTest();
     expect(manager.snapshot()).toEqual([]);
     try {
       manager.setEnabled(true);
@@ -927,7 +999,7 @@ describe("deletion operation tracking", () => {
     );
     const changed = vi.fn();
     window.addEventListener("tgdrive:files-changed", changed);
-    const manager = new TransferManager();
+    const manager = managerForTest();
     try {
       manager.setEnabled(true);
       await vi.waitFor(() =>
@@ -987,7 +1059,7 @@ describe("connection restart admission", () => {
         });
       }),
     );
-    const manager = new TransferManager();
+    const manager = managerForTest();
     try {
       manager.setAdmissionPaused(true);
       manager.setEnabled(true);
@@ -1010,7 +1082,7 @@ describe("connection restart admission", () => {
 });
 
 it("cancels only uploads included in the confirmed selection", async () => {
-  const manager = new TransferManager();
+  const manager = managerForTest();
   manager.add(
     [new File(["a"], "first.txt"), new File(["b"], "second.txt")],
     "/",
@@ -1045,7 +1117,7 @@ it("queues device files for automatic retry when staging is full", async () => {
       );
     }),
   );
-  const manager = new TransferManager();
+  const manager = managerForTest();
   try {
     manager.add(
       [new File(["data"], "one"), new File(["more"], "two")],

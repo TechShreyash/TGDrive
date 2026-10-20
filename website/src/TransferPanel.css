@@ -1,0 +1,10 @@
+.transfer-center .transfer-bytes,
+.transfer-center .transfer-batch-percent,
+.transfer-center .transfer-metrics {
+  font-variant-numeric: tabular-nums;
+}
+
+.transfer-center .transfer-batch-percent {
+  min-inline-size: 3ch;
+  text-align: end;
+}

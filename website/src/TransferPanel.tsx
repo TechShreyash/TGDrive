@@ -1,4 +1,4 @@
-import { useEffect, useId, useRef, useState } from "react";
+import { useEffect, useId, useRef, useState, type ReactNode } from "react";
 import {
   Upload,
   ChevronDown,
@@ -35,7 +35,13 @@ import {
 } from "./types";
 import { errorMessage } from "./api";
 import { Modal, Spinner } from "./components";
-import { transferDetails, transferProgress, formatDuration } from "./progress";
+import {
+  transferDetails,
+  transferProgress,
+  formatDuration,
+  formatProgressPercent,
+} from "./progress";
+import "./TransferPanel.css";
 
 export default function TransferPanel({
   items,
@@ -43,12 +49,16 @@ export default function TransferPanel({
   expandedPage = false,
   onLocate,
   pageContext = "files",
+  finishedControls,
+  finishedEmpty,
 }: {
   items: Transfer[];
   onError: (message: string) => void;
   expandedPage?: boolean;
   pageContext?: string;
   onLocate?: (item: Transfer, folder?: boolean) => void;
+  finishedControls?: ReactNode;
+  finishedEmpty?: ReactNode;
 }) {
   // The Transfers page is global; the floating receipt belongs to this browser.
   items = expandedPage
@@ -93,25 +103,47 @@ export default function TransferPanel({
     return () => clearInterval(timer);
   }, [active]);
   const batches = summarizeBatches(items, now);
-  const categories = [
-    { key: "running", label: "Running" },
-    { key: "queued", label: "Queued" },
-    { key: "error", label: "Needs Attention" },
-    { key: "completed", label: "Completed" },
-    { key: "cancelled", label: "Cancelled" },
-  ] as const;
+  const categories = expandedPage
+    ? [
+        { key: "running", label: "Running" },
+        { key: "queued", label: "Queued" },
+        { key: "finished", label: "Finished" },
+      ]
+    : [
+        { key: "running", label: "Running" },
+        { key: "queued", label: "Queued" },
+        { key: "error", label: "Needs Attention" },
+        { key: "completed", label: "Completed" },
+        { key: "cancelled", label: "Cancelled" },
+      ];
   const groups = categories
     .map((category) => {
-      const groupedBatches = batches.filter(
-        (batch) => batchCategory(batch) === category.key,
+      const groupedBatches = batches.filter((batch) =>
+        category.key === "finished"
+          ? !["running", "queued"].includes(batchCategory(batch))
+          : batchCategory(batch) === category.key,
       );
+      if (category.key === "finished") {
+        const created = (batch: TransferBatch) =>
+          Math.min(
+            ...batch.items.map(
+              (item) => item.batchCreatedAt || item.createdAt || 0,
+            ),
+          );
+        groupedBatches.sort(
+          (a, b) => created(b) - created(a) || a.id.localeCompare(b.id),
+        );
+      }
       return {
         ...category,
         batches: groupedBatches,
         count: groupedBatches.reduce((sum, batch) => sum + batch.count, 0),
       };
     })
-    .filter((group) => group.count > 0);
+    .filter(
+      (group) =>
+        group.count > 0 || (group.key === "finished" && finishedControls),
+    );
 
   const cancellable = items.filter(canCancelTransfer);
   const cancelCount = cancelKeys
@@ -148,7 +180,7 @@ export default function TransferPanel({
     );
   };
   if (!expandedPage && !floatingVisible) return null;
-  if (!items.length)
+  if (!items.length && !finishedControls)
     return expandedPage ? (
       <div className="empty-state">
         <Upload size={40} />
@@ -231,6 +263,8 @@ export default function TransferPanel({
               {group.label}
               <span>{group.count}</span>
             </h3>
+            {group.key === "finished" && finishedControls}
+            {group.key === "finished" && !group.count && finishedEmpty}
             <div role="list">
               {group.batches.map((batch) => (
                 <BatchTransfer
@@ -578,7 +612,7 @@ function BatchTransfer({
           </button>
           {showProgress && batch.progress !== undefined && (
             <span className="transfer-batch-percent">
-              {Math.floor(batch.progress * 100)}%
+              {formatProgressPercent(batch.progress)}
             </span>
           )}
         </div>
@@ -797,7 +831,7 @@ function TransferRow({
     ?.split("/")
     .slice(1, -1)
     .join(" / ");
-  const meter = transferProgress(item);
+  const meter = usePresentedProgress(item);
   const status = historyStatus(item);
   const finished = status === "completed" || status === "cancelled";
   const needsOriginal =
@@ -849,7 +883,7 @@ function TransferRow({
           </strong>
           {!finished && status !== "queued" && meter.fraction !== undefined && (
             <span className="transfer-batch-percent">
-              {Math.floor(meter.fraction * 100)}%
+              {formatProgressPercent(meter.fraction)}
             </span>
           )}
         </div>
@@ -910,11 +944,13 @@ function TransferRow({
           <span
             className="transfer-bytes"
             title={
-              item.jobId &&
-              ["uploading", "finalizing"].includes(item.stage || "") &&
-              !finished
-                ? "Bytes sent to Telegram, including parts still uploading. Each part appears in the channel after it finishes."
-                : undefined
+              item.state === "receiving"
+                ? "Bytes sent by this browser. Resume positions are saved only after the server confirms each chunk."
+                : item.jobId &&
+                    ["uploading", "finalizing"].includes(item.stage || "") &&
+                    !finished
+                  ? "Bytes sent to Telegram, including parts still uploading. Each part appears in the channel after it finishes."
+                  : undefined
             }
           >
             {finished || status === "queued"
@@ -978,6 +1014,59 @@ function TransferRow({
     </article>
   );
 }
+
+/** Ease toward measured bytes only; a stalled transport never advances on a timer. */
+function usePresentedProgress(item: Transfer) {
+  const measured = transferProgress(item);
+  const stage = item.state + ":" + (item.stage || "");
+  const [display, setDisplay] = useState(() => ({
+    stage,
+    total: measured.total,
+    current: measured.current,
+  }));
+  const shown = useRef(display);
+  useEffect(() => {
+    const target = { stage, total: measured.total, current: measured.current };
+    const previous = shown.current;
+    if (
+      previous.stage !== stage ||
+      previous.total !== target.total ||
+      target.current <= previous.current ||
+      window.matchMedia("(prefers-reduced-motion: reduce)").matches
+    ) {
+      shown.current = target;
+      setDisplay(target);
+      return;
+    }
+    const start = performance.now();
+    let frame = 0;
+    const tick = (now: number) => {
+      const elapsed = Math.min(1, (now - start) / 180);
+      const fraction = 1 - (1 - elapsed) ** 3;
+      const next = {
+        ...target,
+        current:
+          elapsed === 1
+            ? target.current
+            : previous.current + (target.current - previous.current) * fraction,
+      };
+      shown.current = next;
+      setDisplay(next);
+      if (elapsed < 1) frame = requestAnimationFrame(tick);
+    };
+    frame = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(frame);
+  }, [stage, measured.current, measured.total]);
+  // Stage changes and retries never show bytes carried over from the previous stage.
+  if (display.stage !== stage || display.total !== measured.total)
+    return measured;
+  return transferProgress({
+    ...item,
+    current: Math.min(display.current, measured.current),
+    sentCurrent: undefined,
+  });
+}
+
 function TransferMetrics({ item, now }: { item: Transfer; now: number }) {
   const details = transferDetails(item, now);
   const meter = transferProgress(item);
