@@ -24,6 +24,21 @@ services:
       COOKIE_SECURE: "true"
       TGDRIVE_AUTO_SECRETS: "true"
       TGDRIVE_PROXY_HOSTS: coolify-proxy
+      # Optional startup policy; saved dashboard preferences take precedence.
+      TELEGRAM_UPLOADS_PER_BOT: ${TELEGRAM_UPLOADS_PER_BOT:-1}
+      TIMEZONE: ${TIMEZONE:-Asia/Kolkata}
+      CACHE_MEMORY_BYTES: ${CACHE_MEMORY_BYTES:-268435456}
+      CACHE_DISK_BYTES: ${CACHE_DISK_BYTES:-10737418240}
+      CACHE_MIN_FREE_BYTES: ${CACHE_MIN_FREE_BYTES:-1073741824}
+      CACHE_TTL_SECONDS: ${CACHE_TTL_SECONDS:-86400}
+      AUTO_PRELOAD: ${AUTO_PRELOAD:-true}
+      PRELOAD_MAX_JOBS: ${PRELOAD_MAX_JOBS:-2}
+      TELEGRAM_UPLOAD_PIPELINE: ${TELEGRAM_UPLOAD_PIPELINE:-4}
+      TELEGRAM_REQUEST_LIMIT: ${TELEGRAM_REQUEST_LIMIT:-8}
+      TELEGRAM_PARTS_PER_SECOND: ${TELEGRAM_PARTS_PER_SECOND:-48}
+      TELEGRAM_MEDIA_PER_BOT: ${TELEGRAM_MEDIA_PER_BOT:-3}
+      TELEGRAM_MAX_QUEUE: ${TELEGRAM_MAX_QUEUE:-256}
+      UPLOAD_SPLIT_MIB: ${UPLOAD_SPLIT_MIB:-2000}
     # Coolify attaches declared middleware to its generated domain routers.
     # Apply at the edge too: Traefik can append HTTP/3 advertisements to app headers.
     labels:

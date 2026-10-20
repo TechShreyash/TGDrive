@@ -16,6 +16,7 @@ from argon2 import PasswordHasher
 
 from tgdrive.config import Settings
 from tgdrive.deployment import installation_secrets
+from tgdrive.performance_preferences import PerformancePreferences
 from tgdrive.server import main, trusted_proxy_ips, wait_for_initialization
 
 
@@ -216,6 +217,13 @@ def test_hosted_and_local_compose_resolve_without_real_credentials(tmp_path):
     environment.pop("COMPOSE_FILE", None)
     environment.pop("BIND_ADDRESS", None)
     environment.pop("PORT", None)
+    policy_defaults = {
+        key.upper(): str(value).lower() if isinstance(value, bool) else str(value)
+        for key, value in PerformancePreferences().model_dump().items()
+    }
+    policy_defaults["TELEGRAM_UPLOADS_PER_BOT"] = "1"
+    for key in policy_defaults:
+        environment.pop(key, None)
 
     def config(*files):
         arguments = [docker, "compose"]
@@ -244,4 +252,22 @@ def test_hosted_and_local_compose_resolve_without_real_credentials(tmp_path):
     assert str(local["ports"][0]["published"]) == "8000"
     assert local["environment"]["SESSION_SECRET"] == fixture["SESSION_SECRET"]
     assert local["environment"]["TGDRIVE_PROXY_HOSTS"] == ""
-    assert not config("compose.coolify.yaml").get("ports")
+    legacy = config("compose.coolify.yaml")
+    assert not legacy.get("ports")
+    for deployment in (hosted, local, legacy):
+        for key, value in policy_defaults.items():
+            assert deployment["environment"][key] == value
+
+    # Optional settings supplied by an operator must survive Compose rendering,
+    # including zero and false, rather than being replaced by app fallbacks.
+    overrides = {
+        "CACHE_MEMORY_BYTES": "536870912",
+        "CACHE_DISK_BYTES": "0",
+        "AUTO_PRELOAD": "false",
+        "UPLOAD_SPLIT_MIB": "0",
+        "TIMEZONE": "UTC",
+    }
+    environment.update(overrides)
+    for files in (("compose.yaml",), (), ("compose.coolify.yaml",)):
+        rendered = config(*files)["environment"]
+        assert {key: rendered[key] for key in overrides} == overrides
