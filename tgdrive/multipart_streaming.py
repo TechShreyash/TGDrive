@@ -13,6 +13,7 @@ from tgdrive.file_parts import validate_parts
 from tgdrive.logical_media import PartLease, part_ranges
 from tgdrive.ranges import MalformedRange, RangeNotSatisfiable, parse_byte_range
 from tgdrive.streaming import (
+    PDF_PREVIEW_BYTES,
     TelegramVariantNotFound,
     _ActivityBody,
     _content_disposition,
@@ -64,9 +65,9 @@ async def stream_multipart_file(
         preview
         and not download
         and mime_type == "application/pdf"
-        and expected_size > 20 * 1024**2
+        and expected_size > PDF_PREVIEW_BYTES
     ):
-        return Response(status_code=413, content="PDF preview limit is 20 MiB")
+        return Response(status_code=413, content="PDF preview limit is 256 MiB")
     spans = part_ranges(manifest, selected)
     first = await PartLease(
         pool, channel_id, spans[0][0], authorize=authorize, request_id=request_id
@@ -91,6 +92,7 @@ async def stream_multipart_file(
         request=request,
         start=selected.start,
         end=selected.end + 1,
+        allow_preload=not (preview and mime_type == "application/pdf" and not download),
         authorize=authorize,
         request_id=request_id,
     )

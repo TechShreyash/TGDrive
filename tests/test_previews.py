@@ -147,6 +147,8 @@ async def test_pdf_descriptor_encodes_share_and_bounds_memory_without_fetch():
         "auth": ["share&token"],
         "preview": ["1"],
     }
+    for size in (21 * 1024**2, PDF_PREVIEW_BYTES):
+        assert (await describe_preview(size=size, **kwargs))["kind"] == "pdf"
     result = await describe_preview(size=PDF_PREVIEW_BYTES + 1, **kwargs)
     assert result["kind"] == "unsupported"
     assert "url" not in result

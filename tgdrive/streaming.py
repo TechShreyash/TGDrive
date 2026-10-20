@@ -31,6 +31,8 @@ from tgdrive.security import safe_name
 
 logger = logging.getLogger(__name__)
 
+PDF_PREVIEW_BYTES = 256 * 1024**2
+
 _MEDIA_ATTRIBUTES = (
     "audio",
     "document",
@@ -199,9 +201,21 @@ def _observe_media_request(
     parts=None,
     authorize=None,
     request_id=None,
+    allow_preload=True,
 ):
     manager = getattr(pool, "_preload_manager", None)
     if manager is not None:
+        if not allow_preload:
+            # Sparse PDF reading retains requested blocks but must not turn a
+            # few neighboring pages into automatic whole-document preparation.
+            manager.register_file(
+                channel_id=channel_id,
+                message_id=message_id,
+                size=size,
+                name=name,
+                parts=parts,
+            )
+            return None
         viewer = request_id or secrets.token_urlsafe(12)
         identity = manager.observe(
             channel_id=channel_id,
@@ -446,10 +460,10 @@ async def stream_telegram_file(
             preview
             and not download
             and mime_type == "application/pdf"
-            and total > 20 * 1024**2
+            and total > PDF_PREVIEW_BYTES
         ):
             await release()
-            return Response(status_code=413, content="PDF preview limit is 20 MiB")
+            return Response(status_code=413, content="PDF preview limit is 256 MiB")
 
         activity = _observe_media_request(
             pool,
@@ -460,6 +474,9 @@ async def stream_telegram_file(
             request=request,
             start=byte_range.start,
             end=byte_range.end + 1,
+            allow_preload=not (
+                preview and mime_type == "application/pdf" and not download
+            ),
             authorize=authorize,
             request_id=request_id,
         )

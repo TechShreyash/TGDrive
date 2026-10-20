@@ -8,6 +8,7 @@ The fixture-only control routes let browser tests advance jobs deterministically
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import io
 import math
 import struct
@@ -338,6 +339,71 @@ def _preview_pdf(page_count: int = 3) -> bytes:
     )
 
 
+def _large_preview_pdf(page_count: int = 48) -> bytes:
+    """A real 36 MiB image document, with distinct uncompressed page images."""
+    result = io.BytesIO()
+    result.write(b"%PDF-1.4\n")
+    offsets = [0]
+    font_id = 3 + page_count * 3
+
+    def obj(identity, body):
+        offsets.append(result.tell())
+        result.write(f"{identity} 0 obj\n".encode() + body + b"\nendobj\n")
+
+    kids = " ".join(f"{3 + number * 3} 0 R" for number in range(page_count))
+    obj(1, b"<< /Type /Catalog /Pages 2 0 R >>")
+    obj(2, f"<< /Type /Pages /Kids [{kids}] /Count {page_count} >>".encode())
+    for number in range(page_count):
+        identity = 3 + number * 3
+        obj(
+            identity,
+            (
+                f"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 420 594] "
+                f"/Resources << /Font << /F1 {font_id} 0 R >> "
+                f"/XObject << /Im0 {identity + 1} 0 R >> >> "
+                f"/Contents {identity + 2} 0 R >>"
+            ).encode(),
+        )
+        pixels = bytes(
+            channel
+            for y in range(512)
+            for x in range(512)
+            for channel in ((x + number * 7) % 256, y % 256, (x + y + number * 3) % 256)
+        )
+        obj(
+            identity + 1,
+            (
+                f"<< /Type /XObject /Subtype /Image /Width 512 /Height 512 "
+                f"/ColorSpace /DeviceRGB /BitsPerComponent 8 "
+                f"/Length {len(pixels)} >>\nstream\n"
+            ).encode()
+            + pixels
+            + b"\nendstream",
+        )
+        content = (
+            f"q 360 0 0 450 30 80 cm /Im0 Do Q "
+            f"BT /F1 18 Tf 24 550 Td (TGDrive large PDF page {number + 1}) Tj ET"
+        ).encode()
+        obj(
+            identity + 2,
+            f"<< /Length {len(content)} >>\nstream\n".encode()
+            + content
+            + b"\nendstream",
+        )
+    obj(font_id, b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>")
+    start = result.tell()
+    result.write(f"xref\n0 {len(offsets)}\n0000000000 65535 f \n".encode())
+    for offset in offsets[1:]:
+        result.write(f"{offset:010d} 00000 n \n".encode())
+    result.write(
+        (
+            f"trailer\n<< /Size {len(offsets)} /Root 1 0 R >>\n"
+            f"startxref\n{start}\n%%EOF"
+        ).encode()
+    )
+    return result.getvalue()
+
+
 def _preview_png() -> bytes:
     """A generated RGB image without an external image or font dependency."""
 
@@ -665,3 +731,37 @@ async def fail_deletion(request: Request, transfer_id: str) -> dict[str, str]:
     runtime.transfers.fail_deletions.add(transfer_id)
     runtime.transfers.release[transfer_id].set()
     return {"status": "ok"}
+
+
+@app.post("/__test__/pdf/large")
+async def seed_large_pdf(request: Request):
+    """Opt-in heavy fixture; ordinary browser tests pay no large-PDF cost."""
+    _control(request)
+    content = _large_preview_pdf()
+    runtime.payloads[900] = content
+    single = runtime.store.add_file(
+        runtime.preview_path, "large-images.pdf", 900, len(content)
+    )
+    boundary = len(content) // 2
+    parts = []
+    for index, data in enumerate((content[:boundary], content[boundary:])):
+        message_id = 901 + index
+        runtime.payloads[message_id] = data
+        parts.append(
+            {
+                "index": index,
+                "offset": 0 if index == 0 else boundary,
+                "size": len(data),
+                "message_id": message_id,
+                "sha256": hashlib.sha256(data).hexdigest(),
+            }
+        )
+    split = runtime.store.add_file(
+        runtime.preview_path, "split-images.pdf", 901, len(content), parts=parts
+    )
+    return {
+        "size": len(content),
+        "pages": 48,
+        "single": runtime.preview_path + "/" + single["id"],
+        "split": runtime.preview_path + "/" + split["id"],
+    }

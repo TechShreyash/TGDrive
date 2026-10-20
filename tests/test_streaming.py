@@ -502,7 +502,9 @@ async def test_response_body_send_failure_closes_iterator_before_lease_release()
 @pytest.mark.asyncio
 @pytest.mark.parametrize(("download", "status"), [(False, 413), (True, 200)])
 async def test_large_pdf_download_overrides_preview_size_cap(download, status):
-    size = 21 * 1024**2
+    from tgdrive.streaming import PDF_PREVIEW_BYTES
+
+    size = PDF_PREVIEW_BYTES + 1
 
     class LargePdfClient(FakeStreamClient):
         async def get_messages(self, _channel: int, *, message_ids: int):

@@ -414,10 +414,13 @@ async def test_full_part_checksum_withholds_final_block_after_prior_blocks_were_
 async def test_multipart_pdf_cap_is_preview_only_and_head_never_reads_payload(download):
     contents = [b"first", b"last"]
     parts = build_parts(contents)
-    parts[0]["size"] = 20 * CHUNK
-    parts[1].update(offset=20 * CHUNK, size=CHUNK)
+    from tgdrive.streaming import PDF_PREVIEW_BYTES
+
+    cap_chunks = PDF_PREVIEW_BYTES // CHUNK
+    parts[0]["size"] = cap_chunks * CHUNK
+    parts[1].update(offset=cap_chunks * CHUNK, size=CHUNK)
     client = MultipartClient(contents)
-    client.sizes.update({101: 20 * CHUNK, 102: CHUNK})
+    client.sizes.update({101: cap_chunks * CHUNK, 102: CHUNK})
     pool = ClientPool([client])
     await pool.start()
     request = make_request()
@@ -428,7 +431,7 @@ async def test_multipart_pdf_cap_is_preview_only_and_head_never_reads_payload(do
             channel_id=-100,
             message_id=101,
             file_name="large.pdf",
-            expected_size=21 * CHUNK,
+            expected_size=(cap_chunks + 1) * CHUNK,
             parts=parts,
             request=request,
             preview=True,
@@ -437,7 +440,7 @@ async def test_multipart_pdf_cap_is_preview_only_and_head_never_reads_payload(do
         assert response.status_code == (200 if download else 413)
         assert not client.reads
         if download:
-            assert response.headers["content-length"] == str(21 * CHUNK)
+            assert response.headers["content-length"] == str((cap_chunks + 1) * CHUNK)
             assert response.headers["content-disposition"].startswith("attachment;")
         else:
             assert not client.fetches

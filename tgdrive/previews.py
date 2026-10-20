@@ -16,10 +16,13 @@ from tgdrive.file_parts import validate_parts
 from tgdrive.logical_media import read_logical_prefix
 from tgdrive.media_metadata import get_message
 from tgdrive.media_reader import MediaReadCache, stream_pooled_media
-from tgdrive.streaming import TelegramFileNotFound, _media_from_message
+from tgdrive.streaming import (
+    PDF_PREVIEW_BYTES,
+    TelegramFileNotFound,
+    _media_from_message,
+)
 
 TEXT_PREVIEW_BYTES = 256 * 1024
-PDF_PREVIEW_BYTES = 20 * 1024**2
 _TEXT_LANGUAGES = {
     "txt": "text",
     "md": "markdown",
@@ -201,7 +204,8 @@ async def describe_preview(
             return base | {
                 "kind": "unsupported",
                 "reason": (
-                    "PDF previews support files up to 20 MiB. "
+                    "PDF previews support files up to 256 MiB "
+                    "to protect browser memory. "
                     "Download the original to open this file."
                 ),
             }

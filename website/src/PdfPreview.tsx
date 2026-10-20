@@ -1,4 +1,8 @@
-import { readBoundedResponse, PreviewLimitError } from "./previewIO";
+import {
+  checkPdfSize,
+  PdfRangeReader,
+  PDF_RANGE_CHUNK_BYTES,
+} from "./pdfRange";
 import {
   useCallback,
   useEffect,
@@ -12,6 +16,7 @@ import { Minus, Plus, Scan, SlidersHorizontal } from "lucide-react";
 import { createPortal } from "react-dom";
 import {
   getDocument,
+  PDFDataRangeTransport,
   GlobalWorkerOptions,
   TextLayer,
   type PDFDocumentLoadingTask,
@@ -25,7 +30,6 @@ import { errorMessage } from "./api";
 import "./PdfPreview.css";
 
 GlobalWorkerOptions.workerSrc = workerUrl;
-const MAX_PDF_BYTES = 20 * 1024 * 1024;
 const OVERSCAN_PAGE_TARGET = 5;
 const MAX_PDF_PAGES = 10_000;
 const MAX_PAGE_PIXELS = 2_000_000;
@@ -41,28 +45,6 @@ const MAX_ZOOM = 3;
 type PageSize = { width: number; height: number };
 type PageFrame = PageSize & { top: number };
 type Layout = { pages: PageFrame[]; width: number; height: number };
-
-async function readPdf(url: string, signal: AbortSignal): Promise<Uint8Array> {
-  const response = await fetch(url, {
-    credentials: "same-origin",
-    signal: AbortSignal.any([signal, AbortSignal.timeout(60000)]),
-  });
-  if (!response.ok) {
-    await response.body?.cancel();
-    throw new Error(
-      "This PDF could not be loaded. Check your connection or download the original.",
-    );
-  }
-  try {
-    return await readBoundedResponse(response, MAX_PDF_BYTES, signal);
-  } catch (error) {
-    if (error instanceof PreviewLimitError)
-      throw new Error(
-        "PDF preview is limited to 20 MB. Download the original instead.",
-      );
-    throw error;
-  }
-}
 
 function pageSize(page: PDFPageProxy): PageSize {
   const { width, height } = page.getViewport({ scale: 1 });
@@ -385,6 +367,19 @@ export default function PdfPreview({
   useEffect(() => {
     const controller = new AbortController();
     let task: PDFDocumentLoadingTask | undefined;
+    let reader: PdfRangeReader | undefined;
+    const fail = (error: unknown) => {
+      if (controller.signal.aborted) return;
+      setError(errorMessage(error));
+      setBusy(false);
+      setDocument(null);
+      controller.abort();
+      reader?.close();
+      void task
+        ?.destroy()
+        .then(() => TextLayer.cleanup())
+        .catch(() => {});
+    };
     setBusy(true);
     setError("");
     setDocument(null);
@@ -393,14 +388,27 @@ export default function PdfPreview({
     anchor.current = null;
     if (scroll.current) scroll.current.scrollTop = 0;
     void (async () => {
-      if (size > MAX_PDF_BYTES)
-        throw new Error(
-          "PDF preview is limited to 20 MB. Download the original instead.",
-        );
-      const data = await readPdf(url, controller.signal);
-      if (controller.signal.aborted) return;
+      checkPdfSize(size);
+      reader = new PdfRangeReader(url, size);
+      const ranges = reader;
+      const transport = new (class extends PDFDataRangeTransport {
+        requestDataRange(begin: number, end: number) {
+          void ranges
+            .read(begin, end)
+            .then((bytes) => {
+              if (!controller.signal.aborted) this.onDataRange(begin, bytes);
+            })
+            .catch(fail);
+        }
+        abort() {
+          ranges.close();
+        }
+      })(size, null);
       task = getDocument({
-        data,
+        range: transport,
+        rangeChunkSize: PDF_RANGE_CHUNK_BYTES,
+        disableStream: true,
+        disableAutoFetch: true,
         enableXfa: false,
         useWorkerFetch: false,
         maxImageSize: 16777216,
@@ -416,18 +424,10 @@ export default function PdfPreview({
       setSizes(new Map([[1, pageSize(first)]]));
       setDocument(loaded);
       setBusy(false);
-    })().catch((error) => {
-      if (!controller.signal.aborted) {
-        setError(errorMessage(error));
-        setBusy(false);
-      }
-      void task
-        ?.destroy()
-        .then(() => TextLayer.cleanup())
-        .catch(() => {});
-    });
+    })().catch(fail);
     return () => {
       controller.abort();
+      reader?.close();
       void task
         ?.destroy()
         .then(() => TextLayer.cleanup())
