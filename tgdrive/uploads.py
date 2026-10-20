@@ -281,6 +281,16 @@ class ResumableUploads:
             ):
                 raise UploadError("Temporary storage is full", 507)
 
+            def commit(checksum: str) -> None:
+                item["checksums"].append(
+                    {"offset": offset, "size": len(body), "sha256": checksum}
+                )
+                item["offset"] += len(body)
+                item["expires_at"] = (
+                    time.time() + self.settings.upload_session_ttl_seconds
+                )
+                self._save(item)
+
             def write() -> str:
                 with path.open("r+b") as handle:
                     handle.truncate(offset)
@@ -288,7 +298,13 @@ class ResumableUploads:
                     handle.write(body)
                     handle.flush()
                     os.fsync(handle.fileno())
-                return hashlib.sha256(body).hexdigest()
+                checksum = hashlib.sha256(body).hexdigest()
+                if self._mongo is not None:
+                    # A majority transaction can take several network round
+                    # trips. Keep it off the HTTP event loop, but in the same
+                    # owned worker as the fsync so disconnects still drain it.
+                    commit(checksum)
+                return checksum
 
             work = asyncio.get_running_loop().run_in_executor(None, write)
             cancelled = False
@@ -298,18 +314,13 @@ class ResumableUploads:
                     break
                 except asyncio.CancelledError:
                     # Repeated disconnect/shutdown cancellation still cannot
-                    # release this lock while an OS write is in progress.
+                    # release this lock while an OS write or its durable cloud
+                    # receipt commit is in progress.
                     cancelled = True
-            item["checksums"].append(
-                {
-                    "offset": offset,
-                    "size": len(body),
-                    "sha256": checksum,
-                }
-            )
-            item["offset"] += len(body)
-            item["expires_at"] = time.time() + self.settings.upload_session_ttl_seconds
-            self._save(item)
+            if self._mongo is None:
+                # This connection also serves synchronous SQLite reads/writes;
+                # keep its existing event-loop transaction ownership unchanged.
+                commit(checksum)
             if cancelled:
                 raise asyncio.CancelledError
             return item
