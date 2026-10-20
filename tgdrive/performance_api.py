@@ -213,3 +213,23 @@ def register_performance_routes(
                 ),
             }
         )
+
+    @app.get("/api/v1/performance/history", dependencies=admin)
+    async def performance_history(request: Request, start: float, end: float):
+        from tgdrive.telemetry_history import validate_range
+
+        try:
+            validate_range(start, end)
+        except ValueError as exc:
+            raise HTTPException(422, str(exc)) from None
+        try:
+            result = await asyncio.to_thread(
+                request.app.state.telemetry_history.query, start, end
+            )
+        except ValueError as exc:
+            raise HTTPException(422, str(exc)) from None
+        except Exception:
+            raise HTTPException(
+                503, "Performance history is temporarily unavailable. Try again."
+            ) from None
+        return response(result)

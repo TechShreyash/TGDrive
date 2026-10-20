@@ -69,8 +69,9 @@ class TrafficCounters:
         )
 
 
-async def sample_performance(counters, pool, *, interval=3):
+async def sample_performance(counters, pool, *, interval=3, history=None):
     """Keep recent history without a dashboard; local resource reads use a thread."""
+    retry_history_at = 0
     while True:
         try:
             await asyncio.to_thread(counters.resources.sample)
@@ -78,13 +79,48 @@ async def sample_performance(counters, pool, *, interval=3):
             logger.exception("Could not sample server resources")
         counters.snapshot()
         snapshot = getattr(pool, "performance_snapshot", None)
+        telegram = None
         if callable(snapshot):
             try:
-                snapshot()
+                telegram = snapshot()
             except Exception:
                 # Diagnostics must not interrupt file service or terminate sampling.
                 logger.exception("Could not sample Telegram activity")
+        if history is not None and (
+            history.initialized or time.monotonic() >= retry_history_at
+        ):
+            try:
+                await checkpoint_history(counters, pool, history, telegram=telegram)
+            except Exception:
+                retry_history_at = time.monotonic() + 60
+                logger.exception("Could not checkpoint performance history")
         await asyncio.sleep(interval)
+
+
+async def checkpoint_history(counters, pool, history, *, telegram=None, force=False):
+    samples = counters.resources.value.get("history", [])
+    if samples:
+        # Counter identities stay process-local, never names in persisted metrics.
+        sources = {
+            slot.name: id(getattr(slot.client, "_media_scheduler", slot.client))
+            for slot in getattr(pool, "_slots", [])
+        }
+        snapshot = getattr(pool, "performance_snapshot", None)
+        if telegram is None and callable(snapshot):
+            try:
+                telegram = snapshot()
+            except Exception:
+                # Broken origin diagnostics must not discard HTTP/server history.
+                logger.exception("Could not checkpoint Telegram counters")
+        await asyncio.to_thread(
+            history.observe,
+            samples[-1],
+            counters.snapshot()
+            | {"network": counters.resources.value.get("network", {})},
+            telegram,
+            sources=sources,
+        )
+    await asyncio.to_thread(history.flush, force=force)
 
 
 class TrafficMiddleware:

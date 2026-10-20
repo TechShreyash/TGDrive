@@ -218,11 +218,13 @@ def create_app(
     async def lifespan(_app: FastAPI):
         try:
             await app_runtime.start()
-            from tgdrive.traffic import sample_performance
+            from tgdrive.traffic import checkpoint_history, sample_performance
 
             sampler = asyncio.create_task(
                 sample_performance(
-                    _app.state.traffic, getattr(app_runtime, "pool", None)
+                    _app.state.traffic,
+                    getattr(app_runtime, "pool", None),
+                    history=_app.state.telemetry_history,
                 ),
                 name="tgdrive-performance-sampler",
             )
@@ -232,6 +234,17 @@ def create_app(
                 sampler.cancel()
                 with suppress(asyncio.CancelledError):
                     await sampler
+                try:
+                    await checkpoint_history(
+                        _app.state.traffic,
+                        getattr(app_runtime, "pool", None),
+                        _app.state.telemetry_history,
+                        force=True,
+                    )
+                except Exception:
+                    logging.getLogger(__name__).exception(
+                        "Could not checkpoint performance history on shutdown"
+                    )
                 login_service = getattr(_app.state, "premium_login_service", None)
                 if login_service is not None:
                     await login_service.close()
@@ -1004,6 +1017,9 @@ def create_app(
     from tgdrive.traffic import TrafficCounters, TrafficMiddleware
 
     app.state.traffic = TrafficCounters()
+    from tgdrive.telemetry_history import TelemetryHistory
+
+    app.state.telemetry_history = TelemetryHistory(settings.resolved_data_dir)
     app.add_middleware(TrafficMiddleware, counters=app.state.traffic)
     app.add_middleware(SameOriginMiddleware)
     app.add_middleware(ApiBodyGuardMiddleware, sessions=sessions)

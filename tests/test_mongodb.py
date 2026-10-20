@@ -63,6 +63,68 @@ def path(row):
     return row["path"].rstrip("/") + "/" + row["id"]
 
 
+def test_performance_history_survives_restart_without_local_sqlite(
+    backend, tmp_path, monkeypatch
+):
+    import sqlite3
+
+    from tgdrive.telemetry_history import RETENTION_SECONDS, TelemetryHistory
+
+    monkeypatch.setattr(
+        sqlite3,
+        "connect",
+        lambda *_a, **_k: pytest.fail("SQLite used for Mongo telemetry"),
+    )
+
+    def sample(at):
+        return dict(
+            at=at,
+            cpu_percent=25,
+            cpu_scope="cgroup",
+            memory_bytes=1024,
+            memory_limit_bytes=8192,
+            received_bytes_per_second=100,
+            sent_bytes_per_second=50,
+            network_interface="eth0",
+        )
+
+    def counters(value):
+        return dict(
+            network=dict(available=True, received_bytes=value, sent_bytes=value * 2),
+            upload_bytes=value * 3,
+            download_bytes=value * 4,
+            requests=value,
+            errors=0,
+        )
+
+    history = TelemetryHistory(tmp_path)
+    history.observe(sample(960), counters(100))
+    history.observe(sample(963), counters(200))
+    history.flush(force=True, now=964)
+    history.flush(force=True, now=964)
+    restarted = TelemetryHistory(tmp_path)
+    restarted.observe(sample(966), counters(5))
+    restarted.observe(sample(969), counters(10))
+    restarted.flush(force=True, now=970)
+    result = TelemetryHistory(tmp_path).query(960, 1020, now=1100)
+    assert result["samples"][0]["memory_bytes"] == 1024
+    assert result["samples"][0]["coverage_seconds"]["cpu_percent"] == 6
+    assert result["totals"]["network_received_bytes"] == 210
+    assert result["tracked_since"] == 960
+    assert backend.db.telemetry_minutes.count_documents({}) == 1
+    assert not (tmp_path / "telemetry.sqlite3").exists()
+    now = 970 + RETENTION_SECONDS + 120
+    restarted.observe(sample(now), counters(20))
+    restarted.flush(force=True, now=now)
+    assert backend.db.telemetry_minutes.count_documents({}) == 0
+    assert (
+        backend.db.telemetry_state.find_one({"_id": "lifetime"})["totals"][
+            "network_received_bytes"
+        ]
+        == 220
+    )
+
+
 def test_container_keys_and_owner_survive_move_without_local_volume(
     backend, tmp_path, monkeypatch
 ):
