@@ -717,16 +717,8 @@
 .performance-overview-status > a {
   margin-left: auto;
 }
-.performance-overview-details {
+.performance-overview-extra {
   grid-column: 1 / -1;
-}
-.performance-overview-details > summary {
-  width: fit-content;
-  min-height: 44px;
-  cursor: pointer;
-  padding-block: 12px;
-  font-size: 13px;
-  color: var(--muted);
 }
 @media (max-width: 720px) {
   .performance-chart-plot {

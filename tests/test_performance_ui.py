@@ -320,7 +320,6 @@ def test_performance_real_samples_nullable_eta_and_mobile_tables(
     }
     page.route("**/api/v1/performance", lambda route: route.fulfill(json=value))
     login(page, server.url + "/?view=performance")
-    page.locator(".performance-overview-details > summary").click()
     expect(
         page.get_by_role("img", name="Recent Telegram load", exact=False)
     ).to_be_visible()

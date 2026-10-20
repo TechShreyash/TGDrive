@@ -224,7 +224,10 @@ def test_performance_views_keyboard_navigation_and_settings_groups(server, deskt
     overview = page.get_by_role("tab", name="Overview", exact=True)
     expect(overview).to_have_attribute("aria-selected", "true")
     expect(page.get_by_role("tabpanel", name="Overview")).to_be_visible()
-    page.locator(".performance-overview-details > summary").click()
+    capacity = page.get_by_role("region", name="Current server capacity", exact=True)
+    expect(capacity).to_be_visible()
+    assert capacity.locator("xpath=ancestor::details").count() == 0
+    expect(page.get_by_role("heading", name="Media ready to reuse")).to_be_visible()
     expect(page.get_by_text("3 MB/s", exact=True)).to_be_visible()
     expect(page.get_by_text("1 MB/s", exact=True)).to_be_visible()
     expect(
@@ -357,13 +360,11 @@ def test_network_includes_url_downloads_and_resources_use_container_limits(
     ram = page.get_by_role("region", name="Container RAM", exact=True)
     expect(ram.locator(".performance-chart-heading")).to_contain_text("2 GB / 8 GB")
     expect(ram.locator(".performance-chart-axis")).to_contain_text("8 GB")
-    page.locator(".performance-overview-details > summary").click()
     file_traffic = page.locator(
         "section",
         has=page.get_by_role("heading", name="TGDrive file traffic", exact=True),
     ).last
     expect(file_traffic).to_contain_text("0 B/s")
-    page.locator(".performance-overview-details > summary").click()
     page.set_viewport_size({"width": 1440, "height": 1100})
     page.get_by_role(
         "heading", name="Performance", exact=True

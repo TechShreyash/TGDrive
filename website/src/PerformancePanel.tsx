@@ -1133,11 +1133,7 @@ export default function PerformancePanel() {
                 </dl>
               </section>
             )}
-            <details
-              className="performance-overview-details"
-              hidden={historical}
-            >
-              <summary>Cache, file transfers & queue history</summary>
+            <div className="performance-overview-extra" hidden={historical}>
               <div className="performance-overview-grid">
                 <section
                   className="performance-section performance-resource-summary"
@@ -1398,7 +1394,7 @@ export default function PerformancePanel() {
                   )}
                 </section>
               </div>
-            </details>
+            </div>
           </div>
           <div
             id="performance-view-telegram"
