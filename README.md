@@ -16,7 +16,7 @@ links from one responsive web interface.
 | **Files and folders** | Upload from your device, drag and drop, or import a public HTTP(S) URL. Search names, move, rename, sort, and restore from Trash. |
 | **Large files** | Split across Telegram documents while retaining one drive item, exact original downloads, and video byte-range seeking. Premium is optional. |
 | **Media playback** | Locally bundled enhanced video player with supported embedded audio/subtitle tracks, chapter navigation, keyboard controls, and buffered timeline feedback. |
-| **Document previews** | Images, PDFs up to 20 MiB, and read-only text/code previews. Original downloads remain available. |
+| **Document previews** | Images, PDFs up to 256 MiB with lazy byte ranges, and read-only text/code previews. Original downloads remain available. |
 | **Cache and preload** | Reuse recently streamed blocks, prepare a file before sharing, and limit RAM, disk, and background work. Inspect ready bytes and evict cached data. |
 | **Transfers** | Resumable device uploads, server-side URL jobs, batch progress, cancellation, retries, and durable history. Floating upload receipts stay scoped to the initiating browser. |
 | **Sharing** | Scoped file/folder links with expiry, re-copy, and revocation. Review access in Shared Links. |
@@ -69,7 +69,12 @@ available Telegram accounts, and caches verified bytes for reuse. Demand reads
 take priority over background preloading. Frequently reused content gets
 preference over a one-time scan.
 
-Use **Settings** to tune cache and transport limits, and inspect current cache
+Use **Monitor → Performance** for traffic graphs and container resources, and
+**Monitor → Preloads** for cached media. See [Backup & recovery](docs/backup-recovery.md)
+for the recovery key and restore procedure.
+
+Use **Configuration → Cache settings** and **Transfer limits** to tune
+cache and transport limits, and inspect current cache
 coverage before relying on a prepared file. Cache entries remain evictable;
 restarting does not turn local cache into a separate backup.
 

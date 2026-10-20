@@ -103,23 +103,33 @@ changes require process/container restart; recreating a container does not
 override a saved preference. The separate connection editor still requires a
 restart after credential changes.
 
+The table lists built-in app defaults, also shown beside dashboard controls.
+Startup environment values may differ; the inputs show the current policy.
+Both Compose files forward these optional performance variables, so leaving
+them unset keeps the app defaults. Dashboard saves need no environment edits
+or redeployment. **Reset Changes** restores the last saved values, not the
+built-in defaults. Units are binary: 1 GiB = 1024 MiB and 1 MiB = 1024 KiB.
+
 | Variable | Default | Meaning and bounds |
 | --- | --- | --- |
-| `CACHE_MEMORY_BYTES` | 268435456 | RAM payload budget, 0–8 GiB. Effective retained RAM is further bounded by available host/container memory. |
+| `CACHE_MEMORY_BYTES` | 268435456 | RAM payload budget, 0–8 GiB (default 256 MiB). Zero disables RAM retention. Available host/container memory can lower the effective limit. RAM blocks expire after 10 idle minutes; reuse refreshes expiry. |
 | `CACHE_DISK_BYTES` | 10737418240 | Disk budget, 0–2 TiB. Zero disables disk retention. It does not reserve that amount of disk in advance. |
-| `CACHE_MIN_FREE_BYTES` | 1073741824 | Free-disk floor for cache writes, 0–2 TiB. |
+| `CACHE_MIN_FREE_BYTES` | 1073741824 | Free-disk floor for cache writes, 0–2 TiB (default 1 GiB). This does not allocate space or constrain other disk users. Upload staging separately uses `MIN_FREE_BYTES`. |
 | `CACHE_TTL_SECONDS` | 86400 | Sliding disk retention, 60–2678400 seconds. Eviction or disk failure can remove bytes sooner. |
-| `AUTO_PRELOAD` | true | Enable bounded speculation after delivered sequential bytes; never bulk preload from HEAD or metadata alone. |
-| `PRELOAD_MAX_JOBS` | 2 | Concurrent preparation jobs, 1–8; foreground work has priority. |
+| `AUTO_PRELOAD` | true | Enable bounded speculation after delivered sequential playback/download bytes; never bulk preload from HEAD or metadata alone. Disabling it leaves manual Prepare available. |
+| `PRELOAD_MAX_JOBS` | 2 | Combined manual and automatic preparation jobs, 1–8; foreground work has priority. More jobs share existing account capacity. |
 | `TELEGRAM_UPLOAD_PIPELINE` | 4 | Outstanding upload-part requests per document, 1–16. |
 | `TELEGRAM_REQUEST_LIMIT` | 8 | Shared per-account media/metadata request concurrency, 1–32. |
 | `TELEGRAM_PARTS_PER_SECOND` | 48 | Application request pacing ceiling, 1–128, including scheduled metadata work. This is not a Telegram-provided bandwidth limit. |
 | `TELEGRAM_MEDIA_PER_BOT` | 3 | Shared concurrent origin media operations per account, 1–16. Uploads also retain their separate per-bot/user lane limits. |
 | `TELEGRAM_MAX_QUEUE` | 256 | Global queued origin operations, 1–4096; overflow returns retry guidance. |
 | `UPLOAD_SPLIT_MIB` | 2000 | 0 uses the safe account/document maximum: 2000 MiB bots, or an eligible 4000 MiB Premium document. Explicit 1–2000 values choose a smaller preferred cap. The minimum grows when needed to stay within 4096 parts. Persisted plans keep their original boundaries. |
-| `TIMEZONE` | Asia/Kolkata | IANA timezone for the owner's displayed dates/times; use a valid zone name. |
+| `TIMEZONE` | Asia/Kolkata | Installation-wide display timezone for owner and public dates/share expiry. Use a valid IANA name; the default is IST. |
 
 The memory budget also covers the bounded asynchronous disk write backlog.
+Disk retention is independent of RAM's 10-minute idle expiry; capacity pressure
+may evict either tier sooner. Cache and staging budgets do not preallocate
+storage, and the cache free-space floor is not a global disk-space guarantee.
 Active responses share an additional transient payload budget, default 32 MiB,
 clamped by available memory with a 2 MiB streaming floor. A response's read-ahead
 window scales with active consumers; a single consumer can use the full budget.
@@ -229,7 +239,7 @@ settings. Initialization/restore refuses existing catalog state.
 | `MIN_FREE_BYTES` | 1073741824 | Nonnegative integer; preserve 1 GiB free space by default. Browser receipt admission reserves remaining bytes; URL downloads also check free space. |
 | `UPLOAD_SESSION_TTL_SECONDS` | 86400 | Integer at least 60; incomplete receipt idle lifetime in seconds, refreshed after each committed chunk. There is no declared upper bound in configuration. |
 | `MAX_CONCURRENT_TRANSFERS` | 2 | Integer 1–32; bounds local fingerprinting, URL retrieval and legacy receive work. Receipt handlers have a separate bound from this value. It does not cap Telegram uploads across bots. |
-| `TELEGRAM_UPLOADS_PER_BOT` | 1 | Integer 1–4; initial per-bot Telegram media limit. **Settings → Uploads** saves an override in MongoDB and applies it immediately. Premium clients remain limited to one media upload each. |
+| `TELEGRAM_UPLOADS_PER_BOT` | 1 | Integer 1–4; initial per-bot Telegram media limit. **Configuration → Transfer limits** saves an override in MongoDB and applies it immediately. Premium clients remain limited to one media upload each. |
 | `MAX_CONCURRENT_STREAMS` | 4 | Compatibility configuration; the file-response path uses bounded origin/media admission instead of a fixed viewer-count gate. It does not cap cached viewers at four. |
 | `TRANSFER_TTL_SECONDS` | 3600 | Integer 60-86400 inclusive; live terminal-job/context retention. Compact server-transfer history is kept separately from this cleanup; files are unaffected. |
 
@@ -539,6 +549,7 @@ not a Telegram quota or a proof that every referenced message is readable.
 | --- | --- | --- | --- |
 | `POST /api/getDirectory` | Owner or valid folder share | `{"path":"/","auth":null}` | `{"status":"ok","data":<directory>,"auth_home_path":null}`. |
 | `GET /api/v1/nodes` | Owner | `parent_id=/&offset=0&limit=100&sort=name` | `{"items":[...],"total":42,"offset":0}`. |
+| `GET /api/v1/trash` | Owner only | `q=report` (optional, up to 255 characters) | `{"data":{"contents":{...}}}`; searches actionable top-level Trash items; never includes live files. |
 | `GET /api/v1/search` | Owner only | `q=report&offset=0&limit=100&sort=name` | `{"items":[...],"query":"report","has_more":false,"next_offset":null}`. |
 | `POST /api/createNewFolder` | Owner | `{"path":"/","name":"Photos"}` | `{"status":"ok"}`; refresh listing for new ID. |
 | `POST /api/renameFileFolder` | Owner | `{"path":"/<id>","name":"New name"}` | `{"status":"ok"}`. |
@@ -698,7 +709,8 @@ Telegram authorization references. Mutations use the usual same-origin checks.
 | --- | --- |
 | `GET /api/v1/settings/performance` | Saved live performance preferences, revision, and documentation link. |
 | `PATCH /api/v1/settings/performance` | Partial lowercase preferences, with returned revision in `If-Match`; persist and apply to new work. |
-| `GET /api/v1/performance` | Account activity, bounded queues/history, request pacing/cooldowns and cache diagnostics. |
+| `GET /api/v1/performance` | Account activity, bounded live queues/history, request pacing/cooldowns and cache diagnostics. |
+| `GET /api/v1/performance/history?start=UNIX&end=UNIX` | Owner-only measured history within the last 31 days and persisted lifetime traffic totals; at most 360 bins. |
 | `GET /api/v1/preloads` | Owner cache/preparation inventory, current coverage, and bounded job state. |
 | `POST /api/v1/preloads` | `{"path":"/<file-id>"}`; prepare an authorized file within effective capacity. |
 | `POST /api/v1/preloads/clear` | `{"file_id":"<inventory-id>"}` evicts one file; `{}` clears cached bytes. |
@@ -728,6 +740,45 @@ include cached file responses and receipt protocol bodies, and exclude settings
 polling/assets. Directional account request counters describe Telegram origin
 traffic separately. Both histories are process-local and reset on restart;
 derived rates are differences between measured samples.
+The application samples both histories every three seconds without dashboard
+polling. Histories are capped at 120 entries and five minutes, and reset after a
+gap longer than 30 seconds or a backward clock jump. `traffic` exposes nullable
+`download_bytes_per_second` and `upload_bytes_per_second`; an initial missing
+baseline is not a measured zero. `server.process_rss_bytes` reports current Linux
+process resident memory when available; `process_peak_rss_bytes` remains a peak.
+`server.cpu.percent` is nullable current cgroup CPU utilization, normalized to
+available cores/quota, or labelled host busy CPU when cgroup counters are unavailable.
+`server.network` exposes the selected default interface, monitor-session
+`received_bytes`/`sent_bytes`, and nullable per-second rates. These include URL
+imports and Telegram traffic that are outside the narrower `traffic` HTTP counters.
+Linux interface counters include protocol overhead; they are not per-file accounting.
+`server.history` retains measured timestamped CPU percentage/scope, current cgroup
+memory/limit, interface receive/send rates and interface name. It follows the same
+three-second/five-minute bounds. Unknown readings are null; an unlimited cgroup
+memory limit is null rather than zero. The dashboard splits plots at missing
+samples or measurement-scope changes and supports keyboard/touch sample inspection.
+
+The historical endpoint is separate from those live process histories. It validates
+finite Unix-second `start < end`, a past interval no older/wider than 31 days,
+and returns `422` for invalid bounds or a redacted retryable `503` if storage is
+unavailable. It returns actual minute-aligned boundary intervals: `start`, `end`,
+`bucket_seconds`, `retention_seconds`, `earliest_at`, `tracked_since`,
+`last_updated`, `available`, `samples`, and `totals`. Samples include `end_at`
+and per-metric `coverage_seconds`. Rates/gauges are weighted by valid observed
+seconds; null gaps are not counted as zero. Mixed interfaces or CPU scopes do
+not become a false continuous series. Long ranges are downsampled, so a bin's
+average is not its peak. The UI keeps Now readings separate from interval averages.
+
+Lifetime `totals` keys are `network_received_bytes`, `network_sent_bytes`,
+`http_upload_bytes`, `http_download_bytes`, `http_requests`, `http_errors`,
+`telegram_upload_bytes`, and `telegram_download_bytes`. Unobserved sources are
+null. These overlapping accounting layers must not be summed together. Totals
+survive process restarts and 31-day chart pruning, but only describe activity
+since `tracked_since`; no pre-installation history can be recovered.
+Production uses MongoDB `telemetry_minutes`/`telemetry_state`; local deployments
+use `DATA_DIR/telemetry.sqlite3`. Minute checkpoints and clean shutdown persist
+state; an abrupt crash may lose the latest uncheckpointed statistics. Telemetry
+is excluded from encrypted catalog backups and never gates file service.
 
 The preparation queue and ordinary media queues have separate bounds.
 Cancelling/clearing a preparation leaves originals intact and does not abort
@@ -837,10 +888,21 @@ capability. Supply path (an ID path) and optional auth query, just as for /file.
 - This source-byte limit does not promise only that many internal Telegram transfer
   bytes.
 
-PDF descriptors support files up to 20 MiB and point to /file?preview=1.
+PDF descriptors support files up to 256 MiB and point to /file?preview=1.
 The UI renders them using locally bundled PDF.js and its worker, not an external
-Office service or active document iframe. Unsupported/oversized files retain
-original download. These are implementation limits, not environment settings.
+Office service or active document iframe. Only requested byte ranges are read;
+streaming and PDF.js automatic full-file prefetch are disabled. Every range
+uses the normal fresh authorization path, shared cache and logical multipart
+mapping. PDF preview requests do not trigger automatic background preparation;
+manual Prepare and ordinary original downloads retain their existing policy.
+A 256 MiB source cap bounds PDF.js's source-sized worker buffer. Each preview
+session may fetch at most 64 MiB, with two simultaneous HTTP ranges of at most
+1 MiB and bounded pending work. These are practical browser-memory protections,
+including on mobile, not a total process-memory guarantee. Complex PDFs can need
+more source data than a single visible page suggests. A reading-limit message
+keeps Download Original available; this is a bounded preview, not an unlimited
+book reader. Closing the preview aborts pending and active range requests.
+Unsupported/oversized files retain original download. These are implementation limits, not environment settings.
 
 For image/video playback, /file accepts quality=<opaque-descriptor-id>.
 A variant ID is bound to that source message and does not grant authorization.
@@ -913,8 +975,9 @@ audit log. Retry retains operation identities. See [transfers](architecture.md#t
 
 | Query | Value |
 | --- | --- |
-| `status` | `all` (default), `queued`, `running`, `completed`, `error`, `cancelled` |
+| `status` | `all` (default), `queued`, `running`, `finished`, `completed`, `error`, `cancelled`; finished combines completed/error/cancelled |
 | `limit` | 1–200; default 50 |
+| `q` | Optional file-name substring, up to 255 characters; Unicode-normalized case-insensitive search across live and archived transfers before pagination |
 | `before` and `before_id` | Both cursor values from the previous page, or neither |
 
 The response contains `jobs`, `has_more`, `next_before` and `next_before_id`.

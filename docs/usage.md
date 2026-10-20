@@ -12,15 +12,23 @@ Other people can view or download only what you share with them.
 | **My Files** | Browse, search and organize files |
 | **Transfers** | See queued/running work and past completed, failed or cancelled transfers |
 | **Shared Links** | Review or revoke links |
-| **Preloads** | Inspect cached coverage, stop preparation, or evict cached bytes |
-| **Performance** | Inspect current server resources, Telegram activity and measured traffic |
 | **Trash** | Restore files or delete them permanently |
-| **Connections** | Manage Telegram bots, Premium accounts and API credentials |
-| **Storage & Backups** | Check saved data, temporary storage and database backups |
-| **Settings** | Choose appearance and timezone, tune transfer/cache limits, or sign out |
+| **Monitor → Performance** | Inspect current server resources, Telegram activity and measured traffic |
+| **Monitor → Preloads** | Inspect cached coverage, stop preparation, or evict cached bytes |
+| **Management → Connections** | Manage Telegram bots, Premium accounts and API credentials |
+| **Management → Storage & Backups** | Check saved data, temporary storage and database backups |
+| **Configuration → Cache settings** | Set RAM/disk budgets, reserves, retention and automatic preparation |
+| **Configuration → Transfer limits** | Set upload concurrency, splitting and shared Telegram request budgets |
+| **Configuration → Timezone** | Choose the installation's timezone |
 
-Choose **Light**, **Dark** or **System** from the appearance menu.
-System follows your device's preference.
+The sidebar keeps **Monitor**, **Configuration**, and **Management** visible as
+separate groups. Monitor shows activity and reusable media; Configuration changes
+instance-wide policies; Management handles connections and recovery.
+
+Choose **Light**, **Dark** or **System** from the appearance menu at the top right.
+System follows your device's preference. **Log Out** is at the bottom of the
+sidebar, including the mobile navigation drawer. It closes this browser's
+access; server transfers continue.
 
 ## Upload files or folders
 
@@ -40,14 +48,15 @@ separate **Show Folder** action to open its directory. Rapid clicks on the
 disclosure never navigate. Expanded children omit repeated group locations
 and dates; nested or changed locations still appear when useful.
 
-A folder appears in just one section: Running while any file is active, Queued
-when only queued work remains, and Completed only when every file is complete.
-Files needing attention and partly cancelled folders retain their own status.
-Page filters keep the folder together; expand it to inspect individual file states.
+A folder appears in just one section: **Running** while any file is active,
+**Queued** while queued files remain, then **Finished** once no work is running
+or queued. Finished includes successful, failed and cancelled uploads. A folder
+with a failed child remains queued while another child is waiting. Filters keep
+known batches together; expand a folder to inspect its individual file states.
 
 ### Upload speed and queue
 
-Open **Settings → Uploads** to choose simultaneous uploads per bot: **1–4**.
+Open **Configuration → Transfer limits → Parallel uploads** to choose simultaneous uploads per bot: **1–4**.
 The default is **1**; adding bots adds upload slots. A large file's parts use
 all eligible client slots, rather than stopping at two simultaneous parts.
 Bot-sized parts can also use connected Premium clients; larger Premium-only
@@ -94,6 +103,10 @@ only after its upload finishes. **Parts in Channel** counts confirmed channel
 messages; TGDrive adds the complete file to My Files after all parts are confirmed.
 
 A full **device** progress bar does not mean the Telegram upload is complete.
+Device progress updates as bytes are sent, including within a large chunk.
+“Waiting for server confirmation” means that the browser finished sending the
+chunk but has not received its acknowledgement. Only confirmed offsets are saved
+for recovery; a failed chunk can move the displayed progress back to that offset.
 For a single file, the bar and byte count describe the current stage. Telegram
 upload starts from zero after the device transfer. Multi-file batches show actual
 Telegram bytes, including partial uploads; device bytes are not counted twice.
@@ -152,8 +165,10 @@ from the list; it does not delete their files. Upload through the sidebar's
 
 ## Transfer history
 
-Transfers are separated into **Running**, **Queued**, **Needs attention**,
-**Completed** and **Cancelled**. Use the filters to focus on one status.
+Transfers show **Running** first, **Queued** next, and **Finished** below them.
+Finished includes successful, failed and cancelled work. Its **All**,
+**Successful**, **Failed** and **Cancelled** filters apply only to finished
+history; current running and queued work stays visible above them.
 
 - Finished rows show the size and date, without repeated progress or elapsed time.
 - Rows use columns on wide screens and compact stacked details on smaller screens.
@@ -167,14 +182,19 @@ Transfers are separated into **Running**, **Queued**, **Needs attention**,
 - Moves and renames are followed automatically. Trashed or deleted items show
   an unavailable state; TGDrive never selects another file with the same name.
 
-Open **Transfers** and choose **All**, **Queued**, **Running**, **Completed**,
-**Failed** or **Cancelled**.
+Open **Transfers** to follow current work and browse finished uploads.
 
 - Current progress and past server transfers appear together.
 - The floating upload panel shows work started from this browser. Uploads
   discovered from another device remain visible in **Transfers**, without
   opening a new floating completion panel on this device.
-- Finished records include dates and sizes. **Show older transfers** loads more.
+- Finished records include dates and sizes. **Previous** and **Next** replace
+  the current history page; the page number shows your position. **Latest**
+  returns to the newest page. Changing the finished-status filter starts at page 1.
+- **Search Transfers** finds names across saved history, including older pages,
+  and filters current browser uploads too. Changing the search starts at page 1.
+- Older pages show their own records, while live running and queued work remains
+  at the top. Recent local completions are not added to every older page.
 - Clearing the floating panel does not erase this history.
 - Completed/cancelled server records stay in MongoDB after live-job cleanup and restart.
 - Previously expired records cannot be recreated.
@@ -186,7 +206,12 @@ opens My Files so the destination is visible.
 <details>
 <summary>History storage and limits</summary>
 
-History pages load up to 50 server records at a time. Compact finished summaries
+History pages load up to 50 server records at a time, rather than accumulating
+the entire archive in the browser. TGDrive remembers up to 128 previous page
+cursors for back navigation; **Latest** is always available on older pages.
+Known browser batches remain grouped. Older server records may appear as
+individual files when the original browser's batch information is unavailable.
+Compact finished summaries
 are kept in MongoDB and included in encrypted database backups; they omit
 payloads, source URLs and private recovery context. They do not expire with the
 short-lived live-job journal. History consumes database space.
@@ -214,12 +239,22 @@ silently replace another file.
 
 ### Search
 
-Type in the search bar to find file and folder **names across your drive**.
-It does not search inside documents.
+Search sits beside the page heading and stays within that page:
+
+| Page | What search finds |
+| --- | --- |
+| **My Files** | File and folder names across your drive, with their locations |
+| **Transfers** | Current upload names and saved transfer names across all history pages |
+| **Trash** | Names of the trashed items available to restore or delete |
+| **Shared Links** | Names in your shared-link inventory |
+| **Preloads** | Cached filenames and preparation jobs |
+
+It does not search inside documents. Switching pages clears the search so a
+query cannot silently hide items in a different page.
 
 - Press Enter to search immediately.
-- Results show each item's folder location.
-- Clear the search or press Escape to return to your previous folder.
+- In My Files, clear the search or press Escape to return to your previous folder.
+  On the other pages, this clears the filter without leaving the page.
 - Press `/` or Ctrl/Cmd+K to focus search when you are not editing another field.
 
 ## Open, preview, and download
@@ -230,22 +265,29 @@ Use the header's **Download** action for the original file.
 | File | Preview |
 | --- | --- |
 | Images, including SVG | Image viewer |
-| PDFs up to 20 MiB | Continuous scrolling, zoom and fit width |
+| PDFs up to 256 MiB | Continuous scrolling, zoom and fit width |
 | Video | Enhanced player with its own audio/subtitle controls |
 | Audio | Browser audio player |
 | Supported text and code | Read-only text; first 256 KiB |
-| Unsupported formats | Compact file details and a download button |
+| EPUB, CBZ, CBR and other unsupported formats | Original download; no built-in reader yet |
 
+- PDFs load the sections needed for visible pages instead of downloading the
+  whole document first. The preview keeps canvas/text work bounded and has a
+  64 MiB reading budget per opening; large or complex books may reach it.
+  **Download Original** remains available. The 256 MiB file ceiling protects
+  browser memory; it does not mean that all those bytes are downloaded.
 - **Escape** or browser **Back** closes the preview.
 - Every video uses the custom player. Its normal play control remains available
   while opening; your browser may require a tap before playback with sound.
-- The timeline highlights estimated buffered time ranges. Loading status shows
-  received bytes/speed and estimated coverage/ahead seconds when available.
-  This device buffer is separate from the server's preload coverage.
+- The timeline highlights estimated loaded source ranges. Loading status shows
+  measured received bytes and speed; it does not turn downloaded bytes into a
+  playback-readiness percentage. Decoding audio and video can still take time.
+  This source window is separate from the server's preload coverage.
 - TGDrive reads ahead using available clients and reuses recently fetched data.
   Replaying or seeking within cached content avoids fetching those bytes again.
 - Real chapters list their titles and times immediately, without waiting for
-  preview thumbnails. Chapter navigation also works in fullscreen.
+  preview thumbnails. Open **Chapters** from the player controls; it follows
+  their visibility and also works in fullscreen.
 - Focus the player for **K/Space** to play/pause, **M** to mute, and arrow-key
   seeking. Audio/subtitle menus show the tracks available in that file.
 - For a slow start, use **Reload Video** within the custom player.
@@ -263,7 +305,10 @@ Repeated viewing and popular shared files reuse those bytes. Background work
 gives priority to people actively watching or downloading.
 
 Choose **Prepare for Download / Streaming** from the file's actions before a
-screening or a large share. Open **Preloads** to check current ready bytes/ranges
+screening or a large share. Open **Preloads** to check cached bytes and the
+coverage bar for each file: blue segments show partial coverage, and a full
+green bar with **Ready** means the whole file is cached. Clear one file or all
+cached data after confirmation; the originals remain in Telegram. Check progress
 and completion, then share it.
 Preparation must fit an effective cache tier; increase the budget or free space
 if it is rejected. You can cancel preparation or evict cached bytes without
@@ -288,10 +333,14 @@ In **Shared Links**:
 | --- | --- |
 | **Active / Expired / All** | Filter links by whether they still grant access. |
 | **Copy link** | Copy the same active link again. |
-| **Show in folder** or double-click the name | Open its current directory and highlight the item. |
+| Click the name or **Show in folder** | Open its current directory and highlight the item. |
 | **Revoke link** | Confirm before blocking access through this link. |
 | **Renew link** | Choose an expiry and create a replacement for an expired link. |
 | **Replace link** | Replace an older, unrecoverable link. The previous link stops working. |
+
+Rows show the item, its current directory and a short expiry date. Hover, focus
+or tap an expiry date for the exact time and timezone configured for the instance.
+The folder and revoke icons keep management actions beside **Copy Link**.
 
 New links can be copied again without replacing them. Older links that were
 stored only as random-token hashes keep working, but cannot be reconstructed.
@@ -341,7 +390,18 @@ exists, start a new URL import rather than selecting an unrelated device file.
 
 ## Settings and connections
 
-Use **Connections** for bots, Premium accounts and Telegram API credentials.
+Use **Management → Connections** for bots, Premium accounts and Telegram API credentials.
+Use **Configuration → Cache settings** for instance-wide storage and preparation
+budgets, **Transfer limits** for transfer policy, and **Timezone** for
+display timezone. Each category shows only its related controls; advanced Telegram
+limits stay collapsed until needed. Saving applies only the current category;
+unsaved changes in other categories remain drafts. Upload concurrency has its
+own save action.
+
+Existing links to `?view=settings&section=performance` continue to open cache
+settings. Switching between these settings categories preserves unsaved drafts.
+The former standalone `?view=settings` page opens **My Files**; use the categorized
+Admin links to change server settings.
 
 | Action | Result |
 | --- | --- |
@@ -367,7 +427,7 @@ back in the page. The web password and storage channel are installation settings
 
 ### Storage and backup
 
-On **Storage & Backups**, **Saved to MongoDB** means the drive's record is saved
+On **Management → Storage & Backups**, **Saved to MongoDB** means the drive's record is saved
 in the cloud. Database status is not repeated in the app header.
 It does not mean an unfinished upload is complete.
 
@@ -379,7 +439,7 @@ It does not mean an unfinished upload is complete.
 
 Deleting the local installation can be recovered by reconnecting the same
 MongoDB database. Losing the database itself needs the separate
-[backup restore procedure](operations.md#emergency-database-restore).
+[Backup & recovery guide](backup-recovery.md).
 
 <details>
 <summary>Optional Telegram bot interface</summary>

@@ -71,6 +71,7 @@ PUBLIC_DOCS = (
     "docs/usage.md",
     "docs/architecture.md",
     "docs/operations.md",
+    "docs/backup-recovery.md",
     "docs/development.md",
     "docs/roadmap.md",
     "docs/reference.md",

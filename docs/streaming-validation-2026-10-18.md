@@ -1,9 +1,8 @@
 # Streaming validation — 18 October 2026
 
 This follow-up reproduces the reported 17 MB playback failure and separates
-browser cache, server cache and delivery protocol. The
-[earlier examination](validation-2026-10-18.md) contains the speed tests, Telegram/DC
-comparison and full 4.249 GiB multipart hash verification.
+browser cache, server cache and delivery protocol. For deployment guidance and
+Telegram datacenter considerations, see [Performance and caching](performance.md).
 
 ## Findings
 

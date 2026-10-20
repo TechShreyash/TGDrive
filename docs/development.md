@@ -41,6 +41,17 @@ npm run dev --prefix website
 
 ## Latest focused validation
 
+The 2026-10-20 local candidate passed **1,018 Python tests** with an isolated
+MongoDB replica set, warnings treated as errors, and **84.07% coverage**.
+All **213 frontend unit tests**, three player patch guards, **100 Chromium
+workflows**, TypeScript checking and the production UI build passed. Targeted browser checks cover real sparse PDF reads, synchronized seeking,
+live uploads, contextual search, compact mobile layouts, backup links and
+historical metrics. The AMD64 Docker image built and passed non-root runtime,
+bundled PDF asset, writable-directory and private-state exclusion checks.
+These synthetic fixtures do not certify every physical
+device or live Telegram route.
+
+
 Transfer locations: exact duplicate-name, move/rename, trash/deletion, owner API
 and history checks passed, including an isolated native MongoDB check. The
 Chromium transfer workflow covers grouped statuses, compact finished rows,
@@ -88,11 +99,13 @@ Compose validation checks the template, not the validity of placeholder credenti
 ~~~bash
 uv run --frozen --group e2e playwright install --with-deps chromium
 TGDRIVE_E2E=1 uv run --frozen --group e2e python -m pytest \
-  -m e2e tests/test_browser_e2e.py
+  -m e2e tests/test_browser*.py
 ~~~
 
 Install browser binaries/libraries inside WSL.
-Evidence goes to ignored `cache/browser-e2e`.
+Evidence goes to ignored `cache/browser-e2e` and the feature-specific cache folders.
+The image-heavy PDF fixture is generated only when the dedicated PDF browser
+tests request it; it is not part of ordinary preview startup.
 
 These tests render the real UI against a test backend. They do not prove a live
 Telegram transfer. The fixture's `/__test__` routes are not production endpoints.
@@ -117,9 +130,10 @@ export TGDRIVE_TEST_MONGODB_URI='mongodb://127.0.0.1:27017/?replicaSet=tgdrive-t
 uv run --frozen --all-groups python -Werror -m pytest tests/test_mongodb.py -q
 ~~~
 
-Tests prefer `TGDRIVE_TEST_MONGODB_URI`, falling back to ignored local `.env`
-when it is unset. They create random `tgdrive_test_` databases. Cleanup targets
-only those exact disposable databases. CI starts its own local replica set.
+Tests require an explicit `TGDRIVE_TEST_MONGODB_URI`; they never infer it from
+`MONGODB_URI` or the deployment's `.env`. They create random `tgdrive_test_`
+databases. Cleanup targets only those exact disposable databases. CI starts its
+own local replica set.
 
 Never point cleanup tests at the real application's database.
 Remove the disposable local server after testing with
@@ -167,8 +181,8 @@ under `testfiles/` stay local because redistribution terms were not verified.
 | Transfer display and controls | Focused WSL Chrome fixture passed stage-zero/live bytes, single/multi-file views, mobile layout, Hide/Show and confirmed bulk cancellation; targeted frontend tests/build passed |
 | Transfer history | Focused registry/API and native MongoDB archive/reopen checks passed; Chrome verified status filters, panel dismissal, browser-tracking reset and responsive history views |
 | Full regression after MongoDB switch | 819 Python tests, 82.39% coverage; 156 frontend tests and 48 Chromium tests passed on 2026-10-18 |
-| Large live file after MongoDB switch | **Pending** |
-| Current source ZIP/container release validation | Source ZIP checksum/extraction/clean build/tests and AMD64 container build/runtime smoke checks passed |
+| Large live file after MongoDB switch | Subsequent server validation: 4,562,805,302-byte file reconstructed from three Telegram documents; full SHA-256 and part-boundary ranges matched. This is original-byte integrity evidence, not certification of every playback codec/device. |
+| 2026-10-18 source ZIP/container baseline | Source ZIP checksum/extraction/clean build/tests and AMD64 container build/runtime smoke checks passed |
 
 Earlier evidence, **before MongoDB**, includes:
 
@@ -206,7 +220,7 @@ Use the pinned files as the exact dependency source:
 | uv | 0.13.1 |
 | Node | 24.22.0 LTS; frontend only |
 | Telegram | Telethon 1.45.0 + cryptg 0.6.0 |
-| Backend | FastAPI 0.143.2 + Uvicorn 0.54.0 |
+| Backend | FastAPI 0.143.5 + Uvicorn 0.54.0 |
 | Database | MongoDB replica set/Atlas + PyMongo 4.19.0 |
 | Authentication | argon2-cffi 25.1.0 |
 | Frontend | React 19.3.1, TypeScript 7.0.2, Vite 8.3.4, Vitest 5.0.5 |
@@ -292,9 +306,10 @@ Do not duplicate the palette in another specification or add runtime font/script
 - API names and CSS assumptions must be reverified against the newly pinned version.
 - Startup state follows real module/media events and unlocks controls on
   metadata/readiness without requiring autoplay.
-- Keep startup controls inert beneath the loading overlay, preserve usable controls
-  during buffering/seeking, clean up event listeners and timers, and offer recovery for
-  long waits without inventing a timeout failure.
+- Keep the custom player's controls reachable during startup, buffering and seeking.
+  Loading messages must not claim that source-byte coverage proves decoded audio/video
+  readiness. Clean up event listeners and timers, and offer recovery for long waits
+  without inventing a timeout failure. Chapters belong in the auto-hiding controls.
 - Verify reduced motion and delayed media with the real decoder, not only a mocked state
   machine.
 
@@ -380,7 +395,7 @@ Record precise private evidence separately, and keep implemented/pending status 
 Shared Links uses compact responsive rows with name/type, current parent directory,
 creation/expiry and copy/location/revoke controls. Active and expired views share
 the same list; expired entries can be renewed or removed. Revoking an active link
-requires confirmation. Double-clicking its name or Show in folder opens the normal
+requires confirmation. Clicking its name or Show in folder opens the normal
 file browser with the stable item highlighted. Long names/paths truncate with
 full text available to assistive technology and pointer tooltips.
 
@@ -422,7 +437,10 @@ keeps the last successful listing visible and reports the error.
 
 Batch aggregation precedes section assignment and page-status filtering.
 Never partition folder members by file status before constructing their batch.
-Running takes priority, then attention, queued work, all-completed, then cancelled.
+Running takes priority, then queued work; terminal outcomes share Finished.
+Finished has All, Successful, Failed and Cancelled filters, with cursor pagination.
+The latest server page stays authoritative; unrelated browser history is not
+prepended to it. Historical folder grouping requires retained browser batch metadata.
 The expanded batch retains every child and its individual status.
 
 Transfer group disclosure is a single stable button containing chevron, neutral

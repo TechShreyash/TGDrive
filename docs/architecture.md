@@ -90,7 +90,7 @@ Local unfinished file bytes are still needed after a restart.
 
 - Bots are balanced by active work and recent selection.
 - Each bot has one media slot by default; the owner can choose 1–4 in
-  **Settings → Uploads**. Premium clients retain one slot each. Multipart parts
+  **Configuration → Transfer limits**. Premium clients retain one slot each. Multipart parts
   use these same slots, with FIFO admission and least-active client selection.
 - Slots scale with connected bots, independently of the local I/O semaphore.
   Lower limits drain existing leases; increasing a limit wakes eligible waiters.
@@ -247,7 +247,7 @@ do not directly describe this adapter.
 | --- | --- |
 | Original bytes | Browser uploads remain documents; preview choices do not change originals |
 | Text | Bounded 256 KiB read-only preview |
-| PDF | Local PDF.js, up to 20 MiB, continuous rendering with memory bounds |
+| PDF | Local PDF.js with lazy byte ranges, up to 256 MiB, continuous rendering with memory bounds |
 | SVG | Passive image element; never inject uploaded markup into the page |
 | Video | Lazy local Movi/WASM decoder using the same authorized range endpoint |
 | Unsupported format | Compact details and original download |
@@ -362,3 +362,12 @@ inside the database archive.
   The owner copy endpoint verifies the derived token against that hash.
 - Legacy random-token links remain usable; re-copy requires explicit replacement.
   Secret rotation also makes existing links unreconstructable, without revoking them.
+
+## Diagnostic history
+
+The performance sampler retains live observations and writes bounded minute
+aggregates to the existing MongoDB, or local `DATA_DIR/telemetry.sqlite3`.
+Recorded graphs retain 31 days; lifetime traffic checkpoints are separate.
+Unavailable samples remain gaps and metric scopes remain explicit. Telemetry
+is disposable and excluded from encrypted catalog backups; file operations do
+not depend on successful diagnostic storage. See [Performance](performance.md#read-the-performance-page).

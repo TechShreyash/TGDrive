@@ -63,6 +63,7 @@ def test_source_archive_excludes_local_state_and_private_documents(
         assert "tgdrive-2.0.0/website/package-lock.json" in names
         assert "tgdrive-2.0.0/website/scripts/patch-movi-player.js" in names
         for public_asset in (
+            "docs/backup-recovery.md",
             "website/public/third-party/README.txt",
             "website/public/third-party/movi-player-LICENSE.txt",
             "website/public/third-party/movi-player-TGDrive-patch-NOTICE.txt",

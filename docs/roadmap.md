@@ -11,9 +11,10 @@ or failure scenario has been tested.
 | --- | --- |
 | Web file manager | Light/dark/system themes, folders, selection, move, rename and search |
 | File and folder uploads | Preserved hierarchy, combined batches, retry/resume and bounded concurrency |
-| Transfer history | Status filters and paged persistent server history, independent of floating-panel dismissal |
+| Transfer history | Running/Queued/Finished sections, result filters, scoped name search and cursor-paged persistent history |
 | Files above 2 GB | Automatic ordered parts; one item for download, preview and seeking |
-| Previews | Full-window images/PDFs/text/video; useful download fallback for unsupported files |
+| Previews | Full-window images/text/video; PDF ranges up to 256 MiB with a 64 MiB reading budget; original download for unsupported books/comics |
+| Owner monitoring | Current container CPU/RAM, network direction, 31-day measured history and lifetime traffic totals; compact positional cache coverage |
 | Multiple bots | Balanced work, account limits and persisted Telegram waits |
 | Connections page | Add/manage bots, Premium login, refresh names and verify credentials/channel access |
 | Sharing | Scoped links, expiry, rotation and revocation |
@@ -28,13 +29,15 @@ Large-file support does not require Premium.
 ## Before public release
 
 The MongoDB version is available for **public beta testing on `dev`**. The
-automated baseline passed on 2026-10-18; live/platform checks remain below.
+original automated baseline passed on 2026-10-18. Later streaming, cache,
+transfer and interface checks are recorded in the development guide; live/platform
+limits remain below.
 
 | Remaining check | Status |
 | --- | --- |
-| Full regression and Chrome workflows after the database switch | Passed: 819 Python, 156 frontend and 48 Chromium tests; 82.39% Python coverage |
-| Repeat live above-2-GB integrity/streaming tests on MongoDB | Pending |
-| Rebuild and validate current source ZIP and container artifacts | Passed: clean source ZIP install/build/tests and AMD64 container build/runtime smoke |
+| Latest local regression on 2026-10-20 | Passed: 1,018 Python, 213 frontend and 100 Chromium tests; 84.07% Python coverage |
+| Live above-2-GB integrity on MongoDB | Verified: 4,562,805,302 bytes across three Telegram documents, full SHA-256 and boundary ranges. Broad physical-device playback remains unverified. |
+| Current deployment artifacts | Passed: AMD64 container build/runtime smoke; source ZIP integrity/manifest/private-state exclusion checks. Earlier clean dependency/install tests are recorded in the development guide. |
 | Near-cap Premium uploads and actual Premium acceleration | Unverified; no Premium test account |
 | Deletion of a disposable message older than 48 hours | Unverified; no suitable message |
 | Prolonged multi-bot outages and crashes during a real Telegram send | Further live coverage needed |
@@ -63,10 +66,10 @@ For current recovery actions, use [Troubleshooting](operations.md#troubleshootin
 
 | Area | Useful follow-up |
 | --- | --- |
-| Video startup | Measure first-frame delay, initial reads and memory before tuning |
+| Video playback | Broaden physical-device and codec coverage; measure first-frame delay and seek audio/video synchronization |
 | Folder uploads | Investigate preserving empty directories the picker cannot see |
 | Recovery | Make emergency restore easier through a guided interface |
-| Previews | Broaden safe formats and test more real devices/files |
+| Book and manga readers | CBZ can read individual ZIP image entries; EPUB also needs isolated XHTML/CSS and spine/navigation support. CBR needs a reviewed RAR decoder, including solid-archive resource limits. These readers are not implemented. |
 | Backup safety | Consider independent file export/redundancy and optional payload encryption |
 | File details | Consider real modification timestamps |
 
