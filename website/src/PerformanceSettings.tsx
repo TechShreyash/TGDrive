@@ -19,7 +19,6 @@ import {
   NumberInput,
   TextInput,
   Switch,
-  Badge,
 } from "@mantine/core";
 import { ApiError, errorMessage } from "./api";
 import { ErrorNotice, Spinner } from "./components";
@@ -152,10 +151,7 @@ export default function PerformanceSettings({
             setNotice("");
           }}
         />
-        <Badge variant="light" color="gray" size="sm">
-          Default {definition.appDefault}
-          {definition.unitLabel ? " " + definition.unitLabel : ""}
-        </Badge>
+
       </div>
     </div>
   );
@@ -275,6 +271,13 @@ export default function PerformanceSettings({
           </Fieldset>
           <Fieldset
             className="performance-setting-group"
+            hidden={category !== "transfers"}
+            legend={<span className="configuration-group-title"><HardDrive size={18} aria-hidden="true" />Upload storage</span>}
+          >
+            {numericPreferences.filter((value) => ["max_file_size", "staging_budget_bytes", "min_free_bytes"].includes(value.key)).map(field)}
+          </Fieldset>
+          <Fieldset
+            className="performance-setting-group"
             hidden={category !== "regional"}
             legend={
               <span className="configuration-group-title">
@@ -316,9 +319,7 @@ export default function PerformanceSettings({
             {numericPreferences.filter((value) => value.advanced).map(field)}
           </details>
           <p className="settings-help performance-save-scope">
-            Changes apply only to this page. Restore defaults loads the built-in
-            values for review; save to apply them. Your deployment environment
-            may have supplied different starting values.
+            Save applies to this page. Restore defaults loads values for review before saving.
             {category === "transfers" &&
               " Parallel uploads has its own Save Changes action above."}
           </p>
@@ -329,10 +330,11 @@ export default function PerformanceSettings({
             <Button
               className="primary-button"
               type="submit"
+              aria-label="Save Performance Settings"
               disabled={busy || !changed || conflict}
             >
               {busy ? <Spinner /> : null}
-              {busy ? "Saving…" : "Save Performance Settings"}
+              {busy ? "Saving…" : "Save changes"}
             </Button>
             <Button
               type="button"

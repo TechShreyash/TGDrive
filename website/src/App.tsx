@@ -1,3 +1,4 @@
+import ThemeControl from "./ThemeControl";
 import {
   useCallback,
   useEffect,
@@ -128,7 +129,7 @@ export default function App() {
   const [location, setLocation] = useState(getLocation);
   const [authenticated, setAuthenticated] = useState<boolean | null>(null);
   const [admissionPaused, setAdmissionPaused] = useState(false);
-  const [config, setConfig] = useState({ max_file_size: 0 });
+  const [config, setConfig] = useState<{ max_file_size: number; demo_data?: boolean }>({ max_file_size: 0 });
   const [directory, setDirectory] = useState<Directory>({ contents: {} });
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState("");
@@ -965,7 +966,7 @@ export default function App() {
             ))}
           </nav>
         )}
-        <h1>{title}</h1>
+        <div className="page-title-line"><h1>{title}</h1>{config.demo_data && <span className="demo-marker" title="Synthetic local preview content and metrics">Demo</span>}</div>
         {isSearch && (
           <p className="page-subtitle">
             Files and folders matching “{currentPath.slice(8)}” across your
@@ -1035,6 +1036,7 @@ export default function App() {
           )}
         </form>
       )}
+      {!mobile && <ThemeControl />}
     </div>
   );
   if (authenticated === null && !isPublic)
@@ -1182,6 +1184,7 @@ export default function App() {
             </div>
           </nav>
           <div className="sidebar-bottom">
+            {config.demo_data && <small className="demo-data-label">Local demo · sample content & metrics</small>}
             <small>
               Uploads up to{" "}
               {config.max_file_size
@@ -1266,6 +1269,7 @@ export default function App() {
               </button>
             </>
           )}
+          {mobile && <ThemeControl />}
           {isPublic && (
             <span className="public-label">
               <Globe size={16} /> Read-Only Shared Folder
@@ -1392,6 +1396,7 @@ export default function App() {
               uploadPreferences={<UploadSettings />}
               onSaved={(value) => {
                 setTimezone(value.timezone);
+                void api.config().then(setConfig).catch(() => {});
                 notify("Performance settings saved.");
                 reload();
               }}

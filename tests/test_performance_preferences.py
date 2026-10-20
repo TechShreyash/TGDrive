@@ -33,15 +33,24 @@ def test_operator_default_hints_and_startup_examples_match_runtime_defaults():
         "cache_disk_bytes": 1024**3,
         "cache_min_free_bytes": 1024**3,
         "cache_ttl_seconds": 3600,
+        "max_file_size": 1024**3,
+        "staging_budget_bytes": 1024**3,
+        "min_free_bytes": 1024**3,
     }
     for key, expected in defaults.items():
-        assert Settings.model_fields[key].default == expected
+        if key == "max_file_size":
+            assert Settings.model_fields[key].default is None
+        else:
+            assert Settings.model_fields[key].default == expected
         if key in numeric:
             assert int(displayed[key]) * units.get(key, 1) == expected
     example = (root / ".env.example").read_text()
     for key, expected in defaults.items():
         value = str(expected).lower() if isinstance(expected, bool) else str(expected)
-        assert f"\n{key.upper()}={value}\n" in example
+        if key == "max_file_size":
+            assert "# MAX_FILE_SIZE=" in example
+        else:
+            assert f"\n{key.upper()}={value}\n" in example
 
 
 def runtime():

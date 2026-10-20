@@ -125,7 +125,7 @@ def test_finished_history_cursor_pages_keep_live_sections_and_reset_filters(
     page.screenshot(path=ARTIFACTS / "transfer-pagination-desktop.png", full_page=True)
     filters = history_region.get_by_role("group", name="Filter Finished Transfers")
     filters.get_by_role("button", name="Successful", exact=True).click()
-    expect(pager.get_by_role("status")).to_have_text("Page 1")
+    expect(pager).to_have_count(0)
     expect(finished).to_contain_text("recent-success.bin")
     expect(finished).not_to_contain_text("recent-failure.bin")
     filters.get_by_role("button", name="Failed", exact=True).click()
@@ -142,7 +142,7 @@ def test_finished_history_cursor_pages_keep_live_sections_and_reset_filters(
     page.set_viewport_size({"width": 390, "height": 844})
     page.evaluate("document.documentElement.dataset.theme = 'dark'")
     assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
-    pager.scroll_into_view_if_needed()
+    expect(pager).to_have_count(0)
     page.screenshot(
         path=ARTIFACTS / "transfer-pagination-empty-mobile.png", full_page=True
     )

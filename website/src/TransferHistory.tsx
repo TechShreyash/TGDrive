@@ -177,7 +177,7 @@ export default function TransferHistory({
         }
         finishedEmpty={empty}
       />
-      <nav
+      {(navigation.previous.length > 0 || page?.has_more) && <nav
         className="transfer-history-pagination"
         aria-label="Finished transfer pages"
       >
@@ -238,7 +238,7 @@ export default function TransferHistory({
             Next <ChevronRight size={16} />
           </button>
         </div>
-      </nav>
+      </nav>}
     </section>
   );
 }

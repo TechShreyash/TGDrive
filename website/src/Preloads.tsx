@@ -244,20 +244,6 @@ export default function Preloads({
   );
   return (
     <div className="preloads-page page-body">
-      <div className="performance-section-heading">
-        <div>
-          <p>Reuse downloaded media for faster playback and sharing.</p>
-        </div>
-        <button
-          className="secondary-button"
-          disabled={!!busy}
-          onClick={() => setRefresh((value) => value + 1)}
-          aria-label="Refresh Cache Inventory"
-        >
-          <RefreshCw size={16} />
-          <span>Refresh</span>
-        </button>
-      </div>
       {loading && (
         <p className="performance-loading" role="status">
           <Spinner /> Loading cache inventory…
@@ -321,20 +307,29 @@ export default function Preloads({
                   Cached files{" "}
                   <span className="performance-count">{files.length}</span>
                 </h3>
-                <p>Media from playback, downloads and manual preparation.</p>
               </div>
-              <button
-                className="secondary-button"
-                disabled={
-                  !!busy ||
-                  (!files.length &&
-                    !pending.some((job) => job.state !== "failed"))
-                }
-                onClick={() => setClearing({})}
-              >
-                <Trash2 size={16} />
-                {busy === "clear" ? "Clearing…" : "Clear Cache"}
-              </button>
+              <div className="inline-actions cache-inventory-actions">
+                <button
+                  className="secondary-button"
+                  disabled={!!busy}
+                  onClick={() => setRefresh((value) => value + 1)}
+                  aria-label="Refresh Cache Inventory"
+                >
+                  <RefreshCw size={16} /> Refresh
+                </button>
+                <button
+                  className="secondary-button"
+                  disabled={
+                    !!busy ||
+                    (!files.length &&
+                      !pending.some((job) => job.state !== "failed"))
+                  }
+                  onClick={() => setClearing({})}
+                >
+                  <Trash2 size={16} />
+                  {busy === "clear" ? "Clearing…" : "Clear Cache"}
+                </button>
+              </div>
             </div>
             {!!files.length && (
               <div className="cache-inventory-toolbar">

@@ -895,6 +895,12 @@ def test_refresh_names_requires_owner_and_same_origin_without_saving_configurati
         assert response.json()["revision"] == 0
         assert response.json()["restart_required"] is False
         assert TOKEN not in response.text
+
+        async def completed_checks():
+            await asyncio.gather(*manager._check_tasks)
+
+        # The endpoint accepts background work; a GET need not complete it.
+        client.portal.call(completed_checks)
         client.get("/api/v1/settings")
         assert manager.verifier.call_count == 1
         assert not settings_path(settings.resolved_data_dir).exists()

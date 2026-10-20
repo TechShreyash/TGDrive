@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import errno
 import hashlib
 import json
 import os
@@ -18,6 +19,7 @@ from typing import Any
 
 from tgdrive.errors import DriveError
 from tgdrive.security import safe_name
+from tgdrive.staging import StorageUnavailable, check_staging
 
 CHUNK_SIZE = 8 * 1024 * 1024
 _ACTIVE = {"receiving", "queued", "cancelling"}
@@ -202,21 +204,10 @@ class ResumableUploads:
         active = [item for item in active if item["state"] in _ACTIVE]
         if len(active) >= 1000:
             raise UploadError("Too many unfinished upload sessions", 429)
-        reserved = sum(item["total_size"] for item in active)
-        remaining = sum(
-            item["total_size"] - item["offset"]
-            for item in active
-            if item["state"] == "receiving"
-        )
-        if reserved + total_size > self.settings.staging_budget_bytes:
-            raise UploadError(
-                "Temporary storage budget is full. Finish or cancel a transfer.", 507
-            )
-        if (
-            shutil.disk_usage(self.root).free - remaining - total_size
-            < self.settings.min_free_bytes
-        ):
-            raise UploadError("Not enough free disk space for this upload", 507)
+        try:
+            check_staging(self.settings, self.manager, total_size, receipts=self)
+        except StorageUnavailable as exc:
+            raise UploadError(str(exc), exc.status) from None
         upload_id = secrets.token_hex(16)
         item = {
             "id": upload_id,
@@ -312,6 +303,14 @@ class ResumableUploads:
                 try:
                     checksum = await asyncio.shield(work)
                     break
+                except OSError as exc:
+                    if exc.errno in {errno.ENOSPC, errno.EDQUOT}:
+                        raise UploadError(
+                            "Upload storage filled while receiving data. "
+                            "Free disk space, then resume this upload.",
+                            507,
+                        ) from None
+                    raise
                 except asyncio.CancelledError:
                     # Repeated disconnect/shutdown cancellation still cannot
                     # release this lock while an OS write or its durable cloud

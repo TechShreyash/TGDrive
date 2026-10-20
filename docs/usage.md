@@ -25,7 +25,7 @@ The sidebar keeps **Monitor**, **Configuration**, and **Management** visible as
 separate groups. Monitor shows activity and reusable media; Configuration changes
 instance-wide policies; Management handles connections and recovery.
 
-TGDrive uses one dark appearance with shared colors and controls. The whole sidebar
+TGDrive offers Light, Dark and System appearances with shared controls. The whole sidebar
 scrolls naturally; Documentation and **Log Out** follow the navigation rather than
 reserving fixed space. Logging out closes this browser's access; server transfers continue.
 See [Configuration & tuning](configuration.md) for safe defaults, restoring values

@@ -137,6 +137,8 @@ async def manager_for(
         bot_upload_limit=4,
         premium_upload_limit=8,
         upload_limit=100,
+        staging_budget_bytes=16 * 1024**3,
+        min_free_bytes=0,
     )
     manager = TransferManager(
         settings=settings,

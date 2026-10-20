@@ -36,6 +36,7 @@ from tgdrive.errors import (
 )
 from tgdrive.remote import RemoteCancelled, RemoteClient, RemoteFileInfo, RemoteTooLarge
 from tgdrive.security import safe_name
+from tgdrive.staging import check_staging
 from tgdrive.store import DriveStore
 from tgdrive.tasks import TransferRecord, TransferRegistry, TransferStatus
 
@@ -213,6 +214,11 @@ class TransferManager:
         if declared_size == 0:
             await upload.close()
             raise TransferEmptyFile("Empty files cannot be uploaded to Telegram")
+        try:
+            check_staging(self.settings, self, declared_size or admission_limit)
+        except BaseException:
+            await upload.close()
+            raise
         record = self.registry.create(
             "saving", total=declared_size if isinstance(declared_size, int) else 0
         )
@@ -221,6 +227,8 @@ class TransferManager:
         local_path = upload_dir / f"{record.id}.upload"
         record.context.update(
             kind="receiving",
+            staging_size=declared_size or admission_limit,
+            staging_written=0,
             local_path=str(local_path),
             destination=destination,
             destination_id=binding["id"],
@@ -246,7 +254,15 @@ class TransferManager:
                         raise TransferTooLarge(
                             f"file exceeds the {admission_limit}-byte upload limit"
                         )
+                    check_staging(
+                        self.settings,
+                        self,
+                        record.context["staging_size"],
+                        exclude=record.id,
+                        written=written - len(chunk),
+                    )
                     await output.write(chunk)
+                    record.context["staging_written"] = written
                     self.registry.update(
                         record.id,
                         current=written,
@@ -372,6 +388,18 @@ class TransferManager:
                     observed = max(current, total or 0)
                     if observed > admission_limit:
                         raise RemoteTooLarge(admission_limit, observed)
+                    size = total if total is not None else admission_limit
+                    check_staging(
+                        self.settings,
+                        self,
+                        size,
+                        exclude=record.id,
+                        written=current,
+                    )
+                    reservation_changed = record.context.get("staging_size") != size
+                    record.context.update(staging_size=size, staging_written=current)
+                    if reservation_changed:
+                        self.registry.persist(record)
                     self.registry.update(
                         record.id,
                         current=current,
@@ -390,6 +418,7 @@ class TransferManager:
                     overwrite=True,
                     cancel_event=record.cancel_event,
                     progress=progress,
+                    max_bytes=admission_limit,
                 )
             await self._upload_path(
                 record,

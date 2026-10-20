@@ -1,3 +1,4 @@
+import { useAppearance } from "./ThemeControl";
 import { type ReactNode } from "react";
 import {
   MantineProvider,
@@ -45,10 +46,11 @@ export const driveTheme = createTheme({
 });
 
 export default function DesignSystem({ children }: { children: ReactNode }) {
+  const { theme } = useAppearance();
   return (
     <MantineProvider
       theme={driveTheme}
-      forceColorScheme="dark"
+      forceColorScheme={theme}
       withCssVariables={false}
       withGlobalClasses={false}
     >

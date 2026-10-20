@@ -494,11 +494,10 @@
 }
 .performance-chart-tooltip {
   position: absolute;
-  top: 6px;
-  right: 8px;
   display: grid;
   gap: 3px;
-  max-width: calc(100% - 70px);
+  width: 280px;
+  max-width: calc(100% - 16px);
   padding: 8px 10px;
   border: 1px solid var(--line);
   border-radius: 6px;
@@ -1225,4 +1224,64 @@
   .performance-page > .performance-toolbar[data-view="telegram"] > .performance-view-tabs {
     flex: 1 1 auto;
   }
+}
+
+.performance-history-availability {
+  margin: 0 0 16px;
+  line-height: 1.6;
+}
+.performance-chart-readout {
+  margin-top: 16px;
+  row-gap: 8px;
+}
+.performance-metric-chart .performance-chart-note {
+  margin-top: 14px;
+}
+.transfer-history .transfer-category[data-category="finished"]:has(> .empty-state) {
+  border-bottom: 0;
+}
+
+.performance-accounts-grid:not([hidden]) {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 20px;
+  align-items: start;
+}
+.performance-account-section {
+  padding: 18px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--surface-subtle);
+  margin: 0;
+  min-width: 0;
+}
+.performance-account-section:first-child { grid-column: 1 / -1; }
+.performance-account-heading {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 10px;
+}
+.performance-account-heading h3 { margin: 0; }
+.performance-account-section .performance-overview-status {
+  background: transparent;
+  border: 0;
+  padding: 0;
+  margin: 0;
+  color: var(--muted);
+  font-size: 12px;
+  gap: 14px;
+}
+.performance-overview-status strong { color: var(--ink); }
+.performance-account-section > .settings-help { margin: 8px 0 16px; }
+.performance-account-section .performance-empty { padding: 18px 0; margin: 0; }
+.performance-account-section .performance-table-wrap { border: 0; border-radius: 8px; }
+.performance-account-section .performance-table td,
+.performance-account-section .performance-table th { padding: 12px; }
+.performance-chart-plot .performance-chart-tooltip { z-index: 2; }
+.demo-data-label { color: var(--warning); margin-bottom: 10px; }
+@media (max-width: 960px) {
+  .performance-accounts-grid:not([hidden]) { grid-template-columns: 1fr; }
 }

@@ -30,6 +30,9 @@ class PerformancePreferences(BaseModel):
     telegram_media_per_bot: int = Field(default=3, ge=1, le=16)
     telegram_max_queue: int = Field(default=256, ge=1, le=4096)
     upload_split_mib: int = Field(default=2000, ge=0, le=2000)
+    max_file_size: int = Field(default=16 * 1024**3, ge=1, le=2 * 1024**4)
+    staging_budget_bytes: int = Field(default=16 * 1024**3, ge=1, le=2 * 1024**4)
+    min_free_bytes: int = Field(default=1024**3, ge=0, le=2 * 1024**4)
 
     @field_validator("timezone")
     @classmethod
@@ -62,6 +65,9 @@ class PerformanceSettings:
         initial.update(
             {key: getattr(settings, key) for key in initial if hasattr(settings, key)}
         )
+        initial["max_file_size"] = (
+            settings.max_file_size or settings.staging_budget_bytes
+        )
         self.value = PerformancePreferences.model_validate(initial)
         self._lock = asyncio.Lock()
         self._loaded = False
@@ -81,7 +87,7 @@ class PerformanceSettings:
             except FileNotFoundError:
                 raw = None
         return (
-            PerformancePreferences.model_validate(raw)
+            PerformancePreferences.model_validate(self.value.model_dump() | raw)
             if raw is not None
             else self.value
         )
@@ -118,6 +124,13 @@ class PerformanceSettings:
     async def _apply(self, value):
         for key, item in value.model_dump().items():
             setattr(self.settings, key, item)
+        manager = getattr(self.runtime, "transfers", None)
+        remote = getattr(manager, "remote", None) or getattr(
+            self.runtime, "remote", None
+        )
+        if remote is not None:
+            remote.max_bytes = self.settings.upload_limit
+            remote.min_free_bytes = value.min_free_bytes
         pool = getattr(self.runtime, "pool", None)
         if pool is None or not hasattr(pool, "__dict__"):
             return
@@ -205,6 +218,36 @@ class PerformanceSettings:
                         "Use the 1 GiB default for normal operation.",
                         status=422,
                     )
+                upload_keys = {
+                    "max_file_size",
+                    "staging_budget_bytes",
+                    "min_free_bytes",
+                }
+                if upload_keys.intersection(changes):
+                    if value.max_file_size > value.staging_budget_bytes:
+                        raise SettingsProblem(
+                            "Maximum file size cannot exceed "
+                            "the temporary upload budget. "
+                            "Increase the budget or lower the file limit.",
+                            status=422,
+                        )
+                    if value.min_free_bytes < 64 * 1024**2:
+                        raise SettingsProblem(
+                            "Keep at least 64 MiB free for upload storage. "
+                            "The recommended default is 1 GiB.",
+                            status=422,
+                        )
+                    from tgdrive.staging import staging_usage
+
+                    manager = getattr(self.runtime, "transfers", None)
+                    reserved, _ = staging_usage(manager)
+                    if value.staging_budget_bytes < reserved:
+                        raise SettingsProblem(
+                            "The temporary budget is below space "
+                            "already reserved by uploads. "
+                            "Finish or cancel transfers first.",
+                            status=409,
+                        )
                 await asyncio.to_thread(self._write, value)
             except SettingsProblem:
                 raise

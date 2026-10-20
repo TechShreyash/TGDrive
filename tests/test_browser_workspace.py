@@ -164,7 +164,7 @@ def test_save_only_current_category_preserves_unrelated_invalid_draft(server, de
     page.get_by_role("link", name="Timezone", exact=True).click()
     page.get_by_label("Timezone", exact=True).fill("UTC")
     page.get_by_role("button", name="Save Performance Settings", exact=True).click()
-    expect(page.locator(".performance-settings").get_by_role("status")).to_contain_text(
+    expect(page.locator(".performance-settings .performance-notice")).to_contain_text(
         "saved for this section"
     )
     assert patches == [{"timezone": "UTC"}]
@@ -188,7 +188,7 @@ def test_removed_settings_page_replaces_legacy_url_with_my_files(
     expect(page.get_by_role("link", name="Settings", exact=True)).to_have_count(0)
     expect(
         page.get_by_role("button", name="Change Appearance", exact=True)
-    ).to_have_count(0)
+    ).to_be_visible()
 
 
 @pytest.mark.parametrize("width", [1440, 390])
@@ -271,7 +271,7 @@ def test_restore_defaults_is_reviewable_scoped_and_durable(server, desktop, widt
     expect(memory).to_have_value("512")
     page.get_by_role("button", name="Restore defaults", exact=True).click()
     page.get_by_role("button", name="Save Performance Settings", exact=True).click()
-    expect(page.locator(".performance-settings").get_by_role("status")).to_contain_text(
+    expect(page.locator(".performance-settings .performance-notice")).to_contain_text(
         "saved for this section"
     )
     policy = page.request.get(server.url + "/api/v1/settings/performance").json()
@@ -289,3 +289,36 @@ def test_restore_defaults_is_reviewable_scoped_and_durable(server, desktop, widt
     page.get_by_role("button", name="Restore defaults", exact=True).click()
     page.screenshot(path=ARTIFACTS / f"configuration-defaults-{width}.png")
     assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
+
+
+@pytest.mark.parametrize("width", [1440, 390])
+def test_owner_upload_storage_limits_validate_save_and_refresh_sidebar(
+    server, desktop, width
+):
+    _, page = desktop
+    page.set_viewport_size({"width": width, "height": 844})
+    login(page, server.url + "/?view=settings&section=transfers")
+    maximum = page.get_by_label("Maximum file size (GiB)", exact=True)
+    budget = page.get_by_label("Temporary upload budget (GiB)", exact=True)
+    reserve = page.get_by_label("Upload free-space reserve (GiB)", exact=True)
+    maximum.fill("32")
+    page.get_by_role("button", name="Save Performance Settings", exact=True).click()
+    expect(page.locator(".performance-settings").get_by_role("alert")).to_contain_text(
+        "cannot exceed"
+    )
+    expect(maximum).to_have_value("32")
+    budget.fill("64")
+    reserve.fill("1")
+    page.get_by_role("button", name="Save Performance Settings", exact=True).click()
+    expect(page.locator(".performance-settings .performance-notice")).to_contain_text(
+        "saved for this section"
+    )
+    assert (
+        page.request.get(server.url + "/api/config").json()["max_file_size"]
+        == 32 * 1024**3
+    )
+    page.reload()
+    expect(maximum).to_have_value("32")
+    expect(budget).to_have_value("64")
+    page.screenshot(path=ARTIFACTS / f"owner-upload-storage-{width}.png")
+    assert page.evaluate("document.documentElement.scrollWidth<=innerWidth")

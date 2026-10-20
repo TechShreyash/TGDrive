@@ -337,6 +337,12 @@ def create_app(
             503,
         )
 
+    from tgdrive.staging import StorageUnavailable
+
+    @app.exception_handler(StorageUnavailable)
+    async def staging_error_handler(_request: Request, exc: StorageUnavailable):
+        return _json_error(str(exc), exc.status)
+
     @app.exception_handler(RemoteError)
     async def remote_error_handler(_request: Request, exc: RemoteError) -> JSONResponse:
         if isinstance(exc, RemoteTooLarge):

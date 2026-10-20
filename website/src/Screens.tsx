@@ -1,4 +1,4 @@
-import { Button, Paper, Badge } from "@mantine/core";
+import { Button, Paper } from "@mantine/core";
 import {
   useCallback,
   useEffect,
@@ -536,14 +536,7 @@ export function UploadSettings() {
       className="settings-section preference-section"
       aria-labelledby="upload-settings-heading"
     >
-      <div className="preference-description">
-        <div className="configuration-section-heading">
-          <h2 id="upload-settings-heading">Parallel uploads</h2>
-          <Badge color="teal" variant="light">
-            Default: 1 per bot
-          </Badge>
-        </div>
-      </div>
+      <h2 id="upload-settings-heading" className="sr-only">Parallel uploads</h2>
       <div className="preference-controls">
         {loading ? (
           <Spinner />

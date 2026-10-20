@@ -159,7 +159,7 @@ def test_transfer_search_resets_cursor_and_filters_active_and_old_finished_names
     expect(pager.get_by_role("status")).to_have_text("Page 2")
     search = page.get_by_role("searchbox", name="Search Transfers", exact=True)
     search.fill("Archive")
-    expect(pager.get_by_role("status")).to_have_text("Page 1")
+    expect(pager).to_have_count(0)
     finished = page.locator('[data-category="finished"]')
     expect(finished).to_contain_text("Archive video.mp4")
     expect(finished.locator(".transfer-item-name")).to_have_count(1)

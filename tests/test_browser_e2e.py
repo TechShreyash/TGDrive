@@ -2476,10 +2476,11 @@ def test_actual_unavailable_wmv_codec_stays_in_custom_player_with_original_downl
 
 
 def assert_single_appearance(page: Any) -> None:
-    expect(page.locator("html")).to_have_attribute("data-theme", "dark")
-    expect(
-        page.get_by_role("button", name="Change Appearance", exact=True)
-    ).to_have_count(0)
+    assert page.locator("html").get_attribute("data-theme") in {"light", "dark"}
+    if not page.locator('input[type="password"]').is_visible():
+        expect(
+            page.get_by_role("button", name="Change Appearance", exact=True)
+        ).to_be_visible()
 
 
 def assert_theme_contrast(page: Any) -> None:
@@ -2522,11 +2523,14 @@ def assert_theme_contrast(page: Any) -> None:
         )
 
 
-def test_single_dark_theme_ignores_legacy_preference_and_preserves_sort_keyboard(
+def test_light_dark_theme_preference_persists_and_preserves_sort_keyboard(
     server: Server, desktop: tuple[Any, Any]
 ) -> None:
     _, page = desktop
-    page.add_init_script("localStorage.setItem('tgdrive.appearance', 'light')")
+    page.add_init_script(
+        "if (!localStorage.getItem('tgdrive.appearance')) "
+        "localStorage.setItem('tgdrive.appearance', 'light')"
+    )
     page.emulate_media(color_scheme="light")
     page.goto(server.url)
     assert_single_appearance(page)
@@ -2537,11 +2541,19 @@ def test_single_dark_theme_ignores_legacy_preference_and_preserves_sort_keyboard
       injected: document.querySelectorAll('style[data-mantine-styles]').length
     })""")
     assert "InterVariable" in baseline["font"]
-    assert baseline["background"] == "rgb(21, 23, 28)"
+    assert baseline["background"] == "rgb(245, 247, 249)"
     assert baseline["injected"] == 0
     login(page)
     page.reload()
     assert_single_appearance(page)
+    expect(page.locator("html")).to_have_attribute("data-theme", "light")
+    page.get_by_role("button", name="Change Appearance", exact=True).click()
+    page.get_by_role("menuitemradio", name="Dark", exact=True).click()
+    expect(page.locator("html")).to_have_attribute("data-theme", "dark")
+    expect(page.locator("html")).to_have_attribute("data-mantine-color-scheme", "dark")
+    assert_theme_contrast(page)
+    page.reload()
+    expect(page.locator("html")).to_have_attribute("data-theme", "dark")
     sort = page.get_by_role("button", name="Sort Files: Name", exact=True)
     sort.click()
     menu = page.get_by_role("menu", name="Sort Files", exact=True)

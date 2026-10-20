@@ -11,6 +11,7 @@ import asyncio
 import hashlib
 import io
 import math
+import os
 import struct
 import tempfile
 import time
@@ -212,6 +213,24 @@ class FixtureTransfers:
 
     def retry_job(self, job_id: str) -> TransferRecord:
         record = self.registry.get(job_id)
+        if record.context.get("showcase"):
+            self.registry.retry(job_id)
+            self._start(
+                record,
+                record.context["name"],
+                record.context["destination"],
+                b"Demo retry result",
+            )
+
+            async def finish():
+                await asyncio.sleep(2)
+                self.release[record.id].set()
+
+            self.showcase_finish_tasks = getattr(self, "showcase_finish_tasks", set())
+            task = asyncio.create_task(finish())
+            self.showcase_finish_tasks.add(task)
+            task.add_done_callback(self.showcase_finish_tasks.discard)
+            return record
         if record.context.get("kind") != "delete":
             raise ValueError("Only fixture deletion retries are supported")
         self.registry.retry(job_id)
@@ -614,10 +633,18 @@ class FixtureRuntime:
 
         await get_performance_settings(settings, self).initialize()
         await self.pool.start()
+        if os.environ.get("TGDRIVE_UI_SHOWCASE") == "1":
+            from showcase_data import seed
+
+            await seed(self, settings)
         self.ready = True
 
     async def stop(self) -> None:
         self.ready = False
+        task = getattr(self, "showcase_task", None)
+        if task is not None:
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
         await self.transfers.registry.shutdown()
         await self.preloads.close()
         await self.pool.stop(drain_timeout=1)
@@ -646,6 +673,10 @@ runtime.connection_manager = ConnectionManager(
     settings, runtime, verifier=fixture_verify_connection
 )
 app = create_app(settings, runtime=runtime)
+if os.environ.get("TGDRIVE_UI_SHOWCASE") == "1":
+    from showcase_data import install
+
+    install(app, runtime)
 app.state.premium_login_service = PremiumLoginService(
     runtime.connection_manager.login_api,
     runtime.connection_manager.add_authenticated_session,

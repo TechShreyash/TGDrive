@@ -39,7 +39,31 @@ npm run dev --prefix website
 - Do not start a second owner of the same drive.
 - Avoid automatic reload during real uploads unless testing interruption recovery.
 
+## Preview with sample content
+
+Build the website, then run the isolated fixture inside WSL:
+
+~~~bash
+npm run build --prefix website
+TGDRIVE_UI_SHOWCASE=1 uv run --frozen --group e2e python -m uvicorn \
+  --app-dir tests browser_transfer_app:app --host 0.0.0.0 --port 18767
+~~~
+
+Open [localhost:18767](http://localhost:18767/) and sign in with
+`offline browser test password`. This disposable preview includes transfers,
+files, shares, trash, complete/partial caches and illustrative performance data.
+It uses temporary stores and no real Telegram credentials. Restarting resets the
+sample content. The fixture's initial 32 MiB upload cap keeps tests small; the
+production default is 16 GiB and owners can adjust it in Transfer limits.
+Never deploy this fixture or its `/__test__` endpoints publicly.
+
 ## Latest focused validation
+
+The subsequent UI/upload-admission follow-up passed **1,007 offline Python tests**,
+**213 frontend tests**, three player guards and **110 Chromium workflows**;
+TypeScript, production build, Ruff and the AMD64 Docker build/runtime smoke check
+also passed. Live MongoDB was not enabled for this follow-up.
+
 
 The 2026-10-20 local candidate passed **1,018 Python tests** with an isolated
 MongoDB replica set, warnings treated as errors, and **84.07% coverage**.

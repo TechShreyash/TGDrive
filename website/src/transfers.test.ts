@@ -173,8 +173,17 @@ describe("safe resume and browser persistence", () => {
       await vi.waitFor(() => expect(manager.snapshot()).toHaveLength(1));
       expect(manager.snapshot()[0].initiatedHere).not.toBe(true);
       const restored = managerForTest();
-      expect(restored.snapshot()[0].initiatedHere).toBe(false);
-      expect(restored.snapshot()[0].jobId).toBe("another-device");
+      // The server is authoritative for discovered rows; stale browser copies
+      // must not resurrect a job removed by a fixture/drive reset.
+      expect(restored.snapshot()).toEqual([]);
+      try {
+        restored.setEnabled(true);
+        await vi.waitFor(() => expect(restored.snapshot()).toHaveLength(1));
+        expect(restored.snapshot()[0].initiatedHere).not.toBe(true);
+        expect(restored.snapshot()[0].jobId).toBe("another-device");
+      } finally {
+        restored.setEnabled(false);
+      }
     } finally {
       manager.setEnabled(false);
     }

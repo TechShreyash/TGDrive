@@ -101,10 +101,10 @@ def test_settings_save_converts_units_guards_revision_and_recovers_conflict(
     section.get_by_label("Memory cache (MiB)", exact=True).fill("512")
     section.get_by_label("Disk cache (GiB)", exact=True).fill("1.5")
     expect(
-        section.locator("#perf-help-cache_memory_bytes").locator(
-            "xpath=ancestor::*[contains(@class, 'performance-field')]"
-        )
-    ).to_contain_text("Default 256 MiB")
+        section.locator("#perf-help-cache_memory_bytes")
+        .locator("xpath=ancestor::*[contains(@class, 'performance-field')]")
+        .locator(".mantine-Badge-root")
+    ).to_have_count(0)
     expect(
         section.locator("#perf-help-cache_memory_bytes").locator(
             "xpath=ancestor::*[contains(@class, 'performance-field')]"
@@ -148,19 +148,19 @@ def test_settings_save_converts_units_guards_revision_and_recovers_conflict(
     section.get_by_role("button", name="Reload Latest Settings", exact=True).click()
     expect(section.get_by_label("Disk cache (GiB)", exact=True)).to_have_value("1.5")
     expect(
-        section.locator("#perf-help-cache_disk_bytes").locator(
-            "xpath=ancestor::*[contains(@class, 'performance-field')]"
-        )
-    ).to_contain_text("Default 10 GiB")
+        section.locator("#perf-help-cache_disk_bytes")
+        .locator("xpath=ancestor::*[contains(@class, 'performance-field')]")
+        .locator(".mantine-Badge-root")
+    ).to_have_count(0)
     page.set_viewport_size({"width": 1440, "height": 960})
     page.get_by_role("link", name="Transfer limits", exact=True).click()
     section.locator("summary").filter(has_text="Advanced Telegram limits").click()
     expect(section.get_by_label("Requests per second", exact=True)).to_have_value("24")
     expect(
-        section.locator("#perf-help-telegram_parts_per_second").locator(
-            "xpath=ancestor::*[contains(@class, 'performance-field')]"
-        )
-    ).to_contain_text("Default 48")
+        section.locator("#perf-help-telegram_parts_per_second")
+        .locator("xpath=ancestor::*[contains(@class, 'performance-field')]")
+        .locator(".mantine-Badge-root")
+    ).to_have_count(0)
 
 
 def test_preload_inventory_cancel_and_scoped_eviction(

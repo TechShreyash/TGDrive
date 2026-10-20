@@ -29,7 +29,7 @@ Telegram client library to enable these features.
 
 Open **Configuration → Cache settings** for cache storage and preparation,
 **Transfer limits** for upload splitting and request limits, and **Timezone**
-for display time. Saving changes only the current category; other drafts stay unsaved. TGDrive uses one dark appearance; logout follows the navigation in the scrollable sidebar.
+for display time. Saving changes only the current category; other drafts stay unsaved. Appearance supports Light, Dark and System; logout follows the navigation in the scrollable sidebar.
 The existing `?view=settings&section=performance` deep link still opens cache controls.
 
 The application defaults are **256 MiB RAM** and **10 GiB disk**, with a

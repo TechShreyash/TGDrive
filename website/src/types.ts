@@ -72,6 +72,7 @@ export interface Share {
   copyable?: boolean;
 }
 export interface PublicConfig {
+  demo_data?: boolean;
   max_file_size: number;
   timezone?: string;
 }

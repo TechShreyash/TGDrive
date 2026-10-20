@@ -16,6 +16,9 @@ export interface PerformancePolicy {
   telegram_media_per_bot: number;
   telegram_max_queue: number;
   upload_split_mib: number;
+  max_file_size: number;
+  staging_budget_bytes: number;
+  min_free_bytes: number;
 }
 export interface PerformancePreferences extends PerformancePolicy {
   revision: string;
@@ -85,6 +88,24 @@ export const numericPreferences: {
     max: 8,
     appDefault: 2,
     help: "Files prepared in the background at once. Active playback and downloads always go first.",
+  },
+  {
+    key: "max_file_size",
+    label: "Maximum file size (GiB)",
+    unit: GIB, min: 1 / GIB, max: 2048, appDefault: 16, unitLabel: "GiB",
+    help: "Largest file accepted for a new upload. Large files are split automatically for Telegram. Must fit within the temporary upload budget.",
+  },
+  {
+    key: "staging_budget_bytes",
+    label: "Temporary upload budget (GiB)",
+    unit: GIB, min: 1 / GIB, max: 2048, appDefault: 16, unitLabel: "GiB",
+    help: "Space all unfinished uploads may use together. This is a ceiling, not preallocated disk space. Each upload also needs real free space.",
+  },
+  {
+    key: "min_free_bytes",
+    label: "Upload free-space reserve (GiB)",
+    unit: GIB, min: 0.0625, max: 2048, appDefault: 1, unitLabel: "GiB",
+    help: "Space uploads must leave free on their storage drive. Reservations from other uploads are checked before file data is sent.",
   },
   {
     key: "upload_split_mib",
@@ -161,7 +182,7 @@ export function performanceCategoryKeys(
       .filter(({ key }) =>
         category === "cache"
           ? key.startsWith("cache_") || key === "preload_max_jobs"
-          : key.startsWith("telegram_") || key === "upload_split_mib",
+          : key.startsWith("telegram_") || ["upload_split_mib", "max_file_size", "staging_budget_bytes", "min_free_bytes"].includes(key),
       )
       .map(({ key }) => key),
     ...(category === "cache" ? ["auto_preload" as const] : []),
@@ -181,7 +202,7 @@ export function performanceDraft(saved: PerformancePolicy): PerformanceDraft {
   return Object.fromEntries([
     ...numericPreferences.map(({ key, unit }) => [
       key,
-      String(saved[key] / unit),
+      String((saved[key] ?? (key === "max_file_size" || key === "staging_budget_bytes" ? 16 * GIB : key === "min_free_bytes" ? GIB : 0)) / unit),
     ]),
     ["timezone", saved.timezone],
     ["auto_preload", saved.auto_preload],
@@ -192,6 +213,7 @@ export function performanceChanges(
   saved: PerformancePreferences,
 ): Partial<PerformancePreferences> {
   const changes: Partial<PerformancePreferences> = {};
+  const baseline = performanceDraft(saved);
   for (const { key, label, unit, min, max } of numericPreferences) {
     const value = Number(draft[key]);
     if (
@@ -214,7 +236,7 @@ export function performanceChanges(
     const converted = Math.round(value * unit);
     if (!Number.isSafeInteger(converted))
       throw new Error(label + " is too large.");
-    if (converted !== saved[key]) changes[key] = converted;
+    if (converted !== Math.round(Number(baseline[key]) * unit)) changes[key] = converted;
   }
   const timezone = draft.timezone.trim();
   try {

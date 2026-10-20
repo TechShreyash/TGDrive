@@ -221,6 +221,8 @@ def test_hosted_and_local_compose_resolve_without_real_credentials(tmp_path):
         key.upper(): str(value).lower() if isinstance(value, bool) else str(value)
         for key, value in PerformancePreferences().model_dump().items()
     }
+    # MAX_FILE_SIZE is an optional override; absent means use staging capacity.
+    policy_defaults.pop("MAX_FILE_SIZE")
     policy_defaults["TELEGRAM_UPLOADS_PER_BOT"] = "1"
     for key in policy_defaults:
         environment.pop(key, None)

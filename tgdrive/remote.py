@@ -337,6 +337,7 @@ class RemoteClient:
         overwrite: bool = False,
         cancel_event: asyncio.Event | None = None,
         progress: ProgressCallback | None = None,
+        max_bytes: int | None = None,
     ) -> DownloadResult:
         """Download one identity-encoded stream and atomically publish it."""
 
@@ -349,6 +350,7 @@ class RemoteClient:
                     overwrite=overwrite,
                     cancel_event=cancel_event,
                     progress=progress,
+                    max_bytes=self.max_bytes if max_bytes is None else max_bytes,
                 )
         except TimeoutError as error:
             raise RemoteTimeout("remote download timed out") from error
@@ -396,6 +398,7 @@ class RemoteClient:
         overwrite: bool,
         cancel_event: asyncio.Event | None,
         progress: ProgressCallback | None,
+        max_bytes: int,
     ) -> DownloadResult:
         response = None
         temp_path: Path | None = None
@@ -411,7 +414,7 @@ class RemoteClient:
                 raise RemoteHTTPError(response.status, final_url)
             self._require_identity_encoding(response.headers)
             declared_size = self._declared_size(response.status, response.headers)
-            self._enforce_size(declared_size)
+            self._enforce_size(declared_size, max_bytes)
 
             content_type = self._header(response.headers, "Content-Type")
             chosen_name = safe_filename(
@@ -447,7 +450,7 @@ class RemoteClient:
                 if not chunk:
                     break
                 downloaded += len(chunk)
-                self._enforce_size(downloaded)
+                self._enforce_size(downloaded, max_bytes)
                 if self.min_free_bytes and shutil.disk_usage(
                     output_dir
                 ).free < self.min_free_bytes + len(chunk):
@@ -636,9 +639,10 @@ class RemoteClient:
         if cancel_event is not None and cancel_event.is_set():
             raise RemoteCancelled("remote operation was cancelled")
 
-    def _enforce_size(self, size: int | None) -> None:
-        if size is not None and size > self.max_bytes:
-            raise RemoteTooLarge(self.max_bytes, size)
+    def _enforce_size(self, size: int | None, limit: int | None = None) -> None:
+        maximum = self.max_bytes if limit is None else limit
+        if size is not None and size > maximum:
+            raise RemoteTooLarge(maximum, size)
 
     @classmethod
     def _declared_size(cls, status: int, headers: Mapping[str, str]) -> int | None:

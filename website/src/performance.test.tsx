@@ -42,6 +42,9 @@ export const preferences: PerformancePreferences = {
   telegram_media_per_bot: 3,
   telegram_max_queue: 256,
   upload_split_mib: 2000,
+  max_file_size: 16 * GIB,
+  staging_budget_bytes: 16 * GIB,
+  min_free_bytes: GIB,
 };
 beforeEach(() => vi.stubGlobal("window", new EventTarget()));
 afterEach(() => vi.unstubAllGlobals());

@@ -11,7 +11,7 @@ not remove Telegram pacing, network-route or client-device limits.
 
 The sidebar separates **Monitor** (Performance, Preloads), **Configuration**
 (Cache settings, Transfer limits, Timezone) and **Management** (Connections,
-Storage & Backups). TGDrive uses one consistent dark appearance.
+Storage & Backups). Choose Light, Dark or System from the appearance menu.
 
 - **Save Performance Settings** applies only the open configuration category.
   Other edited categories remain drafts. New work uses the updated limits.
@@ -71,6 +71,37 @@ above the allowed ceilings are rejected. Reducing limits does not enlarge the
 underlying server or Telegram capacity. Supported large budgets are still operator
 choices, not a guarantee that every workload will fit available resources.
 
+## Upload size and available disk space
+
+In **Transfer limits → Upload storage**, the owner can change:
+
+| Setting | Default | Meaning |
+| --- | --- | --- |
+| Maximum file size | 16 GiB | Largest new file; Telegram document splitting is separate. |
+| Temporary upload budget | 16 GiB | Combined reservation for all unfinished uploads. Must be at least the per-file maximum. |
+| Upload free-space reserve | 1 GiB | Space left free on the actual upload volume after unfinished uploads are accounted for. Minimum configurable reserve is 64 MiB. |
+
+To accept a 32 GiB file, raise both the file maximum and temporary budget to at
+least 32 GiB. A budget of 64 GiB allows two such reservations when actual free
+space also permits them. Raising a ceiling does not allocate space or bypass the
+free-space check. Both controls support up to 2048 GiB. Existing receipts retain
+their admitted size; lowering the budget below active reservations is rejected.
+
+Before a resumable browser upload sends file chunks, the server reserves the
+whole declared file against its staging budget and checks the upload volume's
+real free space, subtracting other uploads' unwritten reservations and keeping
+the reserve. URL imports and multipart receipts share this accounting. For a URL
+without a known length, the server conservatively reserves the admitted maximum
+until the source ends. This can reject an unknown-length import on a small disk;
+provide a source with a Content-Length or reduce the per-file limit.
+
+Space is rechecked while receiving data. Other applications, cache growth,
+storage quotas, disconnects and device failures can still cause a later problem;
+these cannot be ruled out by an initial check. Disk-full receipt writes return a
+clear recoverable storage message and retain the acknowledged offset for resume.
+Use separate persistent cache/staging volumes when appropriate. No upload limit
+or staging budget is a claim about available storage in Telegram.
+
 ## A modest server and a larger server
 
 For a fresh deployment, keep the defaults and run a representative upload,
@@ -114,8 +145,9 @@ times, not stored UTC timestamps or transfer speed. Use an IANA name or UTC.
 
 Start with [Setup](setup.md) for required credentials and persistent storage.
 The [configuration reference](reference.md#configuration) lists all environment
-variables and bounds, including upload staging, file-size and session limits.
-Deployment-only changes require a restart/redeploy. Do not shrink staging beneath
+variables and bounds, including environment fallbacks for upload storage and session limits.
+Dashboard upload storage changes apply to new admissions without redeploying;
+other deployment-only changes require a restart/redeploy. Do not shrink staging beneath
 an active workload or increase file-size limits beyond available temporary space.
 No new mandatory environment variable or extra service is needed for dashboard
-default restoration, history, the shared component library or the single theme.
+default restoration, history, the shared component library or appearance preferences.

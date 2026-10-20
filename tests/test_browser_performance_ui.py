@@ -360,6 +360,22 @@ def test_network_includes_url_downloads_and_resources_use_container_limits(
         page.get_by_role("img", name="Network traffic over time", exact=True)
     ).to_be_visible()
     expect(network.locator("polyline.performance-plot-active")).to_have_count(2)
+    plot = network.locator(".performance-chart-plot")
+    bounds = network.get_by_role("img").bounding_box()
+    positions = []
+    for fraction in (0.2, 0.65, 0.98):
+        pointer_x = bounds["x"] + bounds["width"] * fraction
+        page.mouse.move(pointer_x, bounds["y"] + bounds["height"] * 0.45)
+        tooltip = network.locator(".performance-chart-tooltip")
+        expect(tooltip).to_be_visible()
+        tip = tooltip.bounding_box()
+        frame = plot.bounding_box()
+        assert tip["x"] >= frame["x"]
+        assert tip["x"] + tip["width"] <= frame["x"] + frame["width"] + 1
+        positions.append(tip["x"])
+    assert positions[1] > positions[0] + 100
+    expect(network.locator("svg title")).to_have_count(0)
+
     expect(
         page.get_by_role("region", name="Container RAM", exact=True)
     ).not_to_be_visible()

@@ -44,3 +44,6 @@ testfiles/
 
 # Local design skill state
 .impeccable/
+
+# Private local request tracking
+/docs/request-tracker.md

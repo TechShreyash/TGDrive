@@ -1,5 +1,5 @@
 import { Tabs, Paper } from "@mantine/core";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { RefreshCw } from "lucide-react";
 import { errorMessage } from "./api";
 import { ErrorNotice, Spinner } from "./components";
@@ -107,6 +107,8 @@ function MetricChart({
 }) {
   const [selectedAt, setSelectedAt] = useState<number | null>(null);
   const [hoverAt, setHoverAt] = useState<number | null>(null);
+  const [hoverPosition, setHoverPosition] = useState({ left: 8, top: 8 });
+  const tooltip = useRef<HTMLDivElement>(null);
   useEffect(() => setHoverAt(null), [windowSeconds]);
   const inspectedAt = hoverAt ?? selectedAt;
   const found =
@@ -187,11 +189,20 @@ function MetricChart({
                 );
                 const target = first + position * (last - first);
                 const nearest = nearestSampleAt(samples, target);
+                const plot = event.currentTarget.parentElement!.getBoundingClientRect();
+                const width = tooltip.current?.offsetWidth ?? Math.min(280, plot.width - 16);
+                const height = tooltip.current?.offsetHeight ?? 90;
+                const pointerX = event.clientX - plot.left;
+                const pointerY = event.clientY - plot.top;
+                setHoverPosition({
+                  left: Math.max(8, Math.min(plot.width - width - 8,
+                    pointerX + width + 16 < plot.width ? pointerX + 14 : pointerX - width - 14)),
+                  top: Math.max(8, Math.min(plot.height - height - 8, pointerY + 16)),
+                });
                 setHoverAt(nearest);
               }}
               onPointerLeave={() => setHoverAt(null)}
             >
-              <title>{title + ": " + current}</title>
               <desc>
                 {note + " Missing readings and interruptions are left as gaps."}
               </desc>
@@ -218,7 +229,7 @@ function MetricChart({
                   />
                 )),
               )}
-              {series.flatMap(({ key, label, secondary }) =>
+              {series.flatMap(({ key, secondary }) =>
                 samples.flatMap((sample, sampleIndex) => {
                   const value = sample[key];
                   return value === null || !Number.isFinite(value) || value < 0
@@ -241,15 +252,7 @@ function MetricChart({
                               ? "performance-chart-point-secondary"
                               : "performance-chart-point"
                           }
-                        >
-                          <title>
-                            {metricTime(sample.at) +
-                              " · " +
-                              label +
-                              " " +
-                              format(value)}
-                          </title>
-                        </circle>,
+                        />,
                       ];
                 }),
               )}
@@ -261,7 +264,7 @@ function MetricChart({
               )}
             </svg>
             {hoverAt !== null && selected && (
-              <div className="performance-chart-tooltip" aria-hidden="true">
+              <div ref={tooltip} className="performance-chart-tooltip" aria-hidden="true" style={hoverPosition}>
                 <time>{metricTime(selected.at)}</time>
                 {series.map(({ key, label }) => (
                   <span key={key}>
@@ -1023,7 +1026,12 @@ export default function PerformancePanel() {
               </section>
             )}
           </Tabs.Panel>
-          <Tabs.Panel value="telegram">
+          <Tabs.Panel value="telegram" className="performance-accounts-grid">
+            <section
+              className="performance-section performance-account-section"
+              aria-labelledby="account-load-heading"
+            >
+              <div className="performance-account-heading"><h3 id="account-load-heading">Account capacity</h3>
             <section
               className="performance-overview-status"
               aria-label="Live Telegram activity"
@@ -1038,11 +1046,7 @@ export default function PerformancePanel() {
                 <strong>{telegram.queued}</strong> waiting
               </span>
             </section>
-            <section
-              className="performance-section"
-              aria-labelledby="account-load-heading"
-            >
-              <h3 id="account-load-heading">Account capacity</h3>
+</div>
               <p className="settings-help">
                 Live account activity and current limits.
               </p>
@@ -1153,7 +1157,7 @@ export default function PerformancePanel() {
               )}
             </section>
             <section
-              className="performance-section"
+              className="performance-section performance-account-section"
               aria-labelledby="media-queue-heading"
             >
               <h3 id="media-queue-heading">Waiting for Telegram</h3>
@@ -1206,7 +1210,7 @@ export default function PerformancePanel() {
               )}
             </section>
             <section
-              className="performance-section"
+              className="performance-section performance-account-section"
               aria-labelledby="recent-load-heading"
             >
               <h3 id="recent-load-heading">Recent Telegram load</h3>

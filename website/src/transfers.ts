@@ -315,6 +315,10 @@ export class TransferManager {
         .filter(
           (item) =>
             item.kind !== "delete" &&
+            // Rediscover server-owned rows from the live registry. Keeping
+            // their browser copies can resurrect jobs after a drive/fixture reset.
+            item.initiatedHere !== false &&
+            (item.initiatedHere || !item.batchId?.startsWith("server:")) &&
             typeof item.key === "string" &&
             typeof item.name === "string" &&
             typeof item.destination === "string" &&

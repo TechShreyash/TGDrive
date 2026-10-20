@@ -22,17 +22,11 @@
   background: var(--canvas);
 }
 .nav-section-label {
-  color: var(--violet);
-  letter-spacing: 0.025em;
-}
-.monitor-nav .nav-section-label {
-  color: var(--success);
-}
-.admin-nav[aria-label="Management"] .nav-section-label {
-  color: var(--warning);
+  color: var(--muted);
+  letter-spacing: 0;
 }
 .sidebar .brand-symbol {
-  color: var(--success);
+  color: var(--action);
 }
 .drive-nav a {
   transition:
@@ -40,11 +34,11 @@
     color 140ms ease-out;
 }
 .new-button {
-  background: #4166df;
-  color: #fff;
+  background: var(--action);
+  color: var(--on-action);
 }
 .new-button:hover {
-  background: #5278ee;
+  background: var(--action-hover);
 }
 .settings-help {
   color: var(--muted);
@@ -65,7 +59,7 @@
   max-width: 62ch;
 }
 .performance-settings .performance-setting-group {
-  padding: 16px 20px 8px;
+  padding: 12px 16px 4px;
   margin: 24px 0 0;
   background: var(--surface-subtle);
   border: 1px solid var(--line);
@@ -169,7 +163,7 @@
 }
 .preference-section .upload-limit-setting {
   padding: 12px 0;
-  border-top: 1px solid var(--line);
+  border-top: 0;
 }
 .preference-section .upload-limit-stepper {
   background: var(--canvas);
@@ -190,20 +184,13 @@
   gap: 8px;
   font-size: 12px;
 }
-.performance-save-state::before {
-  content: "";
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  background: var(--success);
-}
 .mantine-Button-root {
   min-height: 38px;
   font-size: 13px;
 }
 .mantine-Button-root.primary-button {
-  background: #4166df;
-  color: #fff;
+  background: var(--action);
+  color: var(--on-action);
 }
 .mantine-Button-root.primary-button:disabled {
   background: var(--line);
@@ -229,7 +216,7 @@
 }
 .error-notice.mantine-Alert-root {
   background: var(--danger-soft);
-  border: 1px solid #835064;
+  border: 1px solid var(--danger);
   color: var(--danger-soft-ink);
   padding: 12px 14px;
   border-radius: 10px;
@@ -240,7 +227,7 @@
 .performance-notice,
 .management-notice {
   background: var(--success-soft);
-  border: 1px solid #32675e;
+  border: 1px solid var(--line);
   padding: 12px 14px;
   border-radius: 10px;
   color: var(--success);
@@ -259,12 +246,14 @@
   min-height: 40px;
   padding: 10px 14px;
   border: 0;
-  border-radius: 8px;
+  border-radius: 0;
+  border-bottom: 2px solid transparent;
   color: var(--muted);
 }
 .performance-view-tabs .mantine-Tabs-tab[data-active] {
-  color: var(--on-action-soft);
-  background: var(--action-soft);
+  color: var(--action);
+  background: transparent;
+  border-bottom-color: var(--action);
 }
 .performance-view-tabs .mantine-Tabs-tab:hover {
   background: var(--hover);
@@ -317,7 +306,7 @@
 }
 .performance-overview-status {
   background: var(--success-soft);
-  border: 1px solid #32675e;
+  border: 1px solid var(--line);
   border-radius: 10px;
   padding: 14px 16px;
   color: var(--success);
@@ -361,7 +350,7 @@
 }
 .storage-protection:has(.connection-ready) {
   background: var(--success-soft);
-  border-color: #32675e;
+  border-color: var(--line);
 }
 .storage-protection:has(.error-notice) {
   background: var(--surface-subtle) !important;
@@ -456,9 +445,6 @@
   }
 }
 @media (prefers-reduced-motion: no-preference) {
-  .mantine-Tabs-panel {
-    animation: drive-section-in 160ms ease-out;
-  }
   .mantine-Button-root {
     transition:
       background-color 140ms ease-out,
@@ -467,20 +453,10 @@
   .configuration-value input {
     transition: border-color 140ms ease-out;
   }
-  @keyframes drive-section-in {
-    from {
-      opacity: 1;
-      transform: translateY(3px);
-    }
-    to {
-      opacity: 1;
-      transform: translateY(0);
-    }
-  }
 }
 
 /* Static theme variables work under the application's strict stylesheet CSP. */
-:root[data-mantine-color-scheme="dark"] {
+:root[data-mantine-color-scheme] {
   --mantine-scale: 1.1428571428571428;
   --mantine-font-family:
     InterVariable, Inter, ui-sans-serif, system-ui, sans-serif;
@@ -498,8 +474,8 @@
   --mantine-color-default-color: var(--ink);
   --mantine-color-default-hover: var(--hover);
   --mantine-color-default-border: var(--line);
-  --mantine-primary-color-filled: #4166df;
-  --mantine-primary-color-filled-hover: #5278ee;
+  --mantine-primary-color-filled: var(--action);
+  --mantine-primary-color-filled-hover: var(--action-hover);
   --mantine-primary-color-light: var(--action-soft);
   --mantine-primary-color-light-color: var(--on-action-soft);
   --mantine-primary-color-light-hover: var(--action-soft-hover);
@@ -544,7 +520,7 @@ textarea {
   font-size: 12px;
 }
 .preference-section.mantine-Paper-root {
-  margin-block: 18px;
+  margin-block: 10px 18px;
   padding: 16px 18px;
 }
 .preference-section .upload-limit-setting {
@@ -556,15 +532,15 @@ textarea {
   margin-block: 6px 0;
 }
 .preference-section .upload-settings-actions {
-  margin-top: 12px;
+  margin-top: 8px;
 }
 @media (max-width: 720px) {
   .preference-section.mantine-Paper-root {
     padding: 14px;
-    margin-top: 12px;
+    margin-top: 8px;
   }
   .preference-section .upload-limit-setting {
-    gap: 10px;
+    gap: 6px;
   }
   .preference-section .upload-limit-setting p {
     margin-bottom: 0;
@@ -576,9 +552,46 @@ textarea {
     gap: 6px;
   }
   .preference-section .upload-settings-actions .mantine-Button-root {
-    min-height: 40px;
+    min-height: 44px;
   }
   .performance-resource-charts:not([hidden]) {
     gap: 12px;
+  }
+}
+
+.preference-section .upload-limit-setting {
+  margin-top: 0;
+  padding-top: 0;
+  border-top: 0;
+}
+.performance-actions {
+  background: transparent;
+  border: 0;
+  border-top: 1px solid var(--line);
+  border-radius: 0;
+  padding: 14px 0;
+}
+.performance-settings .performance-section-heading {
+  margin-bottom: 4px;
+}
+.performance-settings .performance-section-heading p {
+  max-width: 62ch;
+}
+.performance-chart-tooltip {
+  font-size: 12px;
+  box-shadow: none;
+}
+@media (prefers-reduced-motion: no-preference) {
+  .theme-menu,
+  .context-menu {
+    animation: drive-menu-open 120ms ease-out;
+  }
+  @keyframes drive-menu-open {
+    from {
+      opacity: 0;
+    }
+    to {
+      opacity: 1;
+    }
   }
 }

@@ -1,77 +1,82 @@
-# TGDrive design system
+# TGDrive interface design
 
-TGDrive is an operational workspace for an owner organizing Telegram-backed files,
-monitoring transfers and administering a self-hosted installation. Everyday tasks
-must be understandable from the screen. The application has **one dark theme**;
-there is no appearance selector or automatic system-theme branch.
+## Product and reference
 
-## Component foundation
+TGDrive is a personal file manager backed by Telegram. Everyday file access,
+uploads, playback and owner maintenance take precedence over visual decoration.
+The deployed original at https://tgdrive.nexgenbots.us/ is the user-approved visual
+reference. The user explicitly rejected the navy/indigo experiment and excessive
+badges/prose. Preserve the existing Inter type, Lucide icons, neutral surfaces and
+restrained blue actions. The latest request restores **light and dark themes**;
+this supersedes the earlier single-theme direction.
 
-Use Mantine Core + Hooks, pinned together at 9.7.3, for shared form controls,
-buttons, fieldsets, switches, tabs, alerts and panel surfaces. `src/DesignSystem.tsx`
-owns library defaults; `src/style.css` owns semantic colors shared with the compact
-file manager and custom player; `src/design-system.css` integrates component and
-specialized surfaces. Do not add another component library or duplicate a primitive
-when Mantine or an appropriate native browser control already provides it.
-Native dialog behavior remains in the existing tested modal wrapper; the custom
-media player and range/data protocols retain their separate functional contracts.
+## Structure
 
-## Visual tokens
+The file manager is one working surface adjoining the window and sidebar. Search,
+title and useful actions share a compact toolbar. The list scrolls below fixed
+controls. No rounded outer frame or empty bottom action strip.
 
-| Role | Value | Use |
+Sidebar uses static Monitor, Configuration and Management groups. All contents,
+including Documentation and Log Out, scroll together. Labels stay on one line.
+Keep the original compact row density and 232px desktop sidebar.
+
+Group related analytics/settings within 12px rounded sections with one subtle
+border. Do not nest decorative cards. Use 16px section padding, 16–20px section
+gaps, and 8–12px between labels/help/controls. Keep at least 16px between the range
+availability note and graph. Related chart details stay inside their graph section.
+
+Performance: Overview owns traffic and lifetime totals; Accounts owns capacity and
+queue; Resources owns CPU/RAM and storage. Avoid duplicated totals across tabs.
+Show uncertainty and missing measurements honestly. Tooltip follows the pointer
+and stays inside its plot; keyboard/touch sample inspection remains available.
+
+## Tokens
+
+| Role | Light | Dark |
 | --- | --- | --- |
-| Canvas | #15171c | Sidebar and application background |
-| Surface | #1e2128 | Main working surface |
-| Section | #252932 | Related form fields, charts and supporting sections |
-| Raised | #2c303a | Menus and table headers |
-| Text | #f1f3f7 | Labels and essential values |
-| Secondary | #b7bdc8 | Help and supporting data |
-| Boundary | #414753 | Distinct section outlines and control boundaries |
-| Action | #9bb7ff | Interactive text and selected state |
-| Primary fill | #4166df | Main save/create action, with white text |
-| Healthy/ready | #69dfc5 | Success and cached readiness |
-| Attention | #f6cc77 | Waiting/advanced caution |
-| Failure | #ffb1b9 | Errors, with an icon and text |
-| Resource accent | #baabff | CPU/resource chart distinctions |
+| Canvas | #f5f7f9 | #1c1d1f |
+| Workspace | #ffffff | #242527 |
+| Related section | #f5f7f9 | #2a2c2f |
+| Text | #20252b | #e8eaed |
+| Secondary | #616b76 | #b0b4bc |
+| Boundary | #dce1e6 | #414449 |
+| Action | #0877b8 | #8acbff |
 
-Inter Variable is self-hosted. Use 14px default body, 12–13px supporting copy,
-16px section headings and 24px page headings; use tabular numerals for measurements.
-The spacing rhythm is 4/8/12/16/20/24/32px. Sections have a 12px radius, controls
-8px, and compact rows keep the established file-manager density.
+Use semantic tokens for both themes, not raw hex values in JSX. Inter is already
+self-hosted: 14px controls/body, 12–13px useful secondary details, 16px section
+headings, 24px page titles, tabular numerals for measurements. Retain native scale
+and zoom. Target 4.5:1 normal text contrast; meaningful chart/control boundaries 3:1.
 
-## Structure and behavior
+Mantine Core/Hooks 9.7.3 supply shared controls, fieldsets, tabs, alerts and surfaces.
+Use the existing native modal wrapper and custom player. Theme variables are in
+bundled external CSS because the existing CSP blocks injected style elements.
+Do not weaken the CSP. Both Mantine and native components follow one preference.
 
-- The workspace meets the window edges and sidebar directly. Keep content padding
-  inside the workspace; do not add an inset frame or reserve a blank bottom action
-  region. Mobile action clearance belongs inside scrolling content.
+## Content and states
 
-- Give related fields a bounded, subtly contrasting section with a descriptive
-  legend; a wall of differently bold text is not sufficient grouping.
-- Keep a page title once. Put a short intro and Configuration guide link beneath
-  it; keep deep explanation in docs. Inputs keep clear labels and concise help.
-- Put defaults beside values as small neutral badges. Keep safe defaults distinct
-  from edited drafts, saved values and environment starting values.
-- Save actions live with their form. Discard and restore are separate; restore
-  previews values and requires Save. Invalid changes show a visible error.
-- Performance gives each metric one home: traffic/totals, Telegram capacity/queue,
-  or resources. Distinguish Now, historical readings and lifetime totals.
-- Sidebar navigation scrolls as one column; Documentation/Logout follow the links
-  without reserving fixed space. Labels remain single-line.
-- Use status icons and words with semantic colors; never rely on color alone.
-- Use 140–180ms focus/hover/section transitions, measured progress and actual
-  loading states. Respect reduced motion; do not animate fake transfer progress.
-- Keep keyboard focus visible, mobile targets at least 44px where feasible,
-  compact file controls fixed, and only file rows scrolling in the file workspace.
+Keep only immediate consequences beside configuration fields. No default badges,
+duplicate labels, broad explanatory paragraphs or decorative status dots. The
+configuration guide owns deep explanations; Restore defaults stays available.
+Invalid values must retain drafts and show actionable errors. Owner saves apply
+only to the visible category. Upload maximum, staging budget and disk reserve are
+separate concepts, validated together and checked again at actual admission.
 
-## Verification
+No pager for empty/single-page history. Keep navigation back from later pages.
+Transfers lists Running, Queued, then Finished with outcome filters. Show safe demo
+content locally so layouts can be reviewed with all meaningful states.
 
-Check the real built UI at desktop 1440px and mobile 390px/320px, keyboard tabs,
-form errors/default restore, disabled and busy actions, empty and long-content
-states, and reduced motion. Maintain functional browser regressions while
-replacing appearance tests for intentionally removed features. See
-[frontend contracts](../docs/development.md#frontend-contracts).
+## Motion and review
 
-The provider does not inject CSS variables or helper styles. All theme tokens are
-bundled in the external stylesheet to respect `style-src-elem self`; never add
-unsafe-inline stylesheets to work around a component integration. The body and
-form-control font are explicit, not only inherited from `:root`.
+Motion answers an action or reports actual progress. Use 120ms menu appearance,
+140ms control state changes and existing truthful upload progress interpolation.
+No per-tab entrance, staggered data rows, hover translation, bounce or reveal delay.
+Respect reduced motion and never depend on animation completion for correctness.
+
+Inspect populated Files, Transfers, Preloads, Performance and configuration in both
+themes at desktop and small mobile sizes. Check keyboard focus, theme persistence,
+search/filter state, chart pointer alignment, clipping and error/empty states. A
+new palette alone is not a UX improvement.
+
+This direction applies Impeccable, Anthropic frontend-design, Uncodixfy and UI/UX Pro
+Max. User constraints override conflicting generic skill preferences: existing
+blue actions and useful rounded section boundaries remain deliberate TGDrive traits.
