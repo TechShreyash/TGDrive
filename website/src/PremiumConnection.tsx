@@ -138,6 +138,23 @@ export default function PremiumConnection({
       <h3 id="premium-connect-heading">
         <ShieldCheck size={18} /> Connect a Premium Account
       </h3>
+      <ol className="premium-steps" aria-label="Connection progress">
+        <li
+          aria-current={stage === "phone" ? "step" : undefined}
+          data-complete={stage !== "phone"}
+        >
+          Account
+        </li>
+        <li
+          aria-current={stage === "code" ? "step" : undefined}
+          data-complete={stage === "password"}
+        >
+          Login code
+        </li>
+        <li aria-current={stage === "password" ? "step" : undefined}>
+          Verification
+        </li>
+      </ol>
       <p>
         Your account must already have Telegram Premium and access to this
         drive’s channel. Login happens here; your code and two-step password are

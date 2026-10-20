@@ -441,6 +441,10 @@ export default function SettingsManagement() {
     </form>
   );
   const selected = draft?.clients.find((row) => row.key === target);
+  const connectedClients =
+    settings?.clients.filter(
+      (client) => clientConnectionLabel(client) === "Connected",
+    ).length ?? 0;
   return (
     <div className="connection-management page-body" aria-busy={saving}>
       {loading && (
@@ -502,6 +506,10 @@ export default function SettingsManagement() {
                   Bots store your files. Premium accounts add their own upload
                   and read capability.
                 </p>
+                <p className="connection-summary">
+                  {connectedClients} connected · {settings.clients.length}{" "}
+                  configured
+                </p>
               </div>
               <div className="management-actions">
                 <button
@@ -529,7 +537,7 @@ export default function SettingsManagement() {
                 </button>
                 <button
                   type="button"
-                  className="secondary-button"
+                  className="primary-button"
                   disabled={
                     Boolean(draft) ||
                     premiumOpen ||
@@ -541,7 +549,7 @@ export default function SettingsManagement() {
                 </button>
                 <button
                   type="button"
-                  className="primary-button"
+                  className="secondary-button"
                   disabled={
                     Boolean(draft) ||
                     premiumOpen ||
@@ -557,7 +565,15 @@ export default function SettingsManagement() {
                 </button>
               </div>
             </div>
-            <ul className="managed-client-list">
+            <div className="managed-client-columns" aria-hidden="true">
+              <span>Account</span>
+              <span>Connection & activity</span>
+              <span />
+            </div>
+            <ul
+              className="managed-client-list"
+              aria-label="Configured storage clients"
+            >
               {settings.clients.map((client) => (
                 <li
                   key={client.id}

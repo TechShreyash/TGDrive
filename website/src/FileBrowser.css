@@ -1,3 +1,128 @@
+.workspace.file-workspace {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  padding-bottom: 0;
+}
+.file-workspace > :not(.file-browser) {
+  flex-shrink: 0;
+}
+.file-browser {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+  min-width: 0;
+}
+.file-browser > .file-toolbar {
+  flex-shrink: 0;
+  flex-wrap: wrap;
+  column-gap: 20px;
+  row-gap: 8px;
+  padding-bottom: 10px;
+  min-height: 54px;
+}
+.file-toolbar > .page-heading {
+  display: contents;
+}
+.file-toolbar .page-heading > div:first-child {
+  flex: 1 1 140px;
+  min-width: 0;
+}
+.file-toolbar h1 {
+  font-size: 24px;
+  line-height: 1.3;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.file-toolbar .breadcrumbs {
+  flex-wrap: nowrap;
+  overflow: hidden;
+  margin-bottom: 4px;
+  white-space: nowrap;
+}
+.file-toolbar .breadcrumbs > span {
+  display: inline-flex;
+  min-width: 0;
+}
+.file-toolbar .breadcrumbs a {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.file-toolbar .search-form {
+  flex: 1 1 220px;
+  max-width: 380px;
+}
+.file-toolbar-controls {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  flex: 0 0 auto;
+  min-height: 44px;
+}
+.file-toolbar-controls > span:first-child {
+  white-space: nowrap;
+  margin-inline-end: 8px;
+}
+.file-list-scroll {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  overscroll-behavior-y: contain;
+  scrollbar-gutter: stable;
+  padding-bottom: 88px;
+}
+.file-list-scroll:focus-visible {
+  outline: 2px solid var(--action);
+  outline-offset: -2px;
+}
+.file-list-scroll .file-table th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: var(--surface);
+}
+@media (max-width: 720px) {
+  .file-browser > .file-toolbar {
+    gap: 8px;
+  }
+  .file-toolbar .page-heading > div:first-child {
+    flex: 1 1 80px;
+  }
+  .file-toolbar h1 {
+    font-size: 21px;
+  }
+  .file-toolbar .page-heading .search-form {
+    flex-basis: 100%;
+    order: 2;
+    max-width: none;
+  }
+  .file-toolbar-controls {
+    margin-inline-start: auto;
+    gap: 2px;
+  }
+  .file-toolbar-actions {
+    gap: 0;
+  }
+  .file-toolbar-controls > span:first-child {
+    font-size: 11px;
+    margin-inline-end: 2px;
+  }
+  .file-toolbar .page-subtitle {
+    display: none;
+  }
+  .workspace.file-workspace,
+  .app-shell:has(#compact-new-button) .workspace.file-workspace {
+    padding-bottom: 0;
+  }
+  .file-list-scroll {
+    padding-bottom: 32px;
+    scrollbar-gutter: auto;
+  }
+}
+
 .file-table .name-cell {
   padding-inline-start: 12px;
 }

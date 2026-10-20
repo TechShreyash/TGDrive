@@ -1,8 +1,20 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
 import { ApiError } from "./api";
-import { CacheCoverage, coverageRanges } from "./Preloads";
-import { httpRates, loadPoints, queueWait } from "./PerformancePanel";
+import { CacheCoverage, coverageRanges, cachedFileComplete } from "./Preloads";
+import {
+  httpRates,
+  loadPoints,
+  queueWait,
+  recentSamples,
+  samplesInWindow,
+  nearestSampleAt,
+  customHistoryBounds,
+  historyDuration,
+  UsageMeter,
+  metricSegments,
+  metricCeiling,
+} from "./PerformancePanel";
 import StreamMemoryFact from "./StreamMemoryFact";
 import {
   GIB,
@@ -10,7 +22,9 @@ import {
   performanceApi,
   performanceChanges,
   performanceDraft,
+  performanceCategoryDraft,
   type PerformancePreferences,
+  type ResourceSample,
 } from "./performanceApi";
 
 export const preferences: PerformancePreferences = {
@@ -33,6 +47,36 @@ beforeEach(() => vi.stubGlobal("window", new EventTarget()));
 afterEach(() => vi.unstubAllGlobals());
 
 describe("performance settings and HTTP boundaries", () => {
+  it("saves only the visible category while unrelated invalid drafts remain untouched", () => {
+    const draft = {
+      ...performanceDraft(preferences),
+      timezone: "UTC",
+      cache_memory_bytes: "",
+    };
+    expect(
+      performanceChanges(
+        performanceCategoryDraft(draft, preferences, "regional"),
+        preferences,
+      ),
+    ).toEqual({ timezone: "UTC" });
+    expect(draft.cache_memory_bytes).toBe("");
+    expect(() =>
+      performanceChanges(
+        performanceCategoryDraft(draft, preferences, "cache"),
+        preferences,
+      ),
+    ).toThrow("Memory cache");
+    expect(
+      performanceChanges(
+        performanceCategoryDraft(
+          { ...draft, upload_split_mib: "512" },
+          preferences,
+          "transfers",
+        ),
+        preferences,
+      ),
+    ).toEqual({ upload_split_mib: 512 });
+  });
   it("roundtrips saved byte limits and sends only changed unit conversions", () => {
     const draft = performanceDraft(preferences);
     expect(draft.cache_memory_bytes).toBe("256");
@@ -145,6 +189,137 @@ describe("performance settings and HTTP boundaries", () => {
 });
 
 describe("cache coverage and observed queue estimates", () => {
+  it("filters selected history without fabricating samples or joining missing intervals", () => {
+    const samples = Array.from({ length: 31 }, (_, index) => ({
+      at: index * 30,
+    }));
+    expect(samplesInWindow(samples, 60)).toEqual([
+      { at: 840 },
+      { at: 870 },
+      { at: 900 },
+    ]);
+    expect(samplesInWindow(samples, 900)).toHaveLength(31);
+    expect(samplesInWindow([{ at: Number.NaN }], 300)).toEqual([]);
+    expect(nearestSampleAt([{ at: 0 }, { at: 60 }, { at: 180 }], 100)).toBe(60);
+    expect(nearestSampleAt([], 100)).toBeNull();
+    expect(historyDuration(225)).toBe("3 min 45 sec");
+    expect(historyDuration(3600)).toBe("1 hr");
+    expect(historyDuration(90000)).toBe("1 day 1 hr");
+  });
+  it("parses absolute UTC custom bounds and rejects normalized dates, reversed or excessive ranges", () => {
+    const now = Date.parse("2026-10-20T12:00:00Z") / 1000;
+    expect(
+      customHistoryBounds("2026-10-20T10:00", "2026-10-20T11:00", now),
+    ).toEqual({ start: now - 7200, end: now - 3600 });
+    expect(() =>
+      customHistoryBounds("2026-02-30T00:00", "2026-10-20T11:00", now),
+    ).toThrow("valid start");
+    expect(() =>
+      customHistoryBounds("2026-10-20T11:00", "2026-10-20T10:00", now),
+    ).toThrow("after start");
+    expect(() =>
+      customHistoryBounds("2026-09-01T00:00", "2026-10-20T11:00", now),
+    ).toThrow("at most 31");
+    expect(() =>
+      customHistoryBounds("2026-10-20T10:00", "2026-10-21T11:00", now),
+    ).toThrow("future");
+  });
+  it("plots real timestamp spacing and leaves null readings and source changes as gaps", () => {
+    const sample = (
+      at: number,
+      value: number | null,
+      scope: "cgroup" | "host" = "cgroup",
+    ): ResourceSample => ({
+      at,
+      cpu_percent: value,
+      cpu_scope: scope,
+      memory_bytes: null,
+      memory_limit_bytes: null,
+      received_bytes_per_second: null,
+      sent_bytes_per_second: null,
+      network_interface: "eth0",
+    });
+    expect(
+      metricSegments(
+        [sample(1, 0), sample(4, 50), sample(10, 100)],
+        "cpu_percent",
+        100,
+        "cpu_scope",
+      ),
+    ).toEqual(["0,112 200,62 600,12"]);
+    expect(
+      metricSegments(
+        [sample(1, 10), sample(4, null), sample(7, 50), sample(10, 60, "host")],
+        "cpu_percent",
+        100,
+        "cpu_scope",
+      ),
+    ).toEqual(["0,102", "400,62", "600,52"]);
+    expect(
+      metricSegments([sample(1, 10), sample(40, 20)], "cpu_percent", 100),
+    ).toHaveLength(2);
+    expect(metricCeiling(0)).toBe(0);
+    expect(metricCeiling(12 * MIB)).toBe(20 * MIB);
+  });
+  it("keeps charts within a recent continuous window and rejects polling gaps", () => {
+    const history = [{ at: 1 }, { at: 4 }, { at: 400 }, { at: 403 }];
+    expect(recentSamples(history)).toEqual([{ at: 400 }, { at: 403 }]);
+    expect(recentSamples([{ at: 0 }, { at: 300 }, { at: 301 }])).toEqual([
+      { at: 300 },
+      { at: 301 },
+    ]);
+    expect(
+      httpRates([
+        {
+          at: 0,
+          upload_bytes: 0,
+          download_bytes: 0,
+          requests: 0,
+          active: 0,
+          errors: 0,
+        },
+        {
+          at: 300,
+          upload_bytes: 100,
+          download_bytes: 100,
+          requests: 1,
+          active: 0,
+          errors: 0,
+        },
+      ]),
+    ).toEqual([]);
+  });
+  it("does not invent resource utilization when the limit is unavailable", () => {
+    const html = renderToStaticMarkup(
+      <UsageMeter label="RAM cache" used={0} total={0} detail="Disabled" />,
+    );
+    expect(html).toContain("Disabled");
+    expect(html).not.toContain("progress");
+    expect(
+      renderToStaticMarkup(
+        <UsageMeter label="Server RAM" used={50} total={100} />,
+      ),
+    ).toContain('value="50"');
+  });
+  it("shows sampled CPU as a percentage and preserves an unknown baseline", () => {
+    expect(
+      renderToStaticMarkup(
+        <UsageMeter label="Container CPU" used={25} total={100} percent />,
+      ),
+    ).toContain("25.0%");
+    const missing = renderToStaticMarkup(
+      <UsageMeter
+        label="Container CPU"
+        used={NaN}
+        total={100}
+        percent
+        unavailableLabel="Measuring…"
+      />,
+    );
+    expect(missing).toContain("Measuring…");
+    expect(missing).not.toContain("0.0%");
+    expect(missing).not.toContain("progress");
+  });
   it("shows the separate effective stream memory budget and tolerates older snapshots", () => {
     expect(renderToStaticMarkup(<StreamMemoryFact />)).toBe("");
     const html = renderToStaticMarkup(
@@ -180,6 +355,32 @@ describe("cache coverage and observed queue estimates", () => {
     expect(coverageRanges([[0, 10]], 0)).toEqual([]);
   });
   it("paints fragmented cached ranges at their byte offsets without claiming complete", () => {
+    expect(
+      cachedFileComplete({
+        id: "x",
+        name: "Video",
+        size: 100,
+        ready_bytes: 100,
+        complete: true,
+        ready_ranges: [
+          [0, 10],
+          [90, 100],
+        ],
+      }),
+    ).toBe(false);
+    expect(
+      cachedFileComplete({
+        id: "x",
+        name: "Video",
+        size: 100,
+        ready_bytes: 0,
+        complete: false,
+        ready_ranges: [
+          [0, 50],
+          [50, 100],
+        ],
+      }),
+    ).toBe(true);
     const html = renderToStaticMarkup(
       <CacheCoverage
         file={{
@@ -199,6 +400,28 @@ describe("cache coverage and observed queue estimates", () => {
     expect(html).toContain('width="100"');
     expect(html).not.toContain("Complete");
     expect(html).toContain("20 / 100 B cached");
+    expect(html).toContain("20% · Partial");
+    expect(html).toContain('data-complete="false"');
+    const complete = renderToStaticMarkup(
+      <CacheCoverage
+        file={{
+          id: "ready",
+          name: "Ready",
+          size: 100,
+          ready_bytes: 0,
+          complete: false,
+          ready_ranges: [
+            [0, 50],
+            [50, 100],
+          ],
+        }}
+      />,
+    );
+    expect(complete).toContain('data-complete="true"');
+    expect(complete).toContain(
+      'width="1000" height="8" class="cache-coverage-ready"',
+    );
+    expect(complete).toContain("100% · Ready");
   });
   it("does not turn missing queue samples into a zero wait promise", () => {
     expect(queueWait(null)).toBe("Estimating…");

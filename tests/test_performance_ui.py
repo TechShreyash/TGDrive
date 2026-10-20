@@ -95,13 +95,24 @@ def test_settings_save_converts_units_guards_revision_and_recovers_conflict(
         route.fulfill(json=saved)
 
     page.route("**/api/v1/settings/performance", settings)
-    login(page, server.url + "/?view=settings")
+    login(page, server.url + "/?view=settings&section=cache")
     section = page.locator(".performance-settings")
     expect(section.get_by_label("Memory cache (MiB)", exact=True)).to_have_value("256")
     section.get_by_label("Memory cache (MiB)", exact=True).fill("512")
     section.get_by_label("Disk cache (GiB)", exact=True).fill("1.5")
-    section.get_by_label("Cache retention (hours)", exact=True).fill("2")
+    expect(section.locator("#perf-help-cache_memory_bytes")).to_contain_text(
+        "App default: 256 MiB"
+    )
+    expect(section.locator("#perf-help-cache_memory_bytes")).to_contain_text(
+        "Idle blocks expire after 10 minutes"
+    )
+    expect(section.locator("#perf-help-cache_min_free_bytes")).to_contain_text(
+        "Upload staging has its own reserve"
+    )
+    section.get_by_label("Disk cache retention (hours)", exact=True).fill("2")
+    page.get_by_role("link", name="Timezone", exact=True).click()
     section.get_by_label("Timezone", exact=True).fill("UTC")
+    page.get_by_role("link", name="Cache settings", exact=True).click()
     section.get_by_role("button", name="Save Performance Settings", exact=True).click()
     expect(section.get_by_role("status")).to_contain_text("Performance settings saved")
     assert patches == [
@@ -109,9 +120,14 @@ def test_settings_save_converts_units_guards_revision_and_recovers_conflict(
             "cache_memory_bytes": 512 * MIB,
             "cache_disk_bytes": 1.5 * GIB,
             "cache_ttl_seconds": 7200,
-            "timezone": "UTC",
         }
     ]
+    page.get_by_role("link", name="Timezone", exact=True).click()
+    expect(section.get_by_label("Timezone", exact=True)).to_have_value("UTC")
+    section.get_by_role("button", name="Save Performance Settings", exact=True).click()
+    expect(section.get_by_role("status")).to_contain_text("Performance settings saved")
+    assert patches[-1] == {"timezone": "UTC"}
+    page.get_by_role("link", name="Cache settings", exact=True).click()
     section.scroll_into_view_if_needed()
     page.screenshot(path=ARTIFACTS / "performance-settings-desktop.png")
     page.set_viewport_size({"width": 390, "height": 844})
@@ -127,6 +143,16 @@ def test_settings_save_converts_units_guards_revision_and_recovers_conflict(
     ).to_be_disabled()
     section.get_by_role("button", name="Reload Latest Settings", exact=True).click()
     expect(section.get_by_label("Disk cache (GiB)", exact=True)).to_have_value("1.5")
+    expect(section.locator("#perf-help-cache_disk_bytes")).to_contain_text(
+        "App default: 10 GiB"
+    )
+    page.set_viewport_size({"width": 1440, "height": 960})
+    page.get_by_role("link", name="Transfer limits", exact=True).click()
+    section.locator("summary").filter(has_text="Advanced Telegram limits").click()
+    expect(section.get_by_label("Requests per second", exact=True)).to_have_value("24")
+    expect(section.locator("#perf-help-telegram_parts_per_second")).to_contain_text(
+        "App default: 48"
+    )
 
 
 def test_preload_inventory_cancel_and_scoped_eviction(
@@ -175,7 +201,9 @@ def test_preload_inventory_cancel_and_scoped_eviction(
     page.route("**/api/v1/preloads**", handler)
     login(page, server.url + "/?view=preloads")
     page.get_by_role(
-        "button", name="Cancel preparation of Preparing a movie.mkv", exact=True
+        "button",
+        name="Cancel preparation of A long shared movie filename.mkv",
+        exact=True,
     ).click()
     expect(
         page.get_by_role("status").filter(has_text="Preparation cancelled").first
@@ -189,10 +217,12 @@ def test_preload_inventory_cancel_and_scoped_eviction(
         name="Evict cached bytes for A long shared movie filename.mkv",
         exact=True,
     ).click()
+    page.get_by_role("button", name="Clear Cached File", exact=True).click()
     expect(
         page.get_by_text("A long shared movie filename.mkv", exact=True)
     ).to_have_count(0)
     page.get_by_role("button", name="Clear Cache", exact=True).click()
+    page.get_by_role("button", name="Clear All Cache", exact=True).click()
     expect(
         page.get_by_text("No media bytes are cached yet.", exact=False)
     ).to_be_visible()
@@ -290,7 +320,7 @@ def test_performance_real_samples_nullable_eta_and_mobile_tables(
     }
     page.route("**/api/v1/performance", lambda route: route.fulfill(json=value))
     login(page, server.url + "/?view=performance")
-    expect(page.get_by_text("Estimating…", exact=True)).to_be_visible()
+    page.locator(".performance-overview-details > summary").click()
     expect(
         page.get_by_role("img", name="Recent Telegram load", exact=False)
     ).to_be_visible()
@@ -301,6 +331,8 @@ def test_performance_real_samples_nullable_eta_and_mobile_tables(
     page.screenshot(path=ARTIFACTS / "performance-load-desktop.png")
     page.set_viewport_size({"width": 390, "height": 844})
     assert page.evaluate("document.documentElement.scrollWidth<=innerWidth")
+    page.get_by_role("tab", name="Accounts", exact=True).click()
+    expect(page.get_by_text("Estimating…", exact=True)).to_be_visible()
     page.get_by_role(
         "heading", name="Account capacity", exact=True
     ).scroll_into_view_if_needed()

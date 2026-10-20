@@ -1,0 +1,61 @@
+.preloads-page .cached-file {
+  align-items: center;
+  gap: 12px;
+  padding-block: 10px;
+}
+.preloads-page .cached-file > .file-icon {
+  flex: 0 0 22px;
+  margin: 0;
+}
+.preloads-page .cached-file > .icon-button {
+  width: 44px;
+  height: 44px;
+  flex: 0 0 44px;
+}
+.preloads-page .cached-file-title > strong {
+  font-size: 14px;
+  line-height: 21px;
+}
+.preloads-page .cached-file-meta {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 2px 12px;
+  margin-top: 3px;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 18px;
+  font-variant-numeric: tabular-nums;
+}
+.preloads-page .cache-ready-state {
+  font-size: inherit;
+}
+.preloads-page .cache-coverage svg {
+  height: 5px;
+  margin-block: 6px 0;
+}
+.preloads-page .cache-coverage[data-complete="true"] .cache-coverage-ready {
+  fill: var(--success);
+}
+.preloads-page .preload-job {
+  padding-block: 12px;
+}
+.preloads-page .preload-job-copy > span {
+  margin-top: 2px;
+  font-size: 12px;
+}
+.preloads-page .preload-job-error {
+  margin-block: 6px 0;
+  font-size: 12px;
+}
+.preloads-page .preload-recent {
+  font-size: 13px;
+}
+@media (max-width: 620px) {
+  .preloads-page .cached-file {
+    gap: 6px;
+  }
+  .preloads-page .cached-file > .file-icon {
+    display: none;
+  }
+}

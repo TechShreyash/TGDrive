@@ -1,3 +1,5 @@
+import re
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
@@ -6,9 +8,40 @@ from fastapi.testclient import TestClient
 from test_app import FakeRuntime, login, make_settings
 
 from tgdrive.app import create_app
+from tgdrive.config import Settings
 from tgdrive.managed_settings import SettingsProblem
-from tgdrive.performance_preferences import PerformanceSettings
+from tgdrive.performance_preferences import PerformancePreferences, PerformanceSettings
 from tgdrive.store import DriveStore
+
+
+def test_operator_default_hints_and_startup_examples_match_runtime_defaults():
+    """Reference labels and deployment fallbacks must not drift from app policy."""
+    root = Path(__file__).resolve().parents[1]
+    defaults = PerformancePreferences().model_dump()
+    definitions = (
+        (root / "website/src/performanceApi.ts")
+        .read_text()
+        .split("export type PerformanceDraft", 1)[0]
+    )
+    displayed = dict(
+        re.findall(r'key: "([a-z_]+)"[\s\S]*?appDefault: (\d+)', definitions)
+    )
+    numeric = {key: value for key, value in defaults.items() if type(value) is int}
+    assert displayed.keys() == numeric.keys()
+    units = {
+        "cache_memory_bytes": 1024**2,
+        "cache_disk_bytes": 1024**3,
+        "cache_min_free_bytes": 1024**3,
+        "cache_ttl_seconds": 3600,
+    }
+    for key, expected in defaults.items():
+        assert Settings.model_fields[key].default == expected
+        if key in numeric:
+            assert int(displayed[key]) * units.get(key, 1) == expected
+    example = (root / ".env.example").read_text()
+    for key, expected in defaults.items():
+        value = str(expected).lower() if isinstance(expected, bool) else str(expected)
+        assert f"\n{key.upper()}={value}\n" in example
 
 
 def runtime():

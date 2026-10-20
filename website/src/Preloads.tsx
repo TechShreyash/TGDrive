@@ -1,9 +1,8 @@
 import { useCallback, useEffect, useState } from "react";
-import { Database, RefreshCw, Trash2, X, AlertCircle } from "lucide-react";
+import { RefreshCw, Trash2, X, AlertCircle, Settings2 } from "lucide-react";
 import { errorMessage } from "./api";
-import { ErrorNotice, Spinner } from "./components";
-import { formatBytes, formatByteProgress } from "./types";
-import StreamMemoryFact from "./StreamMemoryFact";
+import { ErrorNotice, Spinner, FileIcon, Modal } from "./components";
+import { formatByteProgress } from "./types";
 import {
   performanceApi,
   type CachedFile,
@@ -11,6 +10,7 @@ import {
   type PreloadSnapshot,
 } from "./performanceApi";
 import "./Performance.css";
+import "./Preloads.css";
 
 /** Normalize half-open byte ranges before painting coverage; never paint past EOF. */
 export function coverageRanges(
@@ -38,14 +38,31 @@ export function coverageRanges(
   }
   return merged;
 }
-export function CacheCoverage({ file }: { file: CachedFile }) {
+export function CacheCoverage({
+  file,
+  status,
+}: {
+  file: CachedFile;
+  status?: string;
+}) {
   const ranges = coverageRanges(file.ready_ranges || [], file.size);
   const ready = ranges.reduce((sum, [start, end]) => sum + end - start, 0);
+  const complete = cachedFileComplete(file);
+  const percent =
+    file.size > 0 ? Math.min(100, Math.floor((ready / file.size) * 100)) : 0;
   return (
-    <div className="cache-coverage">
+    <div className="cache-coverage" data-complete={complete}>
+      <div className="cached-file-meta">
+        <span>
+          {formatByteProgress(ready, file.size)} cached · {percent}%
+        </span>
+        <span className="cache-ready-state" data-complete={complete}>
+          {complete ? "Ready" : status || "Partial"}
+        </span>
+      </div>
       <svg
         role="img"
-        aria-label={formatByteProgress(ready, file.size) + " cached"}
+        aria-label={`${formatByteProgress(ready, file.size)} cached · ${percent}% · ${complete ? "Ready" : "Partial"}`}
         viewBox="0 0 1000 8"
         preserveAspectRatio="none"
       >
@@ -67,13 +84,13 @@ export function CacheCoverage({ file }: { file: CachedFile }) {
           />
         ))}
       </svg>
-      <span>
-        {formatByteProgress(ready, file.size)} cached
-        {ranges.length === 1 && ranges[0][0] === 0 && ranges[0][1] === file.size
-          ? " · Complete"
-          : ""}
-      </span>
     </div>
+  );
+}
+export function cachedFileComplete(file: CachedFile): boolean {
+  const ranges = coverageRanges(file.ready_ranges || [], file.size);
+  return (
+    ranges.length === 1 && ranges[0][0] === 0 && ranges[0][1] === file.size
   );
 }
 function jobLabel(job: PreloadJob) {
@@ -92,16 +109,23 @@ function jobLabel(job: PreloadJob) {
 export default function Preloads({
   onError,
   onNotice,
+  query = "",
 }: {
   onError?: (message: string) => void;
   onNotice?: (message: string) => void;
+  query?: string;
 } = {}) {
   const [snapshot, setSnapshot] = useState<PreloadSnapshot | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
   const [busy, setBusy] = useState("");
+  const [clearing, setClearing] = useState<{
+    id?: string;
+    name?: string;
+  } | null>(null);
   const [refresh, setRefresh] = useState(0);
+  const [filter, setFilter] = useState<"all" | "ready" | "partial">("all");
   const load = useCallback(async (signal?: AbortSignal) => {
     try {
       const value = await performanceApi.preloads(signal);
@@ -152,15 +176,32 @@ export default function Preloads({
   };
   const cache = snapshot?.cache;
   const files = cache?.files || [];
-  const jobs = snapshot?.jobs || [];
+  const readyCount = files.filter(cachedFileComplete).length;
+  const visibleFiles = files.filter(
+    (file) =>
+      (file.name || "Cached file")
+        .toLocaleLowerCase()
+        .includes(query.trim().toLocaleLowerCase()) &&
+      (filter === "all" || cachedFileComplete(file) === (filter === "ready")),
+  );
+  const jobs = (snapshot?.jobs || []).filter((job) =>
+    (job.name || "File preparation")
+      .toLocaleLowerCase()
+      .includes(query.trim().toLocaleLowerCase()),
+  );
   const pending = jobs.filter((job) =>
     ["queued", "preparing", "failed"].includes(job.state),
   );
+  const unlistedJobs = pending.filter(
+    (job) => !files.some((file) => file.id === job.file_id),
+  );
   const finished = jobs.filter(
-    (job) => !["queued", "preparing", "failed"].includes(job.state),
+    (job) =>
+      job.state === "cancelled" &&
+      !files.some((file) => file.id === job.file_id),
   );
   const renderJob = (job: PreloadJob) => (
-    <li key={job.id} className="preload-job">
+    <li key={job.id} className="preload-job" data-state={job.state}>
       <div className="preload-job-copy">
         <strong>{job.name || "File preparation"}</strong>
         <span>
@@ -205,11 +246,7 @@ export default function Preloads({
     <div className="preloads-page page-body">
       <div className="performance-section-heading">
         <div>
-          <h2>Cache overview</h2>
-          <p>
-            Prepare a file before sharing, or reuse bytes already fetched during
-            playback.
-          </p>
+          <p>Reuse downloaded media for faster playback and sharing.</p>
         </div>
         <button
           className="secondary-button"
@@ -218,7 +255,7 @@ export default function Preloads({
           aria-label="Refresh Cache Inventory"
         >
           <RefreshCw size={16} />
-          Refresh
+          <span>Refresh</span>
         </button>
       </div>
       {loading && (
@@ -229,7 +266,7 @@ export default function Preloads({
       <ErrorNotice message={error} />
       {cache && (
         <>
-          <dl className="performance-facts">
+          <dl className="performance-facts cache-budget-summary">
             <div>
               <dt>Memory cache</dt>
               <dd>
@@ -238,10 +275,11 @@ export default function Preloads({
                   cache.memory.effective_max_bytes,
                 )}
               </dd>
-              <small>
-                Effective limit; configured{" "}
-                {formatBytes(cache.memory.max_bytes)}
-              </small>
+              <progress
+                aria-label="Memory cache usage"
+                value={cache.memory.bytes}
+                max={Math.max(1, cache.memory.effective_max_bytes)}
+              />
             </div>
             <div>
               <dt>Disk cache</dt>
@@ -250,56 +288,40 @@ export default function Preloads({
                   ? formatByteProgress(cache.disk.bytes, cache.disk.max_bytes)
                   : "Unavailable"}
               </dd>
-              <small>
-                {cache.disk.available
-                  ? "Disposable bytes, shared by all viewers"
-                  : "Playback falls back to Telegram where possible"}
-              </small>
+              <progress
+                aria-label="Disk cache usage"
+                value={cache.disk.bytes}
+                max={Math.max(1, cache.disk.max_bytes)}
+              />
             </div>
             <div>
-              <dt>Background preparation</dt>
+              <dt>Preparation</dt>
               <dd>
-                {snapshot.active_jobs} / {snapshot.max_background_jobs} active
+                {snapshot.active_jobs
+                  ? snapshot.active_jobs + " running"
+                  : "Idle"}
               </dd>
-              <small>Active viewers have priority</small>
+              <small>
+                <a
+                  className="inline-link"
+                  href="/?view=settings&section=performance"
+                >
+                  <Settings2 size={14} /> Cache settings
+                </a>
+              </small>
             </div>
-            <StreamMemoryFact scratch={cache.scratch} />
           </dl>
-          <p className="settings-help">
-            Cached content can expire or be evicted. Preparation does not pin a
-            file permanently; current coverage below is authoritative.
-          </p>
-          <section
-            className="performance-section"
-            aria-labelledby="preparation-heading"
-          >
-            <h3 id="preparation-heading">Preparation jobs</h3>
-            {pending.length ? (
-              <ul className="preload-jobs">{pending.map(renderJob)}</ul>
-            ) : (
-              <p className="performance-empty">
-                No preparation is running. Choose Prepare for Download /
-                Streaming from a file’s menu in My Files to warm it before use.
-              </p>
-            )}
-            {finished.length > 0 && (
-              <details className="performance-advanced">
-                <summary>Recent preparations ({finished.length})</summary>
-                <ul className="preload-jobs">{finished.map(renderJob)}</ul>
-              </details>
-            )}
-          </section>
           <section
             className="performance-section"
             aria-labelledby="cached-files-heading"
           >
             <div className="performance-section-heading">
               <div>
-                <h3 id="cached-files-heading">Cached files</h3>
-                <p>
-                  Includes viewing, downloads and preparation. Clear Cache also
-                  stops background preparation.
-                </p>
+                <h3 id="cached-files-heading">
+                  Cached files{" "}
+                  <span className="performance-count">{files.length}</span>
+                </h3>
+                <p>Media from playback, downloads and manual preparation.</p>
               </div>
               <button
                 className="secondary-button"
@@ -308,68 +330,111 @@ export default function Preloads({
                   (!files.length &&
                     !pending.some((job) => job.state !== "failed"))
                 }
-                onClick={() =>
-                  void act(
-                    "clear",
-                    () => performanceApi.clear(),
-                    "Cached bytes cleared. Originals remain in Telegram.",
-                  )
-                }
+                onClick={() => setClearing({})}
               >
                 <Trash2 size={16} />
                 {busy === "clear" ? "Clearing…" : "Clear Cache"}
               </button>
             </div>
+            {!!files.length && (
+              <div className="cache-inventory-toolbar">
+                <div
+                  className="performance-filters"
+                  role="group"
+                  aria-label="Filter cached files"
+                >
+                  {(
+                    [
+                      ["all", "All", files.length],
+                      ["ready", "Ready", readyCount],
+                      ["partial", "Partial", files.length - readyCount],
+                    ] as const
+                  ).map(([key, label, count]) => (
+                    <button
+                      type="button"
+                      key={key}
+                      aria-pressed={filter === key}
+                      onClick={() => setFilter(key)}
+                    >
+                      {label} <span>{count}</span>
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
             {files.length ? (
               <ul className="cached-file-list">
-                {files.map((file) => (
-                  <li className="cached-file" key={file.id}>
-                    <Database size={20} aria-hidden="true" />
-                    <div className="cached-file-copy">
-                      <strong>{file.name || "Cached file"}</strong>
-                      <CacheCoverage file={file} />
-                      <details>
-                        <summary>
-                          Cached ranges (
-                          {coverageRanges(file.ready_ranges, file.size).length})
-                        </summary>
-                        <p className="settings-help">
-                          Byte intervals; the end position is exclusive.
-                        </p>
-                        <ul className="cached-ranges">
-                          {coverageRanges(file.ready_ranges, file.size).map(
-                            ([start, end], index) => (
-                              <li key={index}>
-                                {formatBytes(start)} – {formatBytes(end)}
-                              </li>
-                            ),
-                          )}
-                        </ul>
-                      </details>
-                    </div>
-                    <button
-                      className="icon-button"
-                      disabled={!!busy}
-                      aria-label={
-                        "Evict cached bytes for " + (file.name || "file")
-                      }
-                      title="Evict cached bytes"
-                      onClick={() =>
-                        void act(
-                          "file:" + file.id,
-                          () => performanceApi.clear(file.id),
-                          "Cached bytes evicted. The original is unchanged.",
-                        )
-                      }
-                    >
-                      {busy === "file:" + file.id ? (
-                        <Spinner />
-                      ) : (
-                        <Trash2 size={17} />
+                {visibleFiles.map((file) => {
+                  const job = pending.find((job) => job.file_id === file.id);
+                  return (
+                    <li className="cached-file" key={file.id}>
+                      <FileIcon name={file.name || "Cached file"} />
+                      <div className="cached-file-copy">
+                        <div className="cached-file-title">
+                          <strong title={file.name || "Cached file"}>
+                            {file.name || "Cached file"}
+                          </strong>
+                        </div>
+                        <CacheCoverage
+                          file={file}
+                          status={
+                            job?.state === "preparing"
+                              ? "Partial · Loading"
+                              : job?.state === "queued"
+                                ? "Partial · Queued"
+                                : job?.state === "failed"
+                                  ? "Needs attention"
+                                  : undefined
+                          }
+                        />
+                        {job?.error && (
+                          <p className="preload-job-error">
+                            <AlertCircle size={15} />
+                            {job.error}
+                          </p>
+                        )}
+                      </div>
+                      {job && ["queued", "preparing"].includes(job.state) && (
+                        <button
+                          className="icon-button"
+                          disabled={!!busy}
+                          aria-label={
+                            "Cancel preparation of " + (file.name || "file")
+                          }
+                          onClick={() =>
+                            void act(
+                              "job:" + job.id,
+                              () => performanceApi.cancel(job.id),
+                              "Preparation cancelled. Shared readers can continue.",
+                            )
+                          }
+                        >
+                          <X size={17} />
+                        </button>
                       )}
-                    </button>
-                  </li>
-                ))}
+                      <button
+                        className="icon-button"
+                        disabled={!!busy}
+                        aria-label={
+                          "Evict cached bytes for " + (file.name || "file")
+                        }
+                        title="Evict cached bytes"
+                        onClick={() =>
+                          setClearing({
+                            id: file.id,
+                            name: file.name || "Cached file",
+                          })
+                        }
+                      >
+                        {busy === "file:" + file.id ? (
+                          <Spinner />
+                        ) : (
+                          <Trash2 size={17} />
+                        )}
+                      </button>
+                    </li>
+                  );
+                })}
               </ul>
             ) : (
               <p className="performance-empty">
@@ -377,11 +442,86 @@ export default function Preloads({
                 from My Files.
               </p>
             )}
+            {!!files.length && !visibleFiles.length && (
+              <p className="performance-empty">
+                No cached files match this filter. Try another search or choose
+                All.
+              </p>
+            )}
+            {!!files.length && (
+              <p className="settings-help cache-clear-help">
+                Clearing cache removes server copies and stops background
+                preparation. Your originals stay in Telegram.
+              </p>
+            )}
           </section>
-          <p className="performance-notice" role="status">
-            {notice}
-          </p>
+          {unlistedJobs.length > 0 && (
+            <section
+              className="performance-section"
+              aria-labelledby="preparation-heading"
+            >
+              <h3 id="preparation-heading">Preparation queue</h3>
+              <ul className="preload-jobs">{unlistedJobs.map(renderJob)}</ul>
+            </section>
+          )}
+          {finished.length > 0 && (
+            <section
+              className="performance-section preload-recent"
+              aria-labelledby="recent-preparation-heading"
+            >
+              <h3 id="recent-preparation-heading">Recently stopped</h3>
+              <ul className="preload-jobs">
+                {finished.slice(0, 5).map(renderJob)}
+              </ul>
+            </section>
+          )}
+          {notice && (
+            <p className="performance-notice" role="status">
+              {notice}
+            </p>
+          )}
         </>
+      )}
+      {clearing && (
+        <Modal
+          title={clearing.id ? "Clear cached file?" : "Clear all cached files?"}
+          onClose={() => setClearing(null)}
+          initialFocus=".preload-keep-cache"
+        >
+          <p className="dialog-description">
+            {clearing.id
+              ? `Remove the server copy of “${clearing.name}”?`
+              : "Remove all cached server copies and stop background preparation?"}{" "}
+            Originals stay in Telegram. Future playback or downloads may need to
+            fetch the data again.
+          </p>
+          <div className="dialog-actions">
+            <button
+              type="button"
+              className="secondary-button preload-keep-cache"
+              onClick={() => setClearing(null)}
+            >
+              Keep Cache
+            </button>
+            <button
+              type="button"
+              className="danger-button"
+              onClick={() => {
+                const target = clearing;
+                setClearing(null);
+                void act(
+                  target.id ? "file:" + target.id : "clear",
+                  () => performanceApi.clear(target.id),
+                  target.id
+                    ? "Cached bytes evicted. The original is unchanged."
+                    : "Cached bytes cleared. Originals remain in Telegram.",
+                );
+              }}
+            >
+              {clearing.id ? "Clear Cached File" : "Clear All Cache"}
+            </button>
+          </div>
+        </Modal>
       )}
       {!snapshot && !loading && error && (
         <button

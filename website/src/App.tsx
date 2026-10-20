@@ -17,6 +17,7 @@ import {
   Plus,
   Link,
   ChevronRight,
+  BookOpen,
   X,
   Settings,
   Plug,
@@ -37,7 +38,7 @@ import {
 } from "./types";
 import { transfers, type Transfer } from "./transfers";
 import { Spinner, ToastNotice as Toast } from "./components";
-import { Login, SharesView, SettingsView, StorageView } from "./Screens";
+import { Login, SharesView, StorageView, UploadSettings } from "./Screens";
 import SettingsManagement from "./SettingsManagement";
 import PerformanceSettings from "./PerformanceSettings";
 import Preloads from "./Preloads";
@@ -50,10 +51,34 @@ import TransferHistory from "./TransferHistory";
 import FolderUpload from "./FolderUpload";
 import DeletionNotice from "./DeletionNotice";
 import ThemeControl from "./ThemeControl";
+import SidebarLogout from "./SidebarLogout";
 function getLocation() {
   const url = new URL(window.location.href);
-  const path = url.searchParams.get("path") || "/";
-  const requested = url.searchParams.get("view");
+  let path = url.searchParams.get("path") || "/";
+  let requested = url.searchParams.get("view");
+  const section = url.searchParams.get("section");
+  const validSection = [
+    "cache",
+    "transfers",
+    "regional",
+    "performance",
+  ].includes(section || "");
+  if (
+    requested === "settings" &&
+    !validSection &&
+    !path.startsWith("/share_")
+  ) {
+    url.searchParams.delete("view");
+    url.searchParams.delete("section");
+    url.searchParams.delete("path");
+    window.history.replaceState(
+      window.history.state,
+      "",
+      url.pathname + url.search + url.hash,
+    );
+    requested = null;
+    path = "/";
+  }
   const view: View = path.startsWith("/share_")
     ? "files"
     : path === "/trash"
@@ -73,6 +98,14 @@ function getLocation() {
     path,
     auth: url.searchParams.get("auth") || "",
     view,
+    settingsSection:
+      url.searchParams.get("section") === "performance"
+        ? "cache"
+        : ["cache", "transfers", "regional"].includes(
+              url.searchParams.get("section") || "",
+            )
+          ? url.searchParams.get("section")!
+          : "cache",
     previewId: url.searchParams.get("preview") || "",
     highlightId:
       typeof window.history.state?.tgdriveHighlight === "string"
@@ -81,6 +114,11 @@ function getLocation() {
   };
 }
 const ROOT_CRUMB = { path: "/", name: "My Files" };
+const ADMIN_SETTING_TITLES: Record<string, string> = {
+  cache: "Cache & preloading",
+  transfers: "Uploads & Telegram",
+  regional: "Regional settings",
+};
 function searchHistoryOffset() {
   const value = window.history.state?.tgdriveSearchOffset;
   return Number.isSafeInteger(value) && value >= 0 && value % 100 === 0
@@ -98,6 +136,7 @@ export default function App() {
   const [refresh, setRefresh] = useState(0);
   const [dialog, setDialog] = useState<ActionDialogState | null>(null);
   const [query, setQuery] = useState("");
+  const [scopedQuery, setScopedQuery] = useState("");
   const [searchOffset, setSearchOffset] = useState(searchHistoryOffset);
   const [searchSort, setSearchSort] = useState<FileSort>("name");
   const [searchMore, setSearchMore] = useState(false);
@@ -205,7 +244,7 @@ export default function App() {
     document.addEventListener("keydown", keydown, true);
     return () => {
       document.removeEventListener("keydown", keydown, true);
-      opener?.focus({ preventScroll: true });
+      if (opener?.isConnected) opener.focus({ preventScroll: true });
     };
   }, [mobileNav]);
 
@@ -239,6 +278,18 @@ export default function App() {
   const isPublic = currentPath.startsWith("/share_");
   const isSearch = currentPath.startsWith("/search_");
   const view = location.view;
+  const searchLabel =
+    view === "files"
+      ? "Search Files and Folders"
+      : view === "trash"
+        ? "Search Trash"
+        : view === "activity"
+          ? "Search Transfers"
+          : view === "shares"
+            ? "Search Shared Links"
+            : view === "preloads"
+              ? "Search cached files"
+              : "";
   const isFiles = view === "files" || view === "trash";
   const listingKey = JSON.stringify([
     authenticated,
@@ -247,12 +298,13 @@ export default function App() {
     location.auth,
     isSearch ? searchOffset : 0,
     isSearch ? searchSort : "",
+    view === "trash" ? scopedQuery : "",
   ]);
   const loadedListing = useRef<string | null>(null);
   const workspace = useRef<HTMLElement>(null);
   useLayoutEffect(() => {
     if (workspace.current) workspace.current.scrollTop = 0;
-  }, [currentPath, view, searchOffset]);
+  }, [currentPath, view, location.settingsSection, searchOffset]);
   const items = useSyncExternalStore(transfers.subscribe, transfers.snapshot);
   const deletionJobs = useSyncExternalStore(
     transfers.subscribe,
@@ -273,11 +325,13 @@ export default function App() {
       auth = "",
       replace = false,
       state: Record<string, unknown> = {},
+      settingsSection = "cache",
     ) => {
       clearTimeout(searchTimer.current);
       const params = new URLSearchParams();
       if (path !== "/") params.set("path", path);
       if (view !== "files" && view !== "trash") params.set("view", view);
+      if (view === "settings") params.set("section", settingsSection);
       if (auth) params.set("auth", auth);
       const target = "/" + (params.size ? "?" + params.toString() : "");
       if (replace) window.history.replaceState(state, "", target);
@@ -401,6 +455,7 @@ export default function App() {
       ownSearchNavigation.current = null;
     } else {
       setQuery(isSearch ? currentPath.slice(8) : "");
+      setScopedQuery("");
     }
     if (!isSearch && !isPublic && view === "files")
       lastFolder.current = currentPath;
@@ -417,6 +472,7 @@ export default function App() {
     const shortcut = (event: KeyboardEvent) => {
       if (
         isPublic ||
+        !searchLabel ||
         authenticated !== true ||
         document.querySelector("dialog[open]")
       )
@@ -445,7 +501,7 @@ export default function App() {
       clearTimeout(searchTimer.current);
       window.removeEventListener("keydown", shortcut);
     };
-  }, [authenticated, isPublic]);
+  }, [authenticated, isPublic, searchLabel]);
   useEffect(() => {
     if ((!authenticated && !isPublic) || !isFiles) {
       loadedListing.current = null;
@@ -459,33 +515,35 @@ export default function App() {
     setLoading(!background);
     setLoadError("");
     const resultPromise =
-      isSearch && !isPublic
-        ? api
-            .search(
-              currentPath.slice(8),
-              searchOffset,
-              searchSort === "modified" ? "date" : searchSort,
-              controller.signal,
-            )
-            .then((result) => {
-              if (!controller.signal.aborted) {
-                setSearchMore(result.has_more);
-                setNextSearchOffset(result.next_offset);
-                setSearchItems(result.items);
-                if (!result.items.length && searchOffset > 0)
-                  setSearchOffset(0);
-              }
-              return {
-                data: {
-                  name: "Search Results",
-                  contents: Object.fromEntries(
-                    result.items.map((item) => [item.id, item]),
-                  ),
-                } as Directory,
-                auth_home_path: undefined,
-              };
-            })
-        : api.directory(currentPath, location.auth, controller.signal);
+      view === "trash"
+        ? api.trash(scopedQuery, controller.signal)
+        : isSearch && !isPublic
+          ? api
+              .search(
+                currentPath.slice(8),
+                searchOffset,
+                searchSort === "modified" ? "date" : searchSort,
+                controller.signal,
+              )
+              .then((result) => {
+                if (!controller.signal.aborted) {
+                  setSearchMore(result.has_more);
+                  setNextSearchOffset(result.next_offset);
+                  setSearchItems(result.items);
+                  if (!result.items.length && searchOffset > 0)
+                    setSearchOffset(0);
+                }
+                return {
+                  data: {
+                    name: "Search Results",
+                    contents: Object.fromEntries(
+                      result.items.map((item) => [item.id, item]),
+                    ),
+                  } as Directory,
+                  auth_home_path: undefined,
+                };
+              })
+          : api.directory(currentPath, location.auth, controller.signal);
     void resultPromise
       .then((result) => {
         if (controller.signal.aborted) return;
@@ -535,6 +593,7 @@ export default function App() {
     refresh,
     searchOffset,
     searchSort,
+    scopedQuery,
     listingKey,
     notify,
   ]);
@@ -626,7 +685,8 @@ export default function App() {
                 : view === "storage"
                   ? "Storage & Backups"
                   : view === "settings"
-                    ? "Settings"
+                    ? ADMIN_SETTING_TITLES[location.settingsSection] ||
+                      "Settings"
                     : isSearch
                       ? "Search Results"
                       : isPublic
@@ -791,8 +851,9 @@ export default function App() {
   const clearSearch = () => {
     clearTimeout(searchTimer.current);
     setQuery("");
+    setScopedQuery("");
     setSearchOffset(0);
-    if (isSearch) {
+    if (view === "files" && isSearch) {
       const origin = searchOrigin.current || lastFolder.current;
       searchOrigin.current = null;
       ownSearchNavigation.current = null;
@@ -808,6 +869,10 @@ export default function App() {
     }
     if ([...term].length > 255) {
       notify("Search names with at most 255 characters.", true);
+      return;
+    }
+    if (view !== "files") {
+      setScopedQuery(term);
       return;
     }
     const path = "/search_" + term;
@@ -838,6 +903,141 @@ export default function App() {
     clearTimeout(searchTimer.current);
     applySearch(query, true);
   };
+  const navigationLink = (item: {
+    view: View;
+    label: string;
+    icon: typeof HardDrive;
+    path?: string;
+    section?: string;
+  }) => {
+    const params = new URLSearchParams();
+    if (item.view === "trash") params.set("path", "/trash");
+    else if (item.view !== "files") params.set("view", item.view);
+    if (item.section) params.set("section", item.section);
+    const current =
+      view === item.view &&
+      (item.view !== "settings" ||
+        location.settingsSection === (item.section || "cache"));
+    return (
+      <a
+        key={item.label}
+        href={"/" + (params.size ? "?" + params.toString() : "")}
+        aria-current={current ? "page" : undefined}
+        onClick={(event) => {
+          event.preventDefault();
+          navigate(item.path || "/", item.view, "", false, {}, item.section);
+        }}
+      >
+        <item.icon size={19} />
+        <span>{item.label}</span>
+        {item.view === "activity" && activeCount > 0 && (
+          <span className="nav-count">{activeCount}</span>
+        )}
+      </a>
+    );
+  };
+  const pageHeading = (
+    <div className="page-heading">
+      <div>
+        {isFiles && !isSearch && view !== "trash" && crumbs.length > 1 && (
+          <nav className="breadcrumbs" aria-label="Breadcrumb">
+            {crumbs.slice(0, -1).map((crumb, index) => (
+              <span key={crumb.path}>
+                {index > 0 && <ChevronRight size={14} aria-hidden="true" />}
+                <a
+                  href={
+                    "/?" +
+                    new URLSearchParams({
+                      path: crumb.path,
+                      ...(location.auth ? { auth: location.auth } : {}),
+                    })
+                  }
+                  onClick={(event) => {
+                    event.preventDefault();
+                    navigate(crumb.path, "files", location.auth);
+                  }}
+                  aria-current={
+                    index === crumbs.length - 1 ? "page" : undefined
+                  }
+                >
+                  {crumb.name}
+                </a>
+              </span>
+            ))}
+          </nav>
+        )}
+        <h1>{title}</h1>
+        {isSearch && (
+          <p className="page-subtitle">
+            Files and folders matching “{currentPath.slice(8)}” across your
+            drive
+          </p>
+        )}
+        {view === "trash" && (
+          <p className="page-subtitle">
+            Trashed items cannot be opened through public links.
+          </p>
+        )}
+      </div>
+      {!isPublic && searchLabel && (
+        <form
+          className={
+            "search-form" + (isSearch && loading ? " search-pending" : "")
+          }
+          role="search"
+          aria-label={searchLabel}
+          onSubmit={onSearch}
+          aria-busy={isSearch && loading}
+        >
+          <button type="submit" className="icon-button" aria-label="Search">
+            <Search size={18} aria-hidden="true" />
+          </button>
+          <label className="sr-only" htmlFor="file-search">
+            {searchLabel}
+          </label>
+          <input
+            id="file-search"
+            ref={searchInput}
+            type="search"
+            maxLength={255}
+            aria-describedby="search-help"
+            value={query}
+            onChange={(event) => changeSearch(event.target.value)}
+            onCompositionStart={() => {
+              searchComposing.current = true;
+              clearTimeout(searchTimer.current);
+            }}
+            onCompositionEnd={(event) => {
+              searchComposing.current = false;
+              changeSearch(event.currentTarget.value);
+            }}
+            onKeyDown={(event) => {
+              if (event.key === "Escape" && !searchComposing.current) {
+                event.preventDefault();
+                clearSearch();
+              }
+            }}
+            placeholder={searchLabel}
+          />
+          <span id="search-help" className="sr-only">
+            {view === "files"
+              ? "Search names across your drive. Press Escape to return to the previous folder."
+              : "Search this page. Press Escape to clear the search."}
+          </span>
+          {query && (
+            <button
+              className="icon-button"
+              type="button"
+              aria-label="Clear Search"
+              onClick={clearSearch}
+            >
+              <X size={17} />
+            </button>
+          )}
+        </form>
+      )}
+    </div>
+  );
   if (authenticated === null && !isPublic)
     return (
       <div className="startup" role="status">
@@ -916,87 +1116,74 @@ export default function App() {
             <Plus size={23} /> New
           </button>
           <nav className="drive-nav">
-            {(
-              [
-                {
-                  view: "files",
-                  label: "My Files",
-                  icon: HardDrive,
-                  path: "/",
-                },
-                {
-                  view: "activity",
-                  label: "Transfers",
-                  icon: Activity,
-                  path: "/",
-                },
-                {
-                  view: "shares",
-                  label: "Shared Links",
-                  icon: Link,
-                  path: "/",
-                },
-                {
-                  view: "preloads",
-                  label: "Preloads",
-                  icon: HardDrive,
-                  path: "/",
-                },
-                {
-                  view: "performance",
-                  label: "Performance",
-                  icon: Activity,
-                  path: "/",
-                },
-                { view: "trash", label: "Trash", icon: Trash2, path: "/trash" },
-                {
-                  view: "connections",
-                  label: "Connections",
-                  icon: Plug,
-                  path: "/",
-                },
-                {
-                  view: "storage",
-                  label: "Storage & Backups",
-                  icon: ShieldCheck,
-                  path: "/",
-                },
-                {
-                  view: "settings",
-                  label: "Settings",
-                  icon: Settings,
-                  path: "/",
-                },
-              ] as const
-            ).map((item) => (
-              <a
-                key={item.view}
-                data-section-start={
-                  item.view === "connections" ? true : undefined
-                }
-                href={
-                  "/?" +
-                  new URLSearchParams(
-                    item.view === "trash"
-                      ? { path: "/trash" }
-                      : item.view === "files"
-                        ? {}
-                        : { view: item.view },
-                  ).toString()
-                }
-                aria-current={view === item.view ? "page" : undefined}
-                onClick={(event) => {
-                  event.preventDefault();
-                  navigate(item.path, item.view);
-                }}
-              >
-                <item.icon size={19} />
-                <span>{item.label}</span>
-                {item.view === "activity" && activeCount > 0 && (
-                  <span className="nav-count">{activeCount}</span>
-                )}
-              </a>
-            ))}
+            {navigationLink({
+              view: "files",
+              label: "My Files",
+              icon: HardDrive,
+            })}
+            {navigationLink({
+              view: "activity",
+              label: "Transfers",
+              icon: Activity,
+            })}
+            {navigationLink({
+              view: "shares",
+              label: "Shared Links",
+              icon: Link,
+            })}
+            {navigationLink({
+              view: "trash",
+              label: "Trash",
+              icon: Trash2,
+              path: "/trash",
+            })}
+            <div className="monitor-nav" role="group" aria-label="Monitor">
+              <span className="nav-section-label">Monitor</span>
+              {navigationLink({
+                view: "performance",
+                label: "Performance",
+                icon: Activity,
+              })}
+              {navigationLink({
+                view: "preloads",
+                label: "Preloads",
+                icon: HardDrive,
+              })}
+            </div>
+            <div className="admin-nav" role="group" aria-label="Configuration">
+              <span className="nav-section-label">Configuration</span>
+              {navigationLink({
+                view: "settings",
+                section: "cache",
+                label: "Cache settings",
+                icon: HardDrive,
+              })}
+              {navigationLink({
+                view: "settings",
+                section: "transfers",
+                label: "Transfer limits",
+                icon: Upload,
+              })}
+              {navigationLink({
+                view: "settings",
+                section: "regional",
+                label: "Timezone",
+                icon: Settings,
+              })}
+            </div>
+            <div className="admin-nav" role="group" aria-label="Management">
+              <span className="nav-section-label">Management</span>
+              {navigationLink({
+                view: "connections",
+                label: "Connections",
+                icon: Plug,
+              })}
+              {navigationLink({
+                view: "storage",
+                label: "Storage & Backups",
+                icon: ShieldCheck,
+              })}
+            </div>
           </nav>
           <div className="sidebar-bottom">
             <small>
@@ -1005,6 +1192,22 @@ export default function App() {
                 ? formatBytes(config.max_file_size)
                 : "the server limit"}
             </small>
+            <a
+              className="sidebar-help"
+              href="https://github.com/TechShreyash/TGDrive/blob/dev/docs/README.md"
+              target="_blank"
+              rel="noopener noreferrer"
+            >
+              <BookOpen size={18} aria-hidden="true" /> Documentation
+            </a>
+            <SidebarLogout
+              onLoggedOut={() => {
+                setMobileNav(false);
+                setNewOpen(false);
+                setAuthenticated(false);
+                notify("Logged out. Server transfers continue.");
+              }}
+            />
           </div>
         </aside>
       )}
@@ -1065,63 +1268,6 @@ export default function App() {
               >
                 <Menu size={22} />
               </button>
-              <form
-                className={
-                  "search-form" + (isSearch && loading ? " search-pending" : "")
-                }
-                role="search"
-                onSubmit={onSearch}
-                aria-busy={isSearch && loading}
-              >
-                <button
-                  type="submit"
-                  className="icon-button"
-                  aria-label="Search"
-                >
-                  <Search size={18} aria-hidden="true" />
-                </button>
-                <label className="sr-only" htmlFor="file-search">
-                  Search Files and Folders
-                </label>
-                <input
-                  id="file-search"
-                  ref={searchInput}
-                  type="search"
-                  maxLength={255}
-                  aria-describedby="search-help"
-                  value={query}
-                  onChange={(event) => changeSearch(event.target.value)}
-                  onCompositionStart={() => {
-                    searchComposing.current = true;
-                    clearTimeout(searchTimer.current);
-                  }}
-                  onCompositionEnd={(event) => {
-                    searchComposing.current = false;
-                    changeSearch(event.currentTarget.value);
-                  }}
-                  onKeyDown={(event) => {
-                    if (event.key === "Escape" && !searchComposing.current) {
-                      event.preventDefault();
-                      clearSearch();
-                    }
-                  }}
-                  placeholder="Search Files and Folders"
-                />
-                <span id="search-help" className="sr-only">
-                  Search file and folder names across your drive. Press Escape
-                  to return to the previous folder.
-                </span>
-                {query && (
-                  <button
-                    className="icon-button"
-                    type="button"
-                    aria-label="Clear Search"
-                    onClick={clearSearch}
-                  >
-                    <X size={17} />
-                  </button>
-                )}
-              </form>
             </>
           )}
           <ThemeControl />
@@ -1131,7 +1277,11 @@ export default function App() {
             </span>
           )}
         </header>
-        <section ref={workspace} className="workspace" aria-label={title}>
+        <section
+          ref={workspace}
+          className={"workspace" + (isFiles ? " file-workspace" : "")}
+          aria-label={title}
+        >
           {!isPublic && admissionPaused && (
             <div className="restart-required-banner" role="status">
               <ShieldAlert size={20} />
@@ -1153,57 +1303,12 @@ export default function App() {
               )}
             </div>
           )}
-          <div className="page-heading">
-            <div>
-              {isFiles &&
-                !isSearch &&
-                view !== "trash" &&
-                crumbs.length > 1 && (
-                  <nav className="breadcrumbs" aria-label="Breadcrumb">
-                    {crumbs.map((crumb, index) => (
-                      <span key={crumb.path}>
-                        {index > 0 && (
-                          <ChevronRight size={14} aria-hidden="true" />
-                        )}
-                        <a
-                          href={
-                            "/?" +
-                            new URLSearchParams({
-                              path: crumb.path,
-                              ...(location.auth ? { auth: location.auth } : {}),
-                            })
-                          }
-                          onClick={(event) => {
-                            event.preventDefault();
-                            navigate(crumb.path, "files", location.auth);
-                          }}
-                          aria-current={
-                            index === crumbs.length - 1 ? "page" : undefined
-                          }
-                        >
-                          {crumb.name}
-                        </a>
-                      </span>
-                    ))}
-                  </nav>
-                )}
-              <h1>{title}</h1>
-              {isSearch && (
-                <p className="page-subtitle">
-                  Files and folders matching “{currentPath.slice(8)}” across
-                  your drive
-                </p>
-              )}
-              {view === "trash" && (
-                <p className="page-subtitle">
-                  Trashed items cannot be opened through public links.
-                </p>
-              )}
-            </div>
-          </div>
+          {!isFiles && pageHeading}
           {!isPublic && <DeletionNotice jobs={deletionJobs} />}
           {isFiles ? (
             <FileBrowser
+              header={pageHeading}
+              searchQuery={view === "trash" ? scopedQuery : ""}
               directory={directory}
               listingKey={listingKey}
               highlightId={location.highlightId}
@@ -1243,6 +1348,7 @@ export default function App() {
             />
           ) : view === "shares" ? (
             <SharesView
+              query={scopedQuery}
               refresh={refresh}
               onError={(message) => notify(message, true)}
               onChange={reload}
@@ -1265,6 +1371,7 @@ export default function App() {
             />
           ) : view === "preloads" ? (
             <Preloads
+              query={scopedQuery}
               onError={(message) => notify(message, true)}
               onNotice={notify}
             />
@@ -1279,24 +1386,24 @@ export default function App() {
               onTrash={() => navigate("/trash", "trash")}
             />
           ) : view === "settings" ? (
-            <>
-              <SettingsView
-                onLogout={async () => {
-                  await api.logout();
-                  setAuthenticated(false);
-                  notify("Logged out. Server transfers continue.");
-                }}
-              />
-              <PerformanceSettings
-                onSaved={(value) => {
-                  setTimezone(value.timezone);
-                  notify("Performance settings saved.");
-                  reload();
-                }}
-              />
-            </>
+            <PerformanceSettings
+              category={
+                location.settingsSection === "transfers"
+                  ? "transfers"
+                  : location.settingsSection === "regional"
+                    ? "regional"
+                    : "cache"
+              }
+              uploadPreferences={<UploadSettings />}
+              onSaved={(value) => {
+                setTimezone(value.timezone);
+                notify("Performance settings saved.");
+                reload();
+              }}
+            />
           ) : (
             <TransferHistory
+              query={scopedQuery}
               items={items}
               onLocate={(item, folder) => void locateTransfer(item, folder)}
               onError={(message) => notify(message, true)}

@@ -14,7 +14,6 @@ import {
   AlertCircle,
   X,
   Link,
-  LogOut,
   Copy,
   ExternalLink,
   Minus,
@@ -24,12 +23,12 @@ import { api, errorMessage, type UploadPreferences } from "./api";
 import {
   formatBytes,
   formatDate,
+  formatTimestamp,
   type ServerStatus,
   type ManagementStats,
 } from "./types";
 import { ErrorNotice, Spinner } from "./components";
 import { transfers, uploadBackupState } from "./transfers";
-import { AppearanceOptions } from "./ThemeControl";
 import "./OwnerPages.css";
 export function Login({ onSuccess }: { onSuccess: () => void }) {
   const [password, setPassword] = useState("");
@@ -280,10 +279,7 @@ export function StorageView({
           {mongo ? "Last Telegram Safety Copy:" : "Last Confirmed Backup:"}{" "}
           <strong>
             {lastBackup && !Number.isNaN(lastBackup.getTime())
-              ? new Intl.DateTimeFormat(undefined, {
-                  dateStyle: "medium",
-                  timeStyle: "short",
-                }).format(lastBackup)
+              ? formatTimestamp(recovery?.last_success_at)
               : mongo
                 ? "Scheduled Automatically"
                 : "Not Confirmed Yet"}
@@ -304,6 +300,14 @@ export function StorageView({
               : "")
           }
         />
+        <a
+          className="inline-link backup-guide-link"
+          href="https://github.com/TechShreyash/TGDrive/blob/dev/docs/backup-recovery.md"
+          target="_blank"
+          rel="noopener noreferrer"
+        >
+          Backup &amp; recovery guide
+        </a>
         {mongo && recovery?.backup_key_configured && (
           <a
             className="text-button"
@@ -482,7 +486,7 @@ export function StorageView({
   );
 }
 
-function UploadSettings() {
+export function UploadSettings() {
   const [saved, setSaved] = useState<UploadPreferences | null>(null);
   const [value, setValue] = useState(1);
   const [busy, setBusy] = useState(false);
@@ -527,144 +531,111 @@ function UploadSettings() {
   };
   return (
     <section
-      className="settings-section"
+      className="settings-section preference-section"
       aria-labelledby="upload-settings-heading"
     >
-      <h2 id="upload-settings-heading">Uploads</h2>
-      <p>
-        Files start uploading to Telegram as soon as they reach the server.
-        Received files continue uploading after you close this tab.
-      </p>
-      {loading ? (
-        <Spinner />
-      ) : saved ? (
-        <form onSubmit={(event) => void save(event)}>
-          <div className="upload-limit-setting">
-            <div>
-              <label id="upload-limit-label" htmlFor="uploads-per-bot">
-                Simultaneous Uploads per Bot
-              </label>
-              <p id="upload-limit-help">
-                Keep 1 for a lighter load. Add more bots for more upload slots.
-              </p>
-            </div>
-            <div className="upload-limit-stepper">
-              <button
-                type="button"
-                className="icon-button"
-                aria-label="Fewer Uploads per Bot"
-                disabled={busy || !Number.isInteger(value) || value <= 1}
-                onClick={() => {
-                  setValue(value - 1);
-                  setNotice("");
-                }}
-              >
-                <Minus size={16} />
-              </button>
-              <input
-                id="uploads-per-bot"
-                type="number"
-                min="1"
-                max="4"
-                step="1"
-                required
-                aria-describedby="upload-limit-help"
-                value={value}
-                disabled={busy}
-                onChange={(event) => {
-                  setValue(event.target.valueAsNumber);
-                  setNotice("");
-                }}
-              />
-              <button
-                type="button"
-                className="icon-button"
-                aria-label="More Uploads per Bot"
-                disabled={busy || !Number.isInteger(value) || value >= 4}
-                onClick={() => {
-                  setValue(value + 1);
-                  setNotice("");
-                }}
-              >
-                <Plus size={16} />
-              </button>
-            </div>
-          </div>
-          <p className="settings-help">
-            {saved.connected_bots} connected{" "}
-            {saved.connected_bots === 1 ? "bot" : "bots"} ·{" "}
-            {saved.connected_bots *
-              (Number.isInteger(value) ? value : saved.uploads_per_bot)}{" "}
-            upload slots. Telegram waits still apply.
-          </p>
-          <div className="upload-settings-actions">
-            <button
-              className="primary-button"
-              disabled={
-                busy ||
-                !Number.isInteger(value) ||
-                value < 1 ||
-                value > 4 ||
-                value === saved.uploads_per_bot
-              }
-            >
-              {busy ? "Saving…" : "Save Changes"}
-            </button>
-            <span role="status" className="settings-help">
-              {notice}
-            </span>
-          </div>
-        </form>
-      ) : (
-        <button className="secondary-button" onClick={() => void load()}>
-          Try Again
-        </button>
-      )}
-      <ErrorNotice message={error} />
-    </section>
-  );
-}
-
-export function SettingsView({ onLogout }: { onLogout: () => Promise<void> }) {
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState("");
-  return (
-    <div className="preferences-page page-body">
-      <section
-        className="settings-section"
-        aria-labelledby="appearance-heading"
-      >
-        <h2 id="appearance-heading">Appearance</h2>
-        <p>Choose a look, or let TGDrive follow your device.</p>
-        <AppearanceOptions />
-      </section>
-      <UploadSettings />
-      <section
-        className="settings-section"
-        aria-labelledby="owner-session-heading"
-      >
-        <h2 id="owner-session-heading">Sign-in</h2>
+      <div className="preference-description">
+        <h2 id="upload-settings-heading">Parallel uploads</h2>
         <p>
-          You’re signed in as the owner of this installation. Logging out closes
-          this browser’s access; server transfers continue.
+          Files start uploading to Telegram as soon as they reach the server.
+          Received files continue uploading after you close this tab.
         </p>
-        <button
-          className="secondary-button"
-          disabled={busy}
-          onClick={() => {
-            setBusy(true);
-            setError("");
-            void onLogout().catch((cause) => {
-              setError(errorMessage(cause));
-              setBusy(false);
-            });
-          }}
-        >
-          <LogOut size={17} />
-          {busy ? "Logging out…" : "Log Out"}
-        </button>
+      </div>
+      <div className="preference-controls">
+        {loading ? (
+          <Spinner />
+        ) : saved ? (
+          <form onSubmit={(event) => void save(event)}>
+            <div className="upload-limit-setting">
+              <div>
+                <label id="upload-limit-label" htmlFor="uploads-per-bot">
+                  Simultaneous Uploads per Bot
+                </label>
+                <p id="upload-limit-help">
+                  Keep 1 for a lighter load. Add more bots for more upload
+                  slots.
+                </p>
+              </div>
+              <div className="upload-limit-stepper">
+                <button
+                  type="button"
+                  className="icon-button"
+                  aria-label="Fewer Uploads per Bot"
+                  disabled={busy || !Number.isInteger(value) || value <= 1}
+                  onClick={() => {
+                    setValue(value - 1);
+                    setNotice("");
+                  }}
+                >
+                  <Minus size={16} />
+                </button>
+                <input
+                  id="uploads-per-bot"
+                  type="number"
+                  min="1"
+                  max="4"
+                  step="1"
+                  required
+                  aria-describedby="upload-limit-help"
+                  value={value}
+                  disabled={busy}
+                  onChange={(event) => {
+                    setValue(event.target.valueAsNumber);
+                    setNotice("");
+                  }}
+                />
+                <button
+                  type="button"
+                  className="icon-button"
+                  aria-label="More Uploads per Bot"
+                  disabled={busy || !Number.isInteger(value) || value >= 4}
+                  onClick={() => {
+                    setValue(value + 1);
+                    setNotice("");
+                  }}
+                >
+                  <Plus size={16} />
+                </button>
+              </div>
+            </div>
+            <p className="settings-help">
+              {saved.connected_bots} connected{" "}
+              {saved.connected_bots === 1 ? "bot" : "bots"} ·{" "}
+              {saved.connected_bots *
+                (Number.isInteger(value) ? value : saved.uploads_per_bot)}{" "}
+              upload{" "}
+              {saved.connected_bots *
+                (Number.isInteger(value) ? value : saved.uploads_per_bot) ===
+              1
+                ? "slot"
+                : "slots"}
+              . Telegram waits still apply.
+            </p>
+            <div className="upload-settings-actions">
+              <button
+                className="primary-button"
+                disabled={
+                  busy ||
+                  !Number.isInteger(value) ||
+                  value < 1 ||
+                  value > 4 ||
+                  value === saved.uploads_per_bot
+                }
+              >
+                {busy ? "Saving…" : "Save Changes"}
+              </button>
+              <span role="status" className="settings-help">
+                {notice}
+              </span>
+            </div>
+          </form>
+        ) : (
+          <button className="secondary-button" onClick={() => void load()}>
+            Try Again
+          </button>
+        )}
         <ErrorNotice message={error} />
-      </section>
-    </div>
+      </div>
+    </section>
   );
 }

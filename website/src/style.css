@@ -298,7 +298,7 @@ form > select {
   padding: 0 16px 18px;
   display: flex;
   flex-direction: column;
-  overflow-y: auto;
+  overflow: hidden;
   min-height: 0;
 }
 .brand {
@@ -350,6 +350,10 @@ form > select {
   display: flex;
   flex-direction: column;
   gap: 4px;
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior-y: contain;
 }
 .drive-nav a,
 .settings-link {
@@ -360,6 +364,14 @@ form > select {
   padding: 0 13px;
   border-radius: 8px;
   color: var(--muted);
+  flex-shrink: 0;
+}
+.drive-nav a > svg {
+  flex-shrink: 0;
+}
+.drive-nav a > span:not(.nav-count) {
+  min-width: 0;
+  white-space: nowrap;
 }
 .drive-nav a:hover,
 .settings-link:hover {
@@ -381,10 +393,29 @@ form > select {
   border-radius: 10px;
   padding: 1px 5px;
 }
-.drive-nav a[data-section-start="true"] {
-  margin-top: 20px;
+.monitor-nav,
+.admin-nav {
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px solid var(--line-subtle);
+}
+.monitor-nav,
+.admin-nav {
+  display: flex;
+  flex-direction: column;
+  flex-shrink: 0;
+  gap: 4px;
+}
+.nav-section-label {
+  display: block;
+  padding: 5px 13px 3px;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 18px;
 }
 .sidebar-bottom {
+  flex-shrink: 0;
   margin-top: auto;
   padding: 24px 8px 0;
   color: var(--muted);
@@ -402,6 +433,31 @@ form > select {
   font-size: 11px;
   line-height: 18px;
 }
+.sidebar-help,
+.sidebar-logout {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  min-height: 44px;
+  margin-top: 8px;
+  padding: 0 8px;
+  border-radius: 8px;
+  color: var(--muted);
+  text-align: start;
+}
+.sidebar-help:hover,
+.sidebar-logout:hover:not(:disabled) {
+  background: var(--hover);
+  color: var(--ink);
+}
+.sidebar-bottom .sidebar-logout-error {
+  display: block;
+  margin: 4px 8px 0;
+  color: var(--danger);
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
 .settings-link {
   margin-top: 16px;
 }
@@ -414,8 +470,8 @@ form > select {
   outline: none;
 }
 .topbar {
-  height: 66px;
-  min-height: 66px;
+  height: 54px;
+  min-height: 54px;
   display: flex;
   align-items: center;
   gap: 12px;
@@ -487,6 +543,14 @@ form > select {
 }
 .page-heading > div:first-child {
   min-width: 0;
+  flex: 1;
+}
+.page-heading > .search-form {
+  width: min(420px, 48%);
+  flex-shrink: 0;
+}
+.page-heading .search-form input {
+  width: 100%;
 }
 .page-heading h1 {
   overflow-wrap: anywhere;
@@ -1311,8 +1375,8 @@ progress::-moz-progress-bar {
     padding: 0 8px 8px;
   }
   .topbar {
-    height: 64px;
-    min-height: 64px;
+    height: 48px;
+    min-height: 48px;
     padding: 0;
     gap: 6px;
   }
@@ -2340,6 +2404,9 @@ progress::-moz-progress-bar {
     align-items: stretch;
   }
   .page-heading > div:first-child {
+    width: 100%;
+  }
+  .page-heading > .search-form {
     width: 100%;
   }
   .page-heading > .inline-actions {

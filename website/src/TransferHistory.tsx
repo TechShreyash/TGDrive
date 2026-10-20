@@ -25,10 +25,12 @@ export default function TransferHistory({
   items,
   onError,
   onLocate,
+  query = "",
 }: {
   items: Transfer[];
   onLocate: (item: Transfer, folder?: boolean) => void;
   onError: (message: string) => void;
+  query?: string;
 }) {
   const [filter, setFilter] = useState<HistoryFilter>("all");
   const [revision, setRevision] = useState(0);
@@ -39,6 +41,9 @@ export default function TransferHistory({
   const [error, setError] = useState("");
   const generation = useRef(0);
   useEffect(() => {
+    move(firstPage);
+  }, [query]);
+  useEffect(() => {
     const controller = new AbortController();
     const version = ++generation.current;
     let timer: ReturnType<typeof setTimeout>;
@@ -48,6 +53,7 @@ export default function TransferHistory({
           filter === "all" ? "finished" : filter,
           navigation.cursor,
           controller.signal,
+          query,
         );
         if (controller.signal.aborted || generation.current !== version) return;
         // Only this cursor page is retained. Live uploads come from items above.
@@ -69,7 +75,7 @@ export default function TransferHistory({
       controller.abort();
       clearTimeout(timer);
     };
-  }, [filter, navigation.cursor, revision]);
+  }, [filter, navigation.cursor, revision, query]);
   const move = (next: typeof navigation) => {
     generation.current++;
     setLoading(true);
@@ -78,7 +84,21 @@ export default function TransferHistory({
     setPage(null);
     setNavigation(next);
   };
-  const visible = visibleHistory(jobs, items, filter, navigation.number === 1);
+  const term = query.normalize("NFC").toLocaleLowerCase();
+  const matchingItems = term
+    ? items.filter((item) =>
+        (item.name + " " + (item.batchName || ""))
+          .normalize("NFC")
+          .toLocaleLowerCase()
+          .includes(term),
+      )
+    : items;
+  const visible = visibleHistory(
+    jobs,
+    matchingItems,
+    filter,
+    navigation.number === 1,
+  );
   const controls = (
     <div
       className="transfer-history-filters transfer-filters"
@@ -110,18 +130,22 @@ export default function TransferHistory({
     <div className="empty-state">
       <Upload size={32} />
       <h2>
-        {filter === "all"
-          ? navigation.number === 1
-            ? "No Finished Transfers Yet"
-            : "No More Finished Transfers"
-          : "No " +
-            filters.find((entry) => entry.key === filter)!.label +
-            " Transfers"}
+        {query
+          ? "No Matching Finished Transfers"
+          : filter === "all"
+            ? navigation.number === 1
+              ? "No Finished Transfers Yet"
+              : "No More Finished Transfers"
+            : "No " +
+              filters.find((entry) => entry.key === filter)!.label +
+              " Transfers"}
       </h2>
       <p>
-        {filter === "all"
-          ? "Successful, failed and cancelled uploads appear here."
-          : "Try another filter to see other finished uploads."}
+        {query
+          ? "Try another name or clear the search."
+          : filter === "all"
+            ? "Successful, failed and cancelled uploads appear here."
+            : "Try another filter to see other finished uploads."}
       </p>
     </div>
   ) : null;

@@ -131,6 +131,9 @@ export function formatBytes(value: number | undefined): string {
   );
 }
 let instanceTimezone = "Asia/Kolkata";
+export function getTimezone(): string {
+  return instanceTimezone;
+}
 export function setTimezone(value: string) {
   try {
     new Intl.DateTimeFormat(undefined, { timeZone: value });

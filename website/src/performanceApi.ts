@@ -29,6 +29,8 @@ export const numericPreferences: {
   unit: number;
   min: number;
   max: number;
+  appDefault: number;
+  unitLabel?: string;
   help: string;
   advanced?: boolean;
 }[] = [
@@ -38,7 +40,9 @@ export const numericPreferences: {
     unit: MIB,
     min: 0,
     max: 8192,
-    help: "Effective memory is also limited by available server and container memory. 0 disables retention.",
+    appDefault: 256,
+    unitLabel: "MiB",
+    help: "Maximum retained media in RAM, reduced automatically when server or container memory is scarce. Idle blocks expire after 10 minutes. 0 disables RAM retention.",
   },
   {
     key: "cache_disk_bytes",
@@ -46,23 +50,29 @@ export const numericPreferences: {
     unit: GIB,
     min: 0,
     max: 2048,
-    help: "Disposable media bytes. 0 disables disk caching; originals stay in Telegram.",
+    appDefault: 10,
+    unitLabel: "GiB",
+    help: "Maximum disposable media stored on disk, allocated as content arrives. Increase only when space remains for uploads and the system. 0 disables disk caching; originals stay in Telegram.",
   },
   {
     key: "cache_min_free_bytes",
-    label: "Keep disk free (GiB)",
+    label: "Cache free-space floor (GiB)",
     unit: GIB,
     min: 0,
     max: 2048,
-    help: "Cache writes stop before crossing this free-space floor.",
+    appDefault: 1,
+    unitLabel: "GiB",
+    help: "Cache writes stop before free space falls below this amount. This does not allocate space or restrict other disk users. Upload staging has its own reserve.",
   },
   {
     key: "cache_ttl_seconds",
-    label: "Cache retention (hours)",
+    label: "Disk cache retention (hours)",
     unit: 3600,
     min: 60 / 3600,
     max: 744,
-    help: "Measured from reuse. Budget pressure may evict bytes sooner.",
+    appDefault: 24,
+    unitLabel: "hours",
+    help: "Expire disk blocks after this much time without reuse; each read refreshes the timer. Capacity pressure can evict blocks sooner. Longer retention helps repeated viewing when space allows.",
   },
   {
     key: "preload_max_jobs",
@@ -70,7 +80,8 @@ export const numericPreferences: {
     unit: 1,
     min: 1,
     max: 8,
-    help: "Background preparation gives way to active playback and downloads.",
+    appDefault: 2,
+    help: "Combined manual and automatic preparation jobs. Active playback and downloads take priority. More jobs share existing account capacity; they do not add it.",
   },
   {
     key: "upload_split_mib",
@@ -78,6 +89,8 @@ export const numericPreferences: {
     unit: 1,
     min: 0,
     max: 2000,
+    appDefault: 2000,
+    unitLabel: "MiB",
     help: "0 uses the safe account maximum, including an eligible Premium document. Choose 1–2000 MiB for smaller parts; existing transfers keep their plan.",
   },
   {
@@ -86,7 +99,8 @@ export const numericPreferences: {
     unit: 1,
     min: 1,
     max: 16,
-    help: "Outstanding part requests inside each Telegram document. Start with 4.",
+    appDefault: 4,
+    help: "Concurrent 512 KiB part-upload requests within one Telegram document, also bounded by the shared account request limit. Raise gradually only if throughput improves without cooldowns.",
     advanced: true,
   },
   {
@@ -95,7 +109,8 @@ export const numericPreferences: {
     unit: 1,
     min: 1,
     max: 32,
-    help: "Shared concurrent upload, download and media-metadata requests.",
+    appDefault: 8,
+    help: "Concurrent Telegram requests per account, shared by uploads, downloads and media metadata. Higher values can compete with playback and trigger cooldowns.",
     advanced: true,
   },
   {
@@ -104,6 +119,7 @@ export const numericPreferences: {
     unit: 1,
     min: 1,
     max: 128,
+    appDefault: 48,
     help: "Application pacing ceiling per account. Telegram cooldowns always take precedence.",
     advanced: true,
   },
@@ -113,7 +129,8 @@ export const numericPreferences: {
     unit: 1,
     min: 1,
     max: 16,
-    help: "Shared upload/download budget. Per-bot and Premium upload limits also apply.",
+    appDefault: 3,
+    help: "Concurrent Telegram upload/download operations per account, including missing-block reads. Per-bot and Premium upload limits also apply. This is not a viewer limit; cached payloads need no Telegram download slot.",
     advanced: true,
   },
   {
@@ -122,7 +139,8 @@ export const numericPreferences: {
     unit: 1,
     min: 1,
     max: 4096,
-    help: "Bounds waiting origin work across the server; excess requests receive retry guidance.",
+    appDefault: 256,
+    help: "Maximum waiting Telegram origin operations across the server, not whole files or viewers. Excess work receives retry guidance. A larger queue permits longer waits; it does not increase speed.",
     advanced: true,
   },
 ];
@@ -130,6 +148,32 @@ export type PerformanceDraft = Record<NumericPreference, string> & {
   timezone: string;
   auto_preload: boolean;
 };
+export type PerformanceCategory = "cache" | "transfers" | "regional";
+export function performanceCategoryKeys(
+  category: PerformanceCategory,
+): (keyof PerformanceDraft)[] {
+  if (category === "regional") return ["timezone"];
+  return [
+    ...numericPreferences
+      .filter(({ key }) =>
+        category === "cache"
+          ? key.startsWith("cache_") || key === "preload_max_jobs"
+          : key.startsWith("telegram_") || key === "upload_split_mib",
+      )
+      .map(({ key }) => key),
+    ...(category === "cache" ? ["auto_preload" as const] : []),
+  ];
+}
+export function performanceCategoryDraft(
+  draft: PerformanceDraft,
+  saved: PerformancePreferences,
+  category: PerformanceCategory,
+): PerformanceDraft {
+  const result = performanceDraft(saved);
+  for (const key of performanceCategoryKeys(category))
+    Object.assign(result, { [key]: draft[key] });
+  return result;
+}
 export function performanceDraft(
   saved: PerformancePreferences,
 ): PerformanceDraft {
@@ -284,7 +328,12 @@ export interface AccountPerformance {
   } | null;
 }
 export interface PerformanceSnapshot {
-  traffic?: TrafficSample & { started_at: number; history: TrafficSample[] };
+  traffic?: TrafficSample & {
+    started_at: number;
+    history: TrafficSample[];
+    download_bytes_per_second?: number | null;
+    upload_bytes_per_second?: number | null;
+  };
   telegram: {
     active: number;
     queued: number;
@@ -304,15 +353,66 @@ export interface PerformanceSnapshot {
   };
   cache: CacheSnapshot;
   server: {
+    history?: ResourceSample[];
     at: number;
     memory: Record<string, number | null>;
     process_peak_rss_bytes: number;
+    process_rss_bytes?: number | null;
+    cpu_count?: number;
+    cpu?: {
+      percent: number | null;
+      scope: "cgroup" | "host" | null;
+      capacity_cores?: number;
+    };
+    network?: {
+      available: boolean;
+      interface: string | null;
+      started_at: number;
+      received_bytes: number;
+      sent_bytes: number;
+      received_bytes_per_second: number | null;
+      sent_bytes_per_second: number | null;
+      scope: string;
+    };
     load_average: number[];
     disk: { total_bytes: number; free_bytes: number; used_bytes: number };
     staging_budget_bytes: number;
   };
   drive: { files: number; folders: number; total_bytes: number };
   history_scope?: string;
+}
+export interface ResourceSample {
+  at: number;
+  end_at?: number;
+  cpu_percent: number | null;
+  cpu_scope: "cgroup" | "host" | null;
+  memory_bytes: number | null;
+  memory_limit_bytes: number | null;
+  received_bytes_per_second: number | null;
+  sent_bytes_per_second: number | null;
+  network_interface: string | null;
+  coverage_seconds?: Record<string, number>;
+}
+export interface PerformanceHistory {
+  start: number;
+  end: number;
+  bucket_seconds: number;
+  samples: ResourceSample[];
+  retention_seconds: number;
+  earliest_at: number | null;
+  tracked_since: number | null;
+  last_updated?: number | null;
+  available: boolean;
+  totals: {
+    network_received_bytes: number | null;
+    network_sent_bytes: number | null;
+    http_upload_bytes: number | null;
+    http_download_bytes: number | null;
+    http_requests: number | null;
+    http_errors: number | null;
+    telegram_upload_bytes?: number | null;
+    telegram_download_bytes?: number | null;
+  };
 }
 export interface TrafficSample {
   at: number;
@@ -323,6 +423,17 @@ export interface TrafficSample {
   errors: number;
 }
 export const performanceApi = {
+  history: (start: number, end: number, signal?: AbortSignal) =>
+    request<PerformanceHistory>(
+      "/api/v1/performance/history?" +
+        new URLSearchParams({ start: String(start), end: String(end) }),
+      undefined,
+      {
+        signal: signal
+          ? AbortSignal.any([signal, AbortSignal.timeout(15000)])
+          : AbortSignal.timeout(15000),
+      },
+    ),
   settings: (signal?: AbortSignal) =>
     request<PerformancePreferences>("/api/v1/settings/performance", undefined, {
       signal,

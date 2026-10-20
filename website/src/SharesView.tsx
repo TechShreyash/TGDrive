@@ -3,7 +3,7 @@ import { Link, Copy, FolderOpen, RefreshCw, X, Check } from "lucide-react";
 import { api, errorMessage } from "./api";
 import {
   formatLocationLabel,
-  formatBytes,
+  formatDate,
   formatTimestamp,
   type Share,
   type DriveItem,
@@ -14,7 +14,11 @@ import "./SharesView.css";
 export function shareExpired(share: Share) {
   return (
     share.expires_at != null &&
-    new Date(share.expires_at).getTime() <= Date.now()
+    new Date(
+      typeof share.expires_at === "number"
+        ? share.expires_at * 1000
+        : share.expires_at,
+    ).getTime() <= Date.now()
   );
 }
 export function shareUrl(auth: string, nodeId: string, folder: boolean) {
@@ -34,12 +38,14 @@ export default function SharesView({
   onChange,
   onLocate,
   onShare,
+  query = "",
 }: {
   refresh: number;
   onError: (message: string) => void;
   onChange: () => void;
   onLocate: (share: Share) => void;
   onShare: (item: DriveItem) => void;
+  query?: string;
 }) {
   const [shares, setShares] = useState<Share[]>([]);
   const [loading, setLoading] = useState(true);
@@ -83,10 +89,16 @@ export default function SharesView({
     const timer = setTimeout(() => setCopied(""), 2500);
     return () => clearTimeout(timer);
   }, [copied]);
-  const active = shares.filter((share) => !shareExpired(share));
-  const expired = shares.filter(shareExpired);
+  const matching = shares.filter((share) =>
+    (share.name || "Shared Item")
+      .normalize("NFC")
+      .toLocaleLowerCase()
+      .includes(query.normalize("NFC").toLocaleLowerCase()),
+  );
+  const active = matching.filter((share) => !shareExpired(share));
+  const expired = matching.filter(shareExpired);
   const visible = (
-    filter === "active" ? active : filter === "expired" ? expired : shares
+    filter === "active" ? active : filter === "expired" ? expired : matching
   )
     .slice()
     .sort(
@@ -172,7 +184,7 @@ export default function SharesView({
               {{ active: "Active", expired: "Expired", all: "All" }[value]}
               <span>
                 {value === "all"
-                  ? shares.length
+                  ? matching.length
                   : value === "active"
                     ? active.length
                     : expired.length}
@@ -190,9 +202,6 @@ export default function SharesView({
           <RefreshCw size={18} />
         </button>
       </div>
-      <p className="shares-hint">
-        Anyone with an active link can view and download the shared item.
-      </p>
       {error && (
         <div className="page-load-error">
           <ErrorNotice message={error} />
@@ -212,138 +221,150 @@ export default function SharesView({
         <div className="empty-state">
           <Link size={36} />
           <h2>
-            {filter === "expired"
-              ? "No Expired Links"
-              : filter === "all"
-                ? "No Shared Links"
-                : "No Active Shared Links"}
+            {query
+              ? "No Matching Shared Links"
+              : filter === "expired"
+                ? "No Expired Links"
+                : filter === "all"
+                  ? "No Shared Links"
+                  : "No Active Shared Links"}
           </h2>
           <p>
-            {filter === "expired"
-              ? "Links that reach their expiry date will appear here."
-              : "Use an item’s Share Link action in My Files to share it."}
+            {query
+              ? "Try another name or clear the search."
+              : filter === "expired"
+                ? "Links that reach their expiry date will appear here."
+                : "Use an item’s Share Link action in My Files to share it."}
           </p>
         </div>
       ) : (
-        <ul className="shares-rows" aria-label="Shared Links">
-          {visible.map((share) => {
-            const ended = shareExpired(share);
-            const name = share.name || "Shared Item";
-            return (
-              <li
-                key={share.id || share.path}
-                className="share-row"
-                data-status={ended ? "expired" : "active"}
-                onDoubleClick={(event) => {
-                  if (!(event.target as HTMLElement).closest("button,a"))
-                    void locate(share);
-                }}
-              >
-                <FileIcon name={name} folder={share.type === "folder"} />
-                <div className="share-item">
-                  <button
-                    className="share-name"
-                    title={name}
-                    onDoubleClick={() => void locate(share)}
-                    onClick={(event) => {
-                      if (event.detail === 0) void locate(share);
-                    }}
-                  >
-                    {name}
-                  </button>
-                  <span
-                    className="share-location"
-                    title={
-                      formatLocationLabel(share.folder_label) || "My Files"
-                    }
-                  >
-                    {formatLocationLabel(share.folder_label) || "My Files"}
-                  </span>
-                </div>
-                <div className="share-created">
-                  <span>
-                    {share.type === "folder"
-                      ? "Folder · includes contents"
-                      : formatBytes(share.size)}
-                  </span>
-                  <span title={new Date(share.created_at).toLocaleString()}>
-                    Created {formatTimestamp(share.created_at)}
-                  </span>
-                </div>
-                <div className={"share-expiry" + (ended ? " ended" : "")}>
-                  <span>
-                    {ended
-                      ? "Expired"
-                      : share.expires_at
-                        ? "Expires"
-                        : "No Expiry"}
-                  </span>
-                  {share.expires_at && (
-                    <span title={new Date(share.expires_at).toLocaleString()}>
-                      {formatTimestamp(share.expires_at)}
-                    </span>
-                  )}
-                </div>
-                <div className="share-row-actions">
-                  {ended || !share.copyable ? (
+        <>
+          <div className="share-columns" aria-hidden="true">
+            <span>Shared item</span>
+            <span>Expires</span>
+            <span>Actions</span>
+          </div>
+          <ul className="shares-rows" aria-label="Shared Links">
+            {visible.map((share) => {
+              const ended = shareExpired(share);
+              const name = share.name || "Shared Item";
+              const expiryDate = new Date(
+                typeof share.expires_at === "number"
+                  ? share.expires_at * 1000
+                  : (share.expires_at ?? ""),
+              );
+              return (
+                <li
+                  key={share.id || share.path}
+                  className="share-row"
+                  data-status={ended ? "expired" : "active"}
+                  onDoubleClick={(event) => {
+                    if (!(event.target as HTMLElement).closest("button,a"))
+                      void locate(share);
+                  }}
+                >
+                  <FileIcon name={name} folder={share.type === "folder"} />
+                  <div className="share-item">
                     <button
-                      className="secondary-button share-copy"
-                      onClick={() => replace(share)}
+                      className="share-name"
+                      title={name}
+                      onClick={() => void locate(share)}
+                    >
+                      {name}
+                    </button>
+                    <span
+                      className="share-location"
                       title={
-                        ended
-                          ? "Create a new link"
-                          : "Older link cannot be recovered; replace it to copy a new link"
+                        formatLocationLabel(share.folder_label) || "My Files"
                       }
                     >
-                      <RefreshCw size={15} />
-                      {ended ? "Renew Link" : "Replace Link"}
-                    </button>
-                  ) : (
+                      {formatLocationLabel(share.folder_label) || "My Files"}
+                    </span>
+                  </div>
+                  <div className={"share-expiry" + (ended ? " ended" : "")}>
+                    {share.expires_at ? (
+                      <time
+                        dateTime={
+                          Number.isFinite(expiryDate.getTime())
+                            ? expiryDate.toISOString()
+                            : undefined
+                        }
+                        tabIndex={0}
+                        aria-label={`${ended ? "Expired" : "Expires"} ${formatTimestamp(share.expires_at)}`}
+                      >
+                        <span className="share-expiry-label">
+                          {ended ? "Expired" : "Expires"}
+                        </span>
+                        {formatDate(share.expires_at)}
+                        <span className="share-expiry-tooltip" role="tooltip">
+                          {formatTimestamp(share.expires_at)}
+                        </span>
+                      </time>
+                    ) : (
+                      "No expiry"
+                    )}
+                  </div>
+                  <div className="share-row-actions">
+                    {ended || !share.copyable ? (
+                      <button
+                        className="secondary-button share-copy"
+                        onClick={() => replace(share)}
+                        title={
+                          ended
+                            ? "Create a new link"
+                            : "Older link cannot be recovered; replace it to copy a new link"
+                        }
+                      >
+                        <RefreshCw size={15} />
+                        {ended ? "Renew Link" : "Replace Link"}
+                      </button>
+                    ) : (
+                      <button
+                        className="secondary-button share-copy"
+                        disabled={busy === share.path}
+                        onClick={() => void copy(share)}
+                      >
+                        {busy === share.path ? (
+                          <Spinner />
+                        ) : copied === share.path ? (
+                          <Check size={15} />
+                        ) : (
+                          <Copy size={15} />
+                        )}
+                        {copied === share.path ? "Copied" : "Copy Link"}
+                      </button>
+                    )}
                     <button
-                      className="secondary-button share-copy"
-                      disabled={busy === share.path}
-                      onClick={() => void copy(share)}
+                      className="icon-button"
+                      title="Show in Folder"
+                      aria-label={"Show " + name + " in folder"}
+                      onClick={() => void locate(share)}
                     >
-                      {busy === share.path ? (
-                        <Spinner />
-                      ) : copied === share.path ? (
-                        <Check size={15} />
-                      ) : (
-                        <Copy size={15} />
-                      )}
-                      {copied === share.path ? "Copied" : "Copy Link"}
+                      <FolderOpen size={18} />
                     </button>
-                  )}
-                  <button
-                    className="icon-button"
-                    title="Show in Folder"
-                    aria-label={"Show " + name + " in folder"}
-                    onClick={() => void locate(share)}
-                  >
-                    <FolderOpen size={18} />
-                  </button>
-                  <button
-                    className="icon-button"
-                    disabled={busy === share.path}
-                    title={ended ? "Remove Expired Entry" : "Revoke Link"}
-                    aria-label={
-                      (ended
-                        ? "Remove Expired Link for "
-                        : "Revoke Link for ") + name
-                    }
-                    onClick={() =>
-                      ended
-                        ? void revoke(share)
-                        : (setRevokeError(""), setConfirm(share))
-                    }
-                  >
-                    <X size={18} />
-                  </button>
-                </div>
-              </li>
-            );
-          })}
-        </ul>
+                    <button
+                      className="icon-button"
+                      disabled={busy === share.path}
+                      title={ended ? "Remove Expired Entry" : "Revoke Link"}
+                      aria-label={
+                        (ended
+                          ? "Remove Expired Link for "
+                          : "Revoke Link for ") + name
+                      }
+                      onClick={() =>
+                        ended
+                          ? void revoke(share)
+                          : (setRevokeError(""), setConfirm(share))
+                      }
+                    >
+                      <X size={18} />
+                    </button>
+                  </div>
+                </li>
+              );
+            })}
+          </ul>
+        </>
       )}
       <span className="sr-only" role="status">
         {copied ? "Share Link copied" : ""}

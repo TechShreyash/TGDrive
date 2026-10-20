@@ -142,6 +142,15 @@ def login(page: Any, url: str | None = None) -> None:
     expect(page.locator("#login-dialog")).not_to_be_visible()
 
 
+def open_admin(page: Any) -> None:
+    sidebar = page.locator(".sidebar")
+    if page.viewport_size["width"] <= 720:
+        if sidebar.get_attribute("inert") is not None:
+            page.get_by_role("button", name="Toggle Navigation", exact=True).click()
+    else:
+        expect(sidebar).not_to_have_attribute("inert", "")
+
+
 def upload(page: Any, names: list[str], *, add: bool = False) -> None:
     page.locator("#new-button:visible, #compact-new-button:visible").click()
     button = page.locator("#file-upload-action")
@@ -1434,7 +1443,7 @@ def test_enhanced_video_delayed_startup_shows_status_and_recovers(
         ).to_have_count(0)
         expect(dialog.locator(".preview-surface > video")).to_have_count(0)
         progress = status.get_by_role(
-            "progressbar", name="Estimated video buffered on this device"
+            "progressbar", name="Preparing audio and video frames"
         )
         expect(progress).to_be_visible()
         assert progress.evaluate("element=>!element.hasAttribute('value')"), (
@@ -1815,9 +1824,9 @@ def test_folder_upload_refresh_keeps_table_selection_page_and_scroll(
           if (removed === window.stableTable || removed.contains?.(window.stableTable))
             window.tableRemovals++;
       }).observe(document.querySelector('.workspace'), {childList:true, subtree:true});
-      document.querySelector('.workspace').scrollTop = 250;
+      document.querySelector('.file-list-scroll').scrollTop = 250;
     }""")
-    scroll = page.locator(".workspace").evaluate("element => element.scrollTop")
+    scroll = page.locator(".file-list-scroll").evaluate("element => element.scrollTop")
     assert scroll > 0
     hold = True
     try:
@@ -1845,7 +1854,9 @@ def test_folder_upload_refresh_keeps_table_selection_page_and_scroll(
             ).to_be_focused()
             expect(page.locator(".pagination")).to_contain_text("Showing 101\u2013")
             assert (
-                page.locator(".workspace").evaluate("element => element.scrollTop")
+                page.locator(".file-list-scroll").evaluate(
+                    "element => element.scrollTop"
+                )
                 == scroll
             )
             assert page.evaluate(
@@ -2183,6 +2194,7 @@ def test_settings_backup_status_never_claims_unconfirmed_protection(
 ) -> None:
     _, page = desktop
     login(page, server.url)
+    open_admin(page)
     page.get_by_role("link", name="Storage & Backups", exact=True).click()
     section = page.get_by_role("region", name="Drive Backup", exact=True)
     status = section.get_by_role("status")
@@ -2217,6 +2229,7 @@ def test_settings_backup_status_never_claims_unconfirmed_protection(
         offset = page.request.head(receipt.url)
         assert offset.ok and offset.headers["upload-offset"] == "0"
         assert server.control()["started"] == []
+        open_admin(page)
         page.get_by_role("link", name="Storage & Backups", exact=True).click()
         expect(status).to_have_text("Uploads Still in Progress", timeout=10000)
         assert_not_protected()
@@ -2550,9 +2563,12 @@ def test_appearance_system_persistence_sort_keyboard_and_mobile(
     page.keyboard.press("Escape")
     expect(sort).to_be_focused()
     page.screenshot(path=ARTIFACTS / "appearance-dark-desktop.png", full_page=False)
-    page.get_by_role("link", name="Settings", exact=True).click()
-    expect(page.get_by_role("heading", name="Appearance", exact=True)).to_be_visible()
-    expect(page.get_by_role("radio", name="Dark", exact=True)).to_be_checked()
+    expect(page.get_by_role("link", name="Settings", exact=True)).to_have_count(0)
+    page.get_by_role("button", name="Change Appearance", exact=True).click()
+    expect(
+        page.get_by_role("menuitemradio", name="Dark", exact=True)
+    ).to_have_attribute("aria-checked", "true")
+    page.keyboard.press("Escape")
     page.set_viewport_size({"width": 390, "height": 844})
     assert page.evaluate("document.documentElement.scrollWidth<=innerWidth")
     page.get_by_role("button", name="Change Appearance", exact=True).click()
@@ -2613,6 +2629,7 @@ def test_settings_connection_changes_are_write_only_verified_and_restart_scoped(
 ) -> None:
     _, page = desktop
     login(page, server.url)
+    open_admin(page)
     page.get_by_role("link", name="Connections", exact=True).click()
     section = page.locator(".connection-management")
     initial = page.request.get(server.url + "/api/v1/settings")
@@ -2752,6 +2769,7 @@ def test_settings_connection_changes_are_write_only_verified_and_restart_scoped(
     )
     assert blocked.status == 409
     assert blocked.json()["code"] == "SETTINGS_RESTART_REQUIRED"
+    open_admin(page)
     page.get_by_role("link", name="Connections", exact=True).click()
     page.set_viewport_size({"width": 320, "height": 844})
     assert page.evaluate("document.documentElement.scrollWidth<=innerWidth")
@@ -2765,6 +2783,7 @@ def test_settings_guided_premium_login_cancel_code_and_two_step(
 ) -> None:
     _, page = desktop
     login(page, server.url)
+    open_admin(page)
     page.get_by_role("link", name="Connections", exact=True).click()
     section = page.locator(".connection-management")
     section.get_by_role("button", name="Connect Premium Account", exact=True).click()
@@ -3008,6 +3027,7 @@ def test_ui_polish_batched_visual_states(
     page.unroute("**/api/v1/jobs")
     page.get_by_role("button", name="Clear Finished", exact=True).click()
     page.set_viewport_size({"width": 1440, "height": 960})
+    open_admin(page)
     page.get_by_role("link", name="Connections", exact=True).click()
     section = page.locator(".connection-management")
     premium_button = section.get_by_role(
@@ -3034,7 +3054,6 @@ def test_ui_polish_batched_visual_states(
         for route, heading in (
             ("connections", "Connections"),
             ("storage", "Storage & Backups"),
-            ("settings", "Settings"),
         ):
             page.goto(server.url + "/?view=" + route)
             expect(
@@ -3050,9 +3069,6 @@ def test_ui_polish_batched_visual_states(
                 expect(
                     page.get_by_role("progressbar", name="Reserved Upload Staging")
                 ).to_be_visible()
-            else:
-                expect(page.get_by_role("radio", name=mode, exact=True)).to_be_checked()
-                expect(page.locator(".connection-management")).to_have_count(0)
             capture(mode.lower() + "-" + route + "-desktop")
             page.set_viewport_size({"width": 390, "height": 844})
             if route == "storage":
@@ -3063,16 +3079,6 @@ def test_ui_polish_batched_visual_states(
                 assert (
                     page.locator(".drive-backup-state").bounding_box()["height"] <= 28
                 )
-            elif route == "settings":
-                for radio in page.get_by_role("radio").all():
-                    bounds = radio.bounding_box()
-                    assert bounds and bounds["width"] <= 18 and bounds["height"] <= 18
-                alternate = "Dark" if mode == "Light" else "Light"
-                page.get_by_role("radio", name=alternate, exact=True).check()
-                expect(page.locator("html")).to_have_attribute(
-                    "data-theme", alternate.lower()
-                )
-                page.get_by_role("radio", name=mode, exact=True).check()
             capture(mode.lower() + "-" + route + "-mobile")
             if route == "connections":
                 page.locator(".workspace").evaluate(
@@ -3200,14 +3206,14 @@ def test_transfer_history_filters_cleared_records_and_empty_state(
     login(page, server.url)
     page.get_by_role("link", name="Transfers", exact=False).click()
     history = page.get_by_role("region", name="Transfer History", exact=True)
-    filters = history.get_by_role("group", name="Filter Transfers", exact=True)
+    filters = history.get_by_role("group", name="Filter Finished Transfers", exact=True)
     expect(
-        history.get_by_role("heading", name="No Transfers Yet", exact=True)
+        history.get_by_role("heading", name="No Finished Transfers Yet", exact=True)
     ).to_be_visible()
     expect(
         history.get_by_role("button", name="Upload Files", exact=True)
     ).to_have_count(0)
-    for name in ("All", "Queued", "Running", "Completed", "Failed", "Cancelled"):
+    for name in ("All", "Successful", "Failed", "Cancelled"):
         expect(filters.get_by_role("button", name=name, exact=True)).to_be_visible()
     # New first opens the destination context instead of a picker on Transfers.
     page.locator("#new-button").click()
@@ -3230,11 +3236,11 @@ def test_transfer_history_filters_cleared_records_and_empty_state(
         page.wait_for_timeout(30)
     assert len(held) == 1
     page.get_by_role("link", name="Transfers", exact=False).click()
-    filters.get_by_role("button", name="Queued", exact=True).click()
+    filters.get_by_role("button", name="Failed", exact=True).click()
     expect(
-        history.get_by_role("heading", name="No Queued Transfers", exact=True)
+        history.get_by_role("heading", name="No Failed Transfers", exact=True)
     ).to_be_visible()
-    filters.get_by_role("button", name="Running", exact=True).click()
+    filters.get_by_role("button", name="All", exact=True).click()
     history.get_by_role("button", name="Show Files", exact=True).click()
     expect(history.locator(".transfer-item-name")).to_have_count(2)
     expect(history.locator(".transfer-item-name").first).to_have_text(
@@ -3244,13 +3250,13 @@ def test_transfer_history_filters_cleared_records_and_empty_state(
         route.continue_()
     page.unroute("**/api/v1/uploads/*", hold_first)
     finish_fixture_uploads(page, server, 2)
-    filters.get_by_role("button", name="Completed", exact=True).click()
+    filters.get_by_role("button", name="Successful", exact=True).click()
     expect(history.locator(".transfer-batch-name")).to_have_text("2 files")
     page.get_by_role("link", name="My Files", exact=True).click()
-    expect(page.locator("#transfer-dialog")).to_have_count(0)
+    expect(page.locator("#transfer-dialog")).to_have_count(0, timeout=10000)
 
     page.get_by_role("link", name="Transfers", exact=False).click()
-    filters.get_by_role("button", name="Completed", exact=True).click()
+    filters.get_by_role("button", name="Successful", exact=True).click()
     history.get_by_role("button", name="Show Files", exact=True).click()
     expect(history.locator(".transfer-item-name")).to_have_count(2)
     expect(history.locator("time")).to_have_count(1)
@@ -3261,17 +3267,17 @@ def test_transfer_history_filters_cleared_records_and_empty_state(
     # Prove server history remains after browser tracking is removed/reloaded.
     page.evaluate("localStorage.clear()")
     page.reload()
-    filters.get_by_role("button", name="Completed", exact=True).click()
+    filters.get_by_role("button", name="Successful", exact=True).click()
     expect(history.locator(".transfer-item-name")).to_have_count(2)
     page.set_viewport_size({"width": 390, "height": 844})
     page.emulate_media(color_scheme="light")
     assert_layout(page)
-    for name in ("All", "Queued", "Running", "Completed", "Failed", "Cancelled"):
+    for name in ("All", "Successful", "Failed", "Cancelled"):
         expect(filters.get_by_role("button", name=name, exact=True)).to_be_in_viewport()
     page.screenshot(path=ARTIFACTS / "transfer-history-mobile.png", full_page=True)
-    filters.get_by_role("button", name="Queued", exact=True).click()
+    filters.get_by_role("button", name="Cancelled", exact=True).click()
     expect(
-        history.get_by_role("heading", name="No Queued Transfers", exact=True)
+        history.get_by_role("heading", name="No Cancelled Transfers", exact=True)
     ).to_be_visible()
     expect(
         history.get_by_role("button", name="Upload Files", exact=True)
@@ -3284,8 +3290,9 @@ def test_upload_concurrency_setting_saves_and_survives_reload(
     _, page = desktop
     page.emulate_media(color_scheme="dark")
     login(page, server.url)
-    page.get_by_role("link", name="Settings", exact=True).click()
-    setting = page.get_by_role("region", name="Uploads", exact=True)
+    open_admin(page)
+    page.get_by_role("link", name="Transfer limits", exact=True).click()
+    setting = page.get_by_role("region", name="Parallel uploads", exact=True)
     field = setting.get_by_label("Simultaneous Uploads per Bot", exact=True)
     expect(field).to_have_value("1")
     setting.get_by_role("button", name="More Uploads per Bot", exact=True).click()
@@ -3328,7 +3335,7 @@ def test_transfer_sections_locate_highlight_and_normal_preview(
     upload(page, ["device-receiving.bin", "queued-device.bin"], add=True)
     page.get_by_role("link", name="Transfers", exact=False).click()
     history = page.get_by_role("region", name="Transfer History", exact=True)
-    for label in ("Running", "Completed"):
+    for label in ("Running", "Finished"):
         expect(history.get_by_role("region", name=label, exact=True)).to_be_visible()
     expect(history.get_by_role("region", name="Queued", exact=True)).to_have_count(0)
     completed = history.locator(".transfer-item[data-status=completed]")
@@ -3412,10 +3419,9 @@ def test_transfer_columns_handle_long_names_paths_and_narrow_screens(
     expect(completed.locator(".transfer-location")).to_have_attribute(
         "title", long_folder + " / " + long_name
     )
-    for category in ("Cancelled", "Queued", "Running", "Needs Attention"):
-        inactive_location = history.get_by_role(
-            "region", name=category, exact=True
-        ).locator(".transfer-item")
+    for inactive_location in history.locator(
+        ".transfer-item:not([data-status=completed])"
+    ).all():
         expect(
             inactive_location.get_by_role("button", name="Show ", exact=False)
         ).to_have_count(0)
@@ -3948,12 +3954,12 @@ def test_history_and_shares_failed_loads_have_retry_without_false_empty_state(
     page.get_by_role("link", name="Transfers", exact=False).click()
     expect(page.get_by_role("button", name="Try Again", exact=True)).to_be_visible()
     expect(
-        page.get_by_role("heading", name="No Transfers Yet", exact=True)
+        page.get_by_role("heading", name="No Finished Transfers Yet", exact=True)
     ).to_have_count(0)
     failing["history"] = False
     page.get_by_role("button", name="Try Again", exact=True).click()
     expect(
-        page.get_by_role("heading", name="No Transfers Yet", exact=True)
+        page.get_by_role("heading", name="No Finished Transfers Yet", exact=True)
     ).to_be_visible()
     page.get_by_role("link", name="Shared Links", exact=True).click()
     expect(page.get_by_role("button", name="Try Again", exact=True)).to_be_visible()

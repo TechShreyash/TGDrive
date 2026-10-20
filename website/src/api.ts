@@ -126,6 +126,12 @@ export const api = {
       { path, auth: auth || null },
       { signal },
     ),
+  trash: (query = "", signal?: AbortSignal) =>
+    request<{ data: Directory; auth_home_path?: string }>(
+      "/api/v1/trash?" + new URLSearchParams({ q: query }),
+      undefined,
+      { signal },
+    ),
   search: (
     query: string,
     offset = 0,
@@ -254,8 +260,10 @@ export const api = {
     status: string,
     cursor?: { before: number; before_id: string },
     signal?: AbortSignal,
+    search = "",
   ) => {
     const query = new URLSearchParams({ status, limit: "50" });
+    if (search) query.set("q", search);
     if (cursor) {
       query.set("before", String(cursor.before));
       query.set("before_id", cursor.before_id);

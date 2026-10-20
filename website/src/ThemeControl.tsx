@@ -45,51 +45,6 @@ function useAppearance() {
   };
   return { preference, choose };
 }
-export function AppearanceOptions() {
-  const { preference, choose } = useAppearance();
-  const name = useId();
-  return (
-    <fieldset className="appearance-options">
-      <legend className="sr-only">Appearance</legend>
-      {choices.map((item) => (
-        <label
-          className="appearance-option"
-          key={item.value}
-          data-selected={preference === item.value}
-        >
-          <input
-            type="radio"
-            name={name}
-            value={item.value}
-            checked={preference === item.value}
-            onChange={() => choose(item.value)}
-          />
-          <span
-            className="appearance-preview"
-            data-appearance={item.value}
-            aria-hidden="true"
-          >
-            <span className="appearance-window">
-              <span className="appearance-window-bar" />
-              <span className="appearance-window-side" />
-              <span className="appearance-window-content">
-                <i />
-                <i />
-                <i />
-              </span>
-            </span>
-          </span>
-          <span className="appearance-option-label">
-            {item.label}
-            {preference === item.value && (
-              <Check size={15} aria-hidden="true" />
-            )}
-          </span>
-        </label>
-      ))}
-    </fieldset>
-  );
-}
 export default function ThemeControl() {
   const { preference, choose } = useAppearance();
   const [open, setOpen] = useState(false);
