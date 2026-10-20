@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
+from threading import local
 
 import pytest
 from fastapi.testclient import TestClient
@@ -8,6 +9,7 @@ from test_app import FakeRuntime, make_settings
 
 from tgdrive.app import create_app
 from tgdrive.errors import ValidationError
+from tgdrive.mongo_store import MongoStore
 from tgdrive.store import MAX_SEARCH_OFFSET, DriveStore
 
 
@@ -89,7 +91,25 @@ def test_filename_only_search_prunes_entire_trash_branch_and_builds_human_parent
     assert hidden["id"] in store.search("report", include_trashed=True)
 
 
-def test_sort_and_pagination_apply_globally_with_deterministic_ties(store):
+def search_implementation(store, implementation):
+    if implementation == "sqlite":
+        return store
+    # Mongo search reads its consistent catalog cache. Exercise that real read
+    # path without requiring a running MongoDB service for ordering unit tests.
+    reader = object.__new__(MongoStore)
+    reader._local = local()
+    reader._closed = False
+    with store._transaction() as db:
+        reader._committed = {
+            "nodes": {row["id"]: dict(row) for row in db.execute("SELECT * FROM nodes")}
+        }
+    return reader
+
+
+@pytest.mark.parametrize("implementation", ["sqlite", "mongo-cache"])
+def test_sort_and_pagination_apply_globally_with_deterministic_ties(
+    store, implementation
+):
     folder = store.create_folder("/", "z report folder")
     records = [
         store.add_file("/", name, index + 1, size)
@@ -107,20 +127,75 @@ def test_sort_and_pagination_apply_globally_with_deterministic_ties(store):
             db.execute(
                 "UPDATE nodes SET upload_date=? WHERE id=?", (timestamp, row["id"])
             )
+    target = search_implementation(store, implementation)
     expected = {
-        "name": [folder["id"], records[1]["id"], records[2]["id"], records[0]["id"]],
-        "size": [folder["id"], records[1]["id"], records[2]["id"], records[0]["id"]],
-        "date": [folder["id"], records[2]["id"], records[1]["id"], records[0]["id"]],
+        ("name", None): [1, 2, 0],
+        ("name", "asc"): [1, 2, 0],
+        ("name", "desc"): [0, 2, 1],
+        ("size", None): [1, 2, 0],
+        ("size", "desc"): [1, 2, 0],
+        ("size", "asc"): [0, 1, 2],
+        ("date", None): [2, 1, 0],
+        ("date", "desc"): [2, 1, 0],
+        ("date", "asc"): [0, 1, 2],
     }
-    for sort, identities in expected.items():
-        first = store.search_page("report", limit=2, sort=sort)
+    for (sort, order), indices in expected.items():
+        identities = [folder["id"], *[records[index]["id"] for index in indices]]
+        first = target.search_page("report", limit=2, sort=sort, order=order)
         assert first["has_more"] and first["next_offset"] == 2
-        second = store.search_page(
-            "report", offset=first["next_offset"], limit=2, sort=sort
+        second = target.search_page(
+            "report", offset=first["next_offset"], limit=2, sort=sort, order=order
         )
         assert not second["has_more"] and second["next_offset"] is None
         assert [row["id"] for row in first["items"] + second["items"]] == identities
-    assert store.search_page("report", offset=MAX_SEARCH_OFFSET)["items"] == []
+    assert target.search_page("report", offset=MAX_SEARCH_OFFSET)["items"] == []
+
+
+@pytest.mark.parametrize("implementation", ["sqlite", "mongo-cache"])
+@pytest.mark.parametrize("sort", ["name", "date", "size"])
+@pytest.mark.parametrize("order", ["asc", "desc"])
+def test_equal_search_keys_keep_stable_id_order_and_hidden_branches_stay_hidden(
+    store, implementation, sort, order
+):
+    parents = [store.create_folder("/", name) for name in ("One", "Two", "Private")]
+    records = [
+        store.add_file(full(parent), "report.txt", index + 1, 10)
+        for index, parent in enumerate(parents)
+    ]
+    store.set_trashed(full(parents[2]), True)
+    with store._transaction(write=True) as db:
+        db.execute("UPDATE nodes SET upload_date='2025-01-01T00:00:00Z'")
+    target = search_implementation(store, implementation)
+    pages = [
+        target.search_page("report", sort=sort, order=order, limit=1, offset=offset)
+        for offset in range(2)
+    ]
+    assert [page["items"][0]["id"] for page in pages] == sorted(
+        row["id"] for row in records[:2]
+    )
+    assert pages[0]["has_more"] and not pages[1]["has_more"]
+
+
+@pytest.mark.parametrize("implementation", ["sqlite", "mongo-cache"])
+def test_trash_lists_human_parent_names_without_hidden_children(store, implementation):
+    parent = store.create_folder("/", "Books")
+    nested = store.create_folder(full(parent), "Reference")
+    root_file = store.add_file("/", "root-deleted.txt", 1, 10)
+    nested_file = store.add_file(full(nested), "nested-deleted.txt", 2, 10)
+    hidden = store.add_file(full(nested), "active.txt", 3, 10)
+    trashed_folder = store.create_folder(full(parent), "Old")
+    child = store.add_file(full(trashed_folder), "hidden-deleted.txt", 4, 10)
+    for row in (root_file, nested_file, trashed_folder, child):
+        store.set_trashed(full(row), True)
+    target = search_implementation(store, implementation)
+    items = target.list_trash()
+    assert set(items) == {root_file["id"], nested_file["id"], trashed_folder["id"]}
+    assert items[root_file["id"]]["parent_names"] == []
+    assert items[nested_file["id"]]["parent_names"] == ["Books", "Reference"]
+    assert items[nested_file["id"]]["path"] == full(nested)
+    assert items[trashed_folder["id"]]["parent_names"] == ["Books"]
+    assert hidden["id"] not in items and child["id"] not in items
+    assert list(target.list_trash("nested")) == [nested_file["id"]]
 
 
 def test_search_has_one_data_query_instead_of_per_result_ancestry_queries(
@@ -159,6 +234,9 @@ def test_search_has_one_data_query_instead_of_per_result_ancestry_queries(
         ("file", {"limit": 501}),
         ("file", {"limit": True}),
         ("file", {"sort": "name; DROP TABLE nodes"}),
+        ("file", {"order": "ASC"}),
+        ("file", {"order": "desc; DROP TABLE nodes"}),
+        ("file", {"order": []}),
     ],
 )
 def test_search_validates_query_pagination_and_sort(store, query, options):
@@ -209,12 +287,41 @@ def test_api_owner_only_search_does_not_accept_public_share_tokens(search_client
         {"q": "report", "limit": 201},
         {"q": "report", "offset": -1},
         {"q": "report", "sort": "modified"},
+        {"q": "report", "order": "ascending"},
     ],
 )
 def test_api_rejects_invalid_search_inputs(search_client, parameters):
     client, _, _ = search_client
     owner(client)
     assert client.get("/api/v1/search", params=parameters).status_code == 422
+
+
+def test_api_direction_applies_before_offset_pagination(search_client):
+    client, store, _ = search_client
+    folder = store.create_folder("/", "a report folder")
+    first = store.add_file("/", "a report.txt", 1, 10)
+    last = store.add_file("/", "z report.txt", 2, 20)
+    owner(client)
+    for sort in ("name", "size"):
+        response = client.get(
+            "/api/v1/search",
+            params={"q": "report", "sort": sort, "order": "desc", "limit": 2},
+        )
+        assert response.status_code == 200
+        page = response.json()
+        assert [item["id"] for item in page["items"]] == [folder["id"], last["id"]]
+        response = client.get(
+            "/api/v1/search",
+            params={
+                "q": "report",
+                "sort": sort,
+                "order": "desc",
+                "limit": 2,
+                "offset": page["next_offset"],
+            },
+        )
+        assert response.status_code == 200
+        assert [item["id"] for item in response.json()["items"]] == [first["id"]]
 
 
 def test_legacy_search_is_bounded_and_exposes_more_results_instead_of_fake_total(

@@ -92,13 +92,13 @@ seeking use the same file.
 
 | Stage | What is happening |
 | --- | --- |
-| Sending from your device | Your browser is sending bytes to the TGDrive machine |
+| Uploading from your device | Your browser is sending bytes to the TGDrive machine |
 | Queued | Waiting for an available upload slot |
-| Sending data to Telegram | Sending bytes, including parts that are not yet channel messages |
+| Uploading to Telegram | Sending bytes, including parts that are not yet channel messages |
 | Publishing to the channel | Finishing channel messages and saving the file record |
 | Completed | The file and its record are confirmed |
 
-For large files, **Sending data to Telegram** counts bytes across parallel
+For large files, **Uploading to Telegram** counts bytes across parallel
 parts, including unfinished parts. Each part appears in the Telegram channel
 only after its upload finishes. **Parts in Channel** counts confirmed channel
 messages; TGDrive adds the complete file to My Files after all parts are confirmed.
@@ -113,7 +113,9 @@ upload starts from zero after the device transfer. Multi-file batches show actua
 Telegram bytes, including partial uploads; device bytes are not counted twice.
 Sizes show up to two decimal places. Progress counters share the unit when possible,
 and active transfers show bytes remaining above 95% so rounding cannot hide the tail.
-Speed and remaining time appear when useful; queued batches have no elapsed timer.
+Active rows show speed and **About … remaining** when an estimate is available.
+Both describe the current stage, not the complete device-to-Telegram journey.
+Queued batches have no elapsed timer.
 
 ### Can I close the tab?
 
@@ -127,8 +129,8 @@ To resume, choose **Choose files**, **Choose folder** or **Choose file** in the
 existing batch. Select the same originals. TGDrive checks the received bytes
 before continuing. This local file check keeps the received-byte progress in place;
 it does not resend those bytes or show hashing speed as upload speed. Once
-verified, sending resumes from the server's acknowledged offset. **Device**
-speed measures browser-to-server sending; **Telegram** speed measures Telegram uploading.
+verified, sending resumes from the server's acknowledged offset. Speed measures
+browser-to-server sending or Telegram uploading according to the current stage.
 When the original is needed, **Choose file** appears beside
 the resume message as the main recovery action.
 
@@ -233,14 +235,30 @@ Queued/resumable device files still need their originals.
 | Clear selection | Done or Escape |
 | Create a folder | New → New folder |
 | Rename, move or trash | Open the item's menu, or use the selection actions |
-| Sort | Choose Name, Date added or File size |
+| Sort | Choose Name, Date Added or File Size, then Ascending or Descending |
+| Change view | Choose List view or Grid view |
 
-Folders stay first. A name conflict lets you keep both or skip; it does not
-silently replace another file.
+Sorting works in folders and search results. Ascending means A–Z, oldest first
+or smallest first; Descending reverses that order. Folders stay first in either
+direction. Clicking the active list column heading reverses its order.
+The list/grid choice is remembered in this browser.
+
+On phones, **View and sort** combines the view, sort field and direction in one
+menu beside the title. The selection icon keeps Select/Done available.
+
+Grid tiles request small Telegram thumbnails only when visible or nearby.
+Each thumbnail is limited to 128 KiB; browsing does not download original files
+to generate covers. Unsupported files and files without a suitable thumbnail
+show their file-type icon. A browser reporting data-saving mode uses icons
+without requesting thumbnails.
+
+A name conflict lets you keep both or skip; it does not silently replace another
+file.
 
 ### Search
 
-Search sits beside the page heading and stays within that page:
+Search sits beside the page heading and stays within that page. On phones,
+choose the search icon to open the field; it stays compact while unused:
 
 | Page | What search finds |
 | --- | --- |
@@ -256,7 +274,8 @@ query cannot silently hide items in a different page.
 - Press Enter to search immediately.
 - In My Files, clear the search or press Escape to return to your previous folder.
   On the other pages, this clears the filter without leaving the page.
-- Press `/` or Ctrl/Cmd+K to focus search when you are not editing another field.
+- Press `/` or Ctrl/Cmd+K to open and focus search when you are not editing another field.
+- On phones, Close Search or Escape collapses an empty search field.
 
 ## Open, preview, and download
 
@@ -366,6 +385,9 @@ browser is signed in as the owner. Revocation also stops future authorized
 blocks of an active stream; bytes already delivered remain with the recipient.
 
 ## Trash and permanent deletion
+
+Each item shows **Deleted from: My Files / …** so you can identify its source
+folder before restoring or deleting it.
 
 - **Move to Trash:** hides the item while keeping its Telegram files.
 - **Restore:** brings it back, subject to name and access checks.

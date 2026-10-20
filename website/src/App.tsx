@@ -46,6 +46,7 @@ import Preloads from "./Preloads";
 import PerformancePanel from "./PerformancePanel";
 import FileBrowser from "./FileBrowser";
 import type { FileSort } from "./SortMenu";
+import type { SortOrder } from "./fileSorting";
 import ActionDialog, { type ActionDialogState } from "./ActionDialog";
 import TransferPanel from "./TransferPanel";
 import TransferHistory from "./TransferHistory";
@@ -129,7 +130,10 @@ export default function App() {
   const [location, setLocation] = useState(getLocation);
   const [authenticated, setAuthenticated] = useState<boolean | null>(null);
   const [admissionPaused, setAdmissionPaused] = useState(false);
-  const [config, setConfig] = useState<{ max_file_size: number; demo_data?: boolean }>({ max_file_size: 0 });
+  const [config, setConfig] = useState<{
+    max_file_size: number;
+    demo_data?: boolean;
+  }>({ max_file_size: 0 });
   const [directory, setDirectory] = useState<Directory>({ contents: {} });
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState("");
@@ -139,10 +143,22 @@ export default function App() {
   const [scopedQuery, setScopedQuery] = useState("");
   const [searchOffset, setSearchOffset] = useState(searchHistoryOffset);
   const [searchSort, setSearchSort] = useState<FileSort>("name");
+  const [searchOrder, setSearchOrder] = useState<SortOrder>("asc");
   const [searchMore, setSearchMore] = useState(false);
   const [searchItems, setSearchItems] = useState<DriveItem[]>([]);
   const [nextSearchOffset, setNextSearchOffset] = useState<number | null>(null);
   const searchInput = useRef<HTMLInputElement>(null);
+  const searchTrigger = useRef<HTMLButtonElement>(null);
+  const [searchExpanded, setSearchExpanded] = useState(false);
+  const requestedSearchFocus = useRef<{ select: boolean } | null>(null);
+  const revealSearch = useCallback((select = false) => {
+    setSearchExpanded(true);
+    const input = searchInput.current;
+    if (input && input.getClientRects().length) {
+      input.focus();
+      if (select) input.select();
+    } else requestedSearchFocus.current = { select };
+  }, []);
   const searchTimer = useRef<ReturnType<typeof setTimeout> | undefined>(
     undefined,
   );
@@ -290,6 +306,14 @@ export default function App() {
             : view === "preloads"
               ? "Search cached files"
               : "";
+  useLayoutEffect(() => {
+    const requested = requestedSearchFocus.current;
+    const input = searchInput.current;
+    if (!requested || !input?.getClientRects().length) return;
+    requestedSearchFocus.current = null;
+    input.focus();
+    if (requested.select) input.select();
+  }, [searchExpanded, mobile, query, searchLabel]);
   const isFiles = view === "files" || view === "trash";
   const listingKey = JSON.stringify([
     authenticated,
@@ -298,6 +322,7 @@ export default function App() {
     location.auth,
     isSearch ? searchOffset : 0,
     isSearch ? searchSort : "",
+    isSearch ? searchOrder : "",
     view === "trash" ? scopedQuery : "",
   ]);
   const loadedListing = useRef<string | null>(null);
@@ -456,6 +481,7 @@ export default function App() {
     } else {
       setQuery(isSearch ? currentPath.slice(8) : "");
       setScopedQuery("");
+      setSearchExpanded(false);
     }
     if (!isSearch && !isPublic && view === "files")
       lastFolder.current = currentPath;
@@ -493,15 +519,14 @@ export default function App() {
       )
         return;
       event.preventDefault();
-      searchInput.current?.focus();
-      if (command) searchInput.current?.select();
+      revealSearch(command);
     };
     window.addEventListener("keydown", shortcut);
     return () => {
       clearTimeout(searchTimer.current);
       window.removeEventListener("keydown", shortcut);
     };
-  }, [authenticated, isPublic, searchLabel]);
+  }, [authenticated, isPublic, searchLabel, revealSearch]);
   useEffect(() => {
     if ((!authenticated && !isPublic) || !isFiles) {
       loadedListing.current = null;
@@ -524,6 +549,7 @@ export default function App() {
                 searchOffset,
                 searchSort === "modified" ? "date" : searchSort,
                 controller.signal,
+                searchOrder,
               )
               .then((result) => {
                 if (!controller.signal.aborted) {
@@ -593,6 +619,7 @@ export default function App() {
     refresh,
     searchOffset,
     searchSort,
+    searchOrder,
     scopedQuery,
     listingKey,
     notify,
@@ -966,7 +993,17 @@ export default function App() {
             ))}
           </nav>
         )}
-        <div className="page-title-line"><h1>{title}</h1>{config.demo_data && <span className="demo-marker" title="Synthetic local preview content and metrics">Demo</span>}</div>
+        <div className="page-title-line">
+          <h1>{title}</h1>
+          {config.demo_data && (
+            <span
+              className="demo-marker"
+              title="Synthetic local preview content and metrics"
+            >
+              Demo
+            </span>
+          )}
+        </div>
         {isSearch && (
           <p className="page-subtitle">
             Files and folders matching “{currentPath.slice(8)}” across your
@@ -979,14 +1016,37 @@ export default function App() {
           </p>
         )}
       </div>
+      {!isPublic && searchLabel && mobile && (
+        <button
+          ref={searchTrigger}
+          type="button"
+          className="icon-button compact-search-trigger"
+          aria-label={searchLabel}
+          aria-controls="page-search-form"
+          aria-expanded={searchExpanded || Boolean(query)}
+          onClick={() => revealSearch()}
+        >
+          <Search size={19} aria-hidden="true" />
+        </button>
+      )}
       {!isPublic && searchLabel && (
         <form
+          id="page-search-form"
+          hidden={mobile && !searchExpanded && !query}
           className={
             "search-form" + (isSearch && loading ? " search-pending" : "")
           }
           role="search"
           aria-label={searchLabel}
           onSubmit={onSearch}
+          onBlur={(event) => {
+            if (
+              mobile &&
+              !query &&
+              !event.currentTarget.contains(event.relatedTarget)
+            )
+              setSearchExpanded(false);
+          }}
           aria-busy={isSearch && loading}
         >
           <button type="submit" className="icon-button" aria-label="Search">
@@ -1002,6 +1062,7 @@ export default function App() {
             maxLength={255}
             aria-describedby="search-help"
             value={query}
+            onFocus={() => setSearchExpanded(true)}
             onChange={(event) => changeSearch(event.target.value)}
             onCompositionStart={() => {
               searchComposing.current = true;
@@ -1015,6 +1076,11 @@ export default function App() {
               if (event.key === "Escape" && !searchComposing.current) {
                 event.preventDefault();
                 clearSearch();
+                if (mobile) {
+                  requestedSearchFocus.current = null;
+                  setSearchExpanded(false);
+                  searchTrigger.current?.focus();
+                }
               }
             }}
             placeholder={searchLabel}
@@ -1024,6 +1090,20 @@ export default function App() {
               ? "Search names across your drive. Press Escape to return to the previous folder."
               : "Search this page. Press Escape to clear the search."}
           </span>
+          {mobile && !query && (
+            <button
+              className="icon-button"
+              type="button"
+              aria-label="Close Search"
+              onClick={() => {
+                requestedSearchFocus.current = null;
+                setSearchExpanded(false);
+                searchTrigger.current?.focus();
+              }}
+            >
+              <X size={17} aria-hidden="true" />
+            </button>
+          )}
           {query && (
             <button
               className="icon-button"
@@ -1184,13 +1264,11 @@ export default function App() {
             </div>
           </nav>
           <div className="sidebar-bottom">
-            {config.demo_data && <small className="demo-data-label">Local demo · sample content & metrics</small>}
-            <small>
-              Uploads up to{" "}
-              {config.max_file_size
-                ? formatBytes(config.max_file_size)
-                : "the server limit"}
-            </small>
+            {config.demo_data && (
+              <small className="demo-data-label">
+                Local demo · sample content & metrics
+              </small>
+            )}
             <a
               className="sidebar-help"
               href="https://github.com/TechShreyash/TGDrive/blob/dev/docs/README.md"
@@ -1340,6 +1418,11 @@ export default function App() {
               }
               searchItems={isSearch ? searchItems : undefined}
               searchSort={isSearch ? searchSort : undefined}
+              searchOrder={isSearch ? searchOrder : undefined}
+              onSearchOrder={(value) => {
+                setSearchOrder(value);
+                setSearchOffset(0);
+              }}
               onSearchSort={(value) => {
                 setSearchSort(value);
                 setSearchOffset(0);
@@ -1396,7 +1479,10 @@ export default function App() {
               uploadPreferences={<UploadSettings />}
               onSaved={(value) => {
                 setTimezone(value.timezone);
-                void api.config().then(setConfig).catch(() => {});
+                void api
+                  .config()
+                  .then(setConfig)
+                  .catch(() => {});
                 notify("Performance settings saved.");
                 reload();
               }}

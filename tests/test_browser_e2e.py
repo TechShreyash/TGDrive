@@ -424,7 +424,7 @@ def test_resumable_multiple_files_navigation_and_mobile_layout(
     page.get_by_role("button", name="Show Transfer Details", exact=True).click()
     expect(row(page, "first.txt").locator(".transfer-metrics")).to_contain_text("/s")
     expect(row(page, "first.txt").locator(".transfer-metrics")).to_contain_text(
-        "left in this stage"
+        "remaining"
     )
     assert_layout(page)
     page.screenshot(path=ARTIFACTS / "react-desktop.png", full_page=True)
@@ -2559,6 +2559,11 @@ def test_light_dark_theme_preference_persists_and_preserves_sort_keyboard(
     menu = page.get_by_role("menu", name="Sort Files", exact=True)
     expect(menu.get_by_role("menuitemradio", name="Name", exact=True)).to_be_focused()
     page.keyboard.press("End")
+    # Direction choices follow fields; keyboard navigation traverses both groups.
+    expect(menu.get_by_role("menuitemradio").last).to_be_focused()
+    page.keyboard.press("Home")
+    page.keyboard.press("ArrowDown")
+    page.keyboard.press("ArrowDown")
     expect(
         menu.get_by_role("menuitemradio", name="File Size", exact=True)
     ).to_be_focused()
@@ -3126,7 +3131,7 @@ def test_transfer_progress_and_safe_panel_controls(
     upload(page, ["single-progress.bin"])
     server.wait_started(1)
     single = row(page, "single-progress.bin")
-    expect(single.locator(".transfer-phase")).to_have_text("Sending data to Telegram")
+    expect(single.locator(".transfer-phase")).to_have_text("Uploading to Telegram")
     expect(single.get_by_role("progressbar")).to_have_attribute("value", "0")
     expect(single.locator(".transfer-bytes")).to_have_text("0 B / 64 KB")
     expect(page.get_by_role("button", name="Show Files", exact=True)).to_have_count(0)

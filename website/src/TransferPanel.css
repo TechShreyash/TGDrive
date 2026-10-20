@@ -8,3 +8,95 @@
   min-inline-size: 3ch;
   text-align: end;
 }
+
+.transfer-center .transfer-speed,
+.transfer-center .transfer-eta {
+  white-space: nowrap;
+}
+
+.transfer-center .transfer-timing-state {
+  overflow-wrap: anywhere;
+}
+
+/* One metadata baseline for the current transfer, above its progress bar. */
+.transfer-center
+  .transfer-item[data-live-metrics="true"]
+  .transfer-row-details {
+  display: flex;
+  align-items: baseline;
+  gap: 4px 14px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.transfer-center
+  .transfer-item[data-live-metrics="true"]
+  .transfer-row-details
+  .transfer-metrics {
+  display: contents;
+  font-size: inherit;
+}
+
+.transfer-center
+  .transfer-item[data-live-metrics="true"]
+  .transfer-row-details
+  > .transfer-bytes {
+  white-space: nowrap;
+}
+
+@container (min-width: 600px) {
+  .transfer-page .transfer-item[data-live-metrics="true"] .transfer-copy {
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1.5fr);
+    column-gap: 24px;
+  }
+
+  .transfer-page
+    .transfer-item[data-live-metrics="true"]
+    .transfer-copy
+    > .transfer-item-title {
+    grid-column: 1;
+    grid-row: 1;
+  }
+
+  .transfer-page .transfer-item[data-live-metrics="true"] .transfer-phase {
+    grid-column: 1;
+    grid-row: 2;
+  }
+
+  .transfer-page .transfer-item[data-live-metrics="true"] .transfer-location,
+  .transfer-page
+    .transfer-item[data-live-metrics="true"]
+    .transfer-relative-path {
+    grid-column: 1;
+    grid-row: 3;
+  }
+
+  .transfer-page
+    .transfer-item[data-live-metrics="true"]
+    .transfer-row-details {
+    grid-column: 2;
+    grid-row: 1 / 4;
+    justify-content: flex-end;
+    align-self: center;
+  }
+
+  .transfer-page
+    .transfer-item[data-live-metrics="true"]
+    .transfer-copy
+    > progress {
+    grid-column: 1 / -1;
+    grid-row: 4;
+  }
+
+  .transfer-page
+    .transfer-item[data-live-metrics="true"]
+    .transfer-item-actions {
+    align-self: center;
+  }
+}
+
+@container (min-width: 900px) {
+  .transfer-page .transfer-item[data-live-metrics="true"] .transfer-copy {
+    grid-template-columns: minmax(0, 1fr) auto;
+  }
+}

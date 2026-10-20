@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import json
+import re
+import time
 from typing import Any
 
 import pytest
@@ -67,7 +69,7 @@ def test_device_upload_reports_bytes_before_first_chunk_receipt(
           return progress && progress.value>0.05 && progress.value<0.8;
         }"""
     )
-    expect(row.locator(".transfer-phase")).to_have_text("Sending from this device")
+    expect(row.locator(".transfer-phase")).to_have_text("Uploading from your device")
     records = page.evaluate("window.uploadObservations")
     assert len(records) >= 2, records
     saved = page.evaluate("JSON.parse(localStorage.getItem('tgdrive.uploads.v2'))")
@@ -76,6 +78,13 @@ def test_device_upload_reports_bytes_before_first_chunk_receipt(
     value = float(row.get_by_role("progressbar").get_attribute("value"))
     assert 0 < value <= records[-1]["bytes"] / size
     assert row.locator(".transfer-bytes").inner_text() != "0 B / 2 MB"
+    expect(row.locator(".transfer-speed")).to_have_text(
+        re.compile(r"^\d[\d.,]* (?:B|KB|MB|GB)/s$")
+    )
+    expect(row.locator(".transfer-eta")).to_contain_text("remaining")
+    expect(row.locator(".transfer-eta")).to_have_attribute(
+        "title", "Estimated time remaining for this stage"
+    )
     page.screenshot(
         path=ARTIFACTS / "device-upload-observed-progress.png", full_page=True
     )
@@ -144,3 +153,85 @@ def test_native_upload_retries_rejected_chunk_from_confirmed_offset(
     expect(row).to_have_attribute("data-status", "uploading")
     server.wait_started(1)
     assert offsets == ["0", "0"]
+
+
+@pytest.mark.parametrize("width", [1440, 390, 320])
+def test_server_transfer_speed_and_eta_are_visible_and_expire_together(
+    server: Server, desktop: tuple[Any, Any], width: int
+) -> None:
+    _, page = desktop
+    page.set_viewport_size({"width": width, "height": 844})
+    mode = ["fresh"]
+
+    def jobs(route: Any) -> None:
+        at = time.time()
+        state = mode[0]
+        route.fulfill(
+            json={
+                "jobs": [
+                    {
+                        "id": "timed-server-transfer",
+                        "name": "Timed transfer.mp4",
+                        "kind": "upload",
+                        "status": "running",
+                        "phase": "retry_wait" if state == "waiting" else "uploading",
+                        "current": 512 * 1024,
+                        "total": 1024 * 1024,
+                        "created_at": at - 30,
+                        "started_at": at - 10,
+                        "progress_updated_at": at - 30 if state == "stale" else at,
+                        "speed_bytes_per_second": None
+                        if state == "calculating"
+                        else 128 * 1024,
+                        "eta_seconds": None,
+                    }
+                ]
+            }
+        )
+
+    page.route("**/api/v1/jobs", jobs)
+    login(page, server.url)
+    page.goto(server.url + "/?view=activity")
+    row = page.locator(".transfer-page .transfer-item").filter(
+        has_text="Timed transfer.mp4"
+    )
+    expect(row.locator(".transfer-phase")).to_have_text("Uploading to Telegram")
+    expect(row.locator(".transfer-speed")).to_have_text("128 KB/s")
+    expect(row.locator(".transfer-eta")).to_have_text("About 4s remaining")
+    assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
+    geometry = row.evaluate("""row => {
+      const box = selector => {
+        const value = row.querySelector(selector).getBoundingClientRect();
+        return {top:value.top,bottom:value.bottom,left:value.left,right:value.right};
+      };
+      return {
+        speed:box('.transfer-speed'), eta:box('.transfer-eta'),
+        percent:box('.transfer-batch-percent'), bytes:box('.transfer-bytes'),
+        progress:box('progress'), phase:box('.transfer-phase'),
+        name:box('.transfer-item-title'), row:row.getBoundingClientRect().toJSON()
+      };
+    }""")
+    metrics = [geometry[key] for key in ("speed", "eta", "percent", "bytes")]
+    assert all(metric["bottom"] < geometry["progress"]["top"] for metric in metrics)
+    assert all(metric["left"] >= geometry["row"]["left"] for metric in metrics)
+    assert all(metric["right"] <= geometry["row"]["right"] for metric in metrics)
+    if width == 1440:
+        assert (
+            max(metric["bottom"] for metric in metrics)
+            - min(metric["bottom"] for metric in metrics)
+            < 2
+        )
+        assert geometry["speed"]["left"] > geometry["name"]["right"]
+    else:
+        assert geometry["speed"]["top"] >= geometry["phase"]["bottom"]
+    page.screenshot(path=ARTIFACTS / f"transfer-speed-eta-{width}.png", full_page=True)
+    for state, expected in [
+        ("calculating", "Calculating speed"),
+        ("stale", "No recent progress"),
+        ("waiting", "Waiting for Telegram"),
+    ]:
+        mode[0] = state
+        page.reload()
+        expect(row.locator(".transfer-metrics")).to_contain_text(expected)
+        expect(row.locator(".transfer-metrics")).not_to_contain_text("128 KB/s")
+        expect(row.locator(".transfer-metrics")).not_to_contain_text("About 4s")

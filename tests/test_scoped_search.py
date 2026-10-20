@@ -12,10 +12,13 @@ def test_trash_search_is_owner_only_and_does_not_include_active_or_hidden_childr
 ):
     store = DriveStore.create(tmp_path / "drive.sqlite3")
     active = store.add_file("/", "résumé active.txt", 1, 10)
-    deleted = store.add_file("/", "résumé deleted.txt", 2, 10)
+    source = store.create_folder("/", "書庫")
+    nested_source = store.create_folder("/" + source["id"], "Reference")
+    nested_path = "/" + source["id"] + "/" + nested_source["id"]
+    deleted = store.add_file(nested_path, "résumé deleted.txt", 2, 10)
     folder = store.create_folder("/", "Old documents")
     child = store.add_file("/" + folder["id"], "résumé child.txt", 3, 10)
-    store.set_trashed("/" + deleted["id"], True)
+    store.set_trashed(nested_path + "/" + deleted["id"], True)
     store.set_trashed("/" + folder["id"], True)
     runtime = FakeRuntime(store)
     try:
@@ -30,7 +33,10 @@ def test_trash_search_is_owner_only_and_does_not_include_active_or_hidden_childr
             result = client.get("/api/v1/trash", params={"q": "RE\u0301SUME\u0301"})
             assert result.status_code == 200
             assert result.headers["cache-control"] == "no-store"
-            assert set(result.json()["data"]["contents"]) == {deleted["id"]}
+            contents = result.json()["data"]["contents"]
+            assert set(contents) == {deleted["id"]}
+            assert contents[deleted["id"]]["parent_names"] == ["書庫", "Reference"]
+            assert contents[deleted["id"]]["path"] == nested_path
             assert active["id"] not in result.text and child["id"] not in result.text
             assert len(client.get("/api/v1/trash").json()["data"]["contents"]) == 2
             assert (

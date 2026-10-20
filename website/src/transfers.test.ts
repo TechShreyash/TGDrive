@@ -1155,7 +1155,7 @@ it("distinguishes bytes sent from multipart messages stored in the channel", () 
     telegram_parts: { stored: 0, total: 3 },
   };
   expect(fromJob(job).phase).toBe(
-    "Sending data to Telegram · 0/3 Parts in Channel",
+    "Uploading to Telegram · 0/3 Parts in Channel",
   );
   expect(
     fromJob({ ...job, telegram_parts: { stored: 1, total: 3 } }).phase,
@@ -1164,7 +1164,7 @@ it("distinguishes bytes sent from multipart messages stored in the channel", () 
     "Available in your drive",
   );
   expect(fromJob({ ...job, telegram_parts: undefined }).phase).toBe(
-    "Sending data to Telegram",
+    "Uploading to Telegram",
   );
 });
 

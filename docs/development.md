@@ -53,8 +53,8 @@ Open [localhost:18767](http://localhost:18767/) and sign in with
 `offline browser test password`. This disposable preview includes transfers,
 files, shares, trash, complete/partial caches and illustrative performance data.
 It uses temporary stores and no real Telegram credentials. Restarting resets the
-sample content. The fixture's initial 32 MiB upload cap keeps tests small; the
-production default is 16 GiB and owners can adjust it in Transfer limits.
+sample content. Ordinary browser tests use a 32 MiB cap; showcase mode uses the production
+16 GiB default. Owners can adjust it in Transfer limits.
 Never deploy this fixture or its `/__test__` endpoints publicly.
 
 ## Latest focused validation

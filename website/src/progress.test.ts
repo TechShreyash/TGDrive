@@ -65,6 +65,69 @@ describe("truthful stage timing", () => {
       transferDetails({ ...item, total: 100, etaSeconds: 3 }, 17000).eta,
     ).toBeUndefined();
   });
+  it("calculates a stage estimate from fresh measured speed when the server omits ETA", () => {
+    const item = {
+      state: "uploading",
+      phase: "Sending to Telegram",
+      stage: "uploading",
+      current: 40,
+      total: 100,
+      speedBytesPerSecond: 20,
+      serverObservedAt: 2000,
+      progressUpdatedAt: 2,
+    };
+    expect(transferDetails(item, 2100)).toMatchObject({ rate: 20, eta: 3 });
+    expect(transferDetails({ ...item, etaSeconds: NaN }, 2100).eta).toBe(3);
+    expect(
+      transferDetails({ ...item, speedBytesPerSecond: -20 }, 2100),
+    ).toMatchObject({
+      rate: undefined,
+      eta: undefined,
+      timing: "calculating",
+    });
+  });
+  it("distinguishes initial measurements, stalls, provider waits and stage completion", () => {
+    const item = {
+      state: "uploading",
+      phase: "Downloading from URL",
+      stage: "downloading",
+      current: 20,
+      total: 100,
+      serverObservedAt: 2000,
+      progressUpdatedAt: 2,
+    };
+    expect(transferDetails(item, 2100).timing).toBe("calculating");
+    expect(transferDetails(item, 18000)).toMatchObject({
+      rate: undefined,
+      eta: undefined,
+      timing: "stalled",
+    });
+    expect(transferDetails({ ...item, stage: "retry_wait" }, 2100).timing).toBe(
+      "waiting",
+    );
+    expect(transferDetails({ ...item, stage: "finalizing" }, 2100).timing).toBe(
+      "finishing",
+    );
+    expect(transferDetails({ ...item, current: 100 }, 2100).timing).toBe(
+      "finishing",
+    );
+    expect(
+      transferDetails(
+        {
+          ...item,
+          state: "receiving",
+          meter: {
+            stage: "receiving",
+            bytes: 20,
+            at: 1000,
+            advancedAt: 1000,
+            rate: 20,
+          },
+        },
+        18000,
+      ).timing,
+    ).toBe("stalled");
+  });
   it("keeps elapsed time through reloads and freezes terminal durations", () => {
     const item = {
       state: "completed",

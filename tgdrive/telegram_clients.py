@@ -969,6 +969,114 @@ class Client:
             getattr(message, "native", message), file=file_name
         )
 
+    async def download_thumbnail(
+        self,
+        message: Any,
+        *,
+        max_bytes: int = 128 * 1024,
+        target_size: int = 320,
+        max_dimension: int = 640,
+    ) -> bytes | None:
+        """Read one advertised image thumbnail; never download the document.
+
+        Telegram's regular download_media defaults to the entire original when
+        no thumbnail is supplied. Build an explicit thumbnail location instead,
+        reject oversized advertised sizes, and bound even a malformed response.
+        Animated/video thumbnails and SVG sticker outlines are not requested.
+        """
+        native = getattr(message, "native", message)
+        document = getattr(native, "document", None)
+        photo = getattr(native, "photo", None)
+        if isinstance(document, types.Document):
+            media, sizes = document, document.thumbs or []
+            location_type = types.InputDocumentFileLocation
+        elif isinstance(photo, types.Photo):
+            media, sizes = photo, photo.sizes
+            location_type = types.InputPhotoFileLocation
+        else:
+            return None
+        max_bytes = min(max_bytes, 128 * 1024)
+        max_dimension = min(max_dimension, 640)
+        choices = []
+        stripped = []
+        for size in sizes:
+            if isinstance(size, types.PhotoStrippedSize):
+                if 0 < len(size.bytes) <= max_bytes:
+                    stripped.append(size)
+                continue
+            if not isinstance(
+                size,
+                (types.PhotoSize, types.PhotoSizeProgressive, types.PhotoCachedSize),
+            ):
+                continue
+            amount = _photo_size(size)
+            dimension = max(size.w, size.h)
+            if (
+                amount is not None
+                # An empty document thumb selector requests the original.
+                and isinstance(size.type, str)
+                and bool(size.type)
+                and 0 < amount <= max_bytes
+                and min(size.w, size.h) > 0
+                and dimension <= max_dimension
+            ):
+                choices.append((size, dimension, amount))
+        if not choices:
+            if stripped:
+                result = utils.stripped_photo_to_jpg(stripped[0].bytes)
+                return result if 0 < len(result) <= max_bytes else None
+            return None
+        # Prefer the smallest rendition which fills a 320px tile. If none
+        # reaches that size, use the largest smaller rendition, never original.
+        selected, _dimension, _amount = min(
+            choices,
+            key=lambda choice: (
+                choice[1] < target_size,
+                abs(choice[1] - target_size),
+                choice[2],
+            ),
+        )
+        if isinstance(selected, types.PhotoCachedSize):
+            return selected.bytes
+        location = location_type(
+            id=media.id,
+            access_hash=media.access_hash,
+            file_reference=media.file_reference,
+            thumb_size=selected.type,
+        )
+        request_size = 32 * 1024
+        iterator = self.native.iter_download(
+            location,
+            request_size=request_size,
+            chunk_size=request_size,
+            limit=(max_bytes + request_size - 1) // request_size + 1,
+            dc_id=media.dc_id,
+        )
+        data = bytearray()
+        scheduler = getattr(self, "_media_scheduler", None)
+        try:
+            while True:
+                if scheduler is None:
+                    part = await anext(iterator, None)
+                else:
+                    async with scheduler.request():
+                        part = await anext(iterator, None)
+                    if part is not None:
+                        scheduler.record_bytes(len(part))
+                if part is None:
+                    break
+                if len(data) + len(part) > max_bytes:
+                    return None
+                data.extend(part)
+            return bytes(data) or None
+        except FloodWaitError as error:
+            if scheduler is not None:
+                await scheduler.flood(max(1, error.seconds) + 0.25)
+            await self._defer_read(error)
+            raise
+        finally:
+            await iterator.close()
+
     @staticmethod
     def describe_media(message: Any) -> dict[str, Any]:
         options = _media_options(message)

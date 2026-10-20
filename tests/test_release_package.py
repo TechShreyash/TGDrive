@@ -30,6 +30,13 @@ def test_source_archive_excludes_local_state_and_private_documents(
     _source_tree(source)
     private_names = (
         ".env",
+        ".agents/skills/private/SKILL.md",
+        ".codex/private.json",
+        "skills-lock.json",
+        "docs/request-tracker.md",
+        "website/.agents/skills/private/config.json",
+        "website/.codex/private.json",
+        "website/skills-lock.json",
         ".git/config",
         "data/drive.json",
         "cache/uploads/private.upload",

@@ -91,6 +91,8 @@ EXCLUDED_PARTS = {
     "coverage",
     ".vite",
     ".impeccable",
+    ".agents",
+    ".codex",
 }
 
 
@@ -109,6 +111,7 @@ def source_files(root: Path) -> list[Path]:
         for path in base.rglob("*"):
             if (
                 EXCLUDED_PARTS.intersection(path.relative_to(base).parts)
+                or path.name in {"skills-lock.json", "request-tracker.md"}
                 or path.suffix not in suffixes
             ):
                 continue

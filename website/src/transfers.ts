@@ -245,7 +245,7 @@ export function fromJob(job: Job, previousKind?: string): Partial<Transfer> {
                       ? "Publishing to the channel"
                       : job.status === "queued"
                         ? "Queued for Telegram"
-                        : "Sending data to Telegram";
+                        : "Uploading to Telegram";
   if (
     state === "uploading" &&
     job.status === "running" &&
@@ -907,7 +907,7 @@ export class TransferManager {
       throw new Error("The server returned an invalid chunk size.");
     this.update(item.key, {
       state: "receiving",
-      phase: "Sending from this device",
+      phase: "Uploading from your device",
       stage: "sending",
       current: offset,
       sentCurrent: offset,

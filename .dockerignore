@@ -40,3 +40,12 @@ website/coverage
 **/*.session*
 
 website/.impeccable
+
+# Local agent tools and private request tracking never enter build context.
+.agents
+.codex
+**/.agents
+**/.codex
+skills-lock.json
+**/skills-lock.json
+docs/request-tracker.md

@@ -1870,7 +1870,9 @@ class DriveStore:
                 path = self._path_for_id(db, row["id"])
                 _, _, chain = self._resolve(db, path)
                 if not any(item["trashed"] for item in chain[:-1]):
-                    result[row["id"]] = self._record(row, path)
+                    result[row["id"]] = self._record(row, path) | {
+                        "parent_names": [item["name"] for item in chain[1:-1]]
+                    }
             return result
 
     def search(
@@ -1889,6 +1891,7 @@ class DriveStore:
         offset: int = 0,
         limit: int = 100,
         sort: str = "name",
+        order: str | None = None,
         include_trashed: bool = False,
     ) -> dict[str, Any]:
         """Search one consistent snapshot without per-result ancestry queries.
@@ -1916,8 +1919,15 @@ class DriveStore:
             or not 1 <= limit <= MAX_SEARCH_RESULTS
             or type(include_trashed) is not bool
             or sort not in {"name", "date", "size"}
+            or (
+                order is not None
+                and (not isinstance(order, str) or order not in {"asc", "desc"})
+            )
         ):
             raise ValidationError("invalid search pagination or sort")
+        # Secondary name/ID keys remain ascending so equal dates and sizes
+        # paginate deterministically in either primary direction.
+        direction = order or ("asc" if sort == "name" else "desc")
         with self._transaction() as db:
             rows = db.execute(
                 "WITH RECURSIVE visible(id,name,full_path,parent_names) AS ("
@@ -1930,10 +1940,23 @@ class DriveStore:
                 "SELECT n.*,v.full_path,v.parent_names FROM visible v "
                 "JOIN nodes n ON n.id=v.id WHERE n.id!='root' "
                 "AND instr(n.name_key,?)>0 ORDER BY (n.kind='folder') DESC,"
-                "CASE WHEN ?='date' THEN n.upload_date END DESC,"
-                "CASE WHEN ?='size' THEN n.size END DESC,"
+                "CASE WHEN ?='asc' THEN CASE ? "
+                "WHEN 'name' THEN n.name_key WHEN 'date' THEN n.upload_date "
+                "ELSE n.size END END ASC,"
+                "CASE WHEN ?='desc' THEN CASE ? "
+                "WHEN 'name' THEN n.name_key WHEN 'date' THEN n.upload_date "
+                "ELSE n.size END END DESC,"
                 "n.name_key,n.id LIMIT ? OFFSET ?",
-                (int(include_trashed), query.casefold(), sort, sort, limit + 1, offset),
+                (
+                    int(include_trashed),
+                    query.casefold(),
+                    direction,
+                    sort,
+                    direction,
+                    sort,
+                    limit + 1,
+                    offset,
+                ),
             ).fetchall()
             items = [
                 self._record(row, row["full_path"])

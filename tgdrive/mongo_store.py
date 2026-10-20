@@ -679,12 +679,22 @@ class MongoStore(DriveStore):
             for node in self._state["nodes"].values():
                 if node["trashed"] and query.casefold() in node["name"].casefold():
                     path = self._path(node["id"])
-                    if not any(row["trashed"] for row in self._resolve(path)[2][:-1]):
-                        result[node["id"]] = self._record(node, path)
+                    chain = self._resolve(path)[2]
+                    if not any(row["trashed"] for row in chain[:-1]):
+                        result[node["id"]] = self._record(node, path) | {
+                            "parent_names": [item["name"] for item in chain[1:-1]]
+                        }
             return result
 
     def search_page(
-        self, query, *, offset=0, limit=100, sort="name", include_trashed=False
+        self,
+        query,
+        *,
+        offset=0,
+        limit=100,
+        sort="name",
+        order=None,
+        include_trashed=False,
     ):
         if not isinstance(query, str):
             raise ValidationError("Search query must be a string")
@@ -702,8 +712,13 @@ class MongoStore(DriveStore):
             or not 1 <= limit <= MAX_SEARCH_RESULTS
             or type(include_trashed) is not bool
             or sort not in {"name", "date", "size"}
+            or (
+                order is not None
+                and (not isinstance(order, str) or order not in {"asc", "desc"})
+            )
         ):
             raise ValidationError("Invalid search pagination or sort")
+        direction = order or ("asc" if sort == "name" else "desc")
         with self._transaction():
             found = []
             for node in self._state["nodes"].values():
@@ -717,11 +732,16 @@ class MongoStore(DriveStore):
                 row["parent_names"] = [item["name"] for item in chain[1:-1]]
                 found.append(row)
             found.sort(key=lambda r: (_name_key(r["name"]), r["id"]))
-            if sort in {"size", "date"}:
-                found.sort(
-                    key=lambda r: r["size"] if sort == "size" else r["upload_date"],
-                    reverse=True,
-                )
+            found.sort(
+                key=lambda r: (
+                    _name_key(r["name"])
+                    if sort == "name"
+                    else r["size"]
+                    if sort == "size"
+                    else r["upload_date"]
+                ),
+                reverse=direction == "desc",
+            )
             found.sort(key=lambda r: r["type"] != "folder")
             items = found[offset : offset + limit]
             more = len(found) > offset + limit

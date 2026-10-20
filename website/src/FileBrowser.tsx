@@ -13,6 +13,11 @@ import {
   Pencil,
   Eye,
   Link,
+  List,
+  LayoutGrid,
+  ArrowUp,
+  ArrowDown,
+  SquareCheck,
 } from "lucide-react";
 import type { ActionDialogState } from "./ActionDialog";
 import {
@@ -29,6 +34,12 @@ import { shareExpired } from "./SharesView";
 import { FileIcon, Spinner } from "./components";
 import SortMenu, { type FileSort } from "./SortMenu";
 import "./FileBrowser.css";
+import FileThumbnail from "./FileThumbnail";
+import {
+  defaultSortOrder,
+  sortDriveItems,
+  type SortOrder,
+} from "./fileSorting";
 
 function positionItemMenu(details: HTMLDetailsElement) {
   const panel = details.querySelector<HTMLElement>(".action-menu");
@@ -83,6 +94,8 @@ export default function FileBrowser({
   searchPagination,
   searchSort,
   onSearchSort,
+  searchOrder,
+  onSearchOrder,
   searchItems,
   header,
   searchQuery = "",
@@ -109,6 +122,8 @@ export default function FileBrowser({
   };
   searchSort?: FileSort;
   onSearchSort?: (value: FileSort) => void;
+  searchOrder?: SortOrder;
+  onSearchOrder?: (value: SortOrder) => void;
   searchItems?: DriveItem[];
   header?: ReactNode;
   searchQuery?: string;
@@ -158,10 +173,47 @@ export default function FileBrowser({
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [selectionMode, setSelectionMode] = useState(false);
   const [localSort, setLocalSort] = useState<FileSort>("name");
+  const [localOrder, setLocalOrder] = useState<SortOrder>("asc");
+  const [layout, setLayout] = useState<"list" | "grid">(() => {
+    try {
+      return localStorage.getItem("tgdrive.file-view") === "grid"
+        ? "grid"
+        : "list";
+    } catch {
+      return "list";
+    }
+  });
   const sort = searchSort || localSort;
-  const setSort = (value: FileSort) => {
-    if (searchPagination) onSearchSort?.(value);
-    else setLocalSort(value);
+  const order = searchOrder || localOrder;
+  const setOrder = (value: SortOrder) => {
+    if (searchPagination) onSearchOrder?.(value);
+    else setLocalOrder(value);
+    setPage(0);
+  };
+  const setSort = (value: FileSort, toggle = false) => {
+    const direction =
+      toggle && value === sort
+        ? order === "asc"
+          ? "desc"
+          : "asc"
+        : value === sort
+          ? order
+          : defaultSortOrder(value);
+    if (searchPagination) {
+      onSearchSort?.(value);
+      onSearchOrder?.(direction);
+    } else {
+      setLocalSort(value);
+      setLocalOrder(direction);
+    }
+    setPage(0);
+  };
+  const setView = (value: "list" | "grid") => {
+    setLayout(value);
+    try {
+      localStorage.setItem("tgdrive.file-view", value);
+    } catch {}
+    hideItemMenus();
   };
   const [page, setPage] = useState(0);
   useEffect(() => {
@@ -198,22 +250,8 @@ export default function FileBrowser({
     const items = (
       searchItems || Object.values(directory.contents || {})
     ).slice();
-    if (!searchPagination)
-      items.sort((a, b) => {
-        if (a.type !== b.type) return a.type === "folder" ? -1 : 1;
-        if (sort === "size") return (b.size || 0) - (a.size || 0);
-        if (sort === "modified")
-          return (
-            (Date.parse(b.upload_date || "") || 0) -
-            (Date.parse(a.upload_date || "") || 0)
-          );
-        return a.name.localeCompare(b.name, undefined, {
-          numeric: true,
-          sensitivity: "base",
-        });
-      });
-    return items;
-  }, [directory.contents, searchItems, searchPagination, sort]);
+    return searchPagination ? items : sortDriveItems(items, sort, order);
+  }, [directory.contents, searchItems, searchPagination, sort, order]);
   useEffect(() => {
     // Retain browsing state on refresh, dropping only selections that disappeared.
     const ids = new Set(allItems.map((item) => item.id));
@@ -227,11 +265,17 @@ export default function FileBrowser({
   }, [allItems]);
   useEffect(() => {
     document.querySelector(".file-list-scroll")?.scrollTo({ top: 0 });
-  }, [page, listingKey]);
+  }, [page, listingKey, layout]);
   const highlighted = useRef("");
   useEffect(() => {
     if (loading || !highlightId) return;
-    const target = JSON.stringify([listingKey, highlightId, sort]);
+    const target = JSON.stringify([
+      listingKey,
+      highlightId,
+      sort,
+      order,
+      layout,
+    ]);
     if (highlighted.current === target) return;
     const index = allItems.findIndex((item) => item.id === highlightId);
     if (index < 0) return;
@@ -251,7 +295,7 @@ export default function FileBrowser({
       });
     });
     return () => cancelAnimationFrame(frame);
-  }, [allItems, listingKey, highlightId, loading, sort]);
+  }, [allItems, listingKey, highlightId, loading, sort, order, layout]);
   const visibleItems = allItems.slice(page * 100, (page + 1) * 100);
   const chosen = allItems.filter((item) => selected.has(item.id));
   const pointerKind = useRef("");
@@ -324,9 +368,16 @@ export default function FileBrowser({
       else next.add(id);
       return next;
     });
+  const Collection = layout === "grid" ? "div" : "table";
+  const CollectionBody = layout === "grid" ? "ul" : "tbody";
+  const Row = layout === "grid" ? "li" : "tr";
+  const Cell = layout === "grid" ? "div" : "td";
   return (
     <div className="file-browser">
-      <div className="file-toolbar">
+      <div
+        className="file-toolbar"
+        data-selection={chosen.length && !isPublic ? "true" : undefined}
+      >
         {header}
         <div className="file-toolbar-controls">
           {chosen.length && !isPublic ? (
@@ -378,7 +429,7 @@ export default function FileBrowser({
             </>
           ) : (
             <>
-              <span>
+              <span className="file-item-count">
                 {searchPagination
                   ? allItems.length
                     ? "Showing " +
@@ -395,30 +446,86 @@ export default function FileBrowser({
                 {!isPublic && (
                   <button
                     type="button"
-                    className="text-button"
+                    className="text-button file-selection-toggle"
                     aria-pressed={selectionMode}
                     onClick={() => {
                       setSelectionMode(!selectionMode);
                       setSelected(new Set());
                     }}
                   >
-                    {selectionMode ? "Done" : "Select"}
+                    <SquareCheck size={18} aria-hidden="true" />
+                    <span>{selectionMode ? "Done" : "Select"}</span>
                   </button>
                 )}
                 <SortMenu
                   value={sort}
-                  onChange={(value) => {
-                    setSort(value);
-                    setPage(0);
-                  }}
+                  order={order}
+                  onChange={(value) => setSort(value)}
+                  onOrderChange={setOrder}
+                  view={layout}
+                  onViewChange={setView}
                 />
               </div>
             </>
           )}
+          {layout === "grid" && selectionMode && !isPublic && (
+            <label className="grid-select-all">
+              <input
+                type="checkbox"
+                aria-label="Select All Files on This Page"
+                checked={
+                  visibleItems.length > 0 &&
+                  visibleItems.every((item) => selected.has(item.id))
+                }
+                ref={(input) => {
+                  if (input) {
+                    const count = visibleItems.filter((item) =>
+                      selected.has(item.id),
+                    ).length;
+                    input.indeterminate =
+                      count > 0 && count < visibleItems.length;
+                  }
+                }}
+                onChange={(event) => {
+                  const next = new Set(selected);
+                  for (const item of visibleItems)
+                    event.target.checked
+                      ? next.add(item.id)
+                      : next.delete(item.id);
+                  setSelected(next);
+                }}
+              />{" "}
+              All
+            </label>
+          )}
+          <div className="file-view-toggle" role="group" aria-label="File view">
+            <button
+              type="button"
+              className="icon-button"
+              aria-label="List view"
+              title="List view"
+              aria-pressed={layout === "list"}
+              onClick={() => setView("list")}
+            >
+              <List size={18} />
+            </button>
+            <button
+              type="button"
+              className="icon-button"
+              aria-label="Grid view"
+              title="Grid view"
+              aria-pressed={layout === "grid"}
+              onClick={() => setView("grid")}
+            >
+              <LayoutGrid size={18} />
+            </button>
+          </div>
         </div>
       </div>
       <div
-        className="file-list-scroll"
+        className={
+          "file-list-scroll" + (layout === "grid" ? " file-grid-scroll" : "")
+        }
         tabIndex={0}
         aria-label="File list"
         onPointerDownCapture={(event) => {
@@ -501,102 +608,137 @@ export default function FileBrowser({
         ) : (
           <>
             <div className="file-table-wrap">
-              <table className="file-table">
-                <thead>
-                  <tr>
-                    <th
-                      scope="col"
-                      aria-sort={sort === "name" ? "ascending" : undefined}
-                    >
-                      <div className="name-header-content">
-                        <span className="file-selection-slot">
-                          {!isPublic && selectionMode && (
-                            <label className="file-checkbox-target">
-                              <input
-                                type="checkbox"
-                                aria-label="Select All Files on This Page"
-                                ref={(input) => {
-                                  if (input) {
-                                    const count = visibleItems.filter((item) =>
+              <Collection
+                className={
+                  "file-table" + (layout === "grid" ? " file-grid" : "")
+                }
+              >
+                {layout === "list" && (
+                  <thead>
+                    <tr>
+                      <th
+                        scope="col"
+                        aria-sort={
+                          sort === "name"
+                            ? order === "asc"
+                              ? "ascending"
+                              : "descending"
+                            : undefined
+                        }
+                      >
+                        <div className="name-header-content">
+                          <span className="file-selection-slot">
+                            {!isPublic && selectionMode && (
+                              <label className="file-checkbox-target">
+                                <input
+                                  type="checkbox"
+                                  aria-label="Select All Files on This Page"
+                                  ref={(input) => {
+                                    if (input) {
+                                      const count = visibleItems.filter(
+                                        (item) => selected.has(item.id),
+                                      ).length;
+                                      input.indeterminate =
+                                        count > 0 &&
+                                        count < visibleItems.length;
+                                    }
+                                  }}
+                                  checked={
+                                    visibleItems.length > 0 &&
+                                    visibleItems.every((item) =>
                                       selected.has(item.id),
-                                    ).length;
-                                    input.indeterminate =
-                                      count > 0 && count < visibleItems.length;
+                                    )
                                   }
-                                }}
-                                checked={
-                                  visibleItems.length > 0 &&
-                                  visibleItems.every((item) =>
-                                    selected.has(item.id),
-                                  )
-                                }
-                                onChange={(event) => {
-                                  const next = new Set(selected);
-                                  for (const item of visibleItems)
-                                    event.target.checked
-                                      ? next.add(item.id)
-                                      : next.delete(item.id);
-                                  setSelected(next);
-                                }}
-                              />
-                            </label>
-                          )}
-                        </span>
+                                  onChange={(event) => {
+                                    const next = new Set(selected);
+                                    for (const item of visibleItems)
+                                      event.target.checked
+                                        ? next.add(item.id)
+                                        : next.delete(item.id);
+                                    setSelected(next);
+                                  }}
+                                />
+                              </label>
+                            )}
+                          </span>
+                          <button
+                            type="button"
+                            className="column-sort-button"
+                            aria-label="Sort by Name"
+                            onClick={() => {
+                              setSort("name", true);
+                              setPage(0);
+                            }}
+                          >
+                            Name{" "}
+                            {sort === "name" &&
+                              (order === "asc" ? (
+                                <ArrowUp size={12} aria-hidden="true" />
+                              ) : (
+                                <ArrowDown size={12} aria-hidden="true" />
+                              ))}
+                          </button>
+                        </div>
+                      </th>
+                      <th
+                        scope="col"
+                        className="date-cell"
+                        aria-sort={
+                          sort === "modified"
+                            ? order === "asc"
+                              ? "ascending"
+                              : "descending"
+                            : undefined
+                        }
+                      >
                         <button
                           type="button"
                           className="column-sort-button"
-                          aria-label="Sort by Name"
+                          aria-label="Sort by Date Added"
                           onClick={() => {
-                            setSort("name");
+                            setSort("modified", true);
                             setPage(0);
                           }}
                         >
-                          Name
+                          Added
                         </button>
-                      </div>
-                    </th>
-                    <th
-                      scope="col"
-                      className="date-cell"
-                      aria-sort={sort === "modified" ? "descending" : undefined}
-                    >
-                      <button
-                        type="button"
-                        className="column-sort-button"
-                        aria-label="Sort by Date Added"
-                        onClick={() => {
-                          setSort("modified");
-                          setPage(0);
-                        }}
+                      </th>
+                      <th
+                        scope="col"
+                        className="size-cell"
+                        aria-sort={
+                          sort === "size"
+                            ? order === "asc"
+                              ? "ascending"
+                              : "descending"
+                            : undefined
+                        }
                       >
-                        Added
-                      </button>
-                    </th>
-                    <th
-                      scope="col"
-                      className="size-cell"
-                      aria-sort={sort === "size" ? "descending" : undefined}
-                    >
-                      <button
-                        type="button"
-                        className="column-sort-button"
-                        aria-label="Sort by File Size"
-                        onClick={() => {
-                          setSort("size");
-                          setPage(0);
-                        }}
-                      >
-                        Size
-                      </button>
-                    </th>
-                    <th scope="col" className="actions-cell">
-                      <span className="sr-only">Actions</span>
-                    </th>
-                  </tr>
-                </thead>
-                <tbody>
+                        <button
+                          type="button"
+                          className="column-sort-button"
+                          aria-label="Sort by File Size"
+                          onClick={() => {
+                            setSort("size", true);
+                            setPage(0);
+                          }}
+                        >
+                          Size
+                        </button>
+                      </th>
+                      <th scope="col" className="actions-cell">
+                        <span className="sr-only">Actions</span>
+                      </th>
+                    </tr>
+                  </thead>
+                )}
+                <CollectionBody
+                  aria-label={
+                    layout === "grid" ? "Files and folders" : undefined
+                  }
+                >
                   {visibleItems.map((item) => (
-                    <tr
+                    <Row
                       key={item.id}
                       className={
                         "file-row " + (selected.has(item.id) ? "selected" : "")
@@ -637,7 +779,14 @@ export default function FileBrowser({
                         onOpen(item);
                       }}
                     >
-                      <td className="name-cell">
+                      <Cell className="name-cell">
+                        {layout === "grid" && (
+                          <FileThumbnail
+                            item={item}
+                            auth={auth}
+                            disabled={isTrash}
+                          />
+                        )}
                         <div className="name-cell-content">
                           <span className="file-selection-slot">
                             {!isPublic && selectionMode ? (
@@ -683,7 +832,7 @@ export default function FileBrowser({
                                 </span>
                               )}
                             </div>
-                            {isSearch && (
+                            {(isSearch || isTrash) && (
                               <span
                                 className="search-result-location"
                                 title={[
@@ -691,6 +840,7 @@ export default function FileBrowser({
                                   ...(item.parent_names || []),
                                 ].join(" / ")}
                               >
+                                {isTrash ? "Deleted from: " : ""}
                                 {[
                                   "My Files",
                                   ...(item.parent_names || []),
@@ -698,18 +848,22 @@ export default function FileBrowser({
                               </span>
                             )}
                           </div>
-                          {item.type === "folder" && (
+                          {item.type === "folder" && layout !== "grid" && (
                             <span className="sr-only">Folder</span>
                           )}
                         </div>
-                      </td>
-                      <td className="date-cell">
+                      </Cell>
+                      <Cell className="date-cell">
                         {formatDate(item.upload_date)}
-                      </td>
-                      <td className="size-cell">
-                        {item.type === "folder" ? "—" : formatBytes(item.size)}
-                      </td>
-                      <td className="actions-cell">
+                      </Cell>
+                      <Cell className="size-cell">
+                        {item.type === "folder"
+                          ? layout === "grid"
+                            ? "Folder"
+                            : "—"
+                          : formatBytes(item.size)}
+                      </Cell>
+                      <Cell className="actions-cell">
                         {isPublic ? (
                           <a
                             className="icon-button"
@@ -861,11 +1015,11 @@ export default function FileBrowser({
                             </div>
                           </details>
                         )}
-                      </td>
-                    </tr>
+                      </Cell>
+                    </Row>
                   ))}
-                </tbody>
-              </table>
+                </CollectionBody>
+              </Collection>
             </div>
             {searchPagination &&
               (searchPagination.offset > 0 || searchPagination.hasMore) && (

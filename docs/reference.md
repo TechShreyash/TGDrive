@@ -549,8 +549,8 @@ not a Telegram quota or a proof that every referenced message is readable.
 | --- | --- | --- | --- |
 | `POST /api/getDirectory` | Owner or valid folder share | `{"path":"/","auth":null}` | `{"status":"ok","data":<directory>,"auth_home_path":null}`. |
 | `GET /api/v1/nodes` | Owner | `parent_id=/&offset=0&limit=100&sort=name` | `{"items":[...],"total":42,"offset":0}`. |
-| `GET /api/v1/trash` | Owner only | `q=report` (optional, up to 255 characters) | `{"data":{"contents":{...}}}`; searches actionable top-level Trash items; never includes live files. |
-| `GET /api/v1/search` | Owner only | `q=report&offset=0&limit=100&sort=name` | `{"items":[...],"query":"report","has_more":false,"next_offset":null}`. |
+| `GET /api/v1/trash` | Owner only | `q=report` (optional, up to 255 characters) | `{"data":{"contents":{...}}}`; actionable top-level Trash items include `parent_names` for their source folder; never includes live files. |
+| `GET /api/v1/search` | Owner only | `q=report&offset=0&limit=100&sort=name&order=asc` | `{"items":[...],"query":"report","has_more":false,"next_offset":null}`. |
 | `POST /api/createNewFolder` | Owner | `{"path":"/","name":"Photos"}` | `{"status":"ok"}`; refresh listing for new ID. |
 | `POST /api/renameFileFolder` | Owner | `{"path":"/<id>","name":"New name"}` | `{"status":"ok"}`. |
 | `POST /api/trashFileFolder` | Owner | `{"path":"/<id>","trash":true}` | Trash; false restores. Prefer v1 bulk for exposure confirmation. |
@@ -579,9 +579,13 @@ and sorts a folder before slicing; this is not database cursor pagination.
 - Results include files and folders across the owner's active drive, with parent_names
   containing human-readable ancestor names; path remains the opaque ID ancestry.
 - Public share tokens cannot authorize global search.
-- Limit is 1–200 (default 100), offset is nonnegative, and sort is name/date/size:
-  folders first, then casefolded name ascending, date-added newest first or size largest
-  first, with deterministic name/ID ties.
+- Limit is 1–200 (default 100), offset is nonnegative, and sort is name/date/size.
+- Optional `order=asc|desc` sets the primary direction for every sort field. Omitting
+  it preserves the original defaults: name ascending, date-added newest first, size
+  largest first. Folders always come first; equal primary values use ascending
+  casefolded name and ID ties.
+- Both catalog backends sort the full matching snapshot before offset/limit
+  pagination, so changing direction affects the global result order.
 - Search pages have no computed total count.
 - The compatibility /search_ directory path is bounded to 500 results; use v1 paging for
   a complete matching listing.
@@ -863,14 +867,27 @@ reconstruct the selected logical interval.
 <details>
 <summary>Descriptors, format bounds and quality selection</summary>
 
-Both descriptors require the owner cookie or a valid file/folder share
-capability. Supply path (an ID path) and optional auth query, just as for /file.
+These routes require the owner cookie or a valid file/folder share capability.
+Supply path (an ID path) and optional auth query, just as for /file.
 
 | Route | Response |
 | --- | --- |
 | GET /api/v1/preview | name, size and kind:text/pdf/video/unsupported. Text includes text, language, truncated and preview_bytes; PDF includes an authorized local URL; unsupported includes a reason. |
 | GET /api/v1/media | original descriptor and variants list from the actual stored message. Each descriptor has id, label, is_original, size, mime_type, width, height and duration where applicable. |
+| GET /api/v1/thumbnail | Small provider JPEG/PNG/WebP thumbnail, at most 128 KiB; optional `If-None-Match` can return `304`. |
 | GET /api/v1/file-status | Authorized `path`, opaque `request_id`, optional `auth`; request-specific queue estimate and logical size, without listing other callers. |
+
+Thumbnail requests authorize before reading cached or remote data and again after
+awaiting it, including cache hits and conditional `304` responses. Payload caching
+never grants file access; revoked/expired shares and trashed files remain blocked.
+Responses use `Cache-Control: private, no-cache`, `Vary: Cookie` and a content ETag.
+Only a small provider thumbnail is eligible: no original-file download, multipart
+assembly or local cover generation is attempted. Unsupported or unavailable
+thumbnails return `404` with `code: "THUMBNAIL_UNAVAILABLE"`; temporary work/capacity
+failures return `503` with `code: "THUMBNAIL_BUSY"` and `Retry-After: 5`.
+The grid falls back to a file-type icon. Visible/nearby tiles use a bounded lazy
+queue, cancel work outside that region, and skip thumbnails when the browser
+reports Save-Data mode.
 
 - Text/code/JSON/CSV and related allowlisted formats return at most the first 256 KiB of
   source text, with a truncation indicator.

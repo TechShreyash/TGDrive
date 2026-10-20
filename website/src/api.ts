@@ -137,12 +137,14 @@ export const api = {
     offset = 0,
     sort: "name" | "date" | "size" = "name",
     signal?: AbortSignal,
+    order?: "asc" | "desc",
   ) => {
     const params = new URLSearchParams({
       q: query,
       offset: String(offset),
       limit: "100",
       sort,
+      ...(order ? { order } : {}),
     });
     return request<SearchResults>("/api/v1/search?" + params, undefined, {
       signal: signal

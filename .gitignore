@@ -42,7 +42,9 @@ test-results/
 # Downloaded manual samples have separate, unverified redistribution terms.
 testfiles/
 
-# Local design skill state
+# Local agent skills and design state
+.agents/
+skills-lock.json
 .impeccable/
 
 # Private local request tracking

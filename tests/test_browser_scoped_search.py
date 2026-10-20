@@ -242,7 +242,13 @@ def test_compact_fixed_directory_controls_leave_room_for_files(
         )
     ).to_have_count(0)
     search = page.get_by_role("searchbox", name="Search Files and Folders", exact=True)
-    expect(search).to_be_visible()
+    if width <= 720:
+        expect(search).not_to_be_visible()
+        expect(
+            page.get_by_role("button", name="Search Files and Folders", exact=True)
+        ).to_be_visible()
+    else:
+        expect(search).to_be_visible()
     ratio = page.locator(".file-list-scroll").evaluate(
         "node => node.clientHeight / node.closest('.workspace').clientHeight"
     )

@@ -105,14 +105,44 @@ export function transferDetails(item: ProgressTransfer, now: number) {
         freshServer &&
         !item.error &&
         item.speedBytesPerSecond &&
-        Number.isFinite(item.speedBytesPerSecond)
+        Number.isFinite(item.speedBytesPerSecond) &&
+        item.speedBytesPerSecond > 0
       ? item.speedBytesPerSecond
       : undefined;
   const remaining =
     item.total > 0
       ? Math.max(0, item.total - transferProgress(item).current)
       : undefined;
-  const eta = rate && remaining && (local ? remaining / rate : item.etaSeconds);
+  const serverEta = item.etaSeconds;
+  const eta =
+    rate && remaining
+      ? !local &&
+        typeof serverEta === "number" &&
+        Number.isFinite(serverEta) &&
+        serverEta > 0
+        ? serverEta
+        : remaining / rate
+      : undefined;
+  const lastAdvance = local
+    ? item.meter?.advancedAt
+    : item.progressUpdatedAt
+      ? item.progressUpdatedAt * 1000
+      : undefined;
+  const timing =
+    item.state === "uploading" &&
+    ["retry_wait", "waiting_for_telegram"].includes(item.stage || "")
+      ? "waiting"
+      : (item.state === "receiving" && item.stage === "confirming") ||
+          (item.state === "uploading" &&
+            ["finalizing", "backup_pending"].includes(item.stage || "")) ||
+          ((local || server) && remaining === 0)
+        ? "finishing"
+        : (local || server) && !rate
+          ? (lastAdvance !== undefined && now - lastAdvance >= 15000) ||
+            (server && !freshServer)
+            ? "stalled"
+            : "calculating"
+          : undefined;
   const end = item.finishedAt || now;
   return {
     elapsed:
@@ -122,6 +152,7 @@ export function transferDetails(item: ProgressTransfer, now: number) {
     rate,
     eta: eta && Number.isFinite(eta) && eta > 0 ? eta : undefined,
     measuring: (local || server) && !rate,
+    timing,
   };
 }
 

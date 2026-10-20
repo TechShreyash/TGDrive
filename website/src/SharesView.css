@@ -59,7 +59,7 @@
   min-width: 0;
   display: flex;
   flex-direction: column;
-  gap: 3px;
+  gap: 2px;
 }
 .share-name {
   padding: 0;
@@ -73,7 +73,7 @@
   text-overflow: ellipsis;
   white-space: nowrap;
   cursor: pointer;
-  line-height: 1.5;
+  line-height: 20px;
   width: fit-content;
   max-width: 100%;
 }
@@ -90,6 +90,7 @@
 }
 .share-location {
   font-size: 12px;
+  line-height: 16px;
   color: var(--muted);
   white-space: nowrap;
   overflow: hidden;
@@ -172,8 +173,8 @@
   .share-row {
     grid-template-columns: 24px minmax(0, 1fr) 130px 200px;
     column-gap: 20px;
-    padding: 14px 8px;
-    min-height: 76px;
+    padding: var(--list-row-padding, 8px) 8px;
+    min-height: var(--list-row-min-height, 56px);
   }
   .share-item {
     grid-column: 2;

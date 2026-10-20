@@ -1119,6 +1119,7 @@
 .performance-toolbar {
   align-items: center;
   padding-bottom: 16px;
+  margin-block-end: 16px;
   border-bottom: 1px solid var(--line);
 }
 .performance-toolbar .performance-view-tabs {

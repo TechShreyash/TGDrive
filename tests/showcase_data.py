@@ -13,6 +13,7 @@ import json
 import math
 import time
 import zipfile
+from collections import deque
 from pathlib import Path
 
 from fastapi.responses import JSONResponse
@@ -56,9 +57,9 @@ async def seed(runtime, settings):
     await cache.flush()
     runtime.payloads[490] = b"Demo item: restore this from Trash."
     discarded = runtime.store.add_file(
-        "/", "Old proposal.txt", 490, len(runtime.payloads[490])
+        destination, "Old proposal.txt", 490, len(runtime.payloads[490])
     )
-    runtime.store.set_trashed("/" + discarded["id"], True)
+    runtime.store.set_trashed(destination + "/" + discarded["id"], True)
     registry = runtime.transfers.registry
     names = [
         "Product walkthrough.mp4",
@@ -118,6 +119,8 @@ async def seed(runtime, settings):
             if state == TransferStatus.ERROR
             else None,
         )
+    demo_jobs = []
+    pending = deque()
     for index, phase in enumerate(["uploading", "downloading", "queued", "queued"]):
         job = registry.create(phase, total=(index + 1) * 256 * 1024**2)
         job.context.update(
@@ -125,27 +128,77 @@ async def seed(runtime, settings):
             source_kind="remote" if phase == "downloading" else "upload",
             name=names[index],
             destination=destination,
+            showcase_active=True,
         )
+        demo_jobs.append(job.id)
+        if phase == "queued":
+            pending.append(job.id)
         registry.update(
             job.id,
             status=TransferStatus.QUEUED
             if phase == "queued"
             else TransferStatus.RUNNING,
-            current=job.total // (index + 3),
+            current=0 if phase == "queued" else job.total // (index + 3),
             phase=phase,
         )
     runtime.showcase = True
 
     async def animate_transfers():
+        tick = 0
         while True:
             await asyncio.sleep(2)
-            for job in registry.list():
-                if job.status == TransferStatus.RUNNING and job.task is None:
-                    registry.update(
-                        job.id, current=min(job.total - 1, job.current + 512 * 1024)
-                    )
+            tick += 1
+            advance_transfers(registry, demo_jobs, pending, tick)
 
     runtime.showcase_task = asyncio.create_task(animate_transfers())
+
+
+def advance_transfers(registry, identities, pending, tick):
+    """Cycle the four illustrative rows without accumulating fake history.
+
+    Each completed stage advances or gives its slot to the oldest queued sample.
+    Only explicitly seeded rows are touched; actual uploads and cancelled samples
+    retain the normal registry lifecycle. API speed/ETA use the registry's ordinary
+    measured-byte samples, rather than invented response fields.
+    """
+    jobs = {job.id: job for job in registry.list() if job.id in identities}
+    for index, identity in enumerate(identities):
+        job = jobs.get(identity)
+        if (
+            job is None
+            or not job.context.get("showcase_active")
+            or job.status != TransferStatus.RUNNING
+            or job.task is not None
+        ):
+            continue
+        if job.phase == "finalizing":
+            registry.update(
+                job.id, status=TransferStatus.QUEUED, phase="queued", current=0
+            )
+            pending.append(job.id)
+            continue
+        step = int((1.7 + 0.6 * math.sin(tick / 4 + index)) * 2 * 1024**2)
+        current = min(job.total, job.current + step)
+        if current == job.total and job.phase == "downloading":
+            registry.update(job.id, phase="uploading", current=0)
+        elif current == job.total:
+            registry.update(job.id, phase="finalizing", current=current)
+        else:
+            registry.update(job.id, current=current)
+    slots = 2 - sum(job.status == TransferStatus.RUNNING for job in jobs.values())
+    while pending and slots > 0:
+        job = jobs.get(pending.popleft())
+        if job is None or job.status != TransferStatus.QUEUED:
+            continue
+        registry.update(
+            job.id,
+            status=TransferStatus.RUNNING,
+            phase="downloading"
+            if job.context.get("source_kind") == "remote"
+            else "uploading",
+            current=0,
+        )
+        slots -= 1
 
 
 def samples(start, end, count=100):

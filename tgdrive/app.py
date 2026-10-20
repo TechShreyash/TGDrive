@@ -90,6 +90,7 @@ from tgdrive.streaming import (
     stream_telegram_file,
 )
 from tgdrive.tasks import TransferNotFound, TransferRecord
+from tgdrive.thumbnails import ThumbnailBusy, ThumbnailCache, load_thumbnail
 from tgdrive.transfers import (
     BackupPending,
     TransferCancelled,
@@ -251,6 +252,7 @@ def create_app(
                 connection_manager = getattr(app_runtime, "connection_manager", None)
                 if connection_manager is not None:
                     await connection_manager.close()
+                await _app.state.thumbnails.close()
                 await app_runtime.stop()
         finally:
             sessions.close()
@@ -267,6 +269,7 @@ def create_app(
     app.state.runtime = app_runtime
     app.state.sessions = sessions
     app.state.login_limiter = limiter
+    app.state.thumbnails = ThumbnailCache()
     starts = TransferStarts(ttl_seconds=settings.transfer_ttl_seconds)
     app.state.transfer_starts = starts
 
@@ -822,6 +825,67 @@ def create_app(
             return result
         except TelegramFileNotFound as exc:
             raise HTTPException(404, "Stored file not found") from exc
+
+    @app.get("/api/v1/thumbnail")
+    async def file_thumbnail(
+        request: Request,
+        path: Annotated[str, Query(min_length=1, max_length=4096)],
+        auth: Annotated[str | None, Query(max_length=512)] = None,
+    ) -> Response:
+        path, file_data = authorized_file(request, path, auth)
+        # Multipart documents contain byte ranges rather than a decodable full
+        # media object. Browsing must not assemble or download them for a cover.
+        headers = {"Cache-Control": "private, no-cache", "Vary": "Cookie"}
+        if file_data.get("parts") is not None:
+            return JSONResponse(
+                {"code": "THUMBNAIL_UNAVAILABLE", "detail": "No thumbnail available"},
+                status_code=404,
+                headers=headers,
+            )
+        identity = (file_data["message_id"], file_data["size"])
+        key = (settings.storage_channel, *identity)
+
+        def recheck():
+            _current_path, current = authorized_file(request, path, auth)
+            if (current["message_id"], current["size"]) != identity or current.get(
+                "parts"
+            ) is not None:
+                raise HTTPException(409, "File changed; refresh the directory")
+
+        try:
+            thumbnail = await app.state.thumbnails.get(
+                key,
+                lambda: load_thumbnail(
+                    pool=_runtime(request).pool,
+                    channel_id=settings.storage_channel,
+                    message_id=file_data["message_id"],
+                ),
+            )
+        except ThumbnailBusy:
+            recheck()
+            return JSONResponse(
+                {
+                    "code": "THUMBNAIL_BUSY",
+                    "detail": "Thumbnail temporarily unavailable",
+                },
+                status_code=503,
+                headers={**headers, "Retry-After": "5"},
+            )
+        # Even a cache hit or conditional 304 must pass today's share/session
+        # authorization. Nothing in the payload cache grants access to a file.
+        recheck()
+        if thumbnail is None:
+            return JSONResponse(
+                {"code": "THUMBNAIL_UNAVAILABLE", "detail": "No thumbnail available"},
+                status_code=404,
+                headers=headers,
+            )
+        headers["ETag"] = thumbnail.etag
+        if request.headers.get("if-none-match") == thumbnail.etag:
+            return Response(status_code=304, headers=headers)
+        return Response(
+            thumbnail.content, media_type=thumbnail.media_type, headers=headers
+        )
 
     @app.get("/api/v1/media")
     async def file_media(

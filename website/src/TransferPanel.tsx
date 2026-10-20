@@ -689,18 +689,26 @@ function BatchTransfer({
             </span>
           )}
           <span className="transfer-batch-throughput">
-            {batchRemaining && <span>{batchRemaining}</span>}
-            {batch.deviceRate ? (
-              <span>Device {formatBytes(batch.deviceRate)}/s</span>
-            ) : null}
-            {batch.telegramRate ? (
-              <span>Telegram {formatBytes(batch.telegramRate)}/s</span>
-            ) : null}
-            {batch.eta !== undefined && (
-              <span title="Estimated from current Telegram throughput after device transfer has finished.">
-                About {formatDuration(Math.max(1, Math.ceil(batch.eta)))}{" "}
-                remaining
-              </span>
+            {batch.count === 1 && batch.active > 0 ? (
+              <TransferMetrics item={batch.items[0]} now={now} />
+            ) : (
+              <>
+                {batchRemaining && <span>{batchRemaining}</span>}
+                {batch.deviceRate ? (
+                  <span>Device {formatBytes(batch.deviceRate)}/s</span>
+                ) : null}
+                {batch.telegramRate ? (
+                  <span>Telegram {formatBytes(batch.telegramRate)}/s</span>
+                ) : null}
+                {batch.eta !== undefined ? (
+                  <span title="Estimated from current Telegram throughput after device transfer has finished.">
+                    About {formatDuration(Math.max(1, Math.ceil(batch.eta)))}{" "}
+                    remaining
+                  </span>
+                ) : batch.active > 0 ? (
+                  <span>Time estimate unavailable</span>
+                ) : null}
+              </>
             )}
           </span>
         </div>
@@ -834,6 +842,12 @@ function TransferRow({
   const meter = usePresentedProgress(item);
   const status = historyStatus(item);
   const finished = status === "completed" || status === "cancelled";
+  const liveMetrics =
+    !finished &&
+    status !== "queued" &&
+    !["error", "awaiting_file"].includes(item.state);
+  const showPercent =
+    !finished && status !== "queued" && meter.fraction !== undefined;
   const needsOriginal =
     item.kind !== "remote" &&
     (item.state === "awaiting_file" ||
@@ -853,6 +867,7 @@ function TransferRow({
       className={"transfer-item" + (compactChild ? " transfer-child" : "")}
       role="listitem"
       data-status={item.state}
+      data-live-metrics={liveMetrics || undefined}
       onDoubleClick={(event) => {
         if (
           canLocate &&
@@ -881,9 +896,9 @@ function TransferRow({
           <strong className="transfer-item-name" title={item.name}>
             {item.name}
           </strong>
-          {!finished && status !== "queued" && meter.fraction !== undefined && (
+          {showPercent && !liveMetrics && (
             <span className="transfer-batch-percent">
-              {formatProgressPercent(meter.fraction)}
+              {formatProgressPercent(meter.fraction!)}
             </span>
           )}
         </div>
@@ -930,17 +945,13 @@ function TransferRow({
             {displayLocation}
           </span>
         )}
-        {status !== "queued" &&
-          !["completed", "cancelled", "error", "awaiting_file"].includes(
-            item.state,
-          ) && (
-            <progress
-              aria-label={item.phase + " for " + item.name}
-              max={1}
-              value={meter.fraction}
-            />
-          )}
         <div className="transfer-row-details">
+          {liveMetrics && <TransferMetrics item={item} now={now} />}
+          {showPercent && liveMetrics && (
+            <span className="transfer-batch-percent">
+              {formatProgressPercent(meter.fraction!)}
+            </span>
+          )}
           <span
             className="transfer-bytes"
             title={
@@ -957,7 +968,7 @@ function TransferRow({
               ? formatBytes(item.size || item.total)
               : formatByteProgress(meter.current, meter.total)}
           </span>
-          {!finished && status !== "queued" && (
+          {!liveMetrics && !finished && status !== "queued" && (
             <TransferMetrics item={item} now={now} />
           )}
           {showTimestamp && finished && validRecordedAt && (
@@ -976,6 +987,13 @@ function TransferRow({
             </time>
           )}
         </div>
+        {liveMetrics && (
+          <progress
+            aria-label={item.phase + " for " + item.name}
+            max={1}
+            value={meter.fraction}
+          />
+        )}
         {item.state !== "cancelled" && item.error && (
           <span className="transfer-error">{item.error}</span>
         )}
@@ -1067,7 +1085,13 @@ function usePresentedProgress(item: Transfer) {
   });
 }
 
-function TransferMetrics({ item, now }: { item: Transfer; now: number }) {
+export function TransferMetrics({
+  item,
+  now,
+}: {
+  item: Transfer;
+  now: number;
+}) {
   const details = transferDetails(item, now);
   const meter = transferProgress(item);
   const remaining =
@@ -1076,23 +1100,44 @@ function TransferMetrics({ item, now }: { item: Transfer; now: number }) {
       ? remainingBytesHint(meter.current, meter.total)
       : "";
   return (
-    <span className="transfer-metrics">
+    <span className="transfer-metrics" data-timing={details.timing}>
       {remaining && <span>{remaining}</span>}
       {details.rate ? (
-        <span>
-          {item.state === "receiving"
-            ? "Device "
-            : item.stage === "uploading"
-              ? "Telegram "
-              : ""}
+        <span className="transfer-speed" title="Speed during this stage">
           {formatBytes(details.rate)}/s
         </span>
       ) : null}
       {details.eta !== undefined && (
-        <span title="Estimate for this stage only. Other stages may follow.">
-          About {formatDuration(Math.max(1, Math.ceil(details.eta)))} left in
-          this stage
+        <span
+          className="transfer-eta"
+          title="Estimated time remaining for this stage"
+        >
+          About {formatDuration(Math.max(1, Math.ceil(details.eta)))} remaining
         </span>
+      )}
+      {details.rate &&
+        details.eta === undefined &&
+        details.timing !== "finishing" && (
+          <span className="transfer-eta">Time remaining unknown</span>
+        )}
+      {details.timing === "calculating" && (
+        <>
+          <span className="transfer-speed">Calculating speed…</span>
+          <span className="transfer-eta">Estimating time…</span>
+        </>
+      )}
+      {details.timing === "stalled" && (
+        <span className="transfer-timing-state">
+          No recent progress · Time estimate unavailable
+        </span>
+      )}
+      {details.timing === "waiting" && (
+        <span className="transfer-timing-state">
+          Waiting for Telegram · Time estimate unavailable
+        </span>
+      )}
+      {details.timing === "finishing" && (
+        <span className="transfer-timing-state">Finishing this stage…</span>
       )}
     </span>
   );

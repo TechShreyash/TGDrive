@@ -93,6 +93,31 @@ class FixtureClient:
         )
         return TelegramMessage(self, native)
 
+    async def download_thumbnail(
+        self,
+        message: Any,
+        *,
+        max_bytes: int,
+        target_size: int,
+        max_dimension: int,
+    ) -> bytes | None:
+        # Synthetic provider-supplied covers exercise the real bounded endpoint.
+        # These never invoke the file stream, PDF renderer, or video decoder.
+        content = self.payloads[message.id]
+        if content.startswith(b"\x89PNG\r\n\x1a\n"):
+            return content if len(content) <= max_bytes else None
+        if content.startswith(b"%PDF"):
+            kind = "document"
+        elif content.startswith(b"\x1aE\xdf\xa3") or content[4:8] == b"ftyp":
+            kind = "video"
+        else:
+            return None
+        cache = getattr(self, "_thumbnail_samples", {})
+        if kind not in cache:
+            cache[kind] = _thumbnail_png(kind)
+            self._thumbnail_samples = cache
+        return cache[kind]
+
     def describe_media(self, message: Any) -> dict[str, Any]:
         original = {
             "id": "original",
@@ -443,6 +468,43 @@ def _preview_png() -> bytes:
     )
 
 
+def _thumbnail_png(kind: str) -> bytes:
+    """Illustrative local-demo provider covers, small enough for a file tile."""
+    width, height = 240, 144
+
+    def pixel(x, y):
+        if kind == "document":
+            if 72 < x < 168 and 12 < y < 132:
+                if 84 < x < 154 and (y - 38) % 15 < 3 and 38 < y < 112:
+                    return (80, 104, 140)
+                return (245, 247, 250)
+            return (214, 225, 239)
+        if y < 80:
+            return (48 + y, 108 + y // 2, 169 + y // 3)
+        if y > 138 - x // 3:
+            return (45, 107, 86)
+        return (78, 144, 116)
+
+    def chunk(kind, data):
+        return (
+            struct.pack(">I", len(data))
+            + kind
+            + data
+            + struct.pack(">I", zlib.crc32(kind + data))
+        )
+
+    pixels = b"".join(
+        b"\x00" + b"".join(bytes(pixel(x, y)) for x in range(width))
+        for y in range(height)
+    )
+    return (
+        b"\x89PNG\r\n\x1a\n"
+        + chunk(b"IHDR", struct.pack(">IIBBBBB", width, height, 8, 2, 0, 0, 0))
+        + chunk(b"IDAT", zlib.compress(pixels))
+        + chunk(b"IEND", b"")
+    )
+
+
 def _preview_wav() -> bytes:
     """A short locally generated PCM tone for native audio controls."""
     stream = io.BytesIO()
@@ -667,7 +729,11 @@ settings = Settings(
     DATA_DIR=Path(_temporary.name) / "data",
     CACHE_DIR=Path(_temporary.name) / "cache",
     COOKIE_SECURE=False,
-    MAX_FILE_SIZE=32 * 1024 * 1024,
+    MAX_FILE_SIZE=(
+        16 * 1024**3
+        if os.environ.get("TGDRIVE_UI_SHOWCASE") == "1"
+        else 32 * 1024 * 1024
+    ),
 )
 runtime.connection_manager = ConnectionManager(
     settings, runtime, verifier=fixture_verify_connection

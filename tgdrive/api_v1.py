@@ -178,10 +178,11 @@ def register_routes(
         offset: int = Query(default=0, ge=0, le=MAX_SEARCH_OFFSET),
         limit: int = Query(default=100, ge=1, le=200),
         sort: Literal["name", "date", "size"] = "name",
+        order: Literal["asc", "desc"] | None = None,
     ) -> dict[str, Any]:
         try:
             return get_store(request).search_page(
-                q, offset=offset, limit=limit, sort=sort
+                q, offset=offset, limit=limit, sort=sort, order=order
             )
         except DriveValidationError as error:
             raise HTTPException(422, str(error)) from None

@@ -21,6 +21,9 @@
   border-radius: 8px;
   background: var(--surface);
   color: var(--ink);
+  max-height: calc(100dvh - 24px);
+  overflow-y: auto;
+  overscroll-behavior: contain;
 }
 .file-sort-menu button {
   display: flex;
@@ -55,4 +58,41 @@
 }
 .column-sort-button:hover {
   color: var(--action);
+}
+
+.sort-direction-group {
+  margin-top: 4px;
+  padding-top: 4px;
+  border-top: 1px solid var(--line);
+}
+.sort-direction-group small {
+  display: inline;
+  margin-inline-start: 8px;
+  color: var(--muted);
+  font-size: 11px;
+}
+@media (max-width: 720px) {
+  .file-sort-trigger,
+  .file-sort-menu button {
+    min-height: 44px;
+  }
+}
+
+.sort-view-group {
+  margin-bottom: 4px;
+  padding-bottom: 4px;
+  border-bottom: 1px solid var(--line);
+}
+.sort-view-option {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+}
+@media (max-width: 720px) {
+  .file-toolbar .file-sort-trigger {
+    width: 44px;
+    height: 44px;
+    justify-content: center;
+    padding: 0;
+  }
 }
