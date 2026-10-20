@@ -204,7 +204,8 @@ def register_performance_routes(
                     "files": [],
                     "pending_writes": 0,
                 },
-                "server": await asyncio.to_thread(system_snapshot, settings),
+                "server": (await asyncio.to_thread(system_snapshot, settings))
+                | request.app.state.traffic.resources.value,
                 "drive": drive,
                 "traffic": request.app.state.traffic.snapshot(),
                 "history_scope": (

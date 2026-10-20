@@ -12,6 +12,9 @@ MAX_SAMPLE_GAP_SECONDS = 30
 
 class TrafficCounters:
     def __init__(self):
+        from tgdrive.resource_metrics import ResourceMetrics
+
+        self.resources = ResourceMetrics()
         self.started_at = time.time()
         self.requests = 0
         self.active = 0
@@ -67,8 +70,12 @@ class TrafficCounters:
 
 
 async def sample_performance(counters, pool, *, interval=3):
-    """Keep a small recent history even when no dashboard is open; no I/O or RPCs."""
+    """Keep recent history without a dashboard; local resource reads use a thread."""
     while True:
+        try:
+            await asyncio.to_thread(counters.resources.sample)
+        except Exception:
+            logger.exception("Could not sample server resources")
         counters.snapshot()
         snapshot = getattr(pool, "performance_snapshot", None)
         if callable(snapshot):
