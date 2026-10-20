@@ -100,14 +100,18 @@ def test_settings_save_converts_units_guards_revision_and_recovers_conflict(
     expect(section.get_by_label("Memory cache (MiB)", exact=True)).to_have_value("256")
     section.get_by_label("Memory cache (MiB)", exact=True).fill("512")
     section.get_by_label("Disk cache (GiB)", exact=True).fill("1.5")
-    expect(section.locator("#perf-help-cache_memory_bytes")).to_contain_text(
-        "App default: 256 MiB"
-    )
-    expect(section.locator("#perf-help-cache_memory_bytes")).to_contain_text(
-        "Idle blocks expire after 10 minutes"
-    )
+    expect(
+        section.locator("#perf-help-cache_memory_bytes").locator(
+            "xpath=ancestor::*[contains(@class, 'performance-field')]"
+        )
+    ).to_contain_text("Default 256 MiB")
+    expect(
+        section.locator("#perf-help-cache_memory_bytes").locator(
+            "xpath=ancestor::*[contains(@class, 'performance-field')]"
+        )
+    ).to_contain_text("reduces this budget when memory is tight")
     expect(section.locator("#perf-help-cache_min_free_bytes")).to_contain_text(
-        "Upload staging has its own reserve"
+        "Keep 1 GiB or more for normal use"
     )
     section.get_by_label("Disk cache retention (hours)", exact=True).fill("2")
     page.get_by_role("link", name="Timezone", exact=True).click()
@@ -143,16 +147,20 @@ def test_settings_save_converts_units_guards_revision_and_recovers_conflict(
     ).to_be_disabled()
     section.get_by_role("button", name="Reload Latest Settings", exact=True).click()
     expect(section.get_by_label("Disk cache (GiB)", exact=True)).to_have_value("1.5")
-    expect(section.locator("#perf-help-cache_disk_bytes")).to_contain_text(
-        "App default: 10 GiB"
-    )
+    expect(
+        section.locator("#perf-help-cache_disk_bytes").locator(
+            "xpath=ancestor::*[contains(@class, 'performance-field')]"
+        )
+    ).to_contain_text("Default 10 GiB")
     page.set_viewport_size({"width": 1440, "height": 960})
     page.get_by_role("link", name="Transfer limits", exact=True).click()
     section.locator("summary").filter(has_text="Advanced Telegram limits").click()
     expect(section.get_by_label("Requests per second", exact=True)).to_have_value("24")
-    expect(section.locator("#perf-help-telegram_parts_per_second")).to_contain_text(
-        "App default: 48"
-    )
+    expect(
+        section.locator("#perf-help-telegram_parts_per_second").locator(
+            "xpath=ancestor::*[contains(@class, 'performance-field')]"
+        )
+    ).to_contain_text("Default 48")
 
 
 def test_preload_inventory_cancel_and_scoped_eviction(
@@ -321,13 +329,13 @@ def test_performance_real_samples_nullable_eta_and_mobile_tables(
     page.route("**/api/v1/performance", lambda route: route.fulfill(json=value))
     login(page, server.url + "/?view=performance")
     expect(
+        page.get_by_role("heading", name="Live file transfers", exact=True)
+    ).to_be_visible()
+    page.screenshot(path=ARTIFACTS / "performance-load-desktop.png")
+    page.get_by_role("tab", name="Accounts", exact=True).click()
+    expect(
         page.get_by_role("img", name="Recent Telegram load", exact=False)
     ).to_be_visible()
-    expect(
-        page.get_by_role("img", name="Measured HTTP send and receive throughput")
-    ).to_be_visible()
-    expect(page.get_by_text("30 MB", exact=True)).to_be_visible()
-    page.screenshot(path=ARTIFACTS / "performance-load-desktop.png")
     page.set_viewport_size({"width": 390, "height": 844})
     assert page.evaluate("document.documentElement.scrollWidth<=innerWidth")
     page.get_by_role("tab", name="Accounts", exact=True).click()

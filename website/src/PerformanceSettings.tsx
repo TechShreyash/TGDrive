@@ -5,7 +5,22 @@ import {
   type FormEvent,
   type ReactNode,
 } from "react";
-import { ExternalLink, RefreshCw } from "lucide-react";
+import {
+  ExternalLink,
+  RefreshCw,
+  HardDrive,
+  PlayCircle,
+  Upload,
+  Globe,
+} from "lucide-react";
+import {
+  Button,
+  Fieldset,
+  NumberInput,
+  TextInput,
+  Switch,
+  Badge,
+} from "@mantine/core";
 import { ApiError, errorMessage } from "./api";
 import { ErrorNotice, Spinner } from "./components";
 import {
@@ -117,29 +132,31 @@ export default function PerformanceSettings({
     <div className="performance-field" key={definition.key}>
       <div>
         <label htmlFor={"perf-" + definition.key}>{definition.label}</label>
-        <p id={"perf-help-" + definition.key}>
-          {definition.help}{" "}
-          <span>
-            App default: {definition.appDefault}
-            {definition.unitLabel ? " " + definition.unitLabel : ""}.
-          </span>
-        </p>
+        <p id={"perf-help-" + definition.key}>{definition.help} </p>
       </div>
-      <input
-        id={"perf-" + definition.key}
-        type="number"
-        min={definition.min}
-        max={definition.max}
-        step={definition.unit === 1 ? 1 : "any"}
-        required
-        disabled={busy}
-        aria-describedby={"perf-help-" + definition.key}
-        value={draft![definition.key]}
-        onChange={(event) => {
-          setDraft({ ...draft!, [definition.key]: event.target.value });
-          setNotice("");
-        }}
-      />
+      <div className="configuration-value">
+        <NumberInput
+          id={"perf-" + definition.key}
+          min={definition.min}
+          max={definition.max}
+          step={definition.unit === 1 ? 1 : 0.25}
+          allowDecimal={definition.unit !== 1}
+          allowNegative={false}
+          aria-label={definition.label}
+          required
+          disabled={busy}
+          aria-describedby={"perf-help-" + definition.key}
+          value={draft![definition.key]}
+          onChange={(value) => {
+            setDraft({ ...draft!, [definition.key]: String(value) });
+            setNotice("");
+          }}
+        />
+        <Badge variant="light" color="gray" size="sm">
+          Default {definition.appDefault}
+          {definition.unitLabel ? " " + definition.unitLabel : ""}
+        </Badge>
+      </div>
     </div>
   );
   return (
@@ -149,7 +166,7 @@ export default function PerformanceSettings({
     >
       <div className="performance-section-heading">
         <div>
-          <h2 id="performance-settings-heading">
+          <h2 id="performance-settings-heading" className="sr-only">
             {
               {
                 cache: "Cache storage and playback preparation",
@@ -173,11 +190,14 @@ export default function PerformanceSettings({
         </div>
         <a
           className="inline-link"
-          href="https://github.com/TechShreyash/TGDrive/blob/dev/docs/performance.md"
+          href={
+            saved?.documentation_url ||
+            "https://github.com/TechShreyash/TGDrive/blob/dev/docs/configuration.md"
+          }
           target="_blank"
           rel="noopener noreferrer"
         >
-          Guide <ExternalLink size={14} />
+          Configuration guide <ExternalLink size={14} />
         </a>
       </div>
       <div hidden={category !== "transfers"}>{uploadPreferences}</div>
@@ -187,25 +207,34 @@ export default function PerformanceSettings({
         </p>
       ) : saved && draft ? (
         <form noValidate onSubmit={(event) => void save(event)}>
-          <fieldset
+          <Fieldset
             className="performance-setting-group"
             hidden={category !== "cache"}
+            legend={
+              <span className="configuration-group-title">
+                <HardDrive size={18} aria-hidden="true" />
+                Cache storage
+              </span>
+            }
           >
-            <legend>Cache storage</legend>
             <p className="settings-help">
-              These are maximums, not reserved resources. Available memory and
-              disk space can reduce what TGDrive retains. 1 GiB = 1024 MiB; 1
-              MiB = 1024 KiB.
+              Budgets are shared by playback, downloads and preloads. They are
+              filled only when needed.
             </p>
             {numericPreferences
               .filter((value) => value.key.startsWith("cache_"))
               .map(field)}
-          </fieldset>
-          <fieldset
+          </Fieldset>
+          <Fieldset
             className="performance-setting-group"
             hidden={category !== "cache"}
+            legend={
+              <span className="configuration-group-title">
+                <PlayCircle size={18} aria-hidden="true" />
+                Playback preparation
+              </span>
+            }
           >
-            <legend>Playback preparation</legend>
             <p className="settings-help">
               Keep useful media ready while active playback and downloads take
               priority.
@@ -213,54 +242,57 @@ export default function PerformanceSettings({
             {numericPreferences
               .filter((value) => value.key === "preload_max_jobs")
               .map(field)}
-            <label className="check-field performance-auto-preload">
-              <input
-                type="checkbox"
-                checked={draft.auto_preload}
-                disabled={busy}
-                onChange={(event) => {
-                  setDraft({ ...draft, auto_preload: event.target.checked });
-                  setNotice("");
-                }}
-              />
-              <span>
-                Preload during playback and downloads
-                <small>
-                  Warm useful content after sequential bytes are delivered.
-                  Metadata and HEAD requests do not start a bulk download.
-                  Turning this off leaves manual Prepare available. App default:
-                  enabled.
-                </small>
-              </span>
-            </label>
-          </fieldset>
-          <fieldset
+            <Switch
+              className="configuration-auto-preload"
+              label="Preload during playback and downloads"
+              description="Keeps upcoming content ready. Active viewers go first; manual preparation stays available when switched off."
+              checked={draft.auto_preload}
+              onLabel="ON"
+              offLabel="OFF"
+              disabled={busy}
+              onChange={(event) => {
+                setDraft({
+                  ...draft,
+                  auto_preload: event.currentTarget.checked,
+                });
+                setNotice("");
+              }}
+            />
+          </Fieldset>
+          <Fieldset
             className="performance-setting-group"
             hidden={category !== "transfers"}
+            legend={
+              <span className="configuration-group-title">
+                <Upload size={18} aria-hidden="true" />
+                Upload splitting
+              </span>
+            }
           >
-            <legend>Upload splitting</legend>
             {numericPreferences
               .filter((value) => value.key === "upload_split_mib")
               .map(field)}
-          </fieldset>
-          <fieldset
+          </Fieldset>
+          <Fieldset
             className="performance-setting-group"
             hidden={category !== "regional"}
+            legend={
+              <span className="configuration-group-title">
+                <Globe size={18} aria-hidden="true" />
+                Display time
+              </span>
+            }
           >
-            <legend className="sr-only">Display time</legend>
             <div className="performance-field">
               <div>
                 <label htmlFor="performance-timezone">Timezone</label>
                 <p id="performance-timezone-help">
-                  Dates and share expiry times use this timezone. For IST, use
-                  Asia/Kolkata; for another zone, use a name such as
-                  Europe/London. Applies to owner and public views. App default:
-                  Asia/Kolkata (IST).
+                  Used for dates and share expiry. Examples: Asia/Kolkata (IST),
+                  Europe/London or UTC.
                 </p>
               </div>
-              <input
+              <TextInput
                 id="performance-timezone"
-                type="text"
                 value={draft.timezone}
                 required
                 disabled={busy}
@@ -271,7 +303,7 @@ export default function PerformanceSettings({
                 }}
               />
             </div>
-          </fieldset>
+          </Fieldset>
           <details
             className="performance-advanced"
             hidden={category !== "transfers"}
@@ -284,30 +316,28 @@ export default function PerformanceSettings({
             {numericPreferences.filter((value) => value.advanced).map(field)}
           </details>
           <p className="settings-help performance-save-scope">
-            Save and Reset apply only to this page. Changes on other pages stay
-            as drafts.
+            Changes apply only to this page. Restore defaults loads the built-in
+            values for review; save to apply them. Your deployment environment
+            may have supplied different starting values.
             {category === "transfers" &&
               " Parallel uploads has its own Save Changes action above."}
-          </p>
-          <p className="settings-help">
-            App defaults are built-in reference values. Your deployment may
-            start with different environment values; saved settings take
-            precedence. Reset Changes restores the last saved values.
           </p>
           <div className="performance-actions">
             <span className="performance-save-state">
               {changed ? "Unsaved changes" : "Settings are up to date"}
             </span>
-            <button
+            <Button
               className="primary-button"
+              type="submit"
               disabled={busy || !changed || conflict}
             >
               {busy ? <Spinner /> : null}
               {busy ? "Saving…" : "Save Performance Settings"}
-            </button>
-            <button
+            </Button>
+            <Button
               type="button"
               className="secondary-button"
+              variant="default"
               disabled={busy}
               onClick={() => {
                 if (conflict) {
@@ -324,8 +354,28 @@ export default function PerformanceSettings({
               }}
             >
               <RefreshCw size={16} />
-              {conflict ? "Reload Latest Settings" : "Reset Changes"}
-            </button>
+              {conflict ? "Reload Latest Settings" : "Discard changes"}
+            </Button>
+            <Button
+              type="button"
+              className="text-button"
+              variant="subtle"
+              disabled={busy || conflict || !saved.defaults}
+              onClick={() => {
+                if (!saved.defaults) return;
+                const defaults = performanceDraft(saved.defaults);
+                const next = { ...draft };
+                for (const key of performanceCategoryKeys(category))
+                  Object.assign(next, { [key]: defaults[key] });
+                setDraft(next);
+                setError("");
+                setNotice(
+                  "Default values loaded for this page. Review and save to apply.",
+                );
+              }}
+            >
+              Restore defaults
+            </Button>
           </div>
           {notice && (
             <p className="performance-notice" role="status">
@@ -334,9 +384,9 @@ export default function PerformanceSettings({
           )}
         </form>
       ) : (
-        <button className="secondary-button" onClick={() => void load()}>
+        <Button className="secondary-button" onClick={() => void load()}>
           Try Again
-        </button>
+        </Button>
       )}
       <ErrorNotice message={error} />
     </section>

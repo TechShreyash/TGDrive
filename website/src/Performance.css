@@ -717,9 +717,6 @@
 .performance-overview-status > a {
   margin-left: auto;
 }
-.performance-overview-extra {
-  grid-column: 1 / -1;
-}
 @media (max-width: 720px) {
   .performance-chart-plot {
     height: 150px;
@@ -1116,5 +1113,116 @@
   }
   .performance-actions > button {
     min-height: 44px;
+  }
+}
+
+/* Each performance metric has one home; the shared toolbar scopes history. */
+.performance-toolbar {
+  align-items: center;
+  padding-bottom: 16px;
+  border-bottom: 1px solid var(--line);
+}
+.performance-toolbar .performance-view-tabs {
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+.performance-toolbar .performance-history-controls {
+  margin-inline-start: auto;
+}
+.performance-section-title {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+.performance-section-title h3 {
+  margin-bottom: 12px;
+}
+.performance-live-traffic {
+  grid-column: 1 / -1;
+  border-top: 1px solid var(--line);
+  padding-top: 24px;
+  margin-top: 0;
+}
+.performance-overview-grid .performance-live-traffic .performance-facts {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 20px 36px;
+}
+.performance-totals-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+}
+.performance-totals-table :is(th, td) {
+  text-align: end;
+  padding: 12px 0 12px 16px;
+  border-bottom: 1px solid var(--line-subtle);
+  font-weight: 400;
+}
+.performance-totals-table th:first-child {
+  text-align: start;
+  padding-left: 0;
+}
+.performance-totals-table thead th {
+  color: var(--muted);
+  font-size: 12px;
+}
+.performance-all-time > .settings-help:last-child {
+  margin-block: 12px 0;
+}
+.performance-resource-charts .performance-metric-chart {
+  padding-top: 8px;
+}
+.performance-resource-summary {
+  margin-block: 12px 20px;
+}
+.performance-cache-link {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 16px;
+  align-items: baseline;
+  padding-bottom: 24px;
+  border-bottom: 1px solid var(--line);
+  margin-bottom: 24px;
+  font-size: 13px;
+}
+.performance-cache-link > span {
+  color: var(--muted);
+}
+.performance-memory-details {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+@media (max-width: 720px) {
+  .performance-page > .performance-toolbar {
+    gap: 12px;
+  }
+  .performance-page > .performance-toolbar .performance-view-tabs {
+    flex-basis: auto;
+  }
+  .performance-toolbar[data-view="telegram"] .performance-history-controls {
+    width: auto;
+  }
+  .performance-toolbar[data-view="telegram"] .performance-view-tabs {
+    flex: 1;
+  }
+  .performance-overview-grid .performance-live-traffic .performance-facts {
+    grid-template-columns: 1fr;
+    gap: 14px;
+  }
+  .performance-memory-details {
+    grid-template-columns: 1fr;
+  }
+  .performance-totals-table :is(th, td) {
+    padding-left: 10px;
+  }
+  .performance-totals-table th:first-child {
+    padding-left: 0;
+  }
+}
+
+@media (max-width: 720px) {
+  .performance-page > .performance-toolbar[data-view="telegram"] > .performance-view-tabs {
+    flex: 1 1 auto;
   }
 }

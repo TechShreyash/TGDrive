@@ -470,3 +470,11 @@ relative nested locations or a different current location.
 - Reduced motion stops spinner rotation while retaining loading text and status.
 - Keep browser checks isolated from real file mutations; use the offline E2E
   fixture for destructive actions and synthetic network failures.
+
+## Shared UI components
+
+The frontend uses Mantine Core/Hooks 9.7.3 with React 19, pinned together in the
+lockfile. TGDrive has one colorful dark theme. See [Design system](../website/DESIGN.md)
+for semantic tokens, section structure, control choices and motion rules. Shared
+library controls use the root provider; specialized file/player UI uses the same
+semantic CSS tokens. Do not reintroduce per-browser light/system settings.

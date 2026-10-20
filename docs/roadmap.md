@@ -9,7 +9,7 @@ or failure scenario has been tested.
 
 | Feature | Current behavior |
 | --- | --- |
-| Web file manager | Light/dark/system themes, folders, selection, move, rename and search |
+| Web file manager | Shared dark component theme, folders, selection, move, rename and scoped search |
 | File and folder uploads | Preserved hierarchy, combined batches, retry/resume and bounded concurrency |
 | Transfer history | Running/Queued/Finished sections, result filters, scoped name search and cursor-paged persistent history |
 | Files above 2 GB | Automatic ordered parts; one item for download, preview and seeking |

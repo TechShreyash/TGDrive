@@ -1,3 +1,4 @@
+import { Tabs, Paper } from "@mantine/core";
 import { useEffect, useState } from "react";
 import { RefreshCw } from "lucide-react";
 import { errorMessage } from "./api";
@@ -129,12 +130,14 @@ function MetricChart({
       ? ((selected.at - first) / (last - first)) * 600
       : 600;
   return (
-    <section
+    <Paper
+      component="section"
       className={
         "performance-metric-chart" +
         (series.length > 1 ? " performance-network-chart" : "")
       }
       aria-label={title}
+      data-metric={series[0]?.key}
     >
       <div className="performance-chart-heading">
         <h3>{title}</h3>
@@ -367,7 +370,7 @@ function MetricChart({
         {quiet ? "Idle during this observed window. " : ""}
         {note}
       </p>
-    </section>
+    </Paper>
   );
 }
 
@@ -671,7 +674,7 @@ export default function PerformancePanel() {
     };
   }, [range, customBounds, rangeKey, refresh]);
   const telegram = snapshot?.telegram;
-  const history = recentSamples(telegram?.history || [], windowSeconds);
+  const history = recentSamples(telegram?.history || [], 300);
   const ceiling = Math.max(
     1,
     ...history.flatMap((sample) => [sample.active, sample.queued]),
@@ -691,14 +694,10 @@ export default function PerformancePanel() {
     0;
   const uploads =
     telegram?.accounts.reduce((sum, account) => sum + account.uploads, 0) || 0;
-  const hasTraffic = rates.some(
-    (sample) => sample.active > 0 || sample.queued > 0,
-  );
   const hasTelegramActivity = history.some(
     (sample) => sample.active > 0 || sample.queued > 0,
   );
   const memory = snapshot?.server.memory;
-  const memoryTotal = memory?.cgroup_limit || 0;
   const memoryUsed = memory?.cgroup_current ?? NaN;
   const network = snapshot?.server.network;
   const cpu = snapshot?.server.cpu;
@@ -732,18 +731,30 @@ export default function PerformancePanel() {
         );
   const networkRate = (value: number | null | undefined) =>
     typeof value === "number" ? formatBytes(value) + "/s" : "Measuring…";
-  const rateCeiling = Math.max(
-    1,
-    ...rates.flatMap((sample) => [sample.active, sample.queued]),
-  );
   return (
-    <div className="performance-page page-body">
-      <div className="performance-section-heading">
-        <div>
-          <p>See current traffic, account capacity and server health.</p>
-        </div>
+    <Tabs
+      className="performance-page page-body"
+      id="performance"
+      value={view}
+      onChange={(value) => {
+        if (value === "overview" || value === "telegram" || value === "server")
+          setView(value);
+      }}
+    >
+      <div
+        className="performance-section-heading performance-toolbar"
+        data-view={view}
+      >
+        <Tabs.List
+          className="performance-view-tabs"
+          aria-label="Performance views"
+        >
+          <Tabs.Tab value="overview">Overview</Tabs.Tab>
+          <Tabs.Tab value="telegram">Accounts</Tabs.Tab>
+          <Tabs.Tab value="server">Resources</Tabs.Tab>
+        </Tabs.List>
         <div className="performance-history-controls">
-          <label hidden={view !== "overview"}>
+          <label hidden={view === "telegram"}>
             Time range
             <select
               aria-label="Time range"
@@ -781,7 +792,7 @@ export default function PerformancePanel() {
       {range === "custom" && (
         <form
           className="performance-custom-range"
-          hidden={view !== "overview"}
+          hidden={view === "telegram"}
           onSubmit={(event) => {
             event.preventDefault();
             try {
@@ -826,7 +837,7 @@ export default function PerformancePanel() {
           <ErrorNotice message={customError} />
         </form>
       )}
-      {historyLoading && historical && (
+      {view !== "telegram" && historyLoading && historical && (
         <p className="performance-history-status" role="status">
           <Spinner /> Loading selected history…
           {recorded && loadedRange !== rangeKey
@@ -834,7 +845,7 @@ export default function PerformancePanel() {
             : ""}
         </p>
       )}
-      {historyError && (
+      {view !== "telegram" && historyError && (
         <div className="performance-history-error">
           <ErrorNotice
             message={
@@ -860,107 +871,9 @@ export default function PerformancePanel() {
       <ErrorNotice message={error} />
       {snapshot && telegram && (
         <>
-          <dl className="performance-facts" hidden={view === "overview"}>
-            <div>
-              <dt>Server network received</dt>
-              <dd>
-                {network?.available
-                  ? typeof network.received_bytes_per_second === "number"
-                    ? formatBytes(network.received_bytes_per_second) + "/s"
-                    : "Measuring…"
-                  : "Unavailable"}
-              </dd>
-              <small>
-                {network?.available
-                  ? formatBytes(network.received_bytes) +
-                    " received since monitoring started"
-                  : "Network measurement unavailable"}
-              </small>
-            </div>
-            <div>
-              <dt>Server network sent</dt>
-              <dd>
-                {network?.available
-                  ? typeof network.sent_bytes_per_second === "number"
-                    ? formatBytes(network.sent_bytes_per_second) + "/s"
-                    : "Measuring…"
-                  : "Unavailable"}
-              </dd>
-              <small>
-                {network?.available
-                  ? formatBytes(network.sent_bytes) +
-                    " sent since monitoring started"
-                  : "Network measurement unavailable"}
-              </small>
-            </div>
-            <div>
-              <dt>Telegram transfers</dt>
-              <dd>
-                {uploads} uploading · {downloads} downloading
-              </dd>
-              <small>
-                {telegram.queued} waiting · cached delivery does not need a bot
-                slot
-              </small>
-            </div>
-          </dl>
-          <p
-            className="settings-help performance-network-help"
-            hidden={view === "overview"}
-          >
-            Network traffic includes Telegram transfers, URL downloads and
-            device connections
-            {network?.interface ? " on " + network.interface : ""}. It is
-            separate from TGDrive file-endpoint traffic below.
-          </p>
-          <div
-            className="performance-filters performance-view-tabs"
-            role="tablist"
-            aria-label="Performance views"
-          >
-            {(
-              [
-                ["overview", "Overview"],
-                ["telegram", "Accounts"],
-                ["server", "Resources"],
-              ] as const
-            ).map(([key, label], index, tabs) => (
-              <button
-                type="button"
-                role="tab"
-                id={"performance-tab-" + key}
-                aria-controls={"performance-view-" + key}
-                aria-selected={view === key}
-                tabIndex={view === key ? 0 : -1}
-                key={key}
-                onClick={() => setView(key)}
-                onKeyDown={(event) => {
-                  const next =
-                    event.key === "ArrowRight"
-                      ? (index + 1) % tabs.length
-                      : event.key === "ArrowLeft"
-                        ? (index + tabs.length - 1) % tabs.length
-                        : event.key === "Home"
-                          ? 0
-                          : event.key === "End"
-                            ? tabs.length - 1
-                            : -1;
-                  if (next >= 0) {
-                    event.preventDefault();
-                    setView(tabs[next][0]);
-                    document
-                      .getElementById("performance-tab-" + tabs[next][0])
-                      ?.focus();
-                  }
-                }}
-              >
-                {label}
-              </button>
-            ))}
-          </div>
           <p
             className="performance-history-availability"
-            hidden={view !== "overview"}
+            hidden={view === "telegram"}
           >
             {historical
               ? recorded && loadedRange === rangeKey
@@ -972,14 +885,7 @@ export default function PerformancePanel() {
                 ? `Showing ${historyDuration(resourceHistory.at(-1)!.at - resourceHistory[0].at)} of collected live history; up to 5 min selected.`
                 : "Collecting live history; earlier readings are not available yet."}
           </p>
-          <div
-            id="performance-view-overview"
-            role="tabpanel"
-            aria-labelledby="performance-tab-overview"
-            hidden={view !== "overview"}
-            tabIndex={0}
-            className="performance-overview-grid"
-          >
+          <Tabs.Panel value="overview" className="performance-overview-grid">
             <MetricChart
               windowSeconds={windowSeconds}
               historical={historical}
@@ -1007,66 +913,120 @@ export default function PerformancePanel() {
                 networkRate(network?.sent_bytes_per_second)
               }
               note={
-                (network?.available
-                  ? formatBytes(network.received_bytes) +
-                    " received · " +
-                    formatBytes(network.sent_bytes) +
-                    " sent during this runtime session. "
-                  : "Network readings unavailable. ") +
                 "Includes Telegram, URL downloads, device uploads and viewer downloads" +
                 (network?.interface ? " on " + network.interface : "") +
                 "."
               }
             />
-            <MetricChart
-              windowSeconds={windowSeconds}
-              historical={historical}
-              bucketSeconds={historical ? recorded?.bucket_seconds || 60 : 3}
-              title={cpu?.scope === "host" ? "Host CPU" : "Container CPU"}
-              samples={resourceHistory}
-              series={[{ key: "cpu_percent", label: "Usage" }]}
-              maximum={100}
-              format={(value) => value.toFixed(1) + "%"}
-              scope="cpu_scope"
-              current={
-                typeof cpu?.percent === "number"
-                  ? cpu.percent.toFixed(1) + "%"
-                  : "Measuring…"
-              }
-              note={
-                cpu?.capacity_cores
-                  ? "100% uses the available " +
-                    cpu.capacity_cores.toLocaleString() +
-                    " CPU cores."
-                  : "Measured CPU utilization; missing readings remain gaps."
-              }
-            />
-            <MetricChart
-              windowSeconds={windowSeconds}
-              historical={historical}
-              bucketSeconds={historical ? recorded?.bucket_seconds || 60 : 3}
-              title="Container RAM"
-              samples={resourceHistory}
-              series={[{ key: "memory_bytes", label: "In use" }]}
-              maximum={memoryCeiling}
-              format={formatBytes}
-              current={
-                Number.isFinite(memoryUsed)
-                  ? formatBytes(memoryUsed) +
-                    (memoryLimit ? " / " + formatBytes(memoryLimit) : " in use")
-                  : "Unavailable"
-              }
-              note={
-                memoryLimit
-                  ? "Current container limit: " +
-                    formatBytes(memoryLimit) +
-                    ". Includes all processes in this container."
-                  : "No container memory limit. The graph scales to observed usage, not total capacity."
-              }
-            />
+            {traffic && (
+              <section
+                className="performance-section performance-live-traffic"
+                aria-labelledby="http-traffic-heading"
+              >
+                <div className="performance-section-title">
+                  <h3 id="http-traffic-heading">Live file transfers</h3>
+                  <span className="performance-chart-now">Now</span>
+                </div>
+                <dl className="performance-facts">
+                  <div>
+                    <dt>Downloads to viewers</dt>
+                    <dd>
+                      {typeof sendRate === "number"
+                        ? formatBytes(sendRate) + "/s"
+                        : "Measuring…"}
+                    </dd>
+                  </div>
+                  <div>
+                    <dt>Uploads from devices</dt>
+                    <dd>
+                      {typeof receiveRate === "number"
+                        ? formatBytes(receiveRate) + "/s"
+                        : "Measuring…"}
+                    </dd>
+                  </div>
+                  <div>
+                    <dt>Active requests</dt>
+                    <dd>{traffic.active.toLocaleString()}</dd>
+                  </div>
+                  <div>
+                    <dt>Failed requests this session</dt>
+                    <dd>{traffic.errors.toLocaleString()}</dd>
+                  </div>
+                </dl>
+                <p className="settings-help">
+                  TGDrive file endpoints, including cached downloads. These live
+                  readings are independent of the chart time range.
+                </p>
+              </section>
+            )}
+            {recorded && (
+              <section
+                className="performance-all-time"
+                aria-labelledby="all-time-heading"
+              >
+                <h3 id="all-time-heading">All-time totals</h3>
+                <p className="settings-help">
+                  {recorded.tracked_since
+                    ? `Since ${formatTimestamp(recorded.tracked_since)}.`
+                    : "Tracking has just started."}{" "}
+                  Totals survive restart and are independent of the time range.
+                </p>
+                <table className="performance-totals-table">
+                  <thead>
+                    <tr>
+                      <th scope="col">Traffic source</th>
+                      <th scope="col">Received by server</th>
+                      <th scope="col">Sent by server</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {(
+                      [
+                        [
+                          "Server network",
+                          recorded.totals.network_received_bytes,
+                          recorded.totals.network_sent_bytes,
+                        ],
+                        [
+                          "TGDrive files",
+                          recorded.totals.http_upload_bytes,
+                          recorded.totals.http_download_bytes,
+                        ],
+                        [
+                          "Telegram",
+                          recorded.totals.telegram_download_bytes,
+                          recorded.totals.telegram_upload_bytes,
+                        ],
+                      ] as const
+                    ).map(([label, received, sent]) => (
+                      <tr key={label}>
+                        <th scope="row">{label}</th>
+                        <td>
+                          {typeof received === "number"
+                            ? formatBytes(received)
+                            : "Not available"}
+                        </td>
+                        <td>
+                          {typeof sent === "number"
+                            ? formatBytes(sent)
+                            : "Not available"}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+                <p className="settings-help">
+                  Network includes Telegram, URL imports and device traffic. The
+                  rows overlap; do not add them together. Usage before tracking
+                  began is not included.
+                </p>
+              </section>
+            )}
+          </Tabs.Panel>
+          <Tabs.Panel value="telegram">
             <section
               className="performance-overview-status"
-              aria-label="Current work and cache"
+              aria-label="Live Telegram activity"
             >
               <span>
                 <strong>{uploads}</strong> uploading
@@ -1077,336 +1037,7 @@ export default function PerformancePanel() {
               <span>
                 <strong>{telegram.queued}</strong> waiting
               </span>
-              <a className="inline-link" href="/?view=preloads">
-                {snapshot.cache.files.filter(cachedFileComplete).length} cached
-                files ready
-              </a>
             </section>
-            {recorded && (
-              <section
-                className="performance-all-time"
-                aria-labelledby="all-time-heading"
-              >
-                <h3 id="all-time-heading">All-time totals</h3>
-                <p className="settings-help">
-                  {recorded.tracked_since
-                    ? `Monitored since ${formatTimestamp(recorded.tracked_since)}.`
-                    : "No totals have been recorded yet."}{" "}
-                  These totals survive restart and are independent of the graph
-                  interval. Earlier usage is not backfilled. These layers can
-                  count the same transfer; do not add them together.
-                </p>
-                <dl className="performance-facts">
-                  {(
-                    [
-                      [
-                        "Server network received",
-                        recorded.totals.network_received_bytes,
-                      ],
-                      [
-                        "Server network sent",
-                        recorded.totals.network_sent_bytes,
-                      ],
-                      [
-                        "Files delivered by TGDrive",
-                        recorded.totals.http_download_bytes,
-                      ],
-                      [
-                        "Device uploads to TGDrive",
-                        recorded.totals.http_upload_bytes,
-                      ],
-                      [
-                        "Telegram downloads",
-                        recorded.totals.telegram_download_bytes,
-                      ],
-                      [
-                        "Telegram uploads",
-                        recorded.totals.telegram_upload_bytes,
-                      ],
-                    ] as const
-                  ).map(([label, bytes]) => (
-                    <div key={label}>
-                      <dt>{label}</dt>
-                      <dd>
-                        {typeof bytes === "number"
-                          ? formatBytes(bytes)
-                          : "Not available"}
-                      </dd>
-                    </div>
-                  ))}
-                </dl>
-              </section>
-            )}
-            <div className="performance-overview-extra" hidden={historical}>
-              <div className="performance-overview-grid">
-                <section
-                  className="performance-section performance-resource-summary"
-                  aria-labelledby="current-capacity-heading"
-                >
-                  <h3 id="current-capacity-heading">Current server capacity</h3>
-                  <UsageMeter
-                    label={cpu?.scope === "host" ? "Host CPU" : "Container CPU"}
-                    used={cpu?.percent ?? NaN}
-                    total={100}
-                    percent
-                    unavailableLabel={cpu?.scope ? "Measuring…" : "Unavailable"}
-                    detail={
-                      typeof cpu?.capacity_cores === "number"
-                        ? "Measured usage across " +
-                          cpu.capacity_cores.toLocaleString() +
-                          " available CPU cores"
-                        : "Collecting CPU usage samples"
-                    }
-                  />
-                  {memoryTotal > 0 ? (
-                    <UsageMeter
-                      label="Container RAM"
-                      used={memoryUsed}
-                      total={memoryTotal}
-                      detail={
-                        typeof snapshot.server.process_rss_bytes === "number"
-                          ? "TGDrive process: " +
-                            formatBytes(snapshot.server.process_rss_bytes)
-                          : "Includes all processes within this memory limit"
-                      }
-                    />
-                  ) : (
-                    <div className="performance-usage">
-                      <div>
-                        <span>Container RAM</span>
-                        <strong>
-                          {Number.isFinite(memoryUsed)
-                            ? formatBytes(memoryUsed) + " in use"
-                            : "Unavailable"}
-                        </strong>
-                      </div>
-                      <small>
-                        No container memory limit.{" "}
-                        {typeof memory?.MemAvailable === "number"
-                          ? formatBytes(memory.MemAvailable) +
-                            " available on the host."
-                          : "Host memory availability is unknown."}
-                      </small>
-                    </div>
-                  )}
-                  <UsageMeter
-                    label="Cache filesystem"
-                    used={snapshot.server.disk.used_bytes}
-                    total={snapshot.server.disk.total_bytes}
-                    detail={
-                      formatBytes(snapshot.server.disk.free_bytes) + " free"
-                    }
-                  />
-                  <UsageMeter
-                    label="RAM cache"
-                    used={snapshot.cache.memory.bytes}
-                    total={snapshot.cache.memory.effective_max_bytes}
-                    detail={
-                      snapshot.cache.memory.effective_max_bytes === 0
-                        ? "RAM cache disabled"
-                        : "Retained media; separate from active stream memory"
-                    }
-                  />
-                  <UsageMeter
-                    label="Disk cache"
-                    used={snapshot.cache.disk.bytes}
-                    total={snapshot.cache.disk.max_bytes}
-                    detail={
-                      !snapshot.cache.disk.available
-                        ? "Disk cache unavailable"
-                        : snapshot.cache.disk.max_bytes === 0
-                          ? "Disk cache disabled"
-                          : "Disposable copies; originals stay in Telegram"
-                    }
-                  />
-                </section>
-                <section
-                  className="performance-section performance-cache-summary"
-                  aria-labelledby="ready-media-heading"
-                >
-                  <h3 id="ready-media-heading">Media ready to reuse</h3>
-                  <p>
-                    <strong>
-                      {snapshot.cache.files.filter(cachedFileComplete).length}
-                    </strong>{" "}
-                    fully cached files ·{" "}
-                    {
-                      snapshot.cache.files.filter(
-                        (file) => !cachedFileComplete(file),
-                      ).length
-                    }{" "}
-                    partially cached
-                  </p>
-                  <p className="settings-help">
-                    Ready ranges are served directly from the server. Files can
-                    be evicted when space is needed.
-                  </p>
-                  <a className="inline-link" href="/?view=preloads">
-                    View cached files
-                  </a>
-                </section>
-                {traffic && (
-                  <section
-                    className="performance-section"
-                    aria-labelledby="http-traffic-heading"
-                  >
-                    <h3 id="http-traffic-heading">TGDrive file traffic</h3>
-                    <dl className="performance-facts">
-                      <div>
-                        <dt>Downloads to viewers</dt>
-                        <dd>
-                          {typeof sendRate === "number"
-                            ? formatBytes(sendRate) + "/s"
-                            : "Measuring…"}
-                        </dd>
-                        <small>Includes cached file delivery</small>
-                      </div>
-                      <div>
-                        <dt>Uploads from devices</dt>
-                        <dd>
-                          {typeof receiveRate === "number"
-                            ? formatBytes(receiveRate) + "/s"
-                            : "Measuring…"}
-                        </dd>
-                        <small>
-                          Data arriving through TGDrive's upload endpoints
-                        </small>
-                      </div>
-                      <div>
-                        <dt>Total file bytes delivered</dt>
-                        <dd>{formatBytes(traffic.download_bytes)}</dd>
-                        <small>File/download and receipt response bodies</small>
-                      </div>
-                      <div>
-                        <dt>Total device upload bytes</dt>
-                        <dd>{formatBytes(traffic.upload_bytes)}</dd>
-                        <small>Upload/receipt request bodies</small>
-                      </div>
-                      <div>
-                        <dt>Tracked requests</dt>
-                        <dd>
-                          {traffic.requests.toLocaleString()} total ·{" "}
-                          {traffic.active} active
-                        </dd>
-                        <small>
-                          {traffic.errors.toLocaleString()} errors;
-                          process-local counters
-                        </small>
-                      </div>
-                    </dl>
-                    {rates.length >= 2 && hasTraffic ? (
-                      <>
-                        <div className="performance-plot-legend">
-                          <span>Sent per second</span>
-                          <span>Received per second</span>
-                        </div>
-                        <p className="settings-help">
-                          Scale 0–{formatBytes(rateCeiling)}/s · measured
-                          differences between recent samples
-                        </p>
-                        <svg
-                          className="performance-load-plot"
-                          role="img"
-                          aria-label="Measured HTTP send and receive throughput"
-                          viewBox="0 0 600 130"
-                          preserveAspectRatio="none"
-                        >
-                          <path
-                            d="M0 120H600"
-                            className="performance-plot-axis"
-                          />
-                          <polyline
-                            points={loadPoints(rates, "active", rateCeiling)}
-                            className="performance-plot-active"
-                          />
-                          <polyline
-                            points={loadPoints(rates, "queued", rateCeiling)}
-                            className="performance-plot-queued"
-                          />
-                        </svg>
-                      </>
-                    ) : (
-                      <p className="performance-empty">
-                        {rates.length < 2
-                          ? "Measuring transfer speed. Samples update every few seconds."
-                          : "No transfer traffic in the recent sample window."}
-                      </p>
-                    )}
-                    <details className="performance-detail-note">
-                      <summary>What these traffic counters include</summary>
-                      <p className="settings-help">
-                        Tracks /file and resumable-upload HTTP bodies, including
-                        cached responses. Excludes settings polls and assets.
-                        These counters reset on restart and are not physical
-                        network-interface utilization.
-                      </p>
-                    </details>
-                  </section>
-                )}
-                <section
-                  className="performance-section"
-                  aria-labelledby="recent-load-heading"
-                >
-                  <h3 id="recent-load-heading">Recent Telegram load</h3>
-                  {history.length >= 2 && hasTelegramActivity ? (
-                    <>
-                      <p className="settings-help">
-                        0–{ceiling} simultaneous operations ·{" "}
-                        {historyDuration(history.at(-1)!.at - history[0].at)} of
-                        sampled activity
-                      </p>
-                      <div className="performance-plot-legend">
-                        <span>Active operations</span>
-                        <span>Queued operations</span>
-                      </div>
-                      <svg
-                        className="performance-load-plot"
-                        role="img"
-                        aria-label={
-                          "Recent Telegram load, peak " +
-                          ceiling +
-                          " concurrent operations"
-                        }
-                        viewBox="0 0 600 130"
-                        preserveAspectRatio="none"
-                      >
-                        <path
-                          d="M0 120H600"
-                          className="performance-plot-axis"
-                        />
-                        <polyline
-                          points={loadPoints(history, "active", ceiling)}
-                          className="performance-plot-active"
-                        />
-                        <polyline
-                          points={loadPoints(history, "queued", ceiling)}
-                          className="performance-plot-queued"
-                        />
-                      </svg>
-                      <p className="settings-help">
-                        Recent observations from this running process.{" "}
-                        {snapshot.history_scope ||
-                          "Restart resets this operational history."}
-                      </p>
-                    </>
-                  ) : (
-                    <p className="performance-empty">
-                      {history.length < 2
-                        ? "Collecting recent activity. Transfer counts are available above."
-                        : "Telegram accounts are idle. Cached files can still be served directly."}
-                    </p>
-                  )}
-                </section>
-              </div>
-            </div>
-          </div>
-          <div
-            id="performance-view-telegram"
-            role="tabpanel"
-            aria-labelledby="performance-tab-telegram"
-            hidden={view !== "telegram"}
-            tabIndex={0}
-          >
             <section
               className="performance-section"
               aria-labelledby="account-load-heading"
@@ -1574,88 +1205,193 @@ export default function PerformancePanel() {
                 </p>
               )}
             </section>
-          </div>
-          <div
-            id="performance-view-server"
-            role="tabpanel"
-            aria-labelledby="performance-tab-server"
-            hidden={view !== "server"}
-            tabIndex={0}
-          >
+            <section
+              className="performance-section"
+              aria-labelledby="recent-load-heading"
+            >
+              <h3 id="recent-load-heading">Recent Telegram load</h3>
+              {history.length >= 2 && hasTelegramActivity ? (
+                <>
+                  <p className="settings-help">
+                    0–{ceiling} simultaneous operations ·{" "}
+                    {historyDuration(history.at(-1)!.at - history[0].at)} of
+                    sampled activity
+                  </p>
+                  <div className="performance-plot-legend">
+                    <span>Active operations</span>
+                    <span>Queued operations</span>
+                  </div>
+                  <svg
+                    className="performance-load-plot"
+                    role="img"
+                    aria-label={
+                      "Recent Telegram load, peak " +
+                      ceiling +
+                      " concurrent operations"
+                    }
+                    viewBox="0 0 600 130"
+                    preserveAspectRatio="none"
+                  >
+                    <path d="M0 120H600" className="performance-plot-axis" />
+                    <polyline
+                      points={loadPoints(history, "active", ceiling)}
+                      className="performance-plot-active"
+                    />
+                    <polyline
+                      points={loadPoints(history, "queued", ceiling)}
+                      className="performance-plot-queued"
+                    />
+                  </svg>
+                  <p className="settings-help">
+                    Recent observations from this running process.{" "}
+                    {snapshot.history_scope ||
+                      "Restart resets this operational history."}
+                  </p>
+                </>
+              ) : (
+                <p className="performance-empty">
+                  {history.length < 2
+                    ? "Collecting recent activity. Transfer counts are available above."
+                    : "Telegram accounts are idle. Cached files can still be served directly."}
+                </p>
+              )}
+            </section>
+          </Tabs.Panel>
+          <Tabs.Panel value="server">
+            <div className="performance-overview-grid performance-resource-charts">
+              <MetricChart
+                windowSeconds={windowSeconds}
+                historical={historical}
+                bucketSeconds={historical ? recorded?.bucket_seconds || 60 : 3}
+                title={cpu?.scope === "host" ? "Host CPU" : "Container CPU"}
+                samples={resourceHistory}
+                series={[{ key: "cpu_percent", label: "Usage" }]}
+                maximum={100}
+                format={(value) => value.toFixed(1) + "%"}
+                scope="cpu_scope"
+                current={
+                  typeof cpu?.percent === "number"
+                    ? cpu.percent.toFixed(1) + "%"
+                    : "Measuring…"
+                }
+                note={
+                  cpu?.capacity_cores
+                    ? "100% uses the available " +
+                      cpu.capacity_cores.toLocaleString() +
+                      " CPU cores."
+                    : "Measured CPU utilization; missing readings remain gaps."
+                }
+              />
+              <MetricChart
+                windowSeconds={windowSeconds}
+                historical={historical}
+                bucketSeconds={historical ? recorded?.bucket_seconds || 60 : 3}
+                title="Container RAM"
+                samples={resourceHistory}
+                series={[{ key: "memory_bytes", label: "In use" }]}
+                maximum={memoryCeiling}
+                format={formatBytes}
+                current={
+                  Number.isFinite(memoryUsed)
+                    ? formatBytes(memoryUsed) +
+                      (memoryLimit
+                        ? " / " + formatBytes(memoryLimit)
+                        : " in use")
+                    : "Unavailable"
+                }
+                note={
+                  memoryLimit
+                    ? "Current container limit: " +
+                      formatBytes(memoryLimit) +
+                      ". Includes all processes in this container."
+                    : "No container memory limit. The graph scales to observed usage, not total capacity."
+                }
+              />
+            </div>
             <section
               className="performance-section"
               aria-labelledby="server-resource-heading"
             >
-              <h3 id="server-resource-heading">Server resources</h3>
-              <p className="settings-help">
-                Current resource usage and capacity.
+              <div className="performance-section-title">
+                <h3 id="server-resource-heading">Storage &amp; cache</h3>
+                <span className="performance-chart-now">Now</span>
+              </div>
+              <div className="performance-resource-summary">
+                <UsageMeter
+                  label="Cache filesystem"
+                  used={snapshot.server.disk.used_bytes}
+                  total={snapshot.server.disk.total_bytes}
+                  detail={
+                    formatBytes(snapshot.server.disk.free_bytes) +
+                    " free on the cache volume"
+                  }
+                />
+                <UsageMeter
+                  label="RAM cache"
+                  used={snapshot.cache.memory.bytes}
+                  total={snapshot.cache.memory.effective_max_bytes}
+                  detail={
+                    snapshot.cache.memory.effective_max_bytes === 0
+                      ? "Disabled"
+                      : "Retained media; part of container memory"
+                  }
+                />
+                <UsageMeter
+                  label="Disk cache"
+                  used={snapshot.cache.disk.bytes}
+                  total={snapshot.cache.disk.max_bytes}
+                  detail={
+                    !snapshot.cache.disk.available
+                      ? "Unavailable"
+                      : snapshot.cache.disk.max_bytes === 0
+                        ? "Disabled"
+                        : "Disposable copies; originals stay in Telegram"
+                  }
+                />
+              </div>
+              <p className="performance-cache-link">
+                <a className="inline-link" href="/?view=preloads">
+                  View cached files
+                </a>
+                <span>
+                  {snapshot.cache.files.filter(cachedFileComplete).length} ready
+                  ·{" "}
+                  {
+                    snapshot.cache.files.filter(
+                      (file) => !cachedFileComplete(file),
+                    ).length
+                  }{" "}
+                  partial
+                </span>
               </p>
-              <dl className="performance-facts">
+              <h3>Memory details</h3>
+              <dl className="performance-facts performance-memory-details">
                 <div>
-                  <dt>Server memory available</dt>
-                  <dd>
-                    {typeof snapshot.server.memory.MemAvailable === "number"
-                      ? formatBytes(snapshot.server.memory.MemAvailable)
-                      : "Unavailable"}
-                  </dd>
-                  <small>
-                    {typeof snapshot.server.memory.MemTotal === "number"
-                      ? "Host total " +
-                        formatBytes(snapshot.server.memory.MemTotal)
-                      : "Host memory sample not available"}
-                  </small>
-                </div>
-                <div>
-                  <dt>Container memory</dt>
-                  <dd>
-                    {typeof snapshot.server.memory.cgroup_current === "number"
-                      ? formatBytes(snapshot.server.memory.cgroup_current)
-                      : "Unavailable"}
-                  </dd>
-                  <small>
-                    {typeof snapshot.server.memory.cgroup_limit === "number"
-                      ? "Limit " +
-                        formatBytes(snapshot.server.memory.cgroup_limit)
-                      : "No finite container limit reported"}
-                  </small>
-                </div>
-                <div>
-                  <dt>
-                    {cpu?.scope === "host"
-                      ? "Host CPU utilization"
-                      : "Container CPU utilization"}
-                  </dt>
-                  <dd>
-                    {typeof cpu?.percent === "number"
-                      ? cpu.percent.toFixed(1) + "%"
-                      : "Measuring…"}
-                  </dd>
-                  <small>
-                    {cpu?.capacity_cores
-                      ? cpu.capacity_cores + " available CPU cores"
-                      : "Current sampled CPU use"}
-                  </small>
-                </div>
-                <div>
-                  <dt>TGDrive process memory</dt>
+                  <dt>TGDrive process</dt>
                   <dd>
                     {typeof snapshot.server.process_rss_bytes === "number"
                       ? formatBytes(snapshot.server.process_rss_bytes)
                       : "Unavailable"}
                   </dd>
                   <small>
-                    Current resident memory · peak{" "}
+                    Part of container RAM · peak{" "}
                     {formatBytes(snapshot.server.process_peak_rss_bytes)}
                   </small>
                 </div>
                 <div>
-                  <dt>RAM cache</dt>
-                  <dd>{formatBytes(snapshot.cache.memory.bytes)}</dd>
+                  <dt>Host memory available</dt>
+                  <dd>
+                    {typeof memory?.MemAvailable === "number"
+                      ? formatBytes(memory.MemAvailable)
+                      : "Unavailable"}
+                  </dd>
                   <small>
-                    Effective limit{" "}
-                    {formatBytes(snapshot.cache.memory.effective_max_bytes)}
+                    {typeof memory?.MemTotal === "number"
+                      ? "Host total " + formatBytes(memory.MemTotal)
+                      : "Host memory is unavailable"}
                   </small>
                 </div>
+                <StreamMemoryFact scratch={snapshot.cache.scratch} />
                 <div>
                   <dt>RAM cache lookups</dt>
                   <dd>
@@ -1663,28 +1399,18 @@ export default function PerformancePanel() {
                     {snapshot.cache.memory.misses.toLocaleString()} misses
                   </dd>
                   <small>
-                    Block lookups, including preparation; not a bandwidth-saving
-                    ratio
+                    Block lookups, including preloading; not a bandwidth-saving
+                    percentage
                   </small>
-                </div>
-                <StreamMemoryFact scratch={snapshot.cache.scratch} />
-                <div>
-                  <dt>Catalog</dt>
-                  <dd>
-                    {snapshot.drive.files.toLocaleString()} files ·{" "}
-                    {formatBytes(snapshot.drive.total_bytes)}
-                  </dd>
-                  <small>
-                    {snapshot.drive.folders.toLocaleString()} folders; file
-                    sizes stored in Telegram
-                  </small>
-                </div>
-                <div>
-                  <dt>Upload staging budget</dt>
-                  <dd>{formatBytes(snapshot.server.staging_budget_bytes)}</dd>
-                  <small>Separate from disposable media cache</small>
                 </div>
               </dl>
+              <p className="settings-help">
+                Upload staging budget:{" "}
+                {formatBytes(snapshot.server.staging_budget_bytes)}.{" "}
+                <a className="inline-link" href="/?view=storage">
+                  Storage &amp; Backups
+                </a>
+              </p>
               <details className="performance-detail-note">
                 <summary>Resource measurement details</summary>
                 <p className="settings-help">
@@ -1699,9 +1425,9 @@ export default function PerformancePanel() {
                 </p>
               </details>
             </section>
-          </div>
+          </Tabs.Panel>
         </>
       )}
-    </div>
+    </Tabs>
   );
 }

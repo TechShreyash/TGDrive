@@ -118,7 +118,7 @@
     padding-bottom: 0;
   }
   .file-list-scroll {
-    padding-bottom: 32px;
+    padding-bottom: 96px;
     scrollbar-gutter: auto;
   }
 }

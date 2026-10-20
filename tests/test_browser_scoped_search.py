@@ -247,6 +247,16 @@ def test_compact_fixed_directory_controls_leave_room_for_files(
         "node => node.clientHeight / node.closest('.workspace').clientHeight"
     )
     assert ratio > 0.60
+    bounds = page.locator(".workspace").bounding_box()
+    viewport = page.viewport_size
+    assert abs(bounds["x"] + bounds["width"] - viewport["width"]) <= 1
+    assert abs(bounds["y"] + bounds["height"] - viewport["height"]) <= 1
+    assert bounds["y"] == (48 if width < 700 else 0)
+    if width < 700:
+        assert bounds["x"] == 0
+    else:
+        sidebar = page.locator(".sidebar").bounding_box()
+        assert abs(bounds["x"] - sidebar["x"] - sidebar["width"]) <= 1
     assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
     assert page.locator(".file-toolbar").evaluate(
         "node => node.scrollWidth <= node.clientWidth + 1"
@@ -258,12 +268,14 @@ def test_compact_fixed_directory_controls_leave_room_for_files(
         page.screenshot(path=ARTIFACTS / f"directory-compact-search-{width}.png")
     if width < 700:
         page.get_by_role("button", name="Toggle Navigation", exact=True).click()
-        expect(
-            page.get_by_role("button", name="Log Out", exact=True)
-        ).to_be_in_viewport()
-        expect(
-            page.get_by_role("link", name="Documentation", exact=True)
-        ).to_be_in_viewport()
+        sidebar = page.locator(".sidebar")
+        assert sidebar.evaluate("node => getComputedStyle(node).overflowY") == "auto"
+        logout = page.get_by_role("button", name="Log Out", exact=True)
+        logout.scroll_into_view_if_needed()
+        expect(logout).to_be_in_viewport()
+        documentation = page.get_by_role("link", name="Documentation", exact=True)
+        documentation.scroll_into_view_if_needed()
+        expect(documentation).to_be_in_viewport()
         page.get_by_role("link", name="Storage & Backups", exact=True).focus()
         expect(
             page.get_by_role("link", name="Storage & Backups", exact=True)

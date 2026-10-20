@@ -13,6 +13,7 @@ and MongoDB remembers their names, folders and sharing settings.
 | Upload, organize, preview or share files | [Using TGDrive](usage.md) |
 | Restart, upgrade or fix a problem | [Operations](operations.md) |
 | Save recovery keys, understand encrypted backups or restore after data loss | [Backup & recovery](backup-recovery.md) |
+| Understand settings, restore safe defaults or tune a larger server | [Configuration & tuning](configuration.md) |
 | Improve streaming, control cache budgets or prepare shared downloads | [Performance and caching](performance.md) |
 | Review fresh-browser playback, protocol and cached-seek checks | [Streaming validation](streaming-validation-2026-10-18.md) |
 | Check what works and what still needs work | [Roadmap](roadmap.md) |

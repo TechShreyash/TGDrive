@@ -95,3 +95,11 @@ scheduler-LICENSE.txt (scheduler 0.28.0)
 SHA-256: da6d3703ed11cbe42bd212c725957c98da23cbff1998c05fa4b3d976d1a58e93
 lucide-react-LICENSE.txt (lucide-react 1.58.0)
 SHA-256: b495047bd93a9b06913511076f504daba17d5bbeb3e0650f3bb53a4220329c57
+
+Mantine UI component foundation
+-------------------------------
+@mantine/core and @mantine/hooks are pinned together at 9.7.3.
+https://mantine.dev/ and https://github.com/mantinedev/mantine
+ui-components-LICENSES.txt preserves the library and new dependency license texts,
+including the upstream notice for react-remove-scroll-bar whose npm package omits it.
+Preserve this file with emitted assets.

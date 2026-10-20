@@ -707,7 +707,7 @@ Telegram authorization references. Mutations use the usual same-origin checks.
 
 | Method and route | Purpose |
 | --- | --- |
-| `GET /api/v1/settings/performance` | Saved live performance preferences, revision, and documentation link. |
+| `GET /api/v1/settings/performance` | Saved live performance preferences, revision, read-only built-in defaults, and configuration guide link. |
 | `PATCH /api/v1/settings/performance` | Partial lowercase preferences, with returned revision in `If-Match`; persist and apply to new work. |
 | `GET /api/v1/performance` | Account activity, bounded live queues/history, request pacing/cooldowns and cache diagnostics. |
 | `GET /api/v1/performance/history?start=UNIX&end=UNIX` | Owner-only measured history within the last 31 days and persisted lifetime traffic totals; at most 360 bins. |
@@ -1243,3 +1243,10 @@ Live job snapshots include telegram_parts {total, stored} for multipart uploads.
 The stored count uses confirmed Telegram messages, independently of current byte
 progress, which includes in-flight part uploads. Private send identities and the
 multipart recovery journal are never included in this summary.
+
+Dashboard disk-cache budget/reserve changes are rejected with 422 if disk caching
+would be enabled with less than 64 MiB of free-space floor. Disabling disk caching
+with a zero budget remains supported. Existing deployment environment values are
+not silently rewritten. Restore defaults is a category-scoped draft in the UI,
+then an ordinary validated PATCH on Save; the read-only defaults object itself
+cannot be submitted as a preference. See [Configuration & tuning](configuration.md).

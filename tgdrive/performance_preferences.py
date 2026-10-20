@@ -179,7 +179,8 @@ class PerformanceSettings:
         await self.initialize()
         return self.value.model_dump() | {
             "revision": self.etag(),
-            "documentation_url": "https://github.com/TechShreyash/TGDrive/blob/dev/docs/performance.md",
+            "defaults": PerformancePreferences().model_dump(),
+            "documentation_url": "https://github.com/TechShreyash/TGDrive/blob/dev/docs/configuration.md",
         }
 
     async def save(self, changes, *, expected=None):
@@ -193,7 +194,20 @@ class PerformanceSettings:
                 value = PerformancePreferences.model_validate(
                     self.value.model_dump() | changes
                 )
+                if (
+                    {"cache_disk_bytes", "cache_min_free_bytes"}.intersection(changes)
+                    and value.cache_disk_bytes > 0
+                    and value.cache_min_free_bytes < 64 * 1024**2
+                ):
+                    raise SettingsProblem(
+                        "Keep at least 64 MiB (0.0625 GiB) free "
+                        "while disk caching is enabled. "
+                        "Use the 1 GiB default for normal operation.",
+                        status=422,
+                    )
                 await asyncio.to_thread(self._write, value)
+            except SettingsProblem:
+                raise
             except ValueError:
                 raise
             except Exception:

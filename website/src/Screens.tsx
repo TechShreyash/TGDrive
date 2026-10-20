@@ -1,3 +1,4 @@
+import { Button, Paper, Badge } from "@mantine/core";
 import {
   useCallback,
   useEffect,
@@ -530,16 +531,18 @@ export function UploadSettings() {
     }
   };
   return (
-    <section
+    <Paper
+      component="section"
       className="settings-section preference-section"
       aria-labelledby="upload-settings-heading"
     >
       <div className="preference-description">
-        <h2 id="upload-settings-heading">Parallel uploads</h2>
-        <p>
-          Files start uploading to Telegram as soon as they reach the server.
-          Received files continue uploading after you close this tab.
-        </p>
+        <div className="configuration-section-heading">
+          <h2 id="upload-settings-heading">Parallel uploads</h2>
+          <Badge color="teal" variant="light">
+            Default: 1 per bot
+          </Badge>
+        </div>
       </div>
       <div className="preference-controls">
         {loading ? (
@@ -552,12 +555,11 @@ export function UploadSettings() {
                   Simultaneous Uploads per Bot
                 </label>
                 <p id="upload-limit-help">
-                  Keep 1 for a lighter load. Add more bots for more upload
-                  slots.
+                  Start with 1; add bots before increasing.
                 </p>
               </div>
               <div className="upload-limit-stepper">
-                <button
+                <Button
                   type="button"
                   className="icon-button"
                   aria-label="Fewer Uploads per Bot"
@@ -568,7 +570,7 @@ export function UploadSettings() {
                   }}
                 >
                   <Minus size={16} />
-                </button>
+                </Button>
                 <input
                   id="uploads-per-bot"
                   type="number"
@@ -584,7 +586,7 @@ export function UploadSettings() {
                     setNotice("");
                   }}
                 />
-                <button
+                <Button
                   type="button"
                   className="icon-button"
                   aria-label="More Uploads per Bot"
@@ -595,7 +597,7 @@ export function UploadSettings() {
                   }}
                 >
                   <Plus size={16} />
-                </button>
+                </Button>
               </div>
             </div>
             <p className="settings-help">
@@ -609,11 +611,12 @@ export function UploadSettings() {
               1
                 ? "slot"
                 : "slots"}
-              . Telegram waits still apply.
+              .
             </p>
             <div className="upload-settings-actions">
-              <button
+              <Button
                 className="primary-button"
+                type="submit"
                 disabled={
                   busy ||
                   !Number.isInteger(value) ||
@@ -623,19 +626,48 @@ export function UploadSettings() {
                 }
               >
                 {busy ? "Saving…" : "Save Changes"}
-              </button>
+              </Button>
+              <Button
+                type="button"
+                className="text-button"
+                variant="subtle"
+                disabled={busy}
+                onClick={() => {
+                  setValue(1);
+                  setError("");
+                  setNotice(
+                    "Default loaded: 1 upload per bot. Save Changes to apply.",
+                  );
+                }}
+              >
+                Restore upload defaults
+              </Button>
+              <Button
+                type="button"
+                className="text-button"
+                variant="subtle"
+                disabled={busy || value === saved.uploads_per_bot}
+                hidden={value === saved.uploads_per_bot}
+                onClick={() => {
+                  setValue(saved.uploads_per_bot);
+                  setError("");
+                  setNotice("");
+                }}
+              >
+                Discard upload changes
+              </Button>
               <span role="status" className="settings-help">
                 {notice}
               </span>
             </div>
           </form>
         ) : (
-          <button className="secondary-button" onClick={() => void load()}>
+          <Button className="secondary-button" onClick={() => void load()}>
             Try Again
-          </button>
+          </Button>
         )}
         <ErrorNotice message={error} />
       </div>
-    </section>
+    </Paper>
   );
 }

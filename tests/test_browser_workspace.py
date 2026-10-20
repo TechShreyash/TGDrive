@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import re
 import time
 
 import pytest
@@ -187,7 +188,7 @@ def test_removed_settings_page_replaces_legacy_url_with_my_files(
     expect(page.get_by_role("link", name="Settings", exact=True)).to_have_count(0)
     expect(
         page.get_by_role("button", name="Change Appearance", exact=True)
-    ).to_be_visible()
+    ).to_have_count(0)
 
 
 @pytest.mark.parametrize("width", [1440, 390])
@@ -203,6 +204,13 @@ def test_sidebar_logout_busy_error_retry_and_server_transfer_survives(
         page.get_by_role("button", name="Toggle Navigation", exact=True).click()
     logout = page.get_by_role("button", name="Log Out", exact=True)
     logout.scroll_into_view_if_needed()
+    sidebar = page.locator(".sidebar")
+    assert sidebar.evaluate("e => e.scrollTop") > 0
+    assert page.locator(".drive-nav").evaluate("e => e.scrollTop") == 0
+    assert (
+        page.locator(".sidebar-bottom").evaluate("e => getComputedStyle(e).position")
+        == "static"
+    )
     page.screenshot(path=ARTIFACTS / f"sidebar-logout-{width}.png")
     held = []
     page.route("**/api/logout", lambda route: held.append(route))
@@ -232,3 +240,52 @@ def test_sidebar_logout_busy_error_retry_and_server_transfer_survives(
     expect(
         page.get_by_text("logout-keeps-server-transfer.bin", exact=True)
     ).to_be_visible()
+
+
+@pytest.mark.parametrize("width", [1440, 390])
+def test_restore_defaults_is_reviewable_scoped_and_durable(server, desktop, width):
+    _, page = desktop
+    page.set_viewport_size({"width": width, "height": 844})
+    login(page, server.url + "/?view=settings&section=cache")
+    initial = page.request.get(server.url + "/api/v1/settings/performance").json()
+    assert page.request.patch(
+        server.url + "/api/v1/settings/performance",
+        data={"cache_memory_bytes": 512 * 1024**2, "timezone": "UTC"},
+        headers={"If-Match": initial["revision"]},
+    ).ok
+    page.reload()
+    memory = page.get_by_label("Memory cache (MiB)", exact=True)
+    expect(memory).to_have_value("512")
+    page.get_by_role("button", name="Restore defaults", exact=True).click()
+    expect(memory).to_have_value("256")
+    assert (
+        page.request.get(server.url + "/api/v1/settings/performance").json()[
+            "cache_memory_bytes"
+        ]
+        == 512 * 1024**2
+    )
+    expect(
+        page.get_by_role("link", name="Configuration guide", exact=True)
+    ).to_have_attribute("href", re.compile(r"/docs/configuration\.md$"))
+    page.get_by_role("button", name="Discard changes", exact=True).click()
+    expect(memory).to_have_value("512")
+    page.get_by_role("button", name="Restore defaults", exact=True).click()
+    page.get_by_role("button", name="Save Performance Settings", exact=True).click()
+    expect(page.locator(".performance-settings").get_by_role("status")).to_contain_text(
+        "saved for this section"
+    )
+    policy = page.request.get(server.url + "/api/v1/settings/performance").json()
+    assert policy["cache_memory_bytes"] == 256 * 1024**2
+    assert policy["timezone"] == "UTC"
+    page.get_by_label("Cache free-space floor (GiB)", exact=True).fill("0")
+    page.get_by_role("button", name="Save Performance Settings", exact=True).click()
+    expect(page.locator(".performance-settings").get_by_role("alert")).to_contain_text(
+        "at least 64 MiB"
+    )
+    assert (
+        page.request.get(server.url + "/api/v1/settings/performance").json()["revision"]
+        == policy["revision"]
+    )
+    page.get_by_role("button", name="Restore defaults", exact=True).click()
+    page.screenshot(path=ARTIFACTS / f"configuration-defaults-{width}.png")
+    assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")

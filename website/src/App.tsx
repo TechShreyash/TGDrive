@@ -50,7 +50,6 @@ import TransferPanel from "./TransferPanel";
 import TransferHistory from "./TransferHistory";
 import FolderUpload from "./FolderUpload";
 import DeletionNotice from "./DeletionNotice";
-import ThemeControl from "./ThemeControl";
 import SidebarLogout from "./SidebarLogout";
 function getLocation() {
   const url = new URL(window.location.href);
@@ -1048,9 +1047,6 @@ export default function App() {
   if (authenticated === false && !isPublic)
     return (
       <>
-        <div className="login-theme-control">
-          <ThemeControl />
-        </div>
         <Login
           onSuccess={() => {
             setAuthenticated(true);
@@ -1250,7 +1246,7 @@ export default function App() {
           addFiles(Array.from(event.dataTransfer.files));
         }}
       >
-        <header className="topbar">
+        <header className="topbar" hidden={!mobile && !isPublic}>
           {isPublic ? (
             <a href="/" className="brand">
               <HardDrive size={22} />
@@ -1270,7 +1266,6 @@ export default function App() {
               </button>
             </>
           )}
-          <ThemeControl />
           {isPublic && (
             <span className="public-label">
               <Globe size={16} /> Read-Only Shared Folder

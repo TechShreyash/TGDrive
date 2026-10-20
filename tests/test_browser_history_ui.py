@@ -98,6 +98,7 @@ def test_history_interval_hover_keyboard_poll_and_persisted_selection(server, de
     page.goto(server.url + "/?view=performance")
     interval = page.get_by_role("combobox", name="Time range", exact=True)
     expect(interval).to_have_value("live")
+    page.get_by_role("tab", name="Resources", exact=True).click()
     cpu = page.get_by_role("region", name="Container CPU", exact=True)
     slider = cpu.get_by_role("slider", name="Inspect Container CPU samples")
     expect(slider).to_have_attribute("max", "2")
@@ -107,20 +108,24 @@ def test_history_interval_hover_keyboard_poll_and_persisted_selection(server, de
     )
     expect(slider).to_have_attribute("max", "59")
     expect(cpu.locator("polyline.performance-plot-active")).to_have_count(2)
-    for name in ["Network traffic", "Container RAM"]:
+    for name, tab in [("Network traffic", "Overview"), ("Container RAM", "Resources")]:
+        page.get_by_role("tab", name=tab, exact=True).click()
         expect(
             page.get_by_role("region", name=name, exact=True).get_by_role("slider")
         ).to_have_attribute("max", "59")
     expect(cpu.locator(".performance-chart-heading")).to_contain_text("70.0%Now")
+    page.get_by_role("tab", name="Overview", exact=True).click()
     expect(page.locator(".performance-chart-legend")).to_contain_text(
         "Download to server"
     )
     expect(page.locator(".performance-chart-legend")).to_contain_text(
         "Upload from server"
     )
+    page.get_by_role("tab", name="Overview", exact=True).click()
     expect(page.get_by_role("heading", name="All-time totals")).to_be_visible()
     expect(page.locator(".performance-all-time")).to_contain_text("5 GB")
     expect(page.locator(".performance-all-time")).to_contain_text("Not available")
+    page.get_by_role("tab", name="Resources", exact=True).click()
     plot = cpu.get_by_role("img", name="Container CPU over time", exact=True)
     cpu.scroll_into_view_if_needed()
     bounds = plot.bounding_box()
@@ -147,17 +152,21 @@ def test_history_interval_hover_keyboard_poll_and_persisted_selection(server, de
     )
     assert len(requests) > before
     page.reload()
+    page.get_by_role("tab", name="Resources", exact=True).click()
     expect(interval).to_have_value("hour")
     expect(slider).to_have_attribute("max", "59")
     assert requests[-1][1] - requests[-1][0] == 3600
     for tab, description in [
         ("Accounts", "Live account activity and current limits."),
-        ("Resources", "Current resource usage and capacity."),
     ]:
         page.get_by_role("tab", name=tab, exact=True).click()
         expect(interval).not_to_be_visible()
         expect(page.get_by_text(description, exact=True)).to_be_visible()
         expect(page.locator(".performance-history-availability")).not_to_be_visible()
+    page.get_by_role("tab", name="Resources", exact=True).click()
+    expect(interval).to_be_visible()
+    expect(interval).to_have_value("hour")
+    expect(cpu).to_be_visible()
     page.get_by_role("tab", name="Overview", exact=True).click()
     expect(interval).to_be_visible()
     expect(interval).to_have_value("hour")
@@ -244,9 +253,7 @@ def test_custom_history_is_absolute_utc_and_stale_fetch_cannot_replace_new_range
 def test_recorded_history_page_uses_real_private_history_endpoint(server, desktop):
     _, page = desktop
     login(page, server.url + "/?view=performance")
-    page.get_by_role("combobox", name="Time range", exact=True).select_option(
-        "hour"
-    )
+    page.get_by_role("combobox", name="Time range", exact=True).select_option("hour")
     expect(page.locator(".performance-history-availability")).to_contain_text(
         "Recorded interval averages"
     )
@@ -255,7 +262,7 @@ def test_recorded_history_page_uses_real_private_history_endpoint(server, deskto
         page.get_by_role("heading", name="All-time totals", exact=True)
     ).to_be_visible()
     expect(page.locator(".performance-all-time")).to_contain_text(
-        "independent of the graph interval"
+        "independent of the time range"
     )
     end = int(time.time())
     response = page.request.get(

@@ -98,6 +98,8 @@ def test_owner_api_resource_policy_and_share_capability(tmp_path):
             result = client.get(url)
             assert result.status_code == 200
             assert result.json()["timezone"] == "Asia/Kolkata"
+            assert result.json()["defaults"] == PerformancePreferences().model_dump()
+            assert result.json()["documentation_url"].endswith("/docs/configuration.md")
             assert result.headers["cache-control"] == "no-store"
             for changes in (
                 {"cache_disk_bytes": -1},
@@ -187,3 +189,47 @@ def test_valid_public_share_cannot_inspect_or_control_operator_resources(
     finally:
         state.transfers.registry.close()
         store.close()
+
+
+async def test_defaults_are_built_in_and_invalid_updates_never_change_saved_policy(
+    tmp_path,
+):
+    settings = make_settings(tmp_path)
+    settings.cache_memory_bytes = 512 * 1024**2
+    state = runtime()
+    service = PerformanceSettings(settings, state)
+    try:
+        before = await service.snapshot()
+        assert before["cache_memory_bytes"] == 512 * 1024**2
+        assert before["defaults"]["cache_memory_bytes"] == 256 * 1024**2
+        from pydantic import ValidationError
+
+        for changes in [
+            {"cache_memory_bytes": 9 * 1024**3, "timezone": "UTC"},
+            {"telegram_upload_pipeline": 17},
+            {"telegram_request_limit": 33},
+            {"telegram_parts_per_second": 129},
+            {"telegram_media_per_bot": 17},
+            {"telegram_max_queue": 4097},
+            {"preload_max_jobs": 0},
+            {"upload_split_mib": 2001},
+            {"cache_ttl_seconds": 0},
+            {"cache_memory_bytes": 1.5},
+            {"auto_preload": "false"},
+            {"defaults": {"cache_memory_bytes": 1}},
+        ]:
+            with pytest.raises(ValidationError):
+                await service.save(changes, expected=before["revision"])
+            assert await service.snapshot() == before
+        with pytest.raises(SettingsProblem) as too_low:
+            await service.save({"cache_min_free_bytes": 0}, expected=before["revision"])
+        assert too_low.value.status == 422
+        assert await service.snapshot() == before
+        disabled = await service.save(
+            {"cache_disk_bytes": 0, "cache_min_free_bytes": 0}
+        )
+        assert disabled["cache_disk_bytes"] == 0
+        restored = await service.save(before["defaults"], expected=disabled["revision"])
+        assert all(restored[key] == value for key, value in before["defaults"].items())
+    finally:
+        await state.preloads.close()

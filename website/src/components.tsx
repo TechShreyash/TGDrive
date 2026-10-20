@@ -1,3 +1,4 @@
+import { Alert } from "@mantine/core";
 import { useEffect, useId, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import {
@@ -10,6 +11,7 @@ import {
   Image,
   Music,
   Archive,
+  AlertCircle,
 } from "lucide-react";
 export function Spinner() {
   return <LoaderCircle className="spinner" aria-hidden="true" size={18} />;
@@ -115,9 +117,15 @@ export function Modal({
 }
 export function ErrorNotice({ message }: { message: string }) {
   return message ? (
-    <p className="error-notice" role="alert">
+    <Alert
+      className="error-notice"
+      color="red"
+      variant="light"
+      icon={<AlertCircle size={18} aria-hidden="true" />}
+      role="alert"
+    >
       {message}
-    </p>
+    </Alert>
   ) : null;
 }
 

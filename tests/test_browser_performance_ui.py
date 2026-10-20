@@ -224,17 +224,14 @@ def test_performance_views_keyboard_navigation_and_settings_groups(server, deskt
     overview = page.get_by_role("tab", name="Overview", exact=True)
     expect(overview).to_have_attribute("aria-selected", "true")
     expect(page.get_by_role("tabpanel", name="Overview")).to_be_visible()
-    capacity = page.get_by_role("region", name="Current server capacity", exact=True)
-    expect(capacity).to_be_visible()
-    assert capacity.locator("xpath=ancestor::details").count() == 0
-    expect(page.get_by_role("heading", name="Media ready to reuse")).to_be_visible()
+    expect(page.get_by_role("heading", name="Live file transfers")).to_be_visible()
     expect(page.get_by_text("3 MB/s", exact=True)).to_be_visible()
     expect(page.get_by_text("1 MB/s", exact=True)).to_be_visible()
     expect(
-        page.get_by_role("progressbar", name="Cache filesystem", exact=True)
-    ).to_be_visible()
+        page.get_by_role("region", name="Container RAM", exact=True)
+    ).not_to_be_visible()
     expect(
-        page.get_by_role("heading", name="Server resources", exact=True)
+        page.get_by_role("heading", name="Storage & cache", exact=True)
     ).not_to_be_visible()
     overview.focus()
     page.keyboard.press("ArrowRight")
@@ -243,10 +240,22 @@ def test_performance_views_keyboard_navigation_and_settings_groups(server, deskt
     expect(page.get_by_role("heading", name="Waiting for Telegram")).to_be_visible()
     expect(page.get_by_role("cell", name="About 5s", exact=True)).to_be_visible()
     page.screenshot(path=ARTIFACTS / "owner-performance-accounts.png", full_page=True)
+    page.get_by_role("tab", name="Accounts", exact=True).focus()
     page.keyboard.press("End")
+    page.keyboard.press("Enter")
     expect(
-        page.get_by_role("heading", name="Server resources", exact=True)
+        page.get_by_role("heading", name="Storage & cache", exact=True)
     ).to_be_visible()
+    expect(
+        page.get_by_role("progressbar", name="Cache filesystem", exact=True)
+    ).to_be_visible()
+    assert (
+        page.get_by_role("heading", name="Storage & cache")
+        .locator("xpath=ancestor::details")
+        .count()
+        == 0
+    )
+    page.screenshot(path=ARTIFACTS / "owner-performance-resources.png", full_page=True)
     page.get_by_role("tab", name="Overview", exact=True).click()
     page.screenshot(path=ARTIFACTS / "owner-performance-desktop.png", full_page=True)
     page.set_viewport_size({"width": 390, "height": 844})
@@ -255,6 +264,13 @@ def test_performance_views_keyboard_navigation_and_settings_groups(server, deskt
     page.screenshot(
         path=ARTIFACTS / "owner-performance-mobile-dark.png", full_page=True
     )
+    for tab in ["Accounts", "Resources"]:
+        page.get_by_role("tab", name=tab, exact=True).click()
+        assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
+        page.screenshot(
+            path=ARTIFACTS / f"owner-performance-{tab.lower()}-mobile.png",
+            full_page=True,
+        )
     page.goto(server.url + "/?view=settings&section=performance")
     expect(page.get_by_role("group", name="Cache storage", exact=True)).to_be_visible()
     expect(
@@ -336,7 +352,6 @@ def test_network_includes_url_downloads_and_resources_use_container_limits(
     page.route("**/api/v1/performance", lambda route: route.fulfill(json=snapshot))
     page.goto(server.url + "/?view=performance")
     network = page.get_by_role("region", name="Network traffic", exact=True)
-    expect(network).to_contain_text("1 GB received")
     expect(network).to_contain_text("12 MB/s")
     expect(network).to_contain_text(
         "Includes Telegram, URL downloads, device uploads and viewer downloads"
@@ -345,6 +360,15 @@ def test_network_includes_url_downloads_and_resources_use_container_limits(
         page.get_by_role("img", name="Network traffic over time", exact=True)
     ).to_be_visible()
     expect(network.locator("polyline.performance-plot-active")).to_have_count(2)
+    expect(
+        page.get_by_role("region", name="Container RAM", exact=True)
+    ).not_to_be_visible()
+    file_traffic = page.locator(
+        "section",
+        has=page.get_by_role("heading", name="Live file transfers", exact=True),
+    ).last
+    expect(file_traffic).to_contain_text("0 B/s")
+    page.get_by_role("tab", name="Resources", exact=True).click()
     cpu = page.get_by_role("region", name="Container CPU", exact=True)
     expect(cpu.locator(".performance-chart-axis")).to_contain_text("100.0%")
     slider = cpu.get_by_role("slider", name="Inspect Container CPU samples", exact=True)
@@ -360,11 +384,6 @@ def test_network_includes_url_downloads_and_resources_use_container_limits(
     ram = page.get_by_role("region", name="Container RAM", exact=True)
     expect(ram.locator(".performance-chart-heading")).to_contain_text("2 GB / 8 GB")
     expect(ram.locator(".performance-chart-axis")).to_contain_text("8 GB")
-    file_traffic = page.locator(
-        "section",
-        has=page.get_by_role("heading", name="TGDrive file traffic", exact=True),
-    ).last
-    expect(file_traffic).to_contain_text("0 B/s")
     page.set_viewport_size({"width": 1440, "height": 1100})
     page.get_by_role(
         "heading", name="Performance", exact=True
@@ -394,5 +413,6 @@ def test_network_includes_url_downloads_and_resources_use_container_limits(
     expect(
         page.get_by_role("img", name="Network traffic over time", exact=True)
     ).to_have_count(0)
+    page.get_by_role("tab", name="Overview", exact=True).click()
     expect(network.locator(".performance-chart-heading")).to_contain_text("12 MB/s")
     expect(network.locator(".performance-chart-collecting")).to_be_visible()

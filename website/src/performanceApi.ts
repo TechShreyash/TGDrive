@@ -2,9 +2,7 @@ import { request } from "./api";
 
 export const MIB = 1024 ** 2;
 export const GIB = 1024 ** 3;
-export interface PerformancePreferences {
-  revision: string;
-  documentation_url?: string;
+export interface PerformancePolicy {
   timezone: string;
   cache_memory_bytes: number;
   cache_disk_bytes: number;
@@ -19,9 +17,14 @@ export interface PerformancePreferences {
   telegram_max_queue: number;
   upload_split_mib: number;
 }
+export interface PerformancePreferences extends PerformancePolicy {
+  revision: string;
+  documentation_url?: string;
+  defaults?: PerformancePolicy;
+}
 export type NumericPreference = Exclude<
-  keyof PerformancePreferences,
-  "revision" | "documentation_url" | "timezone" | "auto_preload"
+  keyof PerformancePolicy,
+  "timezone" | "auto_preload"
 >;
 export const numericPreferences: {
   key: NumericPreference;
@@ -42,7 +45,7 @@ export const numericPreferences: {
     max: 8192,
     appDefault: 256,
     unitLabel: "MiB",
-    help: "Maximum retained media in RAM, reduced automatically when server or container memory is scarce. Idle blocks expire after 10 minutes. 0 disables RAM retention.",
+    help: "Recently viewed media kept in RAM. TGDrive reduces this budget when memory is tight. 0 turns this cache off.",
   },
   {
     key: "cache_disk_bytes",
@@ -52,7 +55,7 @@ export const numericPreferences: {
     max: 2048,
     appDefault: 10,
     unitLabel: "GiB",
-    help: "Maximum disposable media stored on disk, allocated as content arrives. Increase only when space remains for uploads and the system. 0 disables disk caching; originals stay in Telegram.",
+    help: "Disposable copies for repeat access, filled only as data arrives. 0 turns disk caching off; originals stay in Telegram.",
   },
   {
     key: "cache_min_free_bytes",
@@ -62,7 +65,7 @@ export const numericPreferences: {
     max: 2048,
     appDefault: 1,
     unitLabel: "GiB",
-    help: "Cache writes stop before free space falls below this amount. This does not allocate space or restrict other disk users. Upload staging has its own reserve.",
+    help: "Leave this much disk space free when caching. It is not allocated or reserved. Keep 1 GiB or more for normal use.",
   },
   {
     key: "cache_ttl_seconds",
@@ -72,7 +75,7 @@ export const numericPreferences: {
     max: 744,
     appDefault: 24,
     unitLabel: "hours",
-    help: "Expire disk blocks after this much time without reuse; each read refreshes the timer. Capacity pressure can evict blocks sooner. Longer retention helps repeated viewing when space allows.",
+    help: "Remove disk bytes after this much time without reuse. Space pressure can remove them sooner.",
   },
   {
     key: "preload_max_jobs",
@@ -81,7 +84,7 @@ export const numericPreferences: {
     min: 1,
     max: 8,
     appDefault: 2,
-    help: "Combined manual and automatic preparation jobs. Active playback and downloads take priority. More jobs share existing account capacity; they do not add it.",
+    help: "Files prepared in the background at once. Active playback and downloads always go first.",
   },
   {
     key: "upload_split_mib",
@@ -91,7 +94,7 @@ export const numericPreferences: {
     max: 2000,
     appDefault: 2000,
     unitLabel: "MiB",
-    help: "0 uses the safe account maximum, including an eligible Premium document. Choose 1–2000 MiB for smaller parts; existing transfers keep their plan.",
+    help: "Split large files into Telegram documents of this size. 0 uses the safe account maximum. Existing transfers keep their plan.",
   },
   {
     key: "telegram_upload_pipeline",
@@ -100,7 +103,7 @@ export const numericPreferences: {
     min: 1,
     max: 16,
     appDefault: 4,
-    help: "Concurrent 512 KiB part-upload requests within one Telegram document, also bounded by the shared account request limit. Raise gradually only if throughput improves without cooldowns.",
+    help: "Parts sent in parallel within one upload. The shared account request limit also applies.",
     advanced: true,
   },
   {
@@ -110,7 +113,7 @@ export const numericPreferences: {
     min: 1,
     max: 32,
     appDefault: 8,
-    help: "Concurrent Telegram requests per account, shared by uploads, downloads and media metadata. Higher values can compete with playback and trigger cooldowns.",
+    help: "Concurrent Telegram requests, shared by uploads, downloads and file metadata.",
     advanced: true,
   },
   {
@@ -120,7 +123,7 @@ export const numericPreferences: {
     min: 1,
     max: 128,
     appDefault: 48,
-    help: "Application pacing ceiling per account. Telegram cooldowns always take precedence.",
+    help: "Request pacing ceiling per account. Telegram cooldowns reduce the actual rate.",
     advanced: true,
   },
   {
@@ -130,7 +133,7 @@ export const numericPreferences: {
     min: 1,
     max: 16,
     appDefault: 3,
-    help: "Concurrent Telegram upload/download operations per account, including missing-block reads. Per-bot and Premium upload limits also apply. This is not a viewer limit; cached payloads need no Telegram download slot.",
+    help: "Upload and download operations sharing one account. Cached viewers do not need a Telegram download slot.",
     advanced: true,
   },
   {
@@ -140,7 +143,7 @@ export const numericPreferences: {
     min: 1,
     max: 4096,
     appDefault: 256,
-    help: "Maximum waiting Telegram origin operations across the server, not whole files or viewers. Excess work receives retry guidance. A larger queue permits longer waits; it does not increase speed.",
+    help: "Waiting Telegram operations before excess work is asked to retry. A larger queue allows longer waits, not more speed.",
     advanced: true,
   },
 ];
@@ -174,9 +177,7 @@ export function performanceCategoryDraft(
     Object.assign(result, { [key]: draft[key] });
   return result;
 }
-export function performanceDraft(
-  saved: PerformancePreferences,
-): PerformanceDraft {
+export function performanceDraft(saved: PerformancePolicy): PerformanceDraft {
   return Object.fromEntries([
     ...numericPreferences.map(({ key, unit }) => [
       key,

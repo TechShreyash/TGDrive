@@ -2475,9 +2475,11 @@ def test_actual_unavailable_wmv_codec_stays_in_custom_player_with_original_downl
     )
 
 
-def choose_appearance(page: Any, name: str) -> None:
-    page.get_by_role("button", name="Change Appearance", exact=True).click()
-    page.get_by_role("menuitemradio", name=name, exact=True).click()
+def assert_single_appearance(page: Any) -> None:
+    expect(page.locator("html")).to_have_attribute("data-theme", "dark")
+    expect(
+        page.get_by_role("button", name="Change Appearance", exact=True)
+    ).to_have_count(0)
 
 
 def assert_theme_contrast(page: Any) -> None:
@@ -2520,31 +2522,26 @@ def assert_theme_contrast(page: Any) -> None:
         )
 
 
-def test_appearance_system_persistence_sort_keyboard_and_mobile(
+def test_single_dark_theme_ignores_legacy_preference_and_preserves_sort_keyboard(
     server: Server, desktop: tuple[Any, Any]
 ) -> None:
     _, page = desktop
-    page.emulate_media(color_scheme="dark")
-    page.goto(server.url)
-    expect(page.locator("html")).to_have_attribute("data-theme", "dark")
-    expect(page.get_by_role("button", name="Change Appearance")).to_be_visible()
-    assert_theme_contrast(page)
-    choose_appearance(page, "Light")
-    expect(page.locator("html")).to_have_attribute("data-theme", "light")
-    assert_theme_contrast(page)
-    page.reload()
-    expect(page.locator("html")).to_have_attribute("data-theme", "light")
-    login(page)
-    expect(page.locator(".page-heading > .inline-actions")).to_have_count(0)
-    choose_appearance(page, "System")
-    expect(page.locator("html")).to_have_attribute("data-theme", "dark")
+    page.add_init_script("localStorage.setItem('tgdrive.appearance', 'light')")
     page.emulate_media(color_scheme="light")
-    expect(page.locator("html")).to_have_attribute("data-theme", "light")
-    choose_appearance(page, "Dark")
-    expect(page.locator("html")).to_have_attribute("data-theme", "dark")
+    page.goto(server.url)
+    assert_single_appearance(page)
     assert_theme_contrast(page)
+    baseline = page.evaluate("""() => ({
+      font: getComputedStyle(document.body).fontFamily,
+      background: getComputedStyle(document.body).backgroundColor,
+      injected: document.querySelectorAll('style[data-mantine-styles]').length
+    })""")
+    assert "InterVariable" in baseline["font"]
+    assert baseline["background"] == "rgb(21, 23, 28)"
+    assert baseline["injected"] == 0
+    login(page)
     page.reload()
-    expect(page.locator("html")).to_have_attribute("data-theme", "dark")
+    assert_single_appearance(page)
     sort = page.get_by_role("button", name="Sort Files: Name", exact=True)
     sort.click()
     menu = page.get_by_role("menu", name="Sort Files", exact=True)
@@ -2562,26 +2559,13 @@ def test_appearance_system_persistence_sort_keyboard_and_mobile(
     ).to_have_attribute("aria-checked", "true")
     page.keyboard.press("Escape")
     expect(sort).to_be_focused()
-    page.screenshot(path=ARTIFACTS / "appearance-dark-desktop.png", full_page=False)
-    expect(page.get_by_role("link", name="Settings", exact=True)).to_have_count(0)
-    page.get_by_role("button", name="Change Appearance", exact=True).click()
-    expect(
-        page.get_by_role("menuitemradio", name="Dark", exact=True)
-    ).to_have_attribute("aria-checked", "true")
-    page.keyboard.press("Escape")
-    page.set_viewport_size({"width": 390, "height": 844})
-    assert page.evaluate("document.documentElement.scrollWidth<=innerWidth")
-    page.get_by_role("button", name="Change Appearance", exact=True).click()
-    appearance = page.get_by_role("menu", name="Appearance")
-    bounds = appearance.bounding_box()
-    assert bounds and bounds["x"] >= 0 and bounds["x"] + bounds["width"] <= 390
-    page.screenshot(path=ARTIFACTS / "appearance-dark-mobile.png", full_page=False)
-    appearance.get_by_role("menuitemradio", name="Light", exact=True).click()
-    expect(page.locator("html")).to_have_attribute("data-theme", "light")
-    assert_theme_contrast(page)
-    page.set_viewport_size({"width": 320, "height": 844})
-    assert page.evaluate("document.documentElement.scrollWidth<=innerWidth")
-    page.screenshot(path=ARTIFACTS / "appearance-light-320.png", full_page=False)
+    page.screenshot(path=ARTIFACTS / "single-theme-desktop.png", full_page=False)
+    for width in [390, 320]:
+        page.set_viewport_size({"width": width, "height": 844})
+        assert page.evaluate("document.documentElement.scrollWidth<=innerWidth")
+        assert_single_appearance(page)
+        assert_theme_contrast(page)
+        page.screenshot(path=ARTIFACTS / f"single-theme-{width}.png", full_page=False)
 
 
 def test_queued_uploads_have_no_elapsed_speed_or_eta(
@@ -2966,9 +2950,9 @@ def test_ui_polish_batched_visual_states(
         assert page.evaluate("document.documentElement.scrollWidth<=innerWidth")
         page.screenshot(path=target / (name + ".png"), full_page=False)
 
-    for mode in ("Light", "Dark"):
+    for mode in ("Dark",):
         page.set_viewport_size({"width": 1440, "height": 960})
-        choose_appearance(page, mode)
+        assert_single_appearance(page)
         assert_theme_contrast(page)
         page.evaluate("document.fonts.ready")
         assert page.evaluate("document.fonts.check('14px InterVariable')")
@@ -3045,12 +3029,12 @@ def test_ui_polish_batched_visual_states(
     capture("dark-premium-mobile")
     premium.get_by_role("button", name="Cancel Connection", exact=True).click()
     page.locator(".workspace").evaluate("element=>element.scrollTop=0")
-    choose_appearance(page, "Light")
+    assert_single_appearance(page)
     capture("light-connections-mobile")
 
-    for mode in ("Light", "Dark"):
+    for mode in ("Dark",):
         page.set_viewport_size({"width": 1440, "height": 960})
-        choose_appearance(page, mode)
+        assert_single_appearance(page)
         for route, heading in (
             ("connections", "Connections"),
             ("storage", "Storage & Backups"),

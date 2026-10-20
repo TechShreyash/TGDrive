@@ -25,10 +25,11 @@ The sidebar keeps **Monitor**, **Configuration**, and **Management** visible as
 separate groups. Monitor shows activity and reusable media; Configuration changes
 instance-wide policies; Management handles connections and recovery.
 
-Choose **Light**, **Dark** or **System** from the appearance menu at the top right.
-System follows your device's preference. **Log Out** is at the bottom of the
-sidebar, including the mobile navigation drawer. It closes this browser's
-access; server transfers continue.
+TGDrive uses one dark appearance with shared colors and controls. The whole sidebar
+scrolls naturally; Documentation and **Log Out** follow the navigation rather than
+reserving fixed space. Logging out closes this browser's access; server transfers continue.
+See [Configuration & tuning](configuration.md) for safe defaults, restoring values
+and larger-server tuning.
 
 ## Upload files or folders
 
