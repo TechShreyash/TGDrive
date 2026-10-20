@@ -673,11 +673,11 @@ class MongoStore(DriveStore):
                 self._bump()
             return self._record(node, path)
 
-    def list_trash(self):
+    def list_trash(self, query=""):
         with self._transaction():
             result = {}
             for node in self._state["nodes"].values():
-                if node["trashed"]:
+                if node["trashed"] and query.casefold() in node["name"].casefold():
                     path = self._path(node["id"])
                     if not any(row["trashed"] for row in self._resolve(path)[2][:-1]):
                         result[node["id"]] = self._record(node, path)

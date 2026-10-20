@@ -526,9 +526,54 @@ async def test_transfer_history_archive_survives_pruning_and_reopen(backend):
     assert reopened.list() == []
     page = await reopened.history(status="completed", limit=1)
     assert page["jobs"][0]["name"] == "history.bin"
+    assert (await reopened.history(query="HISTORY.BIN"))["jobs"][0]["id"] == record.id
+    assert (await reopened.history(query=".*"))["jobs"] == []
     assert page["jobs"][0]["retained"] is False
     registry.close()
     reopened.close()
+
+
+@pytest.mark.asyncio
+async def test_archived_search_casefold_and_cursor_also_work_for_legacy_records(
+    backend,
+):
+    import time
+
+    registry = TransferRegistry(
+        mongo=backend.db.jobs, mongo_backend=backend, ttl_seconds=1
+    )
+    names = [
+        "Straße [.*] 0.bin",
+        "STRASSE [.*] 1.bin",
+        "strasse [.*] 2.bin",
+        "ΟΣ.txt",
+        "unrelated.bin",
+    ]
+    for index, name in enumerate(names):
+        record = registry.create("uploading", total=10)
+        record.context.update(name=name, kind="upload", destination="/")
+        record.created_at = 1000 + index
+        registry.update(record.id, status=TransferStatus.COMPLETED, current=10)
+    registry.prune(now=time.time() + 2)
+    for legacy in (False, True):
+        if legacy:
+            backend.db.jobs.update_many({}, {"$unset": {"search_name": ""}})
+        first = await registry.history(query="STRASSE [.*]", limit=2)
+        assert [row["name"] for row in first["jobs"]] == names[1:3][::-1]
+        assert first["has_more"]
+        second = await registry.history(
+            query="strasse [.*]",
+            limit=2,
+            before=(first["next_before"], first["next_before_id"]),
+        )
+        assert [row["name"] for row in second["jobs"]] == [names[0]]
+        assert not second["has_more"]
+        assert (await registry.history(query="\u03bf\u03c3"))["jobs"][0][
+            "name"
+        ] == "ΟΣ.txt"
+        assert (await registry.history(query=".*"))["jobs"][0]["name"] == names[2]
+    assert backend.db.jobs.count_documents({"search_name": {"$exists": False}}) <= 1
+    registry.close()
 
 
 def test_transfer_locations_follow_exact_moved_and_deleted_item(store):

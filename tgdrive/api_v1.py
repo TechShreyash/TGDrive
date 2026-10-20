@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import unicodedata
 from dataclasses import asdict
 from datetime import UTC, datetime, timedelta
 from typing import Any, Literal
@@ -185,6 +186,18 @@ def register_routes(
         except DriveValidationError as error:
             raise HTTPException(422, str(error)) from None
 
+    @app.get("/api/v1/trash", dependencies=admin)
+    async def search_trash(
+        request: Request,
+        response: Response,
+        q: str = Query(default="", max_length=MAX_NAME_LENGTH),
+    ):
+        response.headers["Cache-Control"] = "no-store"
+        contents = await asyncio.to_thread(
+            get_store(request).list_trash, unicodedata.normalize("NFC", q.strip())
+        )
+        return {"data": {"contents": contents}}
+
     @app.get("/api/v1/nodes", dependencies=admin)
     async def nodes(
         request: Request,
@@ -328,6 +341,7 @@ def register_routes(
         before_id: str | None = Query(
             default=None, min_length=1, max_length=128, pattern=r"^[A-Za-z0-9_-]+$"
         ),
+        q: str = Query(default="", max_length=MAX_NAME_LENGTH),
     ) -> dict[str, Any]:
         if (before is None) != (before_id is None):
             raise HTTPException(400, "Both history cursor fields are required")
@@ -336,6 +350,7 @@ def register_routes(
             status=status,
             limit=limit,
             before=(before, before_id) if before is not None else None,
+            query=q,
         )
         estimate = getattr(get_runtime(request).pool, "queue_estimate", None)
         if callable(estimate):

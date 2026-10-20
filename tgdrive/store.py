@@ -1861,10 +1861,12 @@ class DriveStore:
             ).fetchone()
             return self._record(updated, path)
 
-    def list_trash(self) -> dict[str, dict[str, Any]]:
+    def list_trash(self, query: str = "") -> dict[str, dict[str, Any]]:
         with self._transaction() as db:
             result = {}
             for row in db.execute("SELECT * FROM nodes WHERE trashed=1 ORDER BY rowid"):
+                if query.casefold() not in row["name"].casefold():
+                    continue
                 path = self._path_for_id(db, row["id"])
                 _, _, chain = self._resolve(db, path)
                 if not any(item["trashed"] for item in chain[:-1]):

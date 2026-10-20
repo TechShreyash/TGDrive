@@ -53,6 +53,42 @@ async def test_history_survives_prune_and_reopen_without_private_context(tmp_pat
 
 
 @pytest.mark.asyncio
+async def test_name_search_filters_before_cursor_pagination_across_archives(tmp_path):
+    registry = TransferRegistry(
+        database_path=tmp_path / "search.sqlite3", ttl_seconds=1
+    )
+    for index in range(75):
+        add(
+            registry,
+            f"other-{index}.bin",
+            TransferStatus.COMPLETED,
+            created=2000 + index,
+        )
+    for index in range(3):
+        add(
+            registry,
+            f"Résumé [.*] {index}.txt",
+            TransferStatus.COMPLETED,
+            created=1000 + index,
+            identity=f"match-{index}",
+        )
+    registry.prune(now=time.time() + 2)
+    first = await registry.history(status="finished", query="RÉSUMÉ [.*]", limit=2)
+    assert [row["id"] for row in first["jobs"]] == ["match-2", "match-1"]
+    assert first["has_more"]
+    second = await registry.history(
+        status="finished",
+        query="résumé [.*]",
+        limit=2,
+        before=(first["next_before"], first["next_before_id"]),
+    )
+    assert [row["id"] for row in second["jobs"]] == ["match-0"]
+    assert not second["has_more"]
+    assert (await registry.history(query="never present"))["jobs"] == []
+    registry.close()
+
+
+@pytest.mark.asyncio
 async def test_history_cursor_filters_and_deletions_are_independent_of_live_eviction(
     tmp_path,
 ):

@@ -7,9 +7,11 @@ import copy
 import json
 import logging
 import math
+import re
 import secrets
 import sqlite3
 import time
+import unicodedata
 import weakref
 from collections import deque
 from collections.abc import Awaitable, Callable
@@ -18,6 +20,7 @@ from enum import StrEnum
 from pathlib import Path
 from typing import Any
 
+from pymongo import UpdateOne
 from pymongo.errors import PyMongoError
 
 from tgdrive.mongo import DatabaseUnavailable
@@ -173,6 +176,12 @@ class TransferRegistry:
         if database_path is not None and mongo is None:
             database_path.parent.mkdir(parents=True, exist_ok=True)
             self._db = sqlite3.connect(database_path, check_same_thread=False)
+            self._db.create_function(
+                "casefold",
+                1,
+                lambda value: unicodedata.normalize("NFC", str(value or "")).casefold(),
+                deterministic=True,
+            )
             self._finalizer = weakref.finalize(self, self._db.close)
             try:
                 database_path.chmod(0o600)
@@ -386,6 +395,9 @@ class TransferRegistry:
                         "archived": True,
                         "created_at": record.created_at,
                         "status": record.status.value,
+                        "search_name": unicodedata.normalize(
+                            "NFC", summary["name"]
+                        ).casefold(),
                         "summary": summary,
                     },
                 )
@@ -425,30 +437,76 @@ class TransferRegistry:
         self._last_progress_commit.pop(transfer_id, None)
 
     @staticmethod
-    def _history_matches(row, statuses, before):
+    def _history_matches(row, statuses, before, query=""):
         return (
             row.get("kind") != "delete"
             and (not statuses or row["status"] in statuses)
             and (before is None or (row["created_at"], row["id"]) < before)
+            and query
+            in unicodedata.normalize("NFC", str(row.get("name", ""))).casefold()
         )
 
-    def _archived_history(self, statuses, before, limit):
+    def _archived_history(self, statuses, before, limit, term=""):
         if self._mongo is not None:
             query: dict[str, Any] = {"archived": True}
             if statuses:
                 query["status"] = {"$in": list(statuses)}
+            if term:
+                query["$and"] = [
+                    {
+                        "$or": [
+                            {"search_name": {"$regex": re.escape(term)}},
+                            {"search_name": {"$exists": False}},
+                        ]
+                    }
+                ]
             if before is not None:
                 at, identity = before
                 query["$or"] = [
                     {"created_at": {"$lt": at}},
                     {"created_at": at, "_id": {"$lt": identity}},
                 ]
-            return [
-                row["summary"]
-                for row in self._mongo.find(query)
-                .sort([("created_at", -1), ("_id", -1)])
-                .limit(limit)
-            ]
+            cursor = self._mongo.find(query).sort([("created_at", -1), ("_id", -1)])
+            if not term:
+                return [row["summary"] for row in cursor.limit(limit)]
+            # Old installations have no canonical search key. Stream bounded
+            # batches and backfill keys automatically; never load the archive
+            # into application memory or paginate before applying the search.
+            rows, updates = [], []
+
+            def backfill():
+                if not updates:
+                    return
+                try:
+                    if self._mongo_backend is not None:
+                        self._mongo_backend.write(
+                            self._mongo, "bulk_write", list(updates), ordered=False
+                        )
+                    else:
+                        self._mongo.bulk_write(list(updates), ordered=False)
+                except (PyMongoError, DatabaseUnavailable):
+                    logger.warning(
+                        "Could not update transfer search keys; retry on later search"
+                    )
+                updates.clear()
+
+            for row in cursor.batch_size(200):
+                name = row.get("search_name")
+                if name is None:
+                    name = unicodedata.normalize(
+                        "NFC", str(row["summary"].get("name", ""))
+                    ).casefold()
+                    updates.append(
+                        UpdateOne({"_id": row["_id"]}, {"$set": {"search_name": name}})
+                    )
+                if term in name:
+                    rows.append(row["summary"])
+                if len(updates) >= 200:
+                    backfill()
+                if len(rows) >= limit:
+                    break
+            backfill()
+            return rows
         if self._db is not None:
             at, identity = before if before is not None else (None, "")
             return [
@@ -458,21 +516,31 @@ class TransferRegistry:
                     "WHERE (? OR status IN (SELECT value FROM json_each(?))) "
                     "AND (? IS NULL OR created_at < ? "
                     "OR (created_at = ? AND id < ?)) "
+                    "AND instr(casefold(json_extract(data,'$.name')),?) > 0 "
                     "ORDER BY created_at DESC,id DESC LIMIT ?",
-                    (not statuses, json.dumps(statuses), at, at, at, identity, limit),
+                    (
+                        not statuses,
+                        json.dumps(statuses),
+                        at,
+                        at,
+                        at,
+                        identity,
+                        term,
+                        limit,
+                    ),
                 ).fetchall()
             ]
         return sorted(
             (
                 row
                 for row in self._history.values()
-                if self._history_matches(row, statuses, before)
+                if self._history_matches(row, statuses, before, term)
             ),
             key=lambda row: (row["created_at"], row["id"]),
             reverse=True,
         )[:limit]
 
-    async def history(self, *, status="all", before=None, limit=50):
+    async def history(self, *, status="all", before=None, limit=50, query=""):
         statuses = {
             "all": (),
             "finished": ("completed", "error", "cancelled"),
@@ -482,19 +550,25 @@ class TransferRegistry:
             "error": ("error",),
             "cancelled": ("cancelled",),
         }
-        if status not in statuses or not 1 <= limit <= 200:
+        if (
+            status not in statuses
+            or not 1 <= limit <= 200
+            or not isinstance(query, str)
+            or len(query) > 255
+        ):
             raise ValueError("Invalid transfer history page")
+        query = unicodedata.normalize("NFC", query.strip()).casefold()
         selected = statuses[status]
         # Snapshot live progress on the event loop; only the DB lookup runs in a thread.
         live = [
             row
             for record in self.list()
             if self._history_matches(
-                row := self.history_snapshot(record), selected, before
+                row := self.history_snapshot(record), selected, before, query
             )
         ]
         archived = await asyncio.to_thread(
-            self._archived_history, selected, before, limit + 1
+            self._archived_history, selected, before, limit + 1, query
         )
         merged = {row["id"]: row for row in archived}
         merged.update({row["id"]: row for row in live})
