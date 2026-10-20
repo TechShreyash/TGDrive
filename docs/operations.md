@@ -71,79 +71,15 @@ If Atlas has paused an idle free cluster, resume it before starting.
 
 ## Encrypted Telegram backups
 
-TGDrive also saves **a complete copy of its database** in the private channel.
-This is separate protection in case MongoDB itself is lost.
-
-| Question | Answer |
-| --- | --- |
-| When? | Automatically, normally hourly; or choose **Back up now** |
-| What is included? | File/folder records, shares, settings, credentials and transfer/deletion records |
-| Are credentials exposed? | The copy is encrypted before it reaches disk or Telegram |
-| What is excluded? | Original file contents, unfinished local bytes and the MongoDB login URI |
-| Does an upload wait for it? | No; uploads complete after their Telegram files and MongoDB records are confirmed |
-| What do I need to restore? | A confirmed `.tgdb` copy, its matching recovery key and an empty MongoDB database |
-
-**Save the recovery key outside TGDrive and MongoDB.**
-A backup cannot be decrypted without its matching key. Keep old keys if you
-rotate them.
-
-Database backups remember where Telegram files are stored; they cannot
-recreate files that have been deleted from Telegram. A backup also represents
-the time it was taken, so later changes are not included.
-
-<details>
-<summary>Technical backup behavior</summary>
-
-- Snapshots use a consistent database read, compression and AES-256-GCM encryption.
-- Telegram's received ciphertext is downloaded and checked with SHA-256 before confirmation.
-- Retry reuses the saved sender/request identity for the same encrypted file.
-- Telegram FloodWait deadlines are honored. Restart preserves the last confirmed
-  schedule instead of creating a duplicate immediately.
-- If a pending encrypted temporary file is lost, that attempt is marked interrupted;
-  a new snapshot gets a new send identity.
-- Durable TGDrive collections are included. The expiring active-owner lease is excluded;
-  indexes are rebuilt during restore.
-- The current expanded snapshot limit is 1 GiB.
-- Remote backup documents are retained. They do not replace the channel pin.
-
-</details>
+The dedicated [Backup & recovery guide](backup-recovery.md) explains what is saved,
+what is excluded, how to keep the decryption key, and how to rehearse recovery.
+The live MongoDB drive and its encrypted Telegram safety copies are separate.
 
 ## Emergency database restore
 
-Use this **only if MongoDB data is lost**. Ordinary reinstalls use the steps above.
-
-1. Download a confirmed `.tgdb` backup from your Telegram channel.
-2. Prepare an empty MongoDB database.
-3. Stop TGDrive before restoring to that destination.
-4. Put the destination URI/name and the backup's `MONGODB_BACKUP_KEY` in private `.env`.
-5. Run the restore command:
-
-~~~bash
-uv run --frozen python -m tgdrive restore-mongodb --file /absolute/path/backup.tgdb
-~~~
-
-6. Start TGDrive and sign in again.
-7. Check the file list and a few downloads before removing any old database.
-
-Restore refuses a nonempty destination. It validates/decrypts the archive before
-writing. Saved app settings are restored; browser sessions are revoked and share
-scope/expiry is preserved.
-
-<details>
-<summary>Restore using Docker instead</summary>
-
-Mount the backup read-only and run the maintenance command:
-
-~~~bash
-docker compose run --rm --no-deps \
-  -v /absolute/path/backup.tgdb:/restore/backup.tgdb:ro \
-  app python -m tgdrive restore-mongodb --file /restore/backup.tgdb
-~~~
-
-The container's nonroot user must be able to read the mounted file.
-Use the backup's original key. A newer key cannot decrypt an older copy.
-
-</details>
+Follow [Restore a lost database from Telegram](backup-recovery.md#restore-a-lost-database-from-telegram).
+A confirmed archive, its matching recovery key and an empty destination database
+are required. Ordinary reinstalls reopen the existing MongoDB drive instead.
 
 ## Connection changes
 

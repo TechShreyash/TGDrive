@@ -11,9 +11,9 @@ and MongoDB remembers their names, folders and sharing settings.
 | --- | --- |
 | Install TGDrive for the first time | [Setup](setup.md) |
 | Upload, organize, preview or share files | [Using TGDrive](usage.md) |
-| Restart, upgrade, fix a problem or recover my drive | [Operations](operations.md) |
+| Restart, upgrade or fix a problem | [Operations](operations.md) |
+| Save recovery keys, understand encrypted backups or restore after data loss | [Backup & recovery](backup-recovery.md) |
 | Improve streaming, control cache budgets or prepare shared downloads | [Performance and caching](performance.md) |
-| Review measured transfer speeds and integrity checks | [Server validation](validation-2026-10-18.md) |
 | Review fresh-browser playback, protocol and cached-seek checks | [Streaming validation](streaming-validation-2026-10-18.md) |
 | Check what works and what still needs work | [Roadmap](roadmap.md) |
 
