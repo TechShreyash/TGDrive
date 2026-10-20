@@ -96,7 +96,7 @@ def test_history_interval_hover_keyboard_poll_and_persisted_selection(server, de
 
     page.route("**/api/v1/performance/history?*", recorded)
     page.goto(server.url + "/?view=performance")
-    interval = page.get_by_role("combobox", name="Graph interval", exact=True)
+    interval = page.get_by_role("combobox", name="Time range", exact=True)
     expect(interval).to_have_value("live")
     cpu = page.get_by_role("region", name="Container CPU", exact=True)
     slider = cpu.get_by_role("slider", name="Inspect Container CPU samples")
@@ -150,6 +150,17 @@ def test_history_interval_hover_keyboard_poll_and_persisted_selection(server, de
     expect(interval).to_have_value("hour")
     expect(slider).to_have_attribute("max", "59")
     assert requests[-1][1] - requests[-1][0] == 3600
+    for tab, description in [
+        ("Accounts", "Live account activity and current limits."),
+        ("Resources", "Current resource usage and capacity."),
+    ]:
+        page.get_by_role("tab", name=tab, exact=True).click()
+        expect(interval).not_to_be_visible()
+        expect(page.get_by_text(description, exact=True)).to_be_visible()
+        expect(page.locator(".performance-history-availability")).not_to_be_visible()
+    page.get_by_role("tab", name="Overview", exact=True).click()
+    expect(interval).to_be_visible()
+    expect(interval).to_have_value("hour")
     page.set_viewport_size({"width": 390, "height": 844})
     page.get_by_role(
         "heading", name="Performance", exact=True
@@ -182,7 +193,7 @@ def test_custom_history_is_absolute_utc_and_stale_fetch_cannot_replace_new_range
 
     page.route("**/api/v1/performance/history?*", recorded)
     page.goto(server.url + "/?view=performance")
-    interval = page.get_by_role("combobox", name="Graph interval", exact=True)
+    interval = page.get_by_role("combobox", name="Time range", exact=True)
     interval.select_option("day")
     expect(page.get_by_text("Loading selected history…", exact=False)).to_be_visible()
     interval.select_option("week")
@@ -233,7 +244,7 @@ def test_custom_history_is_absolute_utc_and_stale_fetch_cannot_replace_new_range
 def test_recorded_history_page_uses_real_private_history_endpoint(server, desktop):
     _, page = desktop
     login(page, server.url + "/?view=performance")
-    page.get_by_role("combobox", name="Graph interval", exact=True).select_option(
+    page.get_by_role("combobox", name="Time range", exact=True).select_option(
         "hour"
     )
     expect(page.locator(".performance-history-availability")).to_contain_text(

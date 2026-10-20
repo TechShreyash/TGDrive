@@ -743,10 +743,10 @@ export default function PerformancePanel() {
           <p>See current traffic, account capacity and server health.</p>
         </div>
         <div className="performance-history-controls">
-          <label>
-            Graph interval
+          <label hidden={view !== "overview"}>
+            Time range
             <select
-              aria-label="Graph interval"
+              aria-label="Time range"
               value={range}
               onChange={(event) => {
                 const value = event.target.value as HistoryRange;
@@ -781,6 +781,7 @@ export default function PerformancePanel() {
       {range === "custom" && (
         <form
           className="performance-custom-range"
+          hidden={view !== "overview"}
           onSubmit={(event) => {
             event.preventDefault();
             try {
@@ -957,7 +958,10 @@ export default function PerformancePanel() {
               </button>
             ))}
           </div>
-          <p className="performance-history-availability">
+          <p
+            className="performance-history-availability"
+            hidden={view !== "overview"}
+          >
             {historical
               ? recorded && loadedRange === rangeKey
                 ? `Recorded interval averages (${historyDuration(recorded.bucket_seconds)} per point). Current values marked Now stay live. ${recorded.samples.some((sample) => sample.cpu_percent !== null || sample.memory_bytes !== null || sample.received_bytes_per_second !== null || sample.sent_bytes_per_second !== null) ? `Available history begins ${formatTimestamp(recorded.earliest_at)}.` : "No readings were recorded for this range."}`
@@ -1408,6 +1412,9 @@ export default function PerformancePanel() {
               aria-labelledby="account-load-heading"
             >
               <h3 id="account-load-heading">Account capacity</h3>
+              <p className="settings-help">
+                Live account activity and current limits.
+              </p>
               {telegram.accounts.length ? (
                 <div
                   className="performance-table-wrap"
@@ -1580,6 +1587,9 @@ export default function PerformancePanel() {
               aria-labelledby="server-resource-heading"
             >
               <h3 id="server-resource-heading">Server resources</h3>
+              <p className="settings-help">
+                Current resource usage and capacity.
+              </p>
               <dl className="performance-facts">
                 <div>
                   <dt>Server memory available</dt>
