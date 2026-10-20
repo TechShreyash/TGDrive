@@ -4,9 +4,10 @@ from __future__ import annotations
 
 import os
 import time
+from collections import deque
 from pathlib import Path
 
-from tgdrive.traffic import MAX_SAMPLE_GAP_SECONDS
+from tgdrive.traffic import HISTORY_SECONDS, MAX_SAMPLE_GAP_SECONDS
 
 
 class ResourceMetrics:
@@ -16,6 +17,7 @@ class ResourceMetrics:
         self._cpu_previous = None
         self._network_previous = None
         self._received = self._sent = 0
+        self.history = deque(maxlen=120)
         self.value = {"cpu": {"percent": None}, "network": {"available": False}}
 
     def _cpu_counter(self):
@@ -140,4 +142,36 @@ class ResourceMetrics:
                 ),
             },
         }
+        # Keep measured history even when nobody has the dashboard open. Reading
+        # the cgroup files here avoids polling the whole system/disk each tick.
+        memory = {}
+        for key, filename in (
+            ("memory_bytes", "memory.current"),
+            ("memory_limit_bytes", "memory.max"),
+        ):
+            try:
+                raw = (self.cgroup / filename).read_text().strip()
+                memory[key] = int(raw) if raw != "max" else None
+            except (OSError, ValueError):
+                memory[key] = None
+        at = time.time()
+        if (
+            self.history
+            and not 0 <= at - self.history[-1]["at"] <= MAX_SAMPLE_GAP_SECONDS
+        ):
+            self.history.clear()
+        while self.history and self.history[0]["at"] < at - HISTORY_SECONDS:
+            self.history.popleft()
+        self.history.append(
+            {
+                "at": at,
+                "cpu_percent": percent,
+                "cpu_scope": cpu_value["scope"],
+                **memory,
+                "received_bytes_per_second": incoming,
+                "sent_bytes_per_second": outgoing,
+                "network_interface": network[0] if network else None,
+            }
+        )
+        self.value = self.value | {"history": list(self.history)}
         return self.value

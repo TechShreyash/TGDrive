@@ -88,3 +88,52 @@ def test_unavailable_metrics_are_unknown_not_zero(tmp_path):
     assert value["cpu"]["percent"] is None
     assert not value["network"]["available"]
     assert value["network"]["received_bytes_per_second"] is None
+
+
+def test_history_retains_measured_resources_without_dashboard_and_expires(
+    tmp_path, monkeypatch
+):
+    metrics, proc, cgroup, now = setup_counters(tmp_path, monkeypatch)
+    monkeypatch.setattr("tgdrive.resource_metrics.time.time", lambda: now[0] + 1000)
+    (cgroup / "memory.current").write_text("1073741824")
+    (cgroup / "memory.max").write_text("2147483648")
+    initial = metrics.sample()
+    assert initial["history"][0]["cpu_percent"] is None
+    assert initial["history"][0]["received_bytes_per_second"] is None
+    for index in range(1, 106):
+        now[0] += 3
+        (cgroup / "cpu.stat").write_text(f"usage_usec {1000000 + index * 3000000}")
+        network(proc, 1000 + index * 3000, 2000 + index * 6000)
+        value = metrics.sample()
+    assert len(initial["history"]) == 1
+    assert len(value["history"]) == 101
+    assert value["history"][-1]["at"] - value["history"][0]["at"] == 300
+    assert value["history"][-1] == {
+        "at": now[0] + 1000,
+        "cpu_percent": 50,
+        "cpu_scope": "cgroup",
+        "memory_bytes": 1024**3,
+        "memory_limit_bytes": 2 * 1024**3,
+        "received_bytes_per_second": 1000,
+        "sent_bytes_per_second": 2000,
+        "network_interface": "eth0",
+    }
+    now[0] += 60
+    assert len(metrics.sample()["history"]) == 1
+    now[0] -= 10
+    assert len(metrics.sample()["history"]) == 1
+
+
+def test_history_missing_container_memory_is_unknown_and_unlimited_is_not_zero(
+    tmp_path, monkeypatch
+):
+    metrics, _proc, cgroup, now = setup_counters(tmp_path, monkeypatch)
+    sample = metrics.sample()["history"][-1]
+    assert sample["memory_bytes"] is None
+    assert sample["memory_limit_bytes"] is None
+    (cgroup / "memory.current").write_text("0")
+    (cgroup / "memory.max").write_text("max")
+    now[0] += 3
+    sample = metrics.sample()["history"][-1]
+    assert sample["memory_bytes"] == 0
+    assert sample["memory_limit_bytes"] is None

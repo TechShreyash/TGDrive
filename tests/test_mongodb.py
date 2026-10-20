@@ -11,7 +11,6 @@ import secrets
 from types import SimpleNamespace
 
 import pytest
-from dotenv import dotenv_values
 
 from tgdrive.client_identity import IdentityCache
 from tgdrive.errors import DuplicateNameError, NotFoundError, ValidationError
@@ -28,9 +27,7 @@ pytestmark = pytest.mark.skipif(
 
 
 def mongo_uri():
-    uri = os.environ.get("TGDRIVE_TEST_MONGODB_URI") or dotenv_values(".env").get(
-        "MONGODB_URI"
-    )
+    uri = os.environ.get("TGDRIVE_TEST_MONGODB_URI")
     if not uri:
         raise pytest.UsageError(
             "Set TGDRIVE_TEST_MONGODB_URI to an isolated MongoDB replica set"
