@@ -55,7 +55,7 @@ export default function FileThumbnail({
           setSource(null);
         }
       },
-      { root: element.closest(".file-list-scroll"), rootMargin: "120px" },
+      { rootMargin: "120px" },
     );
     observer.observe(element);
     return () => {
@@ -87,7 +87,16 @@ export default function FileThumbnail({
           onError={() => setSource(null)}
         />
       ) : (
-        <FileIcon name={item.name} folder={item.type === "folder"} />
+        <>
+          <FileIcon name={item.name} folder={item.type === "folder"} />
+          {item.type !== "folder" && (
+            <span className="file-tile-format">
+              {(item.name.split(".").at(-1) || "File")
+                .slice(0, 8)
+                .toUpperCase()}
+            </span>
+          )}
+        </>
       )}
     </div>
   );

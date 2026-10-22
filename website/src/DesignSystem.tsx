@@ -27,7 +27,10 @@ export const driveTheme = createTheme({
   respectReducedMotion: true,
   cursorType: "pointer",
   components: {
-    Button: Button.extend({ defaultProps: { size: "sm", radius: "md" } }),
+    Button: Button.extend({
+      defaultProps: { size: "sm", radius: "md" },
+      styles: { label: { gap: 8 } },
+    }),
     Fieldset: Fieldset.extend({
       defaultProps: { radius: "lg", variant: "filled" },
     }),

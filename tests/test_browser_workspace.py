@@ -52,19 +52,31 @@ def test_directory_controls_stay_visible_while_only_files_scroll(
     heading = page.get_by_role("heading", name="My Files", exact=True)
     toolbar = page.locator(".file-toolbar")
     before = [heading.bounding_box()["y"], toolbar.bounding_box()["y"]]
-    scroll = page.get_by_label("File list", exact=True)
+    scroll = (
+        page.locator(".workspace")
+        if width < 721
+        else page.get_by_label("File list", exact=True)
+    )
     scroll.evaluate("element => element.scrollTop = 700")
-    expect(page.get_by_role("button", name="Move", exact=True)).to_be_in_viewport()
-    expect(page.get_by_role("button", name="Trash", exact=True)).to_be_in_viewport()
     assert scroll.evaluate("element => element.scrollTop") == 700
-    assert page.locator(".workspace").evaluate("element => element.scrollTop") == 0
-    assert [heading.bounding_box()["y"], toolbar.bounding_box()["y"]] == before
-    table_header = page.locator(".file-table thead th").first.bounding_box()
-    assert abs(table_header["y"] - scroll.bounding_box()["y"]) <= 1
+    if width > 720:
+        expect(page.get_by_role("button", name="Move", exact=True)).to_be_in_viewport()
+        expect(page.get_by_role("button", name="Trash", exact=True)).to_be_in_viewport()
+        assert page.locator(".workspace").evaluate("element => element.scrollTop") == 0
+        assert [heading.bounding_box()["y"], toolbar.bounding_box()["y"]] == before
+        table_header = page.locator(".file-table thead th").first.bounding_box()
+        assert abs(table_header["y"] - scroll.bounding_box()["y"]) <= 1
+    else:
+        assert heading.bounding_box()["y"] < 0
+        assert (
+            page.locator(".file-list-scroll").evaluate("element => element.scrollTop")
+            == 0
+        )
     scroll.focus()
     page.keyboard.press("PageDown")
     page.wait_for_function(
-        "() => document.querySelector('.file-list-scroll').scrollTop > 700"
+        "selector => document.querySelector(selector).scrollTop > 700",
+        arg=".workspace" if width < 721 else ".file-list-scroll",
     )
     assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
     page.screenshot(path=ARTIFACTS / f"directory-fixed-controls-{width}.png")
@@ -205,7 +217,8 @@ def test_sidebar_logout_busy_error_retry_and_server_transfer_survives(
     logout = page.get_by_role("button", name="Log Out", exact=True)
     logout.scroll_into_view_if_needed()
     sidebar = page.locator(".sidebar")
-    assert sidebar.evaluate("e => e.scrollTop") > 0
+    expect(logout).to_be_in_viewport()
+    assert sidebar.evaluate("e => getComputedStyle(e).overflowY") == "auto"
     assert page.locator(".drive-nav").evaluate("e => e.scrollTop") == 0
     assert (
         page.locator(".sidebar-bottom").evaluate("e => getComputedStyle(e).position")

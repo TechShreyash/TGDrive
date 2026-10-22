@@ -626,7 +626,11 @@ async def test_operator_performance_policy_survives_new_service_with_mongodb(
             ),
         )
 
-    settings = SimpleNamespace(resolved_data_dir=tmp_path / "policy-data")
+    settings = SimpleNamespace(
+        resolved_data_dir=tmp_path / "policy-data",
+        max_file_size=0,
+        staging_budget_bytes=16 * 1024**3,
+    )
     first, second = state(), state()
     service = PerformanceSettings(settings, first)
     try:
@@ -646,3 +650,42 @@ async def test_operator_performance_policy_survives_new_service_with_mongodb(
             manager = getattr(runtime, "preloads", None)
             if manager is not None:
                 await manager.close()
+
+
+def test_multiple_independent_share_links_survive_mongo_reopen_and_snapshot(
+    store, backend
+):
+    from datetime import UTC, datetime, timedelta
+
+    from tgdrive.store import DriveStore
+
+    folder = store.create_folder("/", "Reading")
+    target = path(folder)
+    first = store.create_share(target, label="Alex", expires_at=None)
+    second = store.create_share(target, label="Team")
+    rows = store.list_shares(target)
+    store.update_share(
+        rows[0]["id"],
+        label="Alex review",
+        expires_at=(datetime.now(UTC) + timedelta(days=30)).isoformat(),
+    )
+    reopened = MongoStore(backend)
+    assert reopened.authorize_directory(target, first) == target
+    assert reopened.authorize_directory(target, second) == target
+    assert reopened.list_shares(target)[0]["label"] == "Alex review"
+    portable = DriveStore._from_payload(reopened.export())
+    try:
+        assert portable.authorize_directory(target, first) == target
+        assert portable.authorize_directory(target, second) == target
+    finally:
+        portable.close()
+    reopened.revoke_share(rows[0]["id"])
+    assert not reopened.authorize_directory(target, first)
+    assert reopened.authorize_directory(target, second) == target
+
+
+def test_starred_mongo_paths_snapshot_and_restart(store, backend):
+    from test_starred import check_starred
+
+    check_starred(store)
+    assert len(MongoStore(backend).list_starred()) == 1

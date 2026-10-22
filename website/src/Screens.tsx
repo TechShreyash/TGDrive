@@ -1,3 +1,4 @@
+import BrandMark from "./BrandMark";
 import { Button, Paper } from "@mantine/core";
 import {
   useCallback,
@@ -8,7 +9,6 @@ import {
   type FormEvent,
 } from "react";
 import {
-  HardDrive,
   ShieldCheck,
   RefreshCw,
   Check,
@@ -54,7 +54,7 @@ export function Login({ onSuccess }: { onSuccess: () => void }) {
     <main className="login-page">
       <a href="/" className="brand">
         <span className="brand-symbol">
-          <HardDrive size={24} />
+          <BrandMark size={32} />
         </span>
         <strong>TGDrive</strong>
       </a>
@@ -536,7 +536,9 @@ export function UploadSettings() {
       className="settings-section preference-section"
       aria-labelledby="upload-settings-heading"
     >
-      <h2 id="upload-settings-heading" className="sr-only">Parallel uploads</h2>
+      <h2 id="upload-settings-heading" className="sr-only">
+        Parallel uploads
+      </h2>
       <div className="preference-controls">
         {loading ? (
           <Spinner />

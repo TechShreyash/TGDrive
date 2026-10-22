@@ -199,6 +199,8 @@ async def describe_preview(
     extension = PurePath(file_name).suffix.lower().lstrip(".")
     language = _TEXT_LANGUAGES.get(extension or file_name.lower().lstrip("."))
     base: dict[str, Any] = {"name": file_name, "size": size}
+    if extension in {"epub", "cbz", "cbr"}:
+        return base | {"kind": "book", "format": extension}
     if extension == "pdf":
         if size > PDF_PREVIEW_BYTES:
             return base | {

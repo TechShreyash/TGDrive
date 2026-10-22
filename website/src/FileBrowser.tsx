@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import {
+  Star,
   AlertCircle,
   Folder,
   Upload,
@@ -84,6 +85,8 @@ export default function FileBrowser({
   error,
   isPublic,
   isTrash,
+  isStarred = false,
+  onStar,
   isSearch,
   auth,
   onReload,
@@ -107,6 +110,8 @@ export default function FileBrowser({
   error: string;
   isPublic: boolean;
   isTrash: boolean;
+  isStarred?: boolean;
+  onStar?: (item: DriveItem) => void;
   isSearch: boolean;
   auth: string;
   onReload: () => void;
@@ -351,13 +356,25 @@ export default function FileBrowser({
       if (!(event.target as Element).closest(".file-row"))
         pendingTouch.current = null;
     };
+    const reposition = (event: Event) => {
+      if ((event.target as Element)?.closest?.(".action-menu")) return;
+      document
+        .querySelectorAll<HTMLDetailsElement>(".item-actions[open]")
+        .forEach((details) => {
+          const bounds = details.querySelector("summary")?.getBoundingClientRect();
+          if (!bounds || bounds.bottom < 0 || bounds.top > window.innerHeight) {
+            details.open = false;
+          }
+          positionItemMenu(details);
+        });
+    };
     document.addEventListener("click", close);
     window.addEventListener("resize", hideItemMenus);
-    window.addEventListener("scroll", hideItemMenus, true);
+    window.addEventListener("scroll", reposition, true);
     return () => {
       document.removeEventListener("click", close);
       window.removeEventListener("resize", hideItemMenus);
-      window.removeEventListener("scroll", hideItemMenus, true);
+      window.removeEventListener("scroll", reposition, true);
       hideItemMenus();
     };
   }, []);
@@ -580,26 +597,32 @@ export default function FileBrowser({
           <div className="empty-state">
             <Folder size={46} />
             <h2>
-              {isTrash && searchQuery
-                ? "No Matching Trashed Items"
-                : isTrash
-                  ? "Trash Is Empty"
-                  : isSearch
-                    ? "No Matching Files or Folders"
-                    : "Nothing Here Yet"}
+              {isStarred
+                ? searchQuery
+                  ? "No Matching Starred Items"
+                  : "No Starred Items Yet"
+                : isTrash && searchQuery
+                  ? "No Matching Trashed Items"
+                  : isTrash
+                    ? "Trash Is Empty"
+                    : isSearch
+                      ? "No Matching Files or Folders"
+                      : "Nothing Here Yet"}
             </h2>
             <p>
-              {isTrash && searchQuery
-                ? "Try another name or clear the search. This search stays in Trash."
-                : isTrash
-                  ? "Items you trash stay here until you restore or permanently delete them."
-                  : isSearch
-                    ? "Try another file or folder name."
-                    : isPublic
-                      ? "The owner has not added any files to this folder."
-                      : "Upload your first file or create a folder to get started."}
+              {isStarred
+                ? "Star a file or folder from its actions menu to find it here."
+                : isTrash && searchQuery
+                  ? "Try another name or clear the search. This search stays in Trash."
+                  : isTrash
+                    ? "Items you trash stay here until you restore or permanently delete them."
+                    : isSearch
+                      ? "Try another file or folder name."
+                      : isPublic
+                        ? "The owner has not added any files to this folder."
+                        : "Upload your first file or create a folder to get started."}
             </p>
-            {!isPublic && !isTrash && !isSearch && (
+            {!isPublic && !isTrash && !isSearch && !isStarred && (
               <button className="primary-button" onClick={onUpload}>
                 <Upload size={17} /> Upload Files
               </button>
@@ -807,6 +830,15 @@ export default function FileBrowser({
                           </span>
                           <div className="file-name-details">
                             <div className="file-title-line">
+                              {!isPublic && item.starred && (
+                                <Star
+                                  className="file-star-indicator"
+                                  size={14}
+                                  fill="currentColor"
+                                  aria-label="Starred"
+                                  role="img"
+                                />
+                              )}
                               <button
                                 className="file-name item-name-button"
                                 title={item.name}
@@ -832,7 +864,7 @@ export default function FileBrowser({
                                 </span>
                               )}
                             </div>
-                            {(isSearch || isTrash) && (
+                            {(isSearch || isTrash || isStarred) && (
                               <span
                                 className="search-result-location"
                                 title={[
@@ -976,6 +1008,24 @@ export default function FileBrowser({
                                         Download / Streaming
                                       </button>
                                     </>
+                                  )}
+                                  {onStar && (
+                                    <button
+                                      onClick={() => {
+                                        closeItemMenus();
+                                        onStar(item);
+                                      }}
+                                    >
+                                      <Star
+                                        size={16}
+                                        fill={
+                                          item.starred ? "currentColor" : "none"
+                                        }
+                                      />
+                                      {item.starred
+                                        ? "Remove from Starred"
+                                        : "Add to Starred"}
+                                    </button>
                                   )}
                                   <button
                                     onClick={() =>

@@ -252,12 +252,17 @@ def test_compact_fixed_directory_controls_leave_room_for_files(
     ratio = page.locator(".file-list-scroll").evaluate(
         "node => node.clientHeight / node.closest('.workspace').clientHeight"
     )
-    assert ratio > 0.60
+    if width > 720:
+        assert ratio > 0.60
+    else:
+        assert page.locator(".workspace").evaluate(
+            "node => getComputedStyle(node).overflowY"
+        ) == "auto"
     bounds = page.locator(".workspace").bounding_box()
     viewport = page.viewport_size
     assert abs(bounds["x"] + bounds["width"] - viewport["width"]) <= 1
     assert abs(bounds["y"] + bounds["height"] - viewport["height"]) <= 1
-    assert bounds["y"] == (48 if width < 700 else 0)
+    assert bounds["y"] == (52 if width < 700 else 0)
     if width < 700:
         assert bounds["x"] == 0
     else:

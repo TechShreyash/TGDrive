@@ -278,6 +278,7 @@ def assert_layout(page: Any) -> None:
           }),
           panel: (() => {
             const panel = document.querySelector('#transfer-dialog');
+            if (!panel) return {left: 0, right: 0, bottom: 0};
             const rect = panel.getBoundingClientRect();
             return {left: rect.left, right: rect.right, bottom: rect.bottom};
           })()
@@ -431,6 +432,11 @@ def test_resumable_multiple_files_navigation_and_mobile_layout(
     page.set_viewport_size({"width": 390, "height": 844})
     assert_layout(page)
     page.screenshot(path=ARTIFACTS / "react-mobile.png", full_page=True)
+    expect(
+        page.get_by_role("button", name="Open transfer progress", exact=True)
+    ).to_be_visible()
+    expect(page.locator(".transfer-center")).to_have_count(0)
+    page.set_viewport_size({"width": 1440, "height": 900})
     server.finish(started[0]["id"])
     expect(row(page, "first.txt")).to_have_attribute("data-status", "completed")
     clear = page.get_by_role("button", name="Clear Finished", exact=True)
@@ -1824,9 +1830,11 @@ def test_folder_upload_refresh_keeps_table_selection_page_and_scroll(
           if (removed === window.stableTable || removed.contains?.(window.stableTable))
             window.tableRemovals++;
       }).observe(document.querySelector('.workspace'), {childList:true, subtree:true});
-      document.querySelector('.file-list-scroll').scrollTop = 250;
+      window.stableScroll = document.querySelector(
+        innerWidth < 721 ? '.workspace' : '.file-list-scroll');
+      window.stableScroll.scrollTop = 250;
     }""")
-    scroll = page.locator(".file-list-scroll").evaluate("element => element.scrollTop")
+    scroll = page.evaluate("window.stableScroll.scrollTop")
     assert scroll > 0
     hold = True
     try:
@@ -1853,12 +1861,7 @@ def test_folder_upload_refresh_keeps_table_selection_page_and_scroll(
                 page.get_by_label("Select stable-110.txt", exact=True)
             ).to_be_focused()
             expect(page.locator(".pagination")).to_contain_text("Showing 101\u2013")
-            assert (
-                page.locator(".file-list-scroll").evaluate(
-                    "element => element.scrollTop"
-                )
-                == scroll
-            )
+            assert page.evaluate("window.stableScroll.scrollTop") == scroll
             assert page.evaluate(
                 "window.stableTable === document.querySelector('.file-table')"
             )
@@ -2162,10 +2165,10 @@ def test_large_upload_batch_stays_compact_bounded_and_filterable(
     assert heading is not None and heading["height"] <= 64, (
         "Mobile toolbar actions must not squeeze the heading into vertical letters"
     )
-    bounds = batch.bounding_box()
-    assert bounds is not None and bounds["x"] >= 0
-    assert bounds["x"] + bounds["width"] <= 390
+    expect(batch).to_have_count(0)
+    expect(page.locator(".mobile-transfer-status")).to_be_visible()
     page.screenshot(path=ARTIFACTS / "upload-batch-mobile.png", full_page=False)
+    page.set_viewport_size({"width": 1440, "height": 960})
     cancel_all(page)
     deadline = time.monotonic() + 15
     saved = []
@@ -3023,7 +3026,11 @@ def test_ui_polish_batched_visual_states(
     capture("dark-transfer-filters")
     page.set_viewport_size({"width": 390, "height": 844})
     capture("dark-transfer-mobile")
+    expect(page.locator("#transfer-dialog")).to_have_count(0)
+    page.set_viewport_size({"width": 1440, "height": 960})
     cancel_all(page)
+    if batch.get_by_role("button", name="Show Files", exact=True).count():
+        batch.get_by_role("button", name="Show Files", exact=True).click()
     expect(batch.locator(".transfer-item[data-status=cancelled]")).to_have_count(3)
     page.unroute("**/api/v1/jobs")
     page.get_by_role("button", name="Clear Finished", exact=True).click()
@@ -3161,6 +3168,8 @@ def test_transfer_progress_and_safe_panel_controls(
     page.set_viewport_size({"width": 390, "height": 844})
     assert_layout(page)
     page.screenshot(path=ARTIFACTS / "single-transfer-mobile.png", full_page=True)
+    expect(page.locator("#transfer-dialog")).to_have_count(0)
+    page.set_viewport_size({"width": 1440, "height": 960})
 
     page.get_by_role("button", name="Cancel All", exact=True).click()
     confirmation = page.get_by_role("dialog", name="Cancel All Uploads?", exact=True)
@@ -3823,8 +3832,8 @@ def test_shared_links_compact_views_copy_location_and_indicators(server, desktop
     page.set_viewport_size({"width": 1440, "height": 960})
     page.get_by_role("button", name="Expired 1", exact=True).click()
     expect(page.locator(".share-row")).to_have_count(1)
-    expect(page.get_by_role("button", name="Renew Link", exact=True)).to_be_visible()
-    page.get_by_role("button", name="Renew Link", exact=True).click()
+    expect(page.get_by_role("button", name="New Link", exact=True)).to_be_visible()
+    page.get_by_role("button", name="New Link", exact=True).click()
     expiry = page.get_by_role("group", name="Link Expires", exact=True)
     expiry.get_by_role("button", name="30 days", exact=True).click()
     expect(expiry.get_by_role("button", name="30 days", exact=True)).to_have_attribute(

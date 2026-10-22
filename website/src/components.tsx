@@ -10,7 +10,10 @@ import {
   Film,
   Image,
   Music,
-  Archive,
+  FileArchive,
+  FileSpreadsheet,
+  Presentation,
+  BookOpen,
   AlertCircle,
 } from "lucide-react";
 export function Spinner() {
@@ -35,10 +38,16 @@ export function FileIcon({
         : ["mp3", "wav", "ogg", "flac", "m4a"].includes(extension)
           ? Music
           : ["zip", "gz", "7z", "rar", "tar"].includes(extension)
-            ? Archive
-            : ["txt", "md", "pdf", "doc", "docx"].includes(extension)
-              ? FileText
-              : File;
+            ? FileArchive
+            : ["csv", "xlsx", "xls", "ods"].includes(extension)
+              ? FileSpreadsheet
+              : ["ppt", "pptx", "odp"].includes(extension)
+                ? Presentation
+                : ["epub", "cbz", "cbr"].includes(extension)
+                  ? BookOpen
+                  : ["txt", "md", "pdf", "doc", "docx"].includes(extension)
+                    ? FileText
+                    : File;
   return (
     <span
       className={"file-icon " + (folder ? "folder-icon" : "")}

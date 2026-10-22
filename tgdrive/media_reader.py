@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import math
 import os
 import secrets
 import time
@@ -336,6 +337,14 @@ class MediaReadCache:
                     row["parts"] = validate_parts(
                         row["parts"], size=row["size"], message_id=row["message_id"]
                     )
+                downloaded = row.get("last_download", 0)
+                row["last_download"] = (
+                    downloaded
+                    if type(downloaded) in (int, float)
+                    and math.isfinite(downloaded)
+                    and downloaded >= 0
+                    else 0
+                )
                 self._files[row["id"]] = row
             for row in value.get("blocks", []):
                 key = tuple(row["key"])
@@ -400,6 +409,7 @@ class MediaReadCache:
             "size": size,
             "parts": parts or [],
             "last_access": time.time(),
+            "last_download": row.get("last_download", 0),
             "_representations": row.get("_representations", {}),
         }
         self._bind_file(self._files[identity])
@@ -495,6 +505,12 @@ class MediaReadCache:
             payload = await remote()
             if len(payload) != expected:
                 raise OSError("Telegram read ended before the declared block length")
+            if generation == self._generation:
+                block = self._blocks.get(key)
+                owner = self._files.get(block["file_id"]) if block else None
+                if owner is not None:
+                    owner["last_download"] = time.time()
+                    self._index_dirty = True
             if (
                 generation == self._generation
                 and self.disk is not None
@@ -719,6 +735,7 @@ class MediaReadCache:
                         "complete": ready == [[0, row["size"]]],
                     }
                 )
+        files.sort(key=lambda row: (-row.get("last_download", 0), row["id"]))
         # Missing/evicted blocks must not grow an unbounded metadata registry.
         live = (
             memory_keys | disk_keys | set(self.memory.flights) | set(self._active_keys)

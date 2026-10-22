@@ -50,8 +50,8 @@ MAX_FOLDER_TREE_ITEMS = 1000
 MAX_FOLDER_TREE_DEPTH = 64
 MAX_SEARCH_RESULTS = 500
 MAX_SEARCH_OFFSET = MAX_TREE_ITEMS
-# Each newly generated link rotates the prior bearer credential for that item.
-MAX_SHARE_TOKENS_PER_ITEM = 1
+# Bound independent capabilities without evicting somebody else's link.
+MAX_SHARE_TOKENS_PER_ITEM = 100
 
 _ID_RE = re.compile(r"^[A-Za-z0-9_-]{1,128}$")
 _HASH_RE = re.compile(r"^[0-9a-f]{64}$")
@@ -71,6 +71,18 @@ def _validate_timestamp(value: object) -> str:
     if parsed.tzinfo is None:
         raise ValidationError("upload_date must include a timezone")
     return parsed.astimezone(UTC).isoformat(timespec="seconds").replace("+00:00", "Z")
+
+
+def _share_label(value: object) -> str:
+    if (
+        not isinstance(value, str)
+        or len(value) > 80
+        or any(unicodedata.category(char) in {"Cc", "Cs"} for char in value)
+    ):
+        raise ValidationError(
+            "Link label must be at most 80 characters without controls"
+        )
+    return unicodedata.normalize("NFC", value).strip()
 
 
 def _validate_id(value: object, *, allow_root: bool = False) -> str:
@@ -141,6 +153,7 @@ class _FileNode:
     size: int
     upload_date: str
     trashed: bool = False
+    starred: bool = False
     share_hashes: list[str] = field(default_factory=list)
     parts: list[dict[str, Any]] | None = None
     sha256: str | None = None
@@ -153,6 +166,8 @@ class _FileNode:
         self.upload_date = _validate_timestamp(self.upload_date)
         if not isinstance(self.trashed, bool):
             raise ValidationError("trashed must be a boolean")
+        if type(self.starred) is not bool:
+            raise ValidationError("starred must be a boolean")
         self.share_hashes = _validate_share_hashes(self.share_hashes)
         self.sha256 = validate_sha256(self.sha256)
         if self.parts is not None:
@@ -167,6 +182,7 @@ class _FolderNode:
     name: str
     upload_date: str
     trashed: bool = False
+    starred: bool = False
     share_hashes: list[str] = field(default_factory=list)
     children: dict[str, _Node] = field(default_factory=dict)
 
@@ -180,6 +196,8 @@ class _FolderNode:
         self.upload_date = _validate_timestamp(self.upload_date)
         if not isinstance(self.trashed, bool):
             raise ValidationError("trashed must be a boolean")
+        if type(self.starred) is not bool:
+            raise ValidationError("starred must be a boolean")
         self.share_hashes = _validate_share_hashes(self.share_hashes)
         if not isinstance(self.children, dict):
             raise ValidationError("folder children must be an object")
@@ -206,7 +224,7 @@ def _parse_node(
     }
     if item_type == "file":
         expected = common_keys | {"message_id", "size"}
-        optional = {"parts", "sha256"} if schema_version >= 4 else set()
+        optional = {"parts", "sha256", "starred"} if schema_version >= 4 else set()
         if not expected <= set(data) or set(data) - expected - optional:
             raise ValidationError("file node has missing or unknown fields")
         if "parts" in data and not isinstance(data["parts"], list):
@@ -220,13 +238,15 @@ def _parse_node(
             size=data["size"],
             upload_date=data["upload_date"],
             trashed=data["trashed"],
+            starred=data.get("starred", False),
             share_hashes=data["share_hashes"],
             parts=data.get("parts"),
             sha256=data.get("sha256"),
         )
     if item_type == "folder":
         expected = common_keys | {"children"}
-        if set(data) != expected:
+        optional = {"starred"} if schema_version >= 4 else set()
+        if not expected <= set(data) or set(data) - expected - optional:
             raise ValidationError("folder node has missing or unknown fields")
         raw_children = data["children"]
         if not isinstance(raw_children, dict):
@@ -246,6 +266,7 @@ def _parse_node(
             name=data["name"],
             upload_date=data["upload_date"],
             trashed=data["trashed"],
+            starred=data.get("starred", False),
             share_hashes=data["share_hashes"],
             children=children,
         )
@@ -383,7 +404,7 @@ def _manifest_json(manifest: dict[str, Any]) -> str:
 class DriveStore:
     """SQLite metadata whose paths are presentations of stable parent IDs."""
 
-    DATABASE_VERSION = 4
+    DATABASE_VERSION = 6
     APPLICATION_ID = 0x54474456
     _DEFAULT_EXPIRY = object()
 
@@ -475,6 +496,7 @@ class DriveStore:
                 name_key TEXT NOT NULL,
                 upload_date TEXT NOT NULL,
                 trashed INTEGER NOT NULL DEFAULT 0 CHECK(trashed IN (0,1)),
+                starred INTEGER NOT NULL DEFAULT 0 CHECK(starred IN (0,1)),
                 message_id INTEGER,
                 size INTEGER NOT NULL DEFAULT 0 CHECK(size>=0),
                 part_count INTEGER NOT NULL DEFAULT 1
@@ -515,10 +537,11 @@ class DriveStore:
             );
             CREATE TABLE shares (
                 id TEXT PRIMARY KEY,
-                node_id TEXT NOT NULL UNIQUE REFERENCES nodes(id) ON DELETE CASCADE,
+                node_id TEXT NOT NULL REFERENCES nodes(id) ON DELETE CASCADE,
                 token_hash TEXT NOT NULL UNIQUE,
                 created_at TEXT NOT NULL,
-                expires_at TEXT
+                expires_at TEXT,
+                label TEXT NOT NULL DEFAULT ''
             );
             CREATE INDEX shares_node ON shares(node_id);
             CREATE TABLE deletion_intents (
@@ -544,7 +567,7 @@ class DriveStore:
                     SELECT 1 FROM nodes WHERE id=NEW.parent_id AND kind='folder')
                 BEGIN SELECT RAISE(ABORT,'parent must be a folder'); END;
             PRAGMA application_id=1413956694;
-            PRAGMA user_version=4;
+            PRAGMA user_version=6;
             COMMIT;
         """)
 
@@ -637,6 +660,35 @@ class DriveStore:
             )
             connection.commit()
 
+        if version < 5:
+            connection.executescript("""
+                BEGIN IMMEDIATE;
+                CREATE TABLE shares_multi (
+                    id TEXT PRIMARY KEY,
+                    node_id TEXT NOT NULL REFERENCES nodes(id) ON DELETE CASCADE,
+                    token_hash TEXT NOT NULL UNIQUE,
+                    created_at TEXT NOT NULL,
+                    expires_at TEXT,
+                    label TEXT NOT NULL DEFAULT ''
+                );
+                INSERT INTO shares_multi(id,node_id,token_hash,created_at,expires_at)
+                    SELECT id,node_id,token_hash,created_at,expires_at FROM shares;
+                DROP TABLE shares;
+                ALTER TABLE shares_multi RENAME TO shares;
+                CREATE INDEX shares_node ON shares(node_id);
+                PRAGMA user_version=5;
+                COMMIT;
+            """)
+
+        if version < 6:
+            connection.executescript("""
+                BEGIN IMMEDIATE;
+                ALTER TABLE nodes ADD COLUMN starred INTEGER NOT NULL DEFAULT 0
+                    CHECK(starred IN (0,1));
+                PRAGMA user_version=6;
+                COMMIT;
+            """)
+
     @classmethod
     def load(cls, path: str | os.PathLike[str]) -> DriveStore:
         """Open an existing database and fail closed on malformed state."""
@@ -656,7 +708,7 @@ class DriveStore:
             ):
                 raise CorruptStoreError("database is not a TGDrive database")
             version = connection.execute("PRAGMA user_version").fetchone()[0]
-            if version not in {1, 2, 3, cls.DATABASE_VERSION}:
+            if version not in {1, 2, 3, 4, 5, cls.DATABASE_VERSION}:
                 raise UnsupportedSchemaError(f"unsupported database schema {version}")
             if connection.execute("PRAGMA quick_check").fetchone()[0] != "ok":
                 raise CorruptStoreError("SQLite integrity check failed")
@@ -773,6 +825,8 @@ class DriveStore:
                             node.sha256 if isinstance(node, _FileNode) else None,
                         ),
                     )
+                    if node.starred:
+                        db.execute("UPDATE nodes SET starred=1 WHERE id=?", (node.id,))
                     if isinstance(node, _FileNode) and node.parts:
                         store._insert_parts(db, node.id, node.parts)
                     for token_hash in node.share_hashes:
@@ -884,7 +938,7 @@ class DriveStore:
             raise ValidationError("shares must be a list")
         actual_hashes = {}
         for share in shares:
-            if not isinstance(share, dict) or set(share) != {
+            if not isinstance(share, dict) or set(share) - {"label"} != {
                 "id",
                 "node_id",
                 "token_hash",
@@ -907,8 +961,15 @@ class DriveStore:
                 raise ValidationError("invalid share expiry or duplicate hash")
             actual_hashes[share["token_hash"]] = share["node_id"]
             db.execute(
-                "INSERT INTO shares VALUES(?,?,?,?,?)",
-                (share["id"], share["node_id"], share["token_hash"], created, expiry),
+                "INSERT INTO shares VALUES(?,?,?,?,?,?)",
+                (
+                    share["id"],
+                    share["node_id"],
+                    share["token_hash"],
+                    created,
+                    expiry,
+                    _share_label(share.get("label", "")),
+                ),
             )
         if actual_hashes != expected_hashes:
             raise ValidationError("share records do not match node credentials")
@@ -1044,7 +1105,8 @@ class DriveStore:
             raise CorruptStoreError("metadata contains too many nodes")
         nodes: dict[str, dict[str, Any]] = {}
         shares = [
-            dict(row) for row in db.execute("SELECT * FROM shares ORDER BY rowid")
+            {key: value for key, value in dict(row).items() if key != "label" or value}
+            for row in db.execute("SELECT * FROM shares ORDER BY rowid")
         ]
         parts_by_node: dict[str, list[dict[str, Any]]] = {}
         for part in db.execute("SELECT * FROM file_parts ORDER BY node_id,part_index"):
@@ -1071,6 +1133,8 @@ class DriveStore:
                 share_hashes=[],
                 type=row["kind"],
             )
+            if row["starred"]:
+                node["starred"] = True
             if row["kind"] == "file":
                 node.update(message_id=row["message_id"], size=row["size"])
                 parts = parts_by_node.pop(row["id"], None)
@@ -1262,6 +1326,8 @@ class DriveStore:
             type=row["kind"],
             upload_date=row["upload_date"],
         )
+        if "starred" in row.keys() and row["starred"]:  # noqa: SIM118 - sqlite Row membership checks values
+            result["starred"] = True
         if row["kind"] == "file":
             result["part_count"] = row["part_count"]
         if message:
@@ -1875,6 +1941,45 @@ class DriveStore:
                     }
             return result
 
+    def set_starred(self, path: str, starred: bool) -> dict[str, Any]:
+        if type(starred) is not bool:
+            raise ValidationError("starred must be a boolean")
+        with self._transaction(write=True) as db:
+            node, path, chain = self._resolve(db, path)
+            if node["id"] == ROOT_ID:
+                raise RootMutationError("the drive root cannot be starred")
+            self._mutable(db, chain)
+            self._visible(chain)
+            if bool(node["starred"]) != starred:
+                db.execute(
+                    "UPDATE nodes SET starred=? WHERE id=?", (int(starred), node["id"])
+                )
+                self._bump(db)
+            row = db.execute("SELECT * FROM nodes WHERE id=?", (node["id"],)).fetchone()
+            return self._record(row, path)
+
+    def list_starred(self, query: str = "") -> dict[str, dict[str, Any]]:
+        if not isinstance(query, str) or len(query) > MAX_NAME_LENGTH:
+            raise ValidationError("invalid starred search")
+        with self._transaction() as db:
+            rows = db.execute(
+                "WITH RECURSIVE visible(id,full_path,parent_names) AS ("
+                "SELECT id,'','[]' FROM nodes WHERE id='root' UNION ALL "
+                "SELECT n.id,v.full_path||'/'||n.id,CASE WHEN v.id='root' THEN '[]' "
+                "ELSE json_insert(v.parent_names,'$[#]',p.name) END "
+                "FROM nodes n JOIN visible v ON n.parent_id=v.id "
+                "JOIN nodes p ON p.id=v.id WHERE n.trashed=0) "
+                "SELECT n.*,v.full_path,v.parent_names FROM visible v "
+                "JOIN nodes n ON n.id=v.id WHERE n.id!='root' AND n.starred=1 "
+                "AND instr(n.name_key,?)>0 ORDER BY n.name_key,n.id",
+                (_name_key(query.strip()),),
+            ).fetchall()
+            return {
+                row["id"]: self._record(row, row["full_path"])
+                | {"parent_names": json.loads(row["parent_names"])}
+                for row in rows
+            }
+
     def search(
         self, query: str, *, include_trashed: bool = False
     ) -> dict[str, dict[str, Any]]:
@@ -2059,12 +2164,19 @@ class DriveStore:
         )
 
     def create_share(
-        self, path: str, *, expires_at: object = _DEFAULT_EXPIRY, token_factory=None
+        self,
+        path: str,
+        *,
+        expires_at: object = _DEFAULT_EXPIRY,
+        token_factory=None,
+        label: str = "",
+        replace_existing: bool = False,
     ) -> str:
         if expires_at is self._DEFAULT_EXPIRY:
             expiry = self._default_share_expiry()
         else:
             expiry = _validate_timestamp(expires_at) if expires_at is not None else None
+        label = _share_label(label)
         created = _utc_now()
         if expiry is not None and expiry <= created:
             raise ValidationError("share expiry must be in the future")
@@ -2076,15 +2188,26 @@ class DriveStore:
             token = (
                 token_factory(identity) if token_factory else secrets.token_urlsafe(32)
             )
-            db.execute("DELETE FROM shares WHERE node_id=?", (node["id"],))
+            if replace_existing:
+                db.execute("DELETE FROM shares WHERE node_id=?", (node["id"],))
+            if (
+                db.execute(
+                    "SELECT COUNT(*) FROM shares WHERE node_id=?", (node["id"],)
+                ).fetchone()[0]
+                >= MAX_SHARE_TOKENS_PER_ITEM
+            ):
+                raise ValidationError(
+                    "This item has 100 links. Remove an old link first."
+                )
             db.execute(
-                "INSERT INTO shares VALUES(?,?,?,?,?)",
+                "INSERT INTO shares VALUES(?,?,?,?,?,?)",
                 (
                     identity,
                     node["id"],
                     hashlib.sha256(token.encode()).hexdigest(),
                     created,
                     expiry,
+                    label,
                 ),
             )
             self._bump(db)
@@ -2110,6 +2233,7 @@ class DriveStore:
                 result.append(
                     dict(
                         id=row["id"],
+                        label=row["label"],
                         node_id=row["node_id"],
                         path=current_path,
                         created_at=row["created_at"],
@@ -2133,6 +2257,26 @@ class DriveStore:
                     )
                 )
             return result
+
+    def update_share(self, share_id: str, *, label: str, expires_at: str | None):
+        label = _share_label(label)
+        expiry = _validate_timestamp(expires_at) if expires_at is not None else None
+        if expiry is not None and expiry <= _utc_now():
+            raise ValidationError("Link expiry must be in the future")
+        with self._transaction(write=True) as db:
+            row = db.execute(
+                "SELECT node_id FROM shares WHERE id=?", (share_id,)
+            ).fetchone()
+            if row is None:
+                raise NotFoundError("Link not found")
+            _, _, chain = self._resolve(db, self._path_for_id(db, row["node_id"]))
+            self._visible(chain)
+            self._mutable(db, chain)
+            db.execute(
+                "UPDATE shares SET label=?,expires_at=? WHERE id=?",
+                (label, expiry, share_id),
+            )
+            self._bump(db)
 
     def revoke_share(self, share_id: str) -> bool:
         with self._transaction(write=True) as db:

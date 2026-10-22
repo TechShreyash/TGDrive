@@ -35,6 +35,7 @@ from tgdrive.store import (
     MAX_NAME_LENGTH,
     MAX_SEARCH_OFFSET,
     MAX_SEARCH_RESULTS,
+    MAX_SHARE_TOKENS_PER_ITEM,
     MAX_TREE_DEPTH,
     MAX_TREE_ITEMS,
     ROOT_ID,
@@ -47,6 +48,7 @@ from tgdrive.store import (
     _name_key,
     _normalize_name,
     _normalize_path,
+    _share_label,
     _strict_int,
     _utc_now,
     _validate_channel_id,
@@ -686,6 +688,41 @@ class MongoStore(DriveStore):
                         }
             return result
 
+    def set_starred(self, path, starred):
+        if type(starred) is not bool:
+            raise ValidationError("starred must be a boolean")
+        with self._transaction(write=True):
+            node, path, chain = self._resolve(path)
+            if node["id"] == ROOT_ID:
+                raise RootMutationError("the drive root cannot be starred")
+            self._mutable(chain)
+            self._visible(chain)
+            if bool(node.get("starred", False)) != starred:
+                node["starred"] = starred
+                self._bump()
+            return self._record(node, path)
+
+    def list_starred(self, query=""):
+        if not isinstance(query, str) or len(query) > MAX_NAME_LENGTH:
+            raise ValidationError("invalid starred search")
+        with self._transaction():
+            results = {}
+            for node in self._state["nodes"].values():
+                if (
+                    not node.get("starred")
+                    or node["id"] == ROOT_ID
+                    or _name_key(query.strip()) not in node["name_key"]
+                ):
+                    continue
+                path = self._path(node["id"])
+                chain = self._resolve(path)[2]
+                if any(item["trashed"] for item in chain):
+                    continue
+                results[node["id"]] = self._record(node, path) | {
+                    "parent_names": [row["name"] for row in chain[1:-1]]
+                }
+            return results
+
     def search_page(
         self,
         query,
@@ -817,7 +854,13 @@ class MongoStore(DriveStore):
             return self._record(node, _join_path(destination, node["id"]))
 
     def create_share(
-        self, path, *, expires_at=DriveStore._DEFAULT_EXPIRY, token_factory=None
+        self,
+        path,
+        *,
+        expires_at=DriveStore._DEFAULT_EXPIRY,
+        token_factory=None,
+        label="",
+        replace_existing=False,
     ):
         expiry = (
             self._default_share_expiry()
@@ -826,6 +869,7 @@ class MongoStore(DriveStore):
             if expires_at is not None
             else None
         )
+        label = _share_label(label)
         created = _utc_now()
         if expiry is not None and expiry <= created:
             raise ValidationError("Share expiry must be in the future")
@@ -833,7 +877,18 @@ class MongoStore(DriveStore):
             node, _, chain = self._resolve(path)
             self._visible(chain)
             self._mutable(chain)
-            self._revoke([node["id"]])
+            if replace_existing:
+                self._revoke([node["id"]])
+            if (
+                sum(
+                    row["node_id"] == node["id"]
+                    for row in self._state["shares"].values()
+                )
+                >= MAX_SHARE_TOKENS_PER_ITEM
+            ):
+                raise ValidationError(
+                    "This item has 100 links. Remove an old link first."
+                )
             identity = secrets.token_urlsafe(16)
             token = (
                 token_factory(identity) if token_factory else secrets.token_urlsafe(32)
@@ -845,6 +900,7 @@ class MongoStore(DriveStore):
                 "token_hash": hashlib.sha256(token.encode()).hexdigest(),
                 "created_at": created,
                 "expires_at": expiry,
+                **({"label": label} if label else {}),
             }
             self._bump()
             return token
@@ -855,6 +911,7 @@ class MongoStore(DriveStore):
             return [
                 {
                     "id": row["id"],
+                    "label": row.get("label", ""),
                     "node_id": row["node_id"],
                     "path": self._path(row["node_id"]),
                     **self._share_details(row, token_factory),
@@ -886,6 +943,25 @@ class MongoStore(DriveStore):
                 )
             ),
         }
+
+    def update_share(self, share_id, *, label, expires_at):
+        label = _share_label(label)
+        expiry = _validate_timestamp(expires_at) if expires_at is not None else None
+        if expiry is not None and expiry <= _utc_now():
+            raise ValidationError("Link expiry must be in the future")
+        with self._transaction(write=True):
+            row = self._state["shares"].get(share_id)
+            if row is None:
+                raise NotFoundError("Link not found")
+            _, _, chain = self._resolve(self._path(row["node_id"]))
+            self._visible(chain)
+            self._mutable(chain)
+            row["expires_at"] = expiry
+            if label:
+                row["label"] = label
+            else:
+                row.pop("label", None)
+            self._bump()
 
     def revoke_share(self, share_id):
         with self._transaction(write=True):
@@ -1053,6 +1129,8 @@ class MongoStore(DriveStore):
                 "trashed": row["trashed"],
                 "share_hashes": [],
             }
+            if row.get("starred"):
+                value["starred"] = True
             if row["kind"] == "file":
                 value.update(message_id=row["message_id"], size=row["size"])
                 if row.get("parts"):

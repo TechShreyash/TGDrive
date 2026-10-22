@@ -872,17 +872,21 @@ Supply path (an ID path) and optional auth query, just as for /file.
 
 | Route | Response |
 | --- | --- |
-| GET /api/v1/preview | name, size and kind:text/pdf/video/unsupported. Text includes text, language, truncated and preview_bytes; PDF includes an authorized local URL; unsupported includes a reason. |
+| GET /api/v1/books | path, optional auth and entry. Without entry: book index with format, title and ordered entries. With entry: passive EPUB chapter JSON or raster page bytes. See [reader limits](reading.md#reader-limits). |
+| GET /api/v1/preview | name, size and kind:text/pdf/video/book/unsupported. Text includes text, language, truncated and preview_bytes; PDF includes an authorized local URL; unsupported includes a reason. |
 | GET /api/v1/media | original descriptor and variants list from the actual stored message. Each descriptor has id, label, is_original, size, mime_type, width, height and duration where applicable. |
-| GET /api/v1/thumbnail | Small provider JPEG/PNG/WebP thumbnail, at most 128 KiB; optional `If-None-Match` can return `304`. |
+| GET /api/v1/thumbnail | TGDrive-generated JPEG cover when cached, otherwise a provider JPEG/PNG/WebP thumbnail, at most 128 KiB; optional `If-None-Match` can return `304`. |
 | GET /api/v1/file-status | Authorized `path`, opaque `request_id`, optional `auth`; request-specific queue estimate and logical size, without listing other callers. |
 
 Thumbnail requests authorize before reading cached or remote data and again after
 awaiting it, including cache hits and conditional `304` responses. Payload caching
 never grants file access; revoked/expired shares and trashed files remain blocked.
 Responses use `Cache-Control: private, no-cache`, `Vary: Cookie` and a content ETag.
-Only a small provider thumbnail is eligible: no original-file download, multipart
-assembly or local cover generation is attempted. Unsupported or unavailable
+The endpoint tries the bounded local generated-cover cache, then a small Telegram
+thumbnail (including a TGDrive-generated cover attached during upload). It never
+downloads or assembles the original to generate a cover while browsing. Multipart
+files use the first part's cover. Generation, limits and retention are documented
+in [Thumbnail generation](thumbnails.md). Unsupported or unavailable
 thumbnails return `404` with `code: "THUMBNAIL_UNAVAILABLE"`; temporary work/capacity
 failures return `503` with `code: "THUMBNAIL_BUSY"` and `Retry-After: 5`.
 The grid falls back to a file-type icon. Visible/nearby tiles use a bounded lazy
@@ -1020,6 +1024,20 @@ continues to show server jobs initiated on other devices.
 
 </details>
 
+### Starred items
+
+Owner-session only; public capabilities do not grant access to this inventory.
+
+| Route | Request | Response |
+| --- | --- | --- |
+| `GET /api/v1/starred?q=...` | Optional literal filename query | `{data:{contents:{<id>:<item>}}}` with current paths and parent names. |
+| `PATCH /api/v1/starred` | `{path:"/<id-path>",starred:true}` (strict boolean) | `{item:<updated item>}`; idempotent when already set. |
+
+Stars are references to nodes, follow moves/renames, and are hidden for trashed
+subtrees. Restoring an item restores its visibility in Starred. Removing a star
+never deletes or moves its original. Responses are no-store; node annotations are
+preserved in metadata snapshots. The root drive itself cannot be starred.
+
 ### Shares, downloads, and ranges
 
 <details>
@@ -1027,26 +1045,35 @@ continues to show server jobs initiated on other devices.
 
 | Route | Access | Request | Success |
 | --- | --- | --- | --- |
-| `GET /api/v1/shares` | Owner | None | `{"shares":[...]}` includes active and expired entries, IDs, current path/name/type/size, folder_path/folder_label, created_at/expires_at and copyable. No bearer tokens. |
-| `POST /api/v1/shares` | Owner | `{"path":"/<id>","expires_in_days":7}` | `201 {"auth":"<bearer-token>","path":"...","expires_at":"<ISO-date>"}`. |
-| `POST /api/v1/shares/link` | Owner | `{"path":"/<id>"}` | Existing active link auth/path/type/node_id; no rotation. `409` if unrecoverable, `410` if expired/revoked. No-store response. |
-| `POST /api/v1/download-links` | Owner | `{"path":"/<id>"}` | Signed attachment `url`, canonical `path`, and `expires_at`; reuse an active copyable file share or create one expiring in one day. Visible in Shared Links; no-store response. |
-| `DELETE /api/v1/shares` | Owner | `{"path":"/<id>"}` | `{"status":"ok"}`. |
+| `GET /api/v1/shares` | Owner | None | `{"shares":[...]}` includes active and expired entries, IDs, current path/name/type/size, folder_path/folder_label, created_at/expires_at, optional label and copyable. No bearer tokens. |
+| `POST /api/v1/shares` | Owner | `{"path":"/<id>","label":"Alex","expires_in_days":7}`; optional ISO `expires_at` overrides the days. | `201 {"auth":"<bearer-token>","id":"<share-id>","path":"...","expires_at":"<ISO-date>","label":"Alex"}`. Adds an independent link. |
+| `POST /api/v1/shares/link` | Owner | `{"share_id":"<share-id>"}` | Existing active link auth/path/type/node_id; no rotation. `409` if unrecoverable, `410` if expired/revoked. Legacy path selection returns `409` when multiple links exist. No-store response. |
+| `PATCH /api/v1/shares` | Owner | `{"share_id":"<share-id>","label":"Alex","expires_at":"<future ISO-date>"}`; null expiry means never. | Updated link metadata; changes only this link. |
+| `POST /api/v1/download-links` | Owner | `{"path":"/<id>"}` | Signed attachment `url`, canonical `path`, and `expires_at`; reuse an active copyable file share labelled `Download link` or create one expiring in one day. Other recipient links are left alone. Visible in Shared Links; no-store response. |
+| `DELETE /api/v1/shares` | Owner | `{"share_id":"<share-id>"}` | `{"status":"ok"}`. Revokes one link. Legacy `{"path":"/<id>"}` revokes all direct links for that node. |
 | `POST /api/getFolderShareAuth` | Owner | `{"path":"/<folder-id>"}` | Compatibility creation: status and auth. |
 | `POST /api/getFileShareAuth` | Owner | `{"path":"/<file-id>"}` | Same, for a file. |
 | `GET /file`, `HEAD /file` | Owner or scoped capability | Required path, optional auth/Range; quality selects a discovered preview, preview=1 enables the supported PDF path, download=1 forces the original attachment. | Bytes/headers or access/not-found error. |
 
-Share expiry accepts 1, 7 (default), 30 days, or null for no expiry. Creating a
-replacement rotates the old token for that node. New capabilities are HMAC-SHA256
+Share expiry accepts 1–3650 days (default 7), null for no expiry, or a future
+ISO `expires_at`. Labels are optional, at most 80 characters, and cannot contain
+control characters. Labels are organizational, not recipient authentication.
+Each item permits up to 100 independent links; reaching the limit rejects the
+new link without evicting existing ones. Compatibility creation also appends.
+New capabilities are HMAC-SHA256
 of a random share ID under the persistent SESSION_SECRET, with the
 `tgdrive/share-link/v1` domain separator. Only the capability hash is stored
 in the catalog; the owner-only copy endpoint reconstructs it and checks that
 the stored hash matches. Listing never includes the token. Preserve SESSION_SECRET
 to retain re-copy capability across installations; changing it does not invalidate
 previously issued links, but those links then require their original URL or explicit
-replacement. Legacy random tokens cannot be reconstructed and are never silently
+creation of a separate new link. Legacy random tokens cannot be reconstructed and are never silently
 rotated. Store list_shares defaults to active entries for access/exposure checks;
-the owner listing opts into expired entries. Trash revokes subtree shares; explicit
+the owner listing opts into expired entries. The SQLite database upgrades to
+version 6 for independent share rows and starred node metadata; existing links
+and files are preserved. Portable backup schema remains 4, with optional share
+labels and `starred: true` on bookmarked nodes. Trash
+revokes subtree shares; explicit
 complete MongoDB restore revokes owner browser sessions and preserves share scope/expiry.
 
 File URL: `/file?path=<encoded-id-path>&auth=<encoded-token>`.
@@ -1059,7 +1086,8 @@ depends on the new location.
 An owner-only file URL without `auth` needs the owner session cookie. Copying
 it into another browser or a download tool does not make it public. The owner's
 **Copy download link** action explicitly creates or reuses a share capability;
-a newly created link lasts one day and is visible/revocable in Shared Links.
+a newly created link lasts one day, carries the `Download link` label and is
+visible/revocable in Shared Links. It does not reuse a separately labelled recipient link.
 
 When `auth` is supplied, it must be valid for the requested scope even if an
 owner cookie is also present. Warm caches do not bypass expiry or revocation.

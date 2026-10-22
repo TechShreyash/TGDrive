@@ -115,11 +115,22 @@
   }
   .workspace.file-workspace,
   .app-shell:has(#compact-new-button) .workspace.file-workspace {
-    padding-bottom: 0;
+    overflow-y: auto;
+    padding: 12px 12px max(12px, env(safe-area-inset-bottom));
+    scrollbar-gutter: auto;
+    border-radius: 0;
+  }
+  .file-workspace .file-browser {
+    flex: 0 0 auto;
   }
   .file-list-scroll {
-    padding-bottom: 96px;
+    flex: 0 0 auto;
+    overflow: visible;
+    padding-bottom: 0;
     scrollbar-gutter: auto;
+  }
+  .file-list-scroll .file-table th {
+    position: static;
   }
 }
 

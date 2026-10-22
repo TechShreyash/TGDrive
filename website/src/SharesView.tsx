@@ -1,5 +1,13 @@
 import { useEffect, useState } from "react";
-import { Link, Copy, FolderOpen, RefreshCw, X, Check } from "lucide-react";
+import {
+  Link,
+  Copy,
+  FolderOpen,
+  RefreshCw,
+  X,
+  Check,
+  Pencil,
+} from "lucide-react";
 import { api, errorMessage } from "./api";
 import {
   formatLocationLabel,
@@ -57,6 +65,7 @@ export default function SharesView({
   const [confirm, setConfirm] = useState<Share | null>(null);
   const [revokeError, setRevokeError] = useState("");
   const [manualLink, setManualLink] = useState("");
+  const [editing, setEditing] = useState<Share | null>(null);
   // Expiry changes while this page is open, without a database refresh.
   const [, tick] = useState(0);
   useEffect(() => {
@@ -90,7 +99,7 @@ export default function SharesView({
     return () => clearTimeout(timer);
   }, [copied]);
   const matching = shares.filter((share) =>
-    (share.name || "Shared Item")
+    ((share.name || "Shared Item") + " " + (share.label || ""))
       .normalize("NFC")
       .toLocaleLowerCase()
       .includes(query.normalize("NFC").toLocaleLowerCase()),
@@ -107,10 +116,10 @@ export default function SharesView({
         Date.parse(b.created_at) - Date.parse(a.created_at),
     );
   const revoke = async (share: Share) => {
-    setBusy(share.path);
+    setBusy(share.id || share.path);
     setRevokeError("");
     try {
-      await api.revoke(share.path);
+      await api.revoke(share.path, share.id);
       setConfirm(null);
       onChange();
     } catch (cause) {
@@ -121,9 +130,9 @@ export default function SharesView({
     }
   };
   const copy = async (share: Share) => {
-    setBusy(share.path);
+    setBusy(share.id || share.path);
     try {
-      const result = await api.shareLink(share.path);
+      const result = await api.shareLink(share.path, share.id);
       const url = shareUrl(
         result.auth,
         result.node_id,
@@ -131,7 +140,7 @@ export default function SharesView({
       );
       try {
         await navigator.clipboard.writeText(url);
-        setCopied(share.path);
+        setCopied(share.id || share.path);
       } catch {
         setManualLink(url);
       }
@@ -155,7 +164,7 @@ export default function SharesView({
       onError(errorMessage(cause));
     }
   };
-  const replace = (share: Share) =>
+  const newLink = (share: Share) =>
     onShare({
       id: share.node_id || share.path.split("/").pop() || "",
       path:
@@ -278,6 +287,10 @@ export default function SharesView({
                         formatLocationLabel(share.folder_label) || "My Files"
                       }
                     >
+                      <span className="share-link-label">
+                        {share.label || "Unnamed link"}
+                      </span>
+                      {" · "}
                       {formatLocationLabel(share.folder_label) || "My Files"}
                     </span>
                   </div>
@@ -308,34 +321,48 @@ export default function SharesView({
                     {ended || !share.copyable ? (
                       <button
                         className="secondary-button share-copy"
-                        onClick={() => replace(share)}
+                        onClick={() => newLink(share)}
                         title={
                           ended
                             ? "Create a new link"
-                            : "Older link cannot be recovered; replace it to copy a new link"
+                            : "Create a separate new link; the existing link is unaffected"
                         }
                       >
                         <RefreshCw size={15} />
-                        {ended ? "Renew Link" : "Replace Link"}
+                        New Link
                       </button>
                     ) : (
                       <button
                         className="secondary-button share-copy"
-                        disabled={busy === share.path}
+                        disabled={busy === (share.id || share.path)}
                         onClick={() => void copy(share)}
                       >
-                        {busy === share.path ? (
+                        {busy === (share.id || share.path) ? (
                           <Spinner />
-                        ) : copied === share.path ? (
+                        ) : copied === (share.id || share.path) ? (
                           <Check size={15} />
                         ) : (
                           <Copy size={15} />
                         )}
-                        {copied === share.path ? "Copied" : "Copy Link"}
+                        {copied === (share.id || share.path)
+                          ? "Copied"
+                          : "Copy Link"}
+                      </button>
+                    )}
+                    {share.id && (
+                      <button
+                        className="icon-button"
+                        title="Edit link"
+                        aria-label={
+                          "Edit link " + (share.label || "for " + name)
+                        }
+                        onClick={() => setEditing(share)}
+                      >
+                        <Pencil size={18} />
                       </button>
                     )}
                     <button
-                      className="icon-button"
+                      className="icon-button share-locate"
                       title="Show in Folder"
                       aria-label={"Show " + name + " in folder"}
                       onClick={() => void locate(share)}
@@ -344,7 +371,7 @@ export default function SharesView({
                     </button>
                     <button
                       className="icon-button"
-                      disabled={busy === share.path}
+                      disabled={busy === (share.id || share.path)}
                       title={ended ? "Remove Expired Entry" : "Revoke Link"}
                       aria-label={
                         (ended
@@ -399,6 +426,16 @@ export default function SharesView({
           </div>
         </Modal>
       )}
+      {editing && (
+        <EditShare
+          share={editing}
+          onClose={() => setEditing(null)}
+          onSaved={() => {
+            setEditing(null);
+            onChange();
+          }}
+        />
+      )}
       {manualLink && (
         <Modal title="Copy Share Link" onClose={() => setManualLink("")}>
           <p>Select and copy the link below.</p>
@@ -420,5 +457,103 @@ export default function SharesView({
         </Modal>
       )}
     </div>
+  );
+}
+
+function EditShare({
+  share,
+  onClose,
+  onSaved,
+}: {
+  share: Share;
+  onClose: () => void;
+  onSaved: () => void;
+}) {
+  const [label, setLabel] = useState(share.label || "");
+  const date = share.expires_at
+    ? new Date(
+        typeof share.expires_at === "number"
+          ? share.expires_at * 1000
+          : share.expires_at,
+      )
+    : null;
+  const localDate = date
+    ? new Date(date.getTime() - date.getTimezoneOffset() * 60000)
+        .toISOString()
+        .slice(0, 16)
+    : "";
+  const [expiry, setExpiry] = useState(localDate);
+  const [never, setNever] = useState(!share.expires_at);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  return (
+    <Modal
+      title="Edit share link"
+      onClose={() => {
+        if (!busy) onClose();
+      }}
+    >
+      <form
+        onSubmit={(event) => {
+          event.preventDefault();
+          setBusy(true);
+          setError("");
+          void api
+            .updateShare(
+              share.id!,
+              label,
+              never ? null : new Date(expiry).toISOString(),
+            )
+            .then(onSaved)
+            .catch((cause) => setError(errorMessage(cause)))
+            .finally(() => setBusy(false));
+        }}
+      >
+        <label htmlFor="edit-share-label">Link label</label>
+        <input
+          id="edit-share-label"
+          maxLength={80}
+          value={label}
+          onChange={(event) => setLabel(event.target.value)}
+        />
+        <label className="checkbox-label">
+          <input
+            type="checkbox"
+            checked={never}
+            onChange={(event) => setNever(event.target.checked)}
+          />
+          No expiry
+        </label>
+        {!never && (
+          <>
+            <label htmlFor="edit-share-expiry">Expiry date and time</label>
+            <input
+              id="edit-share-expiry"
+              type="datetime-local"
+              required
+              value={expiry}
+              onChange={(event) => setExpiry(event.target.value)}
+            />
+          </>
+        )}
+        <p className="muted">
+          Changes apply only to this link. Anyone with the link can use it.
+        </p>
+        <ErrorNotice message={error} />
+        <div className="dialog-actions">
+          <button
+            className="secondary-button"
+            type="button"
+            disabled={busy}
+            onClick={onClose}
+          >
+            Cancel
+          </button>
+          <button className="primary-button" disabled={busy}>
+            {busy && <Spinner />}Save changes
+          </button>
+        </div>
+      </form>
+    </Modal>
   );
 }

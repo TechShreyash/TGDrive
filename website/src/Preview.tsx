@@ -1,7 +1,15 @@
 import AdvancedVideo from "./AdvancedVideo";
 import { readBoundedResponse, PreviewLimitError } from "./previewIO";
 import { lazy, Suspense, useEffect, useRef, useState } from "react";
-import { AlertCircle, ArrowLeft, Download, RefreshCw, X } from "lucide-react";
+import {
+  AlertCircle,
+  ArrowLeft,
+  Download,
+  Maximize,
+  Minimize,
+  RefreshCw,
+  X,
+} from "lucide-react";
 import { request, errorMessage } from "./api";
 import {
   itemPath,
@@ -34,6 +42,8 @@ function PdfViewerUnavailable() {
 const PdfPreview = lazy(() =>
   import("./PdfPreview").catch(() => ({ default: PdfViewerUnavailable })),
 );
+
+const BookPreview = lazy(() => import("./BookPreview"));
 
 export function nativePreviewKind(
   name: string,
@@ -126,7 +136,7 @@ export async function loadPreview(
   if (
     !data ||
     typeof data !== "object" ||
-    !["text", "pdf", "video", "unsupported"].includes(data.kind) ||
+    !["text", "pdf", "video", "book", "unsupported"].includes(data.kind) ||
     (data.size !== undefined &&
       (!Number.isSafeInteger(data.size) || data.size < 0)) ||
     (data.reason !== undefined &&
@@ -168,6 +178,36 @@ export default function Preview({
   const nativeKind = nativePreviewKind(item.name);
   const path = itemPath(item);
   const viewer = useRef<HTMLDialogElement>(null);
+  const fullscreenSurface = useRef<HTMLDivElement>(null);
+  const [fullscreen, setFullscreen] = useState(false);
+  const [fullscreenError, setFullscreenError] = useState("");
+  useEffect(() => {
+    const surface = fullscreenSurface.current;
+    const update = () => setFullscreen(document.fullscreenElement === surface);
+    document.addEventListener("fullscreenchange", update);
+    return () => {
+      document.removeEventListener("fullscreenchange", update);
+      if (document.fullscreenElement === surface)
+        void document.exitFullscreen().catch(() => {});
+    };
+  }, []);
+  async function toggleFullscreen() {
+    setFullscreenError("");
+    try {
+      if (document.fullscreenElement === fullscreenSurface.current)
+        await document.exitFullscreen();
+      else if (
+        document.fullscreenEnabled &&
+        fullscreenSurface.current?.requestFullscreen
+      )
+        await fullscreenSurface.current.requestFullscreen();
+      else setFullscreenError("Fullscreen is not available in this browser.");
+    } catch {
+      setFullscreenError(
+        "Fullscreen could not open. Try again or use your browser's fullscreen control.",
+      );
+    }
+  }
   const [queue, setQueue] = useState<{
     position: number;
     estimated_wait_seconds: number | null;
@@ -305,6 +345,7 @@ export default function Preview({
   }, [path, auth, nativeKind, attempt]);
   const pdf =
     descriptor?.kind === "pdf" ? safePdfUrl(descriptor.url) : undefined;
+  const documentPreview = !!pdf || descriptor?.kind === "book";
   const details =
     !kind && !error && (loading || descriptor?.kind === "unsupported");
   const suffix = item.name.includes(".")
@@ -335,236 +376,277 @@ export default function Preview({
         onClose();
       }}
     >
-      <header className={"preview-header" + (pdf ? " preview-header-pdf" : "")}>
-        <button
-          className="preview-close icon-button"
-          type="button"
-          aria-label="Close Preview"
-          onClick={onClose}
+      <div className="preview-fullscreen-surface" ref={fullscreenSurface}>
+        <header
+          className={
+            "preview-header" +
+            (documentPreview ? " preview-header-pdf" : "") +
+            (descriptor?.kind === "book" ? " preview-header-book" : "")
+          }
         >
-          {details ? <X size={21} /> : <ArrowLeft size={22} />}
-        </button>
-        {!details && (
-          <>
-            <FileIcon name={item.name} />
-            <div className="preview-heading">
-              <h2 id="preview-title" title={item.name}>
-                {item.name}
-              </h2>
-              <span>
-                {formatBytes(item.size)} · {formatDate(item.upload_date)}
-              </span>
+          <button
+            className="preview-close icon-button"
+            type="button"
+            aria-label="Close Preview"
+            onClick={onClose}
+          >
+            {details ? <X size={21} /> : <ArrowLeft size={22} />}
+          </button>
+          {!details && (
+            <>
+              <FileIcon name={item.name} />
+              <div className="preview-heading">
+                <h2 id="preview-title" title={item.name}>
+                  {item.name}
+                </h2>
+                <span>
+                  {formatBytes(item.size)} · {formatDate(item.upload_date)}
+                </span>
+              </div>
+              {documentPreview && (
+                <div className="preview-toolbar-slot" ref={setToolbarTarget} />
+              )}
+              <button
+                className="icon-button preview-fullscreen"
+                aria-label={fullscreen ? "Exit Fullscreen" : "Enter Fullscreen"}
+                title={fullscreen ? "Exit Fullscreen" : "Enter Fullscreen"}
+                onClick={() => void toggleFullscreen()}
+              >
+                {fullscreen ? <Minimize size={19} /> : <Maximize size={19} />}
+              </button>
+              <a
+                className="preview-download"
+                href={fileUrl(path, auth, true)}
+                download={item.name}
+                aria-label="Download Original"
+                title="Download Original"
+              >
+                <Download size={19} />
+                <span>Download</span>
+              </a>
+            </>
+          )}
+        </header>
+        {fullscreenError && (
+          <p className="preview-limit" role="alert">
+            {fullscreenError}
+          </p>
+        )}
+        {queue && queue.position > 0 && (
+          <p className="preview-limit" role="status">
+            Waiting for Telegram · Queue position {queue.position}
+            {queue.estimated_wait_seconds != null
+              ? " · About " +
+                Math.ceil(queue.estimated_wait_seconds) +
+                " seconds"
+              : " · Estimating wait…"}
+          </p>
+        )}
+        {details ? (
+          <section className="file-details-body">
+            <div className="file-details-icon">
+              <FileIcon name={item.name} />
             </div>
-            {pdf && (
-              <div className="preview-toolbar-slot" ref={setToolbarTarget} />
+            <h2 id="preview-title">{item.name}</h2>
+            {loading ? (
+              <p
+                id="file-details-reason"
+                className="file-details-checking"
+                role="status"
+              >
+                <Spinner /> Checking preview…
+              </p>
+            ) : (
+              <p id="file-details-reason">
+                {descriptor?.reason ||
+                  "Download this file to open it on your device."}
+              </p>
             )}
+            <dl className="file-details-metadata">
+              <div>
+                <dt>Type</dt>
+                <dd>{fileType}</dd>
+              </div>
+              <div>
+                <dt>Size</dt>
+                <dd>{formatBytes(descriptor?.size ?? item.size)}</dd>
+              </div>
+              <div>
+                <dt>Added</dt>
+                <dd>{formatDate(item.upload_date)}</dd>
+              </div>
+            </dl>
             <a
-              className="preview-download"
+              className="primary-button file-details-download"
               href={fileUrl(path, auth, true)}
               download={item.name}
               aria-label="Download Original"
-              title="Download Original"
             >
-              <Download size={19} />
-              <span>Download</span>
+              <Download size={19} /> Download File
             </a>
-          </>
-        )}
-      </header>
-      {queue && queue.position > 0 && (
-        <p className="preview-limit" role="status">
-          Waiting for Telegram · Queue position {queue.position}
-          {queue.estimated_wait_seconds != null
-            ? " · About " + Math.ceil(queue.estimated_wait_seconds) + " seconds"
-            : " · Estimating wait…"}
-        </p>
-      )}
-      {details ? (
-        <section className="file-details-body">
-          <div className="file-details-icon">
-            <FileIcon name={item.name} />
-          </div>
-          <h2 id="preview-title">{item.name}</h2>
-          {loading ? (
-            <p
-              id="file-details-reason"
-              className="file-details-checking"
-              role="status"
-            >
-              <Spinner /> Checking preview…
-            </p>
-          ) : (
-            <p id="file-details-reason">
-              {descriptor?.reason ||
-                "Download this file to open it on your device."}
-            </p>
-          )}
-          <dl className="file-details-metadata">
-            <div>
-              <dt>Type</dt>
-              <dd>{fileType}</dd>
-            </div>
-            <div>
-              <dt>Size</dt>
-              <dd>{formatBytes(descriptor?.size ?? item.size)}</dd>
-            </div>
-            <div>
-              <dt>Added</dt>
-              <dd>{formatDate(item.upload_date)}</dd>
-            </div>
-          </dl>
-          <a
-            className="primary-button file-details-download"
-            href={fileUrl(path, auth, true)}
-            download={item.name}
-            aria-label="Download Original"
-          >
-            <Download size={19} /> Download File
-          </a>
-        </section>
-      ) : (
-        <>
-          {variants.length > 0 && (
-            <label className="preview-quality">
-              Preview Quality
-              <select
-                value={quality}
-                onChange={(event) => {
-                  setFailed(false);
-                  setQuality(event.target.value);
-                }}
-              >
-                <option value="original">Original</option>
-                {variants.map((value) => (
-                  <option key={value.id} value={value.id}>
-                    {value.label}
-                  </option>
-                ))}
-              </select>
-            </label>
-          )}
-          <div
-            className={
-              "preview-surface preview-surface-" +
-              (pdf
-                ? "pdf"
-                : descriptor?.kind === "text"
-                  ? "text"
-                  : kind || "other")
-            }
-          >
-            {loading ? (
-              <div className="preview-loading" role="status">
-                <Spinner /> Loading preview…
-              </div>
-            ) : error ? (
-              <div className="empty-state">
-                <AlertCircle size={34} />
-                <p role="alert">{error}</p>
-                <button
-                  className="secondary-button"
-                  onClick={() => setAttempt((value) => value + 1)}
-                >
-                  <RefreshCw size={16} /> Try Preview Again
-                </button>
-              </div>
-            ) : failed ? (
-              <div className="empty-state">
-                <AlertCircle size={34} />
-                <h3>Preview Unavailable</h3>
-                <p>
-                  This file could not be played or displayed by your browser.
-                  Download the original to open it on your device.
-                </p>
-                <button
-                  className="secondary-button"
-                  onClick={() => {
+          </section>
+        ) : (
+          <>
+            {variants.length > 0 && (
+              <label className="preview-quality">
+                Preview Quality
+                <select
+                  value={quality}
+                  onChange={(event) => {
                     setFailed(false);
-                    setAttempt((value) => value + 1);
+                    setQuality(event.target.value);
                   }}
                 >
-                  <RefreshCw size={16} /> Try Preview Again
-                </button>
-              </div>
-            ) : kind === "image" ? (
-              <img
-                key={attempt}
-                src={src}
-                alt={item.name}
-                onError={() => setFailed(true)}
-              />
-            ) : kind === "video" ? (
-              <AdvancedVideo
-                key={attempt}
-                src={src}
-                name={item.name}
-                playback={playback}
-              />
-            ) : kind === "audio" ? (
-              <audio
-                key={attempt}
-                src={src}
-                controls
-                preload="metadata"
-                onError={() => setFailed(true)}
-              />
-            ) : descriptor?.kind === "text" ? (
-              <div className="text-preview">
-                <div className="preview-document-toolbar">
-                  <span>{descriptor.language || "Plain Text"} · Read-only</span>
-                  <label>
-                    <input
-                      type="checkbox"
-                      checked={wrap}
-                      onChange={(event) => setWrap(event.target.checked)}
-                    />{" "}
-                    Wrap Lines
-                  </label>
-                </div>
-                {descriptor.truncated && (
-                  <p className="preview-limit" role="status">
-                    Showing the first 256 KB. Download the original for the
-                    complete file.
-                  </p>
-                )}
-                <pre
-                  className={wrap ? "wrap-lines" : ""}
-                  tabIndex={0}
-                  aria-label={"Contents of " + item.name}
-                >
-                  <code>
-                    {displayText(descriptor.text || "", descriptor.language)}
-                  </code>
-                </pre>
-              </div>
-            ) : pdf ? (
-              <Suspense
-                fallback={
-                  <div className="preview-loading" role="status">
-                    <Spinner /> Loading PDF viewer…
-                  </div>
-                }
-              >
-                <PdfPreview
-                  url={pdf}
-                  name={item.name}
-                  size={descriptor?.size || item.size || 0}
-                  toolbarTarget={toolbarTarget}
-                />
-              </Suspense>
-            ) : (
-              <div className="empty-state">
-                <FileIcon name={item.name} />
-                <h3>No Preview for This File</h3>
-                <p>
-                  {descriptor?.reason ||
-                    "Download the original to open this format on your device."}
-                </p>
-              </div>
+                  <option value="original">Original</option>
+                  {variants.map((value) => (
+                    <option key={value.id} value={value.id}>
+                      {value.label}
+                    </option>
+                  ))}
+                </select>
+              </label>
             )}
-          </div>
-        </>
-      )}
+            <div
+              className={
+                "preview-surface preview-surface-" +
+                (pdf
+                  ? "pdf"
+                  : descriptor?.kind === "text"
+                    ? "text"
+                    : kind || "other")
+              }
+            >
+              {loading ? (
+                <div className="preview-loading" role="status">
+                  <Spinner /> Loading preview…
+                </div>
+              ) : error ? (
+                <div className="empty-state">
+                  <AlertCircle size={34} />
+                  <p role="alert">{error}</p>
+                  <button
+                    className="secondary-button"
+                    onClick={() => setAttempt((value) => value + 1)}
+                  >
+                    <RefreshCw size={16} /> Try Preview Again
+                  </button>
+                </div>
+              ) : failed ? (
+                <div className="empty-state">
+                  <AlertCircle size={34} />
+                  <h3>Preview Unavailable</h3>
+                  <p>
+                    This file could not be played or displayed by your browser.
+                    Download the original to open it on your device.
+                  </p>
+                  <button
+                    className="secondary-button"
+                    onClick={() => {
+                      setFailed(false);
+                      setAttempt((value) => value + 1);
+                    }}
+                  >
+                    <RefreshCw size={16} /> Try Preview Again
+                  </button>
+                </div>
+              ) : kind === "image" ? (
+                <img
+                  key={attempt}
+                  src={src}
+                  alt={item.name}
+                  onError={() => setFailed(true)}
+                />
+              ) : kind === "video" ? (
+                <AdvancedVideo
+                  key={attempt}
+                  src={src}
+                  name={item.name}
+                  playback={playback}
+                />
+              ) : kind === "audio" ? (
+                <audio
+                  key={attempt}
+                  src={src}
+                  controls
+                  preload="metadata"
+                  onError={() => setFailed(true)}
+                />
+              ) : descriptor?.kind === "text" ? (
+                <div className="text-preview">
+                  <div className="preview-document-toolbar">
+                    <span>
+                      {descriptor.language || "Plain Text"} · Read-only
+                    </span>
+                    <label>
+                      <input
+                        type="checkbox"
+                        checked={wrap}
+                        onChange={(event) => setWrap(event.target.checked)}
+                      />{" "}
+                      Wrap Lines
+                    </label>
+                  </div>
+                  {descriptor.truncated && (
+                    <p className="preview-limit" role="status">
+                      Showing the first 256 KB. Download the original for the
+                      complete file.
+                    </p>
+                  )}
+                  <pre
+                    className={wrap ? "wrap-lines" : ""}
+                    tabIndex={0}
+                    aria-label={"Contents of " + item.name}
+                  >
+                    <code>
+                      {displayText(descriptor.text || "", descriptor.language)}
+                    </code>
+                  </pre>
+                </div>
+              ) : descriptor?.kind === "book" ? (
+                <Suspense
+                  fallback={
+                    <div className="preview-loading" role="status">
+                      <Spinner />
+                      Loading reader…
+                    </div>
+                  }
+                >
+                  <BookPreview
+                    key={path + auth}
+                    path={path}
+                    auth={auth}
+                    toolbarTarget={toolbarTarget}
+                  />
+                </Suspense>
+              ) : pdf ? (
+                <Suspense
+                  fallback={
+                    <div className="preview-loading" role="status">
+                      <Spinner /> Loading PDF viewer…
+                    </div>
+                  }
+                >
+                  <PdfPreview
+                    url={pdf}
+                    name={item.name}
+                    size={descriptor?.size || item.size || 0}
+                    toolbarTarget={toolbarTarget}
+                  />
+                </Suspense>
+              ) : (
+                <div className="empty-state">
+                  <FileIcon name={item.name} />
+                  <h3>No Preview for This File</h3>
+                  <p>
+                    {descriptor?.reason ||
+                      "Download the original to open this format on your device."}
+                  </p>
+                </div>
+              )}
+            </div>
+          </>
+        )}
+      </div>
     </dialog>
   );
 }

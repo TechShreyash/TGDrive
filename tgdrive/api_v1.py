@@ -10,7 +10,7 @@ from typing import Any, Literal
 
 from fastapi import Depends, HTTPException, Query, Request, Response
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, StrictBool
 
 from tgdrive.backup import RecoveryConflict
 from tgdrive.client_pool import current_upload_limit
@@ -37,9 +37,16 @@ class UploadCreate(BaseModel):
     total_size: int = Field(gt=0)
 
 
+class StarItem(BaseModel):
+    path: str = Field(min_length=1, max_length=4096)
+    starred: StrictBool
+
+
 class ShareCreate(BaseModel):
     path: str = Field(min_length=1, max_length=4096)
-    expires_in_days: Literal[1, 7, 30] | None = 7
+    expires_in_days: int | None = Field(default=7, ge=1, le=3650)
+    expires_at: datetime | None = None
+    label: str = Field(default="", max_length=80)
 
 
 class MoveItems(BaseModel):
@@ -56,7 +63,16 @@ class BulkItems(BaseModel):
 
 
 class RevokeShare(BaseModel):
-    path: str = Field(min_length=1, max_length=4096)
+    path: str | None = Field(default=None, min_length=1, max_length=4096)
+    share_id: str | None = Field(
+        default=None, min_length=1, max_length=128, pattern=r"^[A-Za-z0-9_-]+$"
+    )
+
+
+class ShareUpdate(BaseModel):
+    share_id: str = Field(min_length=1, max_length=128, pattern=r"^[A-Za-z0-9_-]+$")
+    label: str = Field(default="", max_length=80)
+    expires_at: datetime | None = None
 
 
 def register_routes(
@@ -186,6 +202,24 @@ def register_routes(
             )
         except DriveValidationError as error:
             raise HTTPException(422, str(error)) from None
+
+    @app.get("/api/v1/starred", dependencies=admin)
+    async def starred_items(
+        request: Request,
+        response: Response,
+        q: str = Query(default="", max_length=MAX_NAME_LENGTH),
+    ):
+        response.headers["Cache-Control"] = "no-store"
+        items = await asyncio.to_thread(get_store(request).list_starred, q)
+        return {"data": {"contents": items}}
+
+    @app.patch("/api/v1/starred", dependencies=admin)
+    async def star_item(body: StarItem, request: Request, response: Response):
+        response.headers["Cache-Control"] = "no-store"
+        result = await asyncio.to_thread(
+            get_store(request).set_starred, body.path, body.starred
+        )
+        return {"item": result}
 
     @app.get("/api/v1/trash", dependencies=admin)
     async def search_trash(
@@ -404,23 +438,34 @@ def register_routes(
         )
         return JSONResponse({"shares": records}, headers={"Cache-Control": "no-store"})
 
+    def selected_share(store, payload):
+        rows = store.list_shares(token_factory=token_factory(settings))
+        if payload.share_id:
+            rows = [row for row in rows if row["id"] == payload.share_id]
+        elif payload.path:
+            path = store.resolve_id(payload.path.rstrip("/").rsplit("/", 1)[-1])
+            rows = [row for row in rows if row["path"] == path]
+            if len(rows) > 1:
+                raise HTTPException(409, "Choose the individual link in Shared Links.")
+        else:
+            raise HTTPException(422, "A link ID or item path is required.")
+        if not rows:
+            raise HTTPException(410, "This link has expired or been revoked.")
+        return rows[0]
+
     @app.post("/api/v1/shares/link", dependencies=admin)
     async def copy_share(payload: RevokeShare, request: Request) -> Response:
         def lookup():
-            store = get_store(request)
-            path = store.resolve_id(payload.path.rstrip("/").rsplit("/", 1)[-1])
-            rows = store.list_shares(path, token_factory=token_factory(settings))
-            if not rows:
-                raise HTTPException(410, "This link has expired or been revoked.")
-            row = rows[0]
+            row = selected_share(get_store(request), payload)
             if not row["copyable"]:
                 raise HTTPException(
                     409,
-                    "This older link cannot be recovered. Create a replacement only "
-                    "if you want to invalidate the previous link.",
+                    "This older link cannot be recovered. "
+                    "Create a separate new link instead.",
                 )
             return {
                 "auth": token_factory(settings)(row["id"]),
+                "id": row["id"],
                 "path": row["path"],
                 "type": row["type"],
                 "node_id": row["node_id"],
@@ -431,28 +476,72 @@ def register_routes(
         )
 
     @app.post("/api/v1/shares", dependencies=admin, status_code=201)
-    async def create_share(payload: ShareCreate, request: Request) -> dict[str, Any]:
+    async def create_share(payload: ShareCreate, request: Request) -> Response:
         expires = (
-            (datetime.now(UTC) + timedelta(days=payload.expires_in_days)).isoformat()
+            payload.expires_at.isoformat()
+            if payload.expires_at
+            else (
+                datetime.now(UTC) + timedelta(days=payload.expires_in_days)
+            ).isoformat()
             if payload.expires_in_days
             else None
         )
-        token = await asyncio.to_thread(
-            get_store(request).create_share,
-            payload.path,
-            expires_at=expires,
-            token_factory=token_factory(settings),
+
+        def create():
+            store = get_store(request)
+            with store.metadata_batch():
+                factory = token_factory(settings)
+                token = store.create_share(
+                    payload.path,
+                    expires_at=expires,
+                    label=payload.label,
+                    token_factory=factory,
+                )
+                row = next(
+                    row
+                    for row in store.list_shares(payload.path, token_factory=factory)
+                    if factory(row["id"]) == token
+                )
+                return {
+                    "auth": token,
+                    "id": row["id"],
+                    "path": row["path"],
+                    "expires_at": row["expires_at"],
+                    "label": row["label"],
+                }
+
+        return JSONResponse(
+            await asyncio.to_thread(create),
+            status_code=201,
+            headers={"Cache-Control": "no-store"},
         )
-        return {"auth": token, "path": payload.path, "expires_at": expires}
+
+    @app.patch("/api/v1/shares", dependencies=admin)
+    async def update_share(payload: ShareUpdate, request: Request) -> dict[str, str]:
+        await asyncio.to_thread(
+            get_store(request).update_share,
+            payload.share_id,
+            label=payload.label,
+            expires_at=payload.expires_at.isoformat() if payload.expires_at else None,
+        )
+        return {"status": "ok"}
 
     @app.post("/api/v1/download-links", dependencies=admin)
     async def download_link(payload: RevokeShare, request: Request) -> Response:
         def create_or_reuse():
             store = get_store(request)
             with store.metadata_batch():
+                if not payload.path:
+                    raise HTTPException(422, "An item path is required.")
                 path = store.resolve_id(payload.path.rstrip("/").rsplit("/", 1)[-1])
                 store.get_file(path)
-                rows = store.list_shares(path, token_factory=token_factory(settings))
+                rows = [
+                    row
+                    for row in store.list_shares(
+                        path, token_factory=token_factory(settings)
+                    )
+                    if row.get("label") == "Download link" and row["copyable"]
+                ]
                 if rows:
                     row = rows[0]
                     if not row["copyable"]:
@@ -468,7 +557,10 @@ def register_routes(
                 else:
                     expires = (datetime.now(UTC) + timedelta(days=1)).isoformat()
                     token = store.create_share(
-                        path, expires_at=expires, token_factory=token_factory(settings)
+                        path,
+                        expires_at=expires,
+                        token_factory=token_factory(settings),
+                        label="Download link",
                     )
             from urllib.parse import urlencode
 
@@ -488,8 +580,13 @@ def register_routes(
     async def revoke_share(payload: RevokeShare, request: Request) -> dict[str, Any]:
         def revoke():
             store = get_store(request)
-            path = store.resolve_id(payload.path.rstrip("/").rsplit("/", 1)[-1])
-            store.revoke_share(path)
+            if payload.share_id:
+                store.revoke_share(payload.share_id)
+            elif payload.path:
+                path = store.resolve_id(payload.path.rstrip("/").rsplit("/", 1)[-1])
+                store.revoke_share(path)
+            else:
+                raise HTTPException(422, "A link ID or item path is required.")
 
         await asyncio.to_thread(revoke)
         return {"status": "ok"}

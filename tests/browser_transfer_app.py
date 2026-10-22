@@ -699,6 +699,10 @@ class FixtureRuntime:
             from showcase_data import seed
 
             await seed(self, settings)
+            seed_reading_samples(self)
+            await seed_thumbnail_samples(self)
+            self.store.set_starred(self.preview_path, True)
+            self.store.set_starred(self.reading_path, True)
         self.ready = True
 
     async def stop(self) -> None:
@@ -862,3 +866,80 @@ async def seed_large_pdf(request: Request):
         "single": runtime.preview_path + "/" + single["id"],
         "split": runtime.preview_path + "/" + split["id"],
     }
+
+
+def seed_reading_samples(target):
+    from book_samples import cbr, cbz, epub
+
+    if hasattr(target, "reading_path"):
+        return target.reading_path
+    folder = target.store.create_folder("/", "Reading samples")
+    target.reading_path = "/" + folder["id"]
+    for message_id, (name, data) in enumerate(
+        {
+            "The little journey.epub": epub(unsafe=True),
+            "Sample comic.cbz": cbz(),
+            "Sample manga.cbr": cbr(),
+        }.items(),
+        980,
+    ):
+        target.payloads[message_id] = data
+        target.store.add_file(target.reading_path, name, message_id, len(data))
+    if os.environ.get("TGDRIVE_UI_SHOWCASE") == "1":
+        from datetime import timedelta
+
+        from tgdrive.share_links import token_factory
+
+        for label, days in (("Book club", 30), ("Review copy", 7)):
+            target.store.create_share(
+                target.reading_path,
+                label=label,
+                expires_at=(datetime.now(UTC) + timedelta(days=days)).isoformat(),
+                token_factory=token_factory(settings),
+            )
+    return target.reading_path
+
+
+@app.post("/__test__/books")
+async def seed_books(request: Request):
+    _control(request)
+    return {"path": seed_reading_samples(runtime)}
+
+
+async def seed_thumbnail_samples(target):
+    from book_samples import png
+
+    from tgdrive.generated_thumbnails import generate, save
+
+    if hasattr(target, "thumbnail_sample_path"):
+        return target.thumbnail_sample_path
+    folder = target.store.create_folder("/", "Thumbnail samples")
+    target.thumbnail_sample_path = "/" + folder["id"]
+    samples = {
+        "Illustration.png": png(2),
+        "Getting started.pdf": _preview_pdf(),
+        "Walkthrough.mp4": (
+            Path(__file__).parent / "fixtures" / "movtext-subtitles.mp4"
+        ).read_bytes(),
+    }
+    for message_id, (name, data) in enumerate(samples.items(), 990):
+        target.payloads[message_id] = data
+        target.store.add_file(target.thumbnail_sample_path, name, message_id, len(data))
+        with tempfile.TemporaryDirectory() as directory:
+            staged = Path(directory) / name
+            staged.write_bytes(data)
+            cover = await generate(staged, name)
+        if cover:
+            save(
+                settings.resolved_cache_dir / "thumbnails",
+                settings.storage_channel,
+                message_id,
+                cover,
+            )
+    return target.thumbnail_sample_path
+
+
+@app.post("/__test__/thumbnails/generated")
+async def seed_generated_thumbnails(request: Request):
+    _control(request)
+    return {"path": await seed_thumbnail_samples(runtime)}

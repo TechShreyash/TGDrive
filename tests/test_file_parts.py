@@ -261,6 +261,7 @@ def downgrade_database_to_v3(database):
         connection.execute("DROP TABLE file_parts")
         connection.execute("ALTER TABLE nodes DROP COLUMN part_count")
         connection.execute("ALTER TABLE nodes DROP COLUMN sha256")
+        connection.execute("ALTER TABLE nodes DROP COLUMN starred")
         connection.execute("PRAGMA user_version=3")
         connection.commit()
 

@@ -162,7 +162,7 @@
 @container (min-width: 700px) {
   .share-columns {
     display: grid;
-    grid-template-columns: minmax(0, 1fr) 130px 200px;
+    grid-template-columns: minmax(0, 1fr) 130px 244px;
     gap: 20px;
     padding: 14px 8px 12px 44px;
     border-bottom: 1px solid var(--line-subtle);
@@ -171,7 +171,7 @@
     text-align: right;
   }
   .share-row {
-    grid-template-columns: 24px minmax(0, 1fr) 130px 200px;
+    grid-template-columns: 24px minmax(0, 1fr) 130px 244px;
     column-gap: 20px;
     padding: var(--list-row-padding, 8px) 8px;
     min-height: var(--list-row-min-height, 56px);
@@ -206,5 +206,37 @@
   }
   .share-copy {
     padding-inline: 8px;
+  }
+}
+
+.share-link-label {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 16px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+@container (max-width:699px) {
+  .share-row-actions .share-locate {
+    display: none;
+  }
+}
+
+@container (max-width: 699px) {
+  .share-expiry {
+    grid-column: 2 / 4;
+    grid-row: 2;
+  }
+  .share-expiry time {
+    flex-direction: row;
+    gap: 4px;
+    flex-wrap: wrap;
+  }
+  .share-row-actions {
+    grid-column: 2 / 4;
+    grid-row: 3;
+    justify-content: flex-start;
   }
 }

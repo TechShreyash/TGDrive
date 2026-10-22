@@ -6,6 +6,7 @@ import asyncio
 import copy
 import hashlib
 import inspect
+import io
 import logging
 import math
 import mimetypes
@@ -399,6 +400,7 @@ class Client:
         session_string: str | None = None,
         updates: bool = False,
     ) -> None:
+        self._thumbnail_directory = settings.resolved_cache_dir / "thumbnails"
         self._token = bot_token
         self._upload_pipeline = getattr(settings, "telegram_upload_pipeline", 4)
         self._media_scheduler = MediaScheduler(
@@ -712,6 +714,7 @@ class Client:
         return message
 
     supports_window_upload = True
+    supports_generated_thumbnails = True
 
     def bind_send_gate(
         self,
@@ -749,12 +752,16 @@ class Client:
         size: int | None = None,
         expected_sha256: str | None = None,
         before_dispatch: Callable[[], None] | None = None,
+        preview_name: str | None = None,
     ) -> TelegramMessage:
         length = (
             (await asyncio.to_thread(path.stat)).st_size - offset
             if size is None
             else size
         )
+        from tgdrive.generated_thumbnails import generate, save
+
+        cover = await generate(path, preview_name or file_name) if offset == 0 else None
         with FileWindow(path, offset, length, name=file_name) as source:
             if hasattr(self, "_media_scheduler"):
                 uploaded = await self._upload_parts(
@@ -771,8 +778,33 @@ class Client:
                 )
             if expected_sha256 is not None:
                 source.verify(expected_sha256)
+        thumbnail = None
+        if cover:
+            try:
+                async with asyncio.timeout(4):
+                    if hasattr(self, "_media_scheduler"):
+
+                        class CoverSource(io.BytesIO):
+                            def verify(self, _expected):
+                                pass
+
+                        thumbnail = await self._upload_parts(
+                            CoverSource(cover),
+                            length=len(cover),
+                            file_name="thumbnail.jpg",
+                            progress=None,
+                        )
+                    else:
+                        thumbnail = await self.native.upload_file(
+                            cover,
+                            file_name="thumbnail.jpg",
+                            file_size=len(cover),
+                        )
+            except (OSError, TimeoutError, RPCError):
+                pass  # A failed optional thumbnail must not fail the original.
         media = types.InputMediaUploadedDocument(
             file=uploaded,
+            thumb=thumbnail,
             mime_type=mimetypes.guess_type(file_name)[0] or "application/octet-stream",
             attributes=[types.DocumentAttributeFilename(file_name)],
             force_file=True,
@@ -800,7 +832,26 @@ class Client:
             if defer is not None:
                 await defer(time.time() + exc.seconds + 0.25)
             raise
-        return await self._sent(channel, result)
+        except RPCError as exc:
+            if thumbnail is None or "THUMB" not in str(exc).upper():
+                raise
+            media.thumb = None
+            result = await self._publish(
+                channel,
+                functions.messages.SendMediaRequest(
+                    peer=peer,
+                    media=media,
+                    message=caption,
+                    random_id=random_id,
+                    silent=True,
+                ),
+            )
+        message = await self._sent(channel, result)
+        directory = getattr(self, "_thumbnail_directory", None)
+        if cover and directory is not None:
+            with suppress(OSError):
+                await asyncio.to_thread(save, directory, channel, message.id, cover)
+        return message
 
     async def _upload_parts(
         self, source: FileWindow, *, length: int, file_name: str, progress: Any

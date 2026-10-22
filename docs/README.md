@@ -11,6 +11,8 @@ and MongoDB remembers their names, folders and sharing settings.
 | --- | --- |
 | Install TGDrive for the first time | [Setup](setup.md) |
 | Upload, organize, preview or share files | [Using TGDrive](usage.md) |
+| Read PDFs, ebooks or comics without downloading every byte first | [Reading books and comics](reading.md) |
+| Understand generated image, video and PDF covers | [Thumbnail generation](thumbnails.md) |
 | Restart, upgrade or fix a problem | [Operations](operations.md) |
 | Save recovery keys, understand encrypted backups or restore after data loss | [Backup & recovery](backup-recovery.md) |
 | Understand settings, restore safe defaults or tune a larger server | [Configuration & tuning](configuration.md) |

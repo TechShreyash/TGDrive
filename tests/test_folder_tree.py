@@ -264,6 +264,7 @@ def test_schema_v1_upgrade_is_additive_and_preserves_existing_nodes(tmp_path):
     store.close()
     with closing(sqlite3.connect(database)) as db:
         db.execute("DROP TABLE folder_preparations")
+        db.execute("ALTER TABLE nodes DROP COLUMN starred")
         db.execute("PRAGMA user_version=1")
         db.commit()
     upgraded = DriveStore.load(database)

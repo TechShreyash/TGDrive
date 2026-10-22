@@ -52,6 +52,9 @@ TGDRIVE_UI_SHOWCASE=1 uv run --frozen --group e2e python -m uvicorn \
 Open [localhost:18767](http://localhost:18767/) and sign in with
 `offline browser test password`. This disposable preview includes transfers,
 files, shares, trash, complete/partial caches and illustrative performance data.
+It also seeds **Reading samples** with generated EPUB, CBZ and CBR files and two
+independent labelled links. CBR requires the native libarchive runtime, included
+in the Docker image; see [reader setup and limits](reading.md).
 It uses temporary stores and no real Telegram credentials. Restarting resets the
 sample content. Ordinary browser tests use a 32 MiB cap; showcase mode uses the production
 16 GiB default. Owners can adjust it in Transfer limits.
@@ -416,12 +419,13 @@ Record precise private evidence separately, and keep implemented/pending status 
 
 ### Shared-links interface
 
-Shared Links uses compact responsive rows with name/type, current parent directory,
-creation/expiry and copy/location/revoke controls. Active and expired views share
-the same list; expired entries can be renewed or removed. Revoking an active link
-requires confirmation. Clicking its name or Show in folder opens the normal
-file browser with the stable item highlighted. Long names/paths truncate with
-full text available to assistive technology and pointer tooltips.
+Shared Links uses compact responsive rows with the item, optional link label,
+current parent directory, expiry and copy/edit/location/revoke controls. Active
+and expired views share the same row structure. On narrow screens the filename
+provides location navigation so the redundant location icon can disappear.
+Each direct link is keyed by its share ID, including pending, copied and edit
+state. Changing or revoking one link must not affect another link to the same
+node. Legacy links that cannot be copied offer **New Link**, never silent rotation.
 
 My Files uses a small link indicator for direct sharing or inherited folder access;
 expired shares never produce an indicator. Public browsers do not fetch owner share
@@ -438,13 +442,18 @@ Location formatting may normalize only TGDrive's first root-label segment.
 
 ### Quiet Overlays and Touch Controls
 
-The floating transfer panel opens for unfinished work, starts minimized on small
-screens and non-file browsing pages, and disappears five seconds after completion.
+The desktop floating transfer panel opens for unfinished work, starts minimized
+on non-file browsing pages, and disappears five seconds after completion.
 Loading server history alone never opens it. Finished history remains on Transfers;
 hiding a popup never clears records. Settings, Connections and Storage & Backups
 do not mount the floating popup; Transfers remains available from navigation.
-The mobile New button belongs to My Files, reserves its own bottom action area,
-is hidden during dialogs, and is absent from search/management pages.
+Phones have their own composition: a top bar contains navigation, TGDrive, New
+(in My Files) and appearance. The file toolbar holds search/selection/view controls.
+The workspace owns scrolling, including its heading and column names. No floating
+upload panel mounts on phones; a reserved bottom status row opens Transfers for
+full progress and cancellation. The full-height drawer overlays the top bar and
+uses one scroller for every navigation group and footer action. New is absent
+from search/management pages and hidden during dialogs.
 
 Keep sharing indicators next to their filename, preserve a visible indicator
 when the name truncates, and keep row actions at least 44px on small screens.

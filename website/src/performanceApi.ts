@@ -92,19 +92,31 @@ export const numericPreferences: {
   {
     key: "max_file_size",
     label: "Maximum file size (GiB)",
-    unit: GIB, min: 1 / GIB, max: 2048, appDefault: 16, unitLabel: "GiB",
+    unit: GIB,
+    min: 1 / GIB,
+    max: 2048,
+    appDefault: 16,
+    unitLabel: "GiB",
     help: "Largest file accepted for a new upload. Large files are split automatically for Telegram. Must fit within the temporary upload budget.",
   },
   {
     key: "staging_budget_bytes",
     label: "Temporary upload budget (GiB)",
-    unit: GIB, min: 1 / GIB, max: 2048, appDefault: 16, unitLabel: "GiB",
+    unit: GIB,
+    min: 1 / GIB,
+    max: 2048,
+    appDefault: 16,
+    unitLabel: "GiB",
     help: "Space all unfinished uploads may use together. This is a ceiling, not preallocated disk space. Each upload also needs real free space.",
   },
   {
     key: "min_free_bytes",
     label: "Upload free-space reserve (GiB)",
-    unit: GIB, min: 0.0625, max: 2048, appDefault: 1, unitLabel: "GiB",
+    unit: GIB,
+    min: 0.0625,
+    max: 2048,
+    appDefault: 1,
+    unitLabel: "GiB",
     help: "Space uploads must leave free on their storage drive. Reservations from other uploads are checked before file data is sent.",
   },
   {
@@ -182,7 +194,13 @@ export function performanceCategoryKeys(
       .filter(({ key }) =>
         category === "cache"
           ? key.startsWith("cache_") || key === "preload_max_jobs"
-          : key.startsWith("telegram_") || ["upload_split_mib", "max_file_size", "staging_budget_bytes", "min_free_bytes"].includes(key),
+          : key.startsWith("telegram_") ||
+            [
+              "upload_split_mib",
+              "max_file_size",
+              "staging_budget_bytes",
+              "min_free_bytes",
+            ].includes(key),
       )
       .map(({ key }) => key),
     ...(category === "cache" ? ["auto_preload" as const] : []),
@@ -202,7 +220,14 @@ export function performanceDraft(saved: PerformancePolicy): PerformanceDraft {
   return Object.fromEntries([
     ...numericPreferences.map(({ key, unit }) => [
       key,
-      String((saved[key] ?? (key === "max_file_size" || key === "staging_budget_bytes" ? 16 * GIB : key === "min_free_bytes" ? GIB : 0)) / unit),
+      String(
+        (saved[key] ??
+          (key === "max_file_size" || key === "staging_budget_bytes"
+            ? 16 * GIB
+            : key === "min_free_bytes"
+              ? GIB
+              : 0)) / unit,
+      ),
     ]),
     ["timezone", saved.timezone],
     ["auto_preload", saved.auto_preload],
@@ -236,7 +261,8 @@ export function performanceChanges(
     const converted = Math.round(value * unit);
     if (!Number.isSafeInteger(converted))
       throw new Error(label + " is too large.");
-    if (converted !== Math.round(Number(baseline[key]) * unit)) changes[key] = converted;
+    if (converted !== Math.round(Number(baseline[key]) * unit))
+      changes[key] = converted;
   }
   const timezone = draft.timezone.trim();
   try {
@@ -251,6 +277,7 @@ export function performanceChanges(
 }
 export interface CachedFile {
   id: string;
+  last_download?: number;
   name: string;
   size: number;
   ready_bytes: number;

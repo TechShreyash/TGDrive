@@ -93,6 +93,7 @@ def test_device_upload_reports_bytes_before_first_chunk_receipt(
     page.screenshot(
         path=ARTIFACTS / "device-upload-observed-progress-mobile.png", full_page=True
     )
+    page.locator(".mobile-transfer-status").click()
     server.wait_started(1)
     expect(row).to_have_attribute("data-status", "uploading")
     records = page.evaluate("window.uploadObservations")

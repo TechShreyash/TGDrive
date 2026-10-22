@@ -12,6 +12,7 @@ Other people can view or download only what you share with them.
 | **My Files** | Browse, search and organize files |
 | **Transfers** | See queued/running work and past completed, failed or cancelled transfers |
 | **Shared Links** | Review or revoke links |
+| **Starred** | Quickly find files and folders you marked |
 | **Trash** | Restore files or delete them permanently |
 | **Monitor → Performance** | Inspect current server resources, Telegram activity and measured traffic |
 | **Monitor → Preloads** | Inspect cached coverage, stop preparation, or evict cached bytes |
@@ -140,7 +141,7 @@ Cancel can take time if Telegram has already received part of the work.
 files already in your drive are kept. New uploads added after opening the
 confirmation are not included.
 
-**Hide/Show** collapses or expands the floating panel's details without stopping
+On desktop, **Hide/Show** collapses or expands the floating panel's details without stopping
 uploads. **Clear finished** appears when completed/cancelled groups can be removed
 from the list; it does not delete their files. Upload through the sidebar's
 **New** menu.
@@ -188,7 +189,10 @@ history; current running and queued work stays visible above them.
 Open **Transfers** to follow current work and browse finished uploads.
 
 - Current progress and past server transfers appear together.
-- The floating upload panel shows work started from this browser. Uploads
+- On phones, the bottom upload status row opens **Transfers**. It occupies its
+  own space and never covers file rows. **New** sits in the top bar; file browsing
+  uses one scrolling workspace. The navigation drawer opens from the top edge.
+- The desktop floating upload panel shows work started from this browser. Uploads
   discovered from another device remain visible in **Transfers**, without
   opening a new floating completion panel on this device.
 - Finished records include dates and sizes. **Previous** and **Next** replace
@@ -246,14 +250,24 @@ The list/grid choice is remembered in this browser.
 On phones, **View and sort** combines the view, sort field and direction in one
 menu beside the title. The selection icon keeps Select/Done available.
 
-Grid tiles request small Telegram thumbnails only when visible or nearby.
-Each thumbnail is limited to 128 KiB; browsing does not download original files
-to generate covers. Unsupported files and files without a suitable thumbnail
-show their file-type icon. A browser reporting data-saving mode uses icons
-without requesting thumbnails.
+For new supported uploads TGDrive generates a small cover from the staged file:
+a scaled image, an early video frame or the first PDF page. It keeps the original
+unchanged. Grid tiles request only the small thumbnail when visible or nearby;
+they never fetch the whole original to manufacture a cover. See
+[Thumbnail generation](thumbnails.md) for supported formats and existing files.
+A browser reporting data-saving mode uses icons without thumbnail requests.
 
 A name conflict lets you keep both or skip; it does not silently replace another
 file.
+
+### Starred files and folders
+
+Choose **Add to Starred** from a file or folder's actions menu. **Starred** in the
+sidebar collects those originals in one place, with their current locations.
+Open, search, sort or switch list/grid views as usual. **Remove from Starred**
+removes only the bookmark; the file stays in its folder. Stars follow renames and
+moves, stay hidden while an item or its parent is in Trash, and return on restore.
+They are owner metadata and are included in backups, not shared-folder access.
 
 ### Search
 
@@ -265,6 +279,7 @@ choose the search icon to open the field; it stays compact while unused:
 | **My Files** | File and folder names across your drive, with their locations |
 | **Transfers** | Current upload names and saved transfer names across all history pages |
 | **Trash** | Names of the trashed items available to restore or delete |
+| **Starred** | Names in your starred files and folders |
 | **Shared Links** | Names in your shared-link inventory |
 | **Preloads** | Cached filenames and preparation jobs |
 
@@ -280,22 +295,34 @@ query cannot silently hide items in a different page.
 ## Open, preview, and download
 
 Double-click a supported file to open a full-window preview.
-Use the header's **Download** action for the original file.
+Use the header's **Download** action for the original file. **Enter Fullscreen**
+in the preview header fills the display for supported previews; **Exit Fullscreen**
+returns to the browser. Some mobile browsers restrict native fullscreen.
+For PDFs, **Fit width** fills the available reading width; **Fit page** shows the
+whole current page. Manual zoom leaves the selected fit mode. The temporary
+“Rendering page…” message means the browser is fetching missing PDF data and
+drawing that page's text/images.
 
 | File | Preview |
 | --- | --- |
 | Images, including SVG | Image viewer |
-| PDFs up to 256 MiB | Continuous scrolling, zoom and fit width |
+| PDFs up to 256 MiB | Continuous scrolling, zoom, Fit width and Fit page |
 | Video | Enhanced player with its own audio/subtitle controls |
 | Audio | Browser audio player |
 | Supported text and code | Read-only text; first 256 KiB |
-| EPUB, CBZ, CBR and other unsupported formats | Original download; no built-in reader yet |
+| EPUB | Chapter reader, text size and saved reading position |
+| CBZ and CBR | Comic pages, page fit and right-to-left navigation |
+| Other unsupported formats | Original download |
 
 - PDFs load the sections needed for visible pages instead of downloading the
   whole document first. The preview keeps canvas/text work bounded and has a
   64 MiB reading budget per opening; large or complex books may reach it.
   **Download Original** remains available. The 256 MiB file ceiling protects
   browser memory; it does not mean that all those bytes are downloaded.
+- EPUB and comic readers request archive sections and the selected chapter/page.
+  They do not start a whole-file download or automatic preload. Complex or solid
+  archives can require more bytes; reader limits keep that work bounded. See
+  [Reading books and comics](reading.md) for controls and supported formats.
 - **Escape** or browser **Back** closes the preview.
 - Every video uses the custom player. Its normal play control remains available
   while opening; your browser may require a tap before playback with sound.
@@ -334,6 +361,11 @@ Preparation must fit an effective cache tier; increase the budget or free space
 if it is rejected. You can cancel preparation or evict cached bytes without
 deleting the original.
 
+Preloads lists the most recently downloaded server data first. New data for an
+existing file moves it to the top. Refreshing the page or reading already-cached
+bytes does not reorder the list. Older cache indexes without a recorded download
+time follow entries with known activity.
+
 Cached bytes can expire or be evicted. A file being prepared once does not
 guarantee that it stays fully cached forever. Cache access still requires a
 valid owner session or share link. [See how caching works](performance.md).
@@ -341,10 +373,14 @@ valid owner session or share link. [See how caching works](performance.md).
 ## Share and revoke
 
 1. Create a link from the item's share action.
-2. Choose one day, seven days, 30 days or no expiry.
-3. Copy the link. You can copy it again from **Shared Links**.
+2. Optionally label it, for example **Alex** or **Project review**.
+3. Choose one day, seven days, 30 days, no expiry, or a custom date and time.
+4. Copy the link. You can copy it again from **Shared Links**.
 
-**Anyone with the link can read its contents.** A folder link includes its
+You can create up to 100 independent links for the same file or folder. Each
+has its own label and expiry; creating one leaves existing links working.
+**Anyone with the link can read its contents.** Labels help you organize links;
+they do not restrict a link to a named person. A folder link includes its
 accessible descendants.
 
 In **Shared Links**:
@@ -352,18 +388,18 @@ In **Shared Links**:
 | Action | What it does |
 | --- | --- |
 | **Active / Expired / All** | Filter links by whether they still grant access. |
-| **Copy link** | Copy the same active link again. |
+| **Copy link** | Copy this active link again. |
+| **Edit link** | Change this link's label or expiry, including a custom date or no expiry. |
 | Click the name or **Show in folder** | Open its current directory and highlight the item. |
-| **Revoke link** | Confirm before blocking access through this link. |
-| **Renew link** | Choose an expiry and create a replacement for an expired link. |
-| **Replace link** | Replace an older, unrecoverable link. The previous link stops working. |
+| **Revoke link** | Confirm before blocking this link. Other links keep working. |
+| **New link** | Create a separate link when an old link is expired or cannot be copied. |
 
-Rows show the item, its current directory and a short expiry date. Hover, focus
-or tap an expiry date for the exact time and timezone configured for the instance.
-The folder and revoke icons keep management actions beside **Copy Link**.
+Rows show the item, link label, current directory and a short expiry date. Hover,
+focus or tap an expiry date for the exact time and instance timezone.
 
-New links can be copied again without replacing them. Older links that were
-stored only as random-token hashes keep working, but cannot be reconstructed.
+New links can be copied again without replacing them. Older links stored only
+as random-token hashes keep working, but cannot be reconstructed. **New link**
+does not revoke them; revoke an old link separately when you want to stop access.
 
 A small link icon in **My Files** identifies items shared directly or through
 a parent folder. Explicit file and folder links keep working after rename or
@@ -377,7 +413,8 @@ Revocation cannot remove copies someone already downloaded.
 An owner-only download address can depend on your signed-in browser cookie.
 Copying that address into an incognito window or a download tool does not
 grant access. Use **Copy download link** to create or reuse an explicit shared
-capability; a newly created download link lasts one day and appears in
+capability labelled **Download link**; this stays separate from recipient links.
+A newly created download link lasts one day and appears in
 **Shared Links**, where you can revoke it. Treat the copied URL as a secret.
 
 A supplied invalid, expired, or revoked token is rejected even if the same

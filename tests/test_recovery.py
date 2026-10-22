@@ -370,6 +370,7 @@ def test_v2_database_migration_preserves_nodes_and_adds_persistent_identity(tmp_
             "FROM old_metadata"
         )
         connection.execute("DROP TABLE old_metadata")
+        connection.execute("ALTER TABLE nodes DROP COLUMN starred")
         connection.execute("PRAGMA user_version=2")
         connection.commit()
     migrated = DriveStore.load(database)

@@ -40,6 +40,10 @@ LABEL org.opencontainers.image.title="TGDrive" \
 
 WORKDIR /app
 
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends libarchive13t64 ffmpeg poppler-utils \
+    && rm -rf /var/lib/apt/lists/*
+
 RUN groupadd --gid 10001 tgdrive \
     && useradd --uid 10001 --gid tgdrive --no-create-home --shell /usr/sbin/nologin tgdrive \
     && mkdir -p /app/data /app/cache \

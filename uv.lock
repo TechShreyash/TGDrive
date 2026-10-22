@@ -1068,6 +1068,15 @@ wheels = [
 ]
 
 [[package]]
+name = "libarchive-c"
+version = "5.3"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/26/23/e72434d5457c24113e0c22605cbf7dd806a2561294a335047f5aa8ddc1ca/libarchive_c-5.3.tar.gz", hash = "sha256:5ddb42f1a245c927e7686545da77159859d5d4c6d00163c59daff4df314dae82", size = 54349, upload-time = "2025-05-22T08:08:04.604Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/88/3f/ff00c588ebd7eae46a9d6223389f5ae28a3af4b6d975c0f2a6d86b1342b9/libarchive_c-5.3-py3-none-any.whl", hash = "sha256:651550a6ec39266b78f81414140a1e04776c935e72dfc70f1d7c8e0a3672ffba", size = 17035, upload-time = "2025-05-22T08:08:03.045Z" },
+]
+
+[[package]]
 name = "license-expression"
 version = "30.4.4"
 source = { registry = "https://pypi.org/simple" }
@@ -2013,7 +2022,9 @@ dependencies = [
     { name = "argon2-cffi" },
     { name = "cryptg" },
     { name = "cryptography" },
+    { name = "defusedxml" },
     { name = "fastapi" },
+    { name = "libarchive-c" },
     { name = "pydantic-settings" },
     { name = "pymongo" },
     { name = "python-multipart" },
@@ -2042,7 +2053,9 @@ requires-dist = [
     { name = "argon2-cffi", specifier = "==25.1.0" },
     { name = "cryptg", specifier = "==0.6.0" },
     { name = "cryptography", specifier = "==50.0.2" },
+    { name = "defusedxml", specifier = "==0.7.1" },
     { name = "fastapi", specifier = "==0.143.5" },
+    { name = "libarchive-c", specifier = "==5.3" },
     { name = "pydantic-settings", specifier = "==2.16.0" },
     { name = "pymongo", specifier = "==4.19.0" },
     { name = "python-multipart", specifier = "==0.0.32" },

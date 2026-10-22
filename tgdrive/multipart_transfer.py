@@ -390,6 +390,16 @@ async def upload_multipart(manager, record, local_path, destination, file_name, 
                                     size=part["size"],
                                     expected_sha256=part["sha256"],
                                     before_dispatch=before_dispatch,
+                                    **(
+                                        {"preview_name": file_name}
+                                        if getattr(
+                                            client,
+                                            "supports_generated_thumbnails",
+                                            False,
+                                        )
+                                        and part["index"] == 0
+                                        else {}
+                                    ),
                                 )
                             elif len(parts) == 1 and hasattr(client, "send_staged"):
                                 # Compatibility with pre-window application adapters.

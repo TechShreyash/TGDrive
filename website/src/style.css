@@ -135,10 +135,10 @@
     --danger-soft: #48282d;
     --danger-soft-ink: #ffc6cc;
     --success: #8ed9aa;
-  --success-soft: #253a30;
-  --warning-soft: #3b3424;
-  --violet: #b8a4e4;
-  --violet-soft: #342e40;
+    --success-soft: #253a30;
+    --warning-soft: #3b3424;
+    --violet: #b8a4e4;
+    --violet-soft: #342e40;
     --warning: #f0cd83;
     --toast-surface: #e3e5e8;
     --toast-ink: #25272b;
@@ -1363,16 +1363,16 @@ progress::-moz-progress-bar {
   }
   .sidebar {
     position: fixed;
-    top: 64px;
-    left: 0;
-    bottom: 0;
-    width: 228px;
-    height: calc(100dvh - 64px);
+    inset: 0 auto 0 0;
+    width: min(320px, calc(100vw - 40px));
+    height: 100dvh;
     background: var(--canvas);
-    z-index: 35;
+    z-index: 50;
     box-shadow: 8px 0 28px #18243b20;
     transform: translateX(-110%);
-    padding: 20px 14px;
+    padding: max(8px, env(safe-area-inset-top)) 12px
+      max(12px, env(safe-area-inset-bottom));
+    scrollbar-width: thin;
   }
   .sidebar.nav-open {
     transform: none;
@@ -1386,13 +1386,15 @@ progress::-moz-progress-bar {
   .main-content,
   .public-shell .main-content {
     height: 100dvh;
-    padding: 0 8px 8px;
+    padding: 0;
   }
   .topbar {
-    height: 48px;
-    min-height: 48px;
-    padding: 0;
-    gap: 6px;
+    height: auto;
+    min-height: 52px;
+    padding: env(safe-area-inset-top) 8px 0;
+    gap: 4px;
+    background: var(--surface);
+    border-bottom: 1px solid var(--line-subtle);
   }
   .search-form {
     padding: 0 4px;
@@ -1409,8 +1411,8 @@ progress::-moz-progress-bar {
     display: none;
   }
   .workspace {
-    padding: 20px 16px 118px;
-    border-radius: 12px;
+    padding: 16px 12px 24px;
+    border-radius: 0;
     min-height: 0;
     scrollbar-gutter: auto;
   }
@@ -1485,17 +1487,47 @@ progress::-moz-progress-bar {
   }
   .mobile-new,
   .mobile-new[aria-expanded="true"] {
+    display: inline-flex;
+    position: relative;
+    inset: auto;
+    min-height: 40px;
+    padding: 8px 12px;
+    gap: 6px;
+    border-radius: 8px;
+    flex-shrink: 0;
+  }
+  .mobile-brand {
+    flex: 1;
+    min-width: 0;
+    font-size: 17px;
+    font-weight: 600;
+    letter-spacing: -0.02em;
+    color: var(--ink);
+  }
+  .mobile-transfer-status {
     display: flex;
-    position: fixed;
-    bottom: 22px;
-    left: 22px;
-    z-index: 27;
-    box-shadow: 0 3px 12px #334fc42b;
+    align-items: center;
+    gap: 10px;
+    flex: 0 0 auto;
+    width: 100%;
+    min-height: 48px;
+    padding: 10px 16px max(10px, env(safe-area-inset-bottom));
+    border-top: 1px solid var(--line);
+    background: var(--surface);
+    color: var(--action);
+    text-align: start;
+    font-size: 13px;
+  }
+  .mobile-transfer-status > span {
+    flex: 1;
+    min-width: 0;
   }
   .new-menu {
-    top: auto;
-    bottom: 76px;
-    left: 20px;
+    top: calc(52px + env(safe-area-inset-top));
+    bottom: auto;
+    left: auto;
+    right: 8px;
+    max-width: calc(100vw - 16px);
   }
   .transfer-center {
     bottom: 80px;
@@ -3237,6 +3269,8 @@ textarea,
 /* Audit fixes shared by owner pages, menus and narrow layouts. */
 .mobile-nav-heading {
   display: flex;
+  flex: 0 0 auto;
+  min-height: 44px;
   align-items: center;
   justify-content: space-between;
   gap: 12px;
@@ -3299,24 +3333,120 @@ textarea,
   }
 }
 
-.theme-control { position: relative; flex-shrink: 0; }
-.theme-trigger { color: var(--muted); }
+.theme-control {
+  position: relative;
+  flex-shrink: 0;
+}
+.theme-trigger {
+  color: var(--muted);
+}
 .theme-menu {
-  position: absolute; right: 0; top: calc(100% + 6px); width: 168px;
-  padding: 6px; border: 1px solid var(--line); border-radius: 10px;
-  background: var(--surface-raised); box-shadow: var(--menu-shadow); z-index: 50;
+  position: absolute;
+  right: 0;
+  top: calc(100% + 6px);
+  width: 168px;
+  padding: 6px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--surface-raised);
+  box-shadow: var(--menu-shadow);
+  z-index: 50;
 }
 .theme-menu button {
-  display: flex; align-items: center; gap: 10px; width: 100%; padding: 10px;
-  background: transparent; border: 0; border-radius: 6px; text-align: left;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 10px;
+  background: transparent;
+  border: 0;
+  border-radius: 6px;
+  text-align: left;
 }
-.theme-menu button span { flex: 1; }
-.theme-menu button:hover { background: var(--hover); }
-.theme-menu button[aria-checked="true"] { color: var(--action); background: var(--action-soft); }
-.page-heading > .theme-control { margin-inline-start: auto; }
-.file-toolbar > .page-heading > .theme-control { order: 4; }
-@media(max-width: 720px) { .page-heading > .theme-control { display: none; } .topbar > .theme-control { margin-inline-start: auto; } }
+.theme-menu button span {
+  flex: 1;
+}
+.theme-menu button:hover {
+  background: var(--hover);
+}
+.theme-menu button[aria-checked="true"] {
+  color: var(--action);
+  background: var(--action-soft);
+}
+.page-heading > .theme-control {
+  margin-inline-start: auto;
+}
+.file-toolbar > .page-heading > .theme-control {
+  order: 4;
+}
+@media (max-width: 720px) {
+  .page-heading > .theme-control {
+    display: none;
+  }
+  .topbar > .theme-control {
+    margin-inline-start: auto;
+  }
+}
 
-.page-title-line { display: flex; align-items: center; gap: 12px; min-width: 0; }
-.page-title-line h1 { margin-bottom: 0; }
-.demo-marker { font-size: 12px; font-weight: 400; color: var(--muted); }
+.page-title-line {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+}
+.page-title-line h1 {
+  margin-bottom: 0;
+}
+.demo-marker {
+  font-size: 12px;
+  font-weight: 400;
+  color: var(--muted);
+}
+
+.preview-fullscreen-surface {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  background: #202328;
+}
+.preview-fullscreen-surface:fullscreen {
+  width: 100vw;
+  height: 100dvh;
+}
+.file-details .preview-fullscreen-surface {
+  display: contents;
+}
+.preview-header .preview-fullscreen {
+  flex: 0 0 44px;
+}
+
+.brand-mark {
+  display: block;
+  flex-shrink: 0;
+  object-fit: contain;
+}
+.mobile-drawer-brand,
+.mobile-brand {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.file-star-indicator {
+  flex: 0 0 auto;
+  color: var(--action);
+}
+.file-tile-format {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 500;
+  letter-spacing: 0.02em;
+}
+.file-tile-preview:has(.file-tile-format) {
+  flex-direction: column;
+  gap: 8px;
+}

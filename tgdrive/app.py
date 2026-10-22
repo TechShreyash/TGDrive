@@ -517,6 +517,8 @@ def create_app(
             if auth_home_path is None:
                 raise HTTPException(status_code=403, detail="Invalid share link")
             data = store.get_directory(real_path)
+            for item in data.get("contents", {}).values():
+                item.pop("starred", None)
         else:
             await require_admin(request)
             data = store.get_directory(requested)
@@ -597,7 +599,9 @@ def create_app(
         from tgdrive.share_links import token_factory
 
         token = await asyncio.to_thread(
-            store.create_share, payload.path, token_factory=token_factory(settings)
+            store.create_share,
+            payload.path,
+            token_factory=token_factory(settings),
         )
         return {"status": "ok", "auth": token}
 
@@ -826,6 +830,75 @@ def create_app(
         except TelegramFileNotFound as exc:
             raise HTTPException(404, "Stored file not found") from exc
 
+    @app.get("/api/v1/books")
+    async def book_preview(
+        request: Request,
+        path: Annotated[str, Query(min_length=1, max_length=4096)],
+        auth: Annotated[str | None, Query(max_length=512)] = None,
+        entry: Annotated[str | None, Query(min_length=1, max_length=1024)] = None,
+    ) -> Response:
+        import base64
+
+        from tgdrive.books import parse_book, read_range
+
+        path, data = authorized_file(request, path, auth)
+        pending = getattr(app.state, "book_requests", 0)
+        if pending >= 16:
+            raise HTTPException(
+                503,
+                "The reader is busy. Try again shortly.",
+                headers={"Retry-After": "2"},
+            )
+        semaphore = getattr(app.state, "book_slots", None)
+        if semaphore is None:
+            semaphore = app.state.book_slots = asyncio.Semaphore(2)
+        app.state.book_requests = pending + 1
+        acquired = False
+
+        async def authorize():
+            _, current = await asyncio.to_thread(authorized_file, request, path, auth)
+            if any(
+                current.get(key) != data.get(key)
+                for key in ("message_id", "size", "parts")
+            ):
+                raise HTTPException(409, "The stored book changed. Reopen it.")
+
+        async def fetch(start, count):
+            return await read_range(
+                _runtime(request).pool,
+                settings.storage_channel,
+                data,
+                start,
+                count,
+                authorize,
+            )
+
+        try:
+            try:
+                await asyncio.wait_for(semaphore.acquire(), timeout=10)
+                acquired = True
+            except TimeoutError as exc:
+                raise HTTPException(
+                    503,
+                    "The reader is busy. Try again shortly.",
+                    headers={"Retry-After": "2"},
+                ) from exc
+            await authorize()
+            result = await parse_book(data, fetch, entry)
+            await authorize()
+            headers = {
+                "Cache-Control": "private, no-store",
+                "X-Content-Type-Options": "nosniff",
+            }
+            if result.get("kind") == "image":
+                content = base64.b64decode(result["data"], validate=True)
+                return Response(content, media_type=result["mime"], headers=headers)
+            return JSONResponse(result, headers=headers)
+        finally:
+            if acquired:
+                semaphore.release()
+            app.state.book_requests -= 1
+
     @app.get("/api/v1/thumbnail")
     async def file_thumbnail(
         request: Request,
@@ -833,34 +906,37 @@ def create_app(
         auth: Annotated[str | None, Query(max_length=512)] = None,
     ) -> Response:
         path, file_data = authorized_file(request, path, auth)
-        # Multipart documents contain byte ranges rather than a decodable full
-        # media object. Browsing must not assemble or download them for a cover.
+        # TGDrive generates a cover from the complete staged source before
+        # splitting; its first part can carry that cover without reassembly.
         headers = {"Cache-Control": "private, no-cache", "Vary": "Cookie"}
-        if file_data.get("parts") is not None:
-            return JSONResponse(
-                {"code": "THUMBNAIL_UNAVAILABLE", "detail": "No thumbnail available"},
-                status_code=404,
-                headers=headers,
-            )
         identity = (file_data["message_id"], file_data["size"])
         key = (settings.storage_channel, *identity)
 
         def recheck():
             _current_path, current = authorized_file(request, path, auth)
-            if (current["message_id"], current["size"]) != identity or current.get(
-                "parts"
-            ) is not None:
+            if (current["message_id"], current["size"]) != identity:
                 raise HTTPException(409, "File changed; refresh the directory")
 
-        try:
-            thumbnail = await app.state.thumbnails.get(
-                key,
-                lambda: load_thumbnail(
-                    pool=_runtime(request).pool,
-                    channel_id=settings.storage_channel,
-                    message_id=file_data["message_id"],
-                ),
+        async def load_cover():
+            from tgdrive.generated_thumbnails import read
+            from tgdrive.thumbnails import Thumbnail
+
+            content = await asyncio.to_thread(
+                read,
+                settings.resolved_cache_dir / "thumbnails",
+                settings.storage_channel,
+                file_data["message_id"],
             )
+            if content:
+                return Thumbnail(content, "image/jpeg")
+            return await load_thumbnail(
+                pool=_runtime(request).pool,
+                channel_id=settings.storage_channel,
+                message_id=file_data["message_id"],
+            )
+
+        try:
+            thumbnail = await app.state.thumbnails.get(key, load_cover)
         except ThumbnailBusy:
             recheck()
             return JSONResponse(

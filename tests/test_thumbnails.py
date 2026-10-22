@@ -479,3 +479,39 @@ def test_thumbnail_signature_rejects_svg_and_recognizes_only_small_raster_types(
     assert image_type(b"\xff\xd8\xffjpeg") == "image/jpeg"
     assert image_type(b"RIFF0000WEBPdata") == "image/webp"
     assert image_type(b"<svg/>") is None
+
+
+def test_own_generated_cover_precedes_provider_and_is_authorized(app_client):
+    from tgdrive.generated_thumbnails import save
+
+    client, store, _runtime, settings = app_client
+    cover = b"\xff\xd8\xff" + b"small generated cover"
+    file = store.add_file(
+        "/",
+        "split.mp4",
+        650,
+        2,
+        parts=[
+            {"index": 0, "offset": 0, "size": 1, "message_id": 650, "sha256": "a" * 64},
+            {"index": 1, "offset": 1, "size": 1, "message_id": 651, "sha256": "b" * 64},
+        ],
+    )
+    path = "/" + file["id"]
+    save(
+        settings.resolved_cache_dir / "thumbnails", settings.storage_channel, 650, cover
+    )
+    assert client.get("/api/v1/thumbnail", params={"path": path}).status_code == 403
+    login(client)
+    token = store.create_share(path)
+    client.post("/api/logout")
+    response = client.get("/api/v1/thumbnail", params={"path": path, "auth": token})
+    assert response.status_code == 200 and response.content == cover
+    store.revoke_share(path)
+    assert (
+        client.get(
+            "/api/v1/thumbnail",
+            params={"path": path, "auth": token},
+            headers={"If-None-Match": response.headers["etag"]},
+        ).status_code
+        == 403
+    )

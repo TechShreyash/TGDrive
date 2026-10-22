@@ -52,6 +52,8 @@ export default function ActionDialog({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [expires, setExpires] = useState("7");
+  const [shareLabel, setShareLabel] = useState("");
+  const [customExpiry, setCustomExpiry] = useState("");
   const [link, setLink] = useState("");
   const [expiry, setExpiry] = useState<string | null>(null);
   const [requestId, setRequestId] = useState(() =>
@@ -234,7 +236,7 @@ export default function ActionDialog({
         </p>
         {!link && (
           <p className="muted">
-            Creating a new link replaces any previous link for this item.
+            Each link has its own expiry. Existing links keep working.
           </p>
         )}
         {!link ? (
@@ -244,7 +246,13 @@ export default function ActionDialog({
               void run(async () => {
                 const result = await api.share(
                   itemPath(dialog.item),
-                  expires === "never" ? null : Number(expires),
+                  expires === "never" || expires === "custom"
+                    ? null
+                    : Number(expires),
+                  shareLabel,
+                  expires === "custom"
+                    ? new Date(customExpiry).toISOString()
+                    : undefined,
                 );
                 const params = new URLSearchParams({
                   path:
@@ -263,6 +271,14 @@ export default function ActionDialog({
               });
             }}
           >
+            <label htmlFor="share-label">Link label (optional)</label>
+            <input
+              id="share-label"
+              maxLength={80}
+              value={shareLabel}
+              placeholder="For example, Alex or project review"
+              onChange={(event) => setShareLabel(event.target.value)}
+            />
             <fieldset className="share-expiry-options">
               <legend>Link Expires</legend>
               <div>
@@ -271,6 +287,7 @@ export default function ActionDialog({
                   ["7", "7 days"],
                   ["30", "30 days"],
                   ["never", "Never"],
+                  ["custom", "Custom"],
                 ].map(([value, label]) => (
                   <button
                     type="button"
@@ -283,6 +300,20 @@ export default function ActionDialog({
                 ))}
               </div>
             </fieldset>
+            {expires === "custom" && (
+              <>
+                <label htmlFor="share-custom-expiry">
+                  Expiry date and time
+                </label>
+                <input
+                  id="share-custom-expiry"
+                  type="datetime-local"
+                  required
+                  value={customExpiry}
+                  onChange={(event) => setCustomExpiry(event.target.value)}
+                />
+              </>
+            )}
             <ErrorNotice message={error} />
             <div className="dialog-actions">
               <button

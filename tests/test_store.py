@@ -295,11 +295,13 @@ def test_share_token_history_is_bounded() -> None:
     folder_path = _full_path(folder)
     tokens = [
         store.create_share(folder_path)
-        for _ in range(store_module.MAX_SHARE_TOKENS_PER_ITEM + 1)
+        for _ in range(store_module.MAX_SHARE_TOKENS_PER_ITEM)
     ]
-
-    assert store.authorize_directory(folder_path, tokens[0]) is None
+    with pytest.raises(store_module.ValidationError, match="100 links"):
+        store.create_share(folder_path)
+    assert store.authorize_directory(folder_path, tokens[0]) == folder_path
     assert store.authorize_directory(folder_path, tokens[-1]) == folder_path
+
     exported = store.export()
     child = next(iter(exported["root"]["children"].values()))
     assert len(child["share_hashes"]) == store_module.MAX_SHARE_TOKENS_PER_ITEM

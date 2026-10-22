@@ -1,3 +1,4 @@
+import BrandMark from "./BrandMark";
 import ThemeControl from "./ThemeControl";
 import {
   useCallback,
@@ -9,6 +10,13 @@ import {
   type FormEvent,
 } from "react";
 import {
+  Star,
+  FolderClosed,
+  ArrowDownUp,
+  ChartNoAxesCombined,
+  Layers,
+  Database,
+  Gauge,
   FolderPlus,
   FolderUp,
   HardDrive,
@@ -20,9 +28,7 @@ import {
   ChevronRight,
   BookOpen,
   X,
-  Settings,
   Plug,
-  Activity,
   Globe,
   ShieldCheck,
   ShieldAlert,
@@ -86,6 +92,7 @@ function getLocation() {
       ? "trash"
       : [
             "activity",
+            "starred",
             "shares",
             "connections",
             "storage",
@@ -221,6 +228,7 @@ export default function App() {
     if (!mobileNav) return;
     const navigation = document.getElementById("drive-navigation");
     const opener = document.getElementById("navigation-toggle");
+    if (navigation) navigation.scrollTop = 0;
     const controls = () =>
       Array.from(
         navigation?.querySelectorAll<HTMLElement>(
@@ -299,13 +307,15 @@ export default function App() {
       ? "Search Files and Folders"
       : view === "trash"
         ? "Search Trash"
-        : view === "activity"
-          ? "Search Transfers"
-          : view === "shares"
-            ? "Search Shared Links"
-            : view === "preloads"
-              ? "Search cached files"
-              : "";
+        : view === "starred"
+          ? "Search Starred"
+          : view === "activity"
+            ? "Search Transfers"
+            : view === "shares"
+              ? "Search Shared Links"
+              : view === "preloads"
+                ? "Search cached files"
+                : "";
   useLayoutEffect(() => {
     const requested = requestedSearchFocus.current;
     const input = searchInput.current;
@@ -314,7 +324,7 @@ export default function App() {
     input.focus();
     if (requested.select) input.select();
   }, [searchExpanded, mobile, query, searchLabel]);
-  const isFiles = view === "files" || view === "trash";
+  const isFiles = view === "files" || view === "trash" || view === "starred";
   const listingKey = JSON.stringify([
     authenticated,
     view,
@@ -323,7 +333,7 @@ export default function App() {
     isSearch ? searchOffset : 0,
     isSearch ? searchSort : "",
     isSearch ? searchOrder : "",
-    view === "trash" ? scopedQuery : "",
+    ["trash", "starred"].includes(view) ? scopedQuery : "",
   ]);
   const loadedListing = useRef<string | null>(null);
   const workspace = useRef<HTMLElement>(null);
@@ -338,6 +348,10 @@ export default function App() {
   const activeCount = items.filter(
     (item) => !["completed", "error", "cancelled"].includes(item.state),
   ).length;
+  const mobileUploadIssues = items.some(
+    (item) =>
+      item.initiatedHere && ["error", "awaiting_file"].includes(item.state),
+  );
   const notify = useCallback(
     (message: string, error = false) => setToast({ message, error }),
     [],
@@ -540,36 +554,38 @@ export default function App() {
     setLoading(!background);
     setLoadError("");
     const resultPromise =
-      view === "trash"
-        ? api.trash(scopedQuery, controller.signal)
-        : isSearch && !isPublic
-          ? api
-              .search(
-                currentPath.slice(8),
-                searchOffset,
-                searchSort === "modified" ? "date" : searchSort,
-                controller.signal,
-                searchOrder,
-              )
-              .then((result) => {
-                if (!controller.signal.aborted) {
-                  setSearchMore(result.has_more);
-                  setNextSearchOffset(result.next_offset);
-                  setSearchItems(result.items);
-                  if (!result.items.length && searchOffset > 0)
-                    setSearchOffset(0);
-                }
-                return {
-                  data: {
-                    name: "Search Results",
-                    contents: Object.fromEntries(
-                      result.items.map((item) => [item.id, item]),
-                    ),
-                  } as Directory,
-                  auth_home_path: undefined,
-                };
-              })
-          : api.directory(currentPath, location.auth, controller.signal);
+      view === "starred"
+        ? api.starred(scopedQuery, controller.signal)
+        : view === "trash"
+          ? api.trash(scopedQuery, controller.signal)
+          : isSearch && !isPublic
+            ? api
+                .search(
+                  currentPath.slice(8),
+                  searchOffset,
+                  searchSort === "modified" ? "date" : searchSort,
+                  controller.signal,
+                  searchOrder,
+                )
+                .then((result) => {
+                  if (!controller.signal.aborted) {
+                    setSearchMore(result.has_more);
+                    setNextSearchOffset(result.next_offset);
+                    setSearchItems(result.items);
+                    if (!result.items.length && searchOffset > 0)
+                      setSearchOffset(0);
+                  }
+                  return {
+                    data: {
+                      name: "Search Results",
+                      contents: Object.fromEntries(
+                        result.items.map((item) => [item.id, item]),
+                      ),
+                    } as Directory,
+                    auth_home_path: undefined,
+                  };
+                })
+            : api.directory(currentPath, location.auth, controller.signal);
     void resultPromise
       .then((result) => {
         if (controller.signal.aborted) return;
@@ -625,7 +641,7 @@ export default function App() {
     notify,
   ]);
   useEffect(() => {
-    if (!isFiles || isSearch || view === "trash") return;
+    if (!isFiles || isSearch || view === "trash" || view === "starred") return;
     let cancelled = false;
     const realPath = isPublic
       ? "/" + currentPath.slice(7).replace(/^\/+/, "")
@@ -697,32 +713,34 @@ export default function App() {
     }
   };
   const title =
-    view === "preloads"
-      ? "Preloads"
-      : view === "performance"
-        ? "Performance"
-        : view === "trash"
-          ? "Trash"
-          : view === "activity"
-            ? "Transfers"
-            : view === "shares"
-              ? "Shared Links"
-              : view === "connections"
-                ? "Connections"
-                : view === "storage"
-                  ? "Storage & Backups"
-                  : view === "settings"
-                    ? ADMIN_SETTING_TITLES[location.settingsSection] ||
-                      "Settings"
-                    : isSearch
-                      ? "Search Results"
-                      : isPublic
-                        ? directory.name && directory.name !== "/"
-                          ? directory.name
-                          : "Shared Files"
-                        : currentPath === "/"
-                          ? "My Files"
-                          : directory.name || "Folder";
+    view === "starred"
+      ? "Starred"
+      : view === "preloads"
+        ? "Preloads"
+        : view === "performance"
+          ? "Performance"
+          : view === "trash"
+            ? "Trash"
+            : view === "activity"
+              ? "Transfers"
+              : view === "shares"
+                ? "Shared Links"
+                : view === "connections"
+                  ? "Connections"
+                  : view === "storage"
+                    ? "Storage & Backups"
+                    : view === "settings"
+                      ? ADMIN_SETTING_TITLES[location.settingsSection] ||
+                        "Settings"
+                      : isSearch
+                        ? "Search Results"
+                        : isPublic
+                          ? directory.name && directory.name !== "/"
+                            ? directory.name
+                            : "Shared Files"
+                          : currentPath === "/"
+                            ? "My Files"
+                            : directory.name || "Folder";
   useEffect(() => {
     document.title = title + " · TGDrive";
   }, [title]);
@@ -966,33 +984,37 @@ export default function App() {
   const pageHeading = (
     <div className="page-heading">
       <div>
-        {isFiles && !isSearch && view !== "trash" && crumbs.length > 1 && (
-          <nav className="breadcrumbs" aria-label="Breadcrumb">
-            {crumbs.slice(0, -1).map((crumb, index) => (
-              <span key={crumb.path}>
-                {index > 0 && <ChevronRight size={14} aria-hidden="true" />}
-                <a
-                  href={
-                    "/?" +
-                    new URLSearchParams({
-                      path: crumb.path,
-                      ...(location.auth ? { auth: location.auth } : {}),
-                    })
-                  }
-                  onClick={(event) => {
-                    event.preventDefault();
-                    navigate(crumb.path, "files", location.auth);
-                  }}
-                  aria-current={
-                    index === crumbs.length - 1 ? "page" : undefined
-                  }
-                >
-                  {crumb.name}
-                </a>
-              </span>
-            ))}
-          </nav>
-        )}
+        {isFiles &&
+          !isSearch &&
+          view !== "trash" &&
+          view !== "starred" &&
+          crumbs.length > 1 && (
+            <nav className="breadcrumbs" aria-label="Breadcrumb">
+              {crumbs.slice(0, -1).map((crumb, index) => (
+                <span key={crumb.path}>
+                  {index > 0 && <ChevronRight size={14} aria-hidden="true" />}
+                  <a
+                    href={
+                      "/?" +
+                      new URLSearchParams({
+                        path: crumb.path,
+                        ...(location.auth ? { auth: location.auth } : {}),
+                      })
+                    }
+                    onClick={(event) => {
+                      event.preventDefault();
+                      navigate(crumb.path, "files", location.auth);
+                    }}
+                    aria-current={
+                      index === crumbs.length - 1 ? "page" : undefined
+                    }
+                  >
+                    {crumb.name}
+                  </a>
+                </span>
+              ))}
+            </nav>
+          )}
         <div className="page-title-line">
           <h1>{title}</h1>
           {config.demo_data && (
@@ -1162,13 +1184,16 @@ export default function App() {
             }}
           >
             <span className="brand-symbol">
-              <HardDrive size={23} />
+              <BrandMark size={30} />
             </span>
             <strong>TGDrive</strong>
           </a>
           {mobile && (
             <div className="mobile-nav-heading">
-              <strong>TGDrive</strong>
+              <span className="mobile-drawer-brand">
+                <BrandMark size={28} />
+                <strong>TGDrive</strong>
+              </span>
               <button
                 className="icon-button"
                 aria-label="Close Navigation"
@@ -1197,12 +1222,13 @@ export default function App() {
             {navigationLink({
               view: "files",
               label: "My Files",
-              icon: HardDrive,
+              icon: FolderClosed,
             })}
+            {navigationLink({ view: "starred", label: "Starred", icon: Star })}
             {navigationLink({
               view: "activity",
               label: "Transfers",
-              icon: Activity,
+              icon: ArrowDownUp,
             })}
             {navigationLink({
               view: "shares",
@@ -1220,12 +1246,12 @@ export default function App() {
               {navigationLink({
                 view: "performance",
                 label: "Performance",
-                icon: Activity,
+                icon: ChartNoAxesCombined,
               })}
               {navigationLink({
                 view: "preloads",
                 label: "Preloads",
-                icon: HardDrive,
+                icon: Layers,
               })}
             </div>
             <div className="admin-nav" role="group" aria-label="Configuration">
@@ -1234,19 +1260,19 @@ export default function App() {
                 view: "settings",
                 section: "cache",
                 label: "Cache settings",
-                icon: HardDrive,
+                icon: Database,
               })}
               {navigationLink({
                 view: "settings",
                 section: "transfers",
                 label: "Transfer limits",
-                icon: Upload,
+                icon: Gauge,
               })}
               {navigationLink({
                 view: "settings",
                 section: "regional",
                 label: "Timezone",
-                icon: Settings,
+                icon: Globe,
               })}
             </div>
             <div className="admin-nav" role="group" aria-label="Management">
@@ -1330,7 +1356,7 @@ export default function App() {
         <header className="topbar" hidden={!mobile && !isPublic}>
           {isPublic ? (
             <a href="/" className="brand">
-              <HardDrive size={22} />
+              <BrandMark size={28} />
               <strong>TGDrive</strong>
             </a>
           ) : (
@@ -1345,6 +1371,32 @@ export default function App() {
               >
                 <Menu size={22} />
               </button>
+            </>
+          )}
+          {mobile && !isPublic && (
+            <>
+              <a
+                className="mobile-brand"
+                href="/"
+                onClick={(event) => {
+                  event.preventDefault();
+                  navigate("/");
+                }}
+              >
+                <BrandMark size={24} /> TGDrive
+              </a>
+              {view === "files" && !isSearch && !dialog && (
+                <button
+                  id="compact-new-button"
+                  disabled={admissionPaused}
+                  className="mobile-new primary-button"
+                  onClick={() => setNewOpen(!newOpen)}
+                  aria-expanded={newOpen}
+                  aria-controls="new-menu"
+                >
+                  <Plus size={18} /> New
+                </button>
+              )}
             </>
           )}
           {mobile && <ThemeControl />}
@@ -1385,7 +1437,9 @@ export default function App() {
           {isFiles ? (
             <FileBrowser
               header={pageHeading}
-              searchQuery={view === "trash" ? scopedQuery : ""}
+              searchQuery={
+                ["trash", "starred"].includes(view) ? scopedQuery : ""
+              }
               directory={directory}
               listingKey={listingKey}
               highlightId={location.highlightId}
@@ -1393,6 +1447,20 @@ export default function App() {
               error={loadError}
               isPublic={isPublic}
               isTrash={view === "trash"}
+              isStarred={view === "starred"}
+              onStar={(item) => {
+                void api
+                  .star(itemPath(item), !item.starred)
+                  .then(() => {
+                    notify(
+                      item.starred
+                        ? "Removed from Starred."
+                        : "Added to Starred.",
+                    );
+                    reload();
+                  })
+                  .catch((error) => notify(errorMessage(error), true));
+              }}
               isSearch={isSearch}
               auth={location.auth}
               onReload={reload}
@@ -1496,31 +1564,35 @@ export default function App() {
             />
           )}
         </section>
+        {mobile &&
+          !isPublic &&
+          view !== "activity" &&
+          (activeCount > 0 || mobileUploadIssues) && (
+            <button
+              className="mobile-transfer-status"
+              onClick={() => navigate("/", "activity")}
+              aria-label="Open transfer progress"
+            >
+              <Upload size={18} aria-hidden="true" />
+              <span>
+                {activeCount > 0
+                  ? activeCount +
+                    (activeCount === 1
+                      ? " upload in progress"
+                      : " uploads in progress")
+                  : "Uploads need attention"}
+              </span>
+              <ChevronRight size={18} aria-hidden="true" />
+            </button>
+          )}
       </main>
-      {!isPublic && ["files", "trash", "shares"].includes(view) && (
+      {!mobile && !isPublic && ["files", "trash", "shares"].includes(view) && (
         <TransferPanel
           pageContext={view}
           items={items}
           onLocate={(item, folder) => void locateTransfer(item, folder)}
           onError={(message) => notify(message, true)}
         />
-      )}
-      {!isPublic && view === "files" && !isSearch && !dialog && (
-        <button
-          id="compact-new-button"
-          disabled={admissionPaused}
-          className="mobile-new primary-button"
-          onClick={() => {
-            if (view !== "files") {
-              navigate("/", "files");
-              setNewOpen(true);
-            } else setNewOpen(!newOpen);
-          }}
-          aria-expanded={newOpen}
-          aria-controls="new-menu"
-        >
-          <Plus size={21} /> New
-        </button>
       )}
       {newOpen && (
         <>

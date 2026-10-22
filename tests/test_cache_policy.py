@@ -386,3 +386,60 @@ async def test_current_availability_refresh_shrinks_and_recovers_retention_and_s
         assert recovered["scratch"]["bytes"] == 0
     finally:
         await cache.close()
+
+
+async def test_inventory_orders_actual_downloads_not_cache_hits_and_retains_order(
+    tmp_path, monkeypatch
+):
+    cache = MediaReadCache(
+        tmp_path,
+        MediaCachePolicy(
+            memory_max_bytes=8 * BLOCK, disk_max_bytes=8 * BLOCK, min_free_bytes=0
+        ),
+    )
+    clock = [1000.0]
+    monkeypatch.setattr("tgdrive.media_reader.time.time", lambda: clock[0])
+    first = cache.register_file(
+        channel_id=CHANNEL, message_id=77, size=2 * BLOCK, name="First"
+    )
+    second = cache.register_file(
+        channel_id=CHANNEL, message_id=88, size=3, name="Second"
+    )
+    try:
+        await cache.get(
+            key(0, 2 * BLOCK), BLOCK, lambda: asyncio.sleep(0, result=b"a" * BLOCK)
+        )
+        clock[0] = 1001.0
+        await cache.get(
+            key(size=3, message=88), 3, lambda: asyncio.sleep(0, result=b"abc")
+        )
+        assert [row["id"] for row in (await cache.snapshot())["files"]] == [
+            second,
+            first,
+        ]
+        clock[0] = 1002.0
+        cache.register_file(
+            channel_id=CHANNEL, message_id=77, size=2 * BLOCK, name="First"
+        )
+        await cache.get(
+            key(0, 2 * BLOCK), BLOCK, lambda: pytest.fail("must reuse cached bytes")
+        )
+        assert [row["id"] for row in (await cache.snapshot())["files"]] == [
+            second,
+            first,
+        ]
+        clock[0] = 1003.0
+        await cache.get(
+            key(1, 2 * BLOCK), BLOCK, lambda: asyncio.sleep(0, result=b"b" * BLOCK)
+        )
+        rows = (await cache.snapshot())["files"]
+        assert [row["id"] for row in rows] == [first, second]
+        assert rows[0]["last_download"] == 1003.0
+        await cache.close()
+        cache = MediaReadCache(tmp_path, cache.policy)
+        assert [row["id"] for row in (await cache.snapshot())["files"]] == [
+            first,
+            second,
+        ]
+    finally:
+        await cache.close()

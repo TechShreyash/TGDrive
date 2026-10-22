@@ -95,6 +95,15 @@ export interface UploadPreferences {
   bot_upload_slots: number;
 }
 export const api = {
+  starred: (q = "", signal?: AbortSignal) =>
+    request<{ data: Directory; auth_home_path?: string }>(
+      "/api/v1/starred?" + new URLSearchParams({ q }),
+      undefined,
+      { signal },
+    ),
+  star: (path: string, starred: boolean) =>
+    request("/api/v1/starred", { path, starred }, { method: "PATCH" }),
+
   transferLocation: (
     transfer_id: string | undefined,
     destination: string,
@@ -195,20 +204,31 @@ export const api = {
       allow_public_exposure,
     }),
   shares: () => request<{ shares: Share[] }>("/api/v1/shares"),
-  shareLink: (path: string) =>
+  shareLink: (path: string, share_id?: string) =>
     request<{
       auth: string;
       path: string;
       type: "file" | "folder";
       node_id: string;
-    }>("/api/v1/shares/link", { path }),
-  share: (path: string, expires_in_days: number | null) =>
+    }>("/api/v1/shares/link", { path, share_id }),
+  share: (
+    path: string,
+    expires_in_days: number | null,
+    label = "",
+    expires_at?: string,
+  ) =>
     request<{ auth: string; path: string; expires_at: string | null }>(
       "/api/v1/shares",
-      { path, expires_in_days },
+      { path, expires_in_days, label, expires_at },
     ),
-  revoke: (path: string) =>
-    request("/api/v1/shares", { path }, { method: "DELETE" }),
+  revoke: (path: string, share_id?: string) =>
+    request("/api/v1/shares", { path, share_id }, { method: "DELETE" }),
+  updateShare: (share_id: string, label: string, expires_at: string | null) =>
+    request(
+      "/api/v1/shares",
+      { share_id, label, expires_at },
+      { method: "PATCH" },
+    ),
   status: (signal?: AbortSignal) =>
     request<ServerStatus>("/api/v1/status", undefined, {
       signal: signal

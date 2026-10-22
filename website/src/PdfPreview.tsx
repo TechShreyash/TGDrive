@@ -12,7 +12,13 @@ import {
   useRef,
   useState,
 } from "react";
-import { Minus, Plus, Scan, SlidersHorizontal } from "lucide-react";
+import {
+  ArrowLeftRight,
+  Minus,
+  Plus,
+  Scan,
+  SlidersHorizontal,
+} from "lucide-react";
 import { createPortal } from "react-dom";
 import {
   getDocument,
@@ -41,7 +47,7 @@ const MAX_TOTAL_TEXT_RUNS = 12_500;
 const MAX_TOTAL_TEXT_CHARACTERS = 500_000;
 const PAGE_GAP = 24;
 const MIN_ZOOM = 0.25;
-const MAX_ZOOM = 3;
+const MAX_ZOOM = 5;
 type PageSize = { width: number; height: number };
 type PageFrame = PageSize & { top: number };
 type Layout = { pages: PageFrame[]; width: number; height: number };
@@ -318,6 +324,7 @@ export default function PdfPreview({
   const [busy, setBusy] = useState(true);
   const [error, setError] = useState("");
   const [zoom, setZoom] = useState<number | null>(null);
+  const [fit, setFit] = useState<"width" | "page">("width");
   const [view, setView] = useState({ top: 0, width: 800, height: 700 });
   const viewRef = useRef(view);
   viewRef.current = view;
@@ -385,6 +392,7 @@ export default function PdfPreview({
     setDocument(null);
     setSizes(new Map());
     setZoom(null);
+    setFit("width");
     anchor.current = null;
     if (scroll.current) scroll.current.scrollTop = 0;
     void (async () => {
@@ -436,15 +444,19 @@ export default function PdfPreview({
   }, [url, size]);
 
   const firstSize = sizes.get(1) ?? { width: 612, height: 792 };
-  const fitWidth = Math.max(64, Math.min(1100, view.width - 32));
-  const scale = zoom ?? fitWidth / firstSize.width;
+  const fitWidth = Math.max(64, view.width - 32);
+  const fitHeight = Math.max(64, view.height - 32);
   const layout = useMemo<Layout>(() => {
     if (!document) return { pages: [], width: view.width, height: 0 };
     let top = 16;
     let width = view.width;
     const pages = Array.from({ length: document.numPages }, (_, index) => {
       const base = sizes.get(index + 1) ?? firstSize;
-      const pageScale = zoom ?? fitWidth / base.width;
+      const pageScale =
+        zoom ??
+        (fit === "page"
+          ? Math.min(fitWidth / base.width, fitHeight / base.height)
+          : fitWidth / base.width);
       const frame = {
         top,
         width: base.width * pageScale,
@@ -455,7 +467,7 @@ export default function PdfPreview({
       return frame;
     });
     return { pages, width, height: Math.max(0, top - PAGE_GAP + 16) };
-  }, [document, sizes, firstSize, fitWidth, zoom, view.width]);
+  }, [document, sizes, firstSize, fitWidth, fitHeight, fit, zoom, view.width]);
   layoutRef.current = layout;
   useLayoutEffect(() => {
     const target = scroll.current;
@@ -487,6 +499,19 @@ export default function PdfPreview({
   }, [rememberAnchor, syncView]);
 
   const current = layout.pages.length ? pageAt(layout.pages, view.top + 24) : 0;
+  const currentSize = sizes.get(current + 1) ?? firstSize;
+  const scale =
+    zoom ??
+    (fit === "page"
+      ? Math.min(fitWidth / currentSize.width, fitHeight / currentSize.height)
+      : fitWidth / currentSize.width);
+  function fitView(mode: "width" | "page") {
+    rememberAnchor();
+    if (mode === "page") anchor.current = { index: current, fraction: 0 };
+    if (scroll.current) scroll.current.scrollLeft = 0;
+    setFit(mode);
+    setZoom(null);
+  }
   let firstVisible = layout.pages.length ? pageAt(layout.pages, view.top) : 0;
   if (
     firstVisible < layout.pages.length - 1 &&
@@ -599,12 +624,22 @@ export default function PdfPreview({
                 <button
                   className="secondary-button pdf-fit"
                   aria-label="Fit Width"
-                  aria-pressed={zoom === null}
+                  aria-pressed={zoom === null && fit === "width"}
                   disabled={!document}
-                  onClick={() => setScale(null)}
+                  onClick={() => fitView("width")}
+                >
+                  <ArrowLeftRight size={16} />{" "}
+                  <span className="pdf-fit-label">Fit Width</span>
+                </button>
+                <button
+                  className="secondary-button pdf-fit"
+                  aria-label="Fit Page"
+                  aria-pressed={zoom === null && fit === "page"}
+                  disabled={!document}
+                  onClick={() => fitView("page")}
                 >
                   <Scan size={16} />{" "}
-                  <span className="pdf-fit-label">Fit Width</span>
+                  <span className="pdf-fit-label">Fit Page</span>
                 </button>
               </div>
             </div>

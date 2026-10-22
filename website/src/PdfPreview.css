@@ -56,3 +56,26 @@
 .pdf-text-layer[data-main-rotation="270"] {
   transform: rotate(270deg) translateX(-100%);
 }
+
+@media (max-width: 720px) {
+  .pdf-controls .pdf-toolbar {
+    position: fixed;
+    inset: calc(64px + env(safe-area-inset-top)) 12px auto;
+    width: auto;
+    max-width: none;
+    flex-direction: column;
+    align-items: stretch;
+  }
+  .pdf-toolbar .inline-actions {
+    flex-wrap: wrap;
+    gap: 6px;
+  }
+  .pdf-toolbar .pdf-fit {
+    width: auto;
+    gap: 6px;
+    padding: 6px 10px;
+  }
+  .pdf-toolbar .pdf-fit-label {
+    display: inline;
+  }
+}

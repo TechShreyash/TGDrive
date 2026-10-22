@@ -6,6 +6,7 @@ export interface DriveItem {
   size?: number;
   upload_date?: string;
   parent_names?: string[];
+  starred?: boolean;
 }
 export interface Directory {
   name?: string;
@@ -59,6 +60,7 @@ export interface UploadSnapshot {
   checksums?: { offset: number; size: number; sha256: string }[];
 }
 export interface Share {
+  label?: string;
   id?: string;
   node_id?: string;
   path: string;
@@ -98,6 +100,7 @@ export interface ServerStatus {
   [key: string]: unknown;
 }
 export type View =
+  | "starred"
   | "files"
   | "trash"
   | "shares"
@@ -187,7 +190,7 @@ export function fileUrl(path: string, auth = "", download = false): string {
 }
 
 export interface PreviewDescriptor {
-  kind: "text" | "pdf" | "video" | "unsupported";
+  kind: "text" | "pdf" | "video" | "book" | "unsupported";
   size: number;
   text?: string;
   language?: string;
