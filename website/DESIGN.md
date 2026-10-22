@@ -16,9 +16,17 @@ The file manager is one working surface adjoining the window and sidebar. Search
 title and useful actions share a compact toolbar. The list scrolls below fixed
 controls. No rounded outer frame or empty bottom action strip.
 
-Sidebar uses static Monitor, Configuration and Management groups. All contents,
-including Documentation and Log Out, scroll together. Labels stay on one line.
-Keep the original compact row density and 232px desktop sidebar.
+Everyday destinations stay visible in the sidebar. Rare destinations belong to
+the collapsible **Tools & settings** group, closed on everyday file routes and
+opened for an active tool route. Monitor, Configuration and Management are
+sibling categories within one indented scope, joined by a subtle 1px rule.
+Their headings, icons and link spacing follow the same hierarchy throughout.
+All contents, including Documentation and Log Out, scroll together. Keep labels
+on one line, compact row density and the 232px desktop sidebar.
+
+Documentation and a small GitHub icon link share a quiet support row. The GitHub
+link uses the recognizable Octocat with an accessible name and 44px target;
+it is not a promotional navigation destination or a persistent star request.
 
 Group related analytics/settings within 12px rounded sections with one subtle
 border. Do not nest decorative cards. Use 16px section padding, 16–20px section
@@ -29,6 +37,15 @@ Performance: Overview owns traffic and lifetime totals; Accounts owns capacity a
 queue; Resources owns CPU/RAM and storage. Avoid duplicated totals across tabs.
 Show uncertainty and missing measurements honestly. Tooltip follows the pointer
 and stays inside its plot; keyboard/touch sample inspection remains available.
+
+## Brand mark
+
+Use the authored TG monogram in `public/static/tgdrive-mark.svg` through the shared
+`BrandMark` component on login, sidebar and phone headers, and the same asset as
+the favicon. Its two geometric paths use the incumbent blue, with no outer badge,
+paper plane, gradient or emoji. Keep it clear at 16–32px; TGDrive's wordmark stays
+in the existing Inter weight and neutral foreground beside it. The old
+`tgdrive.svg` remains a compatibility asset, not the current application identity.
 
 ## Tokens
 

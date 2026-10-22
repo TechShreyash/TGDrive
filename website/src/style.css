@@ -439,10 +439,34 @@ form > select {
 .sidebar-tools[open] .nav-disclosure {
   transform: rotate(90deg);
 }
-.sidebar-tools-content > .monitor-nav {
+.sidebar-tools-content {
+  margin: 8px 0 4px 16px;
+  padding-inline-start: 8px;
+  border-inline-start: 1px solid var(--line);
+}
+.sidebar-tools-content > .monitor-nav,
+.sidebar-tools-content > .admin-nav {
   border-top: 0;
-  margin-top: 4px;
+  margin-top: 16px;
   padding-top: 0;
+}
+.sidebar-tools-content > .monitor-nav:first-child {
+  margin-top: 0;
+}
+.sidebar-tools-content a {
+  min-height: 44px;
+  height: auto;
+  gap: 8px;
+  padding: 0 8px;
+  font-size: 13px;
+}
+.sidebar-tools-content a > svg {
+  width: 16px;
+  height: 16px;
+}
+.sidebar-tools-content .nav-section-label {
+  padding: 0 8px 2px;
+  font-size: 12px;
 }
 .monitor-nav,
 .admin-nav {
@@ -484,6 +508,33 @@ form > select {
   margin: 0;
   font-size: 11px;
   line-height: 18px;
+}
+.sidebar-support {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 8px;
+}
+.sidebar-support .sidebar-help {
+  flex: 1;
+  width: auto;
+  min-width: 0;
+  margin: 0;
+  padding-inline: 4px;
+  gap: 8px;
+  font-size: 13px;
+}
+.sidebar-project {
+  display: grid;
+  place-items: center;
+  flex: 0 0 44px;
+  height: 44px;
+  border-radius: 8px;
+  color: var(--muted);
+}
+.sidebar-project:hover {
+  color: var(--ink);
+  background: var(--hover);
 }
 .sidebar-help,
 .sidebar-logout {

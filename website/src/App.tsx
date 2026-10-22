@@ -1,4 +1,5 @@
 import BrandMark from "./BrandMark";
+import GitHubMark from "./GitHubMark";
 import ThemeControl from "./ThemeControl";
 import {
   useCallback,
@@ -34,7 +35,6 @@ import {
   ShieldAlert,
   Menu,
   SlidersHorizontal,
-  CodeXml,
 } from "lucide-react";
 import { api, ApiError, errorMessage } from "./api";
 import {
@@ -1002,7 +1002,7 @@ export default function App() {
           navigate(item.path || "/", item.view, "", false, {}, item.section);
         }}
       >
-        <item.icon size={19} />
+        <item.icon size={19} aria-hidden="true" />
         <span>{item.label}</span>
         {item.view === "activity" && activeCount > 0 && (
           <span className="nav-count">{activeCount}</span>
@@ -1299,7 +1299,10 @@ export default function App() {
               open={toolsOpen}
               onToggle={(event) => setToolsOpen(event.currentTarget.open)}
             >
-              <summary>
+              <summary
+                id="tools-settings-summary"
+                aria-controls="tools-settings-content"
+              >
                 <SlidersHorizontal size={19} aria-hidden="true" />
                 <span>Tools & settings</span>
                 <ChevronRight
@@ -1308,7 +1311,12 @@ export default function App() {
                   aria-hidden="true"
                 />
               </summary>
-              <div className="sidebar-tools-content">
+              <div
+                className="sidebar-tools-content"
+                id="tools-settings-content"
+                role="group"
+                aria-labelledby="tools-settings-summary"
+              >
                 <div className="monitor-nav" role="group" aria-label="Monitor">
                   <span className="nav-section-label">Monitor</span>
                   {navigationLink({
@@ -1369,22 +1377,26 @@ export default function App() {
                 Local demo · sample content & metrics
               </small>
             )}
-            <a
-              className="sidebar-help"
-              href="https://github.com/TechShreyash/TGDrive/blob/dev/docs/README.md"
-              target="_blank"
-              rel="noopener noreferrer"
-            >
-              <BookOpen size={18} aria-hidden="true" /> Documentation
-            </a>
-            <a
-              className="sidebar-help"
-              href="https://github.com/TechShreyash/TGDrive"
-              target="_blank"
-              rel="noopener noreferrer"
-            >
-              <CodeXml size={18} aria-hidden="true" /> Star on GitHub
-            </a>
+            <div className="sidebar-support">
+              <a
+                className="sidebar-help"
+                href="https://github.com/TechShreyash/TGDrive/blob/dev/docs/README.md"
+                target="_blank"
+                rel="noopener noreferrer"
+              >
+                <BookOpen size={18} aria-hidden="true" /> Documentation
+              </a>
+              <a
+                className="sidebar-project"
+                href="https://github.com/TechShreyash/TGDrive"
+                target="_blank"
+                rel="noopener noreferrer"
+                aria-label="TGDrive on GitHub"
+                title="View TGDrive on GitHub"
+              >
+                <GitHubMark />
+              </a>
+            </div>
             <SidebarLogout
               onLoggedOut={() => {
                 setMobileNav(false);

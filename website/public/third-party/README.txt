@@ -103,3 +103,9 @@ https://mantine.dev/ and https://github.com/mantinedev/mantine
 ui-components-LICENSES.txt preserves the library and new dependency license texts,
 including the upstream notice for react-remove-scroll-bar whose npm package omits it.
 Preserve this file with emitted assets.
+
+Primer Octicons GitHub mark
+--------------------------
+The GitHub repository link uses mark-github-16 from Primer Octicons.
+Source: https://github.com/primer/octicons/blob/main/icons/mark-github-16.svg
+License: MIT, GitHub Inc. The complete notice is in octicons-MIT.txt.

@@ -117,11 +117,19 @@ def test_sidebar_keeps_rare_tools_collapsed_and_exposes_project_link(
     expect(page.get_by_role("link", name="Performance", exact=True)).not_to_be_visible()
     for label in ["My Files", "Starred", "Transfers", "Shared Links", "Trash"]:
         expect(page.get_by_role("link", name=label, exact=True)).to_be_in_viewport()
-    github = page.get_by_role("link", name="Star on GitHub", exact=True)
+    github = page.get_by_role("link", name="TGDrive on GitHub", exact=True)
     expect(github).to_have_attribute("href", "https://github.com/TechShreyash/TGDrive")
     expect(github).to_have_attribute("target", "_blank")
     expect(github).to_have_attribute("rel", "noopener noreferrer")
     expect(github).to_be_in_viewport()
+    assert github.inner_text() == ""
+    support = page.locator(".sidebar-support")
+    assert support.locator("a").count() == 2
+    assert support.evaluate("e => getComputedStyle(e).position === 'static'")
+    assert github.bounding_box()["width"] >= 44
+    assert github.bounding_box()["height"] >= 44
+    docs = support.get_by_role("link", name="Documentation", exact=True)
+    assert abs(docs.bounding_box()["y"] - github.bounding_box()["y"]) <= 1
     expect(page.get_by_role("button", name="Log Out", exact=True)).to_be_in_viewport()
     ARTIFACTS.mkdir(parents=True, exist_ok=True)
     page.screenshot(
@@ -130,6 +138,17 @@ def test_sidebar_keeps_rare_tools_collapsed_and_exposes_project_link(
     summary.focus()
     page.keyboard.press("Enter")
     expect(tools).to_have_attribute("open", "")
+    children = page.get_by_role("group", name="Tools & settings", exact=True)
+    for category in ("Monitor", "Configuration", "Management"):
+        expect(children.get_by_role("group", name=category, exact=True)).to_be_visible()
+    assert children.evaluate("""e => {
+        const parent = e.closest('details').querySelector('summary');
+        return e.getBoundingClientRect().x > parent.getBoundingClientRect().x + 12
+          && getComputedStyle(e).borderInlineStartWidth === '1px'
+          && [...e.querySelectorAll('[role=group]')].every(group =>
+            group.getBoundingClientRect().x ===
+              e.firstElementChild.getBoundingClientRect().x);
+    }""")
     page.get_by_role("link", name="Performance", exact=True).click()
     expect(page.get_by_role("heading", name="Performance", exact=True)).to_be_visible()
     open_drawer()
@@ -156,3 +175,50 @@ def test_sidebar_keeps_rare_tools_collapsed_and_exposes_project_link(
     summary.click()
     expect(tools).not_to_have_attribute("open", "")
     assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
+
+
+@pytest.mark.parametrize(
+    "width,theme", [(1440, "light"), (390, "dark"), (320, "light")]
+)
+def test_brand_asset_and_sidebar_footer_stay_clear_in_both_themes(
+    server, desktop, width, theme
+):
+    _, page = desktop
+    page.set_viewport_size({"width": width, "height": 844})
+    page.emulate_media(color_scheme=theme)
+    page.goto(server.url)
+    expect(page.locator("#login-dialog")).to_be_visible()
+    logo = page.locator(".login-page .brand-mark")
+    expect(logo).to_have_attribute("src", "/static/tgdrive-mark.svg")
+    logo.evaluate("img => img.decode()")
+    assert logo.evaluate("img => img.complete && img.naturalWidth > 0")
+    expect(page.locator('link[rel="icon"]')).to_have_attribute(
+        "href", "/static/tgdrive-mark.svg"
+    )
+    ARTIFACTS.mkdir(parents=True, exist_ok=True)
+    page.screenshot(
+        path=ARTIFACTS / f"brand-login-{theme}-{width}.png", animations="disabled"
+    )
+    login(page)
+    for image in page.locator(".brand-mark").all():
+        expect(image).to_have_attribute("src", "/static/tgdrive-mark.svg")
+        image.evaluate("img => img.decode()")
+        assert image.evaluate("img => img.complete && img.naturalWidth > 0")
+    if width <= 720:
+        page.screenshot(
+            path=ARTIFACTS / f"brand-mobile-header-{theme}-{width}.png",
+            animations="disabled",
+        )
+        page.get_by_role("button", name="Toggle Navigation", exact=True).click()
+    sidebar = page.locator(".sidebar")
+    assert sidebar.evaluate("e => e.scrollWidth <= e.clientWidth")
+    support = sidebar.locator(".sidebar-support")
+    assert support.evaluate("e => e.scrollWidth <= e.clientWidth")
+    github = support.get_by_role("link", name="TGDrive on GitHub", exact=True)
+    support.get_by_role("link", name="Documentation", exact=True).focus()
+    page.keyboard.press("Tab")
+    expect(github).to_be_focused()
+    assert github.evaluate("e => getComputedStyle(e).outlineStyle !== 'none'")
+    page.screenshot(
+        path=ARTIFACTS / f"brand-sidebar-{theme}-{width}.png", animations="disabled"
+    )
