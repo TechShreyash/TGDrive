@@ -40,12 +40,14 @@ and stays inside its plot; keyboard/touch sample inspection remains available.
 
 ## Brand mark
 
-Use the authored TG monogram in `public/static/tgdrive-mark.svg` through the shared
-`BrandMark` component on login, sidebar and phone headers, and the same asset as
-the favicon. Its two geometric paths use the incumbent blue, with no outer badge,
-paper plane, gradient or emoji. Keep it clear at 16–32px; TGDrive's wordmark stays
-in the existing Inter weight and neutral foreground beside it. The old
-`tgdrive.svg` remains a compatibility asset, not the current application identity.
+Use the authored storage symbol in `public/static/tgdrive-symbol.svg` through the
+shared `BrandMark` component on login, sidebar and phone headers, and the same
+asset as the favicon. Three solid geometric faces and open seams form a compact
+storage cube in the incumbent blue. The symbol contains no lettering and sits
+beside the existing neutral Inter TGDrive wordmark without repeating its initials.
+Keep it clear at 16-32px, without an outer badge, paper plane, gradient or emoji.
+The superseded TG monogram is removed. The older `tgdrive.svg` remains a
+compatibility asset, not the current application identity.
 
 ## Tokens
 

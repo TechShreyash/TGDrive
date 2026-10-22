@@ -178,7 +178,7 @@ def test_sidebar_keeps_rare_tools_collapsed_and_exposes_project_link(
 
 
 @pytest.mark.parametrize(
-    "width,theme", [(1440, "light"), (390, "dark"), (320, "light")]
+    "width,theme", [(1440, "light"), (1440, "dark"), (390, "dark"), (320, "light")]
 )
 def test_brand_asset_and_sidebar_footer_stay_clear_in_both_themes(
     server, desktop, width, theme
@@ -189,11 +189,11 @@ def test_brand_asset_and_sidebar_footer_stay_clear_in_both_themes(
     page.goto(server.url)
     expect(page.locator("#login-dialog")).to_be_visible()
     logo = page.locator(".login-page .brand-mark")
-    expect(logo).to_have_attribute("src", "/static/tgdrive-mark.svg")
+    expect(logo).to_have_attribute("src", "/static/tgdrive-symbol.svg")
     logo.evaluate("img => img.decode()")
     assert logo.evaluate("img => img.complete && img.naturalWidth > 0")
     expect(page.locator('link[rel="icon"]')).to_have_attribute(
-        "href", "/static/tgdrive-mark.svg"
+        "href", "/static/tgdrive-symbol.svg"
     )
     ARTIFACTS.mkdir(parents=True, exist_ok=True)
     page.screenshot(
@@ -201,7 +201,7 @@ def test_brand_asset_and_sidebar_footer_stay_clear_in_both_themes(
     )
     login(page)
     for image in page.locator(".brand-mark").all():
-        expect(image).to_have_attribute("src", "/static/tgdrive-mark.svg")
+        expect(image).to_have_attribute("src", "/static/tgdrive-symbol.svg")
         image.evaluate("img => img.decode()")
         assert image.evaluate("img => img.complete && img.naturalWidth > 0")
     if width <= 720:
