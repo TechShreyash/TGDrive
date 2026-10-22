@@ -21,18 +21,20 @@ def test_starred_page_add_find_open_and_remove(server, desktop, width):
     assert page.locator(".brand-mark").first.evaluate(
         "img => img.complete && img.naturalWidth > 0"
     )
-    page.locator('summary[aria-label="Actions for 資料 📁"]').click()
+    page.locator('summary[aria-label="Actions for 資料"]').click()
     page.get_by_role("button", name="Add to Starred", exact=True).click()
-    expect(page.get_by_role("img", name="Starred", exact=True)).to_be_visible()
+    expect(
+        page.locator(".file-status-label").filter(has_text="Starred")
+    ).to_be_visible()
     if width < 721:
         page.get_by_role("button", name="Toggle Navigation", exact=True).click()
     page.get_by_role("link", name="Starred", exact=True).click()
     expect(page.get_by_role("heading", name="Starred", exact=True)).to_be_visible()
     expect(page.locator('.drive-nav a[aria-current="page"]')).to_have_text("Starred")
-    expect(page.get_by_role("button", name="資料 📁", exact=True)).to_be_visible()
+    expect(page.get_by_role("button", name="資料", exact=True)).to_be_visible()
     ARTIFACTS.mkdir(parents=True, exist_ok=True)
     page.screenshot(path=ARTIFACTS / f"starred-{width}.png", animations="disabled")
-    page.locator('summary[aria-label="Actions for 資料 📁"]').click()
+    page.locator('summary[aria-label="Actions for 資料"]').click()
     page.get_by_role("button", name="Remove from Starred", exact=True).click()
     expect(
         page.get_by_role("heading", name="No Starred Items Yet", exact=True)

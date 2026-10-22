@@ -624,11 +624,244 @@ async def fixture_verify_connection(_api_id, _api_hash, row, _channel):
     )
 
 
+class FixtureReplica:
+    """Deterministic offline contract; no Telegram access or durable secrets."""
+
+    def __init__(self, owner):
+        self.owner = owner
+        self.control = asyncio.Lock()
+        self._operation = asyncio.Lock()
+        self.state = {
+            "enabled": False,
+            "configured": False,
+            "recovery_only": False,
+            "phase": "disabled",
+            "source_channel": -1001234567890,
+            "backup_channel": None,
+            "revision": 9,
+            "protected_revision": 0,
+            "pending_revision": 9,
+            "last_success_at": None,
+            "current_file": "",
+            "total_files": 0,
+            "done_files": 0,
+            "total_parts": 0,
+            "done_parts": 0,
+            "total_bytes": 0,
+            "done_bytes": 0,
+            "error": None,
+            "report": [],
+        }
+        self.destination = None
+        self.catalog_only = False
+        self.events = []
+        self.journal = SimpleNamespace(
+            get=lambda name, default=None: {
+                "restore_point": {"revision": 7, "message_id": 9001},
+            }.get(name, default)
+        )
+
+    def status(self):
+        import copy
+
+        result = copy.deepcopy(self.state)
+        result["recovery_only"] = self.owner.recovery_only
+        return result
+
+    def key(self):
+        return "c" * 64
+
+    def recovery_kit(self):
+        return {
+            "format": "tgdrive-replica-key-v1",
+            "key": self.key(),
+            "restore_point": self.journal.get("restore_point"),
+            "next_backup_key": self.key(),
+            "mongodb_backup_key": None,
+            "instructions": "Synthetic key fixture. Never use it for a real drive.",
+        }
+
+    def start(self):
+        pass
+
+    async def close(self):
+        pass
+
+    async def before_mutation(self):
+        if self.blocked:
+            from tgdrive.managed_settings import SettingsProblem
+
+            raise SettingsProblem("Recovery is in progress.", status=409)
+
+    @property
+    def blocked(self):
+        return self.state["phase"] in {
+            "recovering",
+            "ready_to_activate",
+            "restart_required",
+        }
+
+    def event(self, message):
+        self.state["report"].append(
+            {
+                "at": "2026-10-22T05:00:00Z",
+                "level": "info",
+                "message": message,
+            }
+        )
+        self.state["report"] = self.state["report"][-100:]
+
+    async def configure(self, channel, token, independent):
+        if not independent or channel == self.state["source_channel"]:
+            raise ValueError("Use separate private channels and owner accounts.")
+        self.events.append({"action": "configure", "channel": channel})
+        self.state.update(
+            enabled=True,
+            configured=True,
+            backup_channel=channel,
+            phase="syncing",
+            current_file="Project archive.zip",
+            total_files=3,
+            done_files=1,
+            total_parts=4,
+            done_parts=1,
+            total_bytes=3 * 1024**2,
+            done_bytes=1024**2,
+        )
+        self.event("Private channels verified. Initial synchronization started.")
+        return self.status()
+
+    async def action(self, action):
+        self.events.append({"action": action})
+        if action == "disable":
+            self.state.update(enabled=False, phase="disabled")
+        elif action == "pause":
+            self.state["phase"] = "paused"
+        elif action in {"resume", "retry", "sync"}:
+            self.state.update(
+                enabled=True,
+                phase="recovering" if self.destination else "syncing",
+                error=None,
+            )
+        else:
+            raise ValueError("Unknown backup action")
+        self.event("Operation " + action + " requested.")
+        return self.status()
+
+    async def inspect_recovery(self, channel, token, key, message_id):
+        self.events.append(
+            {"action": "inspect", "channel": channel, "message_id": message_id}
+        )
+        self.state.update(
+            phase="paused",
+            error=None,
+            recovery_candidate={
+                "revision": 7,
+                "files": 3,
+                "bytes": 3 * 1024**2,
+                "channel": channel,
+                "complete": False,
+            },
+        )
+        self.event("Recovery copy authenticated. Nothing has been activated.")
+        return self.status()
+
+    async def recover_to(
+        self, target, target_token, confirmation, *, catalog_only=False
+    ):
+        if confirmation != str(target):
+            raise ValueError("Type the destination channel ID exactly.")
+        self.events.append(
+            {"action": "recover", "channel": target, "catalog_only": catalog_only}
+        )
+        self.destination = target
+        self.catalog_only = catalog_only
+        self.state.update(
+            phase="recovering",
+            error=None,
+            total_files=3,
+            done_files=1,
+            total_parts=4,
+            done_parts=1,
+            total_bytes=3 * 1024**2,
+            done_bytes=1024**2,
+            current_file="Project archive.zip",
+        )
+        self.event(
+            "File verification started." if catalog_only else "Recovery copy started."
+        )
+        return self.status()
+
+    def activate(self):
+        if not self.state.get("recovery_candidate", {}).get("complete"):
+            raise ValueError("Complete recovery first.")
+        self.events.append({"action": "activate"})
+        self.state["phase"] = "restart_required"
+        self.event("Recovery activation saved. Restart TGDrive.")
+        return self.status()
+
+    def scenario(self, scenario):
+        if scenario == "recovery-only":
+            self.owner.recovery_only = True
+        elif scenario == "error":
+            self.state.update(
+                phase="error",
+                error={
+                    "code": "CHANNEL_ACCESS",
+                    "detail": "Backup bot cannot read the target channel.",
+                    "action": (
+                        "Restore the bot's administrator permissions, then retry."
+                    ),
+                },
+            )
+        elif scenario == "waiting":
+            self.state.update(
+                phase="waiting",
+                error={
+                    "code": "FLOOD_WAIT",
+                    "detail": "Telegram asked this bot to wait.",
+                    "action": "TGDrive will retry after the displayed time.",
+                    "retry_at": 1792645260,
+                },
+            )
+        elif scenario == "lagging":
+            self.state.update(revision=10, pending_revision=1, phase="idle")
+        elif scenario == "many-events":
+            for number in range(100):
+                self.event(f"File verification {number + 1} confirmed.")
+        elif scenario == "protected":
+            self.state.update(
+                phase="protected",
+                error=None,
+                protected_revision=9,
+                pending_revision=0,
+                done_files=3,
+                done_parts=4,
+                done_bytes=3 * 1024**2,
+                last_success_at="2026-10-22T05:00:00Z",
+            )
+        elif scenario == "recovery-ready":
+            self.state["recovery_candidate"].update(
+                channel=self.destination, complete=True
+            )
+            self.state.update(
+                phase="ready_to_activate",
+                done_files=3,
+                done_parts=4,
+                done_bytes=3 * 1024**2,
+                current_file="",
+                error=None,
+            )
+        else:
+            raise ValueError("Unknown replica fixture scenario")
+        return self.status()
+
+
 class FixtureRuntime:
     def __init__(self) -> None:
         self.store = DriveStore.create()
         self.payloads = {101: b"public content", 102: b"private content"}
-        folder = self.store.create_folder("/", "資料 📁")
+        folder = self.store.create_folder("/", "資料")
         private = self.store.create_folder("/", "Private folder")
         self.folder_path = f"/{folder['id']}"
         self.private_path = f"/{private['id']}"
@@ -688,6 +921,8 @@ class FixtureRuntime:
         self.pool = ClientPool([FixtureClient(self.payloads)])
         self.transfers = FixtureTransfers(self.store, self.payloads)
         self.backup = FixtureBackup(self.store)
+        self.recovery_only = False
+        self.replica = FixtureReplica(self)
         self.ready = False
 
     async def start(self) -> None:
@@ -943,3 +1178,15 @@ async def seed_thumbnail_samples(target):
 async def seed_generated_thumbnails(request: Request):
     _control(request)
     return {"path": await seed_thumbnail_samples(runtime)}
+
+
+@app.post("/__test__/replica/{scenario}")
+async def replica_scenario(request: Request, scenario: str):
+    _control(request)
+    return runtime.replica.scenario(scenario)
+
+
+@app.get("/__test__/replica")
+async def replica_fixture_state(request: Request):
+    _control(request)
+    return {"state": runtime.replica.status(), "events": runtime.replica.events}

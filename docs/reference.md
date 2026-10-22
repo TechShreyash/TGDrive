@@ -433,6 +433,42 @@ Client health distinguishes configured accounts from healthy started accounts.
 
 </details>
 
+### Independent channel backup and recovery
+
+This optional feature is configured by the owner through Storage & Backups rather
+than by placing bot tokens in URLs. See the [operator guide](backup-recovery.md#set-up-an-independent-backup-channel)
+for channel preparation, private permissions, key custody and recovery drills.
+
+| Route | Request | Result |
+| --- | --- | --- |
+| `GET /api/v1/replica` | None | Current configuration state, phase, source/backup channel IDs, catalog/protected revisions, file/part/byte progress, retry guidance, bounded activity and optional recovery candidate. No bot tokens or key. |
+| `POST /api/v1/replica/configure` | `channel_id`, write-only `bot_token`, `independent_accounts: true` | Verifies private distinct channels and a separate backup bot, saves configuration, schedules initial copying. Requires an existing catalog. |
+| `POST /api/v1/replica/action` | `action`: `sync`, `pause`, `resume`, `retry` or `disable` | Durable operation control. Resume also re-enables configured protection. |
+| `GET /api/v1/replica/key` | None | Private no-store attachment `tgdrive-channel-recovery-key.json`: key plus known restore-point message IDs. Save outside Telegram/server. |
+| `GET /api/v1/replica/report` | None | Secret-free owner status/report attachment; file/channel names and IDs may still be private. |
+| `POST /api/v1/replica/recover` | `source_channel`, write-only `bot_token`, 64-hex `key`, optional positive `message_id` | Downloads/authenticates a surviving recovery capsule and records a candidate for inspection. |
+| `POST /api/v1/replica/recover` | `target_channel`, write-only `target_bot_token`, matching typed `confirm_channel`, optional `catalog_only: true` | Uses the inspected server-side candidate to copy into an empty private destination, or verify an existing surviving catalog without copying files. |
+| `POST /api/v1/replica/recover` | `activate: true` | Explicitly activates a completed candidate; service restart is required. Incomplete candidates cannot be activated. |
+
+All routes require owner authentication and normal same-origin mutation checks.
+A recovery-only startup exposes the authenticated recovery surface when the local
+catalog cannot open; it must not enable ordinary file mutations against a missing
+catalog. Channel IDs are negative integers; source and copy destinations must be
+different, except an explicitly requested database-only restore.
+
+The independent channel capsule `tgdrive-replica.tgdb` is an authenticated
+AES-256-GCM document bounded to 64 MiB. It contains paired portable catalogs and
+minimum recovery credentials, not original payload bytes or a complete MongoDB
+archive. A corrupt key, malformed paired catalogs or missing file parts prevents
+confirmation. Ordinary encrypted MongoDB backups and independent-channel
+capsules use different formats and recovery keys.
+
+The local `DATA_DIR/channel-backup.sqlite3` journal persists random operation IDs,
+confirmed message mappings, configuration and recovery state. Preserve the full
+persistent data directory through restarts. Status is confirmed-part progress,
+not speculative queued bytes. Old remote copied messages and capsules are
+retained; changing the configured destination is not a command to erase them.
+
 ### Owner connection management
 
 <details>

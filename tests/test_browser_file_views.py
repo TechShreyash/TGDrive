@@ -223,3 +223,95 @@ def test_grid_respects_data_saver(server, desktop):
     expect(page.locator(".file-tile-preview img")).to_have_count(0)
     page.get_by_role("button", name="sample.png", exact=True).focus()
     assert not requests
+
+
+@pytest.mark.parametrize(
+    "width,theme", [(1440, "light"), (390, "dark"), (320, "light")]
+)
+def test_item_status_is_quiet_metadata_without_interrupting_names(
+    server, desktop, width, theme
+):
+    _, page = desktop
+    page.set_viewport_size({"width": width, "height": 844})
+    page.emulate_media(color_scheme=theme)
+    login(page, server.url)
+    contents = page.request.post(
+        server.url + "/api/getDirectory", data={"path": "/"}
+    ).json()["data"]["contents"]
+    target = next(
+        item for item in contents.values() if item["name"] == "Preview samples"
+    )
+    path = "/" + target["id"]
+    assert page.request.patch(
+        server.url + "/api/v1/starred", data={"path": path, "starred": True}
+    ).ok
+    assert page.request.post(
+        server.url + "/api/v1/shares", data={"path": path, "expires_in_days": 7}
+    ).ok
+    page.reload()
+    row = page.locator(".file-row").filter(
+        has=page.get_by_role("button", name="Preview samples", exact=True)
+    )
+    status = row.locator(".file-item-status")
+    expect(status).to_have_text("StarredShared")
+    expect(status.locator("svg")).to_have_count(0)
+    expect(status.get_by_label("Shared by Link", exact=True)).to_have_text("Shared")
+    name = row.locator(".file-name").bounding_box()
+    state = status.bounding_box()
+    assert name and state
+    if width > 720:
+        assert state["x"] >= name["x"] + name["width"]
+    else:
+        assert state["y"] >= name["y"] + name["height"] - 1
+    height = row.bounding_box()["height"]
+    sibling = page.locator(".file-row").filter(
+        has=page.get_by_role("button", name="Private folder", exact=True)
+    )
+    assert abs(height - sibling.bounding_box()["height"]) <= 1
+    assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
+    ARTIFACTS.mkdir(parents=True, exist_ok=True)
+    page.screenshot(
+        path=ARTIFACTS / f"item-status-list-{theme}-{width}.png",
+        animations="disabled",
+    )
+    choose_view(page, "Grid view")
+    expect(status).to_be_visible()
+    assert status.evaluate("e => e.scrollWidth <= e.clientWidth + 1")
+    assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
+    page.screenshot(
+        path=ARTIFACTS / f"item-status-grid-{theme}-{width}.png",
+        animations="disabled",
+    )
+
+
+@pytest.mark.parametrize("width,view", [(1440, "Grid view"), (390, "List view")])
+def test_escape_selection_returns_focus_to_file_control_not_workspace(
+    server, desktop, width, view
+):
+    _, page = desktop
+    page.set_viewport_size({"width": width, "height": 844})
+    login(page, server.url)
+    choose_view(page, view)
+    page.get_by_role("button", name="Select", exact=True).click()
+    checkbox = page.get_by_role("checkbox", name="Select Preview samples", exact=True)
+    checkbox.check()
+    expect(page.get_by_text("1 selected", exact=True)).to_be_visible()
+    checkbox.focus()
+    page.keyboard.press("Escape")
+    item = page.get_by_role("button", name="Preview samples", exact=True)
+    expect(item).to_be_focused()
+    expect(page.locator(".file-row.selected")).to_have_count(0)
+    expect(page.locator(".file-list-scroll")).not_to_be_focused()
+    assert not page.locator(".file-list-scroll").evaluate(
+        "e => e.matches(':focus-visible')"
+    )
+    assert item.evaluate("e => e.matches(':focus-visible')")
+    assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
+    ARTIFACTS.mkdir(parents=True, exist_ok=True)
+    page.screenshot(
+        path=ARTIFACTS / f"selection-escape-focus-{width}.png", animations="disabled"
+    )
+    item.press("Enter")
+    expect(
+        page.get_by_role("heading", name="Preview samples", exact=True)
+    ).to_be_visible()

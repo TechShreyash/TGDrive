@@ -177,6 +177,8 @@ export default function FileBrowser({
   };
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [selectionMode, setSelectionMode] = useState(false);
+  const selectionActive = useRef(false);
+  selectionActive.current = selectionMode || selected.size > 0;
   const [localSort, setLocalSort] = useState<FileSort>("name");
   const [localOrder, setLocalOrder] = useState<SortOrder>("asc");
   const [layout, setLayout] = useState<"list" | "grid">(() => {
@@ -245,8 +247,22 @@ export default function FileBrowser({
         openMenu.querySelector("summary")?.focus();
         return;
       }
+      if (!selectionActive.current) return;
+      event.preventDefault();
+      const row =
+        (event.target as HTMLElement).closest<HTMLElement>(".file-row") ||
+        document.querySelector<HTMLElement>(".file-row.selected");
+      const item = row?.querySelector<HTMLButtonElement>(".item-name-button");
       setSelected(new Set());
       setSelectionMode(false);
+      // Selection checkboxes disappear on Escape. Return keyboard focus to a
+      // surviving control instead of letting the browser focus the whole scroller.
+      requestAnimationFrame(() => {
+        const target = item?.isConnected
+          ? item
+          : document.querySelector<HTMLButtonElement>(".file-selection-toggle");
+        target?.focus({ preventScroll: true });
+      });
     };
     document.addEventListener("keydown", escape);
     return () => document.removeEventListener("keydown", escape);
@@ -361,7 +377,9 @@ export default function FileBrowser({
       document
         .querySelectorAll<HTMLDetailsElement>(".item-actions[open]")
         .forEach((details) => {
-          const bounds = details.querySelector("summary")?.getBoundingClientRect();
+          const bounds = details
+            .querySelector("summary")
+            ?.getBoundingClientRect();
           if (!bounds || bounds.bottom < 0 || bounds.top > window.innerHeight) {
             details.open = false;
           }
@@ -830,15 +848,6 @@ export default function FileBrowser({
                           </span>
                           <div className="file-name-details">
                             <div className="file-title-line">
-                              {!isPublic && item.starred && (
-                                <Star
-                                  className="file-star-indicator"
-                                  size={14}
-                                  fill="currentColor"
-                                  aria-label="Starred"
-                                  role="img"
-                                />
-                              )}
                               <button
                                 className="file-name item-name-button"
                                 title={item.name}
@@ -853,16 +862,26 @@ export default function FileBrowser({
                               >
                                 {item.name}
                               </button>
-                              {!isPublic && !isTrash && sharing(item) && (
-                                <span
-                                  className="file-share-indicator"
-                                  role="img"
-                                  title={sharing(item)}
-                                  aria-label={sharing(item)}
-                                >
-                                  <Link size={14} />
-                                </span>
-                              )}
+                              {!isPublic &&
+                                ((!isStarred && item.starred) ||
+                                  (!isTrash && sharing(item))) && (
+                                  <span className="file-item-status">
+                                    {!isStarred && item.starred && (
+                                      <span className="file-status-label">
+                                        Starred
+                                      </span>
+                                    )}
+                                    {!isTrash && sharing(item) && (
+                                      <span
+                                        className="file-status-label"
+                                        title={sharing(item)}
+                                        aria-label={sharing(item)}
+                                      >
+                                        Shared
+                                      </span>
+                                    )}
+                                  </span>
+                                )}
                             </div>
                             {(isSearch || isTrash || isStarred) && (
                               <span

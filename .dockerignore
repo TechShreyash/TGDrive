@@ -40,6 +40,8 @@ website/coverage
 **/*.session*
 
 website/.impeccable
+.impeccable
+**/.impeccable
 
 # Local agent tools and private request tracking never enter build context.
 .agents

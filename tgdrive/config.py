@@ -211,6 +211,9 @@ class Settings(BaseSettings):
             bootstrap = {}
             backend = None
             uri = base.get("MONGODB_URI")
+            from tgdrive.replica_bootstrap import load_bootstrap
+
+            recovery_bootstrap = load_bootstrap(directory)
             if uri:
                 from tgdrive.mongo import configure
 
@@ -219,7 +222,19 @@ class Settings(BaseSettings):
                     uri.get_secret_value() if isinstance(uri, SecretStr) else str(uri),
                     str(base.get("MONGODB_DATABASE", "tgdrive")),
                 )
-                row = backend.db.settings.find_one({"_id": "bootstrap"})
+                try:
+                    row = backend.db.settings.find_one({"_id": "bootstrap"})
+                except Exception:
+                    if recovery_bootstrap is None:
+                        raise
+                    return {
+                        key: value
+                        for key, value in recovery_bootstrap.items()
+                        if base.get(key) in (None, "")
+                        and not (
+                            key == "ADMIN_PASSWORD_HASH" and base.get("ADMIN_PASSWORD")
+                        )
+                    }
                 bootstrap = (
                     {
                         key: value
@@ -229,6 +244,10 @@ class Settings(BaseSettings):
                     if row
                     else {}
                 )
+                if recovery_bootstrap is not None:
+                    bootstrap = {**recovery_bootstrap, **bootstrap}
+                    if base.get("ADMIN_PASSWORD"):
+                        bootstrap.pop("ADMIN_PASSWORD_HASH", None)
             if os.environ.get("TGDRIVE_AUTO_SECRETS") == "true":
                 from tgdrive.deployment import SECRET_FIELDS, installation_secrets
 
@@ -250,7 +269,14 @@ class Settings(BaseSettings):
                     **bootstrap,
                     **installation_secrets(directory, known, existing_drive=existing),
                 }
-            document = read_document(directory)
+            try:
+                document = read_document(directory)
+            except Exception:
+                if recovery_bootstrap is None:
+                    raise
+                return {
+                    key: value for key, value in bootstrap.items() if key not in base
+                }
             if document is None:
                 return bootstrap
             rows = [

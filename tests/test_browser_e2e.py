@@ -149,6 +149,9 @@ def open_admin(page: Any) -> None:
             page.get_by_role("button", name="Toggle Navigation", exact=True).click()
     else:
         expect(sidebar).not_to_have_attribute("inert", "")
+    tools = sidebar.locator(".sidebar-tools")
+    if tools.get_attribute("open") is None:
+        tools.locator("summary").click()
 
 
 def upload(page: Any, names: list[str], *, add: bool = False) -> None:
@@ -420,7 +423,7 @@ def test_resumable_multiple_files_navigation_and_mobile_layout(
     page.get_by_role("link", name="Trash", exact=True).click()
     expect(page.get_by_role("heading", name="Trash", exact=True)).to_be_visible()
     page.locator(".drive-nav").get_by_role("link", name="My Files", exact=True).click()
-    page.get_by_role("button", name="資料 📁", exact=True).dblclick()
+    page.get_by_role("button", name="資料", exact=True).dblclick()
     expect(page.get_by_role("button", name="résumé #1.txt", exact=True)).to_be_visible()
     page.get_by_role("button", name="Show Transfer Details", exact=True).click()
     expect(row(page, "first.txt").locator(".transfer-metrics")).to_contain_text("/s")
@@ -537,7 +540,7 @@ def test_public_share_stays_readonly_across_move_and_revocation(
 ) -> None:
     _, page = desktop
     login(page, server.url)
-    page.get_by_label("Actions for 資料 📁", exact=True).click()
+    page.get_by_label("Actions for 資料", exact=True).click()
     page.get_by_role("button", name="Share Link", exact=True).click()
     page.get_by_role("button", name="Create Share Link", exact=True).click()
     link = page.get_by_label("Share Link", exact=True).input_value()
@@ -562,7 +565,7 @@ def test_public_share_stays_readonly_across_move_and_revocation(
         expect(public_dialog.locator("pre")).to_contain_text("public content")
         public_dialog.get_by_role("button", name="Close Preview", exact=True).click()
         expect(public_file).to_be_focused()
-        page.get_by_label("Actions for 資料 📁", exact=True).click()
+        page.get_by_label("Actions for 資料", exact=True).click()
         page.get_by_role("button", name="Move", exact=True).click()
         page.get_by_role("dialog").get_by_role(
             "button", name="Private folder", exact=True
@@ -574,7 +577,7 @@ def test_public_share_stays_readonly_across_move_and_revocation(
             public.get_by_role("button", name="résumé #1.txt", exact=True)
         ).to_be_visible()
         page.get_by_role("link", name="Shared Links", exact=True).click()
-        page.get_by_role("button", name="Revoke Link for 資料 📁", exact=True).click()
+        page.get_by_role("button", name="Revoke Link for 資料", exact=True).click()
         page.get_by_role("button", name="Revoke Link", exact=True).click()
         expect(
             page.get_by_role("heading", name="No Active Shared Links")
@@ -660,7 +663,7 @@ def test_keyboard_dialog_focus_and_unicode_search(
     expect(menu).to_have_count(0)
     expect(new).to_be_focused()
     expect(new).to_have_attribute("aria-expanded", "false")
-    summary = page.get_by_label("Actions for 資料 📁", exact=True)
+    summary = page.get_by_label("Actions for 資料", exact=True)
     summary.click()
     page.get_by_role("button", name="Rename", exact=True).click()
     expect(page.get_by_label("Name", exact=True)).to_be_focused()
@@ -705,7 +708,7 @@ def test_move_and_restore_require_explicit_public_exposure_confirmation(
     assert response.ok
     page.get_by_label("Actions for Private folder", exact=True).click()
     page.get_by_role("button", name="Move", exact=True).click()
-    page.get_by_role("dialog").get_by_role("button", name="資料 📁", exact=True).click()
+    page.get_by_role("dialog").get_by_role("button", name="資料", exact=True).click()
     page.get_by_role("button", name="Move Here", exact=True).click()
     confirmation = page.get_by_label(
         "I understand that files moved here may become public.", exact=True
@@ -715,7 +718,7 @@ def test_move_and_restore_require_explicit_public_exposure_confirmation(
     confirmation.check()
     page.get_by_role("button", name="Move Here", exact=True).click()
     expect(page.get_by_role("dialog")).to_have_count(0)
-    page.get_by_role("button", name="資料 📁", exact=True).dblclick()
+    page.get_by_role("button", name="資料", exact=True).dblclick()
     select_item(page, "Private folder")
     page.get_by_role("button", name="Trash", exact=True).click()
     page.get_by_role("link", name="Trash", exact=True).click()
@@ -1882,9 +1885,9 @@ def test_background_listing_failure_preserves_files_and_navigation_loads_normall
 ) -> None:
     _, page = desktop
     login(page, server.url)
-    primary = page.get_by_role("button", name="資料 📁", exact=True)
+    primary = page.get_by_role("button", name="資料", exact=True)
     expect(primary).to_be_visible()
-    select_item(page, "資料 📁")
+    select_item(page, "資料")
     page.route(
         "**/api/getDirectory",
         lambda route: route.fulfill(
@@ -1894,7 +1897,7 @@ def test_background_listing_failure_preserves_files_and_navigation_loads_normall
     page.evaluate("window.dispatchEvent(new Event('tgdrive:files-changed'))")
     expect(page.get_by_role("alert")).to_contain_text("Could not update your files")
     expect(primary).to_be_visible()
-    expect(page.get_by_label("Select 資料 📁", exact=True)).to_be_checked()
+    expect(page.get_by_label("Select 資料", exact=True)).to_be_checked()
     expect(page.get_by_role("heading", name="Could Not Load Your Files")).to_have_count(
         0
     )
@@ -2199,7 +2202,7 @@ def test_settings_backup_status_never_claims_unconfirmed_protection(
     login(page, server.url)
     open_admin(page)
     page.get_by_role("link", name="Storage & Backups", exact=True).click()
-    section = page.get_by_role("region", name="Drive Backup", exact=True)
+    section = page.get_by_role("region", name="Catalog checkpoint", exact=True)
     status = section.get_by_role("status")
     expect(page.locator(".drive-protection")).to_have_count(0)
     expect(status).to_have_text("Backed up to Telegram", timeout=10000)
@@ -2844,11 +2847,11 @@ def test_bulk_deletion_is_one_notice_with_refresh_failure_and_retry(
 ) -> None:
     _, page = desktop
     login(page, server.url)
-    for name in ("Private folder", "資料 📁", "Preview samples"):
+    for name in ("Private folder", "資料", "Preview samples"):
         select_item(page, name)
     page.get_by_role("button", name="Trash", exact=True).click()
     page.get_by_role("link", name="Trash", exact=True).click()
-    for name in ("Private folder", "資料 📁", "Preview samples"):
+    for name in ("Private folder", "資料", "Preview samples"):
         select_item(page, name)
     page.get_by_role("button", name="Delete Permanently", exact=True).click()
     page.get_by_role("dialog").get_by_role(
@@ -2887,7 +2890,7 @@ def test_debounced_search_restores_origin_and_document_text_stays_selectable(
 ) -> None:
     _, page = desktop
     login(page, server.url)
-    page.get_by_role("button", name="資料 📁", exact=True).dblclick()
+    page.get_by_role("button", name="資料", exact=True).dblclick()
     origin = page.url
     search = page.get_by_role("searchbox", name="Search Files and Folders", exact=True)
     before = page.evaluate("history.length")
@@ -3081,7 +3084,7 @@ def test_ui_polish_batched_visual_states(
             page.set_viewport_size({"width": 390, "height": 844})
             if route == "storage":
                 backup_title = page.get_by_role(
-                    "heading", name="Drive Backup", exact=True
+                    "heading", name="Catalog checkpoint", exact=True
                 )
                 assert backup_title.bounding_box()["height"] <= 28
                 assert (
@@ -3166,9 +3169,11 @@ def test_transfer_progress_and_safe_panel_controls(
     page.get_by_role("button", name="Show Transfer Details", exact=True).click()
     expect(single).to_be_visible()
     page.set_viewport_size({"width": 390, "height": 844})
+    # The phone layout replaces the expanded desktop panel with its summary.
+    # Wait for that React transition before examining controls from the new layout.
+    expect(page.locator("#transfer-dialog")).to_have_count(0)
     assert_layout(page)
     page.screenshot(path=ARTIFACTS / "single-transfer-mobile.png", full_page=True)
-    expect(page.locator("#transfer-dialog")).to_have_count(0)
     page.set_viewport_size({"width": 1440, "height": 960})
 
     page.get_by_role("button", name="Cancel All", exact=True).click()
@@ -3751,7 +3756,7 @@ def test_shared_links_compact_views_copy_location_and_indicators(server, desktop
     contents = page.request.post(
         server.url + "/api/getDirectory", data={"path": "/"}
     ).json()["data"]["contents"]
-    folder = next(item for item in contents.values() if item["name"] == "資料 📁")
+    folder = next(item for item in contents.values() if item["name"] == "資料")
     folder_path = "/" + folder["id"]
     created = page.request.post(
         server.url + "/api/v1/shares",
@@ -3759,7 +3764,7 @@ def test_shared_links_compact_views_copy_location_and_indicators(server, desktop
     ).json()
     page.reload()
     expect(page.get_by_label("Shared by Link", exact=True)).to_have_count(1)
-    page.get_by_role("button", name="資料 📁", exact=True).dblclick()
+    page.get_by_role("button", name="資料", exact=True).dblclick()
     expect(
         page.get_by_label("Shared Through Parent Folder", exact=True).first
     ).to_be_visible()
@@ -3841,13 +3846,13 @@ def test_shared_links_compact_views_copy_location_and_indicators(server, desktop
     )
     page.get_by_role("button", name="Cancel", exact=True).click()
     page.get_by_role("button", name="Active 2", exact=True).click()
-    page.get_by_role("button", name="Show 資料 📁 in folder", exact=True).click()
+    page.get_by_role("button", name="Show 資料 in folder", exact=True).click()
     expect(page.get_by_role("heading", name="My Files", exact=True)).to_be_visible()
     expect(
-        page.locator("tr", has=page.get_by_role("button", name="資料 📁", exact=True))
+        page.locator("tr", has=page.get_by_role("button", name="資料", exact=True))
     ).to_have_class(__import__("re").compile("selected"))
     page.get_by_role("link", name="Shared Links", exact=True).click()
-    page.get_by_role("button", name="Revoke Link for 資料 📁", exact=True).click()
+    page.get_by_role("button", name="Revoke Link for 資料", exact=True).click()
     page.get_by_role("button", name="Keep Sharing", exact=True).click()
     assert (
         page.request.post(
@@ -3856,7 +3861,7 @@ def test_shared_links_compact_views_copy_location_and_indicators(server, desktop
         ).status
         == 200
     )
-    page.get_by_role("button", name="Revoke Link for 資料 📁", exact=True).click()
+    page.get_by_role("button", name="Revoke Link for 資料", exact=True).click()
     page.get_by_role("button", name="Revoke Link", exact=True).click()
     expect(page.get_by_role("dialog")).to_have_count(0)
     assert (

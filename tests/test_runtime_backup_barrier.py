@@ -3,10 +3,7 @@
 from pathlib import Path
 from unittest.mock import AsyncMock, Mock
 
-import pytest
-
 import tgdrive.runtime as runtime_module
-from tgdrive.backup import BackupError
 from tgdrive.config import Settings
 from tgdrive.runtime import Runtime
 from tgdrive.store import DriveStore
@@ -73,14 +70,29 @@ async def test_missing_database_never_uses_leftover_initialize_flag(tmp_path):
     pool = RuntimePool()
     runtime = Runtime(configuration(tmp_path, INITIALIZE_EMPTY_DRIVE=True), pool=pool)
 
-    with pytest.raises(BackupError, match="explicitly recover"):
+    try:
         await runtime.start()
-
-    assert not runtime.ready
-    assert runtime.store is None
-    assert not runtime.settings.resolved_data_dir.joinpath("drive.sqlite3").exists()
+        assert runtime.recovery_only
+        assert not runtime.ready
+        assert runtime.store is None
+        assert runtime.transfers is None
+        assert runtime.bot_mode is None
+        assert not runtime._reconnector
+        assert runtime._owner_lock is not None
+        assert runtime.replica.status()["recovery_only"]
+        assert not runtime.settings.resolved_data_dir.joinpath("drive.sqlite3").exists()
+        assert not runtime.settings.resolved_data_dir.joinpath("jobs.sqlite3").exists()
+        # The recovery UI may inspect preserved Telegram metadata, but stale
+        # initialization intent cannot create an empty replacement catalog.
+        assert any(
+            "explicit recovery" in row["message"]
+            for row in runtime.replica.status()["report"]
+        )
+    finally:
+        await runtime.stop()
     assert runtime._owner_lock is None
     assert pool.stopped
+    assert not runtime.settings.resolved_data_dir.joinpath("drive.sqlite3").exists()
 
 
 async def test_real_existing_database_opens_during_telegram_outage(tmp_path):

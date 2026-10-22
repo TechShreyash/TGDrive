@@ -149,6 +149,19 @@ async def require_admin(request: Request) -> None:
     if not _is_admin(request):
         raise HTTPException(status_code=401, detail="Not authenticated")
     runtime = _runtime(request)
+    replica = getattr(runtime, "replica", None)
+    if (
+        getattr(runtime, "recovery_only", False)
+        or (replica is not None and replica.blocked)
+    ) and (
+        request.method not in {"GET", "HEAD", "OPTIONS"}
+        and not request.url.path.startswith("/api/v1/replica")
+        and request.url.path not in {"/api/checkPassword", "/api/logout"}
+        and not request.url.path.endswith("/cancel")
+    ):
+        raise HTTPException(
+            409, "Channel recovery has paused file changes. Open Storage & Backups."
+        )
     connections = getattr(runtime, "connection_manager", None)
     if connections is not None and connections.restart_required:
         allowed = (
@@ -201,8 +214,17 @@ def create_app(
     runtime: Any | None = None,
 ) -> FastAPI:
     settings = settings or get_settings()
+    from tgdrive.replica_activation import ActivationError, effective_settings
+
+    activation_unavailable = False
+    try:
+        settings = effective_settings(settings)
+    except ActivationError:
+        activation_unavailable = True
     configure_logging(settings.log_level)
     app_runtime = runtime or Runtime(settings)
+    if activation_unavailable:
+        app_runtime._activation_unavailable = True
     sessions = SessionManager(
         settings.session_key,
         settings.session_ttl_seconds,
@@ -431,13 +453,14 @@ def create_app(
         )
 
     @app.get("/api/config")
-    async def public_config(request: Request) -> dict[str, int | str]:
+    async def public_config(request: Request) -> dict[str, Any]:
         return {
             "status": "ok",
             "max_file_size": await current_upload_limit(
                 settings, getattr(_runtime(request), "pool", None)
             ),
             "timezone": settings.timezone,
+            "recovery_only": bool(getattr(_runtime(request), "recovery_only", False)),
         }
 
     @app.post("/api/checkPassword")
@@ -489,6 +512,8 @@ def create_app(
     async def get_directory(
         payload: DirectoryRequest, request: Request
     ) -> JSONResponse:
+        if _is_admin(request):
+            await require_admin(request)
         store = _store(request)
         requested = payload.path
         auth_home_path: str | None = None
@@ -1125,6 +1150,9 @@ def create_app(
             headers={"Cache-Control": "no-store"},
         )
 
+    from tgdrive.replica_api import register_replica_routes
+
+    register_replica_routes(app, settings, require_admin, _runtime)
     register_routes(
         app,
         settings,

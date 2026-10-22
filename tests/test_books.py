@@ -95,12 +95,10 @@ def test_zip_bomb_and_duplicate_resources_are_rejected():
 def test_chapter_parser_drops_active_content_and_external_resources():
     parser = ChapterParser("OPS/chapter.xhtml")
     parser.feed(
-
-            '<p id="start" onclick="alert(1)">Hello <em>reader</em></p>'
-            "<style>body{display:none}</style><script>alert(1)</script>"
-            '<img src="//external.invalid/x"/><a '
-            'href="../next.xhtml#x">Next</a>'
-
+        '<p id="start" onclick="alert(1)">Hello <em>reader</em></p>'
+        "<style>body{display:none}</style><script>alert(1)</script>"
+        '<img src="//external.invalid/x"/><a '
+        'href="../next.xhtml#x">Next</a>'
     )
     text = str(parser.root)
     assert "onclick" not in text and "alert" not in text and "external" not in text

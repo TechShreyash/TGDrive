@@ -1,0 +1,547 @@
+"""Offline contracts for the exact Telegram replica transport requests."""
+
+from __future__ import annotations
+
+import asyncio
+import copy
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, Mock
+
+import pytest
+from pydantic import SecretStr
+from telethon import functions, types, utils
+from telethon.errors import FloodWaitError, RandomIdDuplicateError
+
+from tgdrive.replica_transport import (
+    CAPSULE_NAME,
+    MAX_CAPSULE_BYTES,
+    ReplicaTransport,
+    ReplicaTransportError,
+    _provider_error,
+)
+
+MAIN = -1001234567890
+BACKUP = -1002234567890
+TOKEN = "234567:" + "b" * 24
+PRIMARY = "123456:" + "a" * 24
+
+
+def channel(identity: int, **kwargs):
+    return types.Channel(
+        id=utils.resolve_id(identity)[0],
+        title="Private storage",
+        photo=types.ChatPhotoEmpty(),
+        date=None,
+        broadcast=True,
+        admin_rights=types.ChatAdminRights(
+            post_messages=True, edit_messages=True, delete_messages=True
+        ),
+        **kwargs,
+    )
+
+
+def document(size=123, name="payload.bin"):
+    return types.Document(
+        id=123456789,
+        access_hash=42,
+        file_reference=b"fresh-reference",
+        date=None,
+        mime_type="application/octet-stream",
+        size=size,
+        dc_id=2,
+        attributes=[types.DocumentAttributeFilename(name)],
+    )
+
+
+def message(identity, channel_id, doc):
+    return SimpleNamespace(
+        id=identity,
+        peer_id=types.PeerChannel(utils.resolve_id(channel_id)[0]),
+        document=doc,
+        media=SimpleNamespace(ttl_seconds=None),
+        noforwards=False,
+        fwd_from=None,
+    )
+
+
+class Native:
+    def __init__(self):
+        self.connect = AsyncMock()
+        self.sign_in = AsyncMock()
+        self.get_me = AsyncMock(return_value=SimpleNamespace(id=234567, bot=True))
+        self.disconnect = AsyncMock()
+        self.chats = {MAIN: channel(MAIN), BACKUP: channel(BACKUP)}
+        self.messages = {(MAIN, 77): message(77, MAIN, document())}
+        self.requests = []
+        self.downloads = []
+        self.uploads = []
+        self.pins = {}
+        self.receipts = {}
+        self.next_message = 901
+        self.response_loss = False
+        self.bad_copy = False
+        self.wrong_destination_peer = False
+        self.response_mode = "updates"
+        self.body = b"encrypted capsule"
+        self.delay_download = False
+
+    async def get_input_entity(self, identity):
+        return types.InputPeerChannel(utils.resolve_id(identity)[0], 1)
+
+    async def get_messages(self, channel_id, *, ids):
+        return self.messages.get((channel_id, ids))
+
+    async def upload_file(self, source, **kwargs):
+        self.body = source.read()
+        self.uploads.append(kwargs)
+        return types.InputFileBig(id=123, parts=1, name=kwargs["file_name"])
+
+    async def __call__(self, request):
+        self.requests.append(request)
+        if isinstance(request, functions.channels.GetFullChannelRequest):
+            identity = utils.get_peer_id(request.channel)
+            return SimpleNamespace(
+                chats=[self.chats[identity]],
+                full_chat=SimpleNamespace(pinned_msg_id=self.pins.get(identity)),
+            )
+        if isinstance(request, functions.messages.UpdatePinnedMessageRequest):
+            self.pins[utils.get_peer_id(request.peer)] = request.id
+            return True
+        assert isinstance(request, functions.messages.SendMediaRequest)
+        identity = utils.get_peer_id(request.peer)
+        key = (identity, request.random_id)
+        if key not in self.receipts:
+            result = self.next_message
+            self.next_message += 1
+            self.receipts[key] = result
+            if isinstance(request.media, types.InputMediaDocument):
+                doc = copy.deepcopy(self.messages[(MAIN, 77)].document)
+                if self.bad_copy:
+                    doc.id += 1
+            else:
+                doc = document(len(self.body), request.media.attributes[0].file_name)
+            self.messages[identity, result] = message(result, identity, doc)
+            if self.wrong_destination_peer:
+                self.messages[identity, result].peer_id = types.PeerChannel(999)
+        result = self.receipts[key]
+        if self.response_loss:
+            self.response_loss = False
+            raise TimeoutError("ambiguous response includes " + TOKEN)
+        if self.response_mode == "short":
+            return types.UpdateShort(
+                update=types.UpdateMessageID(id=result, random_id=request.random_id),
+                date=None,
+            )
+        if self.response_mode == "short-sent":
+            return types.UpdateShortSentMessage(
+                id=result, pts=1, pts_count=1, date=None, out=True
+            )
+        return SimpleNamespace(
+            updates=[types.UpdateMessageID(id=result, random_id=request.random_id)]
+        )
+
+    def iter_download(self, doc, **kwargs):
+        self.downloads.append((doc, kwargs))
+
+        async def read():
+            if self.delay_download:
+                await asyncio.Event().wait()
+            yield self.body[:5]
+            yield self.body[5:]
+
+        return read()
+
+
+async def started(native=None, *, primary=PRIMARY):
+    native = native or Native()
+    transport = ReplicaTransport(
+        SimpleNamespace(bot_tokens=(primary,), api_id=1), TOKEN, client=native
+    )
+    await transport.start()
+    return transport, native
+
+
+@pytest.mark.asyncio
+async def test_start_distinguishes_identity_and_does_not_reveal_credentials():
+    native = Native()
+    transport = ReplicaTransport(
+        SimpleNamespace(bot_tokens=(TOKEN,)), TOKEN, client=native
+    )
+    with pytest.raises(ReplicaTransportError) as error:
+        await transport.start()
+    assert error.value.code == "REPLICA_SAME_BOT"
+    native.connect.assert_not_called()
+    assert TOKEN not in str(error.value)
+    native.get_me.return_value = SimpleNamespace(id=999999, bot=True)
+    candidate = ReplicaTransport(
+        SimpleNamespace(bot_tokens=(PRIMARY,)), TOKEN, client=native
+    )
+    with pytest.raises(ReplicaTransportError, match="identity"):
+        await candidate.start()
+    native.disconnect.assert_awaited_once()
+
+
+def test_inflight_duplicate_is_retryable_without_echoing_provider_request():
+    error = RandomIdDuplicateError(request=TOKEN)
+    mapped = _provider_error(error)
+    assert mapped.code == "REPLICA_IN_FLIGHT"
+    assert mapped.retryable and mapped.retry_after == 5
+    assert TOKEN not in str(mapped)
+
+
+@pytest.mark.asyncio
+async def test_native_client_preserves_typed_error_for_durable_coordinator_retry(
+    monkeypatch,
+):
+    native = Native()
+    constructor = Mock(return_value=native)
+    monkeypatch.setattr("tgdrive.replica_transport.TelegramClient", constructor)
+    transport = ReplicaTransport(
+        SimpleNamespace(
+            bot_tokens=(PRIMARY,), api_id=12345, api_hash=SecretStr("a" * 32)
+        ),
+        TOKEN,
+    )
+    try:
+        await transport.start()
+        assert constructor.call_args.kwargs["raise_last_call_error"] is True
+        assert constructor.call_args.kwargs["request_retries"] == 0
+        assert constructor.call_args.kwargs["receive_updates"] is False
+    finally:
+        await transport.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("mode", ["short", "short-sent"])
+@pytest.mark.parametrize("failure", [None, "channel", "document"])
+async def test_typed_short_receipts_require_fresh_matching_destination(mode, failure):
+    transport, native = await started()
+    native.response_mode = mode
+    native.wrong_destination_peer = failure == "channel"
+    native.bad_copy = failure == "document"
+    try:
+        if failure is None:
+            assert (
+                await transport.copy(MAIN, 77, BACKUP, random_id=321, expected_size=123)
+                == 901
+            )
+        else:
+            with pytest.raises(ReplicaTransportError) as error:
+                await transport.copy(MAIN, 77, BACKUP, random_id=321, expected_size=123)
+            assert error.value.code == "REPLICA_VERIFY_FAILED"
+    finally:
+        await transport.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "mode,code",
+    [
+        ("username", "REPLICA_PUBLIC_CHANNEL"),
+        ("usernames", "REPLICA_PUBLIC_CHANNEL"),
+        ("noforwards", "REPLICA_PROTECTED"),
+        ("restricted", "REPLICA_PROTECTED"),
+        ("group", "REPLICA_CHANNEL_TYPE"),
+        ("permissions", "REPLICA_PERMISSIONS"),
+        ("no-admin", "REPLICA_PERMISSIONS"),
+    ],
+)
+async def test_private_channel_preflight_rejects_unsafe_states(mode, code):
+    transport, native = await started()
+    chat = native.chats[BACKUP]
+    if mode == "username":
+        chat.username = "publicchannel"
+    elif mode == "usernames":
+        chat.usernames = [types.Username(username="publicchannel", active=True)]
+    elif mode in {"restricted", "noforwards"}:
+        setattr(chat, mode, True)
+    elif mode == "group":
+        chat.broadcast = False
+    elif mode == "permissions":
+        chat.admin_rights.edit_messages = False
+    else:
+        chat.admin_rights = None
+    with pytest.raises(ReplicaTransportError) as error:
+        await transport.inspect(BACKUP)
+    assert error.value.code == code
+    await transport.close()
+
+
+@pytest.mark.asyncio
+async def test_copy_existing_premium_document_uses_reference_not_original_bytes():
+    transport, native = await started()
+    native.messages[MAIN, 77].document.size = 4 * 1024**3
+    result = await transport.copy(
+        MAIN, 77, BACKUP, random_id=123, expected_size=4 * 1024**3
+    )
+    assert result == 901
+    assert native.uploads == native.downloads == []
+    sent = [
+        r for r in native.requests if isinstance(r, functions.messages.SendMediaRequest)
+    ]
+    assert len(sent) == 1 and isinstance(sent[0].media, types.InputMediaDocument)
+    assert sent[0].media.id.id == native.messages[MAIN, 77].document.id
+    assert sent[0].random_id == 123 and sent[0].silent
+    assert not any(
+        isinstance(r, functions.messages.ForwardMessagesRequest)
+        for r in native.requests
+    )
+
+
+@pytest.mark.asyncio
+async def test_ambiguous_send_reuses_persisted_random_id_without_double_copy():
+    transport, native = await started()
+    native.response_loss = True
+    with pytest.raises(ReplicaTransportError) as error:
+        await transport.copy(MAIN, 77, BACKUP, random_id=-555, expected_size=123)
+    assert error.value.retryable and TOKEN not in str(error.value)
+    assert (
+        await transport.copy(MAIN, 77, BACKUP, random_id=-555, expected_size=123) == 901
+    )
+    assert len(native.receipts) == 1
+    sent = [
+        r for r in native.requests if isinstance(r, functions.messages.SendMediaRequest)
+    ]
+    assert [r.random_id for r in sent] == [-555, -555]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("failure", ["missing", "size", "identity", "channel"])
+async def test_copy_never_confirms_wrong_missing_or_changed_documents(failure):
+    transport, native = await started()
+    if failure == "missing":
+        native.messages.clear()
+    elif failure == "size":
+        native.messages[MAIN, 77].document.size = 124
+    elif failure == "identity":
+        native.bad_copy = True
+    else:
+        native.messages[MAIN, 77].peer_id = types.PeerChannel(999)
+    with pytest.raises(ReplicaTransportError):
+        await transport.copy(MAIN, 77, BACKUP, random_id=123, expected_size=123)
+
+
+@pytest.mark.asyncio
+async def test_inspection_is_fresh_and_detects_public_change_before_copy():
+    transport, native = await started()
+    assert (await transport.inspect(BACKUP))["private"]
+    native.chats[BACKUP].username = "became_public"
+    with pytest.raises(ReplicaTransportError) as error:
+        await transport.copy(MAIN, 77, BACKUP, random_id=123, expected_size=123)
+    assert error.value.code == "REPLICA_PUBLIC_CHANNEL"
+    assert not native.receipts
+
+
+@pytest.mark.asyncio
+async def test_floodwait_carries_wait_without_provider_message_or_credentials():
+    transport, native = await started()
+    native.get_input_entity = AsyncMock(side_effect=FloodWaitError(None, capture=42))
+    with pytest.raises(ReplicaTransportError) as error:
+        await transport.inspect(BACKUP)
+    assert error.value.retryable and error.value.retry_after == 42
+    assert error.value.code == "REPLICA_FLOOD_WAIT"
+    assert TOKEN not in str(error.value)
+
+
+@pytest.mark.asyncio
+async def test_publish_verifies_remote_capsule_then_pins_backup(tmp_path):
+    transport, native = await started()
+    source = tmp_path / "snapshot.tgdb"
+    source.write_bytes(b"authenticated encrypted bytes")
+    result = await transport.publish(
+        BACKUP, source, random_id=12, caption="TGDrive replica", pin=True
+    )
+    assert result == 901 and native.pins[BACKUP] == 901
+    assert native.uploads[0]["file_name"] == CAPSULE_NAME
+    assert native.downloads[0][1]["file_size"] == source.stat().st_size
+    assert native.messages[BACKUP, 901].document.attributes[0].file_name == CAPSULE_NAME
+    result = await transport.publish(
+        MAIN, source, random_id=13, caption="TGDrive replica", pin=False
+    )
+    assert result == 902 and MAIN not in native.pins
+
+
+@pytest.mark.asyncio
+async def test_publish_does_not_pin_when_remote_size_or_bytes_do_not_match(tmp_path):
+    transport, native = await started()
+    source = tmp_path / "snapshot.tgdb"
+    source.write_bytes(b"snapshot")
+    original_download = native.iter_download
+
+    def corrupt(doc, **options):
+        native.body = b"corrupt!"
+        return original_download(doc, **options)
+
+    native.iter_download = corrupt
+    with pytest.raises(ReplicaTransportError) as error:
+        await transport.publish(BACKUP, source, random_id=12, caption="safe", pin=True)
+    assert error.value.code == "REPLICA_VERIFY_FAILED"
+    assert not native.pins
+
+
+@pytest.mark.asyncio
+async def test_publish_rejects_large_capsule_without_upload(tmp_path):
+    transport, native = await started()
+    source = tmp_path / "snapshot.tgdb"
+    with source.open("wb") as handle:
+        handle.truncate(MAX_CAPSULE_BYTES + 1)
+    with pytest.raises(ReplicaTransportError) as error:
+        await transport.publish(BACKUP, source, random_id=12, caption="safe", pin=True)
+    assert error.value.code == "REPLICA_ARCHIVE_TOO_LARGE"
+    assert native.uploads == []
+
+
+@pytest.mark.asyncio
+async def test_download_only_pinned_capsule_into_private_exclusive_path(tmp_path):
+    transport, native = await started()
+    native.messages[BACKUP, 901] = message(
+        901, BACKUP, document(len(native.body), CAPSULE_NAME)
+    )
+    native.pins[BACKUP] = 901
+    target = tmp_path / "recovery.tgdb"
+    assert await transport.download(BACKUP, None, target) == 901
+    assert target.read_bytes() == native.body
+    assert target.stat().st_mode & 0o777 == 0o600
+    with pytest.raises(ReplicaTransportError) as error:
+        await transport.download(BACKUP, 901, target)
+    assert error.value.code == "REPLICA_LOCAL_EXISTS"
+    assert target.read_bytes() == native.body
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("bad", ["name", "oversize", "truncated", "excess"])
+async def test_download_rejects_wrong_or_unbounded_capsules(tmp_path, bad):
+    transport, native = await started()
+    doc = document(len(native.body), CAPSULE_NAME)
+    if bad == "name":
+        doc.attributes[0].file_name = "../../etc/passwd"
+    elif bad == "oversize":
+        doc.size = MAX_CAPSULE_BYTES + 1
+    elif bad == "truncated":
+        doc.size += 1
+    else:
+        doc.size -= 1
+    native.messages[BACKUP, 901] = message(901, BACKUP, doc)
+    target = tmp_path / "recovery.tgdb"
+    with pytest.raises(ReplicaTransportError):
+        await transport.download(BACKUP, 901, target)
+    assert not target.exists()
+    assert list(tmp_path.iterdir()) == []
+
+
+@pytest.mark.asyncio
+async def test_cancelled_download_removes_partial_file_and_can_resume(tmp_path):
+    transport, native = await started()
+    native.messages[BACKUP, 901] = message(
+        901, BACKUP, document(len(native.body), CAPSULE_NAME)
+    )
+    native.delay_download = True
+    target = tmp_path / "recovery.tgdb"
+    task = asyncio.create_task(transport.download(BACKUP, 901, target))
+    await asyncio.sleep(0.01)
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    assert list(tmp_path.iterdir()) == []
+    native.delay_download = False
+    assert await transport.download(BACKUP, 901, target) == 901
+
+
+@pytest.mark.asyncio
+async def test_missing_pin_does_not_search_history_or_download(tmp_path):
+    transport, native = await started()
+    with pytest.raises(ReplicaTransportError) as error:
+        await transport.download(BACKUP, None, tmp_path / "recovery.tgdb")
+    assert error.value.code == "REPLICA_CHECKPOINT_MISSING"
+    assert not native.downloads
+
+
+@pytest.mark.asyncio
+async def test_catalog_download_reads_only_explicit_legacy_name(tmp_path):
+    transport, native = await started()
+    native.messages[MAIN, 78] = message(
+        78, MAIN, document(len(native.body), "drive.json")
+    )
+    native.pins[MAIN] = 78
+    with pytest.raises(ReplicaTransportError) as error:
+        await transport.download(MAIN, None, tmp_path / "capsule.tgdb")
+    assert error.value.code == "REPLICA_DOCUMENT_TYPE"
+    assert not native.downloads
+    assert await transport.download_catalog(MAIN, tmp_path / "catalog.json") == 78
+    assert (tmp_path / "catalog.json").read_bytes() == native.body
+    assert MAIN in native.pins and native.pins[MAIN] == 78
+
+
+@pytest.mark.asyncio
+async def test_provider_exceptions_are_sanitized_and_cancellation_propagates():
+    transport, native = await started()
+    native.get_input_entity = AsyncMock(side_effect=RuntimeError(TOKEN))
+    with pytest.raises(ReplicaTransportError) as error:
+        await transport.inspect(MAIN)
+    assert TOKEN not in str(error.value)
+    assert error.value.code == "REPLICA_PROVIDER_ERROR"
+    assert error.value.__cause__ is None
+    native.get_input_entity = AsyncMock(side_effect=asyncio.CancelledError())
+    with pytest.raises(asyncio.CancelledError):
+        await transport.inspect(MAIN)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("value", [True, 0, 1, "-1001234567890"])
+async def test_invalid_channel_identifiers_are_rejected_before_network(value):
+    transport, native = await started()
+    with pytest.raises(ReplicaTransportError) as error:
+        await transport.inspect(value)
+    assert error.value.code == "REPLICA_INPUT"
+    assert not native.requests
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("state", ["exists", "missing", "wrong-size"])
+async def test_verify_existing_document_without_payload_download(state):
+    transport, native = await started()
+    if state == "missing":
+        native.messages.clear()
+    elif state == "wrong-size":
+        native.messages[MAIN, 77].document.size = 99
+    if state == "exists":
+        assert await transport.verify(MAIN, 77, 123) is None
+    else:
+        with pytest.raises(ReplicaTransportError):
+            await transport.verify(MAIN, 77, 123)
+    assert native.uploads == native.downloads == []
+    assert not native.receipts
+
+
+@pytest.mark.asyncio
+async def test_publish_catalog_preserves_exact_legacy_filename_and_pin(tmp_path):
+    transport, native = await started()
+    source = tmp_path / "catalog.json"
+    source.write_bytes(b'{"schema_version":4}')
+    result = await transport.publish_catalog(
+        MAIN, source, random_id=99, caption="TGDrive checkpoint v1", pin=True
+    )
+    assert native.pins[MAIN] == result
+    assert native.uploads[0]["file_name"] == "drive.json"
+    assert (
+        native.messages[MAIN, result].document.attributes[0].file_name == "drive.json"
+    )
+    target = tmp_path / "restored.json"
+    assert await transport.download_catalog(MAIN, target) == result
+    assert target.read_bytes() == source.read_bytes()
+
+
+@pytest.mark.asyncio
+async def test_pinned_message_reads_only_current_pin_without_messages_or_history():
+    transport, native = await started()
+    assert await transport.pinned_message(BACKUP) is None
+    native.pins[BACKUP] = 901
+    assert await transport.pinned_message(BACKUP) == 901
+    assert all(
+        isinstance(request, functions.channels.GetFullChannelRequest)
+        for request in native.requests
+    )
+    assert not native.downloads and not native.uploads and not native.receipts
+    native.pins[BACKUP] = True
+    with pytest.raises(ReplicaTransportError):
+        await transport.pinned_message(BACKUP)

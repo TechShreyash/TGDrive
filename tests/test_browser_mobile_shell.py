@@ -93,3 +93,66 @@ def test_phone_browsing_drawer_and_upload_use_separate_surfaces(
     expect(page.locator(".transfer-page")).to_be_visible()
     expect(status).to_have_count(0)
     page.screenshot(path=ARTIFACTS / f"phone-transfers-{width}.png")
+
+
+@pytest.mark.parametrize(
+    "width,theme", [(1440, "light"), (390, "dark"), (320, "light")]
+)
+def test_sidebar_keeps_rare_tools_collapsed_and_exposes_project_link(
+    server, desktop, width, theme
+):
+    _, page = desktop
+    page.set_viewport_size({"width": width, "height": 844})
+    page.emulate_media(color_scheme=theme)
+    login(page, server.url)
+
+    def open_drawer():
+        if page.locator(".sidebar").get_attribute("inert") is not None:
+            page.get_by_role("button", name="Toggle Navigation", exact=True).click()
+
+    open_drawer()
+    tools = page.locator(".sidebar-tools")
+    summary = tools.locator("summary")
+    expect(tools).not_to_have_attribute("open", "")
+    expect(page.get_by_role("link", name="Performance", exact=True)).not_to_be_visible()
+    for label in ["My Files", "Starred", "Transfers", "Shared Links", "Trash"]:
+        expect(page.get_by_role("link", name=label, exact=True)).to_be_in_viewport()
+    github = page.get_by_role("link", name="Star on GitHub", exact=True)
+    expect(github).to_have_attribute("href", "https://github.com/TechShreyash/TGDrive")
+    expect(github).to_have_attribute("target", "_blank")
+    expect(github).to_have_attribute("rel", "noopener noreferrer")
+    expect(github).to_be_in_viewport()
+    expect(page.get_by_role("button", name="Log Out", exact=True)).to_be_in_viewport()
+    ARTIFACTS.mkdir(parents=True, exist_ok=True)
+    page.screenshot(
+        path=ARTIFACTS / f"sidebar-simple-{theme}-{width}.png", animations="disabled"
+    )
+    summary.focus()
+    page.keyboard.press("Enter")
+    expect(tools).to_have_attribute("open", "")
+    page.get_by_role("link", name="Performance", exact=True).click()
+    expect(page.get_by_role("heading", name="Performance", exact=True)).to_be_visible()
+    open_drawer()
+    expect(tools).to_have_attribute("open", "")
+    expect(page.locator('.drive-nav a[aria-current="page"]')).to_have_text(
+        "Performance"
+    )
+    page.screenshot(
+        path=ARTIFACTS / f"sidebar-tools-{theme}-{width}.png", animations="disabled"
+    )
+    page.get_by_role("link", name="My Files", exact=True).click()
+    expect(page.get_by_role("heading", name="My Files", exact=True)).to_be_visible()
+    open_drawer()
+    expect(tools).not_to_have_attribute("open", "")
+    page.goto(server.url + "/?view=settings&section=regional")
+    expect(
+        page.get_by_role("heading", name="Regional settings", exact=True)
+    ).to_be_visible()
+    open_drawer()
+    expect(tools).to_have_attribute("open", "")
+    expect(page.get_by_role("link", name="Timezone", exact=True)).to_have_attribute(
+        "aria-current", "page"
+    )
+    summary.click()
+    expect(tools).not_to_have_attribute("open", "")
+    assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")

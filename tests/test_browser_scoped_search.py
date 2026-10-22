@@ -17,6 +17,7 @@ from test_browser_e2e import (
     desktop,  # noqa: F401
     expect,
     login,
+    open_admin,
     server,  # noqa: F401
 )
 
@@ -29,7 +30,7 @@ def test_context_switch_trash_shares_and_preloads_keep_search_scoped(server, des
     contents = page.request.post(
         server.url + "/api/getDirectory", data={"path": "/"}
     ).json()["data"]["contents"]
-    folder = next(item for item in contents.values() if item["name"] == "資料 📁")
+    folder = next(item for item in contents.values() if item["name"] == "資料")
     assert page.request.post(
         server.url + "/api/trashFileFolder",
         data={"path": "/" + folder["id"], "trash": True},
@@ -42,7 +43,7 @@ def test_context_switch_trash_shares_and_preloads_keep_search_scoped(server, des
         == 1
     )
     search.fill("資料")
-    expect(page.get_by_role("button", name="資料 📁", exact=True)).to_be_visible()
+    expect(page.get_by_role("button", name="資料", exact=True)).to_be_visible()
     search.fill("not in the trash")
     expect(
         page.get_by_role("heading", name="No Matching Trashed Items")
@@ -89,6 +90,7 @@ def test_context_switch_trash_shares_and_preloads_keep_search_scoped(server, des
         for name in ("Movie.mp4", "Interview.mkv")
     ]
     page.route("**/api/v1/preloads", lambda route: route.fulfill(json=cache))
+    open_admin(page)
     page.get_by_role("link", name="Preloads", exact=True).click()
     search = page.get_by_role("searchbox", name="Search cached files", exact=True)
     expect(search).to_have_value("")
@@ -232,13 +234,13 @@ def test_compact_fixed_directory_controls_leave_room_for_files(
     _, page = desktop
     page.set_viewport_size({"width": width, "height": height})
     login(page, server.url)
-    folder = page.get_by_role("button", name="資料 📁", exact=True)
+    folder = page.get_by_role("button", name="資料", exact=True)
     folder.focus()
     folder.press("Enter")
-    expect(page.get_by_role("heading", name="資料 📁", exact=True)).to_be_visible()
+    expect(page.get_by_role("heading", name="資料", exact=True)).to_be_visible()
     expect(
         page.get_by_role("navigation", name="Breadcrumb").get_by_text(
-            "資料 📁", exact=True
+            "資料", exact=True
         )
     ).to_have_count(0)
     search = page.get_by_role("searchbox", name="Search Files and Folders", exact=True)
@@ -255,9 +257,12 @@ def test_compact_fixed_directory_controls_leave_room_for_files(
     if width > 720:
         assert ratio > 0.60
     else:
-        assert page.locator(".workspace").evaluate(
-            "node => getComputedStyle(node).overflowY"
-        ) == "auto"
+        assert (
+            page.locator(".workspace").evaluate(
+                "node => getComputedStyle(node).overflowY"
+            )
+            == "auto"
+        )
     bounds = page.locator(".workspace").bounding_box()
     viewport = page.viewport_size
     assert abs(bounds["x"] + bounds["width"] - viewport["width"]) <= 1
@@ -287,6 +292,7 @@ def test_compact_fixed_directory_controls_leave_room_for_files(
         documentation = page.get_by_role("link", name="Documentation", exact=True)
         documentation.scroll_into_view_if_needed()
         expect(documentation).to_be_in_viewport()
+        sidebar.locator(".sidebar-tools > summary").click()
         page.get_by_role("link", name="Storage & Backups", exact=True).focus()
         expect(
             page.get_by_role("link", name="Storage & Backups", exact=True)

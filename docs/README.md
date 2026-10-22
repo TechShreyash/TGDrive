@@ -14,7 +14,7 @@ and MongoDB remembers their names, folders and sharing settings.
 | Read PDFs, ebooks or comics without downloading every byte first | [Reading books and comics](reading.md) |
 | Understand generated image, video and PDF covers | [Thumbnail generation](thumbnails.md) |
 | Restart, upgrade or fix a problem | [Operations](operations.md) |
-| Save recovery keys, understand encrypted backups or restore after data loss | [Backup & recovery](backup-recovery.md) |
+| Configure an independent backup channel, save recovery keys or restore after data loss | [Backup & recovery](backup-recovery.md) |
 | Understand settings, restore safe defaults or tune a larger server | [Configuration & tuning](configuration.md) |
 | Improve streaming, control cache budgets or prepare shared downloads | [Performance and caching](performance.md) |
 | Review fresh-browser playback, protocol and cached-seek checks | [Streaming validation](streaming-validation-2026-10-18.md) |

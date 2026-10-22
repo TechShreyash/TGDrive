@@ -939,6 +939,9 @@ class TransferManager:
             return
         try:
             await self._verify_lineage(record)
+            protect = getattr(self, "_ensure_replica", None)
+            if protect is not None:
+                await protect()
             self.registry.update(
                 record.id, status=TransferStatus.RUNNING, phase="deleting"
             )

@@ -507,7 +507,44 @@ relative nested locations or a different current location.
 ## Shared UI components
 
 The frontend uses Mantine Core/Hooks 9.7.3 with React 19, pinned together in the
-lockfile. TGDrive has one colorful dark theme. See [Design system](../website/DESIGN.md)
+lockfile. TGDrive supports light, dark and system appearance. See [Design system](../website/DESIGN.md)
 for semantic tokens, section structure, control choices and motion rules. Shared
 library controls use the root provider; specialized file/player UI uses the same
-semantic CSS tokens. Do not reintroduce per-browser light/system settings.
+semantic CSS tokens. Preserve the saved appearance preference, keyboard focus and
+reduced-motion behavior across both Mantine and native controls.
+
+## Independent channel backup contracts
+
+`replica_state.py` owns the private journal and bounded authenticated capsule;
+`replica_transport.py` owns the independent bot, channel preflight and Telegram
+copy/confirmation contract; `replica.py` coordinates copying and recoverable
+catalog publication. `replica_api.py` exposes owner-only controls. `ChannelBackup`
+provides normal Storage & Backups and recovery-only UI states.
+
+Keep copied media, catalog mapping and protected revision consistent. Do not
+advance protection before both recovery metadata copies are confirmed. Persist
+send identities before provider calls and reuse them after an ambiguous result.
+A restored catalog must never replay old-channel jobs or deletion receipts into
+new message IDs. Keep source documents and prior state while preparing activation.
+
+[Telegram documents account-wide `random_id` deduplication](https://core.telegram.org/api/updates#updatemessageid-updates),
+including across new sessions: a completed duplicate returns the earlier message;
+`RANDOM_ID_DUPLICATE` can mean its first send is still in flight. Preserve that
+typed error and retry the same journaled identity after a bounded wait. Never
+rotate IDs to work around it. Accept typed update receipts, then fetch and verify
+the destination document before confirming the journal; no history scan is needed.
+
+`tests/test_browser_channel_backup.py` uses the real auth/API/UI with a synthetic
+replica service, exercising configuration, progress, pause/retry, private exports,
+server-side recovery candidates, typed destinations and explicit activation at
+1440/390/320 px. These checks are not evidence that live Telegram copying or
+independent human-account ownership was verified. Run with:
+
+~~~bash
+TGDRIVE_E2E=1 PYTHONPATH=.:tests .venv/bin/python -m pytest tests/test_browser_channel_backup.py -q
+~~~
+
+Live validation needs disposable private source/target channels and unrelated
+bots. Rehearse both recovery directions and database-only recovery without using
+production channels or deleting the only copy. Never paste real bot tokens or
+recovery keys into test logs or committed fixtures.

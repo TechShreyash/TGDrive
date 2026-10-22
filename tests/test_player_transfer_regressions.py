@@ -144,7 +144,7 @@ def test_share_copy_notice_is_above_native_dialog_without_stealing_focus(
     context, page = desktop
     context.grant_permissions(["clipboard-read", "clipboard-write"])
     login(page, server.url)
-    page.get_by_label("Actions for 資料 📁", exact=True).click()
+    page.get_by_label("Actions for 資料", exact=True).click()
     page.get_by_role("button", name="Share Link", exact=True).click()
     page.get_by_role("button", name="Create Share Link", exact=True).click()
     copy = page.get_by_role("button", name="Copy Link", exact=True)

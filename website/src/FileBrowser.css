@@ -200,7 +200,7 @@
   overscroll-behavior: contain;
 }
 
-/* Keep the access indicator attached to the name, including truncated names. */
+/* Keep filenames uninterrupted; optional state is separate, quiet metadata. */
 .file-title-line {
   display: flex;
   align-items: center;
@@ -208,8 +208,24 @@
   min-width: 0;
 }
 .file-title-line .file-name {
-  flex: 0 1 auto;
+  flex: 1 1 auto;
   min-width: 0;
+}
+.file-item-status {
+  display: inline-flex;
+  align-items: center;
+  flex: 0 0 auto;
+  gap: 10px;
+  padding-inline-start: 12px;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 400;
+  line-height: 18px;
+  white-space: nowrap;
+}
+.file-status-label + .file-status-label {
+  border-inline-start: 1px solid var(--line);
+  padding-inline-start: 10px;
 }
 .file-table th:first-child {
   padding-inline-start: 12px;
@@ -356,6 +372,11 @@
 }
 .file-grid .file-title-line {
   align-items: flex-start;
+  flex-direction: column;
+  gap: 2px;
+}
+.file-grid .file-item-status {
+  padding: 0;
 }
 .file-grid .search-result-location {
   padding: 0;
@@ -539,5 +560,22 @@
   }
   .file-toolbar[data-selection="true"] .search-form {
     grid-row: 3;
+  }
+}
+
+@media (max-width: 720px) {
+  .file-title-line:has(.file-item-status) {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 0;
+  }
+  .file-title-line:has(.file-item-status) .file-name {
+    padding-block: 3px;
+  }
+  .file-title-line .file-item-status {
+    padding: 0 5px 3px;
+  }
+  .file-grid .file-title-line .file-item-status {
+    padding: 0;
   }
 }

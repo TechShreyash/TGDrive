@@ -42,6 +42,8 @@ def trusted_proxy_ips() -> str:
 
 
 def main() -> None:
+    # A fresh container must remain available for init without owning its database.
+    # Existing installations with recovery configuration can serve the owner shell.
     wait_for_initialization()
     uvicorn.run(
         "main:app",
@@ -64,12 +66,24 @@ def wait_for_initialization() -> None:
     uri = os.environ.get("MONGODB_URI")
     if not uri:
         return
+    directory = Path(os.environ.get("DATA_DIR", "data")).expanduser().resolve()
+    if any(
+        (directory / name).exists()
+        for name in (
+            "replica-bootstrap.json",
+            "channel-activation.json",
+        )
+    ):
+        return
     backend = configure(
-        Path(os.environ.get("DATA_DIR", "data")).expanduser().resolve(),
+        directory,
         uri,
         os.environ.get("MONGODB_DATABASE", "tgdrive"),
     )
     if backend.db.catalog.find_one({"_id": "catalog"}):
+        return
+    saved = getattr(backend.db, "settings", None)
+    if saved is not None and saved.find_one({"_id": "bootstrap"}):
         return
     logger.warning(
         "Drive is not initialized. Run 'python -m tgdrive init' once in this "

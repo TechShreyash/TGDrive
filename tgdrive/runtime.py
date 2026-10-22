@@ -62,16 +62,6 @@ class Runtime:
         if self.ready:
             return
         self._prepare_runtime_directories()
-        self.registry = TransferRegistry(
-            ttl_seconds=self.settings.transfer_ttl_seconds,
-            database_path=(
-                None
-                if self.mongo is not None
-                else self.settings.resolved_data_dir / "jobs.sqlite3"
-            ),
-            mongo=self.mongo.db.jobs if self.mongo is not None else None,
-            mongo_backend=self.mongo,
-        )
         try:
             self._owner_lock = (
                 self.settings.resolved_data_dir / ".instance.lock"
@@ -84,10 +74,73 @@ class Runtime:
                 raise RuntimeError(
                     "Another TGDrive instance owns this data directory"
                 ) from exc
-            if self.mongo is not None:
-                await asyncio.to_thread(self.mongo.acquire)
-                self._mongo_acquired = True
-            self.store = await self.backup.restore()
+            from tgdrive.backup import BackupError
+            from tgdrive.errors import CorruptStoreError
+            from tgdrive.mongo import DatabaseUnavailable
+            from tgdrive.replica import ChannelReplica
+            from tgdrive.replica_activation import ActivationError, apply_activation
+
+            try:
+                if getattr(self, "_activation_unavailable", False):
+                    raise ActivationError("Recovery activation requires review")
+                if self.mongo is not None:
+                    await asyncio.to_thread(self.mongo.acquire)
+                    self._mongo_acquired = True
+                await asyncio.to_thread(apply_activation, self.settings, self.mongo)
+                self.store = await self.backup.restore()
+            except (
+                ActivationError,
+                BackupError,
+                CorruptStoreError,
+                DatabaseUnavailable,
+                ValueError,
+            ):
+                self.recovery_only = True
+                self.replica = ChannelReplica(self.settings, self)
+                self.replica.report(
+                    "error",
+                    "The local catalog is unavailable or requires explicit recovery. "
+                    "Existing data has been preserved; normal file operations "
+                    "are stopped.",
+                )
+                self.replica.start()
+                logger.warning(
+                    "Catalog unavailable: owner web recovery is available; "
+                    "file writers are stopped"
+                )
+                return
+            self.recovery_only = False
+            self.replica = ChannelReplica(self.settings, self)
+            if self.replica.journal.get("activation"):
+                self.replica.journal.set("activation", None)
+                self.replica.journal.set("recovery", None)
+                self.replica.journal.set("candidate", None)
+                self.replica.journal.set("job", None)
+                self.replica.journal.set("config", {})
+                self.replica.update(phase="disabled", protected_revision=0, error=None)
+            original_lineage = getattr(self.backup, "verify_lineage", None)
+
+            async def protected_lineage(store):
+                if self.replica.blocked:
+                    from tgdrive.managed_settings import SettingsProblem
+
+                    raise SettingsProblem(
+                        "Channel recovery has paused Telegram changes.", status=409
+                    )
+                if original_lineage is not None:
+                    await original_lineage(store)
+
+            self.backup.verify_lineage = protected_lineage
+            self.registry = TransferRegistry(
+                ttl_seconds=self.settings.transfer_ttl_seconds,
+                database_path=(
+                    None
+                    if self.mongo is not None
+                    else self.settings.resolved_data_dir / "jobs.sqlite3"
+                ),
+                mongo=self.mongo.db.jobs if self.mongo is not None else None,
+                mongo_backend=self.mongo,
+            )
             from tgdrive.transfer_preferences import get_transfer_preferences
 
             await get_transfer_preferences(self.settings, self).initialize()
@@ -151,8 +204,18 @@ class Runtime:
                 ensure_lineage=ensure_lineage,
                 check_upload_allowed=self._check_upload_allowed,
             )
+            self.transfers._ensure_replica = self.replica.before_mutation
+            if self.replica.blocked:
+                lineage_ready = False
             if lineage_ready:
-                await self.transfers.recover()
+                try:
+                    await self.transfers.recover()
+                except Exception:
+                    lineage_ready = False
+                    logger.warning(
+                        "Durable transfers are waiting for verified protection; "
+                        "owner metadata and backup controls remain available"
+                    )
             bot_client = build_bot_mode_client(self.settings) if lineage_ready else None
             if bot_client is not None:
                 bot_client.bind_send_gate(self.pool.pace_send, self.pool.defer_channel)
@@ -165,6 +228,7 @@ class Runtime:
                 )
                 await self.bot_mode.start()
             self.backup.start(self.store)
+            self.replica.start()
             self.ready = True
             if not lineage_ready:
                 self._reconnector = asyncio.create_task(
@@ -177,6 +241,12 @@ class Runtime:
             raise
 
     def _check_upload_allowed(self) -> None:
+        if getattr(self, "replica", None) is not None and self.replica.blocked:
+            from tgdrive.managed_settings import SettingsProblem
+
+            raise SettingsProblem(
+                "Finish or disable channel recovery before uploading.", status=409
+            )
         self.backup.check_upload_allowed(self.store)
         manager = getattr(self, "connection_manager", None)
         if manager is not None:
@@ -247,6 +317,8 @@ class Runtime:
                 failures.append(exc)
         else:
             await self.remote.close()
+        if getattr(self, "replica", None) is not None:
+            await self.replica.close()
         if self.store is not None:
             try:
                 await self.backup.stop(self.store)
@@ -289,6 +361,8 @@ class Runtime:
             self._owner_lock = None
 
     async def _cleanup_failed_start(self) -> None:
+        if getattr(self, "replica", None) is not None:
+            await self.replica.close()
         if self.bot_mode is not None:
             try:
                 await self.bot_mode.stop()

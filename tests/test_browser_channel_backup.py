@@ -1,0 +1,289 @@
+"""Owner backup UX uses the real routes with an offline replica service."""
+
+from __future__ import annotations
+
+import json
+import os
+from pathlib import Path
+
+import pytest
+
+if os.environ.get("TGDRIVE_E2E") != "1":
+    pytest.skip("Set TGDRIVE_E2E=1 for Chromium checks", allow_module_level=True)
+
+import test_browser_e2e as fixtures
+from test_browser_e2e import ARTIFACTS, CONTROL, expect, login, open_admin
+
+browser, desktop, server = fixtures.browser, fixtures.desktop, fixtures.server
+pytestmark = pytest.mark.e2e
+BOT = "222222222:" + "a" * 35
+MAIN_BOT = "333333333:" + "b" * 35
+BACKUP_CHANNEL = "-1003333333333"
+NEW_MAIN_CHANNEL = "-1004444444444"
+KEY = "c" * 64
+
+
+@pytest.fixture(autouse=True)
+def keep_console_errors(desktop, request):
+    _, page = desktop
+    errors = []
+
+    def collect(message):
+        if message.type == "error":
+            text = message.text
+            for secret in (BOT, MAIN_BOT, KEY):
+                text = text.replace(secret, "<redacted>")
+            errors.append(text)
+
+    page.on("console", collect)
+    yield
+    ARTIFACTS.mkdir(parents=True, exist_ok=True)
+    (ARTIFACTS / (request.node.name + "-console.json")).write_text(json.dumps(errors))
+    assert errors == []
+
+
+def open_storage(page):
+    open_admin(page)
+    page.get_by_role("link", name="Storage & Backups", exact=True).click()
+    section = page.get_by_role("region", name="Independent backup channel", exact=True)
+    expect(section).to_be_visible()
+    return section
+
+
+def scenario(page, server, name):
+    response = page.request.post(
+        server.url + "/__test__/replica/" + name, headers=CONTROL
+    )
+    assert response.ok
+    page.get_by_role("button", name="Refresh channel backup status", exact=True).click()
+
+
+def capture(page, name):
+    assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
+    ARTIFACTS.mkdir(parents=True, exist_ok=True)
+    page.screenshot(path=ARTIFACTS / name, animations="disabled")
+
+
+@pytest.mark.parametrize(
+    "width,theme", [(1440, "light"), (390, "dark"), (320, "light")]
+)
+def test_channel_backup_setup_progress_pause_errors_and_private_exports(
+    server, desktop, width, theme
+):
+    _, page = desktop
+    page.set_viewport_size({"width": width, "height": 900 if width > 720 else 844})
+    page.add_init_script("localStorage.setItem('tgdrive.appearance','" + theme + "')")
+    login(page, server.url)
+    section = open_storage(page)
+    expect(
+        page.get_by_role("heading", name="Catalog checkpoint", exact=True)
+    ).to_be_visible()
+    section.get_by_role("button", name="Set up backup channel", exact=True).click()
+    section.get_by_label("Backup channel ID", exact=True).fill(BACKUP_CHANNEL)
+    section.get_by_label("Backup bot token", exact=True).fill(BOT)
+    submit = section.get_by_role("button", name="Verify and start backup", exact=True)
+    expect(submit).to_be_disabled()
+    section.get_by_role(
+        "checkbox", name="I created the backup channel", exact=False
+    ).check()
+    capture(page, f"channel-backup-setup-{theme}-{width}.png")
+    submit.click()
+    expect(section.locator(".channel-backup-phase")).to_contain_text(
+        "Copying to the backup channel"
+    )
+    expect(
+        section.get_by_role("progressbar", name="Channel copy progress", exact=True)
+    ).to_have_attribute("value", str(1024**2))
+    expect(section.get_by_text("Project archive.zip", exact=True)).to_be_visible()
+    expect(section.get_by_label("Backup bot token", exact=True)).to_have_count(0)
+    expect(
+        section.get_by_role("heading", name="Independent backup channel", exact=True)
+    ).to_be_focused()
+    section.scroll_into_view_if_needed()
+    capture(page, f"channel-backup-progress-{theme}-{width}.png")
+    section.get_by_role("button", name="Pause", exact=True).click()
+    expect(section.locator(".channel-backup-phase")).to_contain_text("Paused")
+    section.get_by_role("button", name="Resume", exact=True).click()
+    expect(section.locator(".channel-backup-phase")).to_contain_text("Copying")
+    scenario(page, server, "error")
+    expect(section.get_by_role("alert")).to_contain_text("Backup bot cannot read")
+    expect(
+        section.get_by_text(
+            "Restore the bot's administrator permissions, then retry.", exact=True
+        )
+    ).to_be_visible()
+    section.get_by_role("alert").scroll_into_view_if_needed()
+    capture(page, f"channel-backup-error-{theme}-{width}.png")
+    section.get_by_role("button", name="Retry", exact=True).click()
+    expect(section.locator(".channel-backup-phase")).to_contain_text("Copying")
+    scenario(page, server, "waiting")
+    expect(section.locator(".channel-backup-phase")).to_contain_text(
+        "Waiting for Telegram"
+    )
+    expect(section.get_by_text("Next retry:", exact=False)).to_contain_text("2026")
+    section.locator(".channel-backup-phase").scroll_into_view_if_needed()
+    capture(page, f"channel-backup-waiting-{theme}-{width}.png")
+    scenario(page, server, "protected")
+    expect(section.locator(".channel-backup-phase")).to_contain_text("Backup confirmed")
+    expect(section.locator(".channel-backup-confirmation")).to_contain_text(
+        "catalog revision 9"
+    )
+    with page.expect_download() as key_download:
+        section.get_by_role("link", name="Save recovery key", exact=True).click()
+    exported = json.loads(Path(key_download.value.path()).read_text())
+    assert exported["key"] == KEY
+    scenario(page, server, "many-events")
+    section.locator("summary").filter(has_text="Activity and report").click()
+    expect(section.locator(".channel-backup-report li")).to_have_count(30)
+    with page.expect_download() as report_download:
+        section.get_by_role("link", name="Download report", exact=True).click()
+    report = Path(report_download.value.path()).read_text()
+    assert BOT not in report and KEY not in report and MAIN_BOT not in report
+    assert "bot_token" not in report and "credentials" not in report
+    section.locator("summary").filter(has_text="Backup settings").click()
+    section.get_by_role("button", name="Disable automatic backup", exact=True).click()
+    section.get_by_role("button", name="Confirm disable", exact=True).click()
+    expect(section.locator(".channel-backup-phase")).to_contain_text("Not enabled")
+    section.get_by_role("button", name="Enable backup", exact=True).click()
+    expect(section.locator(".channel-backup-phase")).to_contain_text("Copying")
+
+
+@pytest.mark.parametrize(
+    "catalog_only,width,theme", [(False, 320, "light"), (True, 390, "dark")]
+)
+def test_recovery_only_inspection_confirmation_resume_and_activation(
+    server, desktop, catalog_only, width, theme
+):
+    _, page = desktop
+    page.set_viewport_size({"width": width, "height": 844})
+    page.add_init_script("localStorage.setItem('tgdrive.appearance','" + theme + "')")
+    response = page.request.post(
+        server.url + "/__test__/replica/recovery-only", headers=CONTROL
+    )
+    assert response.ok
+    login(page, server.url)
+    expect(
+        page.get_by_role("heading", name="Storage recovery", exact=True)
+    ).to_be_visible()
+    expect(page.locator(".file-browser")).to_have_count(0)
+    section = page.get_by_role("region", name="Recover your drive", exact=True)
+    capture(page, f"channel-recovery-initial-{theme}-{width}.png")
+    section.get_by_label("Surviving channel ID", exact=True).fill(BACKUP_CHANNEL)
+    section.get_by_label(
+        "Bot token with access to the surviving channel", exact=True
+    ).fill(BOT)
+    section.get_by_label("Saved recovery key", exact=True).fill(KEY)
+    section.get_by_role("button", name="Inspect recovery copy", exact=True).click()
+    expect(
+        section.get_by_role("heading", name="Recovery copy found", exact=True)
+    ).to_be_visible()
+    expect(
+        section.get_by_role("heading", name="Recovery copy found", exact=True)
+    ).to_be_focused()
+    expect(section.get_by_label("Saved recovery key", exact=True)).to_have_value("")
+    expect(
+        section.get_by_label(
+            "Bot token with access to the surviving channel", exact=True
+        )
+    ).to_have_value("")
+    # The candidate and credentials are server-side; a page reload resumes the review.
+    page.reload()
+    expect(
+        section.get_by_role("heading", name="Recovery copy found", exact=True)
+    ).to_be_visible()
+    target = BACKUP_CHANNEL if catalog_only else NEW_MAIN_CHANNEL
+    if catalog_only:
+        section.get_by_role(
+            "checkbox",
+            name="Restore the database only on this surviving channel",
+            exact=True,
+        ).check()
+        section.get_by_label("Main bot token for this channel", exact=True).fill(
+            MAIN_BOT
+        )
+    else:
+        section.get_by_label("New main channel ID", exact=True).fill(target)
+        section.get_by_label("New main bot token", exact=True).fill(MAIN_BOT)
+    confirmation = (
+        section.locator("label").filter(has_text="to confirm").locator("input")
+    )
+    copy = section.get_by_role(
+        "button",
+        name="Verify catalog on this channel"
+        if catalog_only
+        else "Copy to new main channel",
+        exact=True,
+    )
+    confirmation.fill("-1001111111111")
+    expect(copy).to_be_disabled()
+    confirmation.fill(target)
+    expect(copy).to_be_enabled()
+    capture(page, f"channel-recovery-review-{theme}-{width}.png")
+    copy.click()
+    expect(section.locator(".channel-backup-phase")).to_contain_text(
+        "Preparing the recovered drive"
+    )
+    section.get_by_role("button", name="Pause recovery", exact=True).click()
+    expect(section.locator(".channel-backup-phase")).to_contain_text("Paused")
+    section.get_by_role("button", name="Resume recovery", exact=True).click()
+    # Advance the synthetic transport only after the UI requested a confirmed target.
+    scenario(page, server, "recovery-ready")
+    expect(
+        section.get_by_role("heading", name="Recovered drive verified", exact=True)
+    ).to_be_visible()
+    activate = section.get_by_role(
+        "button", name="Activate recovered drive", exact=True
+    )
+    expect(activate).to_be_disabled()
+    section.get_by_label(
+        "Type " + target + " to activate this recovered drive", exact=True
+    ).fill(target)
+    activate.click()
+    expect(section.locator(".channel-backup-phase")).to_contain_text("Restart required")
+    expect(
+        section.get_by_text("The recovered configuration is saved.", exact=False)
+    ).to_be_visible()
+    state = page.request.get(server.url + "/__test__/replica", headers=CONTROL).json()
+    recovery = next(item for item in state["events"] if item["action"] == "recover")
+    assert (
+        recovery["channel"] == int(target) and recovery["catalog_only"] is catalog_only
+    )
+    assert state["events"][-1]["action"] == "activate"
+    assert not page.evaluate(
+        "Object.values(localStorage).some(value => value.includes('"
+        + BOT
+        + "') || value.includes('"
+        + KEY
+        + "'))"
+    )
+    capture(page, f"channel-recovery-activated-{theme}-{width}.png")
+
+
+def test_enabled_backup_refreshes_idle_lag_without_manual_reload(server, desktop):
+    _, page = desktop
+    page.clock.install()
+    login(page, server.url)
+    response = page.request.post(
+        server.url + "/api/v1/replica/configure",
+        data={
+            "channel_id": int(BACKUP_CHANNEL),
+            "bot_token": BOT,
+            "independent_accounts": True,
+        },
+    )
+    assert response.ok
+    response = page.request.post(
+        server.url + "/__test__/replica/protected", headers=CONTROL
+    )
+    assert response.ok
+    section = open_storage(page)
+    expect(section.locator(".channel-backup-phase")).to_contain_text("Backup confirmed")
+    response = page.request.post(
+        server.url + "/__test__/replica/lagging", headers=CONTROL
+    )
+    assert response.ok
+    page.clock.fast_forward(15001)
+    expect(section.locator(".channel-backup-confirmation")).to_contain_text(
+        "Catalog revision 10 is waiting to be protected"
+    )
+    expect(section.locator(".channel-backup-phase")).to_contain_text("Ready to sync")

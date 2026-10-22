@@ -406,6 +406,44 @@ form > select {
   border-radius: 10px;
   padding: 1px 5px;
 }
+.sidebar-tools {
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid var(--line-subtle);
+}
+.sidebar-tools > summary {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-height: 44px;
+  padding: 0 13px;
+  border-radius: 8px;
+  color: var(--muted);
+  cursor: pointer;
+  list-style: none;
+}
+.sidebar-tools > summary::-webkit-details-marker {
+  display: none;
+}
+.sidebar-tools > summary:hover {
+  background: var(--hover);
+  color: var(--ink);
+}
+.sidebar-tools > summary > span {
+  white-space: nowrap;
+}
+.sidebar-tools .nav-disclosure {
+  margin-inline-start: auto;
+  flex-shrink: 0;
+}
+.sidebar-tools[open] .nav-disclosure {
+  transform: rotate(90deg);
+}
+.sidebar-tools-content > .monitor-nav {
+  border-top: 0;
+  margin-top: 4px;
+  padding-top: 0;
+}
 .monitor-nav,
 .admin-nav {
   margin-top: 8px;

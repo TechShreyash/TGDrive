@@ -1,4 +1,5 @@
 import BrandMark from "./BrandMark";
+import ChannelBackup from "./ChannelBackup";
 import { Button, Paper } from "@mantine/core";
 import {
   useCallback,
@@ -250,7 +251,7 @@ export function StorageView({
           </div>
           <div>
             <h2 id="drive-backup-heading">
-              {mongo ? "Cloud Database" : "Drive Backup"}
+              {mongo ? "Cloud Database" : "Catalog checkpoint"}
             </h2>
             <p
               className={
@@ -289,7 +290,7 @@ export function StorageView({
         <p className="backup-safety-note">
           {mongo
             ? "Your catalog is saved in MongoDB; files stay in Telegram. Encrypted database backups run separately. Unfinished uploads still need their local files."
-            : "Finish all uploads and wait for confirmation before removing local data. Files still on your device are not backed up."}
+            : "This catalog checkpoint keeps file references in the main channel. It does not copy media to a second channel. Finish uploads and wait for confirmation before removing local data."}
         </p>
         <ErrorNotice
           message={
@@ -326,6 +327,7 @@ export function StorageView({
           </p>
         )}
       </section>
+      <ChannelBackup />
       <section
         className="settings-section"
         aria-labelledby="drive-usage-heading"

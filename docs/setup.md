@@ -327,3 +327,17 @@ that local override.
 Start with [HTTPS and private configuration](operations.md#https-and-private-configuration).
 The included Render template is a starting point and has not been validated as
 a live deployment.
+
+## Optional independent channel protection
+
+After the main drive works, you can add a second private channel from a separate
+Telegram account under **Storage & Backups → Independent backup channel**.
+Create the account/channel and backup bot in Telegram, then add that bot as an
+administrator in both channels. TGDrive verifies privacy/access and starts the
+copy through the web UI. Save the recovery-key JSON outside the provider and wait
+for a confirmed restore point before relying on the second channel.
+
+Follow the complete [backup setup and recovery guide](backup-recovery.md#set-up-an-independent-backup-channel)
+for permissions, interruption recovery, restoring either channel, database-only
+recovery and the limits of two copies on the same provider. This option is not
+required for normal setup and does not replace originals outside Telegram.

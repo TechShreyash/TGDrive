@@ -119,6 +119,17 @@ def register_routes(
     @app.get("/api/v1/status", dependencies=admin)
     async def status(request: Request) -> dict[str, Any]:
         runtime = get_runtime(request)
+        if getattr(runtime, "recovery_only", False):
+            return {
+                "recovery_only": True,
+                "telegram_ready": False,
+                "restart_required": False,
+                "admission_paused": True,
+                "metadata_revision": 0,
+                "backup": [],
+                "recovery": None,
+                "clients": None,
+            }
         pool = getattr(runtime, "pool", None)
         health = await pool.health() if pool else None
         backup = getattr(runtime, "backup", None)

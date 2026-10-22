@@ -13,14 +13,14 @@ links from one responsive web interface.
 
 | Feature | How it works |
 | --- | --- |
-| **Files and folders** | Upload from your device, drag and drop, or import a public HTTP(S) URL. Search names, move, rename, sort, and restore from Trash. |
+| **Files and folders** | Upload from your device, drag and drop, or import a public HTTP(S) URL. Search, sort, switch list/grid, organize Starred items, and restore from Trash. Small generated image/video/PDF thumbnails keep browsing efficient. |
 | **Large files** | Split across Telegram documents while retaining one drive item, exact original downloads, and video byte-range seeking. Premium is optional. |
 | **Media playback** | Locally bundled enhanced video player with supported embedded audio/subtitle tracks, chapter navigation, keyboard controls, and buffered timeline feedback. |
-| **Document previews** | Images, PDFs up to 256 MiB with lazy byte ranges, and read-only text/code previews. Original downloads remain available. |
+| **Document previews** | Images, PDFs up to 256 MiB with lazy byte ranges, read-only text/code, EPUB books and CBZ/CBR comics. Fullscreen and original downloads remain available; unsupported or protected content has a download fallback. |
 | **Cache and preload** | Reuse recently streamed blocks, prepare a file before sharing, and limit RAM, disk, and background work. Inspect ready bytes and evict cached data. |
-| **Transfers** | Resumable device uploads, server-side URL jobs, batch progress, cancellation, retries, and durable history. Floating upload receipts stay scoped to the initiating browser. |
-| **Sharing** | Scoped file/folder links with expiry, re-copy, and revocation. Review access in Shared Links. |
-| **Recovery** | MongoDB stores the catalog and settings; encrypted database snapshots are saved separately to Telegram. |
+| **Transfers** | Resumable device uploads, server-side URL jobs, measured speed and remaining time, cancellation, retries, and durable history. Phone upload status opens Transfers without covering the file list. |
+| **Sharing** | Multiple independent links per file/folder, with optional labels and separate expiry, copy, edit and revocation. Review access in Shared Links. |
+| **Recovery** | MongoDB stores the catalog and settings; encrypted database snapshots are saved separately to Telegram. An optional independent private channel copies completed payloads and enables explicit web recovery from a surviving channel. |
 
 ## Start with Docker
 
@@ -87,6 +87,15 @@ datacenters, cooldowns, and the viewer's connection all matter.
 cache budgets, and a practical bottleneck checklist.
 
 ## Keep your drive recoverable
+
+Optionally enable an **Independent backup channel** in Storage & Backups. Use
+separate Telegram owner accounts and private channels, save the recovery key
+outside Telegram, and wait for a confirmed restore point. The web UI can prepare
+and resume channel/database recovery; creating accounts/channels and adding bots
+still happens in Telegram. See the [setup and recovery guide](docs/backup-recovery.md#set-up-an-independent-backup-channel).
+A second channel reduces a single-channel failure risk, not loss of both accounts
+or access to Telegram. Keep important originals outside the provider.
+
 
 - Save the MongoDB access details and the recovery key separately.
 - Wait for **Completed** before discarding an upload's original or staged bytes.

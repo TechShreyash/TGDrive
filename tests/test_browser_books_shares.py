@@ -123,12 +123,15 @@ def test_independent_share_ui_and_public_reader_revocation(server, desktop, brow
     ARTIFACTS.mkdir(parents=True, exist_ok=True)
     for width, theme in [(1440, "light"), (390, "dark"), (320, "light")]:
         page.set_viewport_size({"width": width, "height": 900 if width > 700 else 844})
-        page.evaluate("""theme => {
+        page.evaluate(
+            """theme => {
           localStorage.setItem('tgdrive.appearance', theme);
           window.dispatchEvent(new CustomEvent(
             'tgdrive:appearance-changed', {detail: theme}
           ));
-        }""", theme)
+        }""",
+            theme,
+        )
         expect(page.locator("html")).to_have_attribute("data-theme", theme)
         assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
         page.screenshot(path=ARTIFACTS / f"independent-links-{theme}-{width}.png")
@@ -187,10 +190,10 @@ def test_independent_share_ui_and_public_reader_revocation(server, desktop, brow
 def test_create_multiple_links_from_share_dialog(server, desktop):
     _, page = desktop
     login(page, server.url)
-    page.get_by_role("button", name="資料 📁", exact=True).focus()
+    page.get_by_role("button", name="資料", exact=True).focus()
     # Use the same per-item action as a person browsing their drive.
     for label, expiry in [("Alex", "1 day"), ("Project team", "Custom")]:
-        page.locator('summary[aria-label="Actions for 資料 📁"]').click()
+        page.locator('summary[aria-label="Actions for 資料"]').click()
         page.get_by_role("button", name="Share Link", exact=True).click()
         page.get_by_label("Link label (optional)", exact=True).fill(label)
         page.get_by_role("button", name=expiry, exact=True).click()

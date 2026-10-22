@@ -193,6 +193,42 @@ def test_new_container_waits_for_explicit_init_without_writing_database(monkeypa
     assert waits == [5]
 
 
+def test_existing_channel_recovery_bootstrap_does_not_wait_for_missing_mongo(
+    tmp_path, monkeypatch
+):
+    from tgdrive.replica_state import atomic_private
+
+    atomic_private(tmp_path / "replica-bootstrap.json", b"{}")
+    monkeypatch.setenv("TGDRIVE_AUTO_SECRETS", "true")
+    monkeypatch.setenv("MONGODB_URI", "mongodb://synthetic.invalid")
+    monkeypatch.setenv("DATA_DIR", str(tmp_path))
+
+    def must_not_connect(*_args):
+        raise AssertionError("Recovery bootstrap must reach owner HTTP startup")
+
+    monkeypatch.setattr("tgdrive.mongo.configure", must_not_connect)
+    wait_for_initialization()
+
+
+def test_existing_mongo_settings_without_catalog_reach_recovery_shell(
+    tmp_path, monkeypatch
+):
+    backend = SimpleNamespace(
+        db=SimpleNamespace(
+            catalog=SimpleNamespace(find_one=lambda _: None),
+            settings=SimpleNamespace(find_one=lambda _: {"_id": "bootstrap"}),
+        )
+    )
+    monkeypatch.setenv("TGDRIVE_AUTO_SECRETS", "true")
+    monkeypatch.setenv("MONGODB_URI", "mongodb://synthetic.invalid")
+    monkeypatch.setenv("DATA_DIR", str(tmp_path))
+    monkeypatch.setattr("tgdrive.mongo.configure", lambda *_args: backend)
+    monkeypatch.setattr(
+        "tgdrive.server.time.sleep", lambda _: pytest.fail("Must not wait for init")
+    )
+    wait_for_initialization()
+
+
 def test_hosted_and_local_compose_resolve_without_real_credentials(tmp_path):
     docker = shutil.which("docker")
     if not docker:

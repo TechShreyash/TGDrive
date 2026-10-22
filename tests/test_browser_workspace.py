@@ -91,8 +91,7 @@ def test_admin_navigation_separates_categories_preserves_drafts_and_supports_key
     login(page, server.url)
 
     def open_drawer():
-        if page.locator(".sidebar").get_attribute("inert") is not None:
-            page.get_by_role("button", name="Toggle Navigation", exact=True).click()
+        fixtures.open_admin(page)
 
     def navigate(label):
         open_drawer()

@@ -18,16 +18,16 @@ def test_shared_filename_opens_location_with_one_click(server, desktop):
     contents = page.request.post(
         server.url + "/api/getDirectory", data={"path": "/"}
     ).json()["data"]["contents"]
-    folder = next(item for item in contents.values() if item["name"] == "資料 📁")
+    folder = next(item for item in contents.values() if item["name"] == "資料")
     assert page.request.post(
         server.url + "/api/v1/shares",
         data={"path": "/" + folder["id"], "expires_in_days": None},
     ).ok
     page.goto(server.url + "/?view=shares")
     page.set_viewport_size({"width": 390, "height": 844})
-    page.get_by_role("button", name="資料 📁", exact=True).click()
+    page.get_by_role("button", name="資料", exact=True).click()
     expect(page.get_by_role("heading", name="My Files", exact=True)).to_be_visible()
-    expect(page.locator("tr.selected")).to_contain_text("資料 📁")
+    expect(page.locator("tr.selected")).to_contain_text("資料")
 
 
 def test_owner_documentation_and_backup_recovery_links_open_safe_new_tabs(

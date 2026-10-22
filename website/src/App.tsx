@@ -33,6 +33,8 @@ import {
   ShieldCheck,
   ShieldAlert,
   Menu,
+  SlidersHorizontal,
+  CodeXml,
 } from "lucide-react";
 import { api, ApiError, errorMessage } from "./api";
 import {
@@ -59,6 +61,7 @@ import TransferHistory from "./TransferHistory";
 import FolderUpload from "./FolderUpload";
 import DeletionNotice from "./DeletionNotice";
 import SidebarLogout from "./SidebarLogout";
+import ChannelBackup from "./ChannelBackup";
 function getLocation() {
   const url = new URL(window.location.href);
   let path = url.searchParams.get("path") || "/";
@@ -121,6 +124,13 @@ function getLocation() {
         : "",
   };
 }
+const TOOL_VIEWS: View[] = [
+  "performance",
+  "preloads",
+  "settings",
+  "connections",
+  "storage",
+];
 const ROOT_CRUMB = { path: "/", name: "My Files" };
 const ADMIN_SETTING_TITLES: Record<string, string> = {
   cache: "Cache & preloading",
@@ -135,11 +145,18 @@ function searchHistoryOffset() {
 }
 export default function App() {
   const [location, setLocation] = useState(getLocation);
+  const [toolsOpen, setToolsOpen] = useState(() =>
+    TOOL_VIEWS.includes(location.view),
+  );
+  useEffect(() => {
+    setToolsOpen(TOOL_VIEWS.includes(location.view));
+  }, [location.view, location.settingsSection]);
   const [authenticated, setAuthenticated] = useState<boolean | null>(null);
   const [admissionPaused, setAdmissionPaused] = useState(false);
   const [config, setConfig] = useState<{
     max_file_size: number;
     demo_data?: boolean;
+    recovery_only?: boolean;
   }>({ max_file_size: 0 });
   const [directory, setDirectory] = useState<Directory>({ contents: {} });
   const [loading, setLoading] = useState(true);
@@ -232,7 +249,7 @@ export default function App() {
     const controls = () =>
       Array.from(
         navigation?.querySelectorAll<HTMLElement>(
-          "a[href],button:not(:disabled)",
+          "a[href],button:not(:disabled),summary",
         ) || [],
       ).filter((element) => element.getClientRects().length > 0);
     (
@@ -469,9 +486,11 @@ export default function App() {
     transfers.setAdmissionPaused(admissionPaused);
   }, [admissionPaused]);
   useEffect(() => {
-    transfers.setEnabled(authenticated === true && !isPublic);
+    transfers.setEnabled(
+      authenticated === true && !isPublic && !config.recovery_only,
+    );
     return () => transfers.setEnabled(false);
-  }, [authenticated, isPublic]);
+  }, [authenticated, isPublic, config.recovery_only]);
   useEffect(() => {
     const expired = () => {
       setAuthenticated(false);
@@ -542,7 +561,7 @@ export default function App() {
     };
   }, [authenticated, isPublic, searchLabel, revealSearch]);
   useEffect(() => {
-    if ((!authenticated && !isPublic) || !isFiles) {
+    if (config.recovery_only || (!authenticated && !isPublic) || !isFiles) {
       loadedListing.current = null;
       setLoading(false);
       return;
@@ -639,9 +658,17 @@ export default function App() {
     scopedQuery,
     listingKey,
     notify,
+    config.recovery_only,
   ]);
   useEffect(() => {
-    if (!isFiles || isSearch || view === "trash" || view === "starred") return;
+    if (
+      config.recovery_only ||
+      !isFiles ||
+      isSearch ||
+      view === "trash" ||
+      view === "starred"
+    )
+      return;
     let cancelled = false;
     const realPath = isPublic
       ? "/" + currentPath.slice(7).replace(/^\/+/, "")
@@ -688,6 +715,7 @@ export default function App() {
     isFiles,
     view,
     shareRoot,
+    config.recovery_only,
     location.auth,
     directory.name,
   ]);
@@ -742,8 +770,9 @@ export default function App() {
                             ? "My Files"
                             : directory.name || "Folder";
   useEffect(() => {
-    document.title = title + " · TGDrive";
-  }, [title]);
+    document.title =
+      (config.recovery_only ? "Storage recovery" : title) + " · TGDrive";
+  }, [title, config.recovery_only]);
   const destination = isSearch || view === "trash" ? "/" : currentPath;
   const addFiles = (files: File[]) => {
     if (!authenticated || isPublic) return;
@@ -1161,6 +1190,30 @@ export default function App() {
         {toast && <Toast toast={toast} close={() => setToast(null)} />}
       </>
     );
+  if (config.recovery_only && !isPublic)
+    return (
+      <div className="channel-recovery-shell">
+        <header className="channel-recovery-topbar">
+          <a href="/" className="brand">
+            <BrandMark size={28} />
+            <strong>TGDrive</strong>
+          </a>
+          <div>
+            <ThemeControl />
+            <SidebarLogout onLoggedOut={() => setAuthenticated(false)} />
+          </div>
+        </header>
+        <main id="main-content" className="channel-recovery-main">
+          <h1>Storage recovery</h1>
+          <p className="channel-recovery-intro">
+            Your local drive is unavailable. File changes are paused while you
+            recover it.
+          </p>
+          <ChannelBackup recoveryOnly />
+        </main>
+        {toast && <Toast toast={toast} close={() => setToast(null)} />}
+      </div>
+    );
   return (
     <div className={"app-shell " + (isPublic ? "public-shell" : "")}>
       <a className="skip-link" href="#main-content">
@@ -1241,53 +1294,74 @@ export default function App() {
               icon: Trash2,
               path: "/trash",
             })}
-            <div className="monitor-nav" role="group" aria-label="Monitor">
-              <span className="nav-section-label">Monitor</span>
-              {navigationLink({
-                view: "performance",
-                label: "Performance",
-                icon: ChartNoAxesCombined,
-              })}
-              {navigationLink({
-                view: "preloads",
-                label: "Preloads",
-                icon: Layers,
-              })}
-            </div>
-            <div className="admin-nav" role="group" aria-label="Configuration">
-              <span className="nav-section-label">Configuration</span>
-              {navigationLink({
-                view: "settings",
-                section: "cache",
-                label: "Cache settings",
-                icon: Database,
-              })}
-              {navigationLink({
-                view: "settings",
-                section: "transfers",
-                label: "Transfer limits",
-                icon: Gauge,
-              })}
-              {navigationLink({
-                view: "settings",
-                section: "regional",
-                label: "Timezone",
-                icon: Globe,
-              })}
-            </div>
-            <div className="admin-nav" role="group" aria-label="Management">
-              <span className="nav-section-label">Management</span>
-              {navigationLink({
-                view: "connections",
-                label: "Connections",
-                icon: Plug,
-              })}
-              {navigationLink({
-                view: "storage",
-                label: "Storage & Backups",
-                icon: ShieldCheck,
-              })}
-            </div>
+            <details
+              className="sidebar-tools"
+              open={toolsOpen}
+              onToggle={(event) => setToolsOpen(event.currentTarget.open)}
+            >
+              <summary>
+                <SlidersHorizontal size={19} aria-hidden="true" />
+                <span>Tools & settings</span>
+                <ChevronRight
+                  className="nav-disclosure"
+                  size={16}
+                  aria-hidden="true"
+                />
+              </summary>
+              <div className="sidebar-tools-content">
+                <div className="monitor-nav" role="group" aria-label="Monitor">
+                  <span className="nav-section-label">Monitor</span>
+                  {navigationLink({
+                    view: "performance",
+                    label: "Performance",
+                    icon: ChartNoAxesCombined,
+                  })}
+                  {navigationLink({
+                    view: "preloads",
+                    label: "Preloads",
+                    icon: Layers,
+                  })}
+                </div>
+                <div
+                  className="admin-nav"
+                  role="group"
+                  aria-label="Configuration"
+                >
+                  <span className="nav-section-label">Configuration</span>
+                  {navigationLink({
+                    view: "settings",
+                    section: "cache",
+                    label: "Cache settings",
+                    icon: Database,
+                  })}
+                  {navigationLink({
+                    view: "settings",
+                    section: "transfers",
+                    label: "Transfer limits",
+                    icon: Gauge,
+                  })}
+                  {navigationLink({
+                    view: "settings",
+                    section: "regional",
+                    label: "Timezone",
+                    icon: Globe,
+                  })}
+                </div>
+                <div className="admin-nav" role="group" aria-label="Management">
+                  <span className="nav-section-label">Management</span>
+                  {navigationLink({
+                    view: "connections",
+                    label: "Connections",
+                    icon: Plug,
+                  })}
+                  {navigationLink({
+                    view: "storage",
+                    label: "Storage & Backups",
+                    icon: ShieldCheck,
+                  })}
+                </div>
+              </div>
+            </details>
           </nav>
           <div className="sidebar-bottom">
             {config.demo_data && (
@@ -1302,6 +1376,14 @@ export default function App() {
               rel="noopener noreferrer"
             >
               <BookOpen size={18} aria-hidden="true" /> Documentation
+            </a>
+            <a
+              className="sidebar-help"
+              href="https://github.com/TechShreyash/TGDrive"
+              target="_blank"
+              rel="noopener noreferrer"
+            >
+              <CodeXml size={18} aria-hidden="true" /> Star on GitHub
             </a>
             <SidebarLogout
               onLoggedOut={() => {
