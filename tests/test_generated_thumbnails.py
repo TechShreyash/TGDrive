@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import asyncio
 import shutil
+import subprocess
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
@@ -14,7 +16,7 @@ from tgdrive.generated_thumbnails import MAX_BYTES, generate, read, save
 from tgdrive.telegram_clients import Client
 
 
-@pytest.mark.parametrize("name", ["cover.png", "clip.mp4"])
+@pytest.mark.parametrize("name", ["cover.png", "clip.mp4", "clip.mov"])
 async def test_native_generation_is_small_and_preserves_original(tmp_path, name):
     if not shutil.which("ffmpeg"):
         pytest.skip("native ffmpeg not installed")
@@ -29,6 +31,94 @@ async def test_native_generation_is_small_and_preserves_original(tmp_path, name)
     assert cover and cover.startswith(b"\xff\xd8\xff") and cover.endswith(b"\xff\xd9")
     assert len(cover) <= MAX_BYTES
     assert path.read_bytes() == original
+
+
+async def test_native_uhd_hevc_mov_has_a_cover_with_bounded_worker_memory(tmp_path):
+    ffmpeg = shutil.which("ffmpeg")
+    if not ffmpeg:
+        pytest.skip("native ffmpeg not installed")
+    path = tmp_path / "uhd-hevc.mov"
+    encoded = await asyncio.to_thread(
+        subprocess.run,
+        [
+            ffmpeg,
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-f",
+            "lavfi",
+            "-i",
+            "color=c=blue:s=3840x2160:r=24",
+            "-frames:v",
+            "12",
+            "-c:v",
+            "libx265",
+            "-preset",
+            "ultrafast",
+            "-threads",
+            "1",
+            "-x265-params",
+            "pools=none:frame-threads=1:log-level=error",
+            "-tag:v",
+            "hvc1",
+            str(path),
+        ],
+        capture_output=True,
+        timeout=30,
+        check=False,
+    )
+    if b"Unknown encoder" in encoded.stderr:
+        pytest.skip("native HEVC encoder not installed")
+    assert encoded.returncode == 0, encoded.stderr.decode(errors="replace")
+    original = path.read_bytes()
+    cover = await generate(path, path.name)
+    assert cover and cover.startswith(b"\xff\xd8\xff") and cover.endswith(b"\xff\xd9")
+    assert len(cover) <= MAX_BYTES
+    assert path.read_bytes() == original
+
+
+@pytest.mark.parametrize("failure", ["timeout", "error", "partial", "oversized"])
+def test_video_first_frame_fallback_after_unsuccessful_seek(monkeypatch, failure):
+    from tgdrive import thumbnail_worker
+
+    cover = b"\xff\xd8\xffcover\xff\xd9"
+    calls = []
+
+    def run(command, **kwargs):
+        calls.append((command.copy(), kwargs["timeout"]))
+        if len(calls) == 1:
+            if failure == "timeout":
+                raise subprocess.TimeoutExpired(command, kwargs["timeout"])
+            return SimpleNamespace(
+                returncode=1 if failure == "error" else 0,
+                stdout=(
+                    cover + b"x" * MAX_BYTES
+                    if failure == "oversized"
+                    else cover
+                    if failure == "error"
+                    else cover[:-2]
+                ),
+            )
+        return SimpleNamespace(returncode=0, stdout=cover)
+
+    monkeypatch.setattr(thumbnail_worker.subprocess, "run", run)
+    assert thumbnail_worker.render(Path("staged.mov"), ".mov") == cover
+    assert [command[command.index("-ss") + 1] for command, _ in calls] == ["1", "0"]
+    assert [timeout for _, timeout in calls] == [8, 3]
+
+
+def test_video_first_frame_fallback_remains_bounded(monkeypatch):
+    from tgdrive import thumbnail_worker
+
+    timeouts = []
+
+    def run(command, **kwargs):
+        timeouts.append(kwargs["timeout"])
+        raise subprocess.TimeoutExpired(command, kwargs["timeout"])
+
+    monkeypatch.setattr(thumbnail_worker.subprocess, "run", run)
+    assert thumbnail_worker.render(Path("staged.mov"), ".mov") == b""
+    assert timeouts == [8, 3]
 
 
 async def test_disguised_playlist_and_invalid_images_do_not_render(tmp_path):

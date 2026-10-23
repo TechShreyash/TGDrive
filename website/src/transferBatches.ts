@@ -2,10 +2,12 @@ import type { Transfer } from "./transfers";
 import { currentRate, transferDetails, transferProgress } from "./progress";
 import { deviceUploadProgress, needsDeviceUpload } from "./deviceUploadStatus";
 import type { BatchProgressMeters } from "./batchProgress";
+import { isFolderTransfer, transferTaskId } from "./transferTasks";
 
 export interface TransferBatch {
   id: string;
   name: string;
+  folder: boolean;
   items: Transfer[];
   count: number;
   completed: number;
@@ -212,9 +214,13 @@ function summarize(
   return {
     id,
     name:
-      source.find((item) => item.batchName)?.batchName ||
+      source.find((item) => item.folderUpload)?.folderUpload?.name ||
+      (source.some(isFolderTransfer)
+        ? source.find((item) => item.batchName)?.batchName
+        : undefined) ||
       source[0].name ||
       "Transfer",
+    folder: source.some(isFolderTransfer),
     items,
     count: items.length,
     completed,
@@ -258,7 +264,7 @@ export function summarizeBatches(
 ): TransferBatch[] {
   const groups = new Map<string, Transfer[]>();
   for (const item of items) {
-    const id = item.batchId || "legacy:" + (item.jobId || item.key);
+    const id = transferTaskId(item);
     const group = groups.get(id) || [];
     group.push(item);
     groups.set(id, group);

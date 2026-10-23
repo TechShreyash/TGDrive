@@ -85,8 +85,18 @@ describe("history merged with live browser work", () => {
     const rows = visibleHistory(
       [job({ id: "older" })],
       [
-        local({ key: "live", batchId: "folder", state: "receiving" }),
-        local({ key: "sibling", batchId: "folder", state: "completed" }),
+        local({
+          key: "live",
+          batchId: "folder",
+          relativePath: "Folder/live.bin",
+          state: "receiving",
+        }),
+        local({
+          key: "sibling",
+          batchId: "folder",
+          relativePath: "Folder/sibling.bin",
+          state: "completed",
+        }),
         local({ key: "unrelated", state: "completed" }),
       ],
       "all",
@@ -156,11 +166,22 @@ it("filters whole folders instead of extracting matching children into duplicate
     local({
       key: "one",
       batchId: "folder",
+      relativePath: "Folder/one.bin",
       state: "uploading",
       stage: "uploading",
     }),
-    local({ key: "two", batchId: "folder", state: "queued" }),
-    local({ key: "three", batchId: "folder", state: "completed" }),
+    local({
+      key: "two",
+      batchId: "folder",
+      relativePath: "Folder/two.bin",
+      state: "queued",
+    }),
+    local({
+      key: "three",
+      batchId: "folder",
+      relativePath: "Folder/three.bin",
+      state: "completed",
+    }),
   ];
   expect(mergeHistory([], items, "running")).toHaveLength(3);
   expect(mergeHistory([], items, "completed")).toEqual([]);

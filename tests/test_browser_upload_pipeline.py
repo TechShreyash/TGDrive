@@ -95,19 +95,31 @@ def test_device_receipts_finish_while_telegram_waits_and_survive_tab_close(
             for record in server.control()["records"].values()
         )
         assert _device_close_blocked(page), "Unsent device data must guard tab close"
-        batch = page.locator('.transfer-batch[data-stage="device"]')
-        expect(batch).to_have_count(1)
-        expect(batch.locator(".transfer-batch-status")).to_contain_text(
-            "Uploading from device"
-        )
-        expect(batch).not_to_contain_text("Telegram")
-        batch.get_by_role("button", name="Show Files", exact=True).click()
-        received = batch.locator('.transfer-child[data-status="uploading"]')
+        if selection == "folder":
+            batch = page.locator('.transfer-batch[data-stage="device"]')
+            expect(batch).to_have_count(1)
+            expect(batch.locator(".transfer-batch-status")).to_contain_text(
+                "Uploading from device"
+            )
+            expect(batch).not_to_contain_text("Telegram")
+            batch.get_by_role("button", name="Show Files", exact=True).click()
+            received = batch.locator('.transfer-child[data-status="uploading"]')
+        else:
+            expect(page.locator(".transfer-batch")).to_have_count(0)
+            rows = page.locator(".transfer-item:not(.transfer-child)")
+            expect(rows).to_have_count(len(names))
+            expect(
+                page.get_by_role("button", name="Show Files", exact=True)
+            ).to_have_count(0)
+            received = page.locator(
+                '.transfer-item:not(.transfer-child)[data-status="uploading"]'
+            )
         expect(received).to_have_count(1)
         expect(received.locator(".transfer-phase")).to_have_text("Received")
         expect(received.get_by_role("progressbar")).to_have_count(0)
         expect(received.locator(".transfer-metrics")).to_have_count(0)
-        batch.get_by_role("button", name="Hide Files", exact=True).click()
+        if selection == "folder":
+            batch.get_by_role("button", name="Hide Files", exact=True).click()
     finally:
         # Playwright releases any pending routes when this handler is removed.
         page.unroute("**/api/v1/uploads/*", hold_later_receipts)
@@ -122,18 +134,35 @@ def test_device_receipts_finish_while_telegram_waits_and_survive_tab_close(
         has_text="You can close this tab"
     )
     expect(safe.first).to_be_visible()
-    batch = page.locator('.transfer-batch[data-stage="telegram"]')
-    expect(batch).to_have_count(1)
-    expect(batch.locator(".transfer-batch-status")).to_contain_text(
-        "Uploading to Telegram"
-    )
-    expect(batch).not_to_contain_text("Uploading from device")
+    if selection == "folder":
+        batch = page.locator('.transfer-batch[data-stage="telegram"]')
+        expect(batch).to_have_count(1)
+        expect(batch.locator(".transfer-batch-status")).to_contain_text(
+            "Uploading to Telegram"
+        )
+        expect(batch).not_to_contain_text("Uploading from device")
+    else:
+        expect(page.locator(".transfer-batch")).to_have_count(0)
+        rows = page.locator(".transfer-item:not(.transfer-child)")
+        expect(rows).to_have_count(len(names))
+        expect(rows.locator(".transfer-phase")).to_have_text(
+            ["Uploading to Telegram"] * len(names)
+        )
+        for name in names:
+            expect(
+                rows.locator(".transfer-item-name").filter(has_text=name)
+            ).to_have_count(1)
     assert not _device_close_blocked(page)
     saved = page.evaluate(
         "JSON.parse(localStorage.getItem('tgdrive.uploads.v2') || '[]')"
     )
     assert len(saved) == len(names)
     assert all(item.get("jobId") for item in saved)
+    if selection == "folder":
+        assert len({item["folderUpload"]["id"] for item in saved}) == 1
+    else:
+        assert all(not item.get("folderUpload") for item in saved)
+        assert len({item["batchId"] for item in saved}) == len(names)
     destination = started[0]["destination"]
     assert {item["destination"] for item in started} == {destination}
     assert set(names).isdisjoint(

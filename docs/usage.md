@@ -68,12 +68,13 @@ an error so you can retry. Automatic background updates stay quiet.
 1. Open the destination folder in **My Files**.
 2. Choose **New → Upload files** or **New → Upload folder**.
 3. Select the files or folder. For a folder, confirm the short upload summary.
-4. Follow the batch in **Transfers**. Keep the tab open until **You can close this
+4. Follow the tasks in **Transfers**. Keep the tab open until **You can close this
    tab** appears; wait for **Completed** before deleting your originals.
 
-You can also drag files into the file area. Multiple files form an expandable
-batch; select its name/chevron for individual states, or **Show Folder** to open
-its directory. A batch stays **Running** while any file is active, then
+You can also drag files into the file area. Each ordinary file or URL is its own
+task, even when several files are selected together. Only a folder upload forms
+an expandable group; select its name/chevron for individual states, or **Show
+Folder** to reveal its directory. A folder stays **Running** while any file is active, then
 **Queued** while work remains, then **Finished** (successful, failed or cancelled).
 
 ### Upload speed and queue
@@ -175,6 +176,12 @@ batch and select the same originals. TGDrive checks received bytes, then continu
 from the acknowledged offset without resending them. Use the existing **Retry**
 action after failure to avoid duplicates.
 
+Temporary connection and server errors retry automatically once TGDrive has
+confirmed an upload session. Keep the tab open and the original files available
+while it retries. If retries stop, read the file's error and use **Retry** (or
+**Retry Failed** on a folder). An interrupted session-creation request still needs manual
+retry because the browser may not have received its session identity.
+
 Cancel may take time after Telegram work begins. **Cancel all** confirms the
 currently selected unfinished work; completed files and later uploads are kept.
 Desktop **Hide/Show** only collapses the panel; **Clear finished** only clears its list.
@@ -205,7 +212,10 @@ Desktop **Hide/Show** only collapses the panel; **Clear finished** only clears i
 **Transfers** keeps **Running** and **Queued** above finished history.
 Filter finished work by **All / Successful / Failed / Cancelled**; search finds
 names across history pages and current browser uploads. A search/filter change
-returns to page 1. Use **Previous / Next / Latest** to navigate.
+returns to page 1. Each finished page holds up to **20 tasks**: a folder counts
+once, and each ordinary file or URL counts separately. Use the page numbers or
+arrow buttons to navigate. A folder's files stay together; matching its name or
+any child's name keeps that whole folder in the search results.
 
 Double-click a completed file or choose **Show in folder** to highlight it;
 folder batches have **Show folder**. Moves/renames are followed. Trashed or
@@ -220,8 +230,10 @@ Start uploads in a destination in **My Files** using **New**.
 <details>
 <summary>History storage and limits</summary>
 
-Pages load up to 50 server records, with 128 remembered back-navigation cursors.
-Older jobs may lack browser batch grouping. Compact MongoDB summaries are included
+New folder uploads save their grouping on the server for other devices and
+reloads. Older folders can use the paths still remembered by the uploading
+browser; if that information is unavailable or exceeds recovery bounds, old
+server records appear individually. Compact MongoDB summaries are included
 in encrypted backups, omit payloads/source URLs/private recovery context, and
 consume database space. Device-only work remains browser-scoped and needs originals.
 
@@ -247,7 +259,9 @@ The browser remembers list/grid view. Phones combine these controls in
 
 New supported uploads get small image/video/PDF covers without changing originals.
 Grid view fetches nearby thumbnails, not whole files; data-saving browsers use
-icons. See [thumbnail formats](thumbnails.md). Name conflicts offer **keep both**
+icons. An existing missing cover can be repaired after preloading the full original
+(up to 128 MiB), then returning to its folder in Grid view. See [thumbnail formats
+and limits](thumbnails.md). Name conflicts offer **keep both**
 or **skip**, without silent replacement.
 
 ### Starred files and folders
@@ -281,6 +295,16 @@ original; **Escape** or browser **Back** closes the preview. Use the header's
 fullscreen control where supported. Non-video previews enter fullscreen with
 the toolbar visible; use the top-right icon to hide or show it. Video keeps its
 own player controls. Download the original if the device cannot decode it.
+
+Video playback uses available bandwidth to build about **90 seconds of buffer**,
+within a browser memory limit. Short clips can load completely. The player refills
+early so brief network dips and forward skips can use already fetched bytes;
+very high bitrate video may reach the memory limit sooner. See the
+[playback buffer policy](performance.md#browser-playback-buffer).
+
+Closing the preview releases its browser buffer. Reopening requests the file
+again; authorized requests reuse the server's cached chunks while available.
+Protected originals use `no-store`, so browser disk caching is not promised.
 
 | File | Preview |
 | --- | --- |
@@ -319,6 +343,15 @@ Controls hide when idle but remain visible for keyboard focus.
 
 The video timeline estimates the device's loaded ranges, separate from server
 cache coverage. Longer waits show **Waiting for video… / Loading this part…**.
+The animated status shows actual received bytes and current speed when available;
+these include seek/repeat reads, not a file-completion percentage. A compact status
+strip stays above the controls; longer waits add an inline retry action. Playback
+can start before the whole file is loaded.
+
+All video previews retain TGDrive’s custom player. **Software decoding on this
+device** means playback can be
+limited by the device even when download speed is fast; use **Download Original**
+to open a difficult file in a video app.
 Browsers may require a tap for sound; codec/fullscreen support varies by device.
 Image alternatives use **Preview quality**. Web uploads preserve original bytes;
 Telegram may not create lower-quality versions.

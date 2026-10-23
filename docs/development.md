@@ -167,6 +167,17 @@ For player interaction changes, include `test_browser_player_gestures.py`,
 320/390 px portrait and 720 px landscape layouts, keyboard and fullscreen checks.
 Emulated touch is separate from physical-device/other-browser validation.
 
+`test_browser_player_controls.py` covers measured loading feedback, held delivery
+and decoded audio, frame stalls, retries, source-byte retention and buffered
+forward seeks during simulated network loss. The pinned-player checks in
+`website/scripts/check-movi-player.js` also exercise bitrate scaling, refill
+hysteresis, allocation failure, shared/non-shared buffer growth and hardware EOF
+drain. `website/src/videoBufferMemory.test.ts` covers device-hint ceilings and the
+missing-hint fallback. Validate actual HEVC profiles on the
+target browser/OS; browser-native support alone does not validate the custom
+player. Thumbnail repair tests use cached sources and forbid origin payload reads;
+thumbnail rendering tests require FFmpeg and Poppler.
+
 </details>
 
 <details>
@@ -261,6 +272,7 @@ Names below are under `tests/` unless stated otherwise.
 | Public demo access and protected samples | `test_demo_mode.py`, `test_demo_admin_auth.py`, `test_demo_files.py`, `test_demo_task_policy.py`, `test_browser_demo_mode.py`, `test_browser_demo_access.py` |
 | Connections | `test_management.py`, `test_management_admission.py`, `test_premium_login.py` |
 | Cache/preloads | `test_adaptive_read_ahead.py`, `test_preloading.py`, `test_preload_api.py` |
+| Thumbnails | `test_thumbnails.py`, `test_generated_thumbnails.py`, `test_cached_thumbnail_repair.py`, `test_thumbnail_repair_access.py` |
 | UI | `website/src/*.test.ts`, `test_browser*.py` |
 | Store/checkpoints | `test_store.py`, `test_backup.py`, `test_recovery.py` |
 | Packaging | `scripts/build_release.py`, `test_release_package.py` |

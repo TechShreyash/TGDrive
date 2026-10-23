@@ -5,7 +5,13 @@ import {
   notifyDemoFilesReadOnly,
   request,
 } from "./api";
-import type { Job, UploadSnapshot, TransferLocation } from "./types";
+import type {
+  Job,
+  UploadSnapshot,
+  TransferLocation,
+  FolderUploadMetadata,
+} from "./types";
+import { transferTaskId } from "./transferTasks";
 import { sampleProgress, type ProgressSample } from "./progress";
 import { BatchProgressTracker } from "./batchProgress";
 import { summarizeBatches } from "./transferBatches";
@@ -32,6 +38,7 @@ export interface Transfer {
   lastModified: number;
   destination: string;
   relativePath?: string;
+  folderUpload?: FolderUploadMetadata;
   batchId?: string;
   batchName?: string;
   batchCreatedAt?: number;
@@ -72,6 +79,8 @@ const MAX_HISTORY_BATCHES = 30;
 const MAX_HISTORY_ROWS = 2000;
 // Receipt verification/handoff is control work, independent of payload slots.
 const RECEIPT_COMPLETION_CONCURRENCY = 2;
+const DEVICE_RETRY_DELAYS_MS = [2000, 4000, 8000];
+const TRANSIENT_DEVICE_STATUSES = new Set([0, 408, 500, 502, 503, 504]);
 export interface UploadEntry {
   file: File;
   destination: string;
@@ -87,6 +96,7 @@ export function safeTransferMetadata(transfers: Transfer[]) {
       lastModified,
       destination,
       relativePath,
+      folderUpload,
       batchId,
       batchName,
       batchCreatedAt,
@@ -108,6 +118,7 @@ export function safeTransferMetadata(transfers: Transfer[]) {
       lastModified,
       destination,
       relativePath,
+      folderUpload,
       batchId,
       batchName,
       batchCreatedAt,
@@ -126,7 +137,7 @@ export function safeTransferMetadata(transfers: Transfer[]) {
   );
 }
 export function transferBatchId(item: Transfer): string {
-  return item.batchId || "legacy:" + (item.jobId || item.key);
+  return transferTaskId(item);
 }
 export function retainTransferBatches(items: Transfer[]): Transfer[] {
   const groups = new Map<string, Transfer[]>();
@@ -283,6 +294,14 @@ export function fromJob(job: Job, previousKind?: string): Partial<Transfer> {
   return {
     state,
     phase,
+    ...(job.folder_upload
+      ? {
+          folderUpload: job.folder_upload,
+          batchId: job.folder_upload.id,
+          batchName: job.folder_upload.name,
+          batchCreatedAt: job.folder_upload.created_at * 1000,
+        }
+      : {}),
     ...(job.location ? { location: job.location } : {}),
     ...(previousKind === "remote"
       ? { kind: "remote" }
@@ -345,6 +364,7 @@ export class TransferManager {
   private polling = false;
   private refreshRequested = false;
   private stagingRetries = new Map<string, number>();
+  private deviceRetryAttempts = new Map<string, number>();
   private admissionRetryAt = 0;
   private dismissed = new Set<string>();
   constructor(
@@ -381,8 +401,12 @@ export class TransferManager {
               (item.batchId && !/^(server:|history:)/.test(item.batchId)),
             ),
           batchId: transferBatchId(item),
-          batchName: item.batchName || item.name,
-          batchCreatedAt: item.batchCreatedAt || item.createdAt || Date.now(),
+          batchName: item.folderUpload?.name || item.batchName || item.name,
+          batchCreatedAt:
+            (item.folderUpload ? item.folderUpload.created_at * 1000 : 0) ||
+            item.batchCreatedAt ||
+            item.createdAt ||
+            Date.now(),
           state: item.jobId
             ? item.state
             : terminal.has(item.state)
@@ -578,7 +602,12 @@ export class TransferManager {
     entries: UploadEntry[],
     maxSize: number,
     requireAll = false,
-    batch?: { name: string; id?: string; createdAt?: number },
+    batch?: {
+      name: string;
+      id?: string;
+      createdAt?: number;
+      folderUpload?: FolderUploadMetadata;
+    },
   ): string[] {
     const rejected: string[] = [];
     const accepted = entries.filter(({ file }) => {
@@ -603,22 +632,27 @@ export class TransferManager {
         "The upload queue can track up to 2,000 files in unfinished batches. Finish or cancel an existing batch, then try again.",
       ];
     if (!accepted.length) return rejected;
-    const batchId = batch?.id || crypto.randomUUID();
-    const createdAt = batch?.createdAt || Date.now();
-    const batchName =
-      batch?.name ||
-      (accepted.length === 1
-        ? accepted[0].file.name
-        : accepted.length + " files");
-    for (const { file, destination, relativePath } of accepted)
+    const folder = batch?.folderUpload;
+    const folderSelection = Boolean(
+      folder || accepted.some((entry) => entry.relativePath),
+    );
+    const batchId = folder?.id || batch?.id || crypto.randomUUID();
+    const createdAt = folder
+      ? folder.created_at * 1000
+      : batch?.createdAt || Date.now();
+    for (const { file, destination, relativePath } of accepted) {
+      const key = crypto.randomUUID();
       this.items.push({
-        key: crypto.randomUUID(),
+        key,
         initiatedHere: true,
         createdAt: Date.now(),
-        batchId,
-        batchName,
+        batchId: folderSelection ? batchId : key,
+        batchName: folderSelection
+          ? folder?.name || batch?.name || file.name
+          : file.name,
         batchCreatedAt: createdAt,
         relativePath,
+        ...(folder ? { folderUpload: folder } : {}),
         name: file.name,
         size: file.size,
         lastModified: file.lastModified,
@@ -629,6 +663,7 @@ export class TransferManager {
         total: file.size,
         file,
       });
+    }
     this.publish();
     void this.startNext();
     return rejected;
@@ -673,6 +708,8 @@ export class TransferManager {
       throw new Error(
         "Choose the same file name and size as the original upload.",
       );
+    this.deviceRetryAttempts.delete(key);
+    this.stagingRetries.delete(key);
     this.update(key, {
       file,
       state: "queued",
@@ -747,6 +784,8 @@ export class TransferManager {
         finishedAt: undefined,
         phase: "Waiting to check the original file",
       });
+      this.deviceRetryAttempts.delete(item.key);
+      this.stagingRetries.delete(item.key);
       matched += 1;
     }
     if (matched) {
@@ -776,6 +815,8 @@ export class TransferManager {
       });
       void this.poll();
     } else if (item.file) {
+      this.deviceRetryAttempts.delete(key);
+      this.stagingRetries.delete(key);
       this.update(key, {
         state: "queued",
         error: undefined,
@@ -797,6 +838,7 @@ export class TransferManager {
     const item = this.items.find((item) => item.key === key);
     if (!item || !canCancelTransfer(item)) return;
     this.stagingRetries.delete(item.key);
+    this.deviceRetryAttempts.delete(item.key);
     this.update(key, {
       state: "cancelling",
       phase: "Cancelling and cleaning up",
@@ -1021,6 +1063,12 @@ export class TransferManager {
         confirmedBytes = options.body.size;
       return response;
     } catch (error) {
+      if (error instanceof DOMException && error.name === "TimeoutError")
+        throw new ApiError(
+          "TGDrive stopped confirming this upload. Try Again.",
+          408,
+          "REQUEST_TIMEOUT",
+        );
       if (error instanceof TypeError) throw new ApiError(errorMessage(error));
       throw error;
     } finally {
@@ -1046,6 +1094,35 @@ export class TransferManager {
         // The server can accept a receipt before its HTTP response is lost.
         // Its polled job remains authoritative over late device-request errors.
         this.refreshJobs();
+      } else if (
+        this.enabled &&
+        !this.admissionPaused &&
+        !item.controller?.signal.aborted &&
+        !["cancelling", "cancelled"].includes(item.state) &&
+        item.uploadId &&
+        item.file &&
+        error instanceof ApiError &&
+        (TRANSIENT_DEVICE_STATUSES.has(error.status) ||
+          (error.status === 409 && error.code === "UPLOAD_OFFSET_CHANGED")) &&
+        (this.deviceRetryAttempts.get(item.key) || 0) <
+          DEVICE_RETRY_DELAYS_MS.length
+      ) {
+        // Retry only a known receipt: an unacknowledged creation may have
+        // succeeded, so automatically repeating its POST could create a second
+        // receipt. HEAD/checksums reconcile ambiguous PATCH/completion results.
+        const attempt = this.deviceRetryAttempts.get(item.key) || 0;
+        this.deviceRetryAttempts.set(item.key, attempt + 1);
+        this.stagingRetries.set(
+          item.key,
+          Date.now() +
+            Math.max(DEVICE_RETRY_DELAYS_MS[attempt], error.retryAfter * 1000),
+        );
+        this.update(item.key, {
+          state: "queued",
+          stage: "retry_wait",
+          phase: "Connection interrupted. Retrying automatically…",
+          error: undefined,
+        });
       } else if (
         item.state !== "cancelling" &&
         item.state !== "cancelled" &&
@@ -1081,6 +1158,7 @@ export class TransferManager {
   }
   private async receive(item: Transfer) {
     const file = item.file!;
+    const previouslyAcknowledged = item.current;
     const controller = new AbortController();
     item.controller = controller;
     this.update(item.key, {
@@ -1091,7 +1169,12 @@ export class TransferManager {
     });
     let snapshot: UploadSnapshot | undefined;
     if (!item.uploadId) {
-      snapshot = await api.createUpload(item.name, item.destination, item.size);
+      snapshot = await api.createUpload(
+        item.name,
+        item.destination,
+        item.size,
+        item.folderUpload,
+      );
       // Cancellation can remove the row before creation returns. Retain the id
       // on this operation as well so its late receipt can still be cleaned up.
       item.uploadId = snapshot.id;
@@ -1112,8 +1195,17 @@ export class TransferManager {
       const head = await fetch("/api/v1/uploads/" + encodeURIComponent(id), {
         method: "HEAD",
         credentials: "same-origin",
-        signal: controller.signal,
+        signal: AbortSignal.any([
+          controller.signal,
+          AbortSignal.timeout(60000),
+        ]),
       }).catch((error) => {
+        if (error instanceof DOMException && error.name === "TimeoutError")
+          throw new ApiError(
+            "TGDrive did not confirm the upload position in time. Try Again.",
+            408,
+            "REQUEST_TIMEOUT",
+          );
         if (error instanceof TypeError) throw new ApiError(errorMessage(error));
         throw error;
       });
@@ -1150,6 +1242,17 @@ export class TransferManager {
       throw new Error("The server returned an invalid upload position.");
     snapshot ??= await api.upload(id);
     if (item.jobId) return;
+    // A prior PATCH can commit between HEAD and this inspection. Its newer
+    // offset and checksum journal belong to one snapshot; never replay the old
+    // offset or combine it with a newer journal. A receipt cannot move backward.
+    if (
+      !Number.isSafeInteger(snapshot.offset) ||
+      snapshot.offset < offset ||
+      snapshot.offset > file.size ||
+      snapshot.total_size !== file.size
+    )
+      throw new Error("The server returned an invalid upload position.");
+    offset = snapshot.offset;
     if (controller.signal.aborted)
       throw new DOMException("Upload paused", "AbortError");
     if (offset) {
@@ -1167,6 +1270,8 @@ export class TransferManager {
         controller.signal,
       );
     }
+    if (offset > previouslyAcknowledged)
+      this.deviceRetryAttempts.delete(item.key);
     const chunkSize = snapshot.chunk_size;
     if (
       !Number.isSafeInteger(chunkSize) ||
@@ -1246,6 +1351,7 @@ export class TransferManager {
           "The server did not confirm this file chunk. Retry to check the upload position.",
         );
       offset = nextOffset;
+      this.deviceRetryAttempts.delete(item.key);
       this.update(item.key, { current: offset, sentCurrent: offset });
     }
     if (controller.signal.aborted)
@@ -1312,6 +1418,8 @@ export class TransferManager {
         );
       throw error;
     });
+    this.deviceRetryAttempts.delete(item.key);
+    this.stagingRetries.delete(item.key);
     // Polling or cancellation can finish while the receipt response is in flight.
     // Attach ownership without replacing that newer server/cancellation state.
     if (
@@ -1399,6 +1507,8 @@ export class TransferManager {
           item.jobId = job.id;
           item.file = undefined;
         }
+        this.deviceRetryAttempts.delete(item.key);
+        this.stagingRetries.delete(item.key);
         const wasVisible =
           item.state === "completed" || item.stage === "backup_pending";
         const createdAt = item.createdAt;

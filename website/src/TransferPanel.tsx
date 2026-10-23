@@ -13,7 +13,6 @@ import {
   FolderOpen,
   Clock3,
   FileUp,
-  Files,
 } from "lucide-react";
 import {
   transfers,
@@ -152,14 +151,7 @@ export default function TransferPanel({
       return {
         ...category,
         batches: groupedBatches,
-        count: groupedBatches.reduce(
-          (sum, batch) =>
-            sum +
-            (["running", "queued"].includes(category.key)
-              ? batch.unfinished
-              : batch.count),
-          0,
-        ),
+        count: groupedBatches.length,
       };
     })
     .filter(
@@ -169,7 +161,11 @@ export default function TransferPanel({
 
   const cancellable = items.filter(canCancelTransfer);
   const cancelCount = cancelKeys
-    ? cancellable.filter((item) => cancelKeys.includes(item.key)).length
+    ? batches.filter((batch) =>
+        batch.items.some(
+          (item) => canCancelTransfer(item) && cancelKeys.includes(item.key),
+        ),
+      ).length
     : 0;
   const pending = batches.filter((batch) => batch.pending).length;
   const heading = batches.some((batch) => batch.active > 0)
@@ -227,8 +223,8 @@ export default function TransferPanel({
         >
           <Upload size={18} />
           {expandedPage ? (
-            items.length +
-            (items.length === 1 ? " transfer shown" : " transfers shown")
+            batches.length +
+            (batches.length === 1 ? " transfer shown" : " transfers shown")
           ) : collapsedDeviceLabel ? (
             <span className="transfer-collapsed-status" role="status">
               {collapsedDeviceLabel}
@@ -330,7 +326,7 @@ export default function TransferPanel({
                   }}
                   onChooseBatch={() => {
                     resumeBatch.current = batch.id;
-                    if (batch.items.some((item) => item.relativePath))
+                    if (batch.folder)
                       folderInput.current?.click();
                     else bulkInput.current?.click();
                   }}
@@ -349,7 +345,7 @@ export default function TransferPanel({
               id="transfer-clear"
               className="text-button"
               onClick={() => transfers.clearFinished()}
-              title="Remove completed and cancelled groups from this list"
+              title="Remove completed and cancelled uploads from this list"
             >
               Clear Finished
             </button>
@@ -490,7 +486,7 @@ export function BatchTransfer({
   const [filter, setFilter] = useState("all");
   const [limit, setLimit] = useState(20);
   const listId = useId();
-  const hasFolder = batch.items.some((item) => item.relativePath);
+  const hasFolder = batch.folder;
   const deviceMessage = deviceUploadMessage(batch.items, deviceUploadsPending);
   // Keep the browser's pending uploads in one visible phase, even when a
   // different batch has already handed its files to the server.
@@ -504,18 +500,23 @@ export function BatchTransfer({
           !["remote", "url", "delete"].includes(item.kind || ""),
       ));
   const receiptComplete = deviceStage && !batch.device.pending;
-  if (batch.count === 1 && !hasFolder)
+  if (!hasFolder)
     return (
-      <TransferRow
-        item={batch.items[0]}
-        deviceUploadsPending={deviceUploadsPending}
-        deviceStage={deviceStage}
-        onLocate={onLocate}
-        showTimestamp={showTimestamp}
-        now={now}
-        run={run}
-        onChooseFile={onChooseFile}
-      />
+      <>
+        {batch.items.map((item) => (
+          <TransferRow
+            key={item.key}
+            item={item}
+            deviceUploadsPending={deviceUploadsPending}
+            deviceStage={deviceStage}
+            onLocate={onLocate}
+            showTimestamp={showTimestamp}
+            now={now}
+            run={run}
+            onChooseFile={onChooseFile}
+          />
+        ))}
+      </>
     );
   const folderItem = batch.items.find((item) => item.state === "completed");
   const canShowFolder =
@@ -560,10 +561,13 @@ export function BatchTransfer({
       (item) => item.location?.available && item.location.folder_label,
     );
     if (source?.location?.folder_label) {
-      const depth = Math.max(
-        0,
-        (source.relativePath || "").split("/").length - 2,
-      );
+      const root = source.folderUpload?.root_path.split("/").filter(Boolean);
+      const destination = source.destination.split("/").filter(Boolean);
+      const depth = source.relativePath
+        ? Math.max(0, source.relativePath.split("/").length - 2)
+        : root && root.every((name, index) => destination[index] === name)
+          ? destination.length - root.length
+          : 0;
       const names = formatLocationLabel(source.location.folder_label).split(
         " / ",
       );
@@ -668,7 +672,7 @@ export function BatchTransfer({
           >
             {expanded ? <ChevronDown size={15} /> : <ChevronRight size={15} />}
             <span className="transfer-group-icon" aria-hidden="true">
-              {hasFolder ? <Folder size={20} /> : <Files size={20} />}
+              <Folder size={20} />
             </span>
             <strong
               id={listId + "-name"}

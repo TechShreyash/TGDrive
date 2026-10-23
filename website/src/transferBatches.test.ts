@@ -11,6 +11,7 @@ function item(overrides: Partial<Transfer> = {}): Transfer {
     destination: "/",
     batchId: "batch",
     batchName: "My folder",
+    relativePath: "My folder/one.bin",
     batchCreatedAt: 1000,
     state: "queued",
     phase: "Waiting",
@@ -382,6 +383,59 @@ describe("stage rates and batch ETA", () => {
 });
 
 describe("batch identity, attention and elapsed time", () => {
+  it("splits ordinary selections, including old shared browser batches, into file tasks", () => {
+    const tasks = summarizeBatches(
+      [
+        item({ key: "first", name: "first.bin", relativePath: undefined }),
+        item({ key: "second", name: "second.bin", relativePath: undefined }),
+      ],
+      10000,
+    );
+    expect(tasks).toHaveLength(2);
+    expect(tasks.map((task) => task.name).sort()).toEqual([
+      "first.bin",
+      "second.bin",
+    ]);
+    expect(tasks.every((task) => task.count === 1 && !task.folder)).toBe(true);
+    expect(new Set(tasks.map((task) => task.id)).size).toBe(2);
+  });
+  it("uses persisted folder metadata across independently discovered server rows", () => {
+    const folderUpload = {
+      id: "folder-upload-identity",
+      name: "Project files",
+      root_path: "/project-root",
+      created_at: 1,
+    };
+    const tasks = summarizeBatches(
+      [
+        item({
+          key: "server-one",
+          batchId: "history:one",
+          relativePath: undefined,
+          folderUpload,
+        }),
+        item({
+          key: "server-two",
+          batchId: "server:two",
+          relativePath: undefined,
+          folderUpload,
+        }),
+      ],
+      10000,
+    );
+    expect(tasks).toHaveLength(1);
+    expect(tasks[0]).toMatchObject({
+      id: folderUpload.id,
+      name: folderUpload.name,
+      folder: true,
+      count: 2,
+    });
+    expect(summary([tasks[0].items[0]])).toMatchObject({
+      id: folderUpload.id,
+      folder: true,
+      count: 1,
+    });
+  });
   it("sorts attention, active and finished batches by newest within class", () => {
     const rows = [
       item({

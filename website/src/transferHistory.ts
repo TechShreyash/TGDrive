@@ -1,6 +1,25 @@
 import { summarizeBatches, batchCategory } from "./transferBatches";
 import type { Job } from "./types";
 import { fromJob, type Transfer } from "./transfers";
+import { api, type TransferHistoryContext } from "./api";
+import type { TransferTaskHistoryPage } from "./types";
+import { transferFolderDestination } from "./transferTasks";
+
+export const TRANSFER_TASK_PAGE_SIZE = 20;
+
+async function folderHistoryId(id: string): Promise<string> {
+  if (/^[A-Za-z0-9_-]{16,128}$/.test(id)) return id;
+  const digest = await crypto.subtle.digest(
+    "SHA-256",
+    new TextEncoder().encode(id),
+  );
+  return (
+    "legacy-" +
+    [...new Uint8Array(digest)]
+      .map((byte) => byte.toString(16).padStart(2, "0"))
+      .join("")
+  );
+}
 
 export type HistoryFilter =
   | "all"
@@ -28,7 +47,7 @@ export function mergeHistory(
   jobs: Job[],
   local: Transfer[],
   filter: HistoryFilter,
-  includeLocalFinished = true,
+  includeLocalFinished: boolean | "selected" = true,
 ): Transfer[] {
   const records = new Map<string, Transfer>();
   for (const job of jobs) {
@@ -63,6 +82,7 @@ export function mergeHistory(
       const key = item.jobId || item.uploadId || item.key;
       const historical = records.get(key);
       if (
+        includeLocalFinished !== "selected" &&
         (!includeLocalFinished || item.jobId) &&
         !historical &&
         !liveKeys.has(item.key)
@@ -70,8 +90,14 @@ export function mergeHistory(
         continue;
       records.set(
         key,
-        historical?.location
-          ? { ...item, location: historical.location }
+        historical?.location || historical?.folderUpload
+          ? {
+              ...item,
+              ...(historical.location ? { location: historical.location } : {}),
+              ...(historical.folderUpload && !item.folderUpload
+                ? { folderUpload: historical.folderUpload }
+                : {}),
+            }
           : item,
       );
     }
@@ -103,8 +129,14 @@ export function visibleHistory(
   local: Transfer[],
   filter: HistoryFilter,
   firstPage: boolean,
+  selectedLocalTasks = false,
 ): Transfer[] {
-  const rows = mergeHistory(jobs, local, "all", firstPage);
+  const rows = mergeHistory(
+    jobs,
+    local,
+    "all",
+    selectedLocalTasks ? "selected" : firstPage,
+  );
   const matching = new Set(
     summarizeBatches(rows, Date.now())
       .filter((batch) => {
@@ -119,4 +151,140 @@ export function visibleHistory(
       .flatMap((batch) => batch.items.map((item) => item.key)),
   );
   return rows.filter((item) => matching.has(item.key));
+}
+
+/** Search keeps every child of a matching folder together. */
+export function matchHistoryTasks(items: Transfer[], query: string): Transfer[] {
+  const term = query.normalize("NFC").toLocaleLowerCase().trim();
+  if (!term) return items;
+  return summarizeBatches(items, Date.now())
+    .filter((task) =>
+      [task.name, ...task.items.map((item) => item.name)].some((name) =>
+        name.normalize("NFC").toLocaleLowerCase().includes(term),
+      ),
+    )
+    .flatMap((task) => task.items);
+}
+
+export function liveHistoryRows(items: Transfer[]): Transfer[] {
+  return summarizeBatches(items, Date.now())
+    .filter((task) => ["running", "queued"].includes(batchCategory(task)))
+    .flatMap((task) => task.items);
+}
+
+/** Merge browser-owned finished tasks into the same 20-task page budget. */
+export async function loadTaskHistoryPage(
+  local: Transfer[],
+  filter: HistoryFilter,
+  page: number,
+  signal: AbortSignal,
+  query = "",
+): Promise<TransferTaskHistoryPage & { localItems: Transfer[] }> {
+  const tasks = summarizeBatches(local, Date.now());
+  const context: TransferHistoryContext = { folders: [], exclude_folders: [] };
+  for (const task of tasks) {
+    if (!task.folder) continue;
+    const source = task.items[0];
+    const metadata = source.folderUpload || {
+      id: await folderHistoryId(task.id),
+      name: task.name,
+      root_path: transferFolderDestination(source),
+      created_at: (source.batchCreatedAt || source.createdAt || Date.now()) / 1000,
+    };
+    if (metadata.root_path === "/" || metadata.root_path.length > 4096) continue;
+    const ids = [
+      ...new Set(
+        task.items
+          .map((item) => item.jobId || item.uploadId)
+          .filter((id): id is string => Boolean(id)),
+      ),
+    ];
+    // New jobs already carry this metadata. Hints recover older folders only
+    // while this browser still remembers their original paths and membership.
+    if (ids.length && !source.folderUpload)
+      context.folders!.push({ folder_upload: metadata, transfer_ids: ids });
+    if (ids.length && task.items.some((item) => !item.jobId))
+      context.exclude_folders!.push(metadata.id);
+  }
+  // Recovery storage can outlive the old grouping protocol. Keep migration
+  // hints within the endpoint's bounds; durable folder metadata needs no hint.
+  const encoder = new TextEncoder();
+  let hintBytes = encoder.encode(
+    JSON.stringify({ ...context, folders: [] }),
+  ).length;
+  let hintIds = 0;
+  let hintCount = 0;
+  context.folders = context.folders!.filter((hint) => {
+    const size = encoder.encode(JSON.stringify(hint)).length + 1;
+    if (
+      hintCount >= 1000 ||
+      hintIds + hint.transfer_ids.length > 2000 ||
+      hintBytes + size > 240 * 1024
+    )
+      return false;
+    hintCount++;
+    hintIds += hint.transfer_ids.length;
+    hintBytes += size;
+    return true;
+  });
+  const matchingKeys = new Set(
+    matchHistoryTasks(local, query).map((item) => item.key),
+  );
+  const localFinished = tasks
+    .filter((task) => {
+      const category = batchCategory(task);
+      return (
+        task.items.some((item) => !item.jobId && !item.historyOnly) &&
+        !["running", "queued"].includes(category) &&
+        (filter === "all" || filter === "finished" || filter === category) &&
+        task.items.some((item) => matchingKeys.has(item.key))
+      );
+    })
+    .sort((a, b) => {
+      const created = (task: typeof a) =>
+        Math.min(
+          ...task.items.map((item) => item.batchCreatedAt || item.createdAt || 0),
+        );
+      return created(b) - created(a) || a.id.localeCompare(b.id);
+    });
+  const start = (page - 1) * TRANSFER_TASK_PAGE_SIZE;
+  const localPage = localFinished.slice(start, start + TRANSFER_TASK_PAGE_SIZE);
+  context.offset = Math.max(0, start - localFinished.length);
+  const result = await api.transferTaskHistory(
+    filter === "all" ? "finished" : filter,
+    page,
+    signal,
+    query,
+    context,
+  );
+  const selectedIds = new Set<string>();
+  const capacity = TRANSFER_TASK_PAGE_SIZE - localPage.length;
+  for (const job of result.jobs) {
+    const id = job.folder_upload
+      ? "folder:" + job.folder_upload.id
+      : "job:" + job.id;
+    if (selectedIds.has(id) || selectedIds.size < capacity) selectedIds.add(id);
+  }
+  const jobs = result.jobs.filter((job) =>
+    selectedIds.has(
+      job.folder_upload ? "folder:" + job.folder_upload.id : "job:" + job.id,
+    ),
+  );
+  const jobIds = new Set(jobs.map((job) => job.id));
+  const localItems = [
+    ...localPage.flatMap((task) => task.items),
+    ...local.filter((item) => jobIds.has(item.jobId || item.uploadId || "")),
+  ];
+  const total = result.total_tasks + localFinished.length;
+  const totalPages = Math.max(1, Math.ceil(total / TRANSFER_TASK_PAGE_SIZE));
+  return {
+    ...result,
+    jobs,
+    localItems,
+    page: Math.min(page, totalPages),
+    page_size: TRANSFER_TASK_PAGE_SIZE,
+    total_tasks: total,
+    total_pages: totalPages,
+    has_more: start + TRANSFER_TASK_PAGE_SIZE < total,
+  };
 }

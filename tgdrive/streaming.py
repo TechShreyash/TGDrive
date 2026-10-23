@@ -124,7 +124,8 @@ class _ActivityBody:
 
     def __init__(self, iterator, activity):
         self.iterator, self.activity = iterator, activity
-        self.started = self.closed = False
+        self.observation = None
+        self.started = self.closed = self.completed = False
 
     def __aiter__(self):
         return self
@@ -134,21 +135,36 @@ class _ActivityBody:
             self.started = True
             if self.activity is not None:
                 manager, identity, viewer = self.activity
-                manager.begin(identity, viewer)
+                self.observation = manager.begin(identity, viewer)
         try:
             return await anext(self.iterator)
+        except StopAsyncIteration:
+            self.completed = True
+            await self.aclose()
+            raise
         except BaseException:
             await self.aclose()
             raise
+
+    def delivered(self, **values):
+        if self.activity is not None and self.observation is not None:
+            manager, _identity, viewer = self.activity
+            manager.delivered(**values, request_id=viewer, observation=self.observation)
 
     async def aclose(self):
         try:
             await self.iterator.aclose()
         finally:
-            if self.started and not self.closed and self.activity is not None:
+            if self.started and not self.closed:
                 self.closed = True
-                manager, identity, viewer = self.activity
-                manager.finished(identity, viewer)
+                if self.activity is not None and self.observation is not None:
+                    manager, identity, viewer = self.activity
+                    manager.finished(
+                        identity,
+                        viewer,
+                        completed=self.completed,
+                        observation=self.observation,
+                    )
 
 
 def _media_etag(identity):
@@ -383,7 +399,17 @@ async def stream_telegram_file(
         nonlocal release_task
         if release_task is None:
             release_task = asyncio.create_task(lease.__aexit__(None, None, None))
-        await asyncio.shield(release_task)
+        interrupted = False
+        while not release_task.done():
+            try:
+                await asyncio.shield(release_task)
+            except asyncio.CancelledError:
+                # Keep lease cleanup owned until it drains, even if disconnect
+                # and shutdown cancel this response more than once.
+                interrupted = True
+        release_task.result()
+        if interrupted:
+            raise asyncio.CancelledError
 
     try:
 
@@ -555,13 +581,11 @@ async def stream_telegram_file(
                     if selected:
                         yield selected
                         if activity is not None:
-                            manager, _identity, viewer = activity
-                            manager.delivered(
+                            tracked_body.delivered(
                                 channel_id=channel_id,
                                 message_id=message_id,
                                 offset=byte_range.start + emitted - len(selected),
                                 length=len(selected),
-                                request_id=viewer,
                             )
                 if emitted != plan.requested_length:
                     raise OSError(
@@ -619,8 +643,9 @@ async def stream_telegram_file(
                 headers=headers,
             )
 
+        tracked_body = _ActivityBody(body(), activity)
         return await _prime_response(
-            _ActivityBody(body(), activity),
+            tracked_body,
             release=release,
             status=206 if byte_range.is_partial else 200,
             mime_type=mime_type,

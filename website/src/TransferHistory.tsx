@@ -1,10 +1,16 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { ChevronLeft, ChevronRight, Upload } from "lucide-react";
-import { api, errorMessage } from "./api";
+import { errorMessage } from "./api";
 import { ErrorNotice, Spinner } from "./components";
 import TransferPanel from "./TransferPanel";
-import { visibleHistory, type HistoryFilter } from "./transferHistory";
-import type { Job, TransferHistoryPage } from "./types";
+import {
+  loadTaskHistoryPage,
+  liveHistoryRows,
+  matchHistoryTasks,
+  visibleHistory,
+  type HistoryFilter,
+} from "./transferHistory";
+import type { Job, TransferTaskHistoryPage } from "./types";
 import type { Transfer } from "./transfers";
 import { useManualRefresh, type RefreshNotice } from "./useManualRefresh";
 import "./TransferHistory.css";
@@ -15,13 +21,6 @@ const filters: { key: HistoryFilter; label: string }[] = [
   { key: "error", label: "Failed" },
   { key: "cancelled", label: "Cancelled" },
 ];
-type Cursor = { before: number; before_id: string } | undefined;
-const firstPage = {
-  cursor: undefined as Cursor,
-  previous: [] as Cursor[],
-  number: 1,
-};
-
 export default function TransferHistory({
   items,
   onError,
@@ -36,27 +35,42 @@ export default function TransferHistory({
   query?: string;
 }) {
   const [filter, setFilter] = useState<HistoryFilter>("all");
-  const [navigation, setNavigation] = useState(firstPage);
+  const [pageNumber, setPageNumber] = useState(1);
   const [jobs, setJobs] = useState<Job[]>([]);
-  const [page, setPage] = useState<TransferHistoryPage | null>(null);
+  const [localItems, setLocalItems] = useState<Transfer[]>([]);
+  const [page, setPage] = useState<TransferTaskHistoryPage | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const generation = useRef(0);
+  const currentItems = useRef(items);
+  currentItems.current = items;
   const manual = useManualRefresh(onNotice);
-  const context = JSON.stringify([filter, navigation.cursor, query]);
+  const context = JSON.stringify([filter, pageNumber, query]);
   const manualContext = useRef<string | null>(null);
   const load = useCallback(
     async (signal: AbortSignal, explicit = false) => {
       const version = ++generation.current;
+      let redirected = false;
       try {
-        const response = await api.transferHistory(
-          filter === "all" ? "finished" : filter,
-          navigation.cursor,
+        const response = await loadTaskHistoryPage(
+          currentItems.current,
+          filter,
+          pageNumber,
           signal,
           query,
         );
         if (signal.aborted || generation.current !== version) return false;
+        if (response.page !== pageNumber) {
+          redirected = true;
+          setJobs([]);
+          setLocalItems([]);
+          setPage(response);
+          setLoading(true);
+          setPageNumber(response.page);
+          return true;
+        }
         setJobs(response.jobs);
+        setLocalItems(response.localItems);
         setPage(response);
         setError("");
         return true;
@@ -66,14 +80,14 @@ export default function TransferHistory({
         if (explicit) throw cause;
         return false;
       } finally {
-        if (!signal.aborted && generation.current === version)
+        if (!redirected && !signal.aborted && generation.current === version)
           setLoading(false);
       }
     },
-    [filter, navigation.cursor, query],
+    [filter, pageNumber, query],
   );
   useEffect(() => {
-    move(firstPage);
+    move(1, true);
   }, [query]);
   useEffect(() => {
     const controller = new AbortController();
@@ -99,28 +113,28 @@ export default function TransferHistory({
         if (manualContext.current === context) manualContext.current = null;
       }
     }, "Transfer history refreshed.");
-  const move = (next: typeof navigation) => {
+  const move = (next: number, resetTotals = false) => {
+    if (next === pageNumber && !resetTotals) return;
     generation.current++;
     setLoading(true);
     setError("");
     setJobs([]);
-    setPage(null);
-    setNavigation(next);
+    setLocalItems([]);
+    if (resetTotals) setPage(null);
+    setPageNumber(next);
   };
-  const term = query.normalize("NFC").toLocaleLowerCase();
-  const matchingItems = term
-    ? items.filter((item) =>
-        (item.name + " " + (item.batchName || ""))
-          .normalize("NFC")
-          .toLocaleLowerCase()
-          .includes(term),
-      )
-    : items;
+  const latest = new Map(items.map((item) => [item.key, item]));
+  const pageItems = new Map(
+    localItems.map((item) => [item.key, latest.get(item.key) || item]),
+  );
+  for (const item of matchHistoryTasks(liveHistoryRows(items), query))
+    pageItems.set(item.key, item);
   const visible = visibleHistory(
     jobs,
-    matchingItems,
+    [...pageItems.values()],
     filter,
-    navigation.number === 1,
+    true,
+    true,
   );
   const controls = (
     <div
@@ -135,7 +149,7 @@ export default function TransferHistory({
           aria-pressed={filter === entry.key}
           onClick={() => {
             if (entry.key !== filter) {
-              move(firstPage);
+              move(1, true);
               setFilter(entry.key);
             }
           }}
@@ -156,7 +170,7 @@ export default function TransferHistory({
         {query
           ? "No Matching Finished Transfers"
           : filter === "all"
-            ? navigation.number === 1
+            ? pageNumber === 1
               ? "No Finished Transfers Yet"
               : "No More Finished Transfers"
             : "No " +
@@ -200,70 +214,101 @@ export default function TransferHistory({
         }
         finishedEmpty={empty}
       />
-      {(navigation.previous.length > 0 || page?.has_more) && (
-        <nav
-          className="transfer-history-pagination"
-          aria-label="Finished transfer pages"
-        >
-          <span role="status" aria-live="polite">
-            Page {navigation.number}
-            {loading ? " · Loading…" : ""}
-          </span>
-          <div>
-            {navigation.number > 1 && (
-              <button
-                className="text-button"
-                disabled={loading}
-                onClick={() => move(firstPage)}
-              >
-                Latest
-              </button>
-            )}
-            <button
-              className="secondary-button"
-              disabled={loading || !navigation.previous.length}
-              onClick={() =>
-                move({
-                  cursor: navigation.previous.at(-1),
-                  previous: navigation.previous.slice(0, -1),
-                  number: navigation.number - 1,
-                })
-              }
-            >
-              <ChevronLeft size={16} /> Previous
-            </button>
-            <button
-              className="secondary-button"
-              disabled={
-                loading ||
-                !page?.has_more ||
-                page.next_before === null ||
-                !page.next_before_id
-              }
-              onClick={() => {
-                if (
-                  !page?.has_more ||
-                  page.next_before === null ||
-                  !page.next_before_id
-                )
-                  return;
-                move({
-                  cursor: {
-                    before: page.next_before,
-                    before_id: page.next_before_id,
-                  },
-                  previous: [...navigation.previous, navigation.cursor].slice(
-                    -128,
-                  ),
-                  number: navigation.number + 1,
-                });
-              }}
-            >
-              Next <ChevronRight size={16} />
-            </button>
-          </div>
-        </nav>
+      {page && page.total_tasks > 0 && (
+        <HistoryPagination
+          page={pageNumber}
+          totalPages={page.total_pages}
+          totalTasks={page.total_tasks}
+          loading={loading}
+          onPageChange={move}
+        />
       )}
     </section>
+  );
+}
+
+function numberedPages(page: number, total: number): (number | "gap")[] {
+  if (total <= 7) return Array.from({ length: total }, (_, index) => index + 1);
+  const start = page <= 3 ? 2 : Math.max(2, Math.min(page - 1, total - 4));
+  const end =
+    page >= total - 2
+      ? total - 1
+      : Math.min(total - 1, Math.max(page + 1, 5));
+  const pages: (number | "gap")[] = [1];
+  if (start > 2) pages.push("gap");
+  for (let number = start; number <= end; number++) pages.push(number);
+  if (end < total - 1) pages.push("gap");
+  pages.push(total);
+  return pages;
+}
+
+export function HistoryPagination({
+  page,
+  totalPages,
+  totalTasks,
+  loading,
+  onPageChange,
+}: {
+  page: number;
+  totalPages: number;
+  totalTasks: number;
+  loading: boolean;
+  onPageChange: (page: number) => void;
+}) {
+  return (
+    <nav
+      className="transfer-history-pagination"
+      aria-label="Finished transfer pages"
+      aria-busy={loading}
+    >
+      <span role="status" aria-live="polite" aria-atomic="true">
+        Page {page} of {totalPages} · {totalTasks}{" "}
+        {totalTasks === 1 ? "task" : "tasks"}
+        {loading ? " · Loading…" : ""}
+      </span>
+      <div className="transfer-history-page-controls">
+        <button
+          type="button"
+          className="secondary-button"
+          aria-label="Previous page of finished transfers"
+          title="Previous page"
+          disabled={loading || page <= 1}
+          onClick={() => onPageChange(page - 1)}
+        >
+          <ChevronLeft size={16} aria-hidden="true" />
+        </button>
+        <div className="transfer-history-page-numbers">
+          {numberedPages(page, totalPages).map((number, index) =>
+            number === "gap" ? (
+              <span key={"gap-" + index} aria-hidden="true">
+                …
+              </span>
+            ) : (
+              <button
+                type="button"
+                key={number}
+                className="secondary-button"
+                aria-label={"Page " + number + " of finished transfers"}
+                aria-current={number === page ? "page" : undefined}
+                disabled={loading}
+                onClick={() => onPageChange(number)}
+              >
+                {number}
+              </button>
+            ),
+          )}
+        </div>
+        <button
+          type="button"
+          className="secondary-button"
+          aria-label="Next page of finished transfers"
+          title="Next page"
+          disabled={loading || page >= totalPages}
+          onClick={() => onPageChange(page + 1)}
+        >
+          <ChevronRight size={16} aria-hidden="true" />
+        </button>
+      </div>
+    </nav>
   );
 }

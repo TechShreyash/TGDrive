@@ -458,3 +458,306 @@ def test_invalid_telegram_duration_cannot_create_unbounded_bitrate(duration):
         document=SimpleNamespace(attributes=[SimpleNamespace(duration=duration)])
     )
     assert _media_byte_rate(source, BLOCK) is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("multipart", [False, True])
+async def test_completed_finite_playback_range_warms_next_chunk_for_reuse(
+    tmp_path, multipart
+):
+    import asyncio
+
+    contents = [b"a" * (6 * BLOCK), b"b" * (6 * BLOCK)]
+    payload = b"".join(contents)
+    client = account("bot", payload)
+    parts = build_parts(contents) if multipart else None
+    if parts:
+        client.native.payloads = {9001: contents[0], 9002: contents[1]}
+
+        async def fetch(_channel, *, message_ids):
+            part = parts[message_ids - 101]
+            source = message(part["document_id"], part["size"])
+            source.id = message_ids
+            return TelegramMessage(client, source)
+
+        client.get_messages = AsyncMock(side_effect=fetch)
+    pool = ClientPool([client], media_cache_dir=tmp_path)
+    await pool.start()
+    manager = PreloadManager(
+        pool, policy=MediaCachePolicy(auto_preload=True, min_free_bytes=0)
+    )
+    try:
+        selected = await stream_telegram_file(
+            pool=pool,
+            channel_id=CHANNEL,
+            message_id=101 if parts else 77,
+            file_name="video.mov",
+            expected_size=len(payload),
+            parts=parts,
+            request=request(f"bytes=0-{4 * BLOCK - 1}"),
+            preview=True,
+            request_id="finite-player",
+        )
+        assert await response_body(selected) == payload[: 4 * BLOCK]
+        for _ in range(100):
+            if manager._jobs:
+                break
+            await asyncio.sleep(0.001)
+        job = next(iter(manager._jobs.values()))
+        task = manager._tasks.get(job["id"])
+        if task is not None:
+            await asyncio.wait_for(asyncio.shield(task), 3)
+        assert job["state"] == "ready"
+        assert job["start"] == 4 * BLOCK and job["end"] == 5 * BLOCK
+        observed = next(iter(manager._observed.values()))
+        viewer = observed["viewers"]["finite-player"]
+        assert viewer["active"] == 0 and viewer["warm_until"] > manager._clock()
+        reads = client.native.requests.copy()
+        following = await stream_telegram_file(
+            pool=pool,
+            channel_id=CHANNEL,
+            message_id=101 if parts else 77,
+            file_name="video.mov",
+            expected_size=len(payload),
+            parts=parts,
+            request=request(f"bytes={4 * BLOCK}-{5 * BLOCK - 1}"),
+            download=True,
+        )
+        assert await response_body(following) == payload[4 * BLOCK : 5 * BLOCK]
+        assert client.native.requests == reads
+    finally:
+        await manager.close()
+        await pool.stop()
+
+
+@pytest.mark.asyncio
+async def test_asgi_abort_does_not_grant_completed_playback_range_grace(tmp_path):
+    import asyncio
+
+    from starlette.requests import ClientDisconnect
+
+    payload = b"x" * (12 * BLOCK)
+    client = account("bot", payload)
+    pool = ClientPool([client], media_cache_dir=tmp_path)
+    await pool.start()
+    manager = PreloadManager(
+        pool, policy=MediaCachePolicy(auto_preload=True, min_free_bytes=0)
+    )
+    delivered = 0
+
+    async def send(value):
+        nonlocal delivered
+        if value["type"] == "http.response.body":
+            delivered += len(value.get("body", b""))
+            if delivered >= 4 * BLOCK:
+                raise OSError("Client disconnected during playback")
+        await asyncio.sleep(0)
+
+    async def receive():
+        return {"type": "http.disconnect"}
+
+    try:
+        selected = await response(
+            pool, payload, preview=True, request_id="aborted-player"
+        )
+        with pytest.raises(ClientDisconnect):
+            await selected(
+                {"type": "http", "asgi": {"spec_version": "2.4"}}, receive, send
+            )
+        await asyncio.gather(
+            *list(manager._auto_tasks.values()),
+            *list(manager._tasks.values()),
+            return_exceptions=True,
+        )
+        viewer = next(iter(manager._observed.values()))["viewers"]["aborted-player"]
+        assert delivered == 4 * BLOCK
+        assert viewer["active"] == 0 and viewer["warm_until"] == 0
+        assert not manager._viewer_timers
+        assert all(
+            job["state"] not in {"queued", "preparing"}
+            for job in manager._jobs.values()
+        )
+        assert not manager.cache.memory.flights
+        assert all(row.active_leases == 0 for row in await pool.status())
+    finally:
+        await manager.close()
+        await pool.stop()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("damaged_length", [0, BLOCK // 2 + 13], ids=["empty", "short"])
+async def test_incomplete_origin_first_block_fails_over_before_headers_and_reuses_cache(
+    tmp_path, damaged_length
+):
+    payload = b"x" * (3 * BLOCK // 4)
+    bot, premium = account("bot", payload), account("premium", payload)
+    premium.native.payloads[1] = payload[:damaged_length]
+    pool = ClientPool([bot], [premium], media_cache_dir=tmp_path)
+    await pool.start()
+    try:
+        selected = await response(pool, payload, request("bytes=17-255"), download=True)
+        assert selected.status_code == 206
+        assert selected.headers["content-length"] == "239"
+        assert await response_body(selected) == payload[17:256]
+        assert premium.native.iterators and bot.native.requests
+        reads = (premium.native.requests.copy(), bot.native.requests.copy())
+        repeated = await response(pool, payload, request("bytes=7-199"), download=True)
+        assert await response_body(repeated) == payload[7:200]
+        assert (premium.native.requests, bot.native.requests) == reads
+        cache = pool._media_read_cache
+        assert not cache.memory.flights and cache.scratch.used == 0
+        assert all(
+            len(entry[1]) == len(payload) for entry in cache.memory.entries.values()
+        )
+        assert all(row.active_leases == 0 for row in await pool.status())
+    finally:
+        if pool._media_read_cache is not None:
+            await pool._media_read_cache.close()
+        await pool.stop()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("damaged_length", [0, BLOCK // 2 + 13], ids=["empty", "short"])
+async def test_incomplete_origin_exhaustion_leaves_no_cache_or_lease_and_retry_recovers(
+    tmp_path, damaged_length
+):
+    payload = b"x" * (3 * BLOCK // 4)
+    client = account("bot", payload)
+    client.native.payloads[1] = payload[:damaged_length]
+    pool = ClientPool([client], media_cache_dir=tmp_path)
+    # The synthetic account remains immediately available between attempts.
+    pool.defer_client = AsyncMock()
+    await pool.start()
+    try:
+        with pytest.raises(OSError, match="declared block length"):
+            await response(pool, payload, request("bytes=17-255"), download=True)
+        cache = pool._media_read_cache
+        assert not cache.memory.entries and not cache.memory.flights
+        assert not list(tmp_path.glob("*.block"))
+        assert cache.scratch.used == 0 and not client.native.active
+        assert all(row.active_leases == 0 for row in await pool.status())
+        assert len(client.native.iterators) == 3
+        client.native.payloads[1] = payload
+        retried = await response(pool, payload, request("bytes=17-255"), download=True)
+        assert await response_body(retried) == payload[17:256]
+    finally:
+        if pool._media_read_cache is not None:
+            await pool._media_read_cache.close()
+        await pool.stop()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("multipart", [False, True])
+@pytest.mark.parametrize("finish_old", [False, True], ids=["abort-old", "finish-old"])
+async def test_old_response_cannot_change_reopened_viewer_after_cache_clear(
+    tmp_path, multipart, finish_old
+):
+    contents = [b"a" * (6 * BLOCK), b"b" * (6 * BLOCK)]
+    payload = b"".join(contents)
+    client = account("bot", payload)
+    parts = build_parts(contents) if multipart else None
+    if parts:
+        client.native.payloads = {9001: contents[0], 9002: contents[1]}
+
+        async def fetch(_channel, *, message_ids):
+            part = parts[message_ids - 101]
+            source = message(part["document_id"], part["size"])
+            source.id = message_ids
+            return TelegramMessage(client, source)
+
+        client.get_messages = AsyncMock(side_effect=fetch)
+    pool = ClientPool([client], media_cache_dir=tmp_path)
+    await pool.start()
+    manager = PreloadManager(
+        pool, policy=MediaCachePolicy(auto_preload=True, min_free_bytes=0)
+    )
+    first = second = None
+
+    async def selected(start):
+        return await stream_telegram_file(
+            pool=pool,
+            channel_id=CHANNEL,
+            message_id=101 if parts else 77,
+            file_name="movie.mov",
+            expected_size=len(payload),
+            parts=parts,
+            request=request(f"bytes={start}-{start + 4 * BLOCK - 1}"),
+            preview=True,
+            request_id="reopened-player",
+        )
+
+    try:
+        first = await selected(0)
+        identity = next(iter(manager._observed))
+        await manager.clear(identity)
+        second = await selected(4 * BLOCK)
+        viewer = manager._observed[identity]["viewers"]["reopened-player"]
+        assert viewer["active"] == 1
+        if finish_old:
+            assert await response_body(first) == payload[: 4 * BLOCK]
+        else:
+            await first.body_iterator.aclose()
+        assert viewer["active"] == 1 and viewer["warm_until"] == 0
+        assert viewer["last_end"] is None and viewer["sequential"] == 0
+        assert not manager._jobs and not manager._auto_tasks
+        assert await response_body(second) == payload[4 * BLOCK : 8 * BLOCK]
+        assert viewer["active"] == 0 and viewer["warm_until"] > manager._clock()
+        assert viewer["sequential"] == 4 * BLOCK
+    finally:
+        if first is not None:
+            await first.body_iterator.aclose()
+        if second is not None:
+            await second.body_iterator.aclose()
+        await manager.close()
+        await pool.stop()
+
+
+@pytest.mark.asyncio
+async def test_repeated_cancel_before_headers_drains_owned_metadata_lease(tmp_path):
+    import asyncio
+
+    payload = b"exact payload"
+    client = account("bot", payload)
+    pool = ClientPool([client], media_cache_dir=tmp_path)
+    await pool.start()
+    metadata_started = asyncio.Event()
+    release_started = asyncio.Event()
+    release_allowed = asyncio.Event()
+    metadata_allowed = asyncio.Event()
+    original_lease = pool.lease
+
+    async def metadata(*_args, **_kwargs):
+        metadata_started.set()
+        await metadata_allowed.wait()
+        return TelegramMessage(client, message(1, len(payload)))
+
+    @asynccontextmanager
+    async def delayed_release(**options):
+        async with original_lease(**options) as owner:
+            try:
+                yield owner
+            finally:
+                release_started.set()
+                await release_allowed.wait()
+
+    client.get_messages = AsyncMock(side_effect=metadata)
+    pool.lease = delayed_release
+    pending = asyncio.create_task(response(pool, payload))
+    try:
+        await asyncio.wait_for(metadata_started.wait(), 2)
+        pending.cancel()
+        await asyncio.wait_for(release_started.wait(), 2)
+        pending.cancel()
+        await asyncio.sleep(0)
+        assert not pending.done()
+        release_allowed.set()
+        with pytest.raises(asyncio.CancelledError):
+            await asyncio.wait_for(pending, 2)
+        assert all(row.active_leases == 0 for row in await pool.status())
+    finally:
+        release_allowed.set()
+        metadata_allowed.set()
+        if not pending.done():
+            pending.cancel()
+        await asyncio.gather(pending, return_exceptions=True)
+        await pool.stop()

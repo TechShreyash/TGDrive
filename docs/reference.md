@@ -287,7 +287,7 @@ remain supported.
 
 Browser chunks are 8 MiB except the last. At most 1,000 unfinished receipts and
 2,000 rows in unfinished browser batches are tracked. Finished browser history
-keeps at most 30 batches/2,000 rows, retaining unresolved batches. Browser bounds
+keeps at most 30 tasks/2,000 rows, retaining unresolved tasks. Browser bounds
 are per controller; staging and Telegram account limits apply across callers.
 Allow disk headroom for URL work, logs, metadata and backups beyond receipt
 reservations.
@@ -912,10 +912,21 @@ folder. A trashed/deleting/missing folder blocks receipt writes/completion while
 retaining acknowledged bytes for restore/cancel.
 
 Create checks the current logical-file limit, folder, staging budget and free disk.
+Folder uploads may also send `folder_upload: {id, name, root_path, created_at}`
+on creation. `id` is a stable 16–128 character URL-safe selection identity,
+`name` is at most 255 characters, `root_path` identifies the uploaded root, and
+`created_at` is finite nonnegative Unix seconds. The destination must belong to
+that root. The metadata follows the receipt into job polling and archived history;
+ordinary file selections and URL imports remain separate tasks.
 Send exactly chunk_size bytes except for a smaller final chunk. Empty/oversized
 chunks and offsets different from the server's are rejected. Wait for each
 acknowledgment. After a lost response, GET/HEAD the authoritative offset before
 retransmitting. The final chunk journal is verified against staged bytes.
+An offset mismatch returns HTTP `409` with code `UPLOAD_OFFSET_CHANGED`; clients
+may recheck the receipt and resume. Other `409` failures are not offset conflicts.
+The browser uses [bounded automatic retries](architecture.md#bounds-and-retries)
+for temporary failures after it knows the receipt ID; creation without a returned
+ID still requires manual retry.
 
 - Call complete only after offset equals total_size.
 - Repeated completion returns the existing retained job rather than creating another
@@ -961,7 +972,12 @@ Owner cookie or scoped file/folder capability required; supply `path` and option
 **Thumbnails:** authorize before and after asynchronous reads, including cache hits
 and `304`. Responses use `Cache-Control: private, no-cache`, `Vary: Cookie` and an
 ETag. The endpoint tries a generated cover, then a small provider thumbnail;
-multipart uses the first part. It never fetches originals to generate grid covers.
+multipart uses the first part. If unavailable, it can render a local cover from a
+complete server-cached original up to 128 MiB, within an eight-second repair
+deadline. It never fetches original Telegram payloads for the grid. Cached misses
+are reconsidered after new data arrives for that file; positive covers remain
+reusable. Repair rechecks authorization/source identity and leaves Telegram and
+the catalog unchanged.
 Unavailable returns `404 THUMBNAIL_UNAVAILABLE`; temporary capacity failure returns
 `503 THUMBNAIL_BUSY`, `Retry-After: 5`. See [generation limits](thumbnails.md).
 
@@ -1043,7 +1059,39 @@ and the recovery journal remain private.
 ### Transfer history
 
 <details>
-<summary>Owner-only history, status filters and cursor paging</summary>
+<summary>Owner-only task pages, filters and cursor compatibility</summary>
+
+The Transfers UI uses `POST /api/v1/transfers/history/tasks`:
+
+```json
+{"status":"finished","page":1,"limit":20,"q":""}
+```
+
+The response includes `jobs`, `page`, `page_size`, `total_tasks`, `total_pages`,
+`has_more`, `offset` and `next_offset`. `jobs` contains every member of each
+selected task, so its row count can exceed `limit`. Only explicit folder uploads
+group together; ordinary files and URL imports each count once. Grouping, status
+and search matching precede pagination. Status precedence is running, queued,
+failed, then cancelled or entirely successful. Matching a folder name or one of
+its files returns the whole task. A page beyond the end clamps to the last page.
+
+| Body field | Value |
+| --- | --- |
+| `status` | Same statuses as the cursor API below; default `all` |
+| `page`, `limit` | Page starts at 1; limit 1–200, default 20 |
+| `q` | Normalized case-insensitive substring, at most 255 characters |
+| `offset` | Optional nonnegative task offset; overrides page slicing for browser-only finished tasks; callers handle page clamping |
+| `folders` | Optional legacy hints: `{folder_upload, transfer_ids}`; at most 1,000 hints and 2,000 IDs total |
+| `exclude_folders` | Up to 2,000 selection IDs omitted from server task totals/results while the browser owns the remaining folder work |
+
+Hints decorate records without saved folder metadata only for this response;
+durable metadata wins. They never rewrite the archive. This owner-only request
+allows up to 256 KiB of JSON. Exact task counts scan archive summaries in bounded
+batches; see [history storage](architecture.md#finished-history).
+
+`GET /api/v1/transfers/history?page=1&limit=20` also returns numbered task pages,
+without browser hints/exclusions. Supplying a page and cursor together is invalid.
+Omitting `page` preserves the original cursor protocol:
 
 `GET /api/v1/transfers/history` accepts:
 

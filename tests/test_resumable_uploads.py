@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import copy
 import gc
 import hashlib
 import logging
@@ -24,7 +25,9 @@ class Manager:
         self.registry = TransferRegistry(database_path=tmp_path / "jobs.sqlite3")
         self.enqueued = 0
 
-    def enqueue_upload(self, source, destination, name, size, *, transfer_id):
+    def enqueue_upload(
+        self, source, destination, name, size, *, transfer_id, folder_upload=None
+    ):
         self.enqueued += 1
         job = self.registry.create("queued", transfer_id=transfer_id, total=size)
         job.context.update(
@@ -34,6 +37,8 @@ class Manager:
             name=name,
             size=size,
         )
+        if folder_upload is not None:
+            job.context["folder_upload"] = copy.deepcopy(folder_upload)
         self.registry.persist(job)
         return job
 
@@ -143,10 +148,13 @@ async def test_complete_rejects_corrupted_and_missing_staging(tmp_path):
 async def test_wrong_offset_and_short_nonfinal_chunks_do_not_advance(tmp_path):
     uploads, _ = make(tmp_path)
     item = uploads.create("big.bin", "/", CHUNK_SIZE + 1)
-    with pytest.raises(UploadError, match="offset"):
+    with pytest.raises(UploadError, match="offset") as conflict:
         await uploads.append(item["id"], 1, b"wrong")
-    with pytest.raises(UploadError, match="last chunk"):
+    assert conflict.value.status == 409
+    assert conflict.value.code == "UPLOAD_OFFSET_CHANGED"
+    with pytest.raises(UploadError, match="last chunk") as invalid:
         await uploads.append(item["id"], 0, b"short")
+    assert invalid.value.code == "UPLOAD_ERROR"
     assert uploads.get(item["id"])["offset"] == 0
     assert uploads.path(item["id"]).stat().st_size == 0
 
@@ -344,3 +352,264 @@ def test_upload_receipt_finalizer_closes_abandoned_connection(tmp_path):
     assert restored.get(item["id"])["offset"] == 0
     restored.close()
     restored.close()
+
+
+def make_cloud(tmp_path, monkeypatch, **overrides):
+    rows = {}
+    collection = SimpleNamespace(find=lambda _query: list(rows.values()))
+
+    def write(target, method, query, document, *, upsert):
+        assert target is collection and method == "replace_one" and upsert
+        rows[query["_id"]] = copy.deepcopy(document)
+
+    backend = SimpleNamespace(db=SimpleNamespace(receipts=collection), write=write)
+    monkeypatch.setattr("tgdrive.mongo.for_settings", lambda _settings: backend)
+    uploads, manager = make(tmp_path, **overrides)
+    manager.uploads = uploads
+    return uploads, manager, backend, rows
+
+
+async def test_cloud_creation_reserves_shared_budget_and_drains_after_disconnect(
+    tmp_path, monkeypatch
+):
+    from tgdrive.staging import StorageUnavailable, check_staging
+
+    uploads, manager, backend, rows = make_cloud(
+        tmp_path, monkeypatch, staging_budget_bytes=3
+    )
+    entered, release = threading.Event(), threading.Event()
+    loop_thread = threading.get_ident()
+    fsync, write = module.os.fsync, backend.write
+
+    def worker_fsync(descriptor):
+        assert threading.get_ident() != loop_thread
+        return fsync(descriptor)
+
+    def slow_commit(*args, **kwargs):
+        assert threading.get_ident() != loop_thread
+        entered.set()
+        assert release.wait(3), "The event loop could not release receipt creation"
+        return write(*args, **kwargs)
+
+    monkeypatch.setattr(module.os, "fsync", worker_fsync)
+    monkeypatch.setattr(backend, "write", slow_commit)
+    creation = asyncio.create_task(uploads.create_async("one.bin", "/", 3))
+    second = None
+    try:
+        assert await asyncio.to_thread(entered.wait, 2)
+        assert not creation.done()
+        assert rows == {}
+        [pending] = uploads._all()
+        assert pending["total_size"] == 3
+        # URL/multipart admissions use the same accounting while the first
+        # receipt has not received a durable cloud acknowledgement.
+        with pytest.raises(StorageUnavailable):
+            check_staging(uploads.settings, manager, 1)
+        with pytest.raises(UploadError) as unavailable:
+            uploads.get_unchecked(pending["id"])
+        assert unavailable.value.status == 404
+        second = asyncio.create_task(uploads.create_async("two.bin", "/", 1))
+        await asyncio.sleep(0)
+        assert not second.done()
+        creation.cancel()
+        await asyncio.sleep(0)
+        creation.cancel()
+        await asyncio.sleep(0)
+        assert not creation.done()
+        assert uploads._creation_lock.locked()
+        assert len(uploads._all()) == 1
+        release.set()
+        with pytest.raises(asyncio.CancelledError):
+            await creation
+        with pytest.raises(UploadError) as full:
+            await second
+        assert full.value.status == 507
+        committed = uploads.get_unchecked(pending["id"])
+        assert committed["state"] == "receiving"
+        assert committed["offset"] == 0
+        assert rows[pending["id"]]["data"] == committed
+        assert uploads.path(pending["id"]).is_file()
+        assert uploads._pending == {}
+        assert len(uploads._all()) == 1
+    finally:
+        release.set()
+        await asyncio.gather(
+            creation, *([second] if second is not None else []), return_exceptions=True
+        )
+        uploads.close()
+        manager.registry.close()
+        manager.store.close()
+
+
+async def test_cloud_creation_cleans_up_local_failure_before_persistence(
+    tmp_path, monkeypatch
+):
+    uploads, manager, _backend, rows = make_cloud(tmp_path, monkeypatch)
+
+    def broken_fsync(_descriptor):
+        raise OSError("Synthetic local receipt failure")
+
+    monkeypatch.setattr(module.os, "fsync", broken_fsync)
+    try:
+        with pytest.raises(OSError, match="Synthetic local"):
+            await uploads.create_async("one.bin", "/", 3)
+        assert uploads._pending == {}
+        assert uploads._all() == []
+        assert rows == {}
+        assert not list(uploads.root.glob("*.part"))
+    finally:
+        uploads.close()
+        manager.registry.close()
+        manager.store.close()
+
+
+@pytest.mark.parametrize("committed", [False, True])
+async def test_unknown_cloud_creation_commit_keeps_file_and_reservation(
+    tmp_path, monkeypatch, committed
+):
+    from tgdrive.mongo import DatabaseUnavailable
+
+    uploads, manager, backend, rows = make_cloud(
+        tmp_path, monkeypatch, staging_budget_bytes=3
+    )
+    write = backend.write
+
+    def unknown(*args, **kwargs):
+        if committed:
+            write(*args, **kwargs)
+        raise DatabaseUnavailable("Synthetic unknown receipt commit")
+
+    monkeypatch.setattr(backend, "write", unknown)
+    try:
+        with pytest.raises(DatabaseUnavailable):
+            await uploads.create_async("one.bin", "/", 3)
+        assert uploads._pending == {}
+        [retained] = uploads._all()
+        assert uploads.path(retained["id"]).is_file()
+        assert (retained["id"] in rows) is committed
+        with pytest.raises(UploadError) as full:
+            await uploads.create_async("two.bin", "/", 1)
+        assert full.value.status == 507
+        monkeypatch.setattr(backend, "write", write)
+        monkeypatch.setattr(module.time, "time", lambda: retained["expires_at"] + 1)
+        replacement = await uploads.create_async("two.bin", "/", 3)
+        assert replacement["state"] == "receiving"
+        assert uploads.get_unchecked(retained["id"])["state"] == "cancelled"
+        assert not uploads.path(retained["id"]).exists()
+    finally:
+        uploads.close()
+        manager.registry.close()
+        manager.store.close()
+
+
+async def test_cloud_creation_reconciles_jobs_on_loop_and_saves_on_worker(
+    tmp_path, monkeypatch
+):
+    uploads, manager, backend, _rows = make_cloud(
+        tmp_path, monkeypatch, staging_budget_bytes=3
+    )
+    item = uploads.create("finished.bin", "/", 3)
+    job = manager.registry.create("queued", transfer_id=item["id"], total=3)
+    manager.registry.update(job.id, status=TransferStatus.COMPLETED)
+    loop_thread = threading.get_ident()
+    write, get = backend.write, manager.registry.get
+
+    def worker_write(*args, **kwargs):
+        assert threading.get_ident() != loop_thread
+        return write(*args, **kwargs)
+
+    def loop_get(*args, **kwargs):
+        assert threading.get_ident() == loop_thread
+        return get(*args, **kwargs)
+
+    monkeypatch.setattr(backend, "write", worker_write)
+    monkeypatch.setattr(manager.registry, "get", loop_get)
+    try:
+        replacement = await uploads.create_async("replacement.bin", "/", 3)
+        assert replacement["state"] == "receiving"
+        assert uploads.get_unchecked(item["id"])["state"] == "finished"
+        assert not uploads.path(item["id"]).exists()
+    finally:
+        uploads.close()
+        manager.registry.close()
+        manager.store.close()
+
+
+async def test_explicit_folder_metadata_survives_receipt_restart_and_job_handoff(tmp_path):
+    uploads, manager = make(tmp_path)
+    folder = manager.store.create_folder("/", "Photos")
+    root_path = "/" + folder["id"]
+    metadata = {
+        "id": "folder-upload-session-1",
+        "name": "Photos",
+        "root_path": root_path,
+        "created_at": 1234.5,
+    }
+    original = copy.deepcopy(metadata)
+    try:
+        item = await uploads.create_async(
+            "one.bin", root_path, 3, folder_upload=metadata
+        )
+        metadata["name"] = "Caller mutation"
+        assert item["folder_upload"] == original
+        uploads.close()
+        uploads, _ = make(tmp_path, manager=manager)
+        assert uploads.get_unchecked(item["id"])["folder_upload"] == original
+        await uploads.append(item["id"], 0, b"one")
+        job = await uploads.complete(item["id"])
+        assert job.context["folder_upload"] == original
+        assert job.as_dict()["folder_upload"] == original
+        assert (await manager.registry.history())["jobs"][0]["folder_upload"] == original
+        standalone = uploads.create("standalone.bin", "/", 3)
+        assert "folder_upload" not in standalone
+        with pytest.raises(UploadError, match="outside"):
+            uploads.create("outside.bin", "/", 3, folder_upload=original)
+    finally:
+        uploads.close()
+        manager.registry.close()
+        manager.store.close()
+
+
+@pytest.mark.parametrize("move_ancestor", [False, True])
+async def test_new_folder_receipts_follow_moved_root_and_ancestor(tmp_path, move_ancestor):
+    uploads, manager = make(tmp_path)
+    store = manager.store
+    ancestor = store.create_folder("/", "Original parent")
+    ancestor_path = "/" + ancestor["id"]
+    folder = store.create_folder(ancestor_path, "Photos")
+    original_root = ancestor_path + "/" + folder["id"]
+    child = store.create_folder(original_root, "Nested")
+    original_parent = original_root + "/" + child["id"]
+    target = store.create_folder("/", "Moved here")
+    target_path = "/" + target["id"]
+    metadata = {
+        "id": "folder-upload-session-moved",
+        "name": "Photos",
+        "root_path": original_root,
+        "created_at": 1234.5,
+    }
+    try:
+        store.move(ancestor_path if move_ancestor else original_root, target_path)
+        current_root = store.resolve_id(folder["id"])
+        current_parent = store.resolve_id(child["id"])
+        item = await uploads.create_async(
+            "later.bin", original_parent, 3, folder_upload=metadata
+        )
+        assert item["parent_id"] == current_parent
+        assert item["parent_node_id"] == child["id"]
+        assert item["folder_upload"] == metadata | {"root_path": current_root}
+        assert metadata["root_path"] == original_root
+        await uploads.append(item["id"], 0, b"one")
+        job = await uploads.complete(item["id"])
+        assert job.context["destination"] == current_parent
+        assert job.context["folder_upload"]["id"] == metadata["id"]
+        assert job.context["folder_upload"]["name"] == metadata["name"]
+        assert job.context["folder_upload"]["root_path"] == current_root
+        with pytest.raises(UploadError, match="outside"):
+            await uploads.create_async(
+                "unrelated.bin", target_path, 3, folder_upload=metadata
+            )
+    finally:
+        uploads.close()
+        manager.registry.close()
+        manager.store.close()

@@ -126,18 +126,28 @@ cannot count as distinct viewers; anonymous ranges cannot earn whole-file promot
 Block alignment/integrity overhead count at admission, so high-rate files can
 receive less than the target duration.
 
-Distant seeks abandon stale ahead work. Departure by its initiating viewer
-cancels ahead work, including pending admission; already justified whole-file
-preparation may finish. Demand precedes queued speculation. Closing/seeking
-drains unused read-ahead; cancelling one subscriber does not abort an in-flight
-fill still needed by another authorized subscriber.
+Successful playback range responses keep their logical viewer eligible for up
+to 5 seconds between requests, so a finite range can warm the next one. The same
+byte/cache/job limits apply during this gap. A real response abort cancels owned
+ahead work immediately; expiry cancels unfinished work if no next range arrives.
+Distant seeks abandon stale ahead work, including pending admission; already
+justified whole-file preparation may finish. Demand precedes queued speculation.
+Closing/seeking drains unused read-ahead; cancelling one subscriber does not
+abort an in-flight fill still needed by another authorized subscriber. Clearing
+cache data isolates the previous response's tracking, so its late progress or
+cleanup cannot change a newly opened viewer's preparation.
 
 </details>
 
 Independent blocks can use different healthy bots/Premium clients and shared
-in-flight fills, while responses preserve original order. Every request must
-pass authorization before cached bytes; shared access is rechecked before future
-blocks. No window estimate promises buffer-free playback or recalls sent bytes.
+in-flight fills, while responses preserve original order. Empty or short origin
+blocks enter the bounded account retry/failover path; incomplete bytes are never
+retained as ready cache blocks. Every request must pass authorization before
+cached bytes; shared access is rechecked before future blocks. No window estimate promises buffer-free playback or recalls sent bytes.
+Reopening a preview starts a new browser transfer: file responses use private,
+non-storing HTTP cache policy. Retained server blocks can satisfy that transfer
+without another Telegram payload download; loading UI alone does not indicate a
+server-cache miss.
 
 ## Prepare a file before sharing
 
@@ -187,6 +197,11 @@ run separately, so receipt verification does not hold the next file's device slo
 Eligible batches rotate through those slots. Slow disk, database commits, staging
 pressure and the uplink can still limit intake.
 
+MongoDB session creation keeps its initial file synchronization and receipt commit
+off the HTTP event loop, with staging reserved before it yields. See the
+[transfer pipeline](architecture.md#transfer-pipeline) for admission and retry
+boundaries.
+
 ## Upload pipeline and smaller splits
 
 | Control | Default / allowed values |
@@ -232,10 +247,67 @@ seeking and errors. It supports the media's available tracks/chapters and focuse
 keyboard shortcuts (**K/Space**, **M**, arrows); mobile autoplay may require tapping
 Play. Slow starts offer **Try again**; unsupported codecs retain **Download Original**.
 
-Compact status follows actual readiness and advancing playback, without invented
-percentages or seconds ahead. The timeline's buffered time ranges are engine
-estimates, separate from server cache coverage. Cached bytes still need delivery
-and decoding. Movi's requested 32 MiB source buffer is not a decoder-memory cap.
+The animated waiting status shows measured bytes received and current delivery
+speed when the player's HTTP source exposes them. Received bytes include repeated
+reads and seeks, so they are not a whole-file completion percentage. The compact
+status strip keeps retry inline and omits zero-speed and explanatory paragraphs;
+advancing presented frames clear a stale wait. The timeline's source-buffer time ranges are estimates,
+separate from server cache coverage. Playback does not require a whole-file preload.
+
+The pinned player applies video-decoder backpressure to video-only files rather
+than reading ahead for a nonexistent audio track. This protects decoder admission;
+it does not establish smooth playback on every codec/device.
+
+TGDrive retains its custom playback pipeline for all video previews, including
+HEVC. Native browser playback support does not establish that the custom
+WebCodecs/WASM pipeline can decode and render the same file smoothly.
+
+Fast server delivery cannot make every device decode a 4K codec smoothly. A long
+wait retains retry/download actions. Cached bytes still need delivery and decoding.
+At EOF, the hardware decoder drains pending pictures; the seek reset path must
+not recreate the HEVC decoder and discard its final pictures.
+
+### Browser playback buffer
+
+The custom player fetches compressed bytes independently of the small decoded
+picture queue. It aims for **90 seconds ahead**, using the greater of the file's
+average byte rate, declared bitrate and observed consumption rate. Higher bitrate
+sections increase that estimate. Seeks reset sampling instead of counting the
+skipped bytes as consumption. Once filled, fetching resumes below 75% of the goal
+(roughly 67 seconds), before the playhead approaches the buffer edge.
+
+The source starts with at most **32 MiB** and grows to meet that time goal as
+bitrate information becomes available. Its memory ceiling is one-sixteenth of
+the browser's approximate `navigator.deviceMemory` hint, bounded to **32–512 MiB**:
+
+| Reported device memory | Compressed source ceiling |
+| --- | --- |
+| 1 GiB | 64 MiB |
+| 2 GiB | 128 MiB |
+| 4 GiB | 256 MiB |
+| 8 GiB or more | 512 MiB |
+| Hint unavailable or invalid | 128 MiB |
+
+The hint is rounded/privacy-limited and unavailable in some browsers; it is
+**not free RAM**. The ceiling is not allocated upfront and does not cover decoder,
+GPU, WASM or transport memory. Growth preserves cached bytes, offsets and stream
+state. During growth the old and new allocations can temporarily coexist until
+garbage collection. If allocation fails, playback retains the working buffer and
+reduces its ceiling for this opening instead of retrying larger allocations.
+
+For longer videos, the time goal uses at most 80% of the allocated window to leave
+transport/compaction headroom. Very high bitrate files may still retain less than
+90 seconds on a constrained device. Clips up to two minutes that fit the device
+budget can cache completely. Non-range origins select sequential storage before
+writes and do not grow it during writes. Range requests scale with the byte goal, up to
+8 MiB; one upcoming response can already be in flight when fetching pauses.
+Neither a request size nor the decoded frame queue is the playback buffer goal.
+
+Seeking inside retained source bytes reuses them while decoding from a suitable
+keyframe. A seek outside the retained window fetches its new range. Closing the
+preview cancels its source requests. This is browser memory, separate from the
+server cache and manual whole-file preloads. Timeline coverage remains an estimate
+for variable bitrate/interleaved files, not a guarantee of decoded readiness.
 
 ## Operator checklist
 

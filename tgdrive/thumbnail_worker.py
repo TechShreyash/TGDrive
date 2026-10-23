@@ -32,6 +32,9 @@ VIDEO_FORMATS = {
     ".mpg": "mpeg",
 }
 MAX_BYTES = 64 * 1024
+# Shared libraries, HEVC reference frames and thread stacks all count toward
+# virtual address space. 512 MiB rejects ordinary UHD HEVC before scaling it.
+ADDRESS_SPACE_BYTES = 768 * 1024**2
 
 
 def render(path: Path, suffix: str) -> bytes:
@@ -106,42 +109,43 @@ def render(path: Path, suffix: str) -> bytes:
         ]
     else:
         return b""
-    try:
-        # Fixed tool/flags and a resolved staged path; no shell interprets input.
-        result = subprocess.run(  # noqa: S603  # nosec B603
-            command,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.DEVNULL,
-            timeout=8,
-            check=False,
-        )
-        if not result.stdout and "-ss" in command:
+    # A costly or damaged seek can time out or emit an incomplete frame even
+    # when decoding the first frame is cheap. Keep that fallback inside the
+    # parent's existing 12-second deadline instead of abandoning the cover.
+    for attempt, timeout in enumerate((8, 3) if "-ss" in command else (8,)):
+        if attempt:
             command[command.index("-ss") + 1] = "0"
-            # Retry the same fixed command at the start of the staged media.
+        try:
+            # Fixed tool/flags and a resolved staged path; no shell interprets input.
             result = subprocess.run(  # noqa: S603  # nosec B603
                 command,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.DEVNULL,
-                timeout=3,
+                timeout=timeout,
                 check=False,
             )
+        except subprocess.TimeoutExpired:
+            continue
+        except OSError:
+            return b""
         data = result.stdout
-        return (
-            data
-            if result.returncode == 0
+        if (
+            result.returncode == 0
             and 0 < len(data) <= MAX_BYTES
             and data.startswith(b"\xff\xd8\xff")
-            else b""
-        )
-    except (OSError, subprocess.TimeoutExpired):
-        return b""
+            and data.endswith(b"\xff\xd9")
+        ):
+            return data
+    return b""
 
 
 def main():
     try:
         import resource
 
-        resource.setrlimit(resource.RLIMIT_AS, (512 * 1024**2, 512 * 1024**2))
+        resource.setrlimit(
+            resource.RLIMIT_AS, (ADDRESS_SPACE_BYTES, ADDRESS_SPACE_BYTES)
+        )
         resource.setrlimit(resource.RLIMIT_CPU, (8, 8))
         resource.setrlimit(resource.RLIMIT_FSIZE, (0, 0))
     except ImportError:

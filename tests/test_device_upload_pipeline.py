@@ -56,3 +56,33 @@ async def test_receiving_more_files_does_not_wait_for_telegram_or_the_whole_batc
         await pool.stop()
         uploads.close()
         store.close()
+
+
+async def test_folder_identity_survives_real_background_upload_and_history(tmp_path):
+    manager, store, _client, pool = await make_manager(tmp_path)
+    uploads = manager.uploads = ResumableUploads(manager.settings, manager)
+    root = store.create_folder("/", "Photos")
+    destination = "/" + root["id"]
+    folder = {
+        "id": "folder-upload-session-1",
+        "name": "Photos",
+        "root_path": destination,
+        "created_at": 1234.5,
+    }
+    try:
+        item = await uploads.create_async(
+            "image.bin", destination, 3, folder_upload=folder
+        )
+        await uploads.append(item["id"], 0, b"one")
+        job = await uploads.complete(item["id"])
+        assert job.as_dict()["folder_upload"] == folder
+        await asyncio.wait_for(job.task, 3)
+        assert job.status is TransferStatus.COMPLETED
+        page = await manager.registry.task_history(status="finished", limit=1)
+        assert page["total_tasks"] == 1
+        assert page["jobs"][0]["folder_upload"] == folder
+    finally:
+        await manager.close()
+        await pool.stop()
+        uploads.close()
+        store.close()

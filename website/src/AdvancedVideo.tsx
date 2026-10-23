@@ -14,6 +14,8 @@ import {
 } from "./videoPlayerPresentation";
 import { installVideoPlayerPip } from "./videoPlayerPip";
 import { attachVideoGestures } from "./videoPlayerGestures";
+import { formatBytes } from "./types";
+import { videoSourceMemoryBudgetMiB } from "./videoBufferMemory";
 import "./AdvancedVideo.css";
 import advancedStyles from "./AdvancedVideo.css?inline";
 
@@ -199,13 +201,24 @@ export type VideoBufferSnapshot = {
   ranges: { start: number; end: number }[];
   received: number;
   bytesPerSecond: number;
+  measured: boolean;
+  decodedSeconds: number;
+  deliveryWaiting: boolean;
+  decodeBound: boolean;
+  softwareDecoding: boolean;
 };
 /** Movi's source-window time ranges are estimates, not decoded readiness. */
 export function videoBufferSnapshot(player: {
   duration: number;
   currentTime: number;
   buffered: TimeRanges;
-  player?: { getSource?: () => unknown } | null;
+  player?: {
+    getSource?: () => unknown;
+    pictureRunwaySeconds?: () => number;
+    deliveryStarved?: () => boolean;
+    isDecodeBound?: () => boolean;
+    isSoftwareDecoding?: () => boolean;
+  } | null;
 }): VideoBufferSnapshot {
   const duration = player.duration;
   const bounded = Number.isFinite(duration) && duration > 0;
@@ -235,6 +248,12 @@ export function videoBufferSnapshot(player: {
     ranges: merged,
     received: positive(stats?.totalBytes),
     bytesPerSecond: positive(stats?.currentSpeed),
+    measured:
+      Number.isFinite(stats?.totalBytes) && (stats?.totalBytes ?? -1) >= 0,
+    decodedSeconds: positive(player.player?.pictureRunwaySeconds?.()),
+    deliveryWaiting: player.player?.deliveryStarved?.() === true,
+    decodeBound: player.player?.isDecodeBound?.() === true,
+    softwareDecoding: player.player?.isSoftwareDecoding?.() === true,
   };
 }
 const phaseCopy = {
@@ -293,6 +312,9 @@ export default function AdvancedVideo({
   const [slow, setSlow] = useState(false);
   const [showStatus, setShowStatus] = useState(false);
   const [playbackError, setPlaybackError] = useState("");
+  const [transfer, setTransfer] = useState<VideoBufferSnapshot | null>(null);
+  const waitingForVideo = useRef(true);
+  waitingForVideo.current = state.phase !== "ready";
   const [visible, setVisible] = useState(!document.hidden);
   const [chapterSurface, setChapterSurface] = useState<ShadowRoot | null>(null);
   useEffect(() => {
@@ -340,8 +362,11 @@ export default function AdvancedVideo({
     let subtitleRenderer: MovTextRenderer | null = null;
     let progressTimer: number | undefined;
     let frameCallback: number | undefined;
+    let frameSource: MoviElement | null = null;
+    let lastPlayback: { time: number; playing: boolean } | null = null;
     let previousTime = Number.NaN;
     let latestProgressAt = 0;
+    let hasPresentedFrame = false;
     let chapterEntries: VideoChapter[] = [];
     let chapterRegistered = false;
     let detachPresentation: (() => void) | undefined;
@@ -460,6 +485,8 @@ export default function AdvancedVideo({
     const listeners: [string, EventListener][] = [];
     dispatch("reset");
     setPlaybackError("");
+    setTransfer(null);
+    let lastTransferAt = 0;
     const clearWaiting = () => {
       clearTimeout(waitingTimer);
       waitingTimer = undefined;
@@ -503,9 +530,26 @@ export default function AdvancedVideo({
       resume.positionApplied = true;
       if (playback.current === resume.source) playback.current = null;
     };
+    const rememberPlayback = () => {
+      if (!usable || !player?.player || player.player.getState() === "error")
+        return;
+      lastPlayback = {
+        time: videoResumeTime(player.currentTime, player.duration),
+        playing: !player.paused,
+      };
+    };
     const updateBuffer = () => {
       if (!player || cancelled || failed) return;
       const sample = videoBufferSnapshot(player);
+      // Source counters include repeat/seek reads. They describe delivery to this
+      // player, never whole-file completion or how many pictures can be decoded.
+      if (
+        waitingForVideo.current &&
+        performance.now() - lastTransferAt >= 500
+      ) {
+        lastTransferAt = performance.now();
+        setTransfer(sample);
+      }
       // Pinned Movi 0.4.1 can leave this documented CSS part at zero while
       // paused, even with a ready buffer. Paint its own public TimeRanges,
       // including the seek origin, instead of converting server byte offsets.
@@ -555,6 +599,12 @@ export default function AdvancedVideo({
         waiting(engineState === "seeking" ? "seeking" : "waiting");
         return;
       }
+      if (event === "playing" && !hasPresentedFrame) {
+        // The engine starts its clock before the first decoded picture arrives.
+        // Preserve loading feedback until successive real frames are presented.
+        waiting("waiting");
+        return;
+      }
       clearWaiting();
       pendingSeek = false;
       dispatch(event);
@@ -567,6 +617,7 @@ export default function AdvancedVideo({
         if (resume.source.playing) void player.play().catch(() => {});
       }
       observeResumePosition();
+      rememberPlayback();
     };
     const waiting = (kind: "waiting" | "seeking") => {
       if (cancelled || failed) return;
@@ -579,6 +630,7 @@ export default function AdvancedVideo({
         pendingSeek = true;
         previousTime = Number.NaN;
         latestProgressAt = 0;
+        hasPresentedFrame = false;
       }
       pendingWait = pendingSeek ? "seeking" : kind;
       if (waitingTimer !== undefined) return;
@@ -590,6 +642,7 @@ export default function AdvancedVideo({
           (player.paused || performance.now() - latestProgressAt < 500)
         )
           return;
+        hasPresentedFrame = false;
         dispatch(pendingWait);
       }, 700);
     };
@@ -598,6 +651,7 @@ export default function AdvancedVideo({
       clearWaiting();
       if (event !== "seeked") pendingSeek = false;
       dispatch(event);
+      rememberPlayback();
     };
     void import("movi-player/element/slim")
       .then(({ MoviElement }) => {
@@ -613,7 +667,17 @@ export default function AdvancedVideo({
         player.setAttribute("wasmurl", wasmUrl);
         player.setAttribute("engine", "wasm");
         player.setAttribute("sw", "auto");
-        player.setAttribute("buffersize", "32");
+        // This ceiling is separate from decoded pictures. The source allocates
+        // gradually toward its bitrate-aware time goal, rather than reserving
+        // the entire device budget for every video.
+        player.setAttribute(
+          "buffersize",
+          String(
+            videoSourceMemoryBudgetMiB(
+              (navigator as Navigator & { deviceMemory?: number }).deviceMemory,
+            ),
+          ),
+        );
         player.setAttribute("persist", "");
         player.setAttribute("controls", "");
         player.setAttribute("playsinline", "");
@@ -644,7 +708,9 @@ export default function AdvancedVideo({
           codecRejected = false;
           recover();
           usable = false;
+          hasPresentedFrame = false;
           clearWaiting();
+          setTransfer(null);
           dispatch("loadstart");
         });
         listen("trackschange", () => {
@@ -658,11 +724,16 @@ export default function AdvancedVideo({
         listen("loadeddata", () => ready("loadeddata"));
         listen("canplay", () => ready("canplay"));
         listen("playing", () => ready("playing"));
+        listen("play", () => {
+          // A playing state is an intent; watch actual presented frames below.
+          latestProgressAt = performance.now();
+        });
         listen("waiting", () => waiting("waiting"));
         listen("stalled", () => waiting("waiting"));
         listen("seeking", () => waiting("seeking"));
         listen("seeked", () => {
           observeResumePosition();
+          rememberPlayback();
           settle("seeked");
           // A new position can be available before its audio/video refill is ready.
           // Keep the actual engine wait visible instead of treating seeked as play.
@@ -672,7 +743,17 @@ export default function AdvancedVideo({
         const observeProgress = () => {
           if (!player || cancelled) return;
           observeResumePosition();
+          rememberPlayback();
           updateBuffer();
+          if (
+            usable &&
+            !player.paused &&
+            !player.seeking &&
+            player.currentTime < player.duration - 0.1 &&
+            latestProgressAt > 0 &&
+            performance.now() - latestProgressAt > 1250
+          )
+            waiting("waiting");
         };
         listen("timeupdate", observeProgress);
         listen("progress", observeProgress);
@@ -716,15 +797,18 @@ export default function AdvancedVideo({
             )
           ) {
             recover();
+            hasPresentedFrame = true;
             pendingSeek = false;
             latestProgressAt = performance.now();
             clearWaiting();
             dispatch("playing");
           }
           previousTime = mediaTime ?? Number.NaN;
-          frameCallback = player.requestVideoFrameCallback(presentedFrame);
+          frameCallback =
+            frameSource?.requestVideoFrameCallback(presentedFrame);
         };
-        frameCallback = player.requestVideoFrameCallback(presentedFrame);
+        frameSource = player;
+        frameCallback = frameSource.requestVideoFrameCallback(presentedFrame);
         progressTimer = window.setInterval(observeProgress, 250);
       })
       .catch(fail);
@@ -739,8 +823,13 @@ export default function AdvancedVideo({
         restorePlayerFocus.current ||= document.activeElement === player;
         clearVideoQualityControl(player);
         if (frameCallback !== undefined)
-          player.cancelVideoFrameCallback(frameCallback);
-        if (resume && !resume.positionApplied)
+          frameSource?.cancelVideoFrameCallback(frameCallback);
+        if (
+          lastPlayback &&
+          (!player.player || player.player.getState() === "error")
+        )
+          playback.current = lastPlayback;
+        else if (resume && !resume.positionApplied)
           playback.current = {
             time: resume.target,
             playing: usable ? !player.paused : resume.source.playing,
@@ -794,10 +883,15 @@ export default function AdvancedVideo({
               </div>
             )}
           </div>
-          {!playbackError && slow && (
-            <p className="advanced-wait-help">
-              Taking longer than usual. You can wait or try again.
-            </p>
+          {!playbackError && transfer?.measured && (
+            <div className="advanced-transfer" aria-live="off">
+              <div className="advanced-transfer-network">
+                <span>{formatBytes(transfer.received)} received</span>
+                {transfer.bytesPerSecond > 0 && (
+                  <span>{formatBytes(transfer.bytesPerSecond)}/s</span>
+                )}
+              </div>
+            </div>
           )}
           {(slow || playbackError) && (
             <div className="advanced-state-actions">
@@ -817,7 +911,7 @@ export default function AdvancedVideo({
       <div
         ref={host}
         className="advanced-player-host"
-        aria-busy={!state.ready && !playbackError}
+        aria-busy={state.phase !== "ready" && !playbackError}
       />
       {chapterSurface
         ? createPortal(loadingStatus, chapterSurface)

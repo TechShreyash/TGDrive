@@ -294,6 +294,7 @@ def create_app(
     @asynccontextmanager
     async def lifespan(_app: FastAPI):
         try:
+            await _app.state.thumbnail_repair.start()
             await app_runtime.start()
             if settings.demo_mode and getattr(app_runtime, "store", None) is not None:
                 try:
@@ -352,6 +353,11 @@ def create_app(
     app.state.sessions = sessions
     app.state.login_limiter = limiter
     app.state.thumbnails = ThumbnailCache()
+    from tgdrive.generated_thumbnails import CachedThumbnailRepair
+
+    app.state.thumbnail_repair = CachedThumbnailRepair(
+        settings.resolved_cache_dir / "thumbnails"
+    )
     starts = TransferStarts(ttl_seconds=settings.transfer_ttl_seconds)
     app.state.transfer_starts = starts
 
@@ -1038,15 +1044,35 @@ def create_app(
         auth: Annotated[str | None, Query(max_length=512)] = None,
     ) -> Response:
         path, file_data = authorized_file(request, path, auth)
-        # TGDrive generates a cover from the complete staged source before
-        # splitting; its first part can carry that cover without reassembly.
+        # Prefer upload-generated/provider covers; missing derivatives can use
+        # a complete verified original already cached, without origin reads.
         headers = {"Cache-Control": "private, no-cache", "Vary": "Cookie"}
-        identity = (file_data["message_id"], file_data["size"])
+
+        def file_identity(data):
+            return (
+                data["message_id"],
+                data["size"],
+                tuple(
+                    (part["message_id"], part["offset"], part["size"], part["sha256"])
+                    for part in data.get("parts") or []
+                ),
+            )
+
+        identity = file_identity(file_data)
         key = (settings.storage_channel, *identity)
+        pool = _runtime(request).pool
+        cache = getattr(pool, "_media_read_cache", None)
+        source = {
+            "channel_id": settings.storage_channel,
+            "message_id": file_data["message_id"],
+            "size": file_data["size"],
+            "parts": file_data.get("parts"),
+        }
+        version = cache.cached_source_version(**source) if cache is not None else None
 
         def recheck():
             _current_path, current = authorized_file(request, path, auth)
-            if (current["message_id"], current["size"]) != identity:
+            if file_identity(current) != identity:
                 raise HTTPException(409, "File changed; refresh the directory")
 
         async def load_cover():
@@ -1061,14 +1087,37 @@ def create_app(
             )
             if content:
                 return Thumbnail(content, "image/jpeg")
-            return await load_thumbnail(
-                pool=_runtime(request).pool,
-                channel_id=settings.storage_channel,
-                message_id=file_data["message_id"],
-            )
+            provider_error = None
+            try:
+                provider = await load_thumbnail(
+                    pool=pool,
+                    channel_id=settings.storage_channel,
+                    message_id=file_data["message_id"],
+                )
+                if provider is not None:
+                    return provider
+            except ThumbnailBusy as exc:
+                provider_error = exc
+            if cache is not None:
+                content = await app.state.thumbnail_repair.get(
+                    cache,
+                    source=source,
+                    name=file_data["name"],
+                    version=version,
+                    authorize=recheck,
+                )
+                if content:
+                    return Thumbnail(content, "image/jpeg")
+            if provider_error is not None:
+                raise provider_error
+            return None
 
         try:
-            thumbnail = await app.state.thumbnails.get(key, load_cover)
+            thumbnail = await app.state.thumbnails.get(
+                key,
+                load_cover,
+                missing_revision=version.data_revision if version is not None else None,
+            )
         except ThumbnailBusy:
             recheck()
             return JSONResponse(

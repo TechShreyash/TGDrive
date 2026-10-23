@@ -212,6 +212,14 @@ class TransferRecord:
                 "total": len(parts),
                 "stored": sum(bool(part.get("confirmed")) for part in parts),
             }
+        folder_upload = self.context.get("folder_upload")
+        folder_fields = ("id", "name", "root_path", "created_at")
+        if isinstance(folder_upload, dict) and all(
+            key in folder_upload for key in folder_fields
+        ):
+            result["folder_upload"] = {
+                key: copy.deepcopy(folder_upload[key]) for key in folder_fields
+            }
         return result
 
 
@@ -771,6 +779,227 @@ class TransferRegistry:
             "next_before": page[-1]["created_at"] if has_more else None,
             "next_before_id": page[-1]["id"] if has_more else None,
         }
+
+    @staticmethod
+    def _history_task_id(row):
+        folder = row.get("folder_upload")
+        if (
+            row.get("kind") in {"upload", "receiving"}
+            and isinstance(folder, dict)
+            and isinstance(folder.get("id"), str)
+            and folder["id"]
+        ):
+            return "folder:" + folder["id"]
+        return "job:" + row["id"]
+
+    def _task_archive_rows(self, selected=None):
+        """Stream summaries; numbered pages never materialize the whole archive."""
+        if self._mongo is not None:
+            query: dict[str, Any] = {"archived": True}
+            if selected is not None:
+                query["$or"] = [
+                    {
+                        "summary.folder_upload.id": {
+                            "$in": [
+                                key[7:] for key in selected if key.startswith("folder:")
+                            ]
+                        }
+                    },
+                    {
+                        "_id": {
+                            "$in": [key[4:] for key in selected if key.startswith("job:")]
+                        }
+                    },
+                ]
+            cursor = self._mongo.find(query)
+            for document in cursor.batch_size(200):
+                yield document["summary"]
+            return
+        if self._db is not None:
+            # Release the shared connection between small reads so lifecycle
+            # commits do not wait behind a scan of a large transfer archive.
+            after = ""
+            while True:
+                with self._db_lock:
+                    rows = self._db.execute(
+                        "SELECT id,data FROM transfer_history WHERE id>? "
+                        "ORDER BY id LIMIT 200",
+                        (after,),
+                    ).fetchall()
+                if not rows:
+                    return
+                for identity, data in rows:
+                    row = json.loads(data)
+                    if selected is None or self._history_task_id(row) in selected:
+                        yield row
+                after = rows[-1][0]
+        else:
+            for row in list(self._history.values()):
+                if selected is None or self._history_task_id(row) in selected:
+                    yield copy.deepcopy(row)
+
+    @staticmethod
+    def _task_status(statuses):
+        if statuses & {"running", "cancelling"}:
+            return "running"
+        if "queued" in statuses:
+            return "queued"
+        if "error" in statuses:
+            return "error"
+        return "completed" if statuses == {"completed"} else "cancelled"
+
+    def _numbered_history(
+        self, live, *, status, page, limit, query, offset, folders, exclude_folders
+    ):
+        live_ids = {row["id"] for row in live}
+        tasks = {}
+        hints = {
+            identity: hint["folder_upload"]
+            for hint in folders
+            for identity in hint["transfer_ids"]
+        }
+        excluded = {"folder:" + identity for identity in exclude_folders}
+
+        def decorate(row):
+            if (
+                not isinstance(row.get("folder_upload"), dict)
+                and row["id"] in hints
+            ):
+                return row | {"folder_upload": hints[row["id"]]}
+            return row
+
+        def observe(row):
+            if row.get("kind") == "delete":
+                return
+            identity = self._history_task_id(row)
+            if identity in excluded:
+                return
+            folder = row.get("folder_upload")
+            created_at = (
+                folder.get("created_at", row["created_at"])
+                if identity.startswith("folder:")
+                else row["created_at"]
+            )
+            entry = tasks.setdefault(
+                identity,
+                {"created_at": created_at, "statuses": set(), "matches": False},
+            )
+            entry["created_at"] = min(entry["created_at"], created_at)
+            entry["statuses"].add(row["status"])
+            names = [row.get("name", "")]
+            if identity.startswith("folder:"):
+                names.append(folder.get("name", ""))
+            entry["matches"] |= any(
+                query in unicodedata.normalize("NFC", str(name)).casefold()
+                for name in names
+            )
+
+        for row in self._task_archive_rows():
+            if row["id"] not in live_ids:
+                observe(decorate(row))
+        for row in live:
+            observe(decorate(row))
+        matching = [
+            identity
+            for identity, entry in tasks.items()
+            if entry["matches"]
+            and (
+                status == "all"
+                or (
+                    status == "finished"
+                    and self._task_status(entry["statuses"])
+                    in {"completed", "cancelled", "error"}
+                )
+                or status == self._task_status(entry["statuses"])
+            )
+        ]
+        matching.sort(
+            key=lambda identity: (tasks[identity]["created_at"], identity), reverse=True
+        )
+        total = len(matching)
+        pages = max(1, (total + limit - 1) // limit)
+        if offset is None:
+            page = min(page, pages)
+            offset = (page - 1) * limit
+        selected = matching[offset : offset + limit]
+        selected_ids = set(selected)
+        members = {}
+        if selected:
+            for row in self._task_archive_rows(None if hints else selected_ids):
+                row = decorate(row)
+                if (
+                    row["id"] not in live_ids
+                    and self._history_task_id(row) in selected_ids
+                ):
+                    members[row["id"]] = row
+            for row in live:
+                row = decorate(row)
+                if self._history_task_id(row) in selected_ids:
+                    members[row["id"]] = row
+        order = {identity: index for index, identity in enumerate(selected)}
+        jobs = sorted(
+            members.values(),
+            key=lambda row: (
+                order[self._history_task_id(row)],
+                row["created_at"],
+                row["id"],
+            ),
+        )
+        return {
+            "jobs": jobs,
+            "page": page,
+            "page_size": limit,
+            "total_tasks": total,
+            "total_pages": pages,
+            "has_more": offset + limit < total,
+            "offset": offset,
+            "next_offset": min(total, offset + limit),
+        }
+
+    async def task_history(
+        self,
+        *,
+        status="all",
+        page=1,
+        limit=20,
+        query="",
+        offset=None,
+        folders=(),
+        exclude_folders=(),
+    ):
+        if (
+            status not in {
+                "all",
+                "finished",
+                "queued",
+                "running",
+                "completed",
+                "error",
+                "cancelled",
+            }
+            or type(page) is not int
+            or page < 1
+            or type(limit) is not int
+            or not 1 <= limit <= 200
+            or not isinstance(query, str)
+            or len(query) > 255
+            or (offset is not None and (type(offset) is not int or offset < 0))
+        ):
+            raise ValueError("Invalid transfer task page")
+        # Progress and recovery contexts belong to the event loop. The worker
+        # sees copied public snapshots and streams archived summaries in batches.
+        live = [self.history_snapshot(record) for record in self.list()]
+        return await asyncio.to_thread(
+            self._numbered_history,
+            live,
+            status=status,
+            page=page,
+            limit=limit,
+            query=unicodedata.normalize("NFC", query.strip()).casefold(),
+            offset=offset,
+            folders=copy.deepcopy(folders),
+            exclude_folders=tuple(exclude_folders),
+        )
 
     def close(self) -> None:
         if self._tasks:

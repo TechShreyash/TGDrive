@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import copy
 import errno
 import hashlib
 import json
@@ -19,8 +20,10 @@ from pathlib import Path
 from typing import Any
 
 from tgdrive.errors import DriveError
+from tgdrive.schemas import FolderUploadMetadata
 from tgdrive.security import safe_name
 from tgdrive.staging import StorageUnavailable, check_staging
+from tgdrive.store import ROOT_ID, _normalize_path
 
 logger = logging.getLogger(__name__)
 
@@ -30,9 +33,12 @@ _ID = re.compile(r"[0-9a-f]{32}")
 
 
 class UploadError(ValueError):
-    def __init__(self, message: str, status: int = 409) -> None:
+    def __init__(
+        self, message: str, status: int = 409, *, code: str = "UPLOAD_ERROR"
+    ) -> None:
         super().__init__(message)
         self.status = status
+        self.code = code
 
 
 class ResumableUploads:
@@ -68,6 +74,8 @@ class ResumableUploads:
             )
         self.locks: dict[str, asyncio.Lock] = {}
         self.slots = asyncio.Semaphore(settings.max_concurrent_transfers)
+        self._creation_lock = asyncio.Lock()
+        self._pending: dict[str, dict[str, Any]] = {}
         self._reconcile_finished()
 
     def close(self) -> None:
@@ -75,9 +83,11 @@ class ResumableUploads:
 
     def _all(self):
         if self._mongo is not None:
-            import copy
-
-            return copy.deepcopy(list(self._items.values()))
+            # Pending receipts reserve space before their first worker await,
+            # including for URL/multipart admissions sharing the same budget.
+            items = dict(self._pending)
+            items.update(self._items)
+            return copy.deepcopy(list(items.values()))
         return [
             json.loads(row[0]) for row in self.db.execute("SELECT data FROM uploads")
         ]
@@ -186,23 +196,68 @@ class ResumableUploads:
         self.get_unchecked(upload_id)
         return self.root / (upload_id + ".part")
 
-    def create(self, name: str, parent_id: str, total_size: int) -> dict[str, Any]:
-        binding = self.manager.store.upload_destination(parent_id)
-        parent_id = binding["path"]
-        if type(total_size) is not int or total_size <= 0:
-            raise UploadError("File size must be a positive integer", 422)
-        if total_size > self.settings.upload_limit:
-            raise UploadError("File exceeds the configured upload limit", 413)
+    def create(
+        self,
+        name: str,
+        parent_id: str,
+        total_size: int,
+        *,
+        folder_upload: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
         self._reconcile_finished()
-        active = self._all()
-        for item in active:
+        for item in self._all():
             lock = self.locks.get(item["id"])
             if (
-                item["state"] == "receiving"
+                item["id"] not in self._pending
+                and item["state"] == "receiving"
                 and item["expires_at"] <= time.time()
                 and (lock is None or not lock.locked())
             ):
                 self._cancel_receiving(item)
+        item = self._admit(name, parent_id, total_size, folder_upload)
+        self._open_receipt(item)
+        return item
+
+    def _admit(
+        self,
+        name: str,
+        parent_id: str,
+        total_size: int,
+        folder_upload: dict[str, Any] | None,
+    ) -> dict[str, Any]:
+        if type(total_size) is not int or total_size <= 0:
+            raise UploadError("File size must be a positive integer", 422)
+        if total_size > self.settings.upload_limit:
+            raise UploadError("File exceeds the configured upload limit", 413)
+        if folder_upload is not None:
+            try:
+                folder_upload = FolderUploadMetadata.model_validate(
+                    folder_upload
+                ).model_dump()
+            except ValueError:
+                raise UploadError("Invalid folder upload metadata", 422) from None
+            root_parts, original_root = _normalize_path(folder_upload["root_path"])
+            if not root_parts or root_parts[-1] == ROOT_ID:
+                raise UploadError("A folder upload requires a non-root folder", 422)
+            # Browser queue entries retain their original paths. Bind both
+            # opaque identities again so moving the folder or an ancestor does
+            # not strand files that have not created a receipt yet.
+            root = self.manager.store.upload_destination(
+                original_root, directory_id=root_parts[-1]
+            )
+            parent_parts, original_parent = _normalize_path(parent_id)
+            binding = self.manager.store.upload_destination(
+                original_parent,
+                directory_id=parent_parts[-1] if parent_parts else ROOT_ID,
+            )
+            parent_id = binding["path"]
+            root_path = root["path"]
+            if parent_id != root_path and not parent_id.startswith(root_path + "/"):
+                raise UploadError("The file is outside its folder upload", 422)
+            folder_upload["root_path"] = root_path
+        else:
+            binding = self.manager.store.upload_destination(parent_id)
+            parent_id = binding["path"]
         active = self._all()
         active = [item for item in active if item["state"] in _ACTIVE]
         if len(active) >= 1000:
@@ -225,24 +280,120 @@ class ResumableUploads:
             "created_at": time.time(),
             "expires_at": time.time() + self.settings.upload_session_ttl_seconds,
         }
+        if folder_upload is not None:
+            item["folder_upload"] = folder_upload
+        return item
+
+    def _open_receipt(self, item: dict[str, Any]) -> None:
+        upload_id = item["id"]
         path = self.root / (upload_id + ".part")
         descriptor = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
         try:
-            os.fsync(descriptor)
-        finally:
-            os.close(descriptor)
-        try:
+            try:
+                os.fsync(descriptor)
+            finally:
+                os.close(descriptor)
             directory = os.open(self.root, os.O_RDONLY | os.O_DIRECTORY)
             try:
                 os.fsync(directory)
             finally:
                 os.close(directory)
-            self._save(item)
         except BaseException:
             path.unlink(missing_ok=True)
             raise
-        logger.debug("Device receipt opened id=%s bytes=%s", upload_id, total_size)
-        return item
+        try:
+            self._save(item)
+        except BaseException:
+            if self._mongo is None:
+                path.unlink(missing_ok=True)
+            else:
+                # A lost acknowledgement is not evidence of rollback. Keep the
+                # file and reservation until expiry/reconciliation; a committed
+                # cloud receipt must never point at a file we just deleted.
+                self._items[upload_id] = copy.deepcopy(item)
+            raise
+        logger.debug(
+            "Device receipt opened id=%s bytes=%s", upload_id, item["total_size"]
+        )
+
+    @staticmethod
+    async def _owned_worker(callback: Any, *args: Any) -> Any:
+        work = asyncio.get_running_loop().run_in_executor(None, callback, *args)
+        cancelled = False
+        while True:
+            try:
+                result = await asyncio.shield(work)
+                break
+            except asyncio.CancelledError:
+                # A disconnected request still owns its worker through fsync
+                # and the MongoDB commit, including repeated cancellation.
+                cancelled = True
+        if cancelled:
+            raise asyncio.CancelledError
+        return result
+
+    async def _reconcile_for_creation(self) -> None:
+        for snapshot in self._all():
+            upload_id = snapshot["id"]
+            if upload_id in self._pending or snapshot["state"] not in _ACTIVE:
+                continue
+            lock = self.locks.setdefault(upload_id, asyncio.Lock())
+            if lock.locked():
+                # An active append/complete/cancel owns this receipt's state.
+                continue
+            async with lock:
+                item = self.get_unchecked(upload_id)
+                record = self._existing_job(upload_id)
+                state = item["state"]
+                if record is not None and str(record.status) in {
+                    "completed",
+                    "cancelled",
+                }:
+                    item["state"] = (
+                        "cancelled" if str(record.status) == "cancelled" else "finished"
+                    )
+                elif (
+                    record is None
+                    and item["state"] == "receiving"
+                    and item["expires_at"] <= time.time()
+                ):
+                    item["state"] = "cancelled"
+                if item["state"] == state:
+                    # Active jobs release their own receipt. Saving a queued
+                    # snapshot here could race that synchronous terminal save.
+                    continue
+
+                def reconcile() -> None:
+                    if item["state"] in {"finished", "cancelled"}:
+                        (self.root / (upload_id + ".part")).unlink(missing_ok=True)
+                    self._save(item)
+
+                # Job inspection and receipt locking stay on the event loop;
+                # only immutable receipt work reaches the cloud worker.
+                await self._owned_worker(reconcile)
+
+    async def create_async(
+        self,
+        name: str,
+        parent_id: str,
+        total_size: int,
+        *,
+        folder_upload: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        if self._mongo is None:
+            # SQLite's connection retains its existing event-loop ownership.
+            return self.create(
+                name, parent_id, total_size, folder_upload=folder_upload
+            )
+        async with self._creation_lock:
+            await self._reconcile_for_creation()
+            item = self._admit(name, parent_id, total_size, folder_upload)
+            self._pending[item["id"]] = item
+            try:
+                await self._owned_worker(self._open_receipt, item)
+            finally:
+                self._pending.pop(item["id"], None)
+            return item
 
     async def append(
         self, upload_id: str, offset: int, body: bytes | bytearray
@@ -254,7 +405,8 @@ class ResumableUploads:
             self._destination(item)
             if type(offset) is not int or offset != item["offset"]:
                 raise UploadError(
-                    "Upload offset changed. Read the current offset and resume."
+                    "Upload offset changed. Read the current offset and resume.",
+                    code="UPLOAD_OFFSET_CHANGED",
                 )
             if (
                 not body
@@ -404,6 +556,11 @@ class ResumableUploads:
                 item["name"],
                 item["total_size"],
                 transfer_id=upload_id,
+                **(
+                    {"folder_upload": copy.deepcopy(item["folder_upload"])}
+                    if item.get("folder_upload") is not None
+                    else {}
+                ),
             )
             item["state"] = "queued"
             self._save(item)

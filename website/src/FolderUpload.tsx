@@ -286,6 +286,12 @@ export default function FolderUpload({
       if (active.signal.aborted || !mounted.current) return;
       const rejected = transfers.addEntries(result.entries, maxSize, true, {
         name: result.root.name,
+        folderUpload: {
+          id: requestId,
+          name: result.root.name,
+          root_path: itemPath(result.root),
+          created_at: Date.now() / 1000,
+        },
       });
       if (rejected.length) throw new Error(rejected.join("; "));
       onChanged();

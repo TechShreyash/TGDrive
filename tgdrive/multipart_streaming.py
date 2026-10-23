@@ -160,13 +160,11 @@ async def stream_multipart_file(
                         emitted += len(chunk)
                         yield chunk
                         if activity is not None:
-                            manager, _identity, viewer = activity
-                            manager.delivered(
+                            tracked_body.delivered(
                                 channel_id=channel_id,
                                 message_id=message_id,
                                 offset=selected.start + emitted - len(chunk),
                                 length=len(chunk),
-                                request_id=viewer,
                             )
                 finally:
                     try:
@@ -180,8 +178,9 @@ async def stream_multipart_file(
         finally:
             await first.close()
 
+    tracked_body = _ActivityBody(body(), activity)
     return await _prime_response(
-        _ActivityBody(body(), activity),
+        tracked_body,
         release=first.close,
         status=status,
         mime_type=mime_type,

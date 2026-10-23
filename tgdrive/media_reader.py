@@ -11,6 +11,7 @@ import secrets
 import time
 from collections.abc import AsyncIterator
 from contextlib import suppress
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -23,6 +24,22 @@ from tgdrive.telegram_clients import _block_identity, _BlockCache
 
 BLOCK = 1024**2
 READ_AHEAD = 32  # MiB per response, including currently requested windows.
+
+
+class CachedSourceUnavailable(Exception):
+    """A cache-only derivative must stop rather than fetch missing payloads."""
+
+
+@dataclass(frozen=True)
+class CachedSourceVersion:
+    file_id: str
+    revision: int
+    generation: int
+
+    @property
+    def data_revision(self):
+        # Registering metadata/HEAD alone must not invalidate a cached miss.
+        return (self.file_id, self.revision) if self.revision else None
 
 
 class _AdaptiveReadAhead:
@@ -370,6 +387,9 @@ class MediaReadCache:
         self._hits = self._misses = 0
         self._index_dirty = False
         self._load_index()
+        self._data_revision = max(
+            (row.get("_data_revision", 0) for row in self._files.values()), default=0
+        )
 
     def _refresh_capacity(self, *, force=False):
         now = self._capacity_clock()
@@ -419,6 +439,10 @@ class MediaReadCache:
                     and downloaded >= 0
                     else 0
                 )
+                revision = row.get("_data_revision", 0)
+                row["_data_revision"] = (
+                    revision if type(revision) is int and revision >= 0 else 0
+                )
                 self._files[row["id"]] = row
             for row in value.get("blocks", []):
                 key = tuple(row["key"])
@@ -462,9 +486,8 @@ class MediaReadCache:
                 part["offset"],
             )
 
-    def register_file(
-        self, *, channel_id, message_id, size, name="", parts=None, representation=None
-    ):
+    @staticmethod
+    def _file_identity(channel_id, message_id, size, parts, representation=None):
         value = (
             channel_id,
             message_id,
@@ -473,7 +496,14 @@ class MediaReadCache:
         )
         if representation is not None:
             value += (representation,)
-        identity = hashlib.sha256(repr(value).encode()).hexdigest()[:24]
+        return hashlib.sha256(repr(value).encode()).hexdigest()[:24]
+
+    def register_file(
+        self, *, channel_id, message_id, size, name="", parts=None, representation=None
+    ):
+        identity = self._file_identity(
+            channel_id, message_id, size, parts, representation
+        )
         row = self._files.get(identity, {})
         self._files[identity] = {
             "id": identity,
@@ -484,6 +514,7 @@ class MediaReadCache:
             "parts": parts or [],
             "last_access": time.time(),
             "last_download": row.get("last_download", 0),
+            "_data_revision": row.get("_data_revision", 0),
             "_representations": row.get("_representations", {}),
         }
         self._bind_file(self._files[identity])
@@ -498,6 +529,120 @@ class MediaReadCache:
             }
         self._index_dirty = True
         return identity
+
+    def cached_source_version(self, *, channel_id, message_id, size, parts=None):
+        identity = self._file_identity(channel_id, message_id, size, parts)
+        row = self._files.get(identity)
+        if row is None:
+            return None
+        return CachedSourceVersion(
+            identity, row.get("_data_revision", 0), self._generation
+        )
+
+    async def cached_file_blocks(
+        self,
+        *,
+        channel_id,
+        message_id,
+        size,
+        parts=None,
+        version,
+        max_bytes,
+        authorize=None,
+    ):
+        """Yield a complete original from retained blocks; never start/join origin I/O.
+
+        Readiness is checked before the first yield, then actual disk reads verify
+        every digest. Eviction, clearing or source replacement aborts the copy.
+        """
+        from tgdrive.file_parts import validate_parts
+
+        def current():
+            if authorize is not None:
+                authorize()
+            if (
+                self._closed
+                or version is None
+                or self.cached_source_version(
+                    channel_id=channel_id,
+                    message_id=message_id,
+                    size=size,
+                    parts=parts,
+                )
+                != version
+            ):
+                raise CachedSourceUnavailable
+
+        current()
+        if not 0 < size <= max_bytes:
+            raise CachedSourceUnavailable
+        documents = (
+            validate_parts(parts, size=size, message_id=message_id)
+            if parts
+            else [{"message_id": message_id, "offset": 0, "size": size}]
+        )
+        row = self._files[version.file_id]
+        plan = []
+        for part in documents:
+            representation = row.get("_representations", {}).get(
+                str(part["message_id"])
+            )
+            if (
+                not isinstance(representation, (list, tuple))
+                or len(representation) not in (3, 4)
+                or not all(
+                    isinstance(value, (str, int, type(None)))
+                    for value in representation
+                )
+                or representation[-1] != part["size"]
+            ):
+                raise CachedSourceUnavailable
+            blocks = []
+            for index in range(math.ceil(part["size"] / BLOCK)):
+                expected = min(BLOCK, part["size"] - index * BLOCK)
+                key = (channel_id, part["message_id"], *representation, index)
+                start = part["offset"] + index * BLOCK
+                if self._blocks.get(key) != {
+                    "file_id": version.file_id,
+                    "start": start,
+                    "end": start + expected,
+                }:
+                    raise CachedSourceUnavailable
+                blocks.append((key, expected))
+            plan.append((part, blocks))
+        keys = [key for _, blocks in plan for key, _ in blocks]
+        disk_keys = (
+            set(await asyncio.to_thread(self.disk.ready, keys))
+            if self.disk is not None
+            else set()
+        )
+        current()
+        # Expire RAM hits here as well; an old inventory entry is not proof that
+        # the complete original is still retained.
+        if any(
+            key not in self._pending
+            and self.memory._hit(key) is None
+            and key not in disk_keys
+            for key in keys
+        ):
+            raise CachedSourceUnavailable
+        for part, blocks in plan:
+            checksum = hashlib.sha256()
+            for key, expected in blocks:
+                current()
+                payload = self._pending.get(key)
+                if payload is None:
+                    payload = self.memory._hit(key)
+                if payload is None and self.disk is not None:
+                    payload = await asyncio.to_thread(self.disk.read, key, expected)
+                current()
+                if payload is None or len(payload) != expected:
+                    raise CachedSourceUnavailable
+                checksum.update(payload)
+                yield payload
+                current()
+            if part.get("sha256") and checksum.hexdigest() != part["sha256"]:
+                raise CachedSourceUnavailable
 
     def register_block(self, key, expected):
         channel, message_id = key[0], key[1]
@@ -584,6 +729,8 @@ class MediaReadCache:
                 owner = self._files.get(block["file_id"]) if block else None
                 if owner is not None:
                     owner["last_download"] = time.time()
+                    self._data_revision += 1
+                    owner["_data_revision"] = self._data_revision
                     self._index_dirty = True
             if (
                 generation == self._generation
@@ -934,7 +1081,14 @@ async def stream_pooled_media(
                     iterator = account.stream_media(bound, **options)
                     started = controller.clock()
                     try:
-                        data = await anext(iterator)
+                        data = await anext(iterator, b"")
+                        block = _block_identity(bound, index)
+                        if block is None or len(data) != block[1]:
+                            # Validate inside account failover, before the cache
+                            # sees any bytes. Empty EOF is a failed read too.
+                            raise OSError(
+                                "Telegram read ended before the declared block length"
+                            )
                         controller.observe_fetch(controller.clock() - started)
                         return data
                     finally:

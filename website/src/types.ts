@@ -24,7 +24,14 @@ export interface TransferLocation {
   display_path?: string;
   reason?: string;
 }
+export interface FolderUploadMetadata {
+  id: string;
+  name: string;
+  root_path: string;
+  created_at: number;
+}
 export interface Job {
+  folder_upload?: FolderUploadMetadata;
   queue?: { position: number; estimated_wait_seconds: number | null } | null;
   telegram_parts?: { total: number; stored: number };
   location?: TransferLocation;
@@ -54,7 +61,16 @@ export interface TransferHistoryPage {
   next_before: number | null;
   next_before_id: string | null;
 }
+export interface TransferTaskHistoryPage {
+  jobs: Job[];
+  page: number;
+  page_size: number;
+  total_tasks: number;
+  total_pages: number;
+  has_more: boolean;
+}
 export interface UploadSnapshot {
+  folder_upload?: FolderUploadMetadata;
   id: string;
   offset: number;
   total_size: number;

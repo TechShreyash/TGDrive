@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import copy
 import json
 import time
 
@@ -12,7 +13,16 @@ from tgdrive.store import DriveStore
 from tgdrive.tasks import TransferNotFound, TransferRegistry, TransferStatus
 
 
-def add(registry, name, status, *, created=1000, identity=None, kind="upload"):
+def add(
+    registry,
+    name,
+    status,
+    *,
+    created=1000,
+    identity=None,
+    kind="upload",
+    folder_upload=None,
+):
     record = registry.create("uploading", total=100, transfer_id=identity)
     record.context.update(
         name=name,
@@ -21,6 +31,8 @@ def add(registry, name, status, *, created=1000, identity=None, kind="upload"):
         local_path="/private/staged-file",
         source_url="https://private/?token=secret",
     )
+    if folder_upload is not None:
+        record.context["folder_upload"] = copy.deepcopy(folder_upload)
     record.created_at = created
     registry.update(
         record.id,
@@ -240,3 +252,247 @@ async def test_history_search_reads_can_overlap_archive_writes_without_connectio
         done.set()
         await asyncio.gather(*workers)
         registry.close()
+
+
+class HistoryCursor(list):
+    def batch_size(self, _size):
+        return self
+
+    def sort(self, fields):
+        for key, direction in reversed(fields):
+            super().sort(key=lambda row: row.get(key), reverse=direction < 0)
+        return self
+
+    def limit(self, count):
+        return HistoryCursor(self[:count])
+
+
+class HistoryMongo:
+    """The archive operations used by task pages, without a MongoDB service."""
+
+    def __init__(self):
+        self.rows = {}
+
+    def find(self, query):
+        rows = list(self.rows.values())
+        if query.get("archived") is True:
+            rows = [row for row in rows if row.get("archived") is True]
+            if "$or" in query:
+                folders = query["$or"][0]["summary.folder_upload.id"]["$in"]
+                identities = query["$or"][1]["_id"]["$in"]
+                rows = [
+                    row
+                    for row in rows
+                    if row["_id"] in identities
+                    or row["summary"].get("folder_upload", {}).get("id") in folders
+                ]
+        else:
+            rows = [row for row in rows if row.get("archived") is not True]
+        return HistoryCursor(copy.deepcopy(rows))
+
+    def replace_one(self, query, document, **_kwargs):
+        self.rows[query["_id"]] = copy.deepcopy(document)
+
+    def delete_one(self, query):
+        self.rows.pop(query["_id"], None)
+
+
+@pytest.fixture(params=["memory", "sqlite", "mongo"])
+def task_registry(request, tmp_path):
+    registry = TransferRegistry(
+        database_path=tmp_path / "tasks.sqlite3" if request.param == "sqlite" else None,
+        mongo=HistoryMongo() if request.param == "mongo" else None,
+        ttl_seconds=1,
+    )
+    try:
+        yield registry
+    finally:
+        registry.close()
+
+
+def folder_metadata(identity="folder-session-0001", name="Holiday photos", created=1000):
+    return {
+        "id": identity,
+        "name": name,
+        "root_path": "/prepared-folder",
+        "created_at": created,
+    }
+
+
+async def test_numbered_pages_count_folders_once_and_keep_every_member(task_registry):
+    registry = task_registry
+    folder = folder_metadata()
+    children = [
+        add(
+            registry,
+            f"image-{index}.jpg",
+            TransferStatus.COMPLETED,
+            identity=f"image-{index}",
+            created=1000 + index,
+            folder_upload=folder,
+        ).id
+        for index in range(72)
+    ]
+    registry.prune(now=time.time() + 2)
+    for index in range(21):
+        add(
+            registry,
+            f"separate-{index}.bin",
+            TransferStatus.COMPLETED,
+            created=2000 + index,
+            kind="remote" if index % 2 else "upload",
+        )
+    first = await registry.task_history(status="finished", page=1, limit=20)
+    assert first["total_tasks"] == 22
+    assert first["total_pages"] == 2
+    assert len(first["jobs"]) == 20
+    assert first["has_more"]
+    second = await registry.task_history(status="finished", page=2, limit=20)
+    assert len(second["jobs"]) == 73
+    assert {row["id"] for row in second["jobs"] if row.get("folder_upload")} == set(
+        children
+    )
+    assert not second["has_more"]
+    assert second["page"] == 2
+    assert (await registry.task_history(page=99, limit=20))["page"] == 2
+
+
+async def test_task_status_and_search_apply_before_pagination_across_live_archive(
+    task_registry,
+):
+    registry = task_registry
+    folder = folder_metadata(name="Résumé [.*] album")
+    for index in range(3):
+        add(
+            registry,
+            f"photo-{index}.jpg",
+            TransferStatus.COMPLETED,
+            folder_upload=folder,
+        )
+    registry.prune(now=time.time() + 2)
+    running = add(
+        registry,
+        "special-child.jpg",
+        TransferStatus.RUNNING,
+        created=1100,
+        folder_upload=folder,
+    )
+    add(registry, "standalone.bin", TransferStatus.COMPLETED, created=1200)
+    finished = await registry.task_history(status="finished", limit=1)
+    assert finished["total_tasks"] == 1
+    assert [row["name"] for row in finished["jobs"]] == ["standalone.bin"]
+    for term in ["RÉSUMÉ [.*]", "special-child"]:
+        matching = await registry.task_history(status="running", query=term, limit=1)
+        assert matching["total_tasks"] == 1
+        assert len(matching["jobs"]) == 4
+    registry.update(running.id, status=TransferStatus.COMPLETED)
+    assert (await registry.task_history(status="running"))["jobs"] == []
+    assert (await registry.task_history(status="finished"))["total_tasks"] == 2
+
+
+async def test_legacy_folder_hints_are_ephemeral_and_durable_metadata_wins(task_registry):
+    registry = task_registry
+    legacy = [
+        add(registry, f"legacy-{index}", TransferStatus.COMPLETED).id
+        for index in range(3)
+    ]
+    registry.prune(now=time.time() + 2)
+    durable = folder_metadata("durable-folder-0001", created=1200)
+    recent = add(
+        registry, "durable-child", TransferStatus.COMPLETED, folder_upload=durable
+    )
+    hint = folder_metadata("legacy-folder-0001", created=1100)
+    hints = [{"folder_upload": hint, "transfer_ids": [*legacy, recent.id]}]
+    page = await registry.task_history(limit=1, page=2, folders=hints)
+    assert page["total_tasks"] == 2
+    assert {row["id"] for row in page["jobs"]} == set(legacy)
+    assert all(row["folder_upload"] == hint for row in page["jobs"])
+    newer = await registry.task_history(limit=1, folders=hints)
+    assert newer["jobs"][0]["folder_upload"] == durable
+    assert (await registry.task_history())["total_tasks"] == 4
+    excluded = await registry.task_history(folders=hints, exclude_folders=[hint["id"]])
+    assert excluded["total_tasks"] == 1
+    assert [row["id"] for row in excluded["jobs"]] == [recent.id]
+    offset = await registry.task_history(folders=hints, offset=1, limit=1)
+    assert {row["id"] for row in offset["jobs"]} == set(legacy)
+    assert offset["offset"] == 1 and offset["next_offset"] == 2
+
+
+async def test_folder_task_metadata_survives_sqlite_history_reopen(tmp_path):
+    path = tmp_path / "folder-history.sqlite3"
+    registry = TransferRegistry(database_path=path, ttl_seconds=1)
+    folder = folder_metadata()
+    for index in range(3):
+        add(registry, f"child-{index}", TransferStatus.COMPLETED, folder_upload=folder)
+    registry.prune(now=time.time() + 2)
+    registry.close()
+    reopened = TransferRegistry(database_path=path)
+    try:
+        page = await reopened.task_history(limit=1)
+        assert page["total_tasks"] == 1
+        assert len(page["jobs"]) == 3
+        assert all(row["folder_upload"] == folder for row in page["jobs"])
+        assert all(not row["retained"] for row in page["jobs"])
+    finally:
+        reopened.close()
+
+
+def test_task_history_http_hints_bounds_and_owner_boundary(tmp_path):
+    settings = make_settings(tmp_path)
+    store = DriveStore.create(tmp_path / "task-catalog.sqlite3")
+    runtime = FakeRuntime(store)
+    registry = runtime.transfers.registry
+    children = [
+        add(registry, str(index), TransferStatus.COMPLETED).id for index in range(3)
+    ]
+    route = "/api/v1/transfers/history/tasks"
+    payload = {
+        "status": "finished",
+        "page": 1,
+        "limit": 1,
+        "folders": [{"folder_upload": folder_metadata(), "transfer_ids": children}],
+    }
+    try:
+        with TestClient(
+            create_app(settings, runtime=runtime), base_url="https://testserver"
+        ) as client:
+            assert client.post(route, json=payload).status_code == 401
+            login(client)
+            response = client.post(route, json=payload)
+            assert response.status_code == 200
+            assert response.headers["cache-control"] == "no-store"
+            assert response.json()["total_tasks"] == 1
+            assert len(response.json()["jobs"]) == 3
+            assert client.get("/api/v1/transfers/history", params={"page": 1}).json()[
+                "total_tasks"
+            ] == 3
+            assert client.post(route, json=payload | {"offset": -1}).status_code == 422
+            assert client.post(route, json=payload | {"page": 0}).status_code == 422
+            oversized = payload | {
+                "folders": [
+                    {"folder_upload": folder_metadata(), "transfer_ids": ["a"] * 2000},
+                    {"folder_upload": folder_metadata(), "transfer_ids": ["b"]},
+                ]
+            }
+            assert client.post(route, json=oversized).status_code == 422
+            large_hints = payload | {
+                "folders": [
+                    {
+                        "folder_upload": folder_metadata(),
+                        "transfer_ids": ["x" * 128] * 1000,
+                    }
+                ]
+            }
+            assert len(json.dumps(large_hints)) > 65536
+            assert client.post(route, json=large_hints).status_code == 200
+            assert client.post(route, content=b"x" * (256 * 1024 + 1)).status_code == 413
+            assert (
+                client.get(
+                    "/api/v1/transfers/history",
+                    params={"page": 1, "before": 1000, "before_id": "safe"},
+                ).status_code
+                == 400
+            )
+    finally:
+        registry.close()
+        store.close()

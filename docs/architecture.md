@@ -177,6 +177,14 @@ payload reception with verification and durable job handoff without unbounded
 completion requests. Files retain their local source and tab-close protection
 until the server confirms a job identity.
 
+MongoDB receipt creation reserves staging on the event loop before a worker
+synchronizes the new file and commits its receipt. Other admissions see that
+reservation while persistence is pending, preventing competing admissions from
+overbooking storage. Disconnects drain that worker; an uncertain
+database acknowledgement retains the file and reservation until reconciliation
+or expiry. Other job lifecycle commits and database/network latency can still
+delay requests.
+
 Display follows a browser-wide device-first boundary: while any local upload
 still needs receipt, pending upload groups show device metrics or **Received**
 for accepted files, with Telegram metrics hidden. Once all remaining local files
@@ -252,6 +260,19 @@ See [deviceUploadConcurrency.ts](../website/src/deviceUploadConcurrency.ts).
 - HTTP 429 pauses new device admission globally; 507 defers only that file.
   Both retain source/offset and retry after at least five seconds or the longer
   `Retry-After`. The controller retains at most 2,000 unfinished batch rows.
+- Known device receipts retry network failures, HTTP 408/500/502/503/504 and
+  `UPLOAD_OFFSET_CHANGED` conflicts up to three times without further confirmed
+  byte progress. Delays are 2, 4 and 8 seconds, respecting a longer `Retry-After`.
+  Each retry checks the server offset and verifies the original file's confirmed
+  prefix; it also reconciles a lost completion response with the existing job.
+  Confirmed byte progress or a manual retry resets the retry budget. Other
+  conflicts, authentication failures and checksum mismatches need owner action.
+  Creation without a returned receipt ID is not replayed automatically.
+- Chunk requests time out after 60 seconds without increasing sent bytes or a
+  server response. Progress renews that interval, allowing slow transfers to
+  continue beyond 60 seconds in total. Resume HEAD and receipt JSON requests
+  have 60-second request deadlines. Retry requires the tab and local source;
+  closing the tab still requires reselecting the originals later.
 - Folder preparation creates an atomic, repeatable tree; its files then succeed
   or fail independently. Listing refreshes are coalesced without losing rows,
   selection, focus, pagination or scroll.
@@ -294,8 +315,24 @@ Resolved jobs stay in a paged history, separate from temporary browser popups.
 
 Resolved upload/import jobs become compact MongoDB summaries; terminal live jobs
 can expire. Archives enter full backups, omit private recovery context and cannot
-be retried as live jobs. The API merges live progress with indexed, cursor-paged
-archives without loading all history at startup. Dismissing a deletion popup does
+be retried as live jobs. Folder uploads carry one explicit identity through
+receipt, job and archive; ordinary files and URL imports retain separate task
+identities. Task status and search matching are determined before pagination,
+and every member of a selected folder is returned together. Completed children
+of a running folder do not become a separate finished task.
+
+The Transfers page shows 20 finished tasks per numbered page. Browser-owned
+finished tasks consume page slots before server history; an explicit server
+offset fills the remaining slots. Folder exclusions keep a partially received
+local folder out of server-only finished counts. Temporary grouping hints recover
+remembered older folders without rewriting their archive. Hints are bounded by
+request size, 1,000 groups and 2,000 member IDs; older groups without usable hints
+remain separate server records.
+
+Exact task totals scan archived summaries in batches on a worker, holding task
+summaries and the selected folders' members rather than every archived job.
+Numbered reads are O(history size); the legacy indexed cursor API remains
+available. Startup does not load the full archive. Dismissing a deletion popup does
 not clear history; deletion notices stay separate.
 
 Browser `initiatedHere` markers scope floating panels; global history includes
@@ -313,7 +350,10 @@ authenticate before origin/cache access. Logical ranges cross part boundaries;
 complete parts verify checksums, partial reads verify identity/size. Expired
 references refresh from stored messages with bounded retries. Disconnect/failure
 closes iterators and leases; missing media or failures after headers can interrupt
-responses.
+responses. Successful finite playback ranges retain a logical viewer for up to
+5 seconds to bridge to the next request. Abort or expiry stops owned partial
+background warming; the existing byte and capacity bounds still apply. Every
+new HTTP request reauthorizes and validates metadata before reusing server blocks.
 
 ## Media and performance
 
@@ -328,7 +368,10 @@ acceleration, never catalog commits or backups. Authorization precedes cached
 bytes and is rechecked before future shared-stream blocks; revocation cannot
 recall bytes already sent.
 
-Movi's requested 32 MiB source buffer is not a decoder-memory cap. The custom
+The player's compressed source buffer grows toward a time goal within a device
+memory budget; see the [browser buffer policy](performance.md#browser-playback-buffer).
+Growth preserves downloaded bytes. This source budget is not a decoder-memory
+cap. The custom
 player handles loading/errors, local styles, tracks, chapters and source changes;
 its buffered time estimates differ from server cache coverage. Neither extra
 bots nor a cache guarantees codec/device playback speed.

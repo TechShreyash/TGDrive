@@ -91,10 +91,15 @@
 }
 .advanced-state-buffering .advanced-state-content {
   width: fit-content;
-  max-width: min(100%, 420px);
-  padding: 8px 12px;
-  border-radius: 6px;
-  background: rgb(0 0 0 / 82%);
+  max-width: 100%;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  gap: 4px 12px;
+  padding: 4px 10px;
+  border-radius: 4px;
+  background: rgb(0 0 0 / 68%);
 }
 .advanced-wait-label {
   display: flex;
@@ -111,9 +116,28 @@
 .advanced-wait-label svg {
   animation: advanced-loading 1s linear infinite;
 }
-.advanced-state-buffering .advanced-wait-help {
-  margin-top: 6px;
-  font-size: 13px;
+.advanced-transfer {
+  margin-top: 0;
+  color: #d5d8de;
+  font-size: 12px;
+  line-height: 1.5;
+  font-variant-numeric: tabular-nums;
+}
+.advanced-transfer-network {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 2px 14px;
+}
+.advanced-state-buffering .advanced-state-actions {
+  margin: 0;
+}
+.advanced-state-buffering .advanced-state-actions button {
+  min-height: 36px;
+  padding: 4px 6px;
+  border: 0;
+  background: transparent;
+  font-size: 12px;
 }
 .advanced-state-error .advanced-state-content {
   max-height: 100%;

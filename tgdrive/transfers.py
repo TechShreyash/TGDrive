@@ -448,6 +448,7 @@ class TransferManager:
         size: int,
         *,
         transfer_id: str | None = None,
+        folder_upload: dict[str, Any] | None = None,
     ) -> TransferRecord:
         if self._check_upload_allowed is not None:
             self._check_upload_allowed()
@@ -464,6 +465,8 @@ class TransferManager:
             name=file_name,
             size=size,
         )
+        if folder_upload is not None:
+            record.context["folder_upload"] = dict(folder_upload)
         self.registry.persist(record)
         self.registry.spawn(
             record.id,

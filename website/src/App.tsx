@@ -45,7 +45,8 @@ import {
   type Directory,
   type View,
 } from "./types";
-import { transfers, type Transfer } from "./transfers";
+import { transfers, transferBatchId, type Transfer } from "./transfers";
+import { transferFolderDestination } from "./transferTasks";
 import { needsDeviceUpload } from "./deviceUploadStatus";
 import {
   createListingRefreshQueue,
@@ -401,9 +402,11 @@ export default function App() {
     transfers.subscribe,
     transfers.deletionSnapshot,
   );
-  const activeCount = items.filter(
-    (item) => !["completed", "error", "cancelled"].includes(item.state),
-  ).length;
+  const activeCount = new Set(
+    items
+      .filter((item) => !["completed", "error", "cancelled"].includes(item.state))
+      .map(transferBatchId),
+  ).size;
   const mobileUploadIssues = items.some(
     (item) =>
       item.initiatedHere && ["error", "awaiting_file"].includes(item.state),
@@ -958,12 +961,9 @@ export default function App() {
   const locateTransfer = async (item: Transfer, folder = false) => {
     if (item.state !== "completed") return;
     try {
-      let destination = item.destination;
-      if (folder && item.relativePath) {
-        const depth = item.relativePath.split("/").length - 2;
-        for (let index = 0; index < depth; index++)
-          destination = destination.replace(/\/?[^/]+$/, "") || "/";
-      }
+      const destination = folder
+        ? transferFolderDestination(item)
+        : item.destination;
       const target = await api.transferLocation(
         folder ? undefined : item.jobId,
         destination,

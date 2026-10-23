@@ -397,7 +397,7 @@ describe("visible device receipt feedback", () => {
     expect(accepted).not.toContain("Uploading from device");
   });
 
-  it("counts unfinished files in Running while keeping the folder's total", () => {
+  it("counts a running folder as one task while keeping its file total", () => {
     const html = render([
       local({
         batchId: "folder",
@@ -414,5 +414,122 @@ describe("visible device receipt feedback", () => {
     ]);
     expect(html).toMatch(/Running<span>1<\/span>/);
     expect(html).toContain("2 files");
+  });
+
+  it("renders files from one ordinary selection as separate tasks", () => {
+    const selected = ["First.jpg", "Second.jpg", "Third.jpg"].map(
+      (name, index) =>
+        local({
+          key: "selected-" + index,
+          batchId: "old-shared-selection",
+          batchName: "3 files",
+          name,
+          state: "receiving",
+        }),
+    );
+    const html = render(selected);
+    expect(html).toContain("3 transfers shown");
+    expect(html).toMatch(/Running<span>3<\/span>/);
+    expect(html.match(/class="transfer-item"/g)).toHaveLength(3);
+    expect(html).not.toContain('class="transfer-batch"');
+    expect(html).not.toContain('aria-label="Show Files"');
+    for (const item of selected) expect(html).toContain(item.name);
+    expect(render(selected, false)).toContain("3 uploads in progress");
+  });
+
+  it("counts a 72-file folder and two ordinary files as three tasks", () => {
+    const folder = Array.from({ length: 72 }, (_, index) =>
+      local({
+        key: "folder-" + index,
+        name: index + ".jpg",
+        batchId: "folder",
+        batchName: "Pictures",
+        relativePath: "Pictures/" + index + ".jpg",
+        state: "receiving",
+      }),
+    );
+    const ordinary = ["First.jpg", "Second.jpg"].map((name, index) =>
+      local({
+        key: "ordinary-" + index,
+        batchId: "selection",
+        name,
+        state: "receiving",
+      }),
+    );
+    const html = render([...folder, ...ordinary]);
+    expect(html).toContain("3 transfers shown");
+    expect(html).toMatch(/Running<span>3<\/span>/);
+    expect(html.match(/class="transfer-batch"/g)).toHaveLength(1);
+    expect(html.match(/class="transfer-item"/g)).toHaveLength(2);
+    expect(html).toContain("72 files");
+  });
+
+  it("keeps a one-file folder grouped using server folder metadata alone", () => {
+    const html = render([
+      local({
+        folderUpload: {
+          id: "folder-task",
+          name: "Pictures",
+          root_path: "/Pictures",
+          created_at: 1,
+        },
+        state: "receiving",
+      }),
+    ]);
+    expect(html).toContain('class="transfer-batch"');
+    expect(html).toContain('data-folder="true"');
+    expect(html).toContain('aria-label="Show Files"');
+    expect(html).toContain("Pictures");
+    expect(html).toContain("1 file");
+    expect(html).toMatch(/Running<span>1<\/span>/);
+  });
+
+  it("uses the uploaded folder root for a nested server history member", () => {
+    const html = render([
+      local({
+        folderUpload: {
+          id: "folder-task",
+          name: "Pictures",
+          root_path: "/Pictures",
+          created_at: 1,
+        },
+        destination: "/Pictures/Nested",
+        state: "completed",
+        jobId: "server-file",
+        historyOnly: true,
+        location: {
+          available: true,
+          folder_label: "My Files / Pictures / Nested",
+          folder_path: "/Pictures/Nested",
+        },
+      }),
+    ]);
+    expect(html).toContain('title="My Files / Pictures"');
+    expect(html).not.toContain('title="My Files / Pictures / Nested"');
+  });
+
+  it("counts finished folders and ordinary files by task", () => {
+    const items = [
+      local({
+        batchId: "folder",
+        relativePath: "Pictures/Photo.jpg",
+        state: "completed",
+        jobId: "first",
+      }),
+      local({
+        key: "folder-second",
+        batchId: "folder",
+        relativePath: "Pictures/Second.jpg",
+        state: "completed",
+        jobId: "second",
+      }),
+      local({
+        key: "ordinary",
+        name: "Readme.txt",
+        state: "completed",
+        jobId: "third",
+      }),
+    ];
+    expect(render(items)).toMatch(/Finished<span>2<\/span>/);
   });
 });

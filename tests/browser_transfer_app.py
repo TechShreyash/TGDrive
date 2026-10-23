@@ -198,11 +198,14 @@ class FixtureTransfers:
         size: int,
         *,
         transfer_id: str | None = None,
+        folder_upload: dict[str, Any] | None = None,
     ) -> TransferRecord:
         record = self.registry.create("queued", total=size, transfer_id=transfer_id)
         if record.task is not None or record.terminal:
             return record
         record.context.update(kind="upload", name=file_name, destination=destination)
+        if folder_upload is not None:
+            record.context["folder_upload"] = dict(folder_upload)
         self._start(record, file_name, destination, local_path.read_bytes())
         return record
 

@@ -1059,17 +1059,16 @@ def test_v1_chunk_receipt_requires_owner_and_durable_offsets(app_client):
             "sha256": hashlib.sha256(b"abc").hexdigest(),
         }
     ]
-    assert (
-        client.patch(
-            address,
-            content=b"abc",
-            headers={
-                "Content-Type": "application/octet-stream",
-                "Upload-Offset": "0",
-            },
-        ).status_code
-        == 409
+    conflict = client.patch(
+        address,
+        content=b"abc",
+        headers={
+            "Content-Type": "application/octet-stream",
+            "Upload-Offset": "0",
+        },
     )
+    assert conflict.status_code == 409
+    assert conflict.json()["code"] == "UPLOAD_OFFSET_CHANGED"
 
 
 def test_v1_move_to_shared_folder_requires_confirmed_exposure(app_client):

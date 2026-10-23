@@ -1054,3 +1054,105 @@ async def test_ahead_owner_leaving_cancels_work_while_another_viewer_remains(tmp
     finally:
         await manager.close()
         await pool.stop()
+
+
+@pytest.mark.asyncio
+async def test_completed_range_grace_expires_and_cancels_unfinished_ahead(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setattr("tgdrive.preloading.PLAYBACK_RANGE_GRACE_SECONDS", 0.03)
+    gate = asyncio.Event()
+    manager, pool, client = await manager_for(
+        tmp_path, b"x" * (16 * BLOCK), gate, auto_preload=True
+    )
+    try:
+        identity = manager.observe(
+            channel_id=CHANNEL, message_id=77, size=16 * BLOCK, request_id="player"
+        )
+        manager.begin(identity, "player")
+        for index in range(4):
+            manager.delivered(
+                channel_id=CHANNEL,
+                message_id=77,
+                offset=index * BLOCK,
+                length=BLOCK,
+                request_id="player",
+            )
+        manager.finished(identity, "player", completed=True)
+        for _ in range(100):
+            if manager._jobs:
+                break
+            await asyncio.sleep(0.001)
+        job = next(iter(manager._jobs.values()))
+        assert manager._viewer_timers
+        for _ in range(100):
+            if job["state"] == "cancelled":
+                break
+            await asyncio.sleep(0.001)
+        assert job["state"] == "cancelled"
+        viewer = manager._observed[identity]["viewers"]["player"]
+        assert viewer["active"] == 0 and viewer["warm_until"] == 0
+        assert not manager._viewer_timers
+        assert not manager.cache.memory.flights and not client.native.active
+    finally:
+        await manager.close()
+        await pool.stop()
+
+
+@pytest.mark.asyncio
+async def test_new_player_request_abort_revokes_completed_range_grace_immediately(
+    tmp_path,
+):
+    gate = asyncio.Event()
+    manager, pool, _client = await manager_for(
+        tmp_path, b"x" * (16 * BLOCK), gate, auto_preload=True
+    )
+    try:
+        identity = manager.observe(
+            channel_id=CHANNEL, message_id=77, size=16 * BLOCK, request_id="player"
+        )
+        manager.begin(identity, "player")
+        for index in range(4):
+            manager.delivered(
+                channel_id=CHANNEL,
+                message_id=77,
+                offset=index * BLOCK,
+                length=BLOCK,
+                request_id="player",
+            )
+        manager.finished(identity, "player", completed=True)
+        for _ in range(100):
+            if manager._jobs:
+                break
+            await asyncio.sleep(0.001)
+        job = next(iter(manager._jobs.values()))
+        manager.begin(identity, "player")
+        manager.finished(identity, "player")
+        task = manager._tasks.get(job["id"])
+        if task is not None:
+            await asyncio.gather(task, return_exceptions=True)
+        assert job["state"] == "cancelled"
+        assert not manager._viewer_timers
+        assert not manager._viewer_active(
+            manager._observed[identity]["viewers"]["player"]
+        )
+    finally:
+        await manager.close()
+        await pool.stop()
+
+
+@pytest.mark.asyncio
+async def test_cache_shutdown_disposes_completed_player_range_timers(tmp_path):
+    manager, pool, _client = await manager_for(tmp_path, b"", auto_preload=True)
+    try:
+        identity = manager.observe(channel_id=CHANNEL, message_id=77, size=BLOCK)
+        manager.begin(identity, None)
+        manager.finished(identity, None, completed=True)
+        timers = list(manager._viewer_timers.values())
+        assert timers and all(not timer.cancelled() for timer in timers)
+        await manager.close()
+        assert not manager._viewer_timers
+        assert all(timer.cancelled() for timer in timers)
+    finally:
+        await manager.close()
+        await pool.stop()

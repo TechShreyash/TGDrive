@@ -13,6 +13,8 @@ import type {
   Share,
   UploadSnapshot,
   TransferHistoryPage,
+  TransferTaskHistoryPage,
+  FolderUploadMetadata,
   TransferLocation,
 } from "./types";
 export class ApiError extends Error {
@@ -39,6 +41,7 @@ export async function request<T>(
   headers.set("Accept", "application/json");
   if (body !== undefined) headers.set("Content-Type", "application/json");
   let response: Response;
+  let text: string;
   try {
     response = await fetch(url, {
       credentials: "same-origin",
@@ -48,15 +51,21 @@ export async function request<T>(
       body: body === undefined ? options.body : JSON.stringify(body),
       signal: options.signal ?? AbortSignal.timeout(60000),
     });
+    text = await response.text();
   } catch (error) {
     if (error instanceof DOMException && error.name === "AbortError")
       throw error;
+    if (error instanceof DOMException && error.name === "TimeoutError")
+      throw new ApiError(
+        "TGDrive took too long to respond. Try again.",
+        408,
+        "REQUEST_TIMEOUT",
+      );
     throw new ApiError(
       "Could not reach TGDrive. Check your connection and try again.",
     );
   }
   let data: Record<string, unknown> = {};
-  const text = await response.text();
   try {
     if (text) data = JSON.parse(text);
   } catch {
@@ -106,6 +115,14 @@ export interface BotUploadSettings {
   available: boolean;
   enabled: boolean;
   settings_url: string | null;
+}
+export interface TransferHistoryContext {
+  folders?: {
+    folder_upload: FolderUploadMetadata;
+    transfer_ids: string[];
+  }[];
+  exclude_folders?: string[];
+  offset?: number;
 }
 export const api = {
   botUploadSettings: (signal?: AbortSignal) =>
@@ -341,6 +358,23 @@ export const api = {
       { signal },
     );
   },
+  transferTaskHistory: (
+    status: string,
+    page: number,
+    signal?: AbortSignal,
+    search = "",
+    context: TransferHistoryContext = {},
+  ) => {
+    return request<TransferTaskHistoryPage>(
+      "/api/v1/transfers/history/tasks",
+      { status, page, limit: 20, q: search, ...context },
+      {
+        signal: signal
+          ? AbortSignal.any([signal, AbortSignal.timeout(60000)])
+          : undefined,
+      },
+    );
+  },
   job: (id: string) =>
     request<Job>("/api/v1/jobs/" + encodeURIComponent(id), undefined, {
       cache: "no-store",
@@ -351,8 +385,18 @@ export const api = {
       {},
     ),
   }),
-  createUpload: (name: string, parent_id: string, total_size: number) =>
-    request<UploadSnapshot>("/api/v1/uploads", { name, parent_id, total_size }),
+  createUpload: (
+    name: string,
+    parent_id: string,
+    total_size: number,
+    folderUpload?: FolderUploadMetadata,
+  ) =>
+    request<UploadSnapshot>("/api/v1/uploads", {
+      name,
+      parent_id,
+      total_size,
+      ...(folderUpload ? { folder_upload: folderUpload } : {}),
+    }),
   upload: (id: string) =>
     request<UploadSnapshot>("/api/v1/uploads/" + encodeURIComponent(id)),
   cancelUpload: (id: string) =>

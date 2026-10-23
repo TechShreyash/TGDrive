@@ -56,7 +56,7 @@ async function runningUploads(count = 10, resumeFirstFile = false) {
   const receipt = (id: string) =>
     Response.json({
       id,
-      offset: 0,
+      offset: resumeFirstFile && id === "file-0.bin" ? 4 : 0,
       total_size: FILE_SIZE,
       chunk_size: FILE_SIZE,
       checksums:

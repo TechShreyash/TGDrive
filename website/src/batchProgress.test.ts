@@ -14,6 +14,7 @@ function item(key: string, overrides: Partial<Transfer> = {}): Transfer {
     lastModified: 0,
     destination: "/",
     batchId: "folder",
+    relativePath: "Folder/" + key + ".bin",
     state: "uploading",
     phase: "Queued for Telegram",
     stage: "queued",

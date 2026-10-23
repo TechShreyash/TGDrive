@@ -25,7 +25,11 @@ from tgdrive.demo_files import (
 )
 from tgdrive.errors import ValidationError as DriveValidationError
 from tgdrive.management_api import register_management_routes
-from tgdrive.schemas import FolderTreeRequest
+from tgdrive.schemas import (
+    FolderTreeRequest,
+    FolderUploadMetadata,
+    TransferTaskHistoryRequest,
+)
 from tgdrive.share_links import token_factory
 from tgdrive.store import MAX_NAME_LENGTH, MAX_SEARCH_OFFSET, FolderTreeConflictError
 from tgdrive.transfer_locations import enrich_locations, locate_transfer
@@ -44,6 +48,7 @@ class UploadCreate(BaseModel):
     name: str = Field(min_length=1, max_length=1024)
     parent_id: str = Field(default="/", max_length=4096)
     total_size: int = Field(gt=0)
+    folder_upload: FolderUploadMetadata | None = None
 
 
 class StarItem(BaseModel):
@@ -121,7 +126,7 @@ def register_routes(
     @app.exception_handler(UploadError)
     async def upload_error(_request: Request, exc: UploadError) -> JSONResponse:
         return JSONResponse(
-            {"detail": str(exc), "code": "UPLOAD_ERROR"}, status_code=exc.status
+            {"detail": str(exc), "code": exc.code}, status_code=exc.status
         )
 
     @app.get("/api/v1/session")
@@ -337,8 +342,13 @@ def register_routes(
             raise UploadError(
                 f"File exceeds the currently available {limit}-byte upload limit", 413
             )
-        return uploads(request).create(
-            payload.name, payload.parent_id, payload.total_size
+        return await uploads(request).create_async(
+            payload.name,
+            payload.parent_id,
+            payload.total_size,
+            folder_upload=(
+                payload.folder_upload.model_dump() if payload.folder_upload else None
+            ),
         )
 
     @app.get("/api/v1/uploads/{upload_id}", dependencies=admin)
@@ -433,15 +443,45 @@ def register_routes(
             default=None, min_length=1, max_length=128, pattern=r"^[A-Za-z0-9_-]+$"
         ),
         q: str = Query(default="", max_length=MAX_NAME_LENGTH),
+        page: int | None = Query(default=None, ge=1),
     ) -> dict[str, Any]:
         if (before is None) != (before_id is None):
             raise HTTPException(400, "Both history cursor fields are required")
+        if page is not None and before is not None:
+            raise HTTPException(400, "Use either a numbered page or a history cursor")
         response.headers["Cache-Control"] = "no-store"
-        result = await get_manager(request).registry.history(
-            status=status,
-            limit=limit,
-            before=(before, before_id) if before is not None else None,
-            query=q,
+        registry = get_manager(request).registry
+        if page is not None:
+            result = await registry.task_history(
+                status=status, limit=limit, page=page, query=q
+            )
+        else:
+            result = await registry.history(
+                status=status,
+                limit=limit,
+                before=(before, before_id) if before is not None else None,
+                query=q,
+            )
+        estimate = getattr(get_runtime(request).pool, "queue_estimate", None)
+        if callable(estimate):
+            for row in result["jobs"]:
+                row["queue"] = estimate(row["id"])
+        await asyncio.to_thread(enrich_locations, get_store(request), result["jobs"])
+        return result
+
+    @app.post("/api/v1/transfers/history/tasks", dependencies=admin)
+    async def transfer_task_history(
+        payload: TransferTaskHistoryRequest, request: Request, response: Response
+    ) -> dict[str, Any]:
+        response.headers["Cache-Control"] = "no-store"
+        result = await get_manager(request).registry.task_history(
+            status=payload.status,
+            page=payload.page,
+            limit=payload.limit,
+            query=payload.q,
+            offset=payload.offset,
+            folders=[hint.model_dump() for hint in payload.folders],
+            exclude_folders=payload.exclude_folders,
         )
         estimate = getattr(get_runtime(request).pool, "queue_estimate", None)
         if callable(estimate):

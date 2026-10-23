@@ -217,7 +217,7 @@ def finish_fixture_uploads(page: Any, server: Server, count: int):
 
 
 def row(page: Any, filename: str):
-    # Single files render directly; multi-file rows mount when their batch opens.
+    # Ordinary files render directly; folder children mount when their task opens.
     # Open each batch once; avoid toggling an already expanded group.
     expect(page.locator("#transfer-list")).to_be_visible()
     for toggle in page.locator("button.transfer-batch-toggle").all():
@@ -2223,13 +2223,19 @@ def test_folder_preparation_retries_response_loss_and_cancels_without_files(
             route.abort("aborted")
 
 
-def test_large_upload_batch_stays_compact_bounded_and_filterable(
-    server: Server, desktop: tuple[Any, Any]
+def test_large_folder_upload_stays_compact_bounded_and_filterable(
+    server: Server, desktop: tuple[Any, Any], tmp_path: Path
 ) -> None:
     _, page = desktop
     login(page, server.url)
     names = [f"batch-file-{number:03}.txt" for number in range(100)]
-    upload(page, names)
+    directory = tmp_path / "Batch files"
+    directory.mkdir()
+    for name in names:
+        (directory / name).write_bytes(b"x" * 65536)
+    dialog = select_folder(page, directory)
+    dialog.get_by_role("button", name="Upload", exact=True).click()
+    expect(dialog).not_to_be_visible()
     batch = page.locator(".transfer-batch")
     expect(batch).to_have_count(1)
     expect(batch).to_be_visible()
@@ -2285,7 +2291,7 @@ def test_large_upload_batch_stays_compact_bounded_and_filterable(
         page.wait_for_timeout(100)
     assert len(saved) == 100 and all(item["state"] == "cancelled" for item in saved)
     assert len({item["batchId"] for item in saved}) == 1
-    expect(batch.locator(".transfer-batch-name")).to_have_text("100 files")
+    expect(batch.locator(".transfer-batch-name")).to_have_text(directory.name)
     toggle.click()
     expect(batch.locator(".transfer-files-toolbar")).to_have_count(0)
     expect(batch.locator(".transfer-item")).to_have_count(20)
@@ -2293,7 +2299,8 @@ def test_large_upload_batch_stays_compact_bounded_and_filterable(
         item.get_attribute("data-status") == "cancelled"
         for item in batch.locator(".transfer-item").all()
     )
-    assert not any(item["name"] in names for item in fixture_nodes(page, server, "/"))
+    root = saved[0]["folderUpload"]["root_path"]
+    assert not any(item["name"] in names for item in fixture_nodes(page, server, root))
 
 
 def test_settings_backup_status_never_claims_unconfirmed_protection(
@@ -2722,15 +2729,16 @@ def test_queued_uploads_have_no_elapsed_speed_or_eta(
     )
     login(page, server.url)
     upload(page, ["waiting-one.bin", "waiting-two.bin"])
-    batch = page.locator(".transfer-batch")
-    expect(batch).to_have_count(1)
+    panel = page.locator("#transfer-dialog")
+    expect(panel.locator(".transfer-batch")).to_have_count(0)
+    expect(panel.locator(".transfer-item")).to_have_count(2)
     expect(
-        page.get_by_role("heading", name="1 upload waiting", exact=True)
+        page.get_by_role("heading", name="2 uploads waiting", exact=True)
     ).to_be_visible()
     page.wait_for_timeout(1200)
-    assert "Elapsed" not in batch.inner_text()
-    assert "remaining" not in batch.inner_text()
-    assert "/s" not in batch.inner_text()
+    assert "Elapsed" not in panel.inner_text()
+    assert "remaining" not in panel.inner_text()
+    assert "/s" not in panel.inner_text()
     assert server.control()["started"] == []
     saved = page.evaluate(
         "JSON.parse(localStorage.getItem('tgdrive.uploads.v2') || '[]')"
@@ -2739,15 +2747,14 @@ def test_queued_uploads_have_no_elapsed_speed_or_eta(
     assert all(
         item["state"] == "queued" and not item.get("startedAt") for item in saved
     )
-    batch.get_by_role("button", name="Show Files", exact=True).click()
-    expect(batch.locator(".transfer-item")).to_have_count(2)
-    assert "Elapsed" not in batch.inner_text()
-    expect(batch.locator("select")).to_have_count(0)
-    expect(batch.locator('[data-filter="active"]')).to_have_count(0)
-    expect(batch.locator('[data-filter="attention"]')).to_have_count(0)
+    expect(panel.get_by_role("button", name="Show Files", exact=True)).to_have_count(0)
+    assert "Elapsed" not in panel.inner_text()
+    expect(panel.locator("select")).to_have_count(0)
+    expect(panel.locator('[data-filter="active"]')).to_have_count(0)
+    expect(panel.locator('[data-filter="attention"]')).to_have_count(0)
     page.screenshot(path=ARTIFACTS / "queued-upload-no-elapsed.png", full_page=False)
     cancel_all(page)
-    expect(batch.locator(".transfer-item[data-status=cancelled]")).to_have_count(2)
+    expect(panel.locator(".transfer-item[data-status=cancelled]")).to_have_count(2)
 
 
 def test_settings_connection_changes_are_write_only_verified_and_restart_scoped(
@@ -3143,23 +3150,21 @@ def test_ui_polish_batched_visual_states(
     )
     page.reload()
     upload(page, ["waiting-one.bin", "waiting-two.bin", "waiting-three.bin"])
-    batch = page.locator(".transfer-batch")
-    expect(batch).to_have_count(1)
+    panel = page.locator("#transfer-dialog")
+    expect(panel.locator(".transfer-batch")).to_have_count(0)
+    expect(panel.locator(".transfer-item")).to_have_count(3)
     expect(
-        page.get_by_role("heading", name="1 upload waiting", exact=True)
+        page.get_by_role("heading", name="3 uploads waiting", exact=True)
     ).to_be_visible()
     capture("dark-transfer-queued")
-    batch.get_by_role("button", name="Show Files", exact=True).click()
-    expect(batch.locator(".transfer-item")).to_have_count(3)
+    expect(panel.get_by_role("button", name="Show Files", exact=True)).to_have_count(0)
     capture("dark-transfer-filters")
     page.set_viewport_size({"width": 390, "height": 844})
     capture("dark-transfer-mobile")
     expect(page.locator("#transfer-dialog")).to_have_count(0)
     page.set_viewport_size({"width": 1440, "height": 960})
     cancel_all(page)
-    if batch.get_by_role("button", name="Show Files", exact=True).count():
-        batch.get_by_role("button", name="Show Files", exact=True).click()
-    expect(batch.locator(".transfer-item[data-status=cancelled]")).to_have_count(3)
+    expect(panel.locator(".transfer-item[data-status=cancelled]")).to_have_count(3)
     page.unroute("**/api/v1/uploads")
     page.get_by_role("button", name="Clear Finished", exact=True).click()
     page.set_viewport_size({"width": 1440, "height": 960})
@@ -3321,17 +3326,15 @@ def test_transfer_progress_and_safe_panel_controls(
     fraction = 0
     upload(page, ["batch-first.bin", "batch-second.bin"])
     server.wait_started(3)
-    batch = page.locator(".transfer-batch")
-    expect(batch).to_have_count(1)
-    expect(batch.locator(".transfer-batch-metrics")).to_contain_text(
-        "0 B / 128 KB sent to Telegram"
-    )
+    expect(page.locator(".transfer-batch")).to_have_count(0)
+    for name in ("batch-first.bin", "batch-second.bin"):
+        expect(row(page, name).locator(".transfer-bytes")).to_have_text("0 B / 64 KB")
     fraction = 0.25
-    expect(batch.get_by_role("progressbar")).to_have_attribute("value", "0.25")
-    expect(batch.locator(".transfer-batch-metrics")).to_contain_text(
-        "32 / 128 KB sent to Telegram"
-    )
-    expect(batch.get_by_role("button", name="Show Files", exact=True)).to_be_visible()
+    for name in ("batch-first.bin", "batch-second.bin"):
+        item = row(page, name)
+        expect(item.get_by_role("progressbar")).to_have_attribute("value", "0.25")
+        expect(item.locator(".transfer-bytes")).to_have_text("16 / 64 KB")
+    expect(page.get_by_role("button", name="Show Files", exact=True)).to_have_count(0)
     page.screenshot(
         path=ARTIFACTS / "multi-transfer-telegram-bytes.png", full_page=True
     )
@@ -3382,25 +3385,25 @@ def test_transfer_history_filters_cleared_records_and_empty_state(
         history.get_by_role("heading", name="No Failed Transfers", exact=True)
     ).to_be_visible()
     filters.get_by_role("button", name="All", exact=True).click()
-    history.get_by_role("button", name="Show Files", exact=True).click()
+    expect(history.get_by_role("button", name="Show Files", exact=True)).to_have_count(0)
     expect(history.locator(".transfer-item-name")).to_have_count(2)
-    expect(history.locator(".transfer-item-name").first).to_have_text(
-        "history-first.bin"
-    )
+    expect(row(page, "history-first.bin")).to_be_visible()
+    expect(row(page, "history-second.bin")).to_be_visible()
     for route in held:
         route.continue_()
     page.unroute("**/api/v1/uploads/*", hold_first)
     finish_fixture_uploads(page, server, 2)
     filters.get_by_role("button", name="Successful", exact=True).click()
-    expect(history.locator(".transfer-batch-name")).to_have_text("2 files")
+    expect(history.locator(".transfer-batch")).to_have_count(0)
+    expect(history.locator(".transfer-item-name")).to_have_count(2)
     page.get_by_role("link", name="My Files", exact=True).click()
     expect(page.locator("#transfer-dialog")).to_have_count(0, timeout=10000)
 
     page.get_by_role("link", name="Transfers", exact=False).click()
     filters.get_by_role("button", name="Successful", exact=True).click()
-    history.get_by_role("button", name="Show Files", exact=True).click()
+    expect(history.get_by_role("button", name="Show Files", exact=True)).to_have_count(0)
     expect(history.locator(".transfer-item-name")).to_have_count(2)
-    expect(history.locator("time")).to_have_count(1)
+    expect(history.locator("time")).to_have_count(2)
     expect(
         history.get_by_role("button", name="Clear Finished", exact=True)
     ).to_have_count(0)
@@ -3423,6 +3426,102 @@ def test_transfer_history_filters_cleared_records_and_empty_state(
     expect(
         history.get_by_role("button", name="Upload Files", exact=True)
     ).to_have_count(0)
+
+
+def test_transfer_task_numbered_pages_keep_folder_intact(
+    server: Server, desktop: tuple[Any, Any]
+) -> None:
+    _, page = desktop
+    now = time.time()
+    metadata = {
+        "id": "explicit-folder-task-0001",
+        "name": "Uploaded folder",
+        "root_path": "/uploaded-folder",
+        "created_at": now,
+    }
+    members = [
+        {
+            "id": "folder-member-" + str(index),
+            "name": f"member-{index:02}.txt",
+            "kind": "upload",
+            "folder_upload": metadata,
+            "destination": metadata["root_path"],
+            "status": "completed",
+            "phase": "completed",
+            "current": 100,
+            "total": 100,
+            "created_at": now,
+            "finished_at": now,
+        }
+        for index in range(72)
+    ]
+    ordinary = [
+        {
+            "id": "ordinary-task-" + str(index),
+            "name": f"separate-{index:02}.txt",
+            "kind": "upload",
+            "destination": "/",
+            "status": "completed",
+            "phase": "completed",
+            "current": 100,
+            "total": 100,
+            "created_at": now - index - 1,
+            "finished_at": now,
+        }
+        for index in range(22)
+    ]
+    offsets = []
+
+    def history(route: Any) -> None:
+        payload = route.request.post_data_json
+        offset = payload.get("offset", 0)
+        offsets.append(offset)
+        assert offset in (0, 20)
+        route.fulfill(
+            json={
+                "jobs": members + ordinary[:19] if offset == 0 else ordinary[19:],
+                "page": payload["page"],
+                "page_size": 20,
+                "total_tasks": 23,
+                "total_pages": 2,
+                "has_more": offset == 0,
+            }
+        )
+
+    page.route("**/api/v1/transfers/history/tasks", history)
+    login(page, server.url)
+    page.get_by_role("link", name="Transfers", exact=False).click()
+    center = page.get_by_role("region", name="Transfer History", exact=True)
+    finished = center.locator('.transfer-category[data-category="finished"]')
+    folder = center.locator('[data-batch-id="explicit-folder-task-0001"]')
+    navigation = center.get_by_role("navigation", name="Finished transfer pages")
+    first = navigation.get_by_role(
+        "button", name="Page 1 of finished transfers", exact=True
+    )
+    second = navigation.get_by_role(
+        "button", name="Page 2 of finished transfers", exact=True
+    )
+    expect(finished.locator(".transfer-category-title > span")).to_have_text("20")
+    expect(folder.locator(".transfer-batch-count")).to_have_text("72 files")
+    expect(center.locator(".transfer-item")).to_have_count(19)
+    expect(first).to_have_attribute("aria-current", "page")
+    second.click()
+    expect(finished.locator(".transfer-category-title > span")).to_have_text("3")
+    expect(folder).to_have_count(0)
+    expect(center.locator(".transfer-item")).to_have_count(3)
+    expect(second).to_have_attribute("aria-current", "page")
+    assert 20 in offsets
+    first.click()
+    expect(first).to_have_attribute("aria-current", "page")
+    expect(finished.locator(".transfer-category-title > span")).to_have_text("20")
+    expect(folder.locator(".transfer-batch-count")).to_have_text("72 files")
+    folder.get_by_role("button", name="Show Files", exact=True).click()
+    expect(folder.locator(".transfer-item")).to_have_count(20)
+    for count in (40, 60, 72):
+        folder.locator("button.transfer-show-more").click()
+        expect(folder.locator(".transfer-item")).to_have_count(count)
+    expect(folder.locator("button.transfer-show-more")).to_have_count(0)
+    assert offsets[-1] == 0
 
 
 def test_upload_concurrency_setting_saves_and_survives_reload(
@@ -3539,13 +3638,15 @@ def test_transfer_columns_handle_long_names_paths_and_narrow_screens(
             }
         )
     page.route(
-        "**/api/v1/transfers/history?*",
+        "**/api/v1/transfers/history/tasks",
         lambda route: route.fulfill(
             json={
                 "jobs": jobs,
+                "page": 1,
+                "page_size": 20,
+                "total_tasks": len(jobs),
+                "total_pages": 1,
                 "has_more": False,
-                "next_before": None,
-                "next_before_id": None,
             }
         ),
     )
@@ -3682,7 +3783,7 @@ def test_original_file_recovery_action_is_inline_and_not_stacked(
         action.click()
 
 
-def test_compact_multi_file_and_folder_batch_headers(
+def test_ordinary_files_stay_separate_and_folder_headers_stay_compact(
     server: Server, desktop: tuple[Any, Any]
 ) -> None:
     _, page = desktop
@@ -3705,7 +3806,9 @@ def test_compact_multi_file_and_folder_batch_headers(
         for index in range(count):
             identity = batch_id + "-" + str(index)
             name = (
-                "Long filename " + "photo-" * 20 if folder else "document-" + str(index)
+                "Long filename " + "photo-" * 20
+                if folder
+                else batch_id + "-document-" + str(index)
             ) + ".txt"
             relative = (
                 batch_name + ("/nested/" if folder and index else "/") + name
@@ -3772,42 +3875,80 @@ def test_compact_multi_file_and_folder_batch_headers(
         + json.dumps(json.dumps(saved))
         + ");"
     )
-    page.route(
-        "**/api/v1/transfers/history?*",
-        lambda route: route.fulfill(
-            json={
-                "jobs": jobs,
-                "has_more": False,
-                "next_before": None,
-                "next_before_id": None,
+
+    def task_history(route: Any) -> None:
+        payload = route.request.post_data_json
+        hints = {
+            identity: hint["folder_upload"]
+            for hint in payload.get("folders", [])
+            for identity in hint["transfer_ids"]
+        }
+        rows = [
+            job | {"folder_upload": hints[job["id"]]}
+            if job["id"] in hints
+            else job
+            for job in jobs
+        ]
+        total = len(
+            {
+                ("folder", job["folder_upload"]["id"])
+                if job.get("folder_upload")
+                else ("file", job["id"])
+                for job in rows
             }
-        ),
-    )
+        )
+        route.fulfill(
+            json={
+                "jobs": rows,
+                "page": payload["page"],
+                "page_size": 20,
+                "total_tasks": total,
+                "total_pages": 1,
+                "has_more": False,
+            }
+        )
+
+    page.route("**/api/v1/transfers/history/tasks", task_history)
     login(page, server.url)
     page.get_by_role("link", name="Transfers", exact=False).click()
     history = page.get_by_role("region", name="Transfer History", exact=True)
-    multi = history.locator('[data-batch-id="six-files"]')
-    folder = history.locator('[data-batch-id="photos"]')
-    single_folder = history.locator('[data-batch-id="one-folder"]')
-    expect(multi).to_be_visible()
+    multi = history.locator(".transfer-item").filter(
+        has=page.locator(".transfer-item-name", has_text="six-files-document-")
+    )
+    folder = history.locator(".transfer-batch").filter(
+        has=page.locator(
+            ".transfer-batch-name", has_text="Photos from a long memorable holiday"
+        )
+    )
+    single_folder = history.locator(".transfer-batch").filter(
+        has=page.locator(".transfer-batch-name", has_text="Single document folder")
+    )
+    expect(multi).to_have_count(6)
+    expect(history.locator(".transfer-batch")).to_have_count(2)
     expect(folder.locator(".transfer-batch-count")).to_have_text("3 files")
     expect(single_folder.locator(".transfer-batch-count")).to_have_text("1 file")
     expect(multi.locator(".transfer-batch-status")).to_have_count(0)
-    expect(multi.locator(".transfer-batch-time")).to_be_visible()
+    expect(multi.locator(".transfer-history-time")).to_have_count(6)
     expect(
-        history.locator('[data-batch-id="running-files"] .transfer-batch-locate')
+        history.locator(".transfer-item")
+        .filter(
+            has=page.locator(".transfer-item-name", has_text="running-files-document-")
+        )
+        .locator(".transfer-item-actions .icon-button[title='Show in Folder']")
     ).to_have_count(0)
     expect(
-        history.locator('[data-batch-id="needs-files"]').get_by_role(
-            "button", name="Choose Files", exact=True
+        history.locator(".transfer-item")
+        .filter(
+            has=page.locator(".transfer-item-name", has_text="needs-files-document-")
         )
-    ).to_be_visible()
+        .get_by_role("button", name="Choose File", exact=True)
+    ).to_have_count(3)
     for width in (1920, 1440, 390, 320):
         page.set_viewport_size({"width": width, "height": 1000})
         page.emulate_media(color_scheme="dark" if width >= 1440 else "light")
         if width >= 1440:
             assert (
-                multi.locator(".transfer-batch-summary").bounding_box()["height"] <= 64
+                folder.locator(".transfer-batch-summary").bounding_box()["height"] <= 64
             )
         assert page.evaluate(
             "document.documentElement.scrollWidth <= window.innerWidth"
@@ -3839,11 +3980,8 @@ def test_compact_multi_file_and_folder_batch_headers(
     folder.get_by_role("button", name="Hide Files", exact=True).click()
     assert location_requests == []
     expect(page.get_by_role("heading", name="Transfers", exact=True)).to_be_visible()
-    multi.get_by_role("button", name="Show Files", exact=True).click()
-    expect(multi.locator(".transfer-item")).to_have_count(6)
-    expect(
-        multi.get_by_role("group", name="Files shown for 6 files", exact=True)
-    ).to_have_count(0)
+    expect(multi.get_by_role("button", name="Show Files", exact=True)).to_have_count(0)
+    expect(multi).to_have_count(6)
     folder.get_by_role("button", name="Show Files", exact=True).click()
     expect(folder.locator(".transfer-item")).to_have_count(3)
     expect(
@@ -4108,9 +4246,11 @@ def test_history_and_shares_failed_loads_have_retry_without_false_empty_state(
             route.fulfill(
                 json={
                     "jobs": [],
+                    "page": 1,
+                    "page_size": 20,
+                    "total_tasks": 0,
+                    "total_pages": 1,
                     "has_more": False,
-                    "next_before": None,
-                    "next_before_id": None,
                 }
             )
 
@@ -4122,7 +4262,7 @@ def test_history_and_shares_failed_loads_have_retry_without_false_empty_state(
         else:
             route.fulfill(json={"shares": []})
 
-    page.route("**/api/v1/transfers/history?*", history)
+    page.route("**/api/v1/transfers/history/tasks", history)
     page.route("**/api/v1/shares", shares)
     login(page, server.url)
     page.get_by_role("link", name="Transfers", exact=False).click()

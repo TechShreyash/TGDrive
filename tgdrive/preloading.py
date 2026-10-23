@@ -19,6 +19,8 @@ from tgdrive.media_policy import MediaCachePolicy
 from tgdrive.media_reader import BLOCK, MediaReadCache, stream_pooled_media
 from tgdrive.telegram_clients import _block_identity
 
+PLAYBACK_RANGE_GRACE_SECONDS = 5.0
+
 
 class PreloadCapacityError(ValueError):
     pass
@@ -50,6 +52,7 @@ class PreloadManager:
         self._tasks = {}
         self._observed = OrderedDict()
         self._auto_tasks = {}
+        self._viewer_timers = {}
         self._closed = False
         self._condition = asyncio.Condition()
         self._admission_lock = asyncio.Lock()
@@ -137,6 +140,7 @@ class PreloadManager:
             "authorize": None,
             "allow_full": True,
             "active": 0,
+            "warm_until": 0.0,
         }
 
     def _get_viewer(self, row, request_id):
@@ -159,27 +163,59 @@ class PreloadManager:
         for key, viewer in list(viewers.items()):
             if (
                 key != keep
-                and not viewer["active"]
+                and not self._viewer_active(viewer)
                 and (viewer.get("last_seen", 0) < cutoff or len(viewers) > 128)
             ):
                 viewers.pop(key)
+
+    def _viewer_active(self, viewer):
+        return bool(viewer["active"] or viewer["warm_until"] > self._clock())
+
+    def _cancel_viewer_timer(self, file_id, request_id):
+        timer = self._viewer_timers.pop((file_id, request_id), None)
+        if timer is not None:
+            timer.cancel()
+
+    def _expire_viewer(self, file_id, request_id):
+        self._viewer_timers.pop((file_id, request_id), None)
+        row = self._observed.get(file_id)
+        viewer = row["viewers"].get(request_id) if row is not None else None
+        if viewer is not None and not viewer["active"]:
+            viewer["warm_until"] = 0.0
+            self.finished(file_id, request_id)
 
     def begin(self, file_id, request_id):
         row = self._observed.get(file_id)
         if row is not None:
             viewer = self._get_viewer(row, request_id)
+            self._cancel_viewer_timer(file_id, request_id or "default")
+            viewer["warm_until"] = 0.0
             viewer["active"] += 1
+            return row
+        return None
 
-    def finished(self, file_id, request_id):
+    def finished(self, file_id, request_id, *, completed=False, observation=None):
         row = self._observed.get(file_id)
-        if row is None:
+        if row is None or (observation is not None and row is not observation):
             return
         viewer = row["viewers"].get(request_id or "default")
         if viewer is not None:
             viewer["active"] = max(0, viewer["active"] - 1)
             viewer["last_seen"] = self._clock()
+            if not viewer["active"]:
+                self._cancel_viewer_timer(file_id, request_id or "default")
+                viewer["warm_until"] = (
+                    self._clock() + PLAYBACK_RANGE_GRACE_SECONDS if completed else 0.0
+                )
+                if completed:
+                    # A completed finite HTTP range is not a closed player.
+                    # Retain only a short, bounded bridge to its next range.
+                    key = (file_id, request_id or "default")
+                    self._viewer_timers[key] = asyncio.get_running_loop().call_later(
+                        PLAYBACK_RANGE_GRACE_SECONDS, self._expire_viewer, *key
+                    )
         self._prune_viewers(row)
-        any_active = any(item["active"] for item in row["viewers"].values())
+        any_active = any(self._viewer_active(item) for item in row["viewers"].values())
         existing = self._existing(file_id)
         if (
             existing is not None
@@ -189,7 +225,7 @@ class PreloadManager:
                 not any_active
                 or (
                     existing.get("viewer_id") == (request_id or "default")
-                    and (viewer is None or not viewer["active"])
+                    and (viewer is None or not self._viewer_active(viewer))
                 )
             )
         ):
@@ -201,11 +237,22 @@ class PreloadManager:
             if task is not None:
                 task.cancel()
 
-    def delivered(self, *, channel_id, message_id, offset, length, request_id=None):
+    def delivered(
+        self,
+        *,
+        channel_id,
+        message_id,
+        offset,
+        length,
+        request_id=None,
+        observation=None,
+    ):
         if not self.policy.auto_preload or self._closed:
             return
         for identity, row in list(self._observed.items()):
-            if row["channel_id"] != channel_id:
+            if row["channel_id"] != channel_id or (
+                observation is not None and row is not observation
+            ):
                 continue
             logical_offset = offset
             if row["parts"]:
@@ -388,7 +435,8 @@ class PreloadManager:
             if not full and (
                 ahead < BLOCK
                 or current is None
-                or not any(viewer["active"] for viewer in current["viewers"].values())
+                or viewer is None
+                or not self._viewer_active(viewer)
             ):
                 return
             end = row["size"] if full else min(row["size"], start + ahead)
@@ -487,7 +535,7 @@ class PreloadManager:
                     if observation is not None
                     else None
                 )
-                if viewer is None or not viewer["active"]:
+                if viewer is None or not self._viewer_active(viewer):
                     # Its viewer can leave while admission waits for the lock,
                     # authorization or disk capacity. Hot whole-file work may
                     # outlive a viewer; speculative ahead work may not.
@@ -694,6 +742,9 @@ class PreloadManager:
         return dict(row)
 
     async def clear(self, file_id=None):
+        for identity, viewer in list(self._viewer_timers):
+            if file_id is None or identity == file_id:
+                self._cancel_viewer_timer(identity, viewer)
         if file_id is None:
             self._observed.clear()
         else:
@@ -712,6 +763,8 @@ class PreloadManager:
     async def reconfigure(self, policy):
         self.policy = policy
         if not policy.auto_preload:
+            for identity, viewer in list(self._viewer_timers):
+                self._cancel_viewer_timer(identity, viewer)
             self._observed.clear()
             for task in list(self._auto_tasks.values()):
                 task.cancel()
@@ -747,6 +800,8 @@ class PreloadManager:
 
     async def close(self):
         self._closed = True
+        for identity, viewer in list(self._viewer_timers):
+            self._cancel_viewer_timer(identity, viewer)
         tasks = list(self._auto_tasks.values()) + list(self._tasks.values())
         for task in tasks:
             task.cancel()

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Annotated
+from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, HttpUrl, model_validator
 
@@ -87,3 +87,49 @@ class FolderTreeRequest(BaseModel):
     client_request_id: str = Field(
         min_length=16, max_length=128, pattern=r"^[A-Za-z0-9_-]+$"
     )
+
+
+class FolderUploadMetadata(BaseModel):
+    """Stable identity for one explicitly selected device folder upload."""
+
+    model_config = ConfigDict(extra="forbid", strict=True)
+    id: str = Field(min_length=16, max_length=128, pattern=r"^[A-Za-z0-9_-]+$")
+    name: str = Field(min_length=1, max_length=255)
+    root_path: str = Field(min_length=2, max_length=4096, pattern=r"^/")
+    created_at: float = Field(ge=0, allow_inf_nan=False)
+
+
+TransferIdentity = Annotated[
+    str, Field(min_length=1, max_length=128, pattern=r"^[A-Za-z0-9_-]+$")
+]
+
+
+class TransferFolderHint(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    folder_upload: FolderUploadMetadata
+    transfer_ids: list[TransferIdentity] = Field(min_length=1, max_length=2000)
+
+
+class TransferTaskHistoryRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    status: Literal[
+        "all", "finished", "queued", "running", "completed", "error", "cancelled"
+    ] = "all"
+    page: int = Field(default=1, ge=1)
+    limit: int = Field(default=20, ge=1, le=200)
+    q: str = Field(default="", max_length=255)
+    offset: int | None = Field(default=None, ge=0)
+    folders: list[TransferFolderHint] = Field(default_factory=list, max_length=1000)
+    exclude_folders: list[TransferIdentity] = Field(default_factory=list, max_length=2000)
+
+    @model_validator(mode="after")
+    def bound_folder_members(self) -> TransferTaskHistoryRequest:
+        if sum(len(folder.transfer_ids) for folder in self.folders) > 2000:
+            raise ValueError("Folder hints support at most 2000 transfer IDs")
+        seen = {}
+        for hint in self.folders:
+            for identity in hint.transfer_ids:
+                previous = seen.setdefault(identity, hint.folder_upload.id)
+                if previous != hint.folder_upload.id:
+                    raise ValueError("A transfer can belong to only one folder hint")
+        return self

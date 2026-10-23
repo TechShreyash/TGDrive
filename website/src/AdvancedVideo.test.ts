@@ -186,6 +186,11 @@ describe("measured player buffer", () => {
       ],
       received: 4194304,
       bytesPerSecond: 524288,
+      measured: true,
+      decodedSeconds: 0,
+      deliveryWaiting: false,
+      decodeBound: false,
+      softwareDecoding: false,
     });
   });
   it("keeps source ranges as estimates without claiming decoded readiness", () => {
@@ -209,5 +214,30 @@ describe("measured player buffer", () => {
       [NaN, 3],
     ]);
     expect(result.ranges).toEqual([{ start: 40, end: 100 }]);
+  });
+  it("keeps network delivery separate from decoded pictures and unknown metrics", () => {
+    const result = videoBufferSnapshot({
+      duration: 100,
+      currentTime: 45,
+      buffered: { length: 1, start: () => 0, end: () => 100 },
+      player: {
+        getSource: () => ({
+          getNetworkStats: () => ({ totalBytes: NaN, currentSpeed: Infinity }),
+        }),
+        pictureRunwaySeconds: () => 0.75,
+        deliveryStarved: () => false,
+        isDecodeBound: () => true,
+        isSoftwareDecoding: () => true,
+      },
+    });
+    expect(result.ranges).toEqual([{ start: 0, end: 100 }]);
+    expect(result.measured).toBe(false);
+    expect(result.received).toBe(0);
+    expect(result.bytesPerSecond).toBe(0);
+    expect(result.decodedSeconds).toBe(0.75);
+    expect(result.decodeBound).toBe(true);
+    expect(result.softwareDecoding).toBe(true);
+    expect(result.deliveryWaiting).toBe(false);
+    expect(result).not.toHaveProperty("percent");
   });
 });

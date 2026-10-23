@@ -112,9 +112,9 @@ class ThumbnailCache:
         self.ttl = ttl
         self.missing_ttl = missing_ttl
         self.bytes = 0
-        self._entries: OrderedDict[tuple[Any, ...], tuple[float, Thumbnail | None]] = (
-            OrderedDict()
-        )
+        self._entries: OrderedDict[
+            tuple[Any, ...], tuple[float, Thumbnail | None, Any]
+        ] = OrderedDict()
         self._flights: dict[tuple[Any, ...], _Flight] = {}
         self._slots = asyncio.Semaphore(2)
         self._closed = False
@@ -123,14 +123,18 @@ class ThumbnailCache:
         self,
         key: tuple[Any, ...],
         load: Callable[[], Awaitable[Thumbnail | None]],
+        *,
+        missing_revision: Any = None,
     ) -> Thumbnail | None:
         if self._closed:
             raise ThumbnailBusy
         self._expire()
         cached = self._entries.get(key)
         if cached is not None:
-            self._entries.move_to_end(key)
-            return cached[1]
+            if cached[1] is not None or cached[2] == missing_revision:
+                self._entries.move_to_end(key)
+                return cached[1]
+            self._entries.pop(key)
         flight = self._flights.get(key)
         while flight is not None and flight.abandoned:
             await asyncio.gather(flight.task, return_exceptions=True)
@@ -142,7 +146,9 @@ class ThumbnailCache:
         if flight is None:
             if len(self._flights) >= self.max_pending:
                 raise ThumbnailBusy
-            flight = _Flight(asyncio.create_task(self._fill(key, load)))
+            flight = _Flight(
+                asyncio.create_task(self._fill(key, load, missing_revision))
+            )
             self._flights[key] = flight
         flight.waiters += 1
         try:
@@ -156,7 +162,7 @@ class ThumbnailCache:
             if flight.task.done() and self._flights.get(key) is flight:
                 self._flights.pop(key, None)
 
-    async def _fill(self, key, load):
+    async def _fill(self, key, load, missing_revision):
         try:
             async with asyncio.timeout(self.timeout):
                 async with self._slots:
@@ -172,16 +178,17 @@ class ThumbnailCache:
         self._entries[key] = (
             time.monotonic() + (self.ttl if result is not None else self.missing_ttl),
             result,
+            missing_revision,
         )
         self.bytes += len(result.content) if result is not None else 0
         while self.bytes > self.max_bytes or len(self._entries) > self.max_entries:
-            _key, (_deadline, value) = self._entries.popitem(last=False)
+            _key, (_deadline, value, _revision) = self._entries.popitem(last=False)
             self.bytes -= len(value.content) if value is not None else 0
         return result
 
     def _expire(self):
         now = time.monotonic()
-        for key, (deadline, value) in list(self._entries.items()):
+        for key, (deadline, value, _revision) in list(self._entries.items()):
             if deadline <= now:
                 del self._entries[key]
                 self.bytes -= len(value.content) if value is not None else 0

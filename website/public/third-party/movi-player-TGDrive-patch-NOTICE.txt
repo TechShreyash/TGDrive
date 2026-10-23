@@ -15,3 +15,21 @@ The exact version and original bundle SHA256 are checked by
 website/scripts/patch-movi-player.js. The patch is applied automatically before
 development, tests and production builds, including Docker builds. An unknown
 or changed bundle fails clearly instead of receiving an unreviewed patch.
+
+TGDrive additionally requires an active audio track before the shared-demux
+audio read-ahead branch can bypass video decoder backpressure (2026-10-23).
+Video-only previews retain the custom demux/decoder/canvas pipeline.
+
+TGDrive applies the configured HTTP cache budget before load and uses a bounded
+window up to that budget, instead of resizing populated buffers after load or
+selecting only 8% of medium-sized sources (2026-10-23).
+
+TGDrive separates compressed network read-ahead from decoded frame admission,
+targets 90 seconds within the configured byte cap, refills below 75% of that
+goal, and scales range requests to the goal. At EOF, hardware decoders drain
+pending output instead of taking the HEVC seek-recreation path (2026-10-23).
+
+The compressed source window grows toward its time goal within a device-derived
+memory ceiling. Growth preserves retained data and stream state; background
+writers refresh storage after awaited reads. Allocation failure retains the
+existing window and caps subsequent growth for the opening (2026-10-23).

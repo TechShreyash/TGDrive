@@ -7,6 +7,7 @@ import {
   TransferManager,
   retainTransferBatches,
   BROWSER_RECEIVE_INITIAL_CONCURRENCY,
+  transferBatchId,
   type Transfer,
 } from "./transfers";
 import {
@@ -581,7 +582,12 @@ describe("ambiguous completion and verification cancellation", () => {
     try {
       manager.setEnabled(true);
       manager.add([new File(["abcd"], "original.bin")], "/", 10);
-      await vi.waitFor(() => expect(manager.snapshot()[0].state).toBe("error"));
+      await vi.waitFor(() =>
+        expect(manager.snapshot()[0]).toMatchObject({
+          state: "queued",
+          stage: "retry_wait",
+        }),
+      );
       manager.setEnabled(false);
       manager.setEnabled(true);
       await vi.waitFor(() =>
@@ -695,12 +701,82 @@ it("opens the demo protection notice when a resumed upload chunk becomes read-on
 });
 
 describe("whole-batch recovery and bounded admission", () => {
-  it("retains completed siblings in an unfinished batch beyond the old hundred-row limit", () => {
+  it("gives every ordinary file a stable task identity before and after reload", () => {
     const manager = managerForTest();
     manager.add(
-      Array.from({ length: 150 }, (_, i) => new File(["x"], "file-" + i)),
+      [new File(["one"], "first.bin"), new File(["two"], "second.bin")],
       "/",
       10,
+    );
+    const original = manager.snapshot();
+    expect(original.map((item) => item.batchName)).toEqual([
+      "first.bin",
+      "second.bin",
+    ]);
+    expect(new Set(original.map(transferBatchId)).size).toBe(2);
+    const restored = managerForTest().snapshot();
+    expect(restored.map(transferBatchId)).toEqual(original.map(transferBatchId));
+    expect(restored.every((item) => !item.folderUpload)).toBe(true);
+  });
+  it("persists explicit folder task metadata and reads the same identity from server jobs", () => {
+    const folderUpload = {
+      id: "folder-upload-identity",
+      name: "Folder",
+      root_path: "/root",
+      created_at: 1000,
+    };
+    const manager = managerForTest();
+    manager.addEntries(
+      [
+        { file: new File(["one"], "first.bin"), destination: "/root" },
+        { file: new File(["two"], "second.bin"), destination: "/root" },
+      ],
+      10,
+      true,
+      { name: "Folder", folderUpload },
+    );
+    const restored = managerForTest().snapshot();
+    expect(
+      restored.every((item) => item.folderUpload?.id === folderUpload.id),
+    ).toBe(true);
+    expect(new Set(restored.map(transferBatchId))).toEqual(
+      new Set([folderUpload.id]),
+    );
+    const job = fromJob({
+      id: "server-member",
+      status: "queued",
+      phase: "queued",
+      current: 0,
+      total: 3,
+      folder_upload: folderUpload,
+    });
+    expect(job).toMatchObject({
+      folderUpload,
+      batchId: folderUpload.id,
+      batchName: folderUpload.name,
+      batchCreatedAt: 1_000_000,
+    });
+    expect(
+      fromJob({
+        id: "legacy-member",
+        status: "queued",
+        phase: "queued",
+        current: 0,
+        total: 3,
+      }),
+    ).not.toHaveProperty("folderUpload");
+  });
+  it("retains completed siblings in an unfinished batch beyond the old hundred-row limit", () => {
+    const manager = managerForTest();
+    manager.addEntries(
+      Array.from({ length: 150 }, (_, i) => ({
+        file: new File(["x"], "file-" + i),
+        relativePath: "Folder/file-" + i,
+        destination: "/",
+      })),
+      10,
+      true,
+      { name: "Folder" },
     );
     const original = manager.snapshot();
     for (const item of original.slice(0, -1)) {
@@ -725,6 +801,7 @@ describe("whole-batch recovery and bounded admission", () => {
           ({
             key: batch + "-" + index,
             batchId: "batch-" + batch,
+            relativePath: "Folder/file-" + index,
             name: "file",
             destination: "/",
             size: 1,
@@ -754,10 +831,15 @@ describe("whole-batch recovery and bounded admission", () => {
   });
   it("caps unfinished-batch rows at 2000 including retained completed siblings", () => {
     const manager = managerForTest();
-    manager.add(
-      Array.from({ length: 2000 }, (_, i) => new File(["x"], "" + i)),
-      "/",
+    manager.addEntries(
+      Array.from({ length: 2000 }, (_, i) => ({
+        file: new File(["x"], "" + i),
+        relativePath: "Folder/" + i,
+        destination: "/",
+      })),
       10,
+      true,
+      { name: "Folder" },
     );
     manager.snapshot()[0].state = "completed";
     expect(manager.canQueue(1)).toBe(false);
@@ -803,7 +885,7 @@ describe("whole-batch recovery and bounded admission", () => {
       1,
     );
   });
-  it("does not guess when ordinary bulk resume has ambiguous name/size/modified signatures", async () => {
+  it("resumes only the selected ordinary task when file signatures are identical", async () => {
     const manager = managerForTest();
     const source = new File(["same"], "same.txt", { lastModified: 42 });
     manager.add([source, source], "/", 10);
@@ -812,11 +894,11 @@ describe("whole-batch recovery and bounded admission", () => {
       reloaded.snapshot()[0].batchId!,
       [source],
     );
-    expect(result.matched).toBe(0);
-    expect(result.errors.length).toBeGreaterThan(0);
-    expect(
-      reloaded.snapshot().every((item) => item.state === "awaiting_file"),
-    ).toBe(true);
+    expect(result.matched).toBe(1);
+    expect(result.remaining).toBe(0);
+    expect(result.errors).toEqual([]);
+    expect(reloaded.snapshot()[0].state).toBe("queued");
+    expect(reloaded.snapshot()[1].state).toBe("awaiting_file");
   });
 });
 
@@ -865,7 +947,9 @@ describe("independent browser receiving and Telegram backlog", () => {
       manager.setEnabled(true);
       await vi.waitFor(() => expect(handoffs).toHaveLength(6));
       expect(
-        manager.snapshot().filter((item) => item.state === "error"),
+        manager
+          .snapshot()
+          .filter((item) => item.state === "queued" && item.stage === "retry_wait"),
       ).toHaveLength(2);
       expect(
         manager

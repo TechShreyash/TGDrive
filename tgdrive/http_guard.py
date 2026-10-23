@@ -66,6 +66,12 @@ class ApiBodyGuardMiddleware:
                 scope, receive, send, "Not authenticated", 401
             )
             return
+        body_limit = (
+            max(self.body_limit, 256 * 1024)
+            if path == "/api/v1/transfers/history/tasks"
+            and scope.get("method") == "POST"
+            else self.body_limit
+        )
         lengths = [
             value
             for key, value in scope.get("headers", [])
@@ -81,7 +87,7 @@ class ApiBodyGuardMiddleware:
                     scope, receive, send, "Invalid Content-Length", 400
                 )
                 return
-            if parsed[0] > self.body_limit:
+            if parsed[0] > body_limit:
                 await UploadGuardMiddleware._reject(
                     scope, receive, send, "API request body is too large", 413
                 )
@@ -95,7 +101,7 @@ class ApiBodyGuardMiddleware:
             message = await receive()
             if message["type"] == "http.request":
                 count += len(message.get("body", b""))
-                if count > self.body_limit:
+                if count > body_limit:
                     too_large = True
                     raise HTTPException(413, "API request body is too large")
             return message
