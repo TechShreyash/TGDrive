@@ -94,7 +94,25 @@ export interface UploadPreferences {
   connected_bots: number;
   bot_upload_slots: number;
 }
+export interface BotUploadSettings {
+  folder_path: string | null;
+  resolved_path: string | null;
+  folder_label: string;
+  available: boolean;
+  enabled: boolean;
+  settings_url: string | null;
+}
 export const api = {
+  botUploadSettings: (signal?: AbortSignal) =>
+    request<BotUploadSettings>("/api/v1/settings/bot-mode", undefined, {
+      signal,
+    }),
+  saveBotUploadSettings: (folder_path: string | null) =>
+    request<BotUploadSettings>(
+      "/api/v1/settings/bot-mode",
+      { folder_path, site_url: window.location.origin },
+      { method: "PATCH" },
+    ),
   starred: (q = "", signal?: AbortSignal) =>
     request<{ data: Directory; auth_home_path?: string }>(
       "/api/v1/starred?" + new URLSearchParams({ q }),

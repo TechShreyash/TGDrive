@@ -83,6 +83,7 @@ do not make a configuration file safe to publish.
 | `STORAGE_CHANNEL` | Required | Negative integer private channel ID. Confirmed catalogs bind to this channel; changing it is not relocation and can trigger RECOVERY_REQUIRED. Use the correct membership/permissions from [Telegram setup](setup.md#additional-bots-and-premium-accounts). |
 | `STRING_SESSIONS` | Empty by default, secret | Comma-separated Telethon StringSession credentials for optional Premium users. Sessions must already be authorized and identify Premium user accounts. |
 | `MAIN_BOT_TOKEN` | Omitted/empty by default, secret | Optional bot-mode token. A nonempty value requires TELEGRAM_ADMIN_IDS. |
+| `PUBLIC_URL` | Omitted/empty by default | Optional HTTP(S) website origin for the bot's `/set_folder` link. Otherwise the website address is remembered when saving its bot upload folder. |
 | `TELEGRAM_ADMIN_IDS` | Empty by default | Comma-separated positive numeric Telegram user IDs allowed to use bot mode. |
 | `DATABASE_BACKUP_MSG_ID` | None by default | Legacy positive checkpoint message ID; blank is accepted. Unused by MongoDB startup and restore-mongodb. |
 

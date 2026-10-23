@@ -15,10 +15,82 @@ from telethon.errors import (
     FilerefUpgradeNeededError,
 )
 
-from tgdrive.telegram_clients import Client
+from tgdrive.telegram_clients import Client, TelegramMessage
 
 MIB = 1024**2
 CHANNEL = -1001234567890
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "text,media,handler",
+    [
+        ("/start", False, "_help"),
+        ("Help", False, "_help"),
+        ("Choose folder", False, "_set_folder"),
+        ("/set_folder@mybot Projects", False, "_set_folder"),
+        ("/folders", False, "_set_folder"),
+        ("Current folder", False, "_current_folder"),
+        ("/cancel", False, "_cancel"),
+        ("Projects", False, "_folder_query"),
+        ("   ", False, "_folder_query"),
+        ("Choose folder", True, "_file"),
+        ("Help", True, "_file"),
+    ],
+)
+async def test_bot_transport_routes_menu_commands_and_media_captions(
+    text, media, handler
+):
+    native = SimpleNamespace(add_event_handler=Mock())
+    client = transport_client(native)
+    handlers = {
+        name: AsyncMock()
+        for name in (
+            "_help",
+            "_set_folder",
+            "_current_folder",
+            "_cancel",
+            "_folder_query",
+            "_file",
+        )
+    }
+    mode = SimpleNamespace(
+        settings=SimpleNamespace(telegram_admin_ids=(1,)), **handlers
+    )
+    client.register_bot(mode)
+    dispatch = native.add_event_handler.call_args_list[0].args[0]
+    message = native_message()
+    message.raw_text = text
+    if not media:
+        message.file = None
+    event = SimpleNamespace(is_private=True, sender_id=1, message=message)
+    await dispatch(event)
+    handlers[handler].assert_awaited_once()
+    assert sum(item.await_count for item in handlers.values()) == 1
+
+    for private, sender in [(False, 1), (True, 999)]:
+        event.is_private, event.sender_id = private, sender
+        await dispatch(event)
+    assert sum(item.await_count for item in handlers.values()) == 1
+
+
+@pytest.mark.asyncio
+async def test_bot_transport_returns_editable_replies_and_preserves_literal_text():
+    sent = native_message()
+    sent.edit = AsyncMock()
+    original = native_message()
+    original.reply = AsyncMock(return_value=sent)
+    client = transport_client(SimpleNamespace())
+    message = TelegramMessage(client, original)
+    reply = await message.reply_text("Saving <file>…", reply_markup="menu")
+    assert isinstance(reply, TelegramMessage)
+    original.reply.assert_awaited_once_with(
+        "Saving <file>…", buttons="menu", parse_mode=None
+    )
+    await reply.edit_text("Saved <file>", reply_markup="new buttons")
+    sent.edit.assert_awaited_once_with(
+        "Saved <file>", buttons="new buttons", parse_mode=None
+    )
 
 
 def native_message(message_id: int = 77) -> Any:

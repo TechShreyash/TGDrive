@@ -85,6 +85,15 @@ class Settings(BaseSettings):
         default=SecretStr(""), alias="STRING_SESSIONS"
     )
     main_bot_token: SecretStr | None = Field(default=None, alias="MAIN_BOT_TOKEN")
+    public_url: str | None = Field(default=None, alias="PUBLIC_URL")
+
+    @field_validator("public_url")
+    @classmethod
+    def valid_public_url(cls, value):
+        from tgdrive.bot_settings import BotUploadPreferences
+
+        return BotUploadPreferences(site_url=value).site_url if value else None
+
     telegram_admin_ids_csv: str = Field(default="", alias="TELEGRAM_ADMIN_IDS")
 
     database_backup_time: int = Field(

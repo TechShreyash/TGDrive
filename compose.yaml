@@ -17,6 +17,9 @@ services:
       API_HASH: ${API_HASH:?Set API_HASH}
       BOT_TOKENS: ${BOT_TOKENS:?Set BOT_TOKENS}
       STORAGE_CHANNEL: ${STORAGE_CHANNEL:?Set STORAGE_CHANNEL}
+      MAIN_BOT_TOKEN: ${MAIN_BOT_TOKEN:-}
+      PUBLIC_URL: ${PUBLIC_URL:-}
+      TELEGRAM_ADMIN_IDS: ${TELEGRAM_ADMIN_IDS:-}
       # Required for a new drive; existing drives can reuse their saved hash.
       ADMIN_PASSWORD: ${ADMIN_PASSWORD:-}
       DATA_DIR: /app/data

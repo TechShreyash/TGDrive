@@ -62,6 +62,7 @@ import FolderUpload from "./FolderUpload";
 import DeletionNotice from "./DeletionNotice";
 import SidebarLogout from "./SidebarLogout";
 import ChannelBackup from "./ChannelBackup";
+import BotModeSettings from "./BotModeSettings";
 function getLocation() {
   const url = new URL(window.location.href);
   let path = url.searchParams.get("path") || "/";
@@ -1638,7 +1639,12 @@ export default function App() {
                     ? "regional"
                     : "cache"
               }
-              uploadPreferences={<UploadSettings />}
+              uploadPreferences={
+                <>
+                  <UploadSettings />
+                  <BotModeSettings />
+                </>
+              }
               onSaved={(value) => {
                 setTimezone(value.timezone);
                 void api

@@ -9,6 +9,7 @@ from pathlib import Path
 
 from tgdrive.backup import RecoveryConflict, TelegramBackupService
 from tgdrive.bot_mode import BotMode
+from tgdrive.bot_settings import get_bot_settings
 from tgdrive.client_pool import ClientPool
 from tgdrive.config import Settings
 from tgdrive.remote import RemoteClient, RemoteTimeouts
@@ -223,6 +224,7 @@ class Runtime:
                     client=bot_client,
                     settings=self.settings,
                     store=self.store,
+                    folder_settings=get_bot_settings(self.settings, self),
                     before_write=self._check_upload_allowed,
                     before_delete=lambda: self.backup.verify_lineage(self.store),
                 )
@@ -270,6 +272,7 @@ class Runtime:
                             client=client,
                             settings=self.settings,
                             store=self.store,
+                            folder_settings=get_bot_settings(self.settings, self),
                             before_write=self._check_upload_allowed,
                             before_delete=lambda: self.backup.verify_lineage(
                                 self.store

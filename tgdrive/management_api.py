@@ -4,6 +4,7 @@ from fastapi import Depends, Request, Response
 from fastapi.responses import JSONResponse
 from pydantic import ValidationError
 
+from tgdrive.bot_settings import BotUploadPreferences, get_bot_settings
 from tgdrive.managed_settings import SettingsProblem
 from tgdrive.management import SettingsChange, get_connection_manager
 from tgdrive.premium_login_api import register_premium_routes
@@ -19,6 +20,18 @@ def register_management_routes(app, settings, *, require_admin, get_runtime):
         ),
     )
     admin = [Depends(require_admin)]
+
+    @app.get("/api/v1/settings/bot-mode", dependencies=admin)
+    async def bot_preferences(request: Request, response: Response):
+        response.headers["Cache-Control"] = "no-store"
+        return await get_bot_settings(settings, get_runtime(request)).snapshot()
+
+    @app.patch("/api/v1/settings/bot-mode", dependencies=admin)
+    async def save_bot_preferences(
+        change: BotUploadPreferences, request: Request, response: Response
+    ):
+        response.headers["Cache-Control"] = "no-store"
+        return await get_bot_settings(settings, get_runtime(request)).save(change)
 
     @app.exception_handler(SettingsProblem)
     async def settings_problem(_request: Request, error: SettingsProblem):

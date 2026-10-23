@@ -529,8 +529,31 @@ MongoDB database. Losing the database itself needs the separate
 <details>
 <summary>Optional Telegram bot interface</summary>
 
-The web interface is the main interface. If bot mode is configured, only
-`TELEGRAM_ADMIN_IDS` can use it. Use `/start` or `/help` for its commands.
+Set `MAIN_BOT_TOKEN` and `TELEGRAM_ADMIN_IDS` to enable the optional bot interface.
+Only those administrators can use it, in a private chat with the bot.
+
+1. Open **Configuration → Transfer limits → Bot uploads** on the website.
+2. Click **Change folder**, browse to a destination, then click **Use this folder**.
+   To restore the default, click **Use default folder**.
+3. Send or forward files, photos, videos or audio to the bot. It shows **Saving…**,
+   then confirms the filename and destination. Send photos as files to preserve
+   their original quality.
+
+The default is **My Files / TGDriveBotModeFiles**. The folder is created on the
+first bot upload and reused afterwards. One website setting controls the
+upload destination for every bot administrator. Changes apply to the next file
+without a restart; files already being imported keep their original destination.
+
+Use `/set_folder` in Telegram for a link to this website setting. The website
+address is remembered when you save the bot upload folder. Optionally set
+`PUBLIC_URL=https://your-drive.example` to provide the link before that first
+save, or to specify the public address when accessing the site locally.
+The link opens the normal owner login and contains no authentication tokens.
+
+`/start` and `/help` explain how to send files. `/current_folder` (also the
+**Current folder** button) shows the current destination. Folder selection is
+handled on the website. If the selected folder is moved or deleted, imports
+pause until you choose an available folder; they do not fall back to the root.
 
 Bot-mode imports do not use the web interface's durable upload queue.
 See [known limits](roadmap.md#known-correctness-and-recovery-gaps).

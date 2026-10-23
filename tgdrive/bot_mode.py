@@ -1,22 +1,22 @@
-"""Optional Telegram bot-mode uploads with per-admin folder state."""
+"""Forward-to-save Telegram interface with a website-managed upload folder."""
 
 from __future__ import annotations
 
 import asyncio
 import hashlib
 import logging
-import secrets
-import sqlite3
-import time
-import weakref
 from collections.abc import Awaitable, Callable
-from dataclasses import dataclass
 from datetime import UTC, datetime
+from types import SimpleNamespace
 from typing import Any
 
 from telethon import Button
+from telethon.errors import ChatForwardsRestrictedError, FloodWaitError
 
+from tgdrive.backup import BackupError
+from tgdrive.bot_settings import BotSettings
 from tgdrive.config import Settings
+from tgdrive.managed_settings import SettingsProblem
 from tgdrive.security import safe_name
 from tgdrive.store import DriveStore
 from tgdrive.telegram_clients import Client
@@ -37,13 +37,6 @@ _MEDIA_ATTRIBUTES = (
 )
 
 
-@dataclass(slots=True)
-class _FolderChoice:
-    user_id: int
-    expires_at: float
-    folders: dict[str, tuple[str, str]]
-
-
 class BotMode:
     def __init__(
         self,
@@ -53,6 +46,7 @@ class BotMode:
         store: DriveStore,
         before_write: Callable[[], None] | None = None,
         before_delete: Callable[[], Awaitable[None]] | None = None,
+        folder_settings: BotSettings | None = None,
     ) -> None:
         self.client = client
         self.settings = settings
@@ -60,34 +54,13 @@ class BotMode:
         self.before_write = before_write
         self.before_delete = before_delete
         self.active_imports = 0
-        self._pending_queries: dict[int, float] = {}
-        self._choices: dict[str, _FolderChoice] = {}
-        settings.resolved_data_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
-        from tgdrive.mongo import for_settings
+        if folder_settings is None:
+            from tgdrive.mongo import for_settings
 
-        backend = for_settings(settings)
-        self._mongo_backend = backend
-        self._mongo = backend.db.bot_folders if backend else None
-        self._db = None
-        self._finalizer = lambda: None
-        if self._mongo is not None:
-            self._selected = {
-                row["_id"]: (row["path"], row["name"]) for row in self._mongo.find({})
-            }
-        else:
-            database = settings.resolved_data_dir / "bot-settings.sqlite3"
-            self._db = sqlite3.connect(database)
-            self._finalizer = weakref.finalize(self, self._db.close)
-            database.chmod(0o600)
-            self._db.execute(
-                "CREATE TABLE IF NOT EXISTS folders "
-                "(user_id INTEGER PRIMARY KEY, path TEXT, name TEXT)"
+            folder_settings = BotSettings(
+                settings, SimpleNamespace(store=store, mongo=for_settings(settings))
             )
-            self._db.commit()
-            self._selected = {
-                row[0]: (row[1], row[2])
-                for row in self._db.execute("SELECT * FROM folders")
-            }
+        self.folder_settings = folder_settings
         self._registered = False
         self._started = False
 
@@ -108,125 +81,87 @@ class BotMode:
         logger.info("Telegram bot mode stopped")
 
     def close(self) -> None:
-        """Release local settings after handlers have stopped."""
-        self._finalizer()
+        """Folder preferences have no open local handles."""
+
+    @staticmethod
+    def _menu() -> list[list[Any]]:
+        return [
+            [
+                Button.text("Current folder", resize=True, persistent=True),
+                Button.text("Help", resize=True, persistent=True),
+            ]
+        ]
 
     async def _help(self, _client: Client, message: Message) -> None:
+        value = await self.folder_settings.snapshot()
         await message.reply_text(
-            "TGDrive bot mode\n\n"
-            "Send or forward a file to upload it.\n"
-            "/set_folder [name] — choose an upload folder\n"
-            "/current_folder — show the current upload folder"
+            "Save files to TGDrive\n\n"
+            "Send or forward files, photos, videos or audio here. "
+            "They will appear in your drive once saved.\n\n"
+            f"Saving to: {value['folder_label']}\n\n"
+            "Use /set_folder to change the upload folder on the TGDrive website.\n"
+            "Tip: send photos as files to keep their original quality.",
+            reply_markup=self._menu(),
         )
 
     async def _set_folder(self, _client: Client, message: Message) -> None:
-        user_id = message.from_user.id
-        query = " ".join(message.command[1:]).strip()
-        if query:
-            await self._show_folder_choices(message, query)
-            return
-        self._pending_queries[user_id] = time.monotonic() + 60
+        value = await self.folder_settings.snapshot()
+        text = (
+            f"Bot upload folder: {value['folder_label']}\n\n"
+            "Choose the upload folder on the TGDrive website under "
+            "Configuration → Transfer limits → Bot uploads. "
+            "Your next forwarded file will be saved there."
+        )
+        if value["settings_url"]:
+            text += "\n\n" + value["settings_url"]
         await message.reply_text(
-            "Send the folder name within 60 seconds, or /cancel to stop."
+            text,
+            reply_markup=(
+                [[Button.url("Set upload folder", value["settings_url"])]]
+                if value["settings_url"]
+                else self._menu()
+            ),
+        )
+
+    async def _cancel(self, _client: Client, message: Message) -> None:
+        await message.reply_text(
+            "There is no folder selection to cancel. "
+            "Use /set_folder to manage the upload folder on the website.",
+            reply_markup=self._menu(),
         )
 
     async def _folder_query(self, _client: Client, message: Message) -> None:
-        user_id = message.from_user.id
-        deadline = self._pending_queries.get(user_id)
-        if deadline is None:
-            return
-        text = (message.text or "").strip()
-        if text.startswith("/") and text.lower() != "/cancel":
-            return
-        self._pending_queries.pop(user_id, None)
-        if deadline < time.monotonic():
-            await message.reply_text("Folder selection expired. Use /set_folder again.")
-            return
-        if text.lower() == "/cancel":
-            await message.reply_text("Folder selection cancelled.")
-            return
-        await self._show_folder_choices(message, text)
-
-    async def _show_folder_choices(self, message: Message, query: str) -> None:
-        self._prune_choices()
-        folders = {
-            item_id: item
-            for item_id, item in self.store.search(query).items()
-            if item["type"] == "folder"
-        }
-        if not folders:
-            await message.reply_text("No matching folder was found.")
-            return
-        request_id = secrets.token_urlsafe(6)
-        options: dict[str, tuple[str, str]] = {}
-        buttons: list[list[Any]] = []
-        for item_id, item in list(folders.items())[:20]:
-            path = f"{item['path'].rstrip('/')}/{item_id}"
-            options[item_id] = (path, item["name"])
-            buttons.append(
-                [
-                    Button.inline(
-                        item["name"][:48],
-                        data=f"folder:{request_id}:{item_id}",
-                    )
-                ]
-            )
-        self._choices[request_id] = _FolderChoice(
-            user_id=message.from_user.id,
-            expires_at=time.monotonic() + 300,
-            folders=options,
-        )
         await message.reply_text(
-            "Choose the upload folder:",
-            reply_markup=buttons,
+            "Send or forward a file to save it. "
+            "Use /set_folder to change its destination on the website.",
+            reply_markup=self._menu(),
         )
 
     async def _folder_callback(self, _client: Client, callback: CallbackQuery) -> None:
-        self._prune_choices()
-        try:
-            _, request_id, folder_id = callback.data.split(":", 2)
-        except (AttributeError, ValueError):
-            await callback.answer("Invalid folder selection", show_alert=True)
-            return
-        choice = self._choices.pop(request_id, None)
-        if (
-            choice is None
-            or choice.user_id != callback.from_user.id
-            or choice.expires_at < time.monotonic()
-            or folder_id not in choice.folders
-        ):
-            await callback.answer("This folder selection expired", show_alert=True)
-            return
-        path, name = choice.folders[folder_id]
-        try:
-            self.store.get_directory(path)
-        except Exception:
-            await callback.answer("That folder no longer exists", show_alert=True)
-            return
-        if self._mongo is not None:
-            await asyncio.to_thread(
-                self._mongo_backend.write,
-                self._mongo,
-                "replace_one",
-                {"_id": callback.from_user.id},
-                {"_id": callback.from_user.id, "path": path, "name": name},
-                upsert=True,
-            )
-        else:
-            with self._db:
-                self._db.execute(
-                    "INSERT INTO folders VALUES (?,?,?) ON CONFLICT(user_id) "
-                    "DO UPDATE SET path=excluded.path,name=excluded.name",
-                    (callback.from_user.id, path, name),
-                )
-        self._selected[callback.from_user.id] = (path, name)
-        await callback.answer("Upload folder updated")
-        if callback.message:
-            await callback.message.edit_text(f"Upload folder set to: {name}")
+        # Old picker messages may remain in Telegram after an upgrade.
+        await callback.answer(
+            "Folder selection has moved to the website. Use /set_folder.",
+            show_alert=True,
+        )
 
     async def _current_folder(self, _client: Client, message: Message) -> None:
-        _, name = self._selected.get(message.from_user.id, ("/", "/ (root directory)"))
-        await message.reply_text(f"Current upload folder: {name}")
+        value = await self.folder_settings.snapshot()
+        await message.reply_text(
+            f"Saving new files to: {value['folder_label']}\n\n"
+            "Use /set_folder to change it on the website.",
+            reply_markup=self._menu(),
+        )
+
+    async def _feedback(
+        self, message: Message, status: Message | None, text: str
+    ) -> None:
+        if status is not None:
+            try:
+                await status.edit_text(text)
+                return
+            except Exception:
+                logger.warning("Could not update bot upload feedback", exc_info=True)
+        await message.reply_text(text, reply_markup=self._menu())
 
     async def _file(self, _client: Client, message: Message) -> None:
         self.active_imports += 1
@@ -236,21 +171,19 @@ class BotMode:
             self.active_imports -= 1
 
     async def _import_file(self, _client: Client, message: Message) -> None:
-        user_id = message.from_user.id
-        path, folder_name = self._selected.get(user_id, ("/", "/ (root directory)"))
-        try:
-            self.store.get_directory(path)
-        except Exception:
-            path, folder_name = "/", "/ (root directory)"
-            self._selected[user_id] = (path, folder_name)
-
         source_chat = getattr(
             getattr(message, "native", None), "chat_id", message.from_user.id
         )
         copied: Message | None = None
+        status: Message | None = None
         try:
             if self.before_write is not None:
                 self.before_write()
+            path, folder_name = await self.folder_settings.destination()
+            status = await message.reply_text(
+                f"Saving your file to: {folder_name}…",
+                reply_markup=self._menu(),
+            )
             copied = await message.copy(
                 self.settings.storage_channel,
                 disable_notification=True,
@@ -261,7 +194,7 @@ class BotMode:
             filename = self._media_name(media, copied)
             if self.before_write is not None:
                 self.before_write()
-            await asyncio.to_thread(
+            item = await asyncio.to_thread(
                 self.store.add_file,
                 path,
                 filename,
@@ -272,7 +205,8 @@ class BotMode:
                 ).hexdigest(),
                 keep_both=True,
             )
-        except Exception:
+        except Exception as error:
+            rolled_back = copied is None
             if copied is not None:
                 try:
                     if self.before_delete is not None:
@@ -280,12 +214,48 @@ class BotMode:
                     await self.client.delete_messages(
                         self.settings.storage_channel, copied.id
                     )
+                    rolled_back = True
                 except Exception:
                     logger.exception("Failed to roll back copied bot-mode media")
             logger.exception("Bot-mode upload failed")
-            await message.reply_text("Upload failed. Check the server logs.")
+            if not rolled_back:
+                text = (
+                    "Upload could not be confirmed. Check your drive in TGDrive "
+                    "before sending this file again."
+                )
+            elif isinstance(error, SettingsProblem):
+                text = (
+                    f"Upload paused. {error}\n"
+                    "Open TGDrive to resolve this, then resend."
+                )
+            elif isinstance(error, BackupError):
+                text = (
+                    "Upload paused while drive protection needs attention. "
+                    "Open TGDrive → Storage & Backups, then send this file again."
+                )
+            elif isinstance(error, FloodWaitError):
+                text = (
+                    f"Telegram needs a pause. Wait {max(1, error.seconds)} seconds, "
+                    "then send this file again."
+                )
+            elif isinstance(error, ChatForwardsRestrictedError):
+                text = (
+                    "This chat protects its files from copying. "
+                    "If you have the original file, send it here as a new attachment."
+                )
+            else:
+                text = (
+                    "Upload failed. Try sending this file again. "
+                    "If it keeps failing, check Telegram connections in TGDrive."
+                )
+            await self._feedback(message, status, text)
             return
-        await message.reply_text(f"Uploaded {filename} to {folder_name}.")
+        await self._feedback(
+            message,
+            status,
+            f"Uploaded {item['name']}\nSaved to: {folder_name}\n\n"
+            "Send another file to save it here, or use /set_folder.",
+        )
 
     @staticmethod
     def _media(message: Message) -> Any | None:
@@ -311,19 +281,3 @@ class BotMode:
             "sticker": ".webp",
         }
         return f"{kind}-{timestamp}-{message.id}{extensions.get(kind, '')}"
-
-    def _prune_choices(self) -> None:
-        now = time.monotonic()
-        expired = [
-            request_id
-            for request_id, choice in self._choices.items()
-            if choice.expires_at < now
-        ]
-        for request_id in expired:
-            self._choices.pop(request_id, None)
-        while len(self._choices) >= 100:
-            oldest = min(
-                self._choices,
-                key=lambda request_id: self._choices[request_id].expires_at,
-            )
-            self._choices.pop(oldest, None)

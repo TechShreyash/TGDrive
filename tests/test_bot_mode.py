@@ -8,6 +8,7 @@ from typing import Any
 import pytest
 
 from tgdrive.bot_mode import BotMode
+from tgdrive.bot_settings import BotUploadPreferences
 from tgdrive.config import Settings
 from tgdrive.store import DriveStore
 
@@ -68,49 +69,17 @@ class FakeMessage:
         self.id = 1
         self.from_user = SimpleNamespace(id=user_id)
         self.text = text
-        self.command = command or []
+        self.command = command if command is not None else text.split()
         self.copied = copied
         self.replies: list[tuple[str, Any | None]] = []
+        self.status = SimpleNamespace(edit_text=_async_recorder())
 
-    async def reply_text(self, text: str, reply_markup: Any | None = None) -> None:
+    async def reply_text(self, text: str, reply_markup: Any | None = None) -> Any:
         self.replies.append((text, reply_markup))
+        return self.status
 
     async def copy(self, _channel: int, **_kwargs: object) -> Any:
         return self.copied
-
-
-@pytest.mark.asyncio
-async def test_folder_choices_filter_files_and_are_scoped_per_admin(
-    tmp_path: Path,
-) -> None:
-    store = DriveStore.create(tmp_path / "drive.json")
-    folder = store.create_folder("/", "Match folder")
-    store.add_file("/", "Match file.txt", 7, 1)
-    mode = BotMode(
-        client=FakeBotClient(),
-        settings=settings(tmp_path),
-        store=store,
-    )
-    message = FakeMessage(1)
-
-    await mode._show_folder_choices(message, "Match")
-
-    assert len(mode._choices) == 1
-    request_id, choice = next(iter(mode._choices.items()))
-    assert choice.user_id == 1
-    assert set(choice.folders) == {folder["id"]}
-    markup = message.replies[0][1]
-    assert len(markup) == 1
-
-    callback_message = SimpleNamespace(edit_text=_async_recorder())
-    callback = FakeCallback(
-        user_id=1,
-        data=f"folder:{request_id}:{folder['id']}",
-        message=callback_message,
-    )
-    await mode._folder_callback(FakeBotClient(), callback)
-    assert mode._selected[1][1] == "Match folder"
-    assert 2 not in mode._selected
 
 
 def _async_recorder():
@@ -123,40 +92,18 @@ def _async_recorder():
     return record
 
 
-class FakeCallback:
-    def __init__(self, user_id: int, data: str, message: Any) -> None:
-        self.id = 1
-        self.from_user = SimpleNamespace(id=user_id)
-        self.data = data
-        self.message = message
-        self.answers: list[tuple[str, bool]] = []
-
-    async def answer(self, text: str, show_alert: bool = False) -> None:
-        self.answers.append((text, show_alert))
-
-
-@pytest.mark.asyncio
-async def test_pending_folder_query_ignores_the_command_update(tmp_path: Path) -> None:
-    store = DriveStore.create(tmp_path / "drive.json")
-    store.create_folder("/", "Target")
-    mode = BotMode(client=FakeBotClient(), settings=settings(tmp_path), store=store)
-    command = FakeMessage(1, text="/set_folder", command=["set_folder"])
-
-    await mode._set_folder(FakeBotClient(), command)
-    await mode._folder_query(FakeBotClient(), command)
-    assert 1 in mode._pending_queries
-
-    query = FakeMessage(1, text="Target")
-    await mode._folder_query(FakeBotClient(), query)
-    assert 1 not in mode._pending_queries
-    assert mode._choices
+def root_mode(**kwargs):
+    mode = BotMode(**kwargs)
+    mode.folder_settings.value = BotUploadPreferences(folder_path="/")
+    mode.folder_settings._loaded = True
+    return mode
 
 
 @pytest.mark.asyncio
 async def test_photo_upload_gets_fallback_name_and_metadata(tmp_path: Path) -> None:
     store = DriveStore.create(tmp_path / "drive.json")
     client = FakeBotClient()
-    mode = BotMode(client=client, settings=settings(tmp_path), store=store)
+    mode = root_mode(client=client, settings=settings(tmp_path), store=store)
     copied = SimpleNamespace(
         id=55,
         media=SimpleNamespace(value="photo"),
@@ -169,7 +116,8 @@ async def test_photo_upload_gets_fallback_name_and_metadata(tmp_path: Path) -> N
     item = next(iter(store.list_directory("/").values()))
     assert item["name"].startswith("photo-")
     assert item["name"].endswith("-55.jpg")
-    assert message.replies[0][0].startswith("Uploaded")
+    assert message.replies[0][0].startswith("Saving")
+    assert message.status.edit_text.calls[-1][0][0].startswith("Uploaded")
     assert client.deleted == []
 
 
@@ -179,7 +127,7 @@ async def test_bot_upload_rolls_back_copy_when_metadata_fails(
 ) -> None:
     store = DriveStore.create(tmp_path / "drive.json")
     client = FakeBotClient()
-    mode = BotMode(client=client, settings=settings(tmp_path), store=store)
+    mode = root_mode(client=client, settings=settings(tmp_path), store=store)
     copied = SimpleNamespace(
         id=56,
         media=SimpleNamespace(value="photo"),
@@ -194,14 +142,14 @@ async def test_bot_upload_rolls_back_copy_when_metadata_fails(
     await mode._file(client, message)
 
     assert client.deleted == [56]
-    assert message.replies[-1][0].startswith("Upload failed")
+    assert message.status.edit_text.calls[-1][0][0].startswith("Upload failed")
 
 
 @pytest.mark.asyncio
 async def test_bot_mode_lifecycle_is_idempotent(tmp_path: Path) -> None:
     store = DriveStore.create(tmp_path / "drive.json")
     client = FakeLifecycleClient()
-    mode = BotMode(client=client, settings=settings(tmp_path), store=store)
+    mode = root_mode(client=client, settings=settings(tmp_path), store=store)
 
     await mode.start()
     await mode.start()
@@ -233,7 +181,7 @@ async def test_bot_import_guard_before_copy_and_after_copy_preserves_metadata(tm
     async def verify_delete():
         verified.append(True)
 
-    mode = BotMode(
+    mode = root_mode(
         client=client,
         settings=settings(tmp_path),
         store=store,
@@ -261,7 +209,7 @@ async def test_bot_rollback_does_not_delete_after_lineage_conflict(tmp_path):
     async def verify_delete():
         raise RecoveryConflict("Recovery required")
 
-    mode = BotMode(
+    mode = root_mode(
         client=client,
         settings=settings(tmp_path),
         store=store,
@@ -281,7 +229,7 @@ async def test_bot_rollback_does_not_delete_after_lineage_conflict(tmp_path):
 async def test_bot_active_import_counter_covers_copy_and_cancellation(tmp_path):
     store = DriveStore.create(tmp_path / "drive.sqlite3")
     client = FakeBotClient()
-    mode = BotMode(client=client, settings=settings(tmp_path), store=store)
+    mode = root_mode(client=client, settings=settings(tmp_path), store=store)
     entered = asyncio.Event()
     message = FakeMessage(1)
 
@@ -301,3 +249,99 @@ async def test_bot_active_import_counter_covers_copy_and_cancellation(tmp_path):
     finally:
         mode.close()
         store.close()
+
+
+@pytest.fixture
+def bot(tmp_path):
+    store = DriveStore.create(tmp_path / "drive.sqlite3")
+    mode = root_mode(client=FakeBotClient(), settings=settings(tmp_path), store=store)
+    try:
+        yield mode
+    finally:
+        mode.close()
+        store.close()
+
+
+@pytest.mark.asyncio
+async def test_success_feedback_names_actual_file_when_a_duplicate_is_renamed(bot):
+    bot.store.add_file("/", "report.txt", 12, 3)
+    copied = SimpleNamespace(
+        id=59, document=SimpleNamespace(file_name="report.txt", file_size=3)
+    )
+    message = FakeMessage(1, copied=copied)
+    await bot._file(bot.client, message)
+    names = {item["name"] for item in bot.store.list_directory("/").values()}
+    actual = next(name for name in names if name != "report.txt")
+    assert actual in message.status.edit_text.calls[-1][0][0]
+    assert bot.active_imports == 0
+
+
+@pytest.mark.asyncio
+async def test_failed_success_message_edit_does_not_roll_back_committed_upload(bot):
+    copied = SimpleNamespace(id=60, photo=SimpleNamespace(file_size=3))
+    message = FakeMessage(1, copied=copied)
+
+    async def fail(*args, **kwargs):
+        raise RuntimeError("message cannot be edited")
+
+    message.status.edit_text = fail
+    await bot._file(bot.client, message)
+    assert len(bot.store.list_directory("/")) == 1
+    assert not bot.client.deleted
+    assert message.replies[-1][0].startswith("Uploaded")
+
+
+@pytest.mark.asyncio
+async def test_paused_upload_explains_how_to_resume_without_copying(bot):
+    from tgdrive.managed_settings import SettingsProblem
+
+    def guard():
+        raise SettingsProblem("Connection restart required")
+
+    bot.before_write = guard
+    message = FakeMessage(1)
+    await bot._file(bot.client, message)
+    assert "Connection restart required" in message.replies[-1][0]
+    assert "Open TGDrive" in message.replies[-1][0]
+    assert not bot.store.list_directory("/")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("failure", ["flood", "protected", "backup"])
+async def test_copy_failures_give_specific_recovery_instructions(bot, failure):
+    from telethon.errors import ChatForwardsRestrictedError, FloodWaitError
+
+    from tgdrive.backup import BackupError
+
+    errors = {
+        "flood": (FloodWaitError(request=None, capture=15), "Wait 15 seconds"),
+        "protected": (ChatForwardsRestrictedError(request=None), "new attachment"),
+        "backup": (BackupError("synthetic backup failure"), "Storage & Backups"),
+    }
+    error, expected = errors[failure]
+    message = FakeMessage(1)
+
+    async def fail(*args, **kwargs):
+        raise error
+
+    message.copy = fail
+    await bot._file(bot.client, message)
+    assert expected in message.status.edit_text.calls[-1][0][0]
+    assert not bot.store.list_directory("/")
+    assert bot.active_imports == 0
+
+
+@pytest.mark.asyncio
+async def test_uncertain_rollback_asks_user_to_check_drive_before_resending(bot):
+    from tgdrive.backup import RecoveryConflict
+
+    async def block_delete():
+        raise RecoveryConflict("synthetic lineage mismatch")
+
+    bot.before_delete = block_delete
+    message = FakeMessage(1, copied=SimpleNamespace(id=61))  # No usable media.
+    await bot._file(bot.client, message)
+    feedback = message.status.edit_text.calls[-1][0][0]
+    assert "could not be confirmed" in feedback
+    assert "before sending this file again" in feedback
+    assert not bot.client.deleted

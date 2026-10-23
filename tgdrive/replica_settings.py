@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 
+from tgdrive.bot_settings import BotUploadPreferences
 from tgdrive.managed_settings import (
     MAX_SETTINGS_BYTES,
     ManagedDocument,
@@ -17,6 +18,7 @@ from tgdrive.transfer_preferences import TransferPreferences, UploadPreferences
 POLICIES = {
     "performance-preferences.json": PerformancePreferences,
     "transfer-preferences.json": UploadPreferences,
+    "bot-preferences.json": BotUploadPreferences,
 }
 MAX_SETTINGS_TOTAL = 256 * 1024
 
@@ -59,6 +61,8 @@ def collect_credentials(settings, runtime):
         if raw is None:
             if model is PerformancePreferences:
                 raw = PerformanceSettings(settings, runtime).value.model_dump()
+            elif model is BotUploadPreferences:
+                raw = BotUploadPreferences().model_dump()
             else:
                 raw = {"uploads_per_bot": TransferPreferences(settings, runtime)._value}
         if len(json.dumps(raw, allow_nan=False).encode()) > MAX_SETTINGS_BYTES:

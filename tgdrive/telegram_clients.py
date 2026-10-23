@@ -377,10 +377,11 @@ class TelegramMessage:
         return getattr(self.native, name)
 
     async def reply_text(self, text: str, reply_markup: Any = None) -> Any:
-        return await self.native.reply(text, buttons=reply_markup, parse_mode=None)
+        sent = await self.native.reply(text, buttons=reply_markup, parse_mode=None)
+        return TelegramMessage(self._client, sent)
 
-    async def edit_text(self, text: str) -> Any:
-        return await self.native.edit(text, parse_mode=None)
+    async def edit_text(self, text: str, reply_markup: Any = None) -> Any:
+        return await self.native.edit(text, buttons=reply_markup, parse_mode=None)
 
     async def copy(self, channel: int, **_kwargs: Any) -> Any:
         identity = f"{channel}:{self.native.chat_id}:{self.id}".encode()
@@ -1298,15 +1299,19 @@ class Client:
             ):
                 return
             message = TelegramMessage(self, event.message)
-            command = message.text.split()[0].split("@")[0] if message.text else ""
-            if command in {"/start", "/help"}:
-                await mode._help(self, message)
-            elif command == "/set_folder":
-                await mode._set_folder(self, message)
-            elif command == "/current_folder":
-                await mode._current_folder(self, message)
-            elif message.document or message.photo:
+            words = message.text.split()
+            command = words[0].split("@")[0].lower() if words else ""
+            label = message.text.strip().casefold()
+            if message.document or message.photo:
                 await mode._file(self, message)
+            elif command in {"/start", "/help"} or label == "help":
+                await mode._help(self, message)
+            elif command in {"/set_folder", "/folders"} or label == "choose folder":
+                await mode._set_folder(self, message)
+            elif command == "/current_folder" or label == "current folder":
+                await mode._current_folder(self, message)
+            elif command == "/cancel":
+                await mode._cancel(self, message)
             else:
                 await mode._folder_query(self, message)
 
