@@ -817,7 +817,7 @@ class MongoStore(DriveStore):
                 raise RootMutationError("The root folder cannot be deleted")
             self._mutable(chain, descendants=True)
             if self._messages(node["id"]):
-                raise ValidationError("Files require confirmed Telegram deletion")
+                raise ValidationError("Files require a permanent deletion intent")
             self._remove_subtree(node["id"])
             self._bump()
             return []
@@ -1106,17 +1106,22 @@ class MongoStore(DriveStore):
             self._bump()
 
     def finish_deletion(self, intent_id):
+        """Atomically forget a trashed subtree; retain its Telegram documents."""
         with self._transaction(write=True):
             row = self._state["deletions"].get(intent_id)
             if row is None:
                 raise NotFoundError("Deletion intent not found")
-            if row["pending_message_ids"]:
-                raise ValidationError("Telegram deletion has unconfirmed messages")
+            messages = row["message_ids"].copy()
             if row["state"] != "completed":
                 self._remove_subtree(row["root_id"])
-                row.update(state="completed", error=None)
+                row.update(
+                    state="completed",
+                    error=None,
+                    message_ids=[],
+                    pending_message_ids=[],
+                )
                 self._bump()
-            return row["message_ids"].copy()
+            return messages
 
     def _export(self):
         nodes = {}

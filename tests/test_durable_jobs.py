@@ -10,6 +10,7 @@ from unittest.mock import AsyncMock
 import pytest
 
 from tgdrive.client_pool import ClientPool
+from tgdrive.errors import NotFoundError
 from tgdrive.store import DriveStore
 from tgdrive.tasks import TransferNotFound, TransferRegistry, TransferStatus
 from tgdrive.transfers import TransferManager
@@ -219,7 +220,10 @@ async def test_cancelled_ambiguous_send_stays_recoverable_until_remote_cleanup(
     await pool.stop()
 
 
-async def test_partial_folder_delete_restarts_only_unconfirmed_batches(tmp_path):
+@pytest.mark.parametrize("confirmed", [0, 100])
+async def test_legacy_failed_delete_retries_as_catalog_removal_after_restart(
+    tmp_path, confirmed, monkeypatch
+):
     telegram = Telegram()
     pool = ClientPool([telegram])
     await pool.start()
@@ -230,12 +234,25 @@ async def test_partial_folder_delete_restarts_only_unconfirmed_batches(tmp_path)
         manager.store.add_file(path, f"{message_id}.bin", message_id, 1)
         telegram.messages[message_id] = SimpleNamespace(id=message_id)
     manager.store.set_trashed(path, True)
-    telegram.fail_delete_call = 2
+    # Simulate an old failed remote-deletion intent, including partial progress.
+    intent = manager.store.begin_deletion(path, channel_id=-100123)
+    manager.store.confirm_deletion_messages(intent["id"], list(range(1, confirmed + 1)))
+    manager.store.fail_deletion(intent["id"], "MessageDeleteForbiddenError")
+    finish = manager.store.finish_deletion
+
+    def database_unavailable(_intent_id):
+        raise RuntimeError("database write failed")
+
+    monkeypatch.setattr(manager.store, "finish_deletion", database_unavailable)
     job = manager.start_deletion(path)
     await job.task
-    intent = manager.store.pending_deletions()[0]
-    assert intent["pending_message_ids"] == list(range(101, 106))
+    assert job.status is TransferStatus.ERROR
     assert manager.store.message_ids(path, include_trashed=True) == list(range(1, 106))
+    assert telegram.deleted == [] and len(telegram.messages) == 105
+    monkeypatch.setattr(manager.store, "finish_deletion", finish)
+    await manager.close()
+    manager.registry.close()
+    manager.store.close()
     recovered = manager_for(
         tmp_path,
         pool,
@@ -245,10 +262,36 @@ async def test_partial_folder_delete_restarts_only_unconfirmed_batches(tmp_path)
     retried = recovered.retry_job(job.id)
     await retried.task
     assert retried.status == TransferStatus.COMPLETED
-    assert telegram.deleted == list(range(1, 106))
+    assert telegram.deleted == [] and len(telegram.messages) == 105
     assert recovered.store.pending_deletions() == []
     assert recovered.store.list_directory("/") == {}
+    assert recovered.store.export()["deletions"][0]["message_ids"] == []
+    await recovered.close()
+    recovered.registry.close()
+    recovered.store.close()
     await pool.stop()
+
+
+async def test_permanent_delete_needs_no_telegram_client_and_revokes_shares(tmp_path):
+    pool = ClientPool([Telegram()])  # Deliberately not started.
+    manager = manager_for(tmp_path, pool)
+    file = manager.store.add_file("/", "old.bin", 77, 1)
+    path = "/" + file["id"]
+    token = manager.store.create_share(path)
+    manager.store.set_trashed(path, True)
+    try:
+        job = manager.start_deletion(path)
+        await job.task
+        assert job.status is TransferStatus.COMPLETED
+        assert manager.store.list_trash() == {}
+        assert manager.store.list_shares() == []
+        with pytest.raises(NotFoundError):
+            manager.store.authorize_file(path, token)
+        assert manager.store.pending_deletions() == []
+    finally:
+        await manager.close()
+        manager.registry.close()
+        manager.store.close()
 
 
 def test_capacity_eviction_and_ttl_pruning_are_persistent(tmp_path):

@@ -428,12 +428,37 @@ folder before restoring or deleting it.
 
 - **Move to Trash:** hides the item while keeping its Telegram files.
 - **Restore:** brings it back, subject to name and access checks.
-- **Delete permanently:** removes Telegram messages and the drive record after
-  you confirm. It cannot be cancelled.
+- **Delete permanently:** removes the selected file/folder records, descendant
+  records and their shares from TGDrive's database after you confirm. Original
+  Telegram messages remain in the storage channel. It cannot be cancelled or
+  restored from Trash after completion.
+
+### Why permanent deletion keeps the Telegram files
+
+Telegram bots cannot delete channel messages older than 48 hours, even with
+administrator deletion permission. Telegram's
+[TDLib implementation enforces this two-day limit](https://github.com/tdlib/td/blob/master/td/telegram/MessagesManager.cpp#L7718).
+TGDrive therefore uses the same database-only removal for every permanent
+deletion, regardless of file age. It does not attempt Telegram deletion first or
+require a Telegram user session. This avoids age-dependent failures and misleading
+success when only some parts of a folder or multipart file could be deleted.
+
+Permanent deletion removes TGDrive's references and access through TGDrive; it
+does not erase Telegram's copies, copies held by recipients, local caches or
+older database/channel backups. Channel members with access may still read the
+original messages. Older backups may restore the removed records. If you need
+to remove the originals, manage them separately in Telegram with an authorized
+user account; that is outside TGDrive's permanent-delete operation.
+
+Previously failed Telegram-deletion jobs can be retried after upgrading. They
+remove the remaining database records without attempting further remote deletion;
+messages already deleted by an older version cannot be brought back by this change.
 
 Bulk deletion has one combined operation notice, rather than upload rows for
 every file. If some items fail, expand the failed-item details and retry them.
 Wait for the completion notice; merely disappearing from a list is not confirmation.
+When independent channel backup is enabled, its existing protection check still
+applies before the catalog is removed; see [backup and recovery](backup-recovery.md).
 
 ## Import from a URL
 

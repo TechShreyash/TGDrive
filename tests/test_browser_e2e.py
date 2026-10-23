@@ -624,6 +624,12 @@ def test_queued_deletion_is_not_reported_complete_early(
     page.get_by_role("link", name="Trash", exact=True).click()
     select_item(page, "Private folder")
     page.get_by_role("button", name="Delete Permanently", exact=True).click()
+    expect(page.get_by_role("dialog")).to_contain_text(
+        "The original files will remain in Telegram."
+    )
+    expect(page.get_by_role("dialog")).to_contain_text(
+        "You cannot restore these items from Trash after deletion."
+    )
     page.get_by_role("dialog").get_by_role(
         "button", name="Delete Permanently", exact=True
     ).click()
@@ -2874,7 +2880,7 @@ def test_bulk_deletion_is_one_notice_with_refresh_failure_and_retry(
     expect(notice.get_by_role("status")).to_have_text("1 item could not be deleted.")
     expect(page.locator(".transfer-batch")).to_have_count(0)
     notice.get_by_text("View Failed Items (1)", exact=True).click()
-    expect(notice).to_contain_text("Synthetic Telegram deletion confirmation failed")
+    expect(notice).to_contain_text("Synthetic catalog deletion failed")
     notice.get_by_role("button", name="Retry Failed deletions", exact=True).click()
     expect(notice.get_by_role("status")).to_contain_text("Deleting 1 item…")
     server.finish(ids[1])

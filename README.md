@@ -103,6 +103,9 @@ or access to Telegram. Keep important originals outside the provider.
 - Encrypted database backups restore records and settings, not deleted Telegram
   files or missing unfinished upload contents.
 - Share links grant access to anyone holding them. Revoke links you no longer need.
+- Permanent deletion removes records from TGDrive's database while keeping the
+  original Telegram messages, because bots cannot delete channel messages older
+  than 48 hours. See [Trash and permanent deletion](docs/usage.md#trash-and-permanent-deletion).
 
 [Operations and recovery](docs/operations.md) ·
 [Security boundaries](docs/reference.md#security-and-privacy)

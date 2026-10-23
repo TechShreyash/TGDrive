@@ -46,7 +46,7 @@ not a second database.
 | Shares | Scoped link access and expiry |
 | Operations and preparations | Retry the same upload/folder request without duplicating it |
 | Jobs and receipts | Resume known work and track acknowledged bytes; archived jobs retain compact transfer history |
-| Deletions | Remember which Telegram messages still need confirmed deletion |
+| Deletions | Track retryable catalog removal; completion drops references and retains Telegram originals |
 | Settings, sessions and identities | Owner access, Telegram credentials, names and preferences |
 | Backups | Snapshot publication and retry history |
 | Runtime lease | Prevent competing installations from writing the same drive |
@@ -201,8 +201,13 @@ Names and sizes alone never prove that a reselected file has matching bytes.
 | URL retrieval is interrupted | Retry may fetch from byte zero |
 | Bot-mode ingestion | Separate path; lacks the browser queue's full durability contract |
 
-Permanent deletion records intent and each remote confirmation before removing
-the final catalog entry. Remote effects are not atomic across multiple items.
+Permanent deletion records a durable intent, then atomically removes that catalog
+subtree and its shares from the database. It also drops message references from
+the completed intent. It never deletes the original Telegram messages: bots
+cannot delete channel messages older than 48 hours. The same behavior applies to
+all file ages and to retries of legacy intents with partial remote confirmations.
+Job retries, lineage checks, upload reconciliation and the independent-backup
+barrier remain in place. Different selected items complete independently.
 
 ### Finished history
 

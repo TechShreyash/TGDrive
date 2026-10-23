@@ -43,8 +43,6 @@ class FakeTransfers:
         record = self.registry.create("deleting", total=len(intent["message_ids"]))
 
         async def complete(item):
-            self.deleted_messages.extend(intent["message_ids"])
-            self.store.confirm_deletion_messages(intent["id"], intent["message_ids"])
             self.store.finish_deletion(intent["id"])
 
         self.registry.spawn(record.id, complete)
@@ -200,7 +198,7 @@ def test_folder_lifecycle_search_trash_and_permanent_delete(
 
     assert client.portal is not None
     client.portal.call(wait_for_deletion)
-    assert runtime.transfers.deleted_messages == [777]
+    assert runtime.transfers.deleted_messages == []
     assert store.list_directory("/") == {}
 
 

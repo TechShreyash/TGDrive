@@ -43,9 +43,10 @@ channel until the owner enables it under **Tools & settings → Storage & Backup
    **Restrict Saving Content** on these dedicated channels if it prevents document
    copies. Do not use expiring documents, unrelated posts or protected content as
    TGDrive storage.
-6. Do not manually delete/edit document messages, change TGDrive pins, or use the
-   channels for unrelated activity. Make file changes through TGDrive. Changing
-   channel permissions or bot membership can interrupt protection.
+6. Do not manually delete/edit document messages still referenced by the catalog
+   or a retained restore point, change TGDrive pins, or use the channels for
+   unrelated activity. Make file changes through TGDrive. Changing channel
+   permissions or bot membership can interrupt protection.
 
 Creating human accounts, BotFather bots, channels and administrator permissions
 happens in Telegram. Telegram's bot APIs cannot create these owner accounts for
@@ -78,13 +79,16 @@ synchronization and later catch-up. An upload completed in the main channel can
 still be pending in the independent backup; check the protected revision and
 confirmed restore point separately.
 
-Permanent removal of original Telegram documents is different: while independent
-backup is enabled, TGDrive first requires the relevant backup protection before
-performing that destructive operation. Pausing backup therefore pauses permanent
-removal until you resume backup or explicitly disable that protection. It does
-not freeze normal browsing, uploads, rename/move or trash changes. A full channel
-recovery freezes file mutations until activation or explicit cancellation of the
-unfinished recovery.
+Permanent deletion removes catalog records and shares while retaining original
+Telegram documents. While independent backup is enabled, TGDrive still requires
+the relevant backup protection before discarding those records. Pausing backup
+therefore pauses permanent catalog removal until you resume backup or explicitly
+disable that protection. It does not freeze normal browsing, uploads, rename/move
+or trash changes. Older restore points may contain permanently removed records
+and their Telegram copies; permanent deletion is not an erasure of backup history.
+See [why Telegram originals are retained](usage.md#why-permanent-deletion-keeps-the-telegram-files).
+A full channel recovery freezes file mutations until activation or explicit
+cancellation of the unfinished recovery.
 
 A file count or 100% byte meter alone is not a complete restore point. TGDrive
 confirms the destination documents and publishes their matching encrypted

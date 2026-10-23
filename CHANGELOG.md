@@ -6,6 +6,16 @@ This release rebuilds TGDrive as a self-hosted, single-owner drive. Run one
 service instance and one Uvicorn worker. No public deployment is implied by
 this candidate.
 
+### Permanent deletion
+
+- Remove file/folder references and shares from the database while retaining
+  original Telegram messages, for every file age. Bots cannot delete channel
+  messages older than 48 hours even with administrator permissions.
+- Complete retried legacy deletion intents without further Telegram deletion;
+  retain durable jobs, lineage checks and independent-backup protection.
+- Explain retained Telegram copies in the confirmation dialog and document the
+  policy, backup implications and separate manual removal of originals.
+
 ### Deployment
 
 - Use `/compose.yaml` directly in Coolify with six initial credential fields;
@@ -195,8 +205,8 @@ are superseded by the MongoDB changes above; transport features remain current.
 - Use Telethon 1.x and cryptg behind a Telegram adapter. Support storage bots,
   optional Premium accounts, media copying, download streaming, and durable
   retry reconciliation.
-- Record permanent-deletion intents and remote confirmations so failed deletion
-  can be retried safely. Preflight whole delete selections; commit v1 move/trash/
+- Record permanent-deletion intents so failed database removal can be retried
+  safely. Preflight whole delete selections; commit v1 move/trash/
   restore batches atomically, including names, revisions and share revocations.
 - Bind pending receipts/jobs to stable destination folder IDs across ancestor
   moves and restarts; reject unavailable destinations without recreating folders.

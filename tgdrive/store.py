@@ -2099,16 +2099,14 @@ class DriveStore:
         ]
 
     def delete(self, path: str) -> list[int]:
-        """Remove empty metadata only; files require durable remote deletion."""
+        """Remove empty metadata only; files require a durable deletion intent."""
         with self._transaction(write=True) as db:
             node, _, chain = self._resolve(db, path)
             if node["id"] == ROOT_ID:
                 raise RootMutationError("the root folder cannot be deleted")
             self._mutable(db, chain, descendants=True)
             if self._messages(db, node["id"]):
-                raise ValidationError(
-                    "files require begin_deletion and confirmed Telegram deletion"
-                )
+                raise ValidationError("files require a permanent deletion intent")
             db.execute("DELETE FROM nodes WHERE id=?", (node["id"],))
             self._bump(db)
             return []
@@ -2473,6 +2471,7 @@ class DriveStore:
             self._bump(db)
 
     def finish_deletion(self, intent_id: str) -> list[int]:
+        """Atomically forget a trashed subtree; retain its Telegram documents."""
         with self._transaction(write=True) as db:
             intent = db.execute(
                 "SELECT * FROM deletion_intents WHERE id=?", (intent_id,)
@@ -2480,10 +2479,11 @@ class DriveStore:
             if intent is None:
                 raise NotFoundError("deletion intent not found")
             record = self._deletion_record(db, intent)
-            if record["pending_message_ids"]:
-                raise ValidationError("Telegram deletion has unconfirmed messages")
             if intent["state"] != "completed":
                 db.execute("DELETE FROM nodes WHERE id=?", (intent["root_id"],))
+                db.execute(
+                    "DELETE FROM deletion_messages WHERE intent_id=?", (intent_id,)
+                )
                 db.execute(
                     "UPDATE deletion_intents SET state='completed',error=NULL WHERE "
                     "id=?",

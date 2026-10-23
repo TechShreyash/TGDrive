@@ -239,7 +239,7 @@ def test_folder_manifest_retry_move_search_and_uniqueness(store):
         store.create_folder("/", "destination")
 
 
-def test_parts_idempotency_shares_and_delete_confirmations(store, backend):
+def test_parts_idempotency_shares_and_catalog_deletion(store, backend):
     parts = [
         {
             "index": 0,
@@ -272,12 +272,14 @@ def test_parts_idempotency_shares_and_delete_confirmations(store, backend):
     with pytest.raises(ValidationError):
         store.confirm_deletion_messages(intent["id"], [103])
     store.confirm_deletion_messages(intent["id"], [101])
-    with pytest.raises(ValidationError):
-        store.finish_deletion(intent["id"])
     reopened = MongoStore(backend)
     assert reopened.pending_deletions()[0]["pending_message_ids"] == [102]
-    store.confirm_deletion_messages(intent["id"], [102])
     assert store.finish_deletion(intent["id"]) == [101, 102]
+    assert store.finish_deletion(intent["id"]) == []
+    assert store.pending_deletions() == []
+    completed = backend.db.deletions.find_one({"_id": intent["id"]})
+    assert completed["message_ids"] == completed["pending_message_ids"] == []
+    assert backend.db.nodes.find_one({"_id": item["id"]}) is None
     assert store.has_file_operation("multipart-op")
     with pytest.raises(ValidationError):
         store.add_file("/", "large.bin", 101, 6, **kwargs)

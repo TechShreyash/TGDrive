@@ -1,4 +1,4 @@
-"""Permanent deletion waits for a real independent payload/catalog restore point."""
+"""Catalog removal preserves originals and the independent backup barrier."""
 
 from __future__ import annotations
 
@@ -25,7 +25,7 @@ async def cleanup(manager, pool, replica=None):
 
 
 @pytest.mark.asyncio
-async def test_permanent_delete_waits_for_verified_payload_and_catalog_in_backup(
+async def test_catalog_delete_waits_for_backup_and_retains_original_messages(
     tmp_path,
 ):
     configured, store, remote, replica, _ = setup(tmp_path)
@@ -39,25 +39,23 @@ async def test_permanent_delete_waits_for_verified_payload_and_catalog_in_backup
     node = next(files_in(store.export()))
     path = store.resolve_id(node["id"])
     store.set_trashed(path, True)
-    original_delete = telegram.delete_messages
+    original_finish = store.finish_deletion
 
-    async def checked_delete(channel, messages):
-        # The native destructive effect cannot start until both catalog and
-        # independent payload have been durably confirmed.
+    def checked_finish(intent_id):
+        # The catalog subtree cannot disappear before its restore point exists.
         assert replica.journal.get("restore_point")
         copied = next(files_in(remote_bundle(remote, replica)["replica_catalog"]))
         assert remote.messages[BACKUP, copied["message_id"]] == b"abc"
-        await original_delete(channel, messages)
-        for identity in messages:
-            remote.messages.pop((channel, identity), None)
+        return original_finish(intent_id)
 
-    telegram.delete_messages = checked_delete
+    store.finish_deletion = checked_finish
     try:
         job = manager.start_deletion(path)
         await job.task
         assert job.status is TransferStatus.COMPLETED
-        assert telegram.deleted == [77]
-        assert (configured.storage_channel, 77) not in remote.messages
+        assert telegram.deleted == [] and 77 in telegram.messages
+        assert remote.messages[configured.storage_channel, 77] == b"abc"
+        assert store.list_trash() == {}
         copied = next(files_in(remote_bundle(remote, replica)["replica_catalog"]))
         assert copied["trashed"]
         assert remote.messages[BACKUP, parts_in(copied)[0]["message_id"]] == b"abc"
@@ -92,7 +90,7 @@ async def test_paused_backup_prevents_permanent_delete_and_retry_preserves_inten
         retry = manager.retry_job(job.id)
         await retry.task
         assert retry.status is TransferStatus.COMPLETED
-        assert telegram.deleted == [77]
+        assert telegram.deleted == [] and 77 in telegram.messages
         assert replica.journal.get("restore_point")
     finally:
         await cleanup(manager, pool, replica)

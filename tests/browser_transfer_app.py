@@ -225,9 +225,7 @@ class FixtureTransfers:
             await self.release[item.id].wait()
             if item.id in self.fail_deletions:
                 self.fail_deletions.remove(item.id)
-                raise RuntimeError("Synthetic Telegram deletion confirmation failed")
-            await self.delete_telegram_messages(intent["message_ids"])
-            self.store.confirm_deletion_messages(intent["id"], intent["message_ids"])
+                raise RuntimeError("Synthetic catalog deletion failed")
             self.store.finish_deletion(intent["id"])
             self.registry.update(
                 item.id, status=TransferStatus.COMPLETED, phase="completed"

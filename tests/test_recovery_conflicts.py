@@ -223,7 +223,7 @@ async def test_late_newer_catalog_blocks_remote_deletion(tmp_path):
     await pool.stop()
 
 
-async def test_every_deletion_batch_checks_lineage_and_retains_unconfirmed_refs(
+async def test_catalog_deletion_rechecks_lineage_before_removing_refs(
     tmp_path,
 ):
     client = FakeTelegramClient()
@@ -240,15 +240,15 @@ async def test_every_deletion_batch_checks_lineage_and_retains_unconfirmed_refs(
     async def guard():
         nonlocal calls
         calls += 1
-        if calls == 3:
+        if calls == 2:
             raise RecoveryConflict("A newer remote catalog appeared")
 
     manager = manager_for(tmp_path, pool, store, guard)
     record = manager.start_deletion(path)
     await record.task
     assert record.status is TransferStatus.ERROR
-    assert client.deleted == list(range(1, 101))
-    assert store.pending_deletions()[0]["pending_message_ids"] == [101]
+    assert client.deleted == []
+    assert store.pending_deletions()[0]["pending_message_ids"] == list(range(1, 102))
     assert len(store.list_directory(path, include_trashed=True)) == 101
     await manager.close()
     manager.registry.close()

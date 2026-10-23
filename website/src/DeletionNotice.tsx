@@ -70,7 +70,7 @@ export default function DeletionNotice({ jobs }: { jobs: Job[] }) {
             {failed.map((job) => (
               <li key={job.id}>
                 <strong>{job.name || "Item"}</strong>:{" "}
-                {job.error || "Telegram has not confirmed deletion."}
+                {job.error || "TGDrive could not remove this item."}
               </li>
             ))}
           </ul>

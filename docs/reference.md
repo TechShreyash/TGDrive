@@ -718,7 +718,7 @@ Action is trash/restore/delete. Both routes accept 1–1000 paths and collapse
 duplicate/overlapping selections. Trash/restore returns `200` with
 `results: [{path,status}]`, where status is trashed/restored. Delete returns
 `202` with result job IDs and status deleting. Poll retained jobs for completion.
-Acceptance is not remote-deletion confirmation. Delete requires Trash entries;
+Acceptance is not database-removal confirmation. Delete requires Trash entries;
 permanent-deletion jobs cannot be cancelled.
 
 Move into a shared destination, or restore into a shared parent, can return
@@ -732,10 +732,15 @@ and share revocations. Public-exposure checks belong to that same transaction.
 Skipped move conflicts remain explicit successful results.
 
 Permanent deletion validates the whole selection before scheduling, then uses
-independently durable Telegram deletion intents. It cannot make remote effects
-atomic across items; retain/poll each accepted job and refresh actual state after
-an interrupted response. The older single-item compatibility routes do not
-provide the v1 exposure-confirmation flow.
+independently durable catalog-removal intents. Each job removes its database
+subtree and shares atomically, retaining original Telegram messages for every
+file age. Completed intents no longer retain message references. Telegram bots'
+48-hour deletion limit is the reason for this policy; see
+[permanent deletion](usage.md#why-permanent-deletion-keeps-the-telegram-files).
+Retain/poll each accepted job and refresh actual state after an interrupted
+response; selected items do not complete atomically as one batch. Legacy failed
+remote-deletion jobs use catalog-only removal when retried. The older single-item
+compatibility routes do not provide the v1 exposure-confirmation flow.
 
 </details>
 
@@ -1312,8 +1317,9 @@ Signed source URLs can persist in private job records.
 Sessions, hashes, secrets, metadata, share URLs and staged bytes are sensitive.
 Redaction is conservative; disable raw query/cookie logging in proxies as well.
 Never publish .env, StringSessions, session DBs or unreviewed traces.
-Confirmed Telegram deletion establishes adapter-visible absence, not physical
-erasure from provider backups or copies held by recipients.
+Permanent deletion removes TGDrive's catalog references, not Telegram originals,
+local caches, historical backups or copies held by recipients. It does not promise
+physical erasure; older backups may restore the removed catalog records.
 
 Use [operations](operations.md) for HTTPS, incident preservation and recovery;
 remaining gaps are in [roadmap](roadmap.md).

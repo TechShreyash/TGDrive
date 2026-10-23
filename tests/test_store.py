@@ -211,15 +211,13 @@ def test_recursive_delete_returns_all_telegram_message_ids() -> None:
     inner_path = _full_path(inner)
     second = store.add_file(inner_path, "two.bin", 102, 2)
 
-    with pytest.raises(ValidationError, match="confirmed Telegram deletion"):
+    with pytest.raises(ValidationError, match="permanent deletion intent"):
         store.delete(outer_path)
     store.set_trashed(outer_path, True)
     intent = store.begin_deletion(outer_path, channel_id=-100123)
     assert set(intent["message_ids"]) == {101, 102}
-    with pytest.raises(ValidationError, match="unconfirmed"):
-        store.finish_deletion(intent["id"])
-    store.confirm_deletion_messages(intent["id"], [101, 102])
     assert set(store.finish_deletion(intent["id"])) == {101, 102}
+    assert store.export()["deletions"][0]["message_ids"] == []
     assert store.list_directory("/") == {}
     assert first["id"] != second["id"]
 
@@ -373,11 +371,11 @@ def test_deletion_intent_survives_restart_with_partial_confirmations(tmp_path) -
         recovered.set_trashed(path, False)
     with pytest.raises(ValidationError, match="outside"):
         recovered.confirm_deletion_messages(intent["id"], [999])
-    recovered.confirm_deletion_messages(intent["id"], [102])
     assert recovered.finish_deletion(intent["id"]) == [101, 102]
-    assert recovered.finish_deletion(intent["id"]) == [101, 102]
+    assert recovered.finish_deletion(intent["id"]) == []
     assert recovered.pending_deletions() == []
-    assert recovered.export()["deletions"][0]["message_ids"] == [101, 102]
+    assert recovered.export()["deletions"][0]["message_ids"] == []
+    assert recovered.export()["deletions"][0]["pending_message_ids"] == []
 
 
 def test_deletion_backups_preserve_refs_and_reject_forged_confirmation() -> None:

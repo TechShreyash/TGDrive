@@ -188,11 +188,12 @@ export default function ActionDialog({
           {dialog.items.length === 1
             ? "“" + dialog.items[0].name + "”"
             : dialog.items.length + " selected items"}{" "}
-          and all files inside from your drive and its Telegram storage channel.
+          and all files inside from TGDrive’s database. The original files will
+          remain in Telegram.
         </p>
         <p className="muted">
-          This cannot be undone. If deletion fails, the item stays in Trash so
-          you can try again.
+          You cannot restore these items from Trash after deletion. If deletion
+          fails, the item stays in Trash so you can try again.
         </p>
         <ErrorNotice message={error} />
         <div className="dialog-actions">

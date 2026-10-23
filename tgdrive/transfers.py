@@ -964,30 +964,10 @@ class TransferManager:
                     raise TransferError(
                         "An upload into this folder still needs Telegram cleanup"
                     )
-            channel = intent["channel_id"] or self.settings.storage_channel
-            async with self.pool.lease() as client:
-                pending = intent["pending_message_ids"]
-                for start in range(0, len(pending), 100):
-                    batch = pending[start : start + 100]
-                    await self._verify_lineage(record)
-                    await client.delete_messages(channel, batch)
-                    if callable(getattr(client, "get_messages", None)):
-                        observed = await client.get_messages(channel, message_ids=batch)
-                        if not isinstance(observed, list):
-                            observed = [observed]
-                        if any(
-                            item is not None and not getattr(item, "empty", False)
-                            for item in observed
-                        ):
-                            raise TransferError(
-                                "Telegram deletion confirmation is incomplete"
-                            )
-                    await asyncio.to_thread(
-                        self.store.confirm_deletion_messages, intent["id"], batch
-                    )
-                    self.registry.update(
-                        record.id, current=min(record.total, start + len(batch))
-                    )
+            # Permanent deletion forgets the catalog subtree, not its Telegram
+            # documents. Bots cannot delete channel messages older than 48 hours.
+            # This also completes legacy intents with unconfirmed remote messages.
+            await self._verify_lineage(record)
             await asyncio.to_thread(self.store.finish_deletion, intent["id"])
             self.registry.update(
                 record.id,

@@ -212,7 +212,7 @@ def test_multipart_move_share_trash_and_recover_keep_one_logical_identity(store)
         restored.close()
 
 
-def test_durable_deletion_retains_and_confirms_all_parts_before_cascade(store):
+def test_catalog_deletion_forgets_all_parts_without_remote_confirmations(store):
     item = add(store)
     store.set_trashed(full(item), True)
     intent = store.begin_deletion(full(item), channel_id=-1001234567890)
@@ -225,10 +225,9 @@ def test_durable_deletion_retains_and_confirms_all_parts_before_cascade(store):
         )
         pending = recovered.pending_deletions()[0]
         assert pending["pending_message_ids"] == [102]
-        with pytest.raises(ValidationError):
-            recovered.finish_deletion(intent["id"])
-        recovered.confirm_deletion_messages(intent["id"], [102])
         assert recovered.finish_deletion(intent["id"]) == [101, 102]
+        assert recovered.pending_deletions() == []
+        assert recovered.export()["deletions"][0]["message_ids"] == []
         with recovered._transaction() as database:
             assert (
                 database.execute("SELECT count(*) FROM file_parts").fetchone()[0] == 0

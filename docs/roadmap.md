@@ -18,7 +18,7 @@ or failure scenario has been tested.
 | Multiple bots | Balanced work, account limits and persisted Telegram waits |
 | Connections page | Add/manage bots, Premium login, refresh names and verify credentials/channel access |
 | Sharing | Scoped links, expiry, rotation and revocation |
-| Trash and deletion | Reversible Trash; confirmed remote permanent deletion with retry |
+| Trash and deletion | Reversible Trash; permanent database removal with retry, retaining Telegram originals |
 | MongoDB persistence | Reopen the same drive after reinstalling the app |
 | Telegram database backups | Complete encrypted copies, separate recovery key and empty-database restore |
 | Guided installation | Docker setup wizard; source installation is also supported |
