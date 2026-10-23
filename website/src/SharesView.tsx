@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   Link,
   Copy,
@@ -8,7 +8,8 @@ import {
   Check,
   Pencil,
 } from "lucide-react";
-import { api, errorMessage } from "./api";
+import { api, errorMessage, request } from "./api";
+import { useManualRefresh } from "./useManualRefresh";
 import {
   formatLocationLabel,
   formatDate,
@@ -46,6 +47,7 @@ export default function SharesView({
   onChange,
   onLocate,
   onShare,
+  onNotice,
   query = "",
 }: {
   refresh: number;
@@ -53,13 +55,16 @@ export default function SharesView({
   onChange: () => void;
   onLocate: (share: Share) => void;
   onShare: (item: DriveItem) => void;
+  onNotice?: (message: string, error?: boolean) => void;
   query?: string;
 }) {
   const [shares, setShares] = useState<Share[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [filter, setFilter] = useState<"active" | "expired" | "all">("active");
-  const [revision, setRevision] = useState(0);
+  const generation = useRef(0);
+  const manualPending = useRef(false);
+  const { refreshing, run } = useManualRefresh(onNotice);
   const [busy, setBusy] = useState("");
   const [copied, setCopied] = useState("");
   const [confirm, setConfirm] = useState<Share | null>(null);
@@ -73,26 +78,52 @@ export default function SharesView({
     return () => clearInterval(timer);
   }, []);
   useEffect(() => {
-    let ignore = false;
+    if (manualPending.current) return;
+    const controller = new AbortController();
+    const requestId = ++generation.current;
     setLoading(true);
-    void api
-      .shares()
+    void request<{ shares: Share[] }>("/api/v1/shares", undefined, {
+      signal: AbortSignal.any([controller.signal, AbortSignal.timeout(60000)]),
+    })
       .then((result) => {
-        if (!ignore) {
+        if (!controller.signal.aborted && requestId === generation.current) {
           setShares(result.shares);
           setError("");
         }
       })
       .catch((cause) => {
-        if (!ignore) setError(errorMessage(cause));
+        if (!controller.signal.aborted && requestId === generation.current)
+          setError(errorMessage(cause));
       })
       .finally(() => {
-        if (!ignore) setLoading(false);
+        if (!controller.signal.aborted && requestId === generation.current)
+          setLoading(false);
       });
-    return () => {
-      ignore = true;
-    };
-  }, [refresh, revision]);
+    return () => controller.abort();
+  }, [refresh]);
+  const refreshShares = () =>
+    run(async (signal) => {
+      manualPending.current = true;
+      const requestId = ++generation.current;
+      try {
+        const result = await request<{ shares: Share[] }>(
+          "/api/v1/shares",
+          undefined,
+          { signal: AbortSignal.any([signal, AbortSignal.timeout(60000)]) },
+        );
+        if (signal.aborted || requestId !== generation.current) return false;
+        setShares(result.shares);
+        setError("");
+        setLoading(false);
+        return true;
+      } catch (cause) {
+        if (!signal.aborted && requestId === generation.current)
+          setError(errorMessage(cause));
+        throw cause;
+      } finally {
+        manualPending.current = false;
+      }
+    }, "Shared links refreshed.");
   useEffect(() => {
     if (!copied) return;
     const timer = setTimeout(() => setCopied(""), 2500);
@@ -176,7 +207,7 @@ export default function SharesView({
       size: share.size,
     });
   return (
-    <div className="shares-page" aria-busy={loading}>
+    <div className="shares-page" aria-busy={loading || refreshing}>
       <div className="shares-toolbar">
         <div
           className="shares-filters"
@@ -205,10 +236,10 @@ export default function SharesView({
           className="icon-button"
           aria-label="Refresh Shared Links"
           title="Refresh"
-          disabled={loading}
-          onClick={() => setRevision((n) => n + 1)}
+          disabled={loading || refreshing}
+          onClick={() => void refreshShares()}
         >
-          <RefreshCw size={18} />
+          {refreshing ? <Spinner /> : <RefreshCw size={18} />}
         </button>
       </div>
       {error && (
@@ -216,9 +247,10 @@ export default function SharesView({
           <ErrorNotice message={error} />
           <button
             className="secondary-button"
-            onClick={() => setRevision((value) => value + 1)}
+            disabled={refreshing}
+            onClick={() => void refreshShares()}
           >
-            Try Again
+            {refreshing && <Spinner />} Try Again
           </button>
         </div>
       )}

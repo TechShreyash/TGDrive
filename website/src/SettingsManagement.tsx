@@ -19,7 +19,8 @@ import {
   UserRound,
   X,
 } from "lucide-react";
-import { api, ApiError, errorMessage } from "./api";
+import { api, ApiError, errorMessage, request } from "./api";
+import { useManualRefresh } from "./useManualRefresh";
 import { ErrorNotice, Spinner } from "./components";
 import type { ManagedClient, ManagementSettings } from "./types";
 import {
@@ -68,8 +69,12 @@ function ClientHealth({ client }: { client: ManagedClient }) {
   );
 }
 export default function SettingsManagement({
+  onNotice,
   demoMode = false,
-}: { demoMode?: boolean } = {}) {
+}: {
+  onNotice?: (message: string, error?: boolean) => void;
+  demoMode?: boolean;
+} = {}) {
   const [settings, setSettings] = useState<ManagementSettings | null>(null);
   const [draft, setDraft] = useState<ConnectionDraft | null>(null);
   const [target, setTarget] = useState<string | null>(null);
@@ -79,7 +84,8 @@ export default function SettingsManagement({
   const [notice, setNotice] = useState("");
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
-  const [refreshingConnections, setRefreshingConnections] = useState(false);
+  const { refreshing: refreshingConnections, run } = useManualRefresh(onNotice);
+  const manualPending = useRef(false);
   const checksBusy = Boolean(
     settings?.clients.some((client) =>
       ["queued", "checking", "waiting"].includes(client.connection_check ?? ""),
@@ -98,14 +104,21 @@ export default function SettingsManagement({
   const mounted = useRef(true);
   const editBase = useRef<ManagementSettings | null>(null);
   const firstField = useRef<HTMLInputElement>(null);
-  const load = useCallback(async (signal?: AbortSignal) => {
+  const load = useCallback(async (signal?: AbortSignal, manual = false) => {
+    if (manualPending.current && !manual) return false;
     const requestId = ++generation.current;
     try {
       const value = await api.settings(signal);
-      if (mounted.current && requestId === generation.current) {
+      if (
+        mounted.current &&
+        !signal?.aborted &&
+        requestId === generation.current
+      ) {
         setSettings(value);
         setError("");
+        return true;
       }
+      return false;
     } catch (cause) {
       if (
         mounted.current &&
@@ -115,6 +128,8 @@ export default function SettingsManagement({
         setSettings(null);
         setError(errorMessage(cause));
       }
+      if (manual) throw cause;
+      return false;
     } finally {
       if (mounted.current && requestId === generation.current)
         setLoading(false);
@@ -145,22 +160,49 @@ export default function SettingsManagement({
       clearTimeout(timer);
     };
   }, [checksPending, settings, load]);
-  const refreshConnections = async () => {
+  const refreshSettings = () =>
+    run(async (signal) => {
+      manualPending.current = true;
+      try {
+        return await load(signal, true);
+      } finally {
+        manualPending.current = false;
+      }
+    }, "Connection status refreshed.");
+  const refreshConnections = () => {
     if (demoMode) return;
-    const requestId = ++generation.current;
-    setRefreshingConnections(true);
-    try {
-      const value = await api.refreshConnections();
-      if (mounted.current && requestId === generation.current) {
+    return run(async (signal) => {
+      manualPending.current = true;
+      const requestId = ++generation.current;
+      try {
+        const value = await request<ManagementSettings>(
+          "/api/v1/settings/refresh",
+          {},
+          {
+            signal: AbortSignal.any([signal, AbortSignal.timeout(60000)]),
+          },
+        );
+        if (
+          !mounted.current ||
+          signal.aborted ||
+          requestId !== generation.current
+        )
+          return false;
         setSettings(value);
         setError("");
+        return true;
+      } catch (cause) {
+        if (
+          mounted.current &&
+          !signal.aborted &&
+          requestId === generation.current
+        )
+          setError(errorMessage(cause));
+        throw cause;
+      } finally {
+        manualPending.current = false;
       }
-    } catch (cause) {
-      if (mounted.current && requestId === generation.current)
-        setError(errorMessage(cause));
-    } finally {
-      if (mounted.current) setRefreshingConnections(false);
-    }
+    }, "Connection checks requested.");
   };
   useEffect(() => {
     firstField.current?.focus();
@@ -312,9 +354,10 @@ export default function SettingsManagement({
           <button
             type="button"
             className="inline-link"
-            onClick={() => void load()}
+            disabled={refreshingConnections}
+            onClick={() => void refreshSettings()}
           >
-            Check Again
+            {refreshingConnections && <Spinner />} Check Again
           </button>
         </p>
       )}
@@ -455,7 +498,10 @@ export default function SettingsManagement({
       (client) => clientConnectionLabel(client) === "Connected",
     ).length ?? 0;
   return (
-    <div className="connection-management page-body" aria-busy={saving}>
+    <div
+      className="connection-management page-body"
+      aria-busy={saving || refreshingConnections}
+    >
       {demoMode && <DemoModeNotice />}
       {loading && (
         <div className="loading-state" role="status">
@@ -468,12 +514,11 @@ export default function SettingsManagement({
           <button
             className="secondary-button"
             type="button"
-            onClick={() => {
-              setLoading(true);
-              void load();
-            }}
+            disabled={refreshingConnections}
+            onClick={() => void refreshSettings()}
           >
-            <RefreshCw size={16} /> Try Again
+            {refreshingConnections ? <Spinner /> : <RefreshCw size={16} />} Try
+            Again
           </button>
         </div>
       )}
@@ -705,9 +750,10 @@ export default function SettingsManagement({
                 <button
                   type="button"
                   className="inline-link"
-                  onClick={() => void load()}
+                  disabled={refreshingConnections}
+                  onClick={() => void refreshSettings()}
                 >
-                  Check Readiness
+                  {refreshingConnections && <Spinner />} Check Readiness
                 </button>
               </p>
             )}

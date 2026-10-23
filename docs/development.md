@@ -97,6 +97,15 @@ For the coverage run, first enable the isolated MongoDB tests described below;
 the default offline tests do not exercise the production database sufficiently
 to meet the 80% coverage floor.
 
+Focused offline checks for adaptive reads, preload admission and exact
+download ranges (fake Telegram resources; no live throughput claim):
+
+~~~bash
+uv run --frozen --all-groups python -m pytest -W error \
+  tests/test_adaptive_read_ahead.py tests/test_preloading.py \
+  tests/test_preload_api.py tests/test_download_ranges.py
+~~~
+
 <details>
 <summary>Full lint, tests, dependency and build checks</summary>
 
@@ -127,6 +136,10 @@ Compose validation checks the template, not the validity of placeholder credenti
 uv run --frozen --group e2e playwright install --with-deps chromium
 TGDRIVE_E2E=1 uv run --frozen --group e2e python -m pytest \
   -m e2e tests/test_browser*.py
+
+# Focused preload/refresh workflows with the offline browser fixture
+TGDRIVE_E2E=1 uv run --frozen --group e2e python -m pytest \
+  tests/test_browser_preloads.py tests/test_browser_refresh_feedback.py
 ~~~
 
 Install browser binaries/libraries inside WSL.
@@ -271,6 +284,7 @@ not guaranteed. Dependency updates must include the affected integration checks.
 | Web app | `website/src/` |
 | MongoDB | `tests/test_mongodb.py`, `tests/test_mongodb_unit.py` |
 | Jobs and receipts | `test_tasks.py`, `test_durable_jobs.py`, `test_resumable_uploads.py` |
+| Preload/adaptive read-ahead | `test_adaptive_read_ahead.py`, `test_preloading.py`, `test_preload_api.py`, `test_download_ranges.py` |
 | Large files | `test_multipart_transfers.py`, `test_multipart_streaming.py`, `test_multipart_previews.py` |
 | Telegram pool/transport | `test_client_pool.py`, `test_telegram_clients.py`, `test_telethon_transport.py` |
 | HTTP/auth/security | `test_app.py`, `test_http_guard.py`, `test_security.py`, `test_remote.py` |

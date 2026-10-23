@@ -32,6 +32,7 @@ import {
 } from "./types";
 import { ErrorNotice, Spinner } from "./components";
 import { transfers, uploadBackupState } from "./transfers";
+import { useManualRefresh, type RefreshNotice } from "./useManualRefresh";
 import "./OwnerPages.css";
 export function Login({ onSuccess }: { onSuccess: () => void }) {
   const [password, setPassword] = useState("");
@@ -117,11 +118,13 @@ export function StorageView({
   demoMode = false,
   onTransfers,
   onTrash,
+  onNotice,
 }: {
   config: { max_file_size: number };
   demoMode?: boolean;
   onTransfers: () => void;
   onTrash: () => void;
+  onNotice?: RefreshNotice;
 }) {
   const [status, setStatus] = useState<ServerStatus | null>(null);
   const [usage, setUsage] = useState<ManagementStats | null>(null);
@@ -134,14 +137,17 @@ export function StorageView({
   const [copyError, setCopyError] = useState("");
   const generation = useRef(0);
   const mounted = useRef(true);
-  const load = useCallback(async (signal?: AbortSignal) => {
+  const manualPending = useRef(false);
+  const refreshAction = useManualRefresh(onNotice);
+  const load = useCallback(async (signal?: AbortSignal, manual = false) => {
+    if (manualPending.current && !manual) return false;
     const current = ++generation.current;
     const [health, management] = await Promise.allSettled([
       api.status(signal),
       api.settings(signal),
     ]);
     if (!mounted.current || signal?.aborted || current !== generation.current)
-      return;
+      return false;
     if (health.status === "fulfilled") {
       setStatus(health.value);
       setError("");
@@ -157,7 +163,21 @@ export function StorageView({
       setUsageError("Usage figures could not be loaded. Check Again to retry.");
     }
     setLoading(false);
+    if (manual) {
+      if (health.status === "rejected") throw health.reason;
+      if (management.status === "rejected") throw management.reason;
+    }
+    return true;
   }, []);
+  const refreshStorage = () =>
+    refreshAction.run(async (signal) => {
+      manualPending.current = true;
+      try {
+        return await load(signal, true);
+      } finally {
+        manualPending.current = false;
+      }
+    }, "Storage refreshed.");
   useEffect(() => {
     mounted.current = true;
     const controller = new AbortController();
@@ -275,7 +295,13 @@ export function StorageView({
           </div>
           <button
             className="secondary-button"
-            disabled={demoMode || backingUp || loading || !status}
+            disabled={
+              demoMode ||
+              backingUp ||
+              loading ||
+              refreshAction.refreshing ||
+              !status
+            }
             onClick={() => void backUp()}
           >
             {backingUp ? <Spinner /> : <RefreshCw size={16} />}
@@ -337,7 +363,7 @@ export function StorageView({
           </p>
         )}
       </section>
-      <ChannelBackup demoMode={demoMode} />
+      <ChannelBackup demoMode={demoMode} onNotice={onNotice} />
       <section
         className="settings-section"
         aria-labelledby="drive-usage-heading"
@@ -352,10 +378,13 @@ export function StorageView({
           </div>
           <button
             className="text-button"
-            disabled={loading}
-            onClick={() => void load()}
+            aria-label="Check Again"
+            disabled={loading || backingUp || refreshAction.refreshing}
+            onClick={() => void refreshStorage()}
+            aria-busy={refreshAction.refreshing}
           >
-            <RefreshCw size={16} /> Check Again
+            {refreshAction.refreshing ? <Spinner /> : <RefreshCw size={16} />}
+            {refreshAction.refreshing ? "Refreshing…" : "Check Again"}
           </button>
         </div>
         <ErrorNotice message={usageError} />
@@ -500,15 +529,17 @@ export function StorageView({
 }
 
 export function UploadSettings({
+  onNotice,
   demoMode = false,
-}: { demoMode?: boolean } = {}) {
+}: { onNotice?: RefreshNotice; demoMode?: boolean } = {}) {
   const [saved, setSaved] = useState<UploadPreferences | null>(null);
   const [value, setValue] = useState(1);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
   const [loading, setLoading] = useState(true);
-  const load = useCallback(async (signal?: AbortSignal) => {
+  const refreshAction = useManualRefresh(onNotice);
+  const load = useCallback(async (signal?: AbortSignal, manual = false) => {
     setLoading(true);
     setError("");
     try {
@@ -517,8 +548,11 @@ export function UploadSettings({
         setSaved(preferences);
         setValue(preferences.uploads_per_bot);
       }
+      return !signal?.aborted;
     } catch (cause) {
       if (!signal?.aborted) setError(errorMessage(cause));
+      if (manual) throw cause;
+      return false;
     } finally {
       if (!signal?.aborted) setLoading(false);
     }
@@ -673,8 +707,18 @@ export function UploadSettings({
             </div>
           </form>
         ) : (
-          <Button className="secondary-button" onClick={() => void load()}>
-            Try Again
+          <Button
+            className="secondary-button"
+            disabled={refreshAction.refreshing || loading}
+            onClick={() =>
+              void refreshAction.run(
+                (signal) => load(signal, true),
+                "Upload settings refreshed.",
+              )
+            }
+          >
+            {refreshAction.refreshing && <Spinner />}
+            {refreshAction.refreshing ? "Refreshing…" : "Try Again"}
           </Button>
         )}
         <ErrorNotice message={error} />

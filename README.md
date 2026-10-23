@@ -17,7 +17,7 @@ links from one responsive web interface.
 | **Large files** | Split across documents capped at 2000 MiB by default; smaller splits are configurable. One drive item, exact original downloads, and video byte-range seeking. Premium is optional and preferred for transfer speed; it does not raise this cap. |
 | **Media playback** | Locally bundled enhanced video player with supported embedded audio/subtitle tracks, chapter navigation, keyboard controls, and buffered timeline feedback. |
 | **Document previews** | Images, PDFs up to 256 MiB with lazy byte ranges, read-only text/code, EPUB books and CBZ/CBR comics. Fullscreen and original downloads remain available; unsupported or protected content has a download fallback. |
-| **Cache and preload** | Reuse recently streamed blocks, prepare a file before sharing, and limit RAM, disk, and background work. Inspect ready bytes and evict cached data. |
+| **Preload files** | Cache the whole original on the server before watching, downloading or sharing. Inspect current coverage and control RAM, disk and background work. [How to preload](docs/usage.md#preload-a-file-for-smoother-playback-and-downloads). |
 | **Transfers** | Resumable device uploads with automatic 1–4 file concurrency, independent server-side Telegram processing, safe-to-close receipt feedback, URL jobs, measured progress, retries, and durable history. [How uploads work](docs/usage.md#upload-speed-and-queue). |
 | **Sharing** | Multiple independent links per file/folder, with optional labels and separate expiry, copy, edit and revocation. Review access in Shared Links. |
 | **Recovery** | MongoDB stores the catalog and settings; encrypted database snapshots are saved separately to Telegram. An optional independent private channel copies completed payloads and enables explicit web recovery from a surviving channel. |
@@ -82,6 +82,16 @@ The default logical-file limit is **16 GiB**, subject to staging capacity and
 free disk; it can be configured. This is not unlimited server storage.
 
 ## Make streaming and shared downloads smoother
+
+Choose **My Files → file ⋯ → Preload file** before a movie or large shared
+download. It caches the whole original on the server; wait for **Ready** with
+full coverage in **Monitor → Preloads**. Your device receives bytes when you
+play or download. [Preloading and its limits](docs/usage.md#preload-a-file-for-smoother-playback-and-downloads).
+
+Ordinary requests use bounded adaptive read-ahead. **Preload during playback**
+also warms upcoming original audio/video by default. Download managers can
+request parallel ranges or resume gaps without automatically warming the
+whole file. [Parallel and resumed downloads](docs/usage.md#parallel-and-resumed-downloads).
 
 The download path shares in-flight reads, reads blocks concurrently through
 available Telegram accounts, and caches verified bytes for reuse. Demand reads

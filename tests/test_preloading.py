@@ -128,7 +128,7 @@ async def test_head_and_metadata_observation_never_trigger_preload(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_auto_completes_hot_file_only_after_sequential_delivery(tmp_path):
+async def test_one_viewer_replaying_a_segment_does_not_promote_whole_file(tmp_path):
     manager, pool, _client = await manager_for(
         tmp_path, b"x" * (8 * BLOCK), auto_preload=True
     )
@@ -149,19 +149,15 @@ async def test_auto_completes_hot_file_only_after_sequential_delivery(tmp_path):
                 break
             await asyncio.sleep(0.001)
         job = next(iter(manager._jobs.values()))
-        assert job["mode"] == "auto" and job["target_bytes"] == 4 * BLOCK
+        assert job["mode"] == "auto" and job["target_bytes"] == BLOCK
         assert (await finish(manager, job))["state"] == "ready"
         for index in range(4):
             manager.delivered(
                 channel_id=CHANNEL, message_id=77, offset=index * BLOCK, length=BLOCK
             )
-        for _ in range(100):
-            if len(manager._jobs) == 2:
-                break
-            await asyncio.sleep(0.001)
-        replay = list(manager._jobs.values())[-1]
-        assert replay["target_bytes"] == 8 * BLOCK
-        assert (await finish(manager, replay))["state"] == "ready"
+        await asyncio.sleep(0)
+        assert len(manager._jobs) == 1
+        assert manager._observed[identity]["hot_until"] == 0
     finally:
         await manager.close()
         await pool.stop()
@@ -272,7 +268,7 @@ async def test_far_seek_cancels_obsolete_automatic_ahead_job(tmp_path):
                 break
             await asyncio.sleep(0.001)
         row = next(iter(manager._jobs.values()))
-        assert row["target_bytes"] == 4 * BLOCK
+        assert row["target_bytes"] == BLOCK
         manager.delivered(
             channel_id=CHANNEL, message_id=77, offset=48 * BLOCK, length=BLOCK
         )
@@ -335,7 +331,7 @@ async def test_first_cold_view_only_preloads_ahead_and_stops_when_viewer_leaves(
                 break
             await asyncio.sleep(0.001)
         row = next(iter(manager._jobs.values()))
-        assert 4 * BLOCK <= row["target_bytes"] <= 32 * BLOCK
+        assert BLOCK <= row["target_bytes"] <= 128 * BLOCK
         assert row["target_bytes"] < row["size"]
         manager.finished(identity, "first-view")
         task = manager._tasks.get(row["id"])
@@ -350,7 +346,7 @@ async def test_first_cold_view_only_preloads_ahead_and_stops_when_viewer_leaves(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    "interval,fill,window", [(1, 2, 8), (1, 0.5, 16), (0.05, 40, 32)]
+    "interval,fill,window", [(1, 2, 8), (1, 0.5, 16), (0.05, 40, 60)]
 )
 async def test_ahead_window_uses_consumption_and_fill_speed(
     tmp_path, interval, fill, window
@@ -365,9 +361,9 @@ async def test_ahead_window_uses_consumption_and_fill_speed(
     )
     now = [0.0]
     manager._clock = lambda: now[0]
-    manager._fill_rate = fill * BLOCK
     try:
         identity = manager.observe(channel_id=CHANNEL, message_id=77, size=64 * BLOCK)
+        manager._observed[identity]["fill_rate"] = fill * BLOCK
         manager.begin(identity, None)
         for index in range(4):
             now[0] = index * interval
@@ -521,5 +517,540 @@ async def test_concurrent_manual_prepare_admits_one_shared_job(tmp_path, monkeyp
         assert len(manager._tasks) == 1
     finally:
         gate.set()
+        await manager.close()
+        await pool.stop()
+
+
+@pytest.mark.asyncio
+async def test_ahead_preload_renews_when_playback_reaches_previous_window(tmp_path):
+    manager, pool, _client = await manager_for(
+        tmp_path, b"x" * (20 * BLOCK), auto_preload=True
+    )
+    manager._clock = lambda: 1.0
+    try:
+        identity = manager.observe(
+            channel_id=CHANNEL, message_id=77, size=20 * BLOCK, media_rate=BLOCK / 2
+        )
+        manager.begin(identity, None)
+        for index in range(4):
+            manager.delivered(
+                channel_id=CHANNEL, message_id=77, offset=index * BLOCK, length=BLOCK
+            )
+        for _ in range(100):
+            if manager._jobs:
+                break
+            await asyncio.sleep(0.001)
+        first = next(iter(manager._jobs.values()))
+        assert first["start"] == 4 * BLOCK and first["end"] == 8 * BLOCK
+        assert (await finish(manager, first))["state"] == "ready"
+        for index in range(4, 8):
+            manager.delivered(
+                channel_id=CHANNEL, message_id=77, offset=index * BLOCK, length=BLOCK
+            )
+        for _ in range(100):
+            if len(manager._jobs) > 1:
+                break
+            await asyncio.sleep(0.001)
+        assert len(manager._jobs) == 2
+        second = list(manager._jobs.values())[-1]
+        assert second["start"] == 8 * BLOCK and second["end"] == 12 * BLOCK
+        assert (await finish(manager, second))["state"] == "ready"
+    finally:
+        await manager.close()
+        await pool.stop()
+
+
+@pytest.mark.asyncio
+async def test_partial_preload_reserves_aligned_blocks_before_admission(tmp_path):
+    manager, pool, client = await manager_for(
+        tmp_path, b"x" * (2 * BLOCK), memory_max_bytes=BLOCK, disk_max_bytes=0
+    )
+    try:
+        with pytest.raises(PreloadCapacityError, match="budget"):
+            await manager.prepare(
+                channel_id=CHANNEL,
+                message_id=77,
+                size=2 * BLOCK,
+                start=BLOCK - 1,
+                end=BLOCK + 1,
+            )
+        assert not manager._jobs and not client.native.requests
+    finally:
+        await manager.close()
+        await pool.stop()
+
+
+@pytest.mark.asyncio
+async def test_multipart_preload_reserves_a_digest_for_each_telegram_part(tmp_path):
+    from test_multipart_streaming import build_parts
+
+    contents = [b"one", b"two"]
+    parts = build_parts(contents)
+    manager, pool, client = await manager_for(
+        tmp_path, b"", memory_max_bytes=0, disk_max_bytes=6 + 32
+    )
+    try:
+        with pytest.raises(PreloadCapacityError, match="budget"):
+            await manager.prepare(
+                channel_id=CHANNEL,
+                message_id=parts[0]["message_id"],
+                size=6,
+                parts=parts,
+            )
+        assert not manager._jobs and not client.native.requests
+    finally:
+        await manager.close()
+        await pool.stop()
+
+
+@pytest.mark.asyncio
+async def test_manual_preload_replaces_full_automatic_job_and_its_authorization(
+    tmp_path,
+):
+    gate = asyncio.Event()
+    manager, pool, _client = await manager_for(tmp_path, b"x" * (4 * BLOCK), gate)
+    revoked = False
+
+    async def authorize_auto():
+        if revoked:
+            raise PermissionError("The original viewer's share was revoked")
+
+    try:
+        automatic = await manager.prepare(
+            channel_id=CHANNEL,
+            message_id=77,
+            size=4 * BLOCK,
+            mode="auto",
+            authorize=authorize_auto,
+        )
+        manual = await manager.prepare(
+            channel_id=CHANNEL, message_id=77, size=4 * BLOCK
+        )
+        assert manual["id"] != automatic["id"] and manual["mode"] == "manual"
+        assert manager._jobs[automatic["id"]]["state"] == "cancelled"
+        revoked = True
+        gate.set()
+        assert (await finish(manager, manual))["state"] == "ready"
+        assert (await manager.snapshot())["cache"]["files"][0]["complete"]
+    finally:
+        gate.set()
+        await manager.close()
+        await pool.stop()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("blocks,complete", [(20, False), (8, True)])
+async def test_hot_auto_admission_after_last_viewer_leaves_only_allows_full_file(
+    tmp_path, monkeypatch, blocks, complete
+):
+    manager, pool, client = await manager_for(
+        tmp_path, b"x" * (blocks * BLOCK), auto_preload=True
+    )
+    manager._clock = lambda: 1.0
+    at_admission = asyncio.Event()
+    release_admission = asyncio.Event()
+    original_capacity = manager._capacity
+    inspections = 0
+
+    async def capacity():
+        nonlocal inspections
+        inspections += 1
+        if inspections == 2:
+            at_admission.set()
+            await release_admission.wait()
+        return await original_capacity()
+
+    monkeypatch.setattr(manager, "_capacity", capacity)
+    try:
+        identity = manager.observe(
+            channel_id=CHANNEL, message_id=77, size=blocks * BLOCK
+        )
+        # Independent viewers qualify overlapping runs as hot-file demand.
+        for viewer in ("first", "second"):
+            manager.observe(
+                channel_id=CHANNEL,
+                message_id=77,
+                size=blocks * BLOCK,
+                request_id=viewer,
+            )
+            manager.begin(identity, viewer)
+            for index in range(4):
+                manager.delivered(
+                    channel_id=CHANNEL,
+                    message_id=77,
+                    offset=index * BLOCK,
+                    length=BLOCK,
+                    request_id=viewer,
+                )
+        await asyncio.wait_for(at_admission.wait(), 3)
+        assert not manager._jobs
+        manager.finished(identity, "first")
+        manager.finished(identity, "second")
+        release_admission.set()
+        await asyncio.wait_for(manager._auto_tasks[identity], 3)
+        if complete:
+            job = next(iter(manager._jobs.values()))
+            assert job["target_bytes"] == blocks * BLOCK
+            assert (await finish(manager, job))["state"] == "ready"
+        else:
+            assert not manager._jobs and not client.native.requests
+            assert not manager.cache.memory.flights
+    finally:
+        release_admission.set()
+        await manager.close()
+        await pool.stop()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "media_rate,qualification,window",
+    [
+        (BLOCK / 64, 1, 1),
+        (2 * BLOCK, 4, 16),
+        (32 * BLOCK, 4, 128),
+        (1e308, 4, 128),
+    ],
+)
+async def test_metadata_bitrate_scales_qualification_and_ahead_without_network_bursts(
+    tmp_path, media_rate, qualification, window
+):
+    from unittest.mock import AsyncMock
+
+    from test_telegram_cache import message
+
+    from tgdrive.telegram_clients import TelegramMessage
+
+    gate = asyncio.Event()
+    size = 256 * BLOCK
+    manager, pool, client = await manager_for(
+        tmp_path, b"", gate, disk_max_bytes=512 * BLOCK, auto_preload=True
+    )
+    client.get_messages = AsyncMock(
+        return_value=TelegramMessage(client, message(1, size))
+    )
+    manager._clock = lambda: 1.0
+    try:
+        identity = manager.observe(
+            channel_id=CHANNEL, message_id=77, size=size, media_rate=media_rate
+        )
+        manager.begin(identity, None)
+        for index in range(qualification - 1):
+            manager.delivered(
+                channel_id=CHANNEL, message_id=77, offset=index * BLOCK, length=BLOCK
+            )
+        await asyncio.sleep(0)
+        assert not manager._jobs
+        manager.delivered(
+            channel_id=CHANNEL,
+            message_id=77,
+            offset=(qualification - 1) * BLOCK,
+            length=BLOCK,
+        )
+        for _ in range(100):
+            if manager._jobs:
+                break
+            await asyncio.sleep(0.001)
+        job = next(iter(manager._jobs.values()))
+        assert job["start"] == qualification * BLOCK
+        assert job["target_bytes"] == window * BLOCK
+        viewer = manager._observed[identity]["viewers"]["default"]
+        assert viewer["rate"] == 0
+        assert viewer["media_rate"] == media_rate
+    finally:
+        await manager.close()
+        await pool.stop()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "times,expected_rate",
+    [
+        ([index * 0.01 for index in range(11)], 100 * BLOCK),
+        ([0, 1, 1.001, 1.002, 1.003, 2], 1.75 * BLOCK),
+        ([index * 0.00001 for index in range(11)], 0),
+        ([0, 0.1, 50], 0),
+    ],
+)
+async def test_fallback_rate_aggregates_fast_chunks_and_bursts_but_rejects_idle_gaps(
+    tmp_path, times, expected_rate
+):
+    manager, pool, _client = await manager_for(tmp_path, b"", auto_preload=True)
+    now = [0.0]
+    manager._clock = lambda: now[0]
+    try:
+        identity = manager.observe(channel_id=CHANNEL, message_id=77, size=64 * BLOCK)
+        manager.begin(identity, None)
+        for index, at in enumerate(times):
+            now[0] = at
+            manager.delivered(
+                channel_id=CHANNEL, message_id=77, offset=index * BLOCK, length=BLOCK
+            )
+        viewer = manager._observed[identity]["viewers"]["default"]
+        assert viewer["rate"] == pytest.approx(expected_rate)
+    finally:
+        await manager.close()
+        await pool.stop()
+
+
+@pytest.mark.asyncio
+async def test_playback_seek_resets_delivery_rate_without_affecting_other_viewer(
+    tmp_path,
+):
+    manager, pool, _client = await manager_for(tmp_path, b"", auto_preload=True)
+    now = [0.0]
+    manager._clock = lambda: now[0]
+    try:
+        identity = manager.observe(
+            channel_id=CHANNEL, message_id=77, size=64 * BLOCK, request_id="first"
+        )
+        manager.observe(
+            channel_id=CHANNEL, message_id=77, size=64 * BLOCK, request_id="second"
+        )
+        manager.begin(identity, "first")
+        manager.begin(identity, "second")
+        for index in range(3):
+            now[0] = index
+            for viewer in ("first", "second"):
+                manager.delivered(
+                    channel_id=CHANNEL,
+                    message_id=77,
+                    offset=index * BLOCK,
+                    length=BLOCK,
+                    request_id=viewer,
+                )
+        now[0] += 0.000001
+        manager.delivered(
+            channel_id=CHANNEL,
+            message_id=77,
+            offset=40 * BLOCK,
+            length=BLOCK,
+            request_id="first",
+        )
+        viewers = manager._observed[identity]["viewers"]
+        assert viewers["first"]["rate"] == 0
+        assert viewers["second"]["rate"] == BLOCK
+    finally:
+        await manager.close()
+        await pool.stop()
+
+
+@pytest.mark.asyncio
+async def test_fill_rate_for_another_file_does_not_change_playback_ahead(tmp_path):
+    gate = asyncio.Event()
+    manager, pool, _client = await manager_for(
+        tmp_path,
+        b"x" * (64 * BLOCK),
+        gate,
+        disk_max_bytes=256 * BLOCK,
+        auto_preload=True,
+    )
+    manager._clock = lambda: 1.0
+    try:
+        identities = []
+        for message_id, fill in ((77, BLOCK / 2), (88, 2 * BLOCK)):
+            identity = manager.observe(
+                channel_id=CHANNEL,
+                message_id=message_id,
+                size=64 * BLOCK,
+                media_rate=BLOCK,
+            )
+            identities.append(identity)
+            manager._observed[identity]["fill_rate"] = fill
+            manager.begin(identity, None)
+            for index in range(4):
+                manager.delivered(
+                    channel_id=CHANNEL,
+                    message_id=message_id,
+                    offset=index * BLOCK,
+                    length=BLOCK,
+                )
+        for _ in range(100):
+            if len(manager._jobs) == 2:
+                break
+            await asyncio.sleep(0.001)
+        targets = {
+            job["file_id"]: job["target_bytes"] for job in manager._jobs.values()
+        }
+        assert targets == {identities[0]: 16 * BLOCK, identities[1]: 8 * BLOCK}
+    finally:
+        await manager.close()
+        await pool.stop()
+
+
+@pytest.mark.asyncio
+async def test_anonymous_player_requests_do_not_qualify_as_distinct_full_file_viewers(
+    tmp_path,
+):
+    manager, pool, _client = await manager_for(tmp_path, b"", auto_preload=True)
+    try:
+        for index in range(3):
+            viewer = f"anonymous-http-{index}"
+            identity = manager.observe(
+                channel_id=CHANNEL,
+                message_id=77,
+                size=8 * BLOCK,
+                request_id=viewer,
+                allow_full=False,
+            )
+            manager.begin(identity, viewer)
+            for block in range(4):
+                manager.delivered(
+                    channel_id=CHANNEL,
+                    message_id=77,
+                    offset=block * BLOCK,
+                    length=BLOCK,
+                    request_id=viewer,
+                )
+        assert manager._observed[identity]["hot_until"] == 0
+    finally:
+        await manager.close()
+        await pool.stop()
+
+
+@pytest.mark.asyncio
+async def test_independent_playback_runs_can_qualify_after_growing_into_overlap(
+    tmp_path,
+):
+    manager, pool, _client = await manager_for(tmp_path, b"", auto_preload=True)
+    try:
+        identity = manager.observe(
+            channel_id=CHANNEL, message_id=77, size=16 * BLOCK, request_id="first"
+        )
+        for viewer, start in (("first", 0), ("second", 8)):
+            manager.observe(
+                channel_id=CHANNEL, message_id=77, size=16 * BLOCK, request_id=viewer
+            )
+            manager.begin(identity, viewer)
+            for index in range(start, start + 4):
+                manager.delivered(
+                    channel_id=CHANNEL,
+                    message_id=77,
+                    offset=index * BLOCK,
+                    length=BLOCK,
+                    request_id=viewer,
+                )
+        assert manager._observed[identity]["hot_until"] == 0
+        for index in range(4, 12):
+            manager.delivered(
+                channel_id=CHANNEL,
+                message_id=77,
+                offset=index * BLOCK,
+                length=BLOCK,
+                request_id="first",
+            )
+        assert manager._observed[identity]["hot_until"] > manager._clock()
+    finally:
+        await manager.close()
+        await pool.stop()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("media_rate", [0, -1, float("nan"), float("inf"), True, "60"])
+async def test_invalid_media_rate_hint_is_ignored(tmp_path, media_rate):
+    manager, pool, _client = await manager_for(tmp_path, b"", auto_preload=True)
+    try:
+        identity = manager.observe(
+            channel_id=CHANNEL, message_id=77, size=8 * BLOCK, media_rate=media_rate
+        )
+        assert manager._observed[identity]["viewers"]["default"]["media_rate"] is None
+    finally:
+        await manager.close()
+        await pool.stop()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("change", ["seek", "owner_leaves"])
+async def test_pending_ahead_admission_rechecks_its_own_viewer_after_capacity_wait(
+    tmp_path, monkeypatch, change
+):
+    manager, pool, client = await manager_for(tmp_path, b"", auto_preload=True)
+    entered = asyncio.Event()
+    release = asyncio.Event()
+    original_capacity = manager._capacity
+    inspections = 0
+
+    async def capacity():
+        nonlocal inspections
+        inspections += 1
+        if inspections == 2:
+            entered.set()
+            await release.wait()
+        return await original_capacity()
+
+    monkeypatch.setattr(manager, "_capacity", capacity)
+    try:
+        identity = manager.observe(
+            channel_id=CHANNEL, message_id=77, size=64 * BLOCK, request_id="first"
+        )
+        manager.observe(
+            channel_id=CHANNEL, message_id=77, size=64 * BLOCK, request_id="second"
+        )
+        manager.begin(identity, "first")
+        manager.begin(identity, "second")
+        for index in range(4):
+            manager.delivered(
+                channel_id=CHANNEL,
+                message_id=77,
+                offset=index * BLOCK,
+                length=BLOCK,
+                request_id="first",
+            )
+        await asyncio.wait_for(entered.wait(), 3)
+        pending = manager._auto_tasks[identity]
+        if change == "seek":
+            manager.delivered(
+                channel_id=CHANNEL,
+                message_id=77,
+                offset=40 * BLOCK,
+                length=BLOCK,
+                request_id="first",
+            )
+        else:
+            manager.finished(identity, "first")
+        release.set()
+        await asyncio.wait_for(pending, 3)
+        assert not manager._jobs and not client.native.requests
+        assert manager._observed[identity]["viewers"]["second"]["active"] == 1
+    finally:
+        release.set()
+        await manager.close()
+        await pool.stop()
+
+
+@pytest.mark.asyncio
+async def test_ahead_owner_leaving_cancels_work_while_another_viewer_remains(tmp_path):
+    gate = asyncio.Event()
+    manager, pool, _client = await manager_for(
+        tmp_path, b"x" * (64 * BLOCK), gate, auto_preload=True
+    )
+    try:
+        identity = manager.observe(
+            channel_id=CHANNEL, message_id=77, size=64 * BLOCK, request_id="first"
+        )
+        manager.observe(
+            channel_id=CHANNEL, message_id=77, size=64 * BLOCK, request_id="second"
+        )
+        manager.begin(identity, "first")
+        manager.begin(identity, "second")
+        for index in range(4):
+            manager.delivered(
+                channel_id=CHANNEL,
+                message_id=77,
+                offset=index * BLOCK,
+                length=BLOCK,
+                request_id="first",
+            )
+        for _ in range(100):
+            if manager._jobs:
+                break
+            await asyncio.sleep(0.001)
+        job = next(iter(manager._jobs.values()))
+        manager.finished(identity, "first")
+        task = manager._tasks.get(job["id"])
+        if task is not None:
+            await asyncio.gather(task, return_exceptions=True)
+        assert job["state"] == "cancelled"
+        assert manager._observed[identity]["viewers"]["second"]["active"] == 1
+    finally:
         await manager.close()
         await pool.stop()

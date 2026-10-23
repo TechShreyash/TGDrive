@@ -1,6 +1,7 @@
 import {
   useCallback,
   useEffect,
+  useRef,
   useState,
   type FormEvent,
   type ReactNode,
@@ -22,6 +23,7 @@ import {
 } from "@mantine/core";
 import { ApiError, errorMessage } from "./api";
 import { ErrorNotice, Spinner } from "./components";
+import { useManualRefresh } from "./useManualRefresh";
 import {
   numericPreferences,
   performanceApi,
@@ -37,11 +39,13 @@ import DemoModeNotice from "./DemoModeNotice";
 
 export default function PerformanceSettings({
   onSaved,
+  onNotice,
   category = "cache",
   uploadPreferences,
   demoMode = false,
 }: {
   onSaved?: (value: PerformancePreferences) => void;
+  onNotice?: (message: string, error?: boolean) => void;
   category?: "cache" | "transfers" | "regional";
   uploadPreferences?: ReactNode;
   demoMode?: boolean;
@@ -53,22 +57,37 @@ export default function PerformanceSettings({
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
   const [conflict, setConflict] = useState(false);
-  const load = useCallback(async (signal?: AbortSignal) => {
-    setLoading(true);
+  const latestLoad = useRef(0);
+  const { refreshing, run } = useManualRefresh(
+    onNotice ||
+      ((message, failed) => {
+        if (failed) setError(message);
+        else setNotice(message);
+      }),
+  );
+  const load = useCallback(async (signal?: AbortSignal, manual = false) => {
+    const request = ++latestLoad.current;
+    if (!manual) setLoading(true);
     setError("");
     try {
       const value = await performanceApi.settings(signal);
-      if (signal?.aborted) return;
+      if (signal?.aborted || request !== latestLoad.current) return false;
       setSaved(value);
       setDraft(performanceDraft(value));
       setConflict(false);
       setNotice("");
+      return true;
     } catch (cause) {
-      if (!signal?.aborted) setError(errorMessage(cause));
+      if (!signal?.aborted && request === latestLoad.current)
+        setError(errorMessage(cause));
+      if (manual) throw cause;
+      return false;
     } finally {
-      if (!signal?.aborted) setLoading(false);
+      if (!signal?.aborted && request === latestLoad.current) setLoading(false);
     }
   }, []);
+  const reloadSettings = () =>
+    void run((signal) => load(signal, true), "Performance settings refreshed.");
   useEffect(() => {
     const controller = new AbortController();
     void load(controller.signal);
@@ -231,7 +250,7 @@ export default function PerformanceSettings({
             legend={
               <span className="configuration-group-title">
                 <PlayCircle size={18} aria-hidden="true" />
-                Playback preparation
+                Automatic preloading
               </span>
             }
           >
@@ -244,8 +263,8 @@ export default function PerformanceSettings({
               .map(field)}
             <Switch
               className="configuration-auto-preload"
-              label="Preload during playback and downloads"
-              description="Keeps upcoming content ready. Active viewers go first; manual preparation stays available when switched off."
+              label="Preload during playback"
+              description="Adapts extra server caching to media playback. Downloads fetch their requested ranges. Requested chunks and adaptive read-ahead still work when off; manual whole-file preloads stay available."
               checked={draft.auto_preload}
               onLabel="ON"
               offLabel="OFF"
@@ -278,7 +297,15 @@ export default function PerformanceSettings({
             hidden={category !== "transfers"}
             legend={<span className="configuration-group-title"><HardDrive size={18} aria-hidden="true" />Upload storage</span>}
           >
-            {numericPreferences.filter((value) => ["max_file_size", "staging_budget_bytes", "min_free_bytes"].includes(value.key)).map(field)}
+            {numericPreferences
+              .filter((value) =>
+                [
+                  "max_file_size",
+                  "staging_budget_bytes",
+                  "min_free_bytes",
+                ].includes(value.key),
+              )
+              .map(field)}
           </Fieldset>
           <Fieldset
             className="performance-setting-group"
@@ -344,10 +371,10 @@ export default function PerformanceSettings({
               type="button"
               className="secondary-button"
               variant="default"
-              disabled={demoMode || busy}
+              disabled={demoMode || busy || refreshing}
               onClick={() => {
                 if (conflict) {
-                  void load();
+                  reloadSettings();
                   return;
                 }
                 const baseline = performanceDraft(saved);
@@ -359,8 +386,12 @@ export default function PerformanceSettings({
                 setNotice("");
               }}
             >
-              <RefreshCw size={16} />
-              {conflict ? "Reload Latest Settings" : "Discard changes"}
+              {refreshing ? <Spinner /> : <RefreshCw size={16} />}
+              {refreshing
+                ? "Refreshing…"
+                : conflict
+                  ? "Reload Latest Settings"
+                  : "Discard changes"}
             </Button>
             <Button
               type="button"
@@ -390,8 +421,14 @@ export default function PerformanceSettings({
           )}
         </form>
       ) : (
-        <Button className="secondary-button" onClick={() => void load()}>
-          Try Again
+        <Button
+          className="secondary-button"
+          disabled={refreshing}
+          aria-busy={refreshing}
+          onClick={reloadSettings}
+        >
+          {refreshing && <Spinner />}
+          {refreshing ? "Refreshing…" : "Try Again"}
         </Button>
       )}
       <ErrorNotice message={error} />

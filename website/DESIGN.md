@@ -38,6 +38,12 @@ queue; Resources owns CPU/RAM and storage. Avoid duplicated totals across tabs.
 Show uncertainty and missing measurements honestly. Tooltip follows the pointer
 and stays inside its plot; keyboard/touch sample inspection remains available.
 
+Preloads uses one compact capacity panel with memory/disk usage and limits.
+File names, Ready/Partial status and byte facts anchor substantial segmented
+coverage bars that span the available detail width; actions sit at the edge.
+Preserve that hierarchy on phones. Keep **About preloading** collapsed by
+default, and use the same Server icon for its navigation and file action.
+
 ## Brand mark
 
 Use the authored storage symbol in `public/static/tgdrive-symbol.svg` through the
@@ -83,6 +89,11 @@ separate concepts, validated together and checked again at actual admission.
 No pager for empty/single-page history. Keep navigation back from later pages.
 Transfers lists Running, Queued, then Finished with outcome filters. Show safe demo
 content locally so layouts can be reviewed with all meaningful states.
+
+Explicit data refresh/reload controls show progress and disable while their
+fresh requests are pending. Confirm success only after all requested data
+loads; failures, cancellation and stale responses never show success.
+Automatic polling stays silent and cannot replace a newer manual result.
 
 ## Motion and review
 

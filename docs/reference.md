@@ -128,7 +128,7 @@ built-in defaults. Units are binary: 1 GiB = 1024 MiB and 1 MiB = 1024 KiB.
 | `CACHE_DISK_BYTES` | 10737418240 | Disk budget, 0–2 TiB. Zero disables disk retention. It does not reserve that amount of disk in advance. |
 | `CACHE_MIN_FREE_BYTES` | 1073741824 | Free-disk floor for cache writes, 0–2 TiB (default 1 GiB). This does not allocate space or constrain other disk users. Upload staging separately uses `MIN_FREE_BYTES`. |
 | `CACHE_TTL_SECONDS` | 86400 | Sliding disk retention, 60–2678400 seconds. Eviction or disk failure can remove bytes sooner. |
-| `AUTO_PRELOAD` | true | Enable bounded speculation after delivered sequential playback/download bytes; never bulk preload from HEAD or metadata alone. Disabling it leaves manual Prepare available. |
+| `AUTO_PRELOAD` | true | Enable extra bounded warming after delivered original audio/video playback bytes. Explicit downloads and unclassified range clients stay within requested ranges. Disabling it leaves adaptive response read-ahead and manual **Preload file** available. |
 | `PRELOAD_MAX_JOBS` | 2 | Combined manual and automatic preparation jobs, 1–8; foreground work has priority. More jobs share existing account capacity. |
 | `TELEGRAM_UPLOAD_PIPELINE` | 4 | Outstanding upload-part requests per document, 1–16. |
 | `TELEGRAM_REQUEST_LIMIT` | 8 | Shared per-account media/metadata request concurrency, 1–32. |
@@ -153,17 +153,16 @@ additional owner setting. `cache.scratch` reports current/effective/configured
 bytes, peak reservations, waiting heads and active streams. Transport and
 server buffers are outside retained payload-cache and scratch budgets.
 RAM/disk can hold duplicate hot blocks; summing the tiers is not a whole-file
-retention guarantee. Disk-backed manual preparation includes per-block integrity overhead
-and competing active reservations when checking capacity.
+retention guarantee. Preparation admission counts complete aligned Telegram
+blocks, including multipart boundaries, competing active reservations and
+a 32-byte integrity prefix per disk block.
 
-Automatic preparation starts after at least 4 MiB of delivered sequential data.
-A first viewing warms a bounded ahead region. Whole-file preparation additionally
-requires two sequential runs of at least 4 MiB overlapping by at least 4 MiB
-within ten minutes, and the file plus overhead must fit half an effective tier.
-Read-ahead adapts to consumption and fill rates within 4–32 MiB, or a quarter
-of effective capacity if smaller. Leaving the final viewer stops ahead work;
-a preparation justified by repeated use may finish. Metadata and small probes
-do not qualify. See the [automatic policy](performance.md#automatic-read-ahead).
+Extra automatic preparation requires original audio/video playback identified
+by `preview=1` or `Sec-Fetch-Dest: audio/video`; `download=1` always excludes it.
+Average media rate from valid duration metadata, otherwise sustained delivered
+cadence, sizes a bounded ahead window. Whole-file promotion requires overlapping
+qualified runs from distinct stable viewer IDs; retries by one viewer and
+anonymous requests do not qualify. See [thresholds and cancellation rules](performance.md#automatic-read-ahead).
 
 Background jobs and block reads are bounded separately. Cache admission, TTL and eviction
 remain active during and after preparation.
@@ -1141,7 +1140,7 @@ preserved in metadata snapshots. The root drive itself cannot be starred.
 | `DELETE /api/v1/shares` | Owner | `{"share_id":"<share-id>"}` | `{"status":"ok"}`. Revokes one link. Legacy `{"path":"/<id>"}` revokes all direct links for that node. |
 | `POST /api/getFolderShareAuth` | Owner | `{"path":"/<folder-id>"}` | Compatibility creation: status and auth. |
 | `POST /api/getFileShareAuth` | Owner | `{"path":"/<file-id>"}` | Same, for a file. |
-| `GET /file`, `HEAD /file` | Owner or scoped capability | Required path, optional auth/Range; quality selects a discovered preview, preview=1 enables the supported PDF path, download=1 forces the original attachment. | Bytes/headers or access/not-found error. |
+| `GET /file`, `HEAD /file` | Owner or scoped capability | Required path, optional auth/Range; quality selects a discovered preview, preview=1 marks a preview (including the supported PDF path and original media playback), download=1 forces the original attachment. | Bytes/headers or access/not-found error. |
 
 Share expiry accepts 1–3650 days (default 7), null for no expiry, or a future
 ISO `expires_at`. Labels are optional, at most 80 characters, and cannot contain
@@ -1184,12 +1183,25 @@ or browser-buffered bytes cannot be recalled.
 
 - Downloads support full `200` and a single `206` range: `bytes=0-1023`, `bytes=1024-`,
   `bytes=-1024`.
+- Download managers may issue several separate single-range requests in parallel
+  or resume only missing intervals. Each response returns exactly its requested
+  bytes, including across Telegram document boundaries. Cache hits and shared
+  in-flight fills avoid duplicate Telegram payload reads where possible.
 - Valid ends beyond EOF are clamped.
 - Malformed/unsupported multiple ranges return `400`.
 - Unsatisfiable ranges return `416` with `Content-Range: bytes */<size>`.
 - HEAD has the corresponding headers and no body.
-- Multipart ranges and conditional ETag/If-Range are not implemented.
-- The stream semaphore spans the full response lifetime.
+- Conditional requests support `If-None-Match` and return `304` after access
+  checks. `If-Range` requires a matching strong ETag; a stale/weak tag or date
+  returns a full `200` response so the client can restart safely. A catalog-only
+  HEAD for a single-document file has a weak ETag; use the strong ETag from an
+  actual GET when resuming.
+- Read-ahead for downloads remains inside the requested range. A cold boundary
+  can still fetch an entire aligned Telegram block (up to 1 MiB). These requests
+  do not start unrelated background preloads; manual **Preload file** remains
+  an explicit whole-file operation.
+- Cold origin work uses bounded shared admission; cached delivery still uses
+  server bandwidth and requires valid access.
 - Active document types are attachments; selected images/audio/video may render inline.
 
 </details>

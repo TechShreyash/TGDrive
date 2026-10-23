@@ -311,10 +311,11 @@ do not directly describe this adapter.
 | Unsupported format | Compact details and original download |
 | Quality choices | Only representations actually present in Telegram |
 
-File responses read ahead through ordered 1 MiB blocks, scaled to client
-capacity and their share of the instance-wide transient payload budget. A
-single consumer can use the default 32 MiB budget; concurrent consumers share
-it. The 32-block policy is an additional ceiling. Waiting response heads take priority
+File responses begin with a head and one probe, then adapt ordered 1 MiB
+read-ahead to sustained delivery, consumer backpressure and remote-block latency.
+Windows stay within the requested interval, account capacity, 32 blocks and
+their fair share of the instance-wide transient payload budget. A paused
+consumer sheds unused speculation. Waiting response heads take priority
 over further prefetch and can revoke another suspended response's speculative
 frames. Its awaited/yielded head remains protected. A revoked in-flight frame
 retains its reservation until cancellation cleanup finishes; a completed frame
@@ -337,6 +338,8 @@ falls back to origin where possible; explicit whole-file preparation fails if
 verified retained coverage cannot be achieved. The shared inventory tracks
 observed ordinary downloads as well as preloads, with half-open ready ranges
 and current complete/ready-byte state. Disk inventory survives clean restarts.
+Updates arriving during an asynchronous inventory write remain dirty for the
+next flush, so a concurrent block arrival is not lost from the saved index.
 
 Transient source blocks have a separate shared scratch budget, default 32 MiB,
 availability-clamped with a 2 MiB streaming floor even if retained RAM is zero.
@@ -355,13 +358,16 @@ Concurrent foreground and preload requests share in-flight fills. The final
 subscriber's cancellation drains remote work; cancelling a preload does not
 abort another authorized subscriber. Closing or seeking drains unused read-ahead.
 
-Automatic preloading requires 4 MiB of sequential data actually delivered to a
-viewer. First use warms only an adaptive 4–32 MiB ahead region, further limited
-by effective capacity. Two qualified runs overlapping by 4 MiB within ten
-minutes establish repeated use; only then can a whole file fitting half an
-effective tier be prepared. Consumption and background fill rates adjust the
-ahead window. The last viewer leaving cancels ahead work; justified whole-file
-work may finish. HEAD, metadata and tiny probes never establish that evidence.
+Additional automatic warming requires sustained original audio/video playback
+identified by `preview=1` or an audio/video fetch destination. Explicit downloads,
+unclassified range clients, document readers and alternate-quality previews
+keep only requested-range read-ahead. Average media rate from duration metadata,
+or sustained delivery when absent, sizes a bounded moving window. Overlapping
+qualified runs from distinct stable viewer IDs may justify a whole-file preload;
+one viewer’s retries and anonymous requests cannot. A distant seek or departure
+by the initiating viewer cancels partial ahead work, including pending admission;
+an already justified whole-file job may finish. HEAD and metadata never qualify.
+See [qualification, renewal and capacity bounds](performance.md#automatic-read-ahead).
 Manual preparation reserves capacity,
 verifies range coverage and checks full multipart checksums where applicable.
 Demand is prioritized over queued speculative work, with bounded background

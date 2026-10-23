@@ -1983,7 +1983,7 @@ def test_background_listing_failure_preserves_files_and_navigation_loads_normall
     held: list[Any] = []
     page.route("**/api/getDirectory", lambda route: held.append(route))
     try:
-        primary.dblclick()
+        primary.press("Enter")
         expect(page.locator(".loading-state")).to_be_visible()
         expect(page.locator(".file-table")).to_have_count(0)
     finally:

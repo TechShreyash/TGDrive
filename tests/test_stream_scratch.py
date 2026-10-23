@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import time
 from unittest.mock import AsyncMock
 
 import pytest
@@ -10,10 +11,38 @@ from test_telegram_cache import message
 
 from tgdrive.client_pool import ClientPool
 from tgdrive.media_policy import MediaCachePolicy
-from tgdrive.media_reader import BLOCK, MediaReadCache, stream_pooled_media
+from tgdrive.media_reader import (
+    BLOCK,
+    MediaReadCache,
+    _AdaptiveReadAhead,
+    stream_pooled_media,
+)
 from tgdrive.telegram_clients import TelegramMessage
 
 CHANNEL = -1000000000123
+
+
+@pytest.fixture
+def sustained_reader(monkeypatch):
+    """Stress reclamation after a reader has already demonstrated fast demand.
+
+    Adaptation itself is exercised with real generator advancement and a
+    deterministic clock in test_adaptive_read_ahead; these tests need a full
+    speculative pipeline to preserve their cancellation/fairness edge cases.
+    """
+
+    class SustainedReadAhead(_AdaptiveReadAhead):
+        def __init__(self, maximum):
+            now = 0.0
+            super().__init__(maximum, clock=lambda: now)
+            self.observe_fetch(1)
+            for _ in range(5):
+                now += 0.25
+                self.consumed(100 * BLOCK)
+            self.clock = time.monotonic
+            self._sample_at = self.clock()
+
+    monkeypatch.setattr("tgdrive.media_reader._AdaptiveReadAhead", SustainedReadAhead)
 
 
 @pytest.mark.asyncio
@@ -120,8 +149,8 @@ async def test_repeated_cancellation_drains_inflight_scratch_reservations(tmp_pa
 
 
 @pytest.mark.asyncio
-async def test_single_reader_uses_full_scratch_and_more_than_twelve_origin_fills(
-    tmp_path, monkeypatch
+async def test_sustained_reader_can_use_full_scratch_and_many_origin_fills(
+    tmp_path, monkeypatch, sustained_reader
 ):
     monkeypatch.setattr("tgdrive.media_reader._effective_memory", lambda value: value)
     gate = asyncio.Event()
@@ -164,7 +193,7 @@ async def test_single_reader_uses_full_scratch_and_more_than_twelve_origin_fills
 @pytest.mark.asyncio
 @pytest.mark.parametrize("tier", ["ram", "disk"])
 async def test_paused_warm_reader_relinquishes_ahead_to_new_heads_and_resumes_in_order(
-    tmp_path, monkeypatch, tier
+    tmp_path, monkeypatch, tier, sustained_reader
 ):
     monkeypatch.setattr("tgdrive.media_reader._effective_memory", lambda value: value)
     payload = b"".join(bytes([index]) * BLOCK for index in range(24)) + b"tail"
@@ -232,7 +261,7 @@ async def test_paused_warm_reader_relinquishes_ahead_to_new_heads_and_resumes_in
 @pytest.mark.asyncio
 @pytest.mark.parametrize("cancel_waiter", [False, True])
 async def test_cold_ahead_reclamation_keeps_payload_reserved_until_remote_cleanup(
-    tmp_path, monkeypatch, cancel_waiter
+    tmp_path, monkeypatch, cancel_waiter, sustained_reader
 ):
     monkeypatch.setattr("tgdrive.media_reader._effective_memory", lambda value: value)
     payload = b"".join(bytes([index]) * BLOCK for index in range(16))
@@ -324,7 +353,7 @@ async def test_cold_ahead_reclamation_keeps_payload_reserved_until_remote_cleanu
 
 @pytest.mark.asyncio
 async def test_reclaiming_shared_ahead_keeps_another_viewers_origin_fill_alive(
-    tmp_path, monkeypatch
+    tmp_path, monkeypatch, sustained_reader
 ):
     monkeypatch.setattr("tgdrive.media_reader._effective_memory", lambda value: value)
     payload = b"".join(bytes([index]) * BLOCK for index in range(16))

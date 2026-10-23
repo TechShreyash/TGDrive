@@ -25,6 +25,72 @@ BLOCK = 1024**2
 READ_AHEAD = 32  # MiB per response, including currently requested windows.
 
 
+class _AdaptiveReadAhead:
+    """Size a response pipeline from demonstrated delivery, not codec bitrate.
+
+    Consumer advancement includes HTTP backpressure and waits for the next
+    source block. Sampling over time avoids treating an immediate cache burst as
+    an unlimited consumer. Source latency supplies the horizon needed to overlap
+    Telegram reads; policy, account capacity and scratch remain separate caps.
+    """
+
+    def __init__(self, maximum, *, clock=None):
+        self.maximum = max(1, maximum)
+        self.window = min(2, self.maximum)
+        self.clock = clock or time.monotonic
+        self._sample_at = self.clock()
+        self._last_consumed_at = self._sample_at
+        self._sample_bytes = 0
+        self._rate = None
+        self._latency = None
+
+    def observe_fetch(self, elapsed):
+        elapsed = max(0.001, elapsed)
+        self._latency = (
+            elapsed if self._latency is None else self._latency * 0.75 + elapsed * 0.25
+        )
+
+    def consumed(self, size, *, consumer_seconds=None):
+        self._sample_bytes += size
+        now = self.clock()
+        if consumer_seconds is None:
+            consumer_seconds = now - self._last_consumed_at
+        self._last_consumed_at = now
+        elapsed = now - self._sample_at
+        if elapsed < 0.1:
+            return
+        rate = self._sample_bytes / elapsed
+        if consumer_seconds >= 0.1:
+            # A paused send must not inherit the fast bytes accumulated just
+            # before it. Source waits are measured separately by the caller.
+            rate = min(rate, size / consumer_seconds)
+        # Slow consumers reduce speculation promptly. Sustained faster delivery
+        # must demonstrate itself over successive samples before using more RAM.
+        self._rate = (
+            rate
+            if self._rate is None or rate < self._rate
+            else min(self._rate * 2, self._rate * 0.5 + rate * 0.5)
+        )
+        horizon = max(0.25, 2 * (self._latency or 0))
+        target = min(self.maximum, max(2, 1 + math.ceil(self._rate * horizon / BLOCK)))
+        self.window = min(target, max(2, self.window * 2))
+        self._sample_bytes = 0
+        self._sample_at = now
+
+    @property
+    def idle_seconds(self):
+        return max(1.0, 3 * (self._latency or 0))
+
+    def idle(self):
+        # No consumer progress: retain only the yielded head. Its speculative
+        # neighbours are disposable; a later advancement starts a fresh probe.
+        self.window = 1
+        self._rate = None
+        self._sample_at = self.clock()
+        self._last_consumed_at = self._sample_at
+        self._sample_bytes = 0
+
+
 class _ScratchBudget:
     """Global MiB reservations with FIFO heads and reclaimable read-ahead.
 
@@ -117,6 +183,14 @@ class _StreamFrames:
                 self.retire(frame)
                 return True
         return False
+
+    def trim(self, index, quota):
+        for following in sorted(self.frames, reverse=True):
+            frame = self.frames[following]
+            if not frame.head and (
+                following >= index + quota or len(self.frames) > quota
+            ):
+                self.retire(frame)
 
     def release(self, frame):
         if self.frames.get(frame.index) is frame:
@@ -618,24 +692,31 @@ class MediaReadCache:
 
     async def _persist_index_locked(self):
         if self.disk is not None and self._index_dirty:
-            disk_keys = set(
-                await asyncio.to_thread(self.disk.ready, list(self._blocks))
-            )
-            blocks = [
-                {"key": key, **row}
-                for key, row in self._blocks.items()
-                if key in disk_keys
-            ]
-            owners = {row["file_id"] for row in blocks}
-            value = {
-                "files": [row for key, row in self._files.items() if key in owners],
-                "blocks": blocks,
-            }
+            # Clear before yielding so registrations/downloads arriving during
+            # the write keep their own dirty flag and get a subsequent snapshot.
+            self._index_dirty = False
+            written = False
             try:
+                disk_keys = set(
+                    await asyncio.to_thread(self.disk.ready, list(self._blocks))
+                )
+                blocks = [
+                    {"key": key, **row}
+                    for key, row in self._blocks.items()
+                    if key in disk_keys
+                ]
+                owners = {row["file_id"] for row in blocks}
+                value = {
+                    "files": [row for key, row in self._files.items() if key in owners],
+                    "blocks": blocks,
+                }
                 await asyncio.to_thread(self._write_index, value)
-                self._index_dirty = False
+                written = True
             except OSError:
                 pass
+            finally:
+                if not written:
+                    self._index_dirty = True
 
     def _write_index(self, value):
         self.directory.mkdir(parents=True, exist_ok=True, mode=0o700)
@@ -851,8 +932,10 @@ async def stream_pooled_media(
                     if getattr(account, "supports_uncached_media", False):
                         options["use_cache"] = False
                     iterator = account.stream_media(bound, **options)
+                    started = controller.clock()
                     try:
                         data = await anext(iterator)
+                        controller.observe_fetch(controller.clock() - started)
                         return data
                     finally:
                         await iterator.aclose()
@@ -902,16 +985,21 @@ async def stream_pooled_media(
     maximum = (
         cache.policy.background_blocks if background else cache.policy.read_ahead_blocks
     )
-    window = min(
-        maximum,
-        max(4, await pool.download_capacity() * 4),
-        limit,
+    controller = _AdaptiveReadAhead(
+        min(
+            maximum,
+            max(4, await pool.download_capacity() * 4),
+            limit,
+        )
     )
     frames = _StreamFrames(scratch, read)
 
     def refill(index):
-        quota = min(window, max(1, scratch.limit // max(1, cache._active_streams)))
-        for following in range(index + 1, min(end, index + window)):
+        quota = min(
+            controller.window, max(1, scratch.limit // max(1, cache._active_streams))
+        )
+        frames.trim(index, quota)
+        for following in range(index + 1, min(end, index + quota)):
             if len(frames.frames) >= quota:
                 break
             if following in frames.frames:
@@ -922,6 +1010,12 @@ async def stream_pooled_media(
 
     cache._active_streams += 1
     data = frame = None
+    idle_timer = None
+
+    def idle(index):
+        controller.idle()
+        frames.trim(index, 1)
+
     try:
         for index in range(offset, end):
             frame = frames.frames.get(index)
@@ -934,7 +1028,16 @@ async def stream_pooled_media(
             data = await frame.task
             if authorize is not None:
                 await authorize()
+            idle_timer = asyncio.get_running_loop().call_later(
+                controller.idle_seconds, idle, index
+            )
+            yielded_at = controller.clock()
             yield data
+            idle_timer.cancel()
+            idle_timer = None
+            controller.consumed(
+                len(data), consumer_seconds=controller.clock() - yielded_at
+            )
             # A suspended consumer owns exactly its yielded head, plus only
             # reclaimable read-ahead. Drop our payload references before freeing
             # the reservation so a new head cannot exceed the aggregate bound.
@@ -942,6 +1045,8 @@ async def stream_pooled_media(
             frames.release(frame)
             frame = None
     finally:
+        if idle_timer is not None:
+            idle_timer.cancel()
         del data, frame
         try:
             await frames.close()

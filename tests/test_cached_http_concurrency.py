@@ -113,7 +113,9 @@ async def test_fully_cached_http_seeks_tail_and_download_pass_a_stalled_full_res
 
         stalled = asyncio.create_task(slow(ASGI_SCOPE, receive, slow_send))
         await entered_send.wait()
-        await wait_until(lambda: cache.scratch.used == 32)
+        # A consumer blocked on its first send must shed speculative frames;
+        # the yielded head remains owned while other requests pass it.
+        await wait_until(lambda: cache.scratch.used == 1)
         assert not stalled.done()
 
         selections = [
@@ -402,7 +404,9 @@ async def test_tcp_stalled_cached_download_does_not_block_a_different_video(
         headers = await asyncio.wait_for(slow_reader.readuntil(b"\r\n\r\n"), 5)
         assert headers.startswith(b"HTTP/1.1 200")
         assert b"content-length: 134217728" in headers.lower()
-        await wait_until(lambda: cache.scratch.used == 32)
+        # TCP backpressure leaves only the response head reserved after the
+        # adaptive pipeline retires unused read-ahead.
+        await wait_until(lambda: cache.scratch.used == 1)
 
         async with httpx2.AsyncClient(
             base_url=f"http://127.0.0.1:{port}", timeout=10

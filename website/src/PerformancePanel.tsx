@@ -1,11 +1,12 @@
 import { Tabs, Paper } from "@mantine/core";
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { RefreshCw } from "lucide-react";
 import { errorMessage } from "./api";
 import { ErrorNotice, Spinner } from "./components";
 import { formatBytes, formatTimestamp, getTimezone } from "./types";
 import StreamMemoryFact from "./StreamMemoryFact";
 import { cachedFileComplete } from "./Preloads";
+import { useManualRefresh } from "./useManualRefresh";
 import {
   performanceApi,
   type LoadSample,
@@ -581,11 +582,12 @@ export function loadPoints(
     )
     .join(" ");
 }
-export default function PerformancePanel() {
+export default function PerformancePanel({ onNotice }: {
+  onNotice?: (message: string, error?: boolean) => void;
+} = {}) {
   const [snapshot, setSnapshot] = useState<PerformanceSnapshot | null>(null);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(true);
-  const [refresh, setRefresh] = useState(0);
   const [range, setRange] = useState<HistoryRange>(savedHistoryRange);
   const [customStart, setCustomStart] = useState(() =>
     new Date(Date.now() - 86400000).toISOString().slice(0, 16),
@@ -611,71 +613,92 @@ export default function PerformancePanel() {
   const [view, setView] = useState<"overview" | "telegram" | "server">(
     "overview",
   );
-  useEffect(() => {
-    const controller = new AbortController();
-    let timer: ReturnType<typeof setTimeout>;
-    const poll = async () => {
-      try {
-        const value = await performanceApi.snapshot(controller.signal);
-        if (!controller.signal.aborted) {
-          setSnapshot(value);
-          setError("");
-        }
-      } catch (cause) {
-        if (!controller.signal.aborted) setError(errorMessage(cause));
-      } finally {
-        if (!controller.signal.aborted) {
-          setLoading(false);
-          timer = setTimeout(poll, document.hidden ? 15000 : 3000);
-        }
-      }
-    };
-    void poll();
-    return () => {
-      controller.abort();
-      clearTimeout(timer);
-    };
-  }, [refresh]);
-  useEffect(() => {
+  const latestSnapshot = useRef(0);
+  const latestHistory = useRef(0);
+  const manualLoading = useRef(false);
+  const { refreshing, run } = useManualRefresh(onNotice);
+  const loadSnapshot = useCallback(async (signal: AbortSignal, manual = false) => {
+    if (!manual && manualLoading.current) return false;
+    const request = ++latestSnapshot.current;
+    try {
+      const value = await performanceApi.snapshot(signal);
+      if (signal.aborted || request !== latestSnapshot.current) return false;
+      setSnapshot(value);
+      setError("");
+      return true;
+    } catch (cause) {
+      if (!signal.aborted && request === latestSnapshot.current) setError(errorMessage(cause));
+      if (manual) throw cause;
+      return false;
+    } finally {
+      if (!signal.aborted && request === latestSnapshot.current) setLoading(false);
+    }
+  }, []);
+  const loadHistory = useCallback(async (signal: AbortSignal, manual = false) => {
+    if (!manual && manualLoading.current) return false;
+    const request = ++latestHistory.current;
     if (range === "custom" && !customBounds) {
       setHistoryError("");
       setHistoryLoading(false);
-      return;
+      return true;
     }
+    setHistoryLoading(true);
+    if (!manual) setHistoryError("");
+    const end = range === "custom" ? customBounds!.end : Math.floor(Date.now() / 1000);
+    const start = range === "custom" ? customBounds!.start : end - HISTORY_RANGES[range];
+    try {
+      const data = await performanceApi.history(start, end, signal);
+      if (signal.aborted || request !== latestHistory.current) return false;
+      setRecorded(data);
+      setLoadedRange(rangeKey);
+      setHistoryError("");
+      return true;
+    } catch (cause) {
+      if (!signal.aborted && request === latestHistory.current) setHistoryError(errorMessage(cause));
+      if (manual) throw cause;
+      return false;
+    } finally {
+      if (!signal.aborted && request === latestHistory.current) setHistoryLoading(false);
+    }
+  }, [range, customBounds, rangeKey]);
+  const refreshPerformance = () => void run(async (signal) => {
+    manualLoading.current = true;
+    try {
+      const results = await Promise.allSettled([
+        loadSnapshot(signal, true), loadHistory(signal, true),
+      ]);
+      for (const result of results) if (result.status === "rejected") throw result.reason;
+      return results.every((result) => result.status === "fulfilled" && result.value);
+    } finally {
+      manualLoading.current = false;
+    }
+  }, "Performance refreshed.");
+  useEffect(() => {
     const controller = new AbortController();
     let timer: ReturnType<typeof setTimeout>;
     const poll = async () => {
-      setHistoryLoading(true);
-      setHistoryError("");
-      const end =
-        range === "custom" ? customBounds!.end : Math.floor(Date.now() / 1000);
-      const start =
-        range === "custom" ? customBounds!.start : end - HISTORY_RANGES[range];
-      try {
-        const data = await performanceApi.history(
-          start,
-          end,
-          controller.signal,
-        );
-        if (!controller.signal.aborted) {
-          setRecorded(data);
-          setLoadedRange(rangeKey);
-        }
-      } catch (cause) {
-        if (!controller.signal.aborted) setHistoryError(errorMessage(cause));
-      } finally {
-        if (!controller.signal.aborted) {
-          setHistoryLoading(false);
-          if (range !== "custom") timer = setTimeout(poll, 60000);
-        }
-      }
+      await loadSnapshot(controller.signal);
+      if (!controller.signal.aborted) timer = setTimeout(poll, document.hidden ? 15000 : 3000);
     };
     void poll();
     return () => {
       controller.abort();
       clearTimeout(timer);
     };
-  }, [range, customBounds, rangeKey, refresh]);
+  }, [loadSnapshot]);
+  useEffect(() => {
+    const controller = new AbortController();
+    let timer: ReturnType<typeof setTimeout>;
+    const poll = async () => {
+      await loadHistory(controller.signal);
+      if (!controller.signal.aborted && range !== "custom") timer = setTimeout(poll, 60000);
+    };
+    void poll();
+    return () => {
+      controller.abort();
+      clearTimeout(timer);
+    };
+  }, [range, loadHistory]);
   const telegram = snapshot?.telegram;
   const history = recentSamples(telegram?.history || [], 300);
   const ceiling = Math.max(
@@ -761,6 +784,7 @@ export default function PerformancePanel() {
             Time range
             <select
               aria-label="Time range"
+              disabled={refreshing}
               value={range}
               onChange={(event) => {
                 const value = event.target.value as HistoryRange;
@@ -784,11 +808,13 @@ export default function PerformancePanel() {
           </label>
           <button
             className="secondary-button"
-            onClick={() => setRefresh((value) => value + 1)}
+            disabled={refreshing}
+            aria-busy={refreshing}
+            onClick={refreshPerformance}
             aria-label="Refresh Performance"
           >
-            <RefreshCw size={16} />
-            <span>Refresh</span>
+            {refreshing ? <Spinner /> : <RefreshCw size={16} />}
+            <span>{refreshing ? "Refreshing…" : "Refresh"}</span>
           </button>
         </div>
       </div>
@@ -824,7 +850,7 @@ export default function PerformancePanel() {
               onChange={(event) => setCustomEnd(event.target.value)}
             />
           </label>
-          <button className="secondary-button" type="submit">
+          <button className="secondary-button" type="submit" disabled={refreshing}>
             Apply Range
           </button>
           <p className="settings-help">
@@ -860,9 +886,11 @@ export default function PerformancePanel() {
           <button
             type="button"
             className="text-button"
-            onClick={() => setRefresh((value) => value + 1)}
+            disabled={refreshing}
+            aria-busy={refreshing}
+            onClick={refreshPerformance}
           >
-            Retry History
+            {refreshing && <Spinner />}{refreshing ? "Refreshing…" : "Retry History"}
           </button>
         </div>
       )}

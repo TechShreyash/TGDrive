@@ -14,7 +14,7 @@ from tgdrive.streaming import stream_telegram_file
 @pytest.mark.asyncio
 @pytest.mark.parametrize("multipart", [False, True])
 @pytest.mark.parametrize("download", [False, True])
-async def test_pdf_preview_skips_automatic_prepare_but_download_keeps_policy(
+async def test_pdf_preview_and_download_do_not_start_extra_preloading(
     multipart, download
 ):
     contents = [b"A" * 3 * 1024**2, b"B" * 3 * 1024**2]
@@ -44,9 +44,9 @@ async def test_pdf_preview_skips_automatic_prepare_but_download_keeps_policy(
             parts=build_parts(contents) if multipart else None,
         )
         assert response.status_code == 206
-        assert len(await response_body(response)) == 4 * 1024**2
-        assert manager.observe.called is download
-        assert manager.delivered.called is download
-        assert manager.register_file.called is not download
+        assert await response_body(response) == b"".join(contents)[: 4 * 1024**2]
+        manager.observe.assert_not_called()
+        manager.delivered.assert_not_called()
+        manager.register_file.assert_called_once()
     finally:
         await pool.stop()

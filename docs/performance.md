@@ -86,63 +86,78 @@ Clearing it leaves Telegram originals and MongoDB catalog entries intact.
 
 ## Automatic read-ahead
 
-An ordinary response reads ahead through ordered **1 MiB blocks**. Its window
-is bounded by account capacity, 32 blocks, and its share of the transient
-budget. A lone viewer can use the full budget; concurrent consumers share it.
-Waiting response heads receive priority over additional prefetch. Multiple healthy accounts can
-fetch independent blocks, and simultaneous viewers can share an in-flight fetch
-of the same block. The server emits bytes in their original order.
+TGDrive adapts reads in two places:
 
-Automatic background preloading begins only after **4 MiB of sequential bytes
-have actually been delivered** during playback or a download. A first viewing
-warms a bounded region ahead;
-it does not automatically prepare the whole movie. Metadata, HEAD requests,
-and tiny range probes do not qualify as delivered viewing data.
+| Kind | Scope |
+| --- | --- |
+| Inside a response | Ordered 1 MiB blocks within the requested interval; paused consumers shed speculation |
+| Beyond playback responses | Optional warming for original audio/video; excludes explicit downloads, unknown range clients, document readers and alternate-quality previews |
 
-- Whole-file preparation requires repeated use: two sequential runs of at
-  least 4 MiB must overlap by at least 4 MiB within ten minutes. This can be
-  another viewer or a replay. The file plus overhead must also fit within
-  half an effective cache tier.
-- Read-ahead adapts to measured consumption and background fill rates, targeting
-  roughly 8–16 seconds ahead within 4–32 MiB and a quarter of effective
-  preparation capacity. It skips speculation if even 4 MiB does not fit.
-- A distant seek abandons that viewer's stale ahead work. When the last viewer
-  leaves, bounded ahead work stops; an already justified whole-file preparation
-  can finish.
-- Ordinary automatic starts have a 30-second per-file cooldown; newly observed
-  repeated use can promote a file immediately.
-- Manual and automatic preparations share a default maximum of two jobs with
-  bounded block concurrency. Raising this limit does not add account capacity.
-- Foreground playback/download requests receive priority over speculative work.
+Downloads keep speculation inside each requested interval, including parallel
+ranges and retries. Aligned cold Telegram boundary blocks may be larger than
+the requested interval; the HTTP response bytes remain exact.
 
-Disabling automatic preloading leaves manual **Prepare for Download / Streaming**
-available. Ordinary demand reads still fetch requested bytes and use their bounded
-response read-ahead; the switch controls additional background preparation.
+**Preload during playback** defaults to enabled. Disabling it leaves in-response
+read-ahead and manual whole-file preloads available. Manual preparation always
+targets the original, even when a lower-quality preview is selected.
 
-Cancelling one viewer or preload does not cancel a shared fetch that another
-authorized viewer still needs. Bytes already delivered cannot be recalled.
+<details>
+<summary>Playback qualification and preparation thresholds</summary>
+
+In-response reads begin with a head and one probe. Delivery, backpressure and
+remote-block latency adjust the window within account capacity, 32 blocks,
+remaining requested blocks and fair transient-budget share. Beyond-response
+warming requires `preview=1` or an audio/video fetch destination.
+
+Valid Telegram duration supplies average media byte rate; otherwise sustained
+delivery cadence supplies an estimate. Fill cadence is measured per file, not
+borrowed from unrelated cache hits. Neither estimate measures device decoding
+or the bitrate of each variable-rate scene.
+
+| Policy | Threshold |
+| --- | --- |
+| Qualify playback | Deliver roughly 4 seconds at estimated media rate, clipped to 1–4 MiB; 4 MiB when duration is unknown |
+| Ahead target | 8 seconds; extend to 16 when same-file fills lag estimated demand |
+| Ahead byte bounds | Block-rounded 1–128 MiB, at most ¼ of effective preparation capacity; skip if 1 MiB cannot fit |
+| Whole-file promotion | Qualifying, overlapping runs from distinct identified viewers within 10 minutes; overlap reaches qualification threshold; file plus overhead fits ½ of an effective tier |
+| Start cooldown | 30 seconds per file; new repeated use may promote immediately |
+| Renewal | Renew after delivery reaches halfway through the warmed region |
+| Concurrent preparations | 2 by default, shared by manual/automatic jobs, with bounded block concurrency |
+
+Metadata/HEAD never qualify. Parallel requests, retries or replays by one viewer
+cannot count as distinct viewers; anonymous ranges cannot earn whole-file promotion.
+Block alignment/integrity overhead count at admission, so high-rate files can
+receive less than the target duration.
+
+Distant seeks abandon stale ahead work. Departure by its initiating viewer
+cancels ahead work, including pending admission; already justified whole-file
+preparation may finish. Demand precedes queued speculation. Closing/seeking
+drains unused read-ahead; cancelling one subscriber does not abort an in-flight
+fill still needed by another authorized subscriber.
+
+</details>
+
+Independent blocks can use different healthy bots/Premium clients and shared
+in-flight fills, while responses preserve original order. Every request must
+pass authorization before cached bytes; shared access is rechecked before future
+blocks. No window estimate promises buffer-free playback or recalls sent bytes.
 
 ## Prepare a file before sharing
 
-Choose **Prepare for Download / Streaming** from a file's actions in **My Files**,
-then inspect progress in **Preloads**.
-Preparation uses the same verified block cache as ordinary downloads, including
-files stored as multiple Telegram documents.
+[Preload file](usage.md#preload-a-file-for-smoother-playback-and-downloads) requests
+the whole original through the same verified cache, including multipart files.
+It runs on the server without downloading to your device.
 
-1. Choose the file and start preparation.
-2. Check **ready bytes**, **ready ranges**, and completion.
-3. Share the file after it is fully prepared if cold Telegram reads would be
-   disruptive for the expected viewers.
+1. Choose **My Files → file ⋯ → Preload file**.
+2. Open **Monitor → Preloads** and wait for **Ready** with full coverage.
+   Blue segments show partial coverage.
 
-Preparation is admitted only when the requested range fits an effective tier.
-Concurrent preparations reserve capacity to prevent overcommitting the budget.
-The job verifies retained range coverage before reporting ready; bytes merely
-downloaded and then evicted do not count as a prepared file.
-
-You can cancel preparation or clear cached bytes without deleting the file.
-Lowering a budget, eviction, expiry, disk loss, or restart can change current
-coverage. Check the current inventory rather than treating a historical
-completion message as a permanent availability guarantee.
+Admission requires the file to fit an effective tier. Concurrent preparations
+reserve capacity and verify retained ranges before completion; downloaded then
+evicted bytes do not count. Manual multipart preparation also checks complete
+part checksums. Cancellation/clearing does not delete the file. Eviction, expiry,
+reduced budgets, disk loss and restart can change coverage, so inspect current
+inventory before a planned viewing.
 
 ## Shared-download load and queues
 
@@ -370,9 +385,10 @@ wait estimates can change with eligible bots, ongoing requests and Telegram
 cooldowns. They cannot promise a precise completion time. Cache lookup hits and
 misses count lookups, not bytes saved.
 
-**Preloads** lists ready and partial files first. A ready file has verified cached
-coverage. Every row shows bytes, percent and a positional coverage bar: blue
-segments mark cached regions in a **Partial** file; a full green bar and **Ready**
+**Preloads** lists cached files above their associated jobs, newest downloaded
+data first. Reading cached bytes or refreshing does not change that order.
+Every row shows bytes, percent and positional coverage: blue segments mark
+cached regions in a **Partial** file; full coverage and **Ready**
 label mark complete coverage. Matching preparation jobs show their loading,
 queue or error status with the file. Clear one file or the whole cache after
 confirmation; Telegram originals stay unchanged. Change instance budgets in

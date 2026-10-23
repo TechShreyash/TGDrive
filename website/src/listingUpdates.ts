@@ -1,37 +1,46 @@
 import type { Directory, DriveItem } from "./types";
 
 /** Coalesce invalidations without cancelling a listing that is still loading. */
-export function createListingRefreshQueue(load: () => Promise<void>) {
+export function createListingRefreshQueue(load: () => Promise<void | boolean>) {
   let running = false;
-  let pending = false;
   let disposed = false;
-  const finish = () => {
-    running = false;
-    if (pending && !disposed) {
-      pending = false;
-      request();
-    }
-  };
-  const request = () => {
-    if (disposed) return;
-    if (running) {
-      pending = true;
-      return;
-    }
+  let current: ((success: boolean) => void)[] = [];
+  let queued: ((success: boolean) => void)[] = [];
+  const start = () => {
     running = true;
+    current = queued;
+    queued = [];
+    const finish = (success: boolean) => {
+      for (const resolve of current) resolve(success && !disposed);
+      current = [];
+      running = false;
+      if (queued.length && !disposed) start();
+    };
     // The caller presents load errors. A failed request must still release the
     // queue so a later upload notification can retry the listing.
     void Promise.resolve()
       .then(() => {
-        if (!disposed) return load();
+        return disposed ? false : load();
       })
-      .then(finish, finish);
+      .then(
+        (result) => finish(result !== false),
+        () => finish(false),
+      );
+  };
+  const request = (): Promise<boolean> => {
+    if (disposed) return Promise.resolve(false);
+    return new Promise((resolve) => {
+      queued.push(resolve);
+      if (!running) start();
+    });
   };
   return {
     request,
     dispose() {
       disposed = true;
-      pending = false;
+      for (const resolve of [...current, ...queued]) resolve(false);
+      current = [];
+      queued = [];
     },
   };
 }

@@ -150,7 +150,9 @@ async def test_read_ahead_is_bounded_and_disconnect_drains_workers():
         assert await anext(iterator) == payload[:MIB]
         await asyncio.sleep(0.03)
         fetched = sum(sum(c.native.requests.values()) for c in clients)
-        assert 8 < fetched <= 66  # Up to 32 ahead + yielded MiB; never whole movie.
+        # A new response probes one block ahead until the consumer demonstrates
+        # sustained demand. Each MiB uses two native Telegram requests here.
+        assert fetched == 4
         await iterator.aclose()
         assert all(c.native.active == 0 for c in clients)
         assert all(row.active_leases == 0 for row in await pool.status())

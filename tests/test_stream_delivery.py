@@ -9,7 +9,7 @@ from fastapi import HTTPException
 from test_multipart_streaming import MultipartClient, build_parts
 from test_pooled_media import account
 from test_streaming import make_request, response_body
-from test_telegram_cache import message
+from test_telegram_cache import document, message
 
 from tgdrive.client_pool import ClientPool, MediaQueueFull
 from tgdrive.media_policy import MediaCachePolicy
@@ -359,6 +359,7 @@ async def test_tiny_http_range_probes_do_not_count_whole_telegram_blocks_as_play
                 payload,
                 request(f"bytes={offset}-{offset}"),
                 request_id="same-video",
+                preview=True,
             )
             assert await response_body(probe) == b"x"
         assert not manager._jobs and not manager._auto_tasks
@@ -368,3 +369,92 @@ async def test_tiny_http_range_probes_do_not_count_whole_telegram_blocks_as_play
     finally:
         await manager.close()
         await pool.stop()
+
+
+@pytest.mark.asyncio
+async def test_alternate_quality_does_not_schedule_original_file_preloads(tmp_path):
+    original = b"o" * (8 * BLOCK)
+    alternate = b"a" * (5 * BLOCK)
+    client = account("bot", original)
+    client.native.payloads[2] = alternate
+    source = TelegramMessage(
+        client, message(1, len(original), [document(2, len(alternate))])
+    )
+    client.get_messages = AsyncMock(return_value=source)
+    quality = client.describe_media(source)["variants"][0]["id"]
+    pool = ClientPool([client], media_cache_dir=tmp_path)
+    await pool.start()
+    manager = PreloadManager(
+        pool, policy=MediaCachePolicy(auto_preload=True, min_free_bytes=0)
+    )
+    try:
+        selected = await response(pool, original, quality=quality)
+        assert await response_body(selected) == alternate
+        assert not manager._observed and not manager._jobs and not manager._auto_tasks
+        assert all(identity == 2 for identity, _offset in client.native.requests)
+        files = (await manager.cache.snapshot())["files"]
+        assert len(files) == 1 and files[0]["complete"]
+    finally:
+        await manager.close()
+        await pool.stop()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "preview,media_destination,download,classified",
+    [
+        (False, False, False, False),
+        (True, False, False, True),
+        (False, True, False, True),
+        (True, True, True, False),
+    ],
+)
+async def test_only_identified_playback_uses_media_duration_for_background_warming(
+    tmp_path, preview, media_destination, download, classified
+):
+    from telethon import types
+
+    payload = b"x" * (2 * BLOCK)
+    client = account("bot", payload)
+    source = message(1, len(payload))
+    source.document.attributes.append(
+        types.DocumentAttributeVideo(duration=3600, w=1920, h=1080)
+    )
+    client.get_messages = AsyncMock(return_value=TelegramMessage(client, source))
+    pool = ClientPool([client], media_cache_dir=tmp_path)
+    await pool.start()
+    manager = PreloadManager(
+        pool, policy=MediaCachePolicy(auto_preload=True, min_free_bytes=0)
+    )
+    req = request(
+        f"bytes=0-{BLOCK - 1}",
+        **({"sec_fetch_dest": "video"} if media_destination else {}),
+    )
+    try:
+        selected = await response(
+            pool, payload, req, preview=preview, download=download
+        )
+        assert await response_body(selected) == payload[:BLOCK]
+        assert bool(manager._observed) is classified
+        if classified:
+            observed = next(iter(manager._observed.values()))
+            viewer = next(iter(observed["viewers"].values()))
+            assert viewer["media_rate"] == len(payload) / 3600
+            assert not viewer["allow_full"]
+    finally:
+        await manager.close()
+        await pool.stop()
+
+
+@pytest.mark.parametrize(
+    "duration", [0, -1, float("nan"), float("inf"), 1e-320, True, "60"]
+)
+def test_invalid_telegram_duration_cannot_create_unbounded_bitrate(duration):
+    from types import SimpleNamespace
+
+    from tgdrive.streaming import _media_byte_rate
+
+    source = SimpleNamespace(
+        document=SimpleNamespace(attributes=[SimpleNamespace(duration=duration)])
+    )
+    assert _media_byte_rate(source, BLOCK) is None

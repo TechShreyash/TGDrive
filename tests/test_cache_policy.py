@@ -18,6 +18,53 @@ def key(index=0, size=3 * BLOCK, message=77):
     return (CHANNEL, message, "document", message + 100, size, index)
 
 
+@pytest.mark.asyncio
+async def test_download_during_inventory_write_is_persisted_before_close(
+    tmp_path, monkeypatch
+):
+    cache = MediaReadCache(
+        tmp_path,
+        MediaCachePolicy(memory_max_bytes=8 * BLOCK, min_free_bytes=0),
+    )
+    first = cache.register_file(channel_id=CHANNEL, message_id=77, size=3, name="First")
+    second = cache.register_file(
+        channel_id=CHANNEL, message_id=88, size=3, name="Second"
+    )
+    started, release = threading.Event(), threading.Event()
+    original = cache._write_index
+    writes = 0
+
+    def delayed_write(value):
+        nonlocal writes
+        writes += 1
+        if writes == 1:
+            # Freeze the state as a real writer can do before a later download
+            # changes the cache while the disk operation is still in progress.
+            value = json.loads(json.dumps(value))
+            started.set()
+            assert release.wait(5)
+        original(value)
+
+    monkeypatch.setattr(cache, "_write_index", delayed_write)
+    try:
+        await cache.get(key(size=3), 3, lambda: asyncio.sleep(0, result=b"one"))
+        assert await asyncio.to_thread(started.wait, 2)
+        await cache.get(
+            key(size=3, message=88), 3, lambda: asyncio.sleep(0, result=b"two")
+        )
+        release.set()
+        await cache.close()
+        cache = MediaReadCache(tmp_path, cache.policy)
+        files = {row["id"]: row for row in (await cache.snapshot())["files"]}
+        assert set(files) == {first, second}
+        assert all(row["complete"] for row in files.values())
+        assert files[first]["name"] == "First"
+        assert files[second]["name"] == "Second"
+    finally:
+        release.set()
+        await cache.close()
+
+
 @pytest.mark.parametrize(
     "change",
     [

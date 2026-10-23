@@ -4,25 +4,32 @@ import { ChevronRight, Folder } from "lucide-react";
 import { api, errorMessage, type BotUploadSettings } from "./api";
 import { ErrorNotice, Modal, Spinner } from "./components";
 import { itemPath, type DriveItem } from "./types";
+import { useManualRefresh, type RefreshNotice } from "./useManualRefresh";
 import "./BotModeSettings.css";
 
 export default function BotModeSettings({
+  onNotice,
   demoMode = false,
-}: { demoMode?: boolean } = {}) {
+}: { onNotice?: RefreshNotice; demoMode?: boolean } = {}) {
   const [saved, setSaved] = useState<BotUploadSettings | null>(null);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [picking, setPicking] = useState(false);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
-  const load = useCallback(async (signal?: AbortSignal) => {
+  const manual = useManualRefresh(onNotice);
+  const load = useCallback(async (signal?: AbortSignal, explicit = false) => {
     setLoading(true);
     setError("");
     try {
       const value = await api.botUploadSettings(signal);
-      if (!signal?.aborted) setSaved(value);
+      if (signal?.aborted) return false;
+      setSaved(value);
+      return true;
     } catch (cause) {
       if (!signal?.aborted) setError(errorMessage(cause));
+      if (explicit) throw cause;
+      return false;
     } finally {
       if (!signal?.aborted) setLoading(false);
     }
@@ -111,9 +118,20 @@ export default function BotModeSettings({
         )
       )}
       {!picking && <ErrorNotice message={error} />}
-      {!saved && !loading && (
-        <Button variant="subtle" onClick={() => void load()}>
-          Try again
+      {!saved && (!loading || manual.refreshing) && (
+        <Button
+          variant="subtle"
+          disabled={loading || manual.refreshing}
+          aria-busy={manual.refreshing}
+          onClick={() =>
+            void manual.run(
+              (signal) => load(signal, true),
+              "Bot settings refreshed.",
+            )
+          }
+        >
+          {manual.refreshing && <Spinner />}
+          {manual.refreshing ? "Refreshing…" : "Try again"}
         </Button>
       )}
       {notice && <p role="status">{notice}</p>}

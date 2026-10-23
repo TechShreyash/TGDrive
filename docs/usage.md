@@ -15,7 +15,7 @@ Other people can view or download only what you share with them.
 | **Starred** | Quickly find files and folders you marked |
 | **Trash** | Restore files or delete them permanently |
 | **Monitor → Performance** | Inspect current server resources, Telegram activity and measured traffic |
-| **Monitor → Preloads** | Inspect cached coverage, stop preparation, or evict cached bytes |
+| **Monitor → Preloads** | Follow full-file preloads, inspect cached coverage, stop work, or evict cached bytes |
 | **Management → Connections** | Manage Telegram bots, Premium accounts and API credentials |
 | **Management → Storage & Backups** | Check saved data, temporary storage and database backups |
 | **Configuration → Cache settings** | Set RAM/disk budgets, reserves, retention and automatic preparation |
@@ -35,6 +35,10 @@ and larger-server tuning.
 On a [public demo deployment](configuration.md#public-demo-mode), Configuration
 and Management show the current settings with changes disabled. File features
 remain available; everyone using the demo shares its files and changes.
+
+**Refresh** and **Check Again** show progress and stay disabled until their
+requests finish. A successful refresh shows a brief confirmation; failures show
+an error so you can retry. Automatic background updates stay quiet.
 
 ## Upload files or folders
 
@@ -390,30 +394,59 @@ drawing that page's text/images.
 - Web uploads preserve their source bytes. TGDrive does not promise that
   Telegram will create lower-quality versions.
 
-### Cache and prepare playback
+## Preload a file for smoother playback and downloads
 
-The server keeps verified media blocks within your configured RAM/disk budgets.
-Repeated viewing and popular shared files reuse those bytes. Background work
-gives priority to people actively watching or downloading.
+**Preload file** caches the **whole original on the server** before a movie,
+large download or busy share. It uses server storage/bandwidth; your device
+receives bytes when you play or download.
 
-Choose **Prepare for Download / Streaming** from the file's actions before a
-screening or a large share. Open **Preloads** to check cached bytes and the
-coverage bar for each file: blue segments show partial coverage, and a full
-green bar with **Ready** means the whole file is cached. Clear one file or all
-cached data after confirmation; the originals remain in Telegram. Check progress
-and completion, then share it.
-Preparation must fit an effective cache tier; increase the budget or free space
-if it is rejected. You can cancel preparation or evict cached bytes without
-deleting the original.
+1. Choose **My Files → file ⋯ → Preload file** and start.
+2. Follow **Monitor → Preloads**. **Ready** with full coverage means the whole
+   file is cached; blue segments mean partial coverage.
+3. Play, download or share normally. Recheck coverage before relying on it.
 
-Preloads lists the most recently downloaded server data first. New data for an
-existing file moves it to the top. Refreshing the page or reading already-cached
-bytes does not reorder the list. Older cache indexes without a recorded download
-time follow entries with known activity.
+Expand **About preloading** on that page for the manual/automatic distinction.
 
-Cached bytes can expire or be evicted. A file being prepared once does not
-guarantee that it stays fully cached forever. Cache access still requires a
-valid owner session or share link. [See how caching works](performance.md).
+Preloading continues with the tab closed while TGDrive runs; foreground playback/
+downloads take priority. **Cancel** keeps cached bytes; clearing cache keeps
+Telegram originals. Cached bytes can expire or be evicted after completion.
+Preloading is not a backup and does not keep a sleeping server online.
+
+<details>
+<summary>Automatic read-ahead, download managers and cache limits</summary>
+
+### What happens when I just open or stream a file?
+
+Preloading is optional. Requested sections are cached with bounded adaptive
+read-ahead. **Preload during playback** (default On) also warms upcoming original
+audio/video after sustained delivery, adjusting for estimated media rate and seeks.
+Turn it off to reduce speculative Telegram traffic and cache use; requested-range
+read-ahead and manual preloading still work.
+A first viewer does not trigger a whole-file preload; separate viewers may
+justify one within cache policy. One player's overlapping requests do not count
+as extra viewers. PDFs/books/comics stay sparse; lower-quality previews do not
+automatically preload the original. Manual preloading always targets the original.
+
+### Parallel and resumed downloads
+
+Use file **⋯ → Copy Download Link**, then paste into your download manager.
+It is a [share capability](#share-and-revoke), separate from browser-cookie access.
+Managers can request ranges in parallel or resume; the manager must retain its
+own received-byte state. Downloads read ahead only within requested ranges,
+without warming unrelated gaps/the whole file. Shared cold blocks reuse origin
+fetches; Telegram alignment can fetch extra origin bytes while the response
+contains only the requested bytes. See [delivery policy](performance.md).
+
+### Storage, progress and limits
+
+Full preloads must fit one effective cache tier, including overhead/reservations.
+If rejected, free space, raise **Configuration → Cache settings** or wait for
+other jobs. Larger files can still stream in chunks.
+Preloads sorts by newest downloaded data, not cache reads or page refreshes.
+Cache access needs a valid session/share. Cold seeks, Telegram/network delays and
+decoding can still buffer. See [cache limits](performance.md).
+
+</details>
 
 ## Share and revoke
 
@@ -549,7 +582,8 @@ Admin links to change server settings.
 
 Refresh runs in the background. A failed check keeps the saved name and shows
 an error; temporary failures retry with Telegram's wait times. Disabled accounts
-are skipped. Keep at least one working storage bot.
+are skipped. Keep at least one working storage bot. The confirmation means
+connection checks were requested; watch each connection’s result for verification.
 
 If Telegram revokes a token/session or removes channel access, TGDrive excludes
 that connection and shows a warning with the repair action. Downloads can use

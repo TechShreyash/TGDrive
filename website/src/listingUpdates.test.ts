@@ -17,6 +17,42 @@ function deferred() {
 }
 
 describe("upload-driven listing refreshes", () => {
+  it("acknowledges an explicit refresh only after its trailing fresh load", async () => {
+    const first = deferred();
+    const second = deferred();
+    const load = vi
+      .fn<() => Promise<void>>()
+      .mockReturnValueOnce(first.promise)
+      .mockReturnValueOnce(second.promise);
+    const queue = createListingRefreshQueue(load);
+    const initial = queue.request();
+    await vi.waitFor(() => expect(load).toHaveBeenCalledTimes(1));
+    const acknowledge = vi.fn();
+    const manual = queue.request().then(acknowledge);
+    first.resolve();
+    await expect(initial).resolves.toBe(true);
+    await vi.waitFor(() => expect(load).toHaveBeenCalledTimes(2));
+    expect(acknowledge).not.toHaveBeenCalled();
+    second.resolve();
+    await manual;
+    expect(acknowledge).toHaveBeenCalledWith(true);
+    queue.dispose();
+  });
+
+  it("does not report refresh success after failure or navigation", async () => {
+    const queue = createListingRefreshQueue(async () => false);
+    await expect(queue.request()).resolves.toBe(false);
+    queue.dispose();
+    const waiting = deferred();
+    const other = createListingRefreshQueue(() => waiting.promise);
+    const current = other.request();
+    const trailing = other.request();
+    other.dispose();
+    await expect(current).resolves.toBe(false);
+    await expect(trailing).resolves.toBe(false);
+    waiting.resolve();
+  });
+
   it("lets a slow listing finish and coalesces a completion burst into one trailing request", async () => {
     const first = deferred();
     const second = deferred();

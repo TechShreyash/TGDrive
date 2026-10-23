@@ -7,6 +7,7 @@ import {
 } from "react";
 import { Download, Pause, Play, RefreshCw, ShieldCheck } from "lucide-react";
 import { errorMessage, request } from "./api";
+import { useManualRefresh } from "./useManualRefresh";
 import { ErrorNotice, Spinner } from "./components";
 import {
   currentRate,
@@ -102,10 +103,12 @@ export default function ChannelBackup({
   recoveryOnly = false,
   demoMode = false,
   onRestartRequired,
+  onNotice,
 }: {
   recoveryOnly?: boolean;
   demoMode?: boolean;
   onRestartRequired?: () => void;
+  onNotice?: (message: string, error?: boolean) => void;
 }) {
   const [state, setState] = useState<ReplicaState | null>(null);
   const [loadError, setLoadError] = useState("");
@@ -129,6 +132,8 @@ export default function ChannelBackup({
   const [observedAt, setObservedAt] = useState(Date.now());
   const mounted = useRef(true);
   const generation = useRef(0);
+  const manualPending = useRef(false);
+  const { refreshing, run } = useManualRefresh(onNotice);
   const progress = useRef<ProgressSample | undefined>(undefined);
   const restartNotified = useRef(false);
   const surface = useRef<HTMLElement>(null);
@@ -136,7 +141,8 @@ export default function ChannelBackup({
   const restartCallback = useRef(onRestartRequired);
   restartCallback.current = onRestartRequired;
 
-  const load = useCallback(async (signal?: AbortSignal) => {
+  const load = useCallback(async (signal?: AbortSignal, manual = false) => {
+    if (manualPending.current && !manual) return false;
     const revision = ++generation.current;
     try {
       const result = await request<ReplicaState>("/api/v1/replica", undefined, {
@@ -149,7 +155,7 @@ export default function ChannelBackup({
         signal?.aborted ||
         revision !== generation.current
       )
-        return;
+        return false;
       const now = Date.now();
       progress.current = sampleProgress(
         progress.current,
@@ -160,6 +166,7 @@ export default function ChannelBackup({
       setObservedAt(now);
       setState(result);
       setLoadError("");
+      return true;
     } catch (cause) {
       if (
         mounted.current &&
@@ -167,8 +174,22 @@ export default function ChannelBackup({
         revision === generation.current
       )
         setLoadError(errorMessage(cause));
+      if (manual) throw cause;
+      return false;
     }
   }, []);
+  const refreshStatus = () =>
+    run(
+      async (signal) => {
+        manualPending.current = true;
+        try {
+          return await load(signal, true);
+        } finally {
+          manualPending.current = false;
+        }
+      },
+      recoveryOnly ? "Recovery status refreshed." : "Backup status refreshed.",
+    );
 
   useEffect(() => {
     mounted.current = true;
@@ -425,6 +446,7 @@ export default function ChannelBackup({
     <section
       className="settings-section channel-backup"
       aria-labelledby="channel-backup-title"
+      aria-busy={!!busy || refreshing}
       ref={surface}
     >
       {demoMode && recoveryOnly && <DemoModeNotice />}
@@ -443,10 +465,10 @@ export default function ChannelBackup({
           type="button"
           className="icon-button"
           aria-label="Refresh channel backup status"
-          disabled={!!busy}
-          onClick={() => void load()}
+          disabled={!!busy || refreshing}
+          onClick={() => void refreshStatus()}
         >
-          <RefreshCw size={18} />
+          {refreshing ? <Spinner /> : <RefreshCw size={18} />}
         </button>
       </div>
       {!state && !loadError && (
@@ -460,9 +482,10 @@ export default function ChannelBackup({
           <button
             type="button"
             className="text-button"
-            onClick={() => void load()}
+            disabled={refreshing}
+            onClick={() => void refreshStatus()}
           >
-            Try again
+            {refreshing && <Spinner />} Try again
           </button>
         </div>
       )}

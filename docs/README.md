@@ -13,6 +13,8 @@ and MongoDB remembers their names, folders and sharing settings.
 | Host TGDrive for remote access and sharing | [Recommended: Coolify](setup.md#coolify), or [server Compose](setup.md#docker-compose-on-a-server) |
 | Offer a public demo with settings locked | [Public demo mode](configuration.md#public-demo-mode) |
 | Upload, organize, preview or share files | [Using TGDrive](usage.md) |
+| Preload a whole file before watching/sharing and understand automatic read-ahead | [Preloading](usage.md#preload-a-file-for-smoother-playback-and-downloads) |
+| Use a download manager with parallel or resumed ranges | [Parallel and resumed downloads](usage.md#parallel-and-resumed-downloads) |
 | Understand adaptive uploads, device/server stages or when a tab can close | [Upload speed and queue](usage.md#upload-speed-and-queue), [tab closure](usage.md#can-i-close-the-tab) |
 | Read PDFs, ebooks or comics without downloading every byte first | [Reading books and comics](reading.md) |
 | Understand generated image, video and PDF covers | [Thumbnail generation](thumbnails.md) |

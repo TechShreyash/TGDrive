@@ -17,6 +17,7 @@ from tgdrive.streaming import (
     TelegramVariantNotFound,
     _ActivityBody,
     _content_disposition,
+    _is_playback_request,
     _not_modified,
     _observe_media_request,
     _prime_response,
@@ -92,7 +93,9 @@ async def stream_multipart_file(
         request=request,
         start=selected.start,
         end=selected.end + 1,
-        allow_preload=not (preview and mime_type == "application/pdf" and not download),
+        allow_preload=_is_playback_request(
+            request, mime_type, download=download, preview=preview
+        ),
         authorize=authorize,
         request_id=request_id,
     )

@@ -8,6 +8,7 @@ import {
   Trash2,
   RefreshCw,
   Download,
+  Server,
   ChevronRight,
   ChevronLeft,
   MoreHorizontal,
@@ -83,6 +84,7 @@ export default function FileBrowser({
   refresh = 0,
   highlightId = "",
   loading,
+  refreshing = false,
   error,
   isPublic,
   isTrash,
@@ -109,6 +111,7 @@ export default function FileBrowser({
   refresh?: number;
   highlightId?: string;
   loading: boolean;
+  refreshing?: boolean;
   error: string;
   isPublic: boolean;
   isTrash: boolean;
@@ -605,8 +608,13 @@ export default function FileBrowser({
                 : "Could Not Load Your Files"}
             </h2>
             <p role="alert">{error}</p>
-            <button className="secondary-button" onClick={onReload}>
-              Try Again
+            <button
+              className="secondary-button"
+              disabled={loading || refreshing}
+              onClick={onReload}
+            >
+              {refreshing && <Spinner />}
+              {refreshing ? "Refreshing…" : "Try Again"}
             </button>
           </div>
         ) : loading ? (
@@ -1021,12 +1029,13 @@ export default function FileBrowser({
                                       </button>
                                       <button
                                         role="menuitem"
+                                        title="Cache the whole file on the server for faster streaming and downloads"
                                         onClick={() =>
                                           showDialog({ type: "prepare", item })
                                         }
                                       >
-                                        <Download size={16} /> Prepare for
-                                        Download / Streaming
+                                        <Server size={16} aria-hidden="true" />{" "}
+                                        Preload file
                                       </button>
                                     </>
                                   )}

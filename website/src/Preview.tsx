@@ -331,6 +331,7 @@ export default function Preview({
   const playback = useRef<{ time: number; playing: boolean } | null>(null);
   const src =
     fileUrl(path, auth) +
+    (kind === "video" || kind === "audio" ? "&preview=1" : "") +
     (quality === "original" ? "" : "&quality=" + encodeURIComponent(quality));
   useEffect(() => {
     setVariants([]);

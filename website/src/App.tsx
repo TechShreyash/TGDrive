@@ -15,7 +15,7 @@ import {
   FolderClosed,
   ArrowDownUp,
   ChartNoAxesCombined,
-  Layers,
+  Server,
   Database,
   Gauge,
   FolderPlus,
@@ -69,6 +69,7 @@ import DeletionNotice from "./DeletionNotice";
 import SidebarLogout from "./SidebarLogout";
 import ChannelBackup from "./ChannelBackup";
 import BotModeSettings from "./BotModeSettings";
+import { useManualRefresh } from "./useManualRefresh";
 function getLocation() {
   const url = new URL(window.location.href);
   let path = url.searchParams.get("path") || "/";
@@ -417,6 +418,7 @@ export default function App() {
     (message: string, error = false) => setToast({ message, error }),
     [],
   );
+  const listingRefreshAction = useManualRefresh(notify);
   useEffect(() => {
     if (
       !deletionProgress.completed ||
@@ -684,9 +686,9 @@ export default function App() {
                     };
                   })
               : api.directory(currentPath, location.auth, controller.signal);
-      await resultPromise
+      return await resultPromise
         .then((result) => {
-          if (controller.signal.aborted) return;
+          if (controller.signal.aborted) return false;
           loadedListing.current = listingKey;
           setToast((current) =>
             current?.message === retryNotice ? null : current,
@@ -695,9 +697,10 @@ export default function App() {
           setShareRoot(result.auth_home_path || "");
           if (result.data.name)
             names.current.set(currentPath, result.data.name);
+          return true;
         })
         .catch((error) => {
-          if (controller.signal.aborted) return;
+          if (controller.signal.aborted) return false;
           if (error.name !== "AbortError") {
             if (
               background &&
@@ -708,7 +711,7 @@ export default function App() {
             ) {
               notify(retryNotice, true);
               retryTimer = setTimeout(reload, 3000);
-              return;
+              return false;
             }
             loadedListing.current = null;
             if (isSearch) {
@@ -723,6 +726,7 @@ export default function App() {
             );
             setDirectory({ contents: {} });
           }
+          return false;
         })
         .finally(() => {
           if (!controller.signal.aborted) setLoading(false);
@@ -1342,7 +1346,7 @@ export default function App() {
             recover it.
           </p>
           {configLoad === "ready" ? (
-            <ChannelBackup recoveryOnly demoMode={config.demo_mode} />
+            <ChannelBackup recoveryOnly demoMode={config.demo_mode} onNotice={notify} />
           ) : (
             configGate
           )}
@@ -1463,7 +1467,7 @@ export default function App() {
                   {navigationLink({
                     view: "preloads",
                     label: "Preloads",
-                    icon: Layers,
+                    icon: Server,
                   })}
                 </div>
                 <div
@@ -1699,6 +1703,7 @@ export default function App() {
               refresh={refresh}
               highlightId={location.highlightId}
               loading={loading}
+              refreshing={listingRefreshAction.refreshing}
               error={loadError}
               isPublic={isPublic}
               isTrash={view === "trash"}
@@ -1718,7 +1723,16 @@ export default function App() {
               }}
               isSearch={isSearch}
               auth={location.auth}
-              onReload={reload}
+              onReload={() =>
+                void listingRefreshAction.run(
+                  async () => listingRefresh.current?.request() ?? false,
+                  view === "trash"
+                    ? "Trash refreshed."
+                    : view === "starred"
+                      ? "Starred files refreshed."
+                      : "Files refreshed.",
+                )
+              }
               onUpload={pickFiles}
               onOpen={open}
               onDialog={setDialog}
@@ -1756,6 +1770,7 @@ export default function App() {
               query={scopedQuery}
               refresh={refresh}
               onError={(message) => notify(message, true)}
+              onNotice={notify}
               onChange={reload}
               onLocate={(share) =>
                 navigate(
@@ -1781,22 +1796,24 @@ export default function App() {
               onNotice={notify}
             />
           ) : view === "performance" ? (
-            <PerformancePanel />
+            <PerformancePanel onNotice={notify} />
           ) : ["connections", "storage", "settings"].includes(view) &&
             configLoad !== "ready" ? (
             configGate
           ) : view === "connections" ? (
-            <SettingsManagement demoMode={config.demo_mode} />
+            <SettingsManagement demoMode={config.demo_mode} onNotice={notify} />
           ) : view === "storage" ? (
             <StorageView
               config={config}
               demoMode={config.demo_mode}
+              onNotice={notify}
               onTransfers={() => navigate("/", "activity")}
               onTrash={() => navigate("/trash", "trash")}
             />
           ) : view === "settings" ? (
             <PerformanceSettings
               demoMode={config.demo_mode}
+              onNotice={notify}
               category={
                 location.settingsSection === "transfers"
                   ? "transfers"
@@ -1806,8 +1823,8 @@ export default function App() {
               }
               uploadPreferences={
                 <>
-                  <UploadSettings demoMode={config.demo_mode} />
-                  <BotModeSettings demoMode={config.demo_mode} />
+                  <UploadSettings demoMode={config.demo_mode} onNotice={notify} />
+                  <BotModeSettings demoMode={config.demo_mode} onNotice={notify} />
                 </>
               }
               onSaved={(value) => {
@@ -1822,6 +1839,7 @@ export default function App() {
             />
           ) : (
             <TransferHistory
+              onNotice={notify}
               query={scopedQuery}
               items={items}
               onLocate={(item, folder) => void locateTransfer(item, folder)}

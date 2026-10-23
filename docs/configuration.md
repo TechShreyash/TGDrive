@@ -70,7 +70,7 @@ to tune performance. Keep the [recovery kit](backup-recovery.md) independently.
 | Cache free-space floor | 1 GiB | Free space cache writes must leave on their volume | Raise for active uploads, a small/shared disk or system growth. It does not allocate space. Dashboard changes cannot enable disk caching with less than 64 MiB left free; normal use should retain at least the 1 GiB default. |
 | Disk retention | 24 hours | Time since each disk block was last reused | Increase for files repeatedly used across days. It does not pin files; capacity pressure can evict them sooner. |
 | Concurrent preloads | 2 | Manual and automatic preparation jobs in progress | Reduce to 1 on a constrained server. Raise only after measuring cold reads and Telegram capacity; it creates no extra provider bandwidth. |
-| Preload during playback/downloads | On | Prepare useful upcoming bytes after sequential delivery | Turn off to minimize speculative traffic. Manual Prepare remains available. Active demand has priority. |
+| Preload during playback | On | Warm a bounded upcoming region during original audio/video playback | Turn off to minimize speculative Telegram traffic and cache use. Requested ranges and adaptive response read-ahead still work; downloads do not start extra warming. Manual **Preload file** remains available. |
 
 RAM and disk cache do not permanently store the originals. Original file payloads
 remain in Telegram; catalog metadata remains in MongoDB. Retention and clearing

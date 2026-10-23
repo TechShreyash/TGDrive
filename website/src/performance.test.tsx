@@ -1,7 +1,13 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
 import { ApiError } from "./api";
-import { CacheCoverage, coverageRanges, cachedFileComplete } from "./Preloads";
+import {
+  CacheCoverage,
+  CacheCapacity,
+  coverageRanges,
+  cachedFileComplete,
+  currentPreloadJobs,
+} from "./Preloads";
 import {
   httpRates,
   loadPoints,
@@ -24,6 +30,7 @@ import {
   performanceDraft,
   performanceCategoryDraft,
   type PerformancePreferences,
+  type PreloadJob,
   type ResourceSample,
 } from "./performanceApi";
 
@@ -192,6 +199,60 @@ describe("performance settings and HTTP boundaries", () => {
 });
 
 describe("cache coverage and observed queue estimates", () => {
+  it("shows actual tier usage and distinguishes zero capacity from unavailable memory", () => {
+    const usage = renderToStaticMarkup(
+      <CacheCapacity label="Memory cache" used={80 * MIB} limit={256 * MIB} />,
+    );
+    expect(usage).toContain("80 MB");
+    expect(usage).toContain("256 MB");
+    expect(usage).toContain("31%");
+    expect(usage).toContain('aria-valuetext="80 / 256 MB used (31%)"');
+    const disabled = renderToStaticMarkup(
+      <CacheCapacity
+        label="Disk cache"
+        used={0}
+        limit={0}
+        disabled
+        unavailable
+      />,
+    );
+    expect(disabled).toContain("Disabled");
+    expect(disabled).not.toContain("<progress");
+    const pressure = renderToStaticMarkup(
+      <CacheCapacity label="Memory cache" used={20} limit={0} unavailable />,
+    );
+    expect(pressure).toContain("Unavailable");
+    expect(pressure).not.toContain("Disabled");
+    expect(pressure).not.toContain("NaN");
+  });
+  it("uses the latest per-file job before searching or showing old failures", () => {
+    const job = (file_id: string, state: string, name: string): PreloadJob => ({
+      id: name,
+      file_id,
+      state,
+      name,
+      mode: "manual",
+      bytes_done: 0,
+      target_bytes: 100,
+      size: 100,
+      start: 0,
+      end: 100,
+    });
+    const newest = job("finished", "ready", "Renamed movie.mp4");
+    const active = job("active", "preparing", "Streaming movie.mp4");
+    const cancelled = job("stopped", "cancelled", "Stopped movie.mp4");
+    const jobs = currentPreloadJobs([
+      newest,
+      active,
+      cancelled,
+      job("finished", "failed", "Old movie.mp4"),
+      job("active", "failed", "Old streaming movie.mp4"),
+      job("stopped", "failed", "Old stopped movie.mp4"),
+    ]);
+    expect(jobs).toEqual([newest, active, cancelled]);
+    expect(jobs.filter((value) => value.name.includes("Old"))).toEqual([]);
+    expect(jobs.filter((value) => value.state === "failed")).toEqual([]);
+  });
   it("filters selected history without fabricating samples or joining missing intervals", () => {
     const samples = Array.from({ length: 31 }, (_, index) => ({
       at: index * 30,

@@ -11,6 +11,7 @@ import {
   AlertCircle,
 } from "lucide-react";
 import { api, request, ApiError, errorMessage } from "./api";
+import { performanceApi } from "./performanceApi";
 import { itemPath, formatTimestamp, type DriveItem } from "./types";
 import { transfers } from "./transfers";
 import { Modal, ErrorNotice, Spinner } from "./components";
@@ -87,18 +88,35 @@ export default function ActionDialog({
     return (
       <Modal
         title={
-          dialog.type === "prepare"
-            ? "Prepare for Download or Streaming"
-            : "Copy Download Link"
+          dialog.type === "prepare" ? "Preload file" : "Copy Download Link"
         }
         onClose={close}
       >
         <p>{dialog.item.name}</p>
         <p>
           {dialog.type === "prepare"
-            ? "Save this file in the server cache for faster playback and downloads. It uses your instance cache budget and waits behind on-demand requests. Prepared bytes can later be evicted to respect limits."
+            ? "Cache the whole file on the server for faster later streaming and downloads. This uses the shared cache budget and runs behind active streams and downloads. Cached bytes may be removed when space is needed."
             : "Anyone with this link can download the file without logging in. An active link is reused, or a new one-day link is created. Revoke it in Shared Links."}
         </p>
+        {dialog.type === "prepare" && (
+          <>
+            <p>
+              Opening or streaming fetches requested chunks with adaptive,
+              bounded read-ahead. Automatic preloading can warm additional
+              upcoming playback chunks. Downloads fetch their requested ranges.
+              Use this action to preload the entire file in advance.
+              Your device still needs an internet connection to access the
+              server copy.
+            </p>
+            <p>
+              View progress and manage cached files in{" "}
+              <a className="inline-link" href="/?view=preloads">
+                Preloads
+              </a>
+              .
+            </p>
+          </>
+        )}
         {link && (
           <label>
             Download link
@@ -127,10 +145,16 @@ export default function ActionDialog({
             onClick={() =>
               void run(async () => {
                 if (dialog.type === "prepare") {
-                  await request("/api/v1/preloads", {
-                    path: itemPath(dialog.item),
-                  });
-                  onNotice("Preparation queued. View progress in Preloads.");
+                  const job = await performanceApi.prepare(
+                    itemPath(dialog.item),
+                  );
+                  onNotice(
+                    job.state === "ready"
+                      ? "File is already fully cached on the server. View it in Preloads."
+                      : job.state === "preparing"
+                        ? "File is preloading on the server. View progress in Preloads."
+                        : "Preload queued. View progress in Preloads.",
+                  );
                   onClose();
                 } else {
                   const result = await request<{
@@ -147,7 +171,7 @@ export default function ActionDialog({
             }
           >
             {busy ? <Spinner /> : null}
-            {dialog.type === "prepare" ? "Prepare File" : "Create or Copy Link"}
+            {dialog.type === "prepare" ? "Preload file" : "Create or Copy Link"}
           </button>
         </div>
       </Modal>

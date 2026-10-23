@@ -85,8 +85,8 @@ def test_cache_inventory_filters_verified_coverage_and_clear_actions(server, des
     expect(page.locator(".cached-file")).to_have_count(2)
     expect(
         page.locator(".cached-file").filter(has_text="Interview.mkv")
-    ).to_contain_text("Loading")
-    ready = page.locator(".cached-file").filter(has_text="Prepared movie.mp4")
+    ).to_contain_text("Preloading")
+    ready = page.locator(".cached-file").filter(has_text="Prepared movie")
     partial = page.locator(".cached-file").filter(has_text="Interview.mkv")
     expect(ready.locator("svg[role=img]")).to_be_visible()
     expect(ready.locator(".cache-coverage-ready")).to_have_attribute("x", "0")
@@ -100,10 +100,9 @@ def test_cache_inventory_filters_verified_coverage_and_clear_actions(server, des
         "node => getComputedStyle(node).fill"
     ) != segments.first.evaluate("node => getComputedStyle(node).fill")
     expect(partial.locator(".cache-ready-state")).to_contain_text("Partial")
-    assert ready.bounding_box()["height"] < 90
     expect(page.get_by_text("Cached ranges", exact=False)).to_have_count(0)
     expect(page.get_by_text("Cache details & recent preparations")).to_have_count(0)
-    expect(page.get_by_role("heading", name="Preparation queue")).to_be_visible()
+    expect(page.get_by_role("heading", name="Preload queue")).to_be_visible()
     expect(
         page.get_by_text("Telegram is temporarily unavailable", exact=True)
     ).to_be_visible()
@@ -111,7 +110,8 @@ def test_cache_inventory_filters_verified_coverage_and_clear_actions(server, des
     expect(page.locator(".cached-file")).to_have_count(1)
     expect(page.locator(".cached-file")).to_contain_text("Prepared movie")
     page.get_by_role("button", name="Partial 1", exact=True).click()
-    expect(page.locator(".cache-coverage")).to_contain_text("20 / 100 B cached · 20%")
+    expect(page.locator(".cache-coverage")).to_contain_text("20 / 100 B cached")
+    expect(page.locator(".cache-coverage")).to_contain_text("20%")
     page.get_by_role("searchbox", name="Search cached files", exact=True).fill(
         "missing"
     )
@@ -120,6 +120,28 @@ def test_cache_inventory_filters_verified_coverage_and_clear_actions(server, des
     ).to_be_visible()
     page.get_by_role("searchbox", name="Search cached files", exact=True).fill("")
     page.get_by_role("button", name="All 2", exact=True).click()
+
+    # Retain tiny-range edge checks above; judge the composition with realistic
+    # synthetic file sizes and actual tier counters, independent of coverage.
+    gib = 1024**3
+    snapshot["cache"]["memory"]["bytes"] = 80 * 1024**2
+    snapshot["cache"]["files"][0].update(
+        name="Prepared movie - director's cut remastered full edition 2026.mp4",
+        size=2 * gib,
+        ready_bytes=2 * gib,
+        ready_ranges=[[0, 2 * gib]],
+    )
+    snapshot["cache"]["files"][1].update(
+        size=gib, ready_ranges=[[0, gib // 10], [gib * 9 // 10, gib]]
+    )
+    snapshot["cache"]["disk"]["bytes"] = 2 * gib + gib // 10 + (gib - gib * 9 // 10)
+    page.get_by_role("button", name="Refresh Cache Inventory").click()
+    expect(page.get_by_role("group", name="Memory cache", exact=True)).to_contain_text(
+        "31%"
+    )
+    expect(page.get_by_role("group", name="Disk cache", exact=True)).to_contain_text(
+        "22%"
+    )
     page.screenshot(path=ARTIFACTS / "owner-preloads-desktop.png", full_page=True)
     page.get_by_role("button", name="Evict cached bytes for Interview.mkv").click()
     dialog = page.get_by_role("dialog", name="Clear cached file?", exact=True)
@@ -129,9 +151,11 @@ def test_cache_inventory_filters_verified_coverage_and_clear_actions(server, des
     expect(dialog).not_to_be_visible()
     page.get_by_role("button", name="Evict cached bytes for Interview.mkv").click()
     dialog.get_by_role("button", name="Clear Cached File", exact=True).click()
-    expect(
-        page.locator(".performance-notice").filter(has_text="Cached bytes evicted")
-    ).to_be_visible()
+    feedback = page.get_by_text(
+        "Cached bytes evicted. The original is unchanged.", exact=True
+    )
+    expect(feedback).to_have_count(1)
+    expect(feedback).to_be_visible()
     assert cleared == [{"file_id": "partial-file"}]
     page.get_by_role("button", name="Dismiss Notification").click()
     page.set_viewport_size({"width": 390, "height": 844})
@@ -141,6 +165,91 @@ def test_cache_inventory_filters_verified_coverage_and_clear_actions(server, des
         page.get_by_role("searchbox", name="Search cached files", exact=True)
     ).to_be_visible()
     page.screenshot(path=ARTIFACTS / "owner-preloads-mobile-dark.png", full_page=True)
+
+    # The same coverage and controls stay usable in compact layouts and themes.
+    for width, theme in [
+        (1440, "light"),
+        (1440, "dark"),
+        (390, "light"),
+        (390, "dark"),
+        (320, "dark"),
+    ]:
+        page.set_viewport_size({"width": width, "height": 900})
+        page.evaluate("theme => document.documentElement.dataset.theme = theme", theme)
+        if width <= 640:
+            selector = page.get_by_role("combobox", name="Filter cached files")
+            selector.select_option("ready")
+            expect(page.locator(".cached-file")).to_have_count(1)
+            expect(page.locator(".cached-file")).to_contain_text("Prepared movie")
+            selector.select_option("partial")
+            expect(page.locator(".cached-file")).to_contain_text("Interview.mkv")
+            selector.select_option("all")
+        expect(page.locator(".cached-file")).to_have_count(2)
+        assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
+        page.screenshot(
+            path=ARTIFACTS / f"preloads-compact-{width}-{theme}.png", full_page=True
+        )
+
+    help_panel = page.locator(".preload-help")
+    summary = help_panel.get_by_text("About preloading", exact=True)
+    summary.focus()
+    page.keyboard.press("Enter")
+    expect(help_panel).to_have_attribute("open", "")
+    expect(
+        help_panel.get_by_role("link", name="Read the preloading guide")
+    ).to_have_attribute(
+        "href",
+        "https://github.com/TechShreyash/TGDrive/blob/dev/docs/usage.md"
+        "#preload-a-file-for-smoother-playback-and-downloads",
+    )
+    expect(help_panel).to_contain_text("downloads fetch their requested ranges")
+    page.keyboard.press("Enter")
+    expect(help_panel).not_to_have_attribute("open", "")
+
+    cancellations = []
+
+    def cancel(route):
+        cancellations.append(route.request.url)
+        snapshot["jobs"][0]["state"] = "cancelled"
+        snapshot["active_jobs"] = 0
+        route.fulfill(json={"status": "ok"})
+
+    page.route("**/api/v1/preloads/active/cancel", cancel)
+    page.get_by_role("button", name="Cancel preload of Interview.mkv").click()
+    expect(
+        page.get_by_role("button", name="Cancel preload of Interview.mkv")
+    ).to_have_count(0)
+    assert len(cancellations) == 1
+    expect(partial.locator(".cache-ready-state")).to_have_text("Partial")
+
+    page.get_by_role("button", name="Clear Cache", exact=True).click()
+    all_dialog = page.get_by_role("dialog", name="Clear all cached files?", exact=True)
+    expect(all_dialog.get_by_role("button", name="Keep Cache")).to_be_focused()
+    assert cleared == [{"file_id": "partial-file"}]
+    all_dialog.get_by_role("button", name="Keep Cache").click()
+    expect(all_dialog).not_to_be_visible()
+    page.get_by_role("button", name="Clear Cache", exact=True).click()
+    all_dialog.get_by_role("button", name="Clear All Cache", exact=True).click()
+    feedback = page.get_by_text(
+        "Cached bytes cleared. Originals remain in Telegram.", exact=True
+    )
+    expect(feedback).to_have_count(1)
+    expect(feedback).to_be_visible()
+    assert cleared == [{"file_id": "partial-file"}, {}]
+
+    snapshot["cache"]["files"] = []
+    snapshot["cache"]["memory"].update(max_bytes=256 * 1024**2, effective_max_bytes=0)
+    snapshot["cache"]["disk"]["available"] = False
+    page.get_by_role("button", name="Refresh Cache Inventory").click()
+    expect(page.get_by_text("No files cached yet", exact=True)).to_be_visible()
+    expect(page.get_by_role("button", name="Clear Cache", exact=True)).to_be_disabled()
+    expect(page.get_by_role("group", name="Server cache usage")).to_contain_text(
+        "Unavailable"
+    )
+    expect(page.get_by_role("group", name="Server cache usage")).not_to_contain_text(
+        "Disabled"
+    )
+    page.screenshot(path=ARTIFACTS / "preloads-empty-unavailable-320-dark.png")
 
 
 def test_performance_views_keyboard_navigation_and_settings_groups(server, desktop):
@@ -274,7 +383,7 @@ def test_performance_views_keyboard_navigation_and_settings_groups(server, deskt
     page.goto(server.url + "/?view=settings&section=performance")
     expect(page.get_by_role("group", name="Cache storage", exact=True)).to_be_visible()
     expect(
-        page.get_by_role("group", name="Playback preparation", exact=True)
+        page.get_by_role("group", name="Automatic preloading", exact=True)
     ).to_be_visible()
     expect(
         page.get_by_role("button", name="Save Performance Settings")

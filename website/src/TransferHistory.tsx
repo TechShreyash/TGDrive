@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { ChevronLeft, ChevronRight, Upload } from "lucide-react";
 import { api, errorMessage } from "./api";
 import { ErrorNotice, Spinner } from "./components";
@@ -6,6 +6,7 @@ import TransferPanel from "./TransferPanel";
 import { visibleHistory, type HistoryFilter } from "./transferHistory";
 import type { Job, TransferHistoryPage } from "./types";
 import type { Transfer } from "./transfers";
+import { useManualRefresh, type RefreshNotice } from "./useManualRefresh";
 import "./TransferHistory.css";
 
 const filters: { key: HistoryFilter; label: string }[] = [
@@ -25,57 +26,79 @@ export default function TransferHistory({
   items,
   onError,
   onLocate,
+  onNotice,
   query = "",
 }: {
   items: Transfer[];
   onLocate: (item: Transfer, folder?: boolean) => void;
   onError: (message: string) => void;
+  onNotice?: RefreshNotice;
   query?: string;
 }) {
   const [filter, setFilter] = useState<HistoryFilter>("all");
-  const [revision, setRevision] = useState(0);
   const [navigation, setNavigation] = useState(firstPage);
   const [jobs, setJobs] = useState<Job[]>([]);
   const [page, setPage] = useState<TransferHistoryPage | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const generation = useRef(0);
+  const manual = useManualRefresh(onNotice);
+  const context = JSON.stringify([filter, navigation.cursor, query]);
+  const manualContext = useRef<string | null>(null);
+  const load = useCallback(
+    async (signal: AbortSignal, explicit = false) => {
+      const version = ++generation.current;
+      try {
+        const response = await api.transferHistory(
+          filter === "all" ? "finished" : filter,
+          navigation.cursor,
+          signal,
+          query,
+        );
+        if (signal.aborted || generation.current !== version) return false;
+        setJobs(response.jobs);
+        setPage(response);
+        setError("");
+        return true;
+      } catch (cause) {
+        if (signal.aborted || generation.current !== version) return false;
+        setError(errorMessage(cause));
+        if (explicit) throw cause;
+        return false;
+      } finally {
+        if (!signal.aborted && generation.current === version)
+          setLoading(false);
+      }
+    },
+    [filter, navigation.cursor, query],
+  );
   useEffect(() => {
     move(firstPage);
   }, [query]);
   useEffect(() => {
     const controller = new AbortController();
-    const version = ++generation.current;
     let timer: ReturnType<typeof setTimeout>;
     const poll = async () => {
-      try {
-        const response = await api.transferHistory(
-          filter === "all" ? "finished" : filter,
-          navigation.cursor,
-          controller.signal,
-          query,
-        );
-        if (controller.signal.aborted || generation.current !== version) return;
-        // Only this cursor page is retained. Live uploads come from items above.
-        setJobs(response.jobs);
-        setPage(response);
-        setError("");
-      } catch (cause) {
-        if (!controller.signal.aborted && generation.current === version)
-          setError(errorMessage(cause));
-      } finally {
-        if (!controller.signal.aborted && generation.current === version) {
-          setLoading(false);
-          timer = setTimeout(poll, document.hidden ? 30000 : 10000);
-        }
-      }
+      if (manualContext.current !== context) await load(controller.signal);
+      if (!controller.signal.aborted)
+        timer = setTimeout(poll, document.hidden ? 30000 : 10000);
     };
     void poll();
     return () => {
       controller.abort();
       clearTimeout(timer);
     };
-  }, [filter, navigation.cursor, revision, query]);
+  }, [load, context]);
+  const retry = () =>
+    manual.run(async (signal) => {
+      manualContext.current = context;
+      setLoading(true);
+      try {
+        return await load(signal, true);
+      } finally {
+        if (manualContext.current === context) manualContext.current = null;
+      }
+    }, "Transfer history refreshed.");
   const move = (next: typeof navigation) => {
     generation.current++;
     setLoading(true);
@@ -164,12 +187,12 @@ export default function TransferHistory({
                 <ErrorNotice message={error} />
                 <button
                   className="secondary-button"
-                  onClick={() => {
-                    setLoading(true);
-                    setRevision((value) => value + 1);
-                  }}
+                  disabled={loading || manual.refreshing}
+                  aria-busy={manual.refreshing}
+                  onClick={() => void retry()}
                 >
-                  Try Again
+                  {manual.refreshing && <Spinner />}
+                  {manual.refreshing ? "Refreshing…" : "Try Again"}
                 </button>
               </div>
             )}
@@ -177,68 +200,70 @@ export default function TransferHistory({
         }
         finishedEmpty={empty}
       />
-      {(navigation.previous.length > 0 || page?.has_more) && <nav
-        className="transfer-history-pagination"
-        aria-label="Finished transfer pages"
-      >
-        <span role="status" aria-live="polite">
-          Page {navigation.number}
-          {loading ? " · Loading…" : ""}
-        </span>
-        <div>
-          {navigation.number > 1 && (
+      {(navigation.previous.length > 0 || page?.has_more) && (
+        <nav
+          className="transfer-history-pagination"
+          aria-label="Finished transfer pages"
+        >
+          <span role="status" aria-live="polite">
+            Page {navigation.number}
+            {loading ? " · Loading…" : ""}
+          </span>
+          <div>
+            {navigation.number > 1 && (
+              <button
+                className="text-button"
+                disabled={loading}
+                onClick={() => move(firstPage)}
+              >
+                Latest
+              </button>
+            )}
             <button
-              className="text-button"
-              disabled={loading}
-              onClick={() => move(firstPage)}
+              className="secondary-button"
+              disabled={loading || !navigation.previous.length}
+              onClick={() =>
+                move({
+                  cursor: navigation.previous.at(-1),
+                  previous: navigation.previous.slice(0, -1),
+                  number: navigation.number - 1,
+                })
+              }
             >
-              Latest
+              <ChevronLeft size={16} /> Previous
             </button>
-          )}
-          <button
-            className="secondary-button"
-            disabled={loading || !navigation.previous.length}
-            onClick={() =>
-              move({
-                cursor: navigation.previous.at(-1),
-                previous: navigation.previous.slice(0, -1),
-                number: navigation.number - 1,
-              })
-            }
-          >
-            <ChevronLeft size={16} /> Previous
-          </button>
-          <button
-            className="secondary-button"
-            disabled={
-              loading ||
-              !page?.has_more ||
-              page.next_before === null ||
-              !page.next_before_id
-            }
-            onClick={() => {
-              if (
+            <button
+              className="secondary-button"
+              disabled={
+                loading ||
                 !page?.has_more ||
                 page.next_before === null ||
                 !page.next_before_id
-              )
-                return;
-              move({
-                cursor: {
-                  before: page.next_before,
-                  before_id: page.next_before_id,
-                },
-                previous: [...navigation.previous, navigation.cursor].slice(
-                  -128,
-                ),
-                number: navigation.number + 1,
-              });
-            }}
-          >
-            Next <ChevronRight size={16} />
-          </button>
-        </div>
-      </nav>}
+              }
+              onClick={() => {
+                if (
+                  !page?.has_more ||
+                  page.next_before === null ||
+                  !page.next_before_id
+                )
+                  return;
+                move({
+                  cursor: {
+                    before: page.next_before,
+                    before_id: page.next_before_id,
+                  },
+                  previous: [...navigation.previous, navigation.cursor].slice(
+                    -128,
+                  ),
+                  number: navigation.number + 1,
+                });
+              }}
+            >
+              Next <ChevronRight size={16} />
+            </button>
+          </div>
+        </nav>
+      )}
     </section>
   );
 }

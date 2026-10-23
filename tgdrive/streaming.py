@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import logging
+import math
 import mimetypes
 import re
 import secrets
@@ -192,6 +193,27 @@ def _not_modified(request, etag):
     )
 
 
+def _is_playback_request(request, mime_type, *, download=False, preview=False):
+    """Only explicit player requests may warm beyond their HTTP byte range."""
+    return (
+        not download
+        and mime_type.startswith(("audio/", "video/"))
+        and (preview or request.headers.get("sec-fetch-dest") in {"audio", "video"})
+    )
+
+
+def _media_byte_rate(message, size):
+    """Use media duration for average bitrate instead of network burst speed."""
+    native = getattr(message, "native", message)
+    document = getattr(native, "document", None)
+    for attribute in getattr(document, "attributes", ()):
+        duration = getattr(attribute, "duration", None)
+        if type(duration) in (int, float) and math.isfinite(duration) and duration > 0:
+            rate = size / duration
+            return rate if math.isfinite(rate) and rate > 0 else None
+    return None
+
+
 def _observe_media_request(
     pool,
     *,
@@ -206,12 +228,13 @@ def _observe_media_request(
     authorize=None,
     request_id=None,
     allow_preload=True,
+    media_rate=None,
 ):
     manager = getattr(pool, "_preload_manager", None)
     if manager is not None:
         if not allow_preload:
-            # Sparse PDF reading retains requested blocks but must not turn a
-            # few neighboring pages into automatic whole-document preparation.
+            # Downloads and unclassified clients retain their requested blocks.
+            # Only identified playback may schedule work outside its HTTP range.
             manager.register_file(
                 channel_id=channel_id,
                 message_id=message_id,
@@ -232,6 +255,8 @@ def _observe_media_request(
             method=request.method,
             authorize=authorize,
             request_id=viewer,
+            media_rate=media_rate,
+            allow_full=request_id is not None,
         )
         return (manager, identity, viewer) if request.method == "GET" else None
     elif callable(getattr(pool, "download_capacity", None)):
@@ -486,9 +511,11 @@ async def stream_telegram_file(
             request=request,
             start=byte_range.start,
             end=byte_range.end + 1,
-            allow_preload=not (
-                preview and mime_type == "application/pdf" and not download
-            ),
+            allow_preload=_is_playback_request(
+                request, mime_type, download=download, preview=preview
+            )
+            and quality in (None, "", "original"),
+            media_rate=_media_byte_rate(message, total),
             authorize=authorize,
             request_id=request_id,
         )
