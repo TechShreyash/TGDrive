@@ -177,9 +177,11 @@ payload reception with verification and durable job handoff without unbounded
 completion requests. Files retain their local source and tab-close protection
 until the server confirms a job identity.
 
-Batch display follows that ownership boundary: device bytes/counts first, then
-Telegram bytes/counts after all remaining files are server-owned. Telegram jobs
-run throughout; the display switch does not delay dispatch.
+Display follows a browser-wide device-first boundary: while any local upload
+still needs receipt, pending upload groups show device metrics or **Received**
+for accepted files, with Telegram metrics hidden. Once all remaining local files
+are server-owned, their Telegram metrics appear together. Telegram jobs run
+throughout; this presentation boundary does not delay dispatch.
 
 Batch ETA uses fresh per-file rates, falling back to a rolling measurement of the
 batch's current-stage byte counter. File handoffs do not discard that measurement;

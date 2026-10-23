@@ -130,11 +130,13 @@ and [backup coverage](backup-recovery.md).
 | Publishing to the channel | Finishing channel messages and saving the file record |
 | Completed | The file and its record are confirmed |
 
-Each batch shows **one stage at a time**: device progress until every remaining
-file has an accepted server job, then Telegram progress. Telegram work continues
-in the background during device upload. Expanded files already handed off show
-**Received** until the batch switches stages. Running/Queued counts include only
-unfinished files; the folder's file count includes its completed files.
+The panel shows **device progress first** while any upload from this browser
+still needs server receipt. Files and folders already handed off show **Received**
+without Telegram progress, speed or ETA. Once every remaining device upload has
+an accepted server job, the panel switches to Telegram metrics. Telegram work
+continues in the background throughout. Single-file uploads omit redundant
+file-count summaries. Running/Queued counts include only unfinished files; a
+folder's file count includes its completed files.
 
 Time remaining estimates the bytes left in the displayed stage using recent
 transfer speed. Folder measurements continue across individual file handoffs,

@@ -60,18 +60,22 @@ Give each subject one canonical explanation and cross-link it instead of copying
 the same details across guides. Update or remove obsolete text, examples and
 links when behavior changes. Check affected links and documented commands.
 
-## Keep testing proportional to the change
+## Ask before running tests or validation
 
-Do not run unnecessary repeated tests after every user message. A clarification,
-status question or documentation-only edit does not require another full run.
-Use focused checks for the behavior being changed, including visual checks for
-UI changes, and reuse passing results while the tested code remains unchanged.
+Do not run tests, typechecks, builds, linters, benchmarks or browser validation
+unless the user explicitly requests those checks for the current work or approves
+the specific proposed validation. Do not run unnecessary checks after every
+message. A fix request, clarification, status question, documentation edit or
+commit request alone is not permission to start or repeat testing.
 
-Run complete testing when the user explicitly requests it, when preparing a
-commit that needs fresh validation, or when the scope, risk or an unresolved
-failure makes it necessary. Expand or repeat checks only to cover new changes,
-investigate a failure or resolve a specific concern. Report what was actually
-tested and any remaining limitations.
+Reuse existing results while they remain applicable. Earlier permission to test
+is not standing permission for later runs. Before additional validation, explain
+the smallest useful check and why it is needed, then wait for approval. Stay
+within the approved scope; do not broaden it or repeat passing checks without
+asking. Ordinary code reading and Git status/diff inspection may continue.
+
+Report checks actually performed and remaining limitations. Never imply a change
+was tested when validation was not requested or approved.
 
 ## Write useful commit titles and descriptions
 

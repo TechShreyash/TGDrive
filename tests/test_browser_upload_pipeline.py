@@ -363,10 +363,17 @@ def test_new_folder_gets_device_slots_while_older_folder_and_telegram_are_pendin
         new_batch = page.locator(".transfer-batch").filter(
             has=page.locator(".transfer-batch-name", has_text="New folder")
         )
-        expect(new_batch).to_have_attribute("data-stage", "telegram")
+        expect(new_batch).to_have_attribute("data-stage", "device")
+        expect(new_batch).to_contain_text("Received")
+        expect(new_batch).not_to_contain_text("Uploading to Telegram")
+        expect(new_batch.locator(".transfer-batch-throughput")).to_have_text("")
         expect(new_batch).to_contain_text("Keep this tab open for other uploads")
         assert _device_close_blocked(page)
         page.screenshot(path=ARTIFACTS / "pipeline-new-folder-fair-slots.png")
     finally:
         page.unroute("**/api/v1/uploads/*", hold_old_payloads)
         page.unroute("**/api/v1/uploads", remember_receipt)
+    _wait_started(page, server, 10)
+    expect(new_batch).to_have_attribute("data-stage", "telegram")
+    expect(new_batch).to_contain_text("Uploading to Telegram")
+    assert not _device_close_blocked(page)

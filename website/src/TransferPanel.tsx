@@ -435,16 +435,20 @@ export default function TransferPanel({
   );
 }
 
-function batchStatus(batch: TransferBatch) {
-  const counts = batch.device.pending
-    ? [
-        "Uploading from device",
-        batch.device.received + " of " + batch.device.count + " received",
-      ]
-    : [
-        "Uploading to Telegram",
-        batch.completed + " of " + batch.count + " uploaded",
-      ];
+function batchStatus(batch: TransferBatch, deviceStage: boolean) {
+  const counts = [
+    deviceStage
+      ? batch.device.pending
+        ? "Uploading from device"
+        : "Received"
+      : "Uploading to Telegram",
+  ];
+  if (batch.count > 1 && (!deviceStage || batch.device.pending))
+    counts.push(
+      deviceStage
+        ? batch.device.received + " of " + batch.device.count + " received"
+        : batch.completed + " of " + batch.count + " uploaded",
+    );
   const attention = batch.device.pending
     ? batch.items.filter(needsDeviceUpload)
     : batch.items;
@@ -488,11 +492,24 @@ export function BatchTransfer({
   const listId = useId();
   const hasFolder = batch.items.some((item) => item.relativePath);
   const deviceMessage = deviceUploadMessage(batch.items, deviceUploadsPending);
+  // Keep the browser's pending uploads in one visible phase, even when a
+  // different batch has already handed its files to the server.
+  const deviceStage =
+    batch.device.pending ||
+    (deviceUploadsPending &&
+      batch.pending &&
+      batch.items.some(
+        (item) =>
+          !item.historyOnly &&
+          !["remote", "url", "delete"].includes(item.kind || ""),
+      ));
+  const receiptComplete = deviceStage && !batch.device.pending;
   if (batch.count === 1 && !hasFolder)
     return (
       <TransferRow
         item={batch.items[0]}
         deviceUploadsPending={deviceUploadsPending}
+        deviceStage={deviceStage}
         onLocate={onLocate}
         showTimestamp={showTimestamp}
         now={now}
@@ -556,23 +573,27 @@ export function BatchTransfer({
     }
   }
   if (batch.cancelled === batch.count) locationLabel = "";
-  const showProgress = batch.pending && batch.active + batch.queued > 0;
-  const displayTotal = batch.device.pending
-    ? batch.device.total
-    : batch.totalBytes;
+  const showProgress =
+    batch.pending && batch.active + batch.queued > 0 && !receiptComplete;
+  const displayTotal =
+    deviceStage && batch.device.count > 0
+      ? batch.device.total
+      : batch.totalBytes;
+  const displayRate = receiptComplete ? undefined : batch.displayRate;
+  const displayEta = receiptComplete ? undefined : batch.displayEta;
   const received = (item: Transfer) =>
     !needsDeviceUpload(item) && item.state !== "cancelled";
   const activeFile = (item: Transfer) =>
     isTransferActive(item) &&
     item.state !== "awaiting_file" &&
-    (!batch.device.pending || needsDeviceUpload(item));
+    (!deviceStage || needsDeviceUpload(item));
   const activeCount = batch.items.filter(activeFile).length;
   const receivedCount = batch.items.filter(received).length;
   const mixedStatuses =
     [
       activeCount,
       batch.failed + batch.awaiting,
-      batch.device.pending ? receivedCount : batch.completed,
+      deviceStage ? receivedCount : batch.completed,
       batch.cancelled,
     ].filter((count) => count > 0).length > 1;
   const canCancel = batch.items.some(
@@ -593,7 +614,7 @@ export function BatchTransfer({
       (filter === "attention" &&
         (item.state === "error" || item.state === "awaiting_file")) ||
       (filter === "completed" &&
-        (batch.device.pending ? received(item) : item.state === "completed")) ||
+        (deviceStage ? received(item) : item.state === "completed")) ||
       (filter === "cancelled" && item.state === "cancelled"),
   );
   const filters = [
@@ -606,8 +627,8 @@ export function BatchTransfer({
     },
     {
       key: "completed",
-      label: batch.device.pending ? "Received" : "Done",
-      count: batch.device.pending ? receivedCount : batch.completed,
+      label: deviceStage ? "Received" : "Done",
+      count: deviceStage ? receivedCount : batch.completed,
     },
     { key: "cancelled", label: "Cancelled", count: batch.cancelled },
   ].filter(
@@ -621,7 +642,7 @@ export function BatchTransfer({
       data-cancelled={batch.cancelled === batch.count || undefined}
       data-folder={hasFolder || undefined}
       data-expanded={expanded}
-      data-stage={batch.device.pending ? "device" : "telegram"}
+      data-stage={deviceStage ? "device" : "telegram"}
       data-status={
         !batch.pending
           ? "finished"
@@ -675,7 +696,7 @@ export function BatchTransfer({
         )}
         {batch.pending && (
           <p className="transfer-batch-status" aria-live="polite">
-            {batchStatus(batch)}
+            {batchStatus(batch, deviceStage)}
             {deviceMessage && (
               <span className="transfer-device-status"> · {deviceMessage}</span>
             )}
@@ -719,7 +740,7 @@ export function BatchTransfer({
         {showProgress && (
           <progress
             aria-label={
-              (batch.device.pending ? "Device upload" : "Telegram upload") +
+              (deviceStage ? "Device upload" : "Telegram upload") +
               " progress for " +
               batch.name
             }
@@ -730,24 +751,22 @@ export function BatchTransfer({
         <div className="transfer-batch-metrics">
           {displayTotal !== undefined && (
             <span className="transfer-batch-size">
-              {batch.pending
+              {batch.pending && !receiptComplete
                 ? formatByteProgress(batch.displayBytes, displayTotal)
                 : formatBytes(displayTotal)}
             </span>
           )}
           <span className="transfer-batch-throughput">
-            {batch.displayRate && (
-              <span>{formatBytes(batch.displayRate)}/s</span>
-            )}
-            {batch.displayEta !== undefined && (
+            {displayRate && <span>{formatBytes(displayRate)}/s</span>}
+            {displayEta !== undefined && (
               <span
                 title={
-                  batch.device.pending
+                  deviceStage
                     ? "Estimated upload time from your device. Server verification may take longer."
                     : "Estimated upload time to Telegram. Publishing and retries may take longer."
                 }
               >
-                About {formatDuration(Math.max(1, Math.ceil(batch.displayEta)))}{" "}
+                About {formatDuration(Math.max(1, Math.ceil(displayEta)))}{" "}
                 remaining
               </span>
             )}
@@ -822,7 +841,7 @@ export function BatchTransfer({
                 item={item}
                 onLocate={onLocate}
                 compactChild
-                deviceStage={batch.device.pending}
+                deviceStage={deviceStage}
                 groupLocation={hasFolder ? locationLabel : undefined}
                 showTimestamp={false}
                 now={now}
