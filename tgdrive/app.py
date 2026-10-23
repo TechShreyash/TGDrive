@@ -838,20 +838,26 @@ def create_app(
         if payload.client_request_id:
             entry, created = starts.claim(
                 payload.client_request_id,
-                ("remote", payload.path, str(payload.url), payload.filename or ""),
+                (
+                    "remote",
+                    payload.path,
+                    str(payload.url),
+                    payload.filename or "",
+                    str(payload.single_threaded),
+                ),
             )
             if not created:
                 snapshot = entry.snapshot()
                 return {"status": "ok", "id": snapshot["id"], "data": snapshot}
         try:
             manager = _transfers(request)
-            await manager.inspect_remote(str(payload.url))
-            await require_admin(request)
-            check_path(_store(request), payload.path)
+            # Source DNS, headers and size admission belong to the cancellable
+            # server job. Return its identity without waiting on an external host.
             record = manager.start_remote(
                 url=str(payload.url),
                 destination=payload.path,
                 filename=payload.filename,
+                single_threaded=payload.single_threaded,
             )
         except Exception as exc:
             if entry:

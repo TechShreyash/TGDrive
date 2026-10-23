@@ -26,6 +26,7 @@ It stores your files in a private channel on Telegram.
 - **Bring your big files.** Upload once; TGDrive handles splitting behind the scenes and keeps one file for downloads and video seeking.
 - **Press play. Start reading.** Stream video and preview photos, PDFs, text, ebooks and comics right in your browser.
 - **Share on your terms.** Send a file or an entire folder with links you can expire or revoke.
+- **Import direct file links.** [Adaptive parallel retrieval and slow queued imports](docs/usage.md#import-from-a-url), with progress while source checks run.
 - **Pick up where you left off.** Resumable uploads, folder uploads, URL imports and bot uploads, plus search, stars and Trash.
 - **Give your files a safety net.** Encrypted database backups and optional copies in an independent channel.
 

@@ -424,6 +424,14 @@ export const api = {
       singleThreaded,
       client_request_id,
     }),
+  remoteRequest: (client_request_id: string) =>
+    request<{ id: string; data: Job }>("/api/getTransferByRequest", {
+      client_request_id,
+    }),
+  cancelRemoteRequest: (client_request_id: string) =>
+    request<{ id: string; data: Job }>("/api/cancelUpload", {
+      client_request_id,
+    }),
 };
 export function errorMessage(error: unknown): string {
   return error instanceof Error

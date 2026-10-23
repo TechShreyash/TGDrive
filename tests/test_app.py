@@ -37,6 +37,7 @@ class FakeTransfers:
         self.registry = TransferRegistry()
         self.deleted_messages: list[int] = []
         self.remote_requests: list[tuple[str, str, str | None]] = []
+        self.remote_modes: list[bool] = []
 
     def start_deletion(self, path: str):
         intent = self.store.begin_deletion(path, channel_id=-1001234567890)
@@ -73,9 +74,17 @@ class FakeTransfers:
             url=url,
         )
 
-    def start_remote(self, *, url: str, destination: str, filename: str | None):
+    def start_remote(
+        self,
+        *,
+        url: str,
+        destination: str,
+        filename: str | None,
+        single_threaded: bool = False,
+    ):
         self.remote_requests.append((url, destination, filename))
-        return self.registry.create("downloading", total=12)
+        self.remote_modes.append(single_threaded)
+        return self.registry.create("checking_source")
 
 
 class FakeRuntime:
@@ -460,6 +469,32 @@ def test_remote_start_idempotency_and_request_recovery(
     )
     assert changed.status_code == 409
     assert len(runtime.transfers.remote_requests) == 1
+
+
+@pytest.mark.parametrize("single_threaded", [False, True])
+def test_url_start_returns_job_without_contacting_source(
+    app_client, monkeypatch, single_threaded
+):
+    from unittest.mock import AsyncMock
+
+    client, _, runtime, _ = app_client
+    login(client)
+    inspect = AsyncMock(
+        side_effect=AssertionError("source lookup blocked start request")
+    )
+    monkeypatch.setattr(runtime.transfers, "inspect_remote", inspect)
+    response = client.post(
+        "/api/startFileDownloadFromUrl",
+        json={
+            "url": "https://example.com/slow-source.mov",
+            "path": "/",
+            "singleThreaded": single_threaded,
+        },
+    )
+    assert response.status_code == 200
+    assert response.json()["id"]
+    assert runtime.transfers.remote_modes == [single_threaded]
+    inspect.assert_not_awaited()
 
 
 def test_cancel_request_before_start_prevents_late_remote_job(

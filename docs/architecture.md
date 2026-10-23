@@ -40,7 +40,7 @@ Backend filenames are under `tgdrive/`.
 | Telegram connections/admission | `telegram_clients.py`, `client_pool.py` |
 | Downloads and previews | `streaming.py`, `ranges.py`, `previews.py` |
 | Shared cache and preparation | `media_reader.py`, `media_cache.py`, `media_policy.py`, `preloading.py` |
-| URL imports | `remote.py` |
+| URL imports | `remote.py`, `remote_ranges.py`, `remote_scheduler.py` |
 | Database backups | `mongo_backup.py` |
 | Connection settings/Premium login | `management.py`, `managed_settings.py`, `premium_login.py` |
 | Lifecycle/setup | `runtime.py`, `__main__.py`, `setup.py`, `scripts/setup.py` |
@@ -300,6 +300,13 @@ See [deviceUploadConcurrency.ts](../website/src/deviceUploadConcurrency.ts).
 | Database persistence fails | Retain staged bytes and remote identities for retry |
 | URL retrieval interrupted | May fetch again from byte zero; live byte progress is advisory, while reservations and lifecycle changes are journaled |
 | Bot-mode ingestion | Separate path without the browser queue's full durability contract |
+
+URL starts return a job before source I/O. A separate scheduler grants full-speed
+source slots and paces bounded waiting connections; validated ranges share an
+unpublished staging file. Promotion preserves the sequential prefix. Workers drain
+before that file can close or a fallback can truncate it. Source retrieval releases
+its slot before Telegram upload. See [URL intake](performance.md#url-import-intake)
+for scheduling, representation checks, storage claims and expiry limits.
 
 Permanent deletion journals intent, then atomically removes the subtree/shares
 and drops completed-intent message references. **Original Telegram messages remain**,

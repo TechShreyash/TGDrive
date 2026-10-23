@@ -10,6 +10,7 @@ export interface PerformancePolicy {
   cache_ttl_seconds: number;
   auto_preload: boolean;
   preload_max_jobs: number;
+  remote_download_concurrency: number;
   telegram_upload_pipeline: number;
   telegram_request_limit: number;
   telegram_parts_per_second: number;
@@ -40,6 +41,15 @@ export const numericPreferences: {
   help: string;
   advanced?: boolean;
 }[] = [
+  {
+    key: "remote_download_concurrency",
+    label: "Full-speed URL downloads",
+    unit: 1,
+    min: 1,
+    max: 8,
+    appDefault: 2,
+    help: "Imports downloading at full speed together. Queued sources receive slowly while connection and storage limits permit; expiring links can still fail.",
+  },
   {
     key: "cache_memory_bytes",
     label: "Memory cache (MiB)",
@@ -200,6 +210,7 @@ export function performanceCategoryKeys(
               "max_file_size",
               "staging_budget_bytes",
               "min_free_bytes",
+              "remote_download_concurrency",
             ].includes(key),
       )
       .map(({ key }) => key),
@@ -226,7 +237,9 @@ export function performanceDraft(saved: PerformancePolicy): PerformanceDraft {
             ? 16 * GIB
             : key === "min_free_bytes"
               ? GIB
-              : 0)) / unit,
+              : key === "remote_download_concurrency"
+                ? 2
+                : 0)) / unit,
       ),
     ]),
     ["timezone", saved.timezone],

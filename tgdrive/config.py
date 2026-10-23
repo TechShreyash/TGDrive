@@ -123,6 +123,9 @@ class Settings(BaseSettings):
     remote_connect_timeout: float = Field(
         default=20.0, alias="REMOTE_CONNECT_TIMEOUT", gt=0, le=300
     )
+    remote_download_concurrency: int = Field(
+        default=2, alias="REMOTE_DOWNLOAD_CONCURRENCY", ge=1, le=8
+    )
     remote_read_timeout: float = Field(
         default=120.0, alias="REMOTE_READ_TIMEOUT", gt=0, le=3600
     )

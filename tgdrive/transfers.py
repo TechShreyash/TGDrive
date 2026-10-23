@@ -36,7 +36,7 @@ from tgdrive.errors import (
 )
 from tgdrive.remote import RemoteCancelled, RemoteClient, RemoteFileInfo, RemoteTooLarge
 from tgdrive.security import safe_name
-from tgdrive.staging import check_staging
+from tgdrive.staging import StorageUnavailable, check_staging
 from tgdrive.store import DriveStore
 from tgdrive.tasks import TransferRecord, TransferRegistry, TransferStatus
 
@@ -340,12 +340,13 @@ class TransferManager:
         url: str,
         destination: str,
         filename: str | None,
+        single_threaded: bool = False,
     ) -> TransferRecord:
         if self._check_upload_allowed is not None:
             self._check_upload_allowed()
         binding = self.store.upload_destination(destination)
         destination = binding["path"]
-        record = self.registry.create("downloading")
+        record = self.registry.create("checking_source")
         record.context.update(
             kind="remote",
             source_kind="remote",
@@ -353,6 +354,7 @@ class TransferManager:
             destination=destination,
             destination_id=binding["id"],
             name=filename,
+            single_threaded=single_threaded,
         )
         self.registry.persist(record)
         self.registry.spawn(
@@ -379,59 +381,105 @@ class TransferManager:
             destination = self._check_destination_or_cancel(record, destination)
             if record.cancel_event.is_set():
                 raise TransferCancelled("Transfer destination is unavailable")
-            async with self._semaphore:
-                admission_limit = await current_upload_limit(self.settings, self.pool)
+            from tgdrive.remote_scheduler import WARM_STAGING_WINDOW
+
+            admission_limit = await current_upload_limit(self.settings, self.pool)
+            if self._check_upload_allowed is not None:
+                self._check_upload_allowed()
+            self.registry.update(
+                record.id, status=TransferStatus.RUNNING, phase="checking_source"
+            )
+            admitted = False
+            source_size = None
+            mode = "full"
+
+            def mode_changed(value):
+                nonlocal mode
+                mode = value
+                record.context["download_mode"] = value
+
+            def can_promote():
+                if source_size is None:
+                    return False
+                if record.context.get("staging_size", 0) >= source_size:
+                    return True
+                try:
+                    check_staging(
+                        self.settings,
+                        self,
+                        source_size,
+                        exclude=record.id,
+                        written=record.context.get("staging_written", 0),
+                    )
+                except StorageUnavailable:
+                    return False
+                # Claim atomically on this event loop before another candidate
+                # is promoted. Its next progress/lifecycle update journals it.
+                record.context["staging_size"] = source_size
+                return True
+
+            async def progress(current: int, total: int | None) -> None:
+                nonlocal admitted, source_size
+                observed = max(current, total or 0)
+                if observed > admission_limit:
+                    raise RemoteTooLarge(admission_limit, observed)
+                source_size = total if total is not None else admission_limit
+                record.context["staging_written"] = current
+                if mode == "full":
+                    size = source_size
+                else:
+                    # Waiting sources reserve bounded windows, rather than
+                    # taking the full staging budget away from active imports.
+                    headroom = current + getattr(self.remote, "chunk_size", _CHUNK_SIZE)
+                    windows = (
+                        headroom + WARM_STAGING_WINDOW - 1
+                    ) // WARM_STAGING_WINDOW
+                    size = min(source_size, max(1, windows) * WARM_STAGING_WINDOW)
+                size = max(size, record.context.get("staging_size", 0))
+                reservation_changed = record.context.get("staging_size") != size
+                refresh_needed = not admitted or reservation_changed
+                if not admitted or reservation_changed:
+                    while True:
+                        try:
+                            check_staging(
+                                self.settings,
+                                self,
+                                size,
+                                exclude=record.id,
+                                written=current,
+                            )
+                            break
+                        except StorageUnavailable:
+                            record.context["download_mode"] = "waiting_storage"
+                            await self.remote._cancelable(
+                                asyncio.sleep(1), record.cancel_event
+                            )
+                    admitted = True
+                record.context.update(staging_size=size, download_mode=mode)
+                scheduler = getattr(self.remote, "scheduler", None)
+                if scheduler is not None and refresh_needed:
+                    scheduler.refresh()
                 self.registry.update(
                     record.id,
-                    status=TransferStatus.RUNNING,
+                    current=current,
                     phase="downloading",
+                    total=total or 0,
+                    checkpoint_progress=False,
                 )
 
-                admitted = False
-
-                async def progress(current: int, total: int | None) -> None:
-                    nonlocal admitted
-                    observed = max(current, total or 0)
-                    if observed > admission_limit:
-                        raise RemoteTooLarge(admission_limit, observed)
-                    size = total if total is not None else admission_limit
-                    reservation_changed = record.context.get("staging_size") != size
-                    if not admitted or reservation_changed:
-                        # Reserve the whole source (or the unknown-length cap)
-                        # before reading. Writes consume this existing claim;
-                        # rescanning every receipt/job per read cannot improve it.
-                        check_staging(
-                            self.settings,
-                            self,
-                            size,
-                            exclude=record.id,
-                            written=current,
-                        )
-                        admitted = True
-                    record.context.update(staging_size=size, staging_written=current)
-                    if reservation_changed:
-                        self.registry.persist(record)
-                    self.registry.update(
-                        record.id,
-                        current=current,
-                        # Unknown source length stays indeterminate until the
-                        # upload stage; growing the total per chunk resets ETA.
-                        total=total or 0,
-                        checkpoint_progress=False,
-                    )
-
-                result = await self.remote.download(
-                    url,
-                    download_dir,
-                    filename=filename,
-                    # This UUID directory belongs only to this unpublished URL job.
-                    # A crash after atomic local publication may leave the old output.
-                    # Retry from zero and atomically replace only that stage.
-                    overwrite=True,
-                    cancel_event=record.cancel_event,
-                    progress=progress,
-                    max_bytes=admission_limit,
-                )
+            result = await self.remote.download(
+                url,
+                download_dir,
+                filename=filename,
+                # This UUID directory belongs only to this unpublished URL job.
+                overwrite=True,
+                cancel_event=record.cancel_event,
+                progress=progress,
+                max_bytes=admission_limit,
+                single_threaded=bool(record.context.get("single_threaded", False)),
+                can_promote=can_promote,
+                mode_changed=mode_changed,
+            )
             await self._upload_path(
                 record,
                 result.path,

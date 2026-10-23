@@ -12,15 +12,19 @@ import shutil
 import socket
 import tempfile
 from collections.abc import Awaitable, Callable, Mapping
+from contextvars import ContextVar
 from dataclasses import dataclass
 from email.message import Message
 from pathlib import Path
-from typing import Any, Protocol, TypeAlias
+from typing import TYPE_CHECKING, Any, Protocol, TypeAlias
 from urllib.parse import unquote, urljoin, urlsplit, urlunsplit
 
 import aiohttp
 from aiohttp.abc import AbstractResolver
 from aiohttp.resolver import DefaultResolver
+
+if TYPE_CHECKING:
+    from tgdrive.remote_ranges import RangePolicy
 
 DEFAULT_MAX_BYTES = 4 * 1024 * 1024 * 1024
 DEFAULT_CHUNK_SIZE = 1024 * 1024
@@ -249,7 +253,7 @@ def safe_filename(
 
 
 class RemoteClient:
-    """Inspect and single-stream remote files with strict network limits."""
+    """Inspect and adaptively retrieve remote files with strict network limits."""
 
     def __init__(
         self,
@@ -263,6 +267,8 @@ class RemoteClient:
         resolver: AbstractResolver | None = None,
         session: HTTPSessionLike | None = None,
         session_factory: SessionFactory | None = None,
+        range_policy: RangePolicy | None = None,
+        download_concurrency: int = 2,
     ) -> None:
         if max_bytes <= 0:
             raise ValueError("max_bytes must be positive")
@@ -294,6 +300,16 @@ class RemoteClient:
         self._owns_resolver = resolver is None
         self._closed = False
         self._session_lock = asyncio.Lock()
+        from tgdrive.remote_ranges import RangePolicy
+
+        self.range_policy = range_policy or RangePolicy()
+        self._range_slots = asyncio.Semaphore(16)
+        from tgdrive.remote_scheduler import URLDownloadScheduler
+
+        self.scheduler = URLDownloadScheduler(download_concurrency)
+        self._download_ticket: ContextVar[Any] = ContextVar(
+            "url_download", default=None
+        )
 
     async def __aenter__(self) -> RemoteClient:
         await self._get_session()
@@ -342,22 +358,71 @@ class RemoteClient:
         cancel_event: asyncio.Event | None = None,
         progress: ProgressCallback | None = None,
         max_bytes: int | None = None,
+        single_threaded: bool = False,
+        can_promote: Callable[[], bool] | None = None,
+        mode_changed: Callable[[str], None] | None = None,
     ) -> DownloadResult:
-        """Download one identity-encoded stream and atomically publish it."""
+        """Retrieve original bytes, falling back once if ranges are unsuitable."""
 
         try:
             async with asyncio.timeout(self.timeouts.total):
+                async with self.scheduler.admit(
+                    lambda wait: self._cancelable(wait, cancel_event),
+                    can_promote,
+                    mode_changed,
+                ) as ticket:
+                    token = self._download_ticket.set(ticket)
+                    try:
+                        return await self._download_with_fallback(
+                            url,
+                            Path(output_dir),
+                            filename=filename,
+                            overwrite=overwrite,
+                            cancel_event=cancel_event,
+                            progress=progress,
+                            max_bytes=max_bytes,
+                            single_threaded=single_threaded,
+                        )
+                    finally:
+                        self._download_ticket.reset(token)
+        except TimeoutError as error:
+            raise RemoteTimeout("remote download timed out") from error
+
+    async def _download_with_fallback(
+        self,
+        url,
+        output_dir,
+        *,
+        filename,
+        overwrite,
+        cancel_event,
+        progress,
+        max_bytes,
+        single_threaded,
+    ):
+        from tgdrive.remote_ranges import RangeFallback
+
+        for parallel in (not single_threaded, False):
+            try:
                 return await self._download(
                     url,
-                    Path(output_dir),
+                    output_dir,
                     filename=filename,
                     overwrite=overwrite,
                     cancel_event=cancel_event,
                     progress=progress,
                     max_bytes=self.max_bytes if max_bytes is None else max_bytes,
+                    parallel=parallel,
                 )
-        except TimeoutError as error:
-            raise RemoteTimeout("remote download timed out") from error
+            except RangeFallback as error:
+                if not parallel:
+                    raise
+                await self._report_progress(progress, 0, error.size)
+                if error.retry_after:
+                    await self._cancelable(
+                        asyncio.sleep(error.retry_after), cancel_event
+                    )
+        raise AssertionError("remote fallback exhausted unexpectedly")
 
     async def _inspect(
         self,
@@ -403,6 +468,7 @@ class RemoteClient:
         cancel_event: asyncio.Event | None,
         progress: ProgressCallback | None,
         max_bytes: int,
+        parallel: bool,
     ) -> DownloadResult:
         response = None
         temp_path: Path | None = None
@@ -449,15 +515,41 @@ class RemoteClient:
             downloaded = 0
             await self._report_progress(progress, downloaded, declared_size)
 
+            from tgdrive.remote_ranges import download_ranges, range_validator
+
+            validator = range_validator(response.headers)
+            ticket = self._download_ticket.get()
             while True:
+                if (
+                    parallel
+                    and self.range_policy.max_connections > 1
+                    and declared_size is not None
+                    and declared_size - downloaded >= self.range_policy.minimum_size
+                    and validator is not None
+                    and (ticket is None or ticket.full_speed)
+                ):
+                    # A waiting source can switch to parallel ranges in-place
+                    # after promotion, keeping its already received prefix.
+                    await download_ranges(
+                        self,
+                        response,
+                        final_url,
+                        temp_file,
+                        output_dir,
+                        declared_size,
+                        validator,
+                        cancel_event,
+                        progress,
+                        initial_offset=downloaded,
+                    )
+                    downloaded = declared_size
+                    break
                 chunk = await self._read_chunk(response.content, cancel_event)
                 if not chunk:
                     break
                 downloaded += len(chunk)
                 self._enforce_size(downloaded, max_bytes)
-                # The HTTP reader buffers ahead while this worker writes. Keep
-                # filesystem calls together and off the shared event loop.
-                await asyncio.to_thread(self._write_chunk, temp_file, chunk, output_dir)
+                await self._disk_io(self._write_chunk, temp_file, chunk, output_dir)
                 await self._report_progress(progress, downloaded, declared_size)
 
             if declared_size is not None and downloaded != declared_size:
@@ -465,11 +557,13 @@ class RemoteClient:
                     f"remote stream ended at {downloaded} of {declared_size} bytes"
                 )
 
-            await asyncio.to_thread(temp_file.flush)
-            await asyncio.to_thread(os.fsync, temp_file.fileno())
+            await self._disk_io(temp_file.flush)
+            await self._disk_io(os.fsync, temp_file.fileno())
             temp_file.close()
             temp_file = None
-            self._publish_temp(temp_path, final_path, overwrite=overwrite)
+            await self._disk_io(
+                self._publish_temp, temp_path, final_path, overwrite=overwrite
+            )
             temp_path = None
             return DownloadResult(
                 path=final_path,
@@ -499,13 +593,17 @@ class RemoteClient:
 
         for redirect_count in range(self.max_redirects + 1):
             self._raise_if_cancelled(cancel_event)
-            current = await self._validate_url(current)
-            response = await session.request(
-                "GET",
-                current,
-                headers=dict(headers),
-                allow_redirects=False,
-                timeout=self.timeouts.to_aiohttp(),
+            current = await self._cancelable(self._validate_url(current), cancel_event)
+            response = await self._cancelable(
+                session.request(
+                    "GET",
+                    current,
+                    headers=dict(headers),
+                    allow_redirects=False,
+                    timeout=self.timeouts.to_aiohttp(),
+                ),
+                cancel_event,
+                cleanup=self._release_response,
             )
             if response.status not in _REDIRECT_STATUSES:
                 return response, current
@@ -597,24 +695,74 @@ class RemoteClient:
                 )
             return self._session
 
-    def _write_chunk(self, output: Any, chunk: bytes, directory: Path) -> None:
+    def _write_chunk(
+        self, output: Any, chunk: bytes, directory: Path, offset: int | None = None
+    ) -> None:
         if self.min_free_bytes and shutil.disk_usage(directory).free < (
             self.min_free_bytes + len(chunk)
         ):
             raise RemoteError("Temporary storage is full. Free disk space and retry.")
-        output.write(chunk)
+        if offset is None:
+            output.write(chunk)
+        else:
+            remaining = memoryview(chunk)
+            while remaining:
+                written = os.pwrite(output.fileno(), remaining, offset)
+                if written <= 0:
+                    raise OSError("remote staging write made no progress")
+                remaining = remaining[written:]
+                offset += written
+
+    @staticmethod
+    async def _disk_io(operation: Callable[..., Any], *args: Any, **kwargs: Any) -> Any:
+        # Cancelling an await does not stop its thread. Drain the write before
+        # any worker/file cleanup can close or reuse its descriptor.
+        worker = asyncio.create_task(asyncio.to_thread(operation, *args, **kwargs))
+        try:
+            return await asyncio.shield(worker)
+        except asyncio.CancelledError:
+            while not worker.done():
+                try:
+                    await asyncio.shield(worker)
+                except asyncio.CancelledError:
+                    continue
+                except Exception:
+                    break
+            if not worker.cancelled():
+                worker.exception()
+            raise
 
     async def _read_chunk(
         self,
         content: Any,
         cancel_event: asyncio.Event | None,
+        limit: int | None = None,
     ) -> bytes:
-        self._raise_if_cancelled(cancel_event)
-        if cancel_event is None:
-            return await content.read(self.chunk_size)
+        from tgdrive.remote_scheduler import WARM_READ_SIZE
 
-        read_task = asyncio.ensure_future(content.read(self.chunk_size))
+        ticket = self._download_ticket.get()
+        if ticket is not None:
+            await self._cancelable(ticket.pace(), cancel_event)
+        size = self.chunk_size if limit is None else limit
+        if ticket is not None and not ticket.full_speed:
+            size = min(size, WARM_READ_SIZE)
+        result = await self._cancelable(content.read(size), cancel_event)
+        if ticket is not None:
+            ticket.received(len(result))
+        return result
+
+    async def _cancelable(
+        self,
+        operation: Awaitable[Any],
+        cancel_event: asyncio.Event | None,
+        *,
+        cleanup: Callable[[Any], Awaitable[None]] | None = None,
+    ) -> Any:
+        if cancel_event is None:
+            return await operation
+        read_task = asyncio.ensure_future(operation)
         cancel_task = asyncio.create_task(cancel_event.wait())
+        delivered = False
         try:
             await asyncio.wait(
                 (read_task, cancel_task),
@@ -623,12 +771,21 @@ class RemoteClient:
             if cancel_event.is_set():
                 read_task.cancel()
                 raise RemoteCancelled("remote download was cancelled")
-            return await read_task
+            result = await read_task
+            delivered = True
+            return result
         finally:
             cancel_task.cancel()
             if not read_task.done():
                 read_task.cancel()
             await asyncio.gather(read_task, cancel_task, return_exceptions=True)
+            if (
+                cleanup is not None
+                and not delivered
+                and not read_task.cancelled()
+                and read_task.exception() is None
+            ):
+                await cleanup(read_task.result())
 
     @staticmethod
     async def _report_progress(

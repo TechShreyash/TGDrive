@@ -55,6 +55,7 @@ export interface Job {
   speed_bytes_per_second?: number | null;
   eta_seconds?: number | null;
   progress_updated_at?: number | null;
+  download_mode?: "full" | "warm" | "queued" | "waiting_storage";
 }
 export interface TransferHistoryPage {
   jobs: Job[];

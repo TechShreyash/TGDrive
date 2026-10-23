@@ -41,6 +41,7 @@ class Runtime:
         else:
             self.backup = TelegramBackupService(settings, self.pool)
         self.remote = RemoteClient(
+            download_concurrency=settings.remote_download_concurrency,
             max_bytes=settings.upload_limit,
             min_free_bytes=settings.min_free_bytes,
             max_redirects=settings.remote_max_redirects,

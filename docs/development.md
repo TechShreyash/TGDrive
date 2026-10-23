@@ -59,6 +59,23 @@ fixture or its `/__test__` endpoints.
 Recorded evidence describes a tested snapshot, not the state of a later checkout.
 
 <details>
+<summary>URL intake, slow queue and immediate start feedback — 2026-10-23</summary>
+
+Offline fixtures passed **156 backend tests plus 24 subtests** and **88 frontend
+tests**. After correcting intake-mode leakage into the Telegram-stage ETA, all
+**15 progress-metrics tests** passed again. TypeScript checking, Ruff lint/format
+checks on 17 changed Python files, and Prettier checks on 10 frontend files passed.
+
+Coverage includes exact range assembly, representation mismatch and single-stream
+fallback, cancellation while writing, promotion with an existing prefix, full-speed
+slot/connection bounds, slow pacing, storage windows, saved concurrency settings,
+immediate client feedback and lost-start-response reconciliation. These are
+synthetic offline checks; no live downloads, throughput benchmark, production build,
+browser visual check or deployment was performed for this change.
+
+</details>
+
+<details>
 <summary>Shared Links and simultaneous owner sessions — 2026-10-23</summary>
 
 The reviewed working tree passed **201 focused backend tests**, **335 frontend

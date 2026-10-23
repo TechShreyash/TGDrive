@@ -242,3 +242,24 @@ async def test_defaults_are_built_in_and_invalid_updates_never_change_saved_poli
         assert all(restored[key] == value for key, value in before["defaults"].items())
     finally:
         await state.preloads.close()
+
+
+async def test_url_concurrency_applies_live_and_persists(tmp_path):
+    from tgdrive.remote_scheduler import URLDownloadScheduler
+
+    settings = make_settings(tmp_path)
+    state = runtime()
+    state.remote = SimpleNamespace(scheduler=URLDownloadScheduler())
+    service = PerformanceSettings(settings, state)
+    before = await service.snapshot()
+    assert before["remote_download_concurrency"] == 2
+    for invalid in (0, 9, True, 2.5):
+        with pytest.raises(ValueError):
+            await service.save({"remote_download_concurrency": invalid})
+    await service.save({"remote_download_concurrency": 8})
+    assert state.remote.scheduler.full_speed_limit == 8
+    other = runtime()
+    restarted = PerformanceSettings(settings, other)
+    assert (await restarted.snapshot())["remote_download_concurrency"] == 8
+    await state.preloads.close()
+    await other.preloads.close()

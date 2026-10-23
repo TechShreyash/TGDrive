@@ -186,6 +186,13 @@ class TransferRecord:
                 speed = (last_bytes - first_bytes) / duration
                 if self.total > self.current:
                     eta = (self.total - self.current) / speed
+        download_mode = (
+            self.context.get("download_mode")
+            if self.phase in {"checking_source", "downloading"}
+            else None
+        )
+        if download_mode in {"warm", "queued", "waiting_storage"}:
+            eta = None
         deadlines = [
             value
             for key in ("retry_at", "backup_retry_at", "lineage_retry_at")
@@ -210,6 +217,8 @@ class TransferRecord:
             "eta_seconds": eta,
         }
         plan = self.context.get("multipart_plan")
+        if download_mode in {"full", "warm", "queued", "waiting_storage"}:
+            result["download_mode"] = download_mode
         parts = plan.get("parts") if isinstance(plan, dict) else None
         if isinstance(parts, list) and len(parts) > 1:
             result["telegram_parts"] = {
@@ -764,7 +773,8 @@ class TransferRegistry:
         live = [
             row
             for record in self.list()
-            if not record.history_hidden and self._history_matches(
+            if not record.history_hidden
+            and self._history_matches(
                 row := self.history_snapshot(record), selected, before, query
             )
         ]
@@ -1041,7 +1051,7 @@ class TransferRegistry:
                 )
             with self._db_lock, self._db:
                 cleared = self._db.execute(
-                    "DELETE FROM transfer_history "
+                    "DELETE FROM transfer_history "  # noqa: S608 -- bound IDs
                     "WHERE status IN ('completed','error','cancelled')" + clause,
                     parameters,
                 ).rowcount

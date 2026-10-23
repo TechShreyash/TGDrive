@@ -18,6 +18,41 @@
   overflow-wrap: anywhere;
 }
 
+.transfer-precheck-progress {
+  grid-column: 1 / -1;
+  block-size: 4px;
+  overflow: hidden;
+  border-radius: 6px;
+  background: var(--line);
+  margin-block: 5px;
+}
+
+.transfer-precheck-progress > span {
+  display: block;
+  inline-size: 30%;
+  block-size: 100%;
+  background: var(--action);
+}
+
+.transfer-source-wait {
+  grid-column: 1 / -1;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .transfer-precheck-progress > span {
+    animation: transfer-checking 1.4s ease-in-out infinite alternate;
+  }
+  @keyframes transfer-checking {
+    to {
+      transform: translateX(233%);
+    }
+  }
+}
+
 .transfer-heading:has(.transfer-collapsed-status) h2 {
   min-width: 0;
 }

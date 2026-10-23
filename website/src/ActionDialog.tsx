@@ -104,9 +104,8 @@ export default function ActionDialog({
               Opening or streaming fetches requested chunks with adaptive,
               bounded read-ahead. Automatic preloading can warm additional
               upcoming playback chunks. Downloads fetch their requested ranges.
-              Use this action to preload the entire file in advance.
-              Your device still needs an internet connection to access the
-              server copy.
+              Use this action to preload the entire file in advance. Your device
+              still needs an internet connection to access the server copy.
             </p>
             <p>
               View progress and manage cached files in{" "}
@@ -423,18 +422,8 @@ export default function ActionDialog({
               onNotice("Name updated.");
               onChanged();
             } else {
-              const result = await api.remote(
-                url,
-                destination,
-                compat,
-                requestId,
-              );
-              transfers.addJob(
-                result.id,
-                new URL(url).pathname.split("/").at(-1) || "URL import",
-                destination,
-              );
-              onNotice("URL import queued. It continues on the server.");
+              transfers.startRemote(url, destination, compat, requestId);
+              onNotice("Starting URL import. Follow progress in Transfers.");
               onClose();
             }
           });
@@ -493,7 +482,8 @@ export default function ActionDialog({
               <span>
                 Compatibility Mode
                 <small>
-                  Use one connection for servers that reject parallel downloads.
+                  Use one connection. Unsupported sources fall back
+                  automatically.
                 </small>
               </span>
             </label>

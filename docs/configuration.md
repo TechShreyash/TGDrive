@@ -167,10 +167,13 @@ at least 32 GiB. A 64 GiB budget can reserve two such files if real space permit
 Both controls support up to 2048 GiB. Existing admissions retain their size;
 shrinking below active reservations is rejected.
 
-Before receiving chunks, TGDrive reserves the whole file and checks real free
-space, including other uploads' unwritten reservations. Unknown-length URL imports
-reserve the admitted maximum; provide Content-Length or lower the file limit
-if this prevents admission. Space is rechecked during receipt, but other disk
+Browser uploads and full-speed URL imports reserve the whole file and check real
+free space, including other uploads' unwritten reservations. Full-speed unknown-length
+URL imports reserve the admitted maximum; provide Content-Length or lower the file
+limit if this prevents admission. Waiting URL sources reserve smaller windows.
+**Transfer limits → URL downloads** controls simultaneous full-speed imports
+(default **2**, range **1–8**); see [URL intake](performance.md#url-import-intake)
+for slow queued connections, storage waits and link-expiry limits. Space is rechecked during receipt, but other disk
 users can still fill it. Browser disk-full failures retain the acknowledged resume
 offset; URL retrieval may restart from zero. See [URL intake](performance.md#url-import-intake).
 These limits describe local staging, not Telegram storage capacity.

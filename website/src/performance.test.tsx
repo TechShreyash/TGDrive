@@ -43,6 +43,7 @@ export const preferences: PerformancePreferences = {
   cache_ttl_seconds: 86400,
   auto_preload: true,
   preload_max_jobs: 2,
+  remote_download_concurrency: 2,
   telegram_upload_pipeline: 4,
   telegram_request_limit: 8,
   telegram_parts_per_second: 24,

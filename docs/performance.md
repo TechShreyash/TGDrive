@@ -185,25 +185,49 @@ URL imports download to the server before uploading to Telegram. **Downloading
 from URL** shows the source-to-server rate; Telegram capacity affects the next
 stage. The browser can close after submission while the server keeps working.
 
-Intake uses one HTTP stream, a **1 MiB** receive-buffer setting and reads of up
-to **1 MiB**. HTTP flow control allows receiving ahead while a worker checks
-free disk space and writes each chunk. There is no intentional bandwidth cap
-or per-chunk database transaction. Storage admission reserves the whole file
-once per attempt, or the admitted maximum for unknown-length responses; live
-written-byte counters reduce its unwritten reservation without rescanning all
-receipts for every read. Retries recheck admission before reading again.
+Large, known-length sources with a strong ETag use adaptive parallel HTTP
+ranges: TGDrive starts with two streams and probes four, then eight when aggregate
+throughput improves. Every range must match the original representation and exact
+requested interval. Unsuitable range responses abandon the partial attempt and
+restart once as a single stream; rate-limit responses respect `Retry-After`.
+Small files, unknown lengths, sources without a strong ETag, and **Compatibility
+Mode** use one stream. Neither mode can exceed the source, route or server capacity.
 
-Download progress stays in memory; reservation changes, phase/status changes and
-recovery identities still commit immediately. File and directory synchronization
+**Transfer limits → URL downloads → Full-speed URL downloads** defaults to **2**,
+configurable from **1 to 8** without a restart. Lowering it lets existing full-speed
+jobs finish. This limit covers source retrieval; Telegram upload has its own
+scheduling. Eligible waiting jobs are promoted in arrival order. A job that cannot
+reserve its full staging requirement stays slow while another eligible job can run.
+
+Waiting sources use one stream paced at **64 KiB/s** each, shown as **Queued ·
+receiving slowly**. Open source jobs are bounded to the configured full-speed limit
+plus **8**; further jobs show **Waiting for a source connection**. Waiting sources
+reserve **32 MiB** staging windows as needed, capped by the file size; full-speed
+jobs reserve their entire known size, or the admitted maximum for unknown lengths.
+**Waiting for temporary storage** pauses reads until space becomes available.
+Promotion preserves received bytes and can switch the remaining body to ranges.
+Slow reception can help with idle timeouts, but does **not** extend signed-token
+expiry, guarantee a server will keep a request open, or protect links beyond the
+connection/storage bounds. Submit expiring links close to when capacity is available.
+The total operation timeout includes queuing and slow reception.
+
+Full-speed intake has no intentional bandwidth cap or per-chunk database
+transaction. Reads and receive buffers are up to **1 MiB**; waiting reads are up to
+**16 KiB**. Blocking writes and free-space checks run in workers. Parallel range
+responses have a shared **16-response** bound in addition to the source-job bound.
+Live written-byte counters reduce unwritten reservations without scanning receipts
+for every chunk; storage is checked when claims grow and before disk writes.
+
+Download progress stays in memory. Initial/window admissions, phase/status changes
+and recovery identities commit with their updates; a promotion claims space in
+memory immediately and journals it with the next progress/lifecycle update. File and directory synchronization
 remain at final publication. These counters do not promise byte-range resume:
 an interrupted URL retrieval may restart from zero. See
 [transfer durability](architecture.md#transfer-pipeline).
 
-The source, network, disk and available CPU can still limit throughput. A
-comparison with a server-local downloader should use the same URL and comparable
-time windows; simultaneous downloads may compete for source/server bandwidth.
-These implementation choices do not establish a measured speedup or guarantee
-the same rate as another client.
+Comparisons with a server-local downloader should use the same URL and comparable
+time windows; simultaneous downloads compete for bandwidth. These policies do not
+establish a measured speedup or guarantee the same rate as another client.
 
 ## Device upload receipts
 

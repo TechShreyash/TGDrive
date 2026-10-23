@@ -253,3 +253,26 @@ def test_terminal_jobs_retain_provider_deadlines_until_they_expire(clock, contex
     registry.prune()
     assert registry.list() == []
     assert registry.create("queued")
+
+
+@pytest.mark.parametrize("mode", ["warm", "queued", "waiting_storage"])
+def test_waiting_url_does_not_extrapolate_a_completion_eta(clock, mode):
+    registry = TransferRegistry()
+    record = running(registry)
+    record.context.update(source_kind="remote", download_mode=mode)
+    registry.update(record.id, phase="downloading", current=0)
+    clock.now += 2
+    registry.update(record.id, current=50)
+    snapshot = record.as_dict()
+    assert snapshot["download_mode"] == mode
+    assert snapshot["speed_bytes_per_second"] == 25
+    assert snapshot["eta_seconds"] is None
+    record.context["download_mode"] = "full"
+    assert record.as_dict()["eta_seconds"] == 2
+    # Intake pacing must not suppress the subsequent Telegram-stage ETA.
+    record.context["download_mode"] = mode
+    registry.update(record.id, phase="uploading", current=0)
+    clock.now += 2
+    registry.update(record.id, current=50)
+    assert record.as_dict()["eta_seconds"] == 2
+    assert "download_mode" not in record.as_dict()

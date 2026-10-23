@@ -53,19 +53,17 @@ async def test_settings_saved_during_async_multipart_admission_never_create_a_jo
         await pool.stop()
 
 
-def test_settings_saved_during_remote_inspection_never_enqueue_a_job(tmp_path):
+def test_restart_required_rejects_remote_start_without_source_inspection(tmp_path):
     settings = make_settings(tmp_path)
     store = DriveStore.create(tmp_path / "drive.json")
     runtime = FakeRuntime(store)
     runtime.connection_manager = SimpleNamespace(
-        restart_required=False, close=AsyncMock()
+        restart_required=True, close=AsyncMock()
     )
 
-    async def changed_during_inspection(_url):
-        runtime.connection_manager.restart_required = True
-        return SimpleNamespace(size=12)
-
-    runtime.transfers.inspect_remote = changed_during_inspection
+    runtime.transfers.inspect_remote = AsyncMock(
+        side_effect=AssertionError("start must not contact the source")
+    )
     app = create_app(settings, runtime=runtime)
     try:
         with TestClient(app, base_url="https://testserver") as client:
@@ -84,6 +82,7 @@ def test_settings_saved_during_remote_inspection_never_enqueue_a_job(tmp_path):
             )
             assert result.status_code == 409
             assert result.json()["code"] == "SETTINGS_RESTART_REQUIRED"
+            runtime.transfers.inspect_remote.assert_not_awaited()
             assert runtime.transfers.remote_requests == []
             assert runtime.transfers.registry.list() == []
     finally:

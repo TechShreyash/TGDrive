@@ -50,6 +50,7 @@ export interface Transfer {
   total: number;
   uploadId?: string;
   jobId?: string;
+  remoteRequestId?: string;
   kind?: string;
   error?: string;
   file?: File;
@@ -106,6 +107,7 @@ export function safeTransferMetadata(transfers: Transfer[]) {
       total,
       uploadId,
       jobId,
+      remoteRequestId,
       kind,
       initiatedHere,
       createdAt,
@@ -128,6 +130,7 @@ export function safeTransferMetadata(transfers: Transfer[]) {
       total,
       uploadId,
       jobId,
+      remoteRequestId,
       kind,
       initiatedHere,
       createdAt,
@@ -268,13 +271,25 @@ export function fromJob(job: Job, previousKind?: string): Partial<Transfer> {
                 ? "Securing your drive backup in Telegram"
                 : job.phase === "retry_wait"
                   ? "Waiting for Telegram; retry scheduled"
-                  : job.phase === "downloading"
-                    ? "Downloading from URL"
-                    : job.phase === "finalizing"
-                      ? "Publishing to the channel"
-                      : job.status === "queued"
-                        ? "Queued for Telegram"
-                        : "Uploading to Telegram";
+                  : ["checking_source", "downloading"].includes(job.phase) &&
+                      job.download_mode === "waiting_storage"
+                    ? "Waiting for temporary storage"
+                    : job.phase === "checking_source" &&
+                        job.download_mode === "queued"
+                      ? "Waiting for a source connection"
+                      : job.phase === "checking_source"
+                        ? job.status === "queued"
+                          ? "Waiting to check source"
+                          : "Checking source…"
+                        : job.phase === "downloading"
+                          ? job.download_mode === "warm"
+                            ? "Queued · receiving slowly"
+                            : "Downloading from URL"
+                          : job.phase === "finalizing"
+                            ? "Publishing to the channel"
+                            : job.status === "queued"
+                              ? "Queued for Telegram"
+                              : "Uploading to Telegram";
   if (
     state === "uploading" &&
     job.status === "running" &&
@@ -368,6 +383,16 @@ export class TransferManager {
   private admissionRetryAt = 0;
   private dismissed = new Set<string>();
   private historyRevision = 0;
+  private remoteStarts = new Map<
+    string,
+    {
+      url: string;
+      destination: string;
+      singleThreaded: boolean;
+      requestId: string;
+    }
+  >();
+  private remoteSubmitting = new Set<string>();
   constructor(
     private readonly sendChunk: UploadChunkTransport = sendUploadChunk,
   ) {
@@ -408,20 +433,27 @@ export class TransferManager {
             item.batchCreatedAt ||
             item.createdAt ||
             Date.now(),
-          state: item.jobId
-            ? item.state
-            : terminal.has(item.state)
+          state:
+            item.jobId || (item.kind === "remote" && item.remoteRequestId)
               ? item.state
-              : item.kind === "remote"
-                ? "error"
-                : "awaiting_file",
-          phase: item.jobId
-            ? item.phase
-            : terminal.has(item.state)
-              ? item.phase
-              : item.kind === "remote"
-                ? "URL transfer is missing its server job. Start a new URL upload."
-                : "Choose the original file to resume",
+              : terminal.has(item.state)
+                ? item.state
+                : item.kind === "remote"
+                  ? "error"
+                  : "awaiting_file",
+          phase:
+            item.kind === "remote" &&
+            item.remoteRequestId &&
+            !item.jobId &&
+            !terminal.has(item.state)
+              ? "Checking import status…"
+              : item.jobId
+                ? item.phase
+                : terminal.has(item.state)
+                  ? item.phase
+                  : item.kind === "remote"
+                    ? "URL transfer is missing its server job. Start a new URL upload."
+                    : "Choose the original file to resume",
         }));
     } catch {
       this.recoveryWarning =
@@ -695,6 +727,114 @@ export class TransferManager {
     this.publish();
     void this.poll();
   }
+  startRemote(
+    url: string,
+    destination: string,
+    singleThreaded: boolean,
+    requestId: string,
+  ): string {
+    const parsed = new URL(url);
+    if (!["http:", "https:"].includes(parsed.protocol))
+      throw new Error("Enter a direct HTTP or HTTPS file link.");
+    if (!this.canQueue(1))
+      throw new Error(
+        "Finish or cancel an existing transfer before adding more.",
+      );
+    const key = crypto.randomUUID();
+    let name = parsed.pathname.split("/").at(-1) || "URL import";
+    try {
+      name = decodeURIComponent(name);
+    } catch {
+      /* Keep the URL basename. */
+    }
+    const now = Date.now();
+    this.items.push({
+      key,
+      name,
+      destination,
+      batchId: key,
+      batchName: name,
+      batchCreatedAt: now,
+      createdAt: now,
+      initiatedHere: true,
+      size: 0,
+      lastModified: 0,
+      current: 0,
+      total: 0,
+      kind: "remote",
+      remoteRequestId: requestId,
+      state: "uploading",
+      stage: "checking_source",
+      phase: "Starting URL import…",
+    });
+    this.remoteStarts.set(key, { url, destination, singleThreaded, requestId });
+    this.publish();
+    void this.submitRemote(key);
+    return key;
+  }
+  private acceptRemote(key: string, result: { id: string; data?: Job }) {
+    const item = this.items.find((row) => row.key === key);
+    if (!item) return;
+    if (result.id) {
+      item.jobId = result.id;
+      // Polling may discover this server job before its start response arrives.
+      this.items = this.items.filter(
+        (row) => row.key === key || row.jobId !== result.id,
+      );
+      this.remoteStarts.delete(key);
+    }
+    if (result.data && item.state !== "cancelled")
+      Object.assign(item, fromJob(result.data, "remote"));
+    else if (!["cancelled", "cancelling"].includes(item.state)) {
+      item.state = "uploading";
+      item.phase = "Checking source…";
+      item.stage = "checking_source";
+      item.error = undefined;
+    }
+    this.publish();
+  }
+  private async recoverRemote(key: string, originalError?: unknown) {
+    const item = this.items.find((row) => row.key === key);
+    if (!item?.remoteRequestId) return;
+    try {
+      const result = await api.remoteRequest(item.remoteRequestId);
+      if (!result.id && result.data.status === "queued")
+        throw new Error(
+          "The server is still accepting this import. Retry to check it.",
+        );
+      this.acceptRemote(key, result);
+    } catch (error) {
+      if (["cancelled", "cancelling"].includes(item.state)) return;
+      this.update(key, {
+        state: "error",
+        stage: "checking_source",
+        phase: "Import needs attention",
+        error: errorMessage(originalError || error),
+      });
+    }
+  }
+  private async submitRemote(key: string) {
+    const pending = this.remoteStarts.get(key);
+    if (!pending || this.remoteSubmitting.has(key)) return;
+    this.remoteSubmitting.add(key);
+    try {
+      this.acceptRemote(
+        key,
+        await api.remote(
+          pending.url,
+          pending.destination,
+          pending.singleThreaded,
+          pending.requestId,
+        ),
+      );
+    } catch (error) {
+      // A lost response must not silently create a second import on retry.
+      await this.recoverRemote(key, error);
+    } finally {
+      this.remoteSubmitting.delete(key);
+      void this.poll();
+    }
+  }
   async resume(key: string, file: File) {
     const item = this.items.find((item) => item.key === key);
     if (!item) return;
@@ -824,11 +964,19 @@ export class TransferManager {
         phase: "Waiting to resume",
       });
       void this.startNext();
-    } else if (item.kind === "remote")
-      throw new Error(
-        "This URL transfer has no server job. Start a new URL upload.",
-      );
-    else
+    } else if (item.kind === "remote") {
+      this.update(key, {
+        state: "uploading",
+        error: undefined,
+        phase: "Checking import status…",
+      });
+      if (this.remoteStarts.has(key)) await this.submitRemote(key);
+      else if (item.remoteRequestId) await this.recoverRemote(key);
+      else
+        throw new Error(
+          "This URL transfer has no server job. Start a new URL upload.",
+        );
+    } else
       this.update(key, {
         state: "awaiting_file",
         error: undefined,
@@ -850,6 +998,12 @@ export class TransferManager {
       if (item.jobId) {
         const result = await api.cancelJob(item.jobId);
         if (result.data) this.update(key, fromJob(result.data, item.kind));
+      } else if (item.kind === "remote" && item.remoteRequestId) {
+        this.acceptRemote(
+          key,
+          await api.cancelRemoteRequest(item.remoteRequestId),
+        );
+        this.remoteStarts.delete(key);
       } else {
         if (item.uploadId) await api.cancelUpload(item.uploadId);
         this.update(key, {
@@ -902,11 +1056,14 @@ export class TransferManager {
   async clearHistory() {
     const unfinished = new Set(
       this.items
-        .filter((item) => !["completed", "cancelled", "error"].includes(item.state))
+        .filter(
+          (item) => !["completed", "cancelled", "error"].includes(item.state),
+        )
         .map(transferBatchId),
     );
     const removed = this.items.filter(
-      (item) => item.kind !== "delete" && !unfinished.has(transferBatchId(item)),
+      (item) =>
+        item.kind !== "delete" && !unfinished.has(transferBatchId(item)),
     );
     const keys = new Set(removed.map((item) => item.key));
     const excludeFolders = [
@@ -1465,6 +1622,21 @@ export class TransferManager {
     if (!this.enabled || this.polling) return;
     clearTimeout(this.timer);
     this.polling = true;
+    for (const item of this.items
+      .filter(
+        (row) =>
+          row.kind === "remote" &&
+          row.remoteRequestId &&
+          !row.jobId &&
+          !terminal.has(row.state) &&
+          !this.remoteSubmitting.has(row.key),
+      )
+      .slice(0, 8)) {
+      this.remoteSubmitting.add(item.key);
+      void this.recoverRemote(item.key).finally(() =>
+        this.remoteSubmitting.delete(item.key),
+      );
+    }
     const deletionVersion = this.deletionVersion;
     const historyRevision = this.historyRevision;
     try {
@@ -1560,10 +1732,13 @@ export class TransferManager {
           filesChanged = true;
       }
       const unfinished = new Set(
-        this.items.filter((item) => !terminal.has(item.state)).map(transferBatchId),
+        this.items
+          .filter((item) => !terminal.has(item.state))
+          .map(transferBatchId),
       );
       this.items = this.items.filter(
-        (item) => !clearedKeys.has(item.key) || unfinished.has(transferBatchId(item)),
+        (item) =>
+          !clearedKeys.has(item.key) || unfinished.has(transferBatchId(item)),
       );
       this.publish();
       if (filesChanged)

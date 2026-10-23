@@ -58,10 +58,13 @@ export default function PerformanceSettings({
   const [notice, setNotice] = useState("");
   const [conflict, setConflict] = useState(false);
   const latestLoad = useRef(0);
-  const { refreshing, run } = useManualRefresh(onNotice || ((message, failed) => {
-    if (failed) setError(message);
-    else setNotice(message);
-  }));
+  const { refreshing, run } = useManualRefresh(
+    onNotice ||
+      ((message, failed) => {
+        if (failed) setError(message);
+        else setNotice(message);
+      }),
+  );
   const load = useCallback(async (signal?: AbortSignal, manual = false) => {
     const request = ++latestLoad.current;
     if (!manual) setLoading(true);
@@ -75,14 +78,16 @@ export default function PerformanceSettings({
       setNotice("");
       return true;
     } catch (cause) {
-      if (!signal?.aborted && request === latestLoad.current) setError(errorMessage(cause));
+      if (!signal?.aborted && request === latestLoad.current)
+        setError(errorMessage(cause));
       if (manual) throw cause;
       return false;
     } finally {
       if (!signal?.aborted && request === latestLoad.current) setLoading(false);
     }
   }, []);
-  const reloadSettings = () => void run((signal) => load(signal, true), "Performance settings refreshed.");
+  const reloadSettings = () =>
+    void run((signal) => load(signal, true), "Performance settings refreshed.");
   useEffect(() => {
     const controller = new AbortController();
     void load(controller.signal);
@@ -168,7 +173,6 @@ export default function PerformanceSettings({
             setNotice("");
           }}
         />
-
       </div>
     </div>
   );
@@ -290,9 +294,36 @@ export default function PerformanceSettings({
           <Fieldset
             className="performance-setting-group"
             hidden={category !== "transfers"}
-            legend={<span className="configuration-group-title"><HardDrive size={18} aria-hidden="true" />Upload storage</span>}
+            legend={
+              <span className="configuration-group-title">
+                <Globe size={18} aria-hidden="true" />
+                URL downloads
+              </span>
+            }
           >
-            {numericPreferences.filter((value) => ["max_file_size", "staging_budget_bytes", "min_free_bytes"].includes(value.key)).map(field)}
+            {numericPreferences
+              .filter((value) => value.key === "remote_download_concurrency")
+              .map(field)}
+          </Fieldset>
+          <Fieldset
+            className="performance-setting-group"
+            hidden={category !== "transfers"}
+            legend={
+              <span className="configuration-group-title">
+                <HardDrive size={18} aria-hidden="true" />
+                Upload storage
+              </span>
+            }
+          >
+            {numericPreferences
+              .filter((value) =>
+                [
+                  "max_file_size",
+                  "staging_budget_bytes",
+                  "min_free_bytes",
+                ].includes(value.key),
+              )
+              .map(field)}
           </Fieldset>
           <Fieldset
             className="performance-setting-group"
@@ -337,7 +368,8 @@ export default function PerformanceSettings({
             {numericPreferences.filter((value) => value.advanced).map(field)}
           </details>
           <p className="settings-help performance-save-scope">
-            Save applies to this page. Restore defaults loads values for review before saving.
+            Save applies to this page. Restore defaults loads values for review
+            before saving.
             {category === "transfers" &&
               " Parallel uploads has its own Save Changes action above."}
           </p>
@@ -374,7 +406,11 @@ export default function PerformanceSettings({
               }}
             >
               {refreshing ? <Spinner /> : <RefreshCw size={16} />}
-              {refreshing ? "Refreshing…" : conflict ? "Reload Latest Settings" : "Discard changes"}
+              {refreshing
+                ? "Refreshing…"
+                : conflict
+                  ? "Reload Latest Settings"
+                  : "Discard changes"}
             </Button>
             <Button
               type="button"
@@ -404,8 +440,14 @@ export default function PerformanceSettings({
           )}
         </form>
       ) : (
-        <Button className="secondary-button" disabled={refreshing} aria-busy={refreshing} onClick={reloadSettings}>
-          {refreshing && <Spinner />}{refreshing ? "Refreshing…" : "Try Again"}
+        <Button
+          className="secondary-button"
+          disabled={refreshing}
+          aria-busy={refreshing}
+          onClick={reloadSettings}
+        >
+          {refreshing && <Spinner />}
+          {refreshing ? "Refreshing…" : "Try Again"}
         </Button>
       )}
       <ErrorNotice message={error} />

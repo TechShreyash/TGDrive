@@ -231,10 +231,23 @@ async def test_url_import_checks_shared_space_before_reading_body(
         # has the same size as this source response.
         record.context.update(staging_size=80 if known else 100, staging_written=40)
         manager.registry.persist(record)
-    await record.task
-    assert record.status == TransferStatus.ERROR
-    assert "free disk space" in record.error
+    import asyncio
+
+    waiting = asyncio.Event()
+    original_cancelable = manager.remote._cancelable
+
+    async def observe_wait(operation, event, **kwargs):
+        if record.context.get("download_mode") == "waiting_storage":
+            waiting.set()
+        return await original_cancelable(operation, event, **kwargs)
+
+    monkeypatch.setattr(manager.remote, "_cancelable", observe_wait)
+    await asyncio.wait_for(waiting.wait(), 3)
+    assert not record.task.done()
     assert list(response.content.chunks) == [b"x" * 80]
+    record.cancel_event.set()
+    await record.task
+    assert record.status == TransferStatus.CANCELLED
     assert not list((tmp_path / "cache" / "remote" / record.id).glob("*.part"))
     await manager.remote.close()
     await pool.stop()
@@ -315,6 +328,70 @@ async def test_url_reserves_once_and_reports_live_written_bytes(
         assert admissions == [64 if known else 100]
         assert written == list(range(65))
     finally:
+        await manager.close()
+        await pool.stop()
+        store.close()
+
+
+async def test_waiting_url_reserves_a_window_instead_of_the_whole_file(
+    tmp_path, monkeypatch
+):
+    import asyncio
+
+    from test_remote import PUBLIC_DNS, FakeResolver, FakeResponse, FakeSession
+    from test_transfers import make_manager
+
+    from tgdrive.remote import RemoteClient
+
+    manager, store, _, pool = await make_manager(tmp_path, max_size=100)
+    manager.settings.staging_budget_bytes = 64
+    manager.settings.min_free_bytes = 0
+    monkeypatch.setattr("tgdrive.remote_scheduler.WARM_STAGING_WINDOW", 8)
+    first_read, warm_read = asyncio.Event(), asyncio.Event()
+    first = FakeResponse(200, headers={"Content-Length": "48"}, chunks=[b"x" * 48])
+    second = FakeResponse(200, headers={"Content-Length": "48"}, chunks=[b"y" * 48])
+
+    async def held_read(_size):
+        first_read.set()
+        await asyncio.Event().wait()
+
+    original_read = second.content.read
+
+    async def observe_read(size):
+        warm_read.set()
+        return await original_read(size)
+
+    first.content.read = held_read
+    second.content.read = observe_read
+    manager.remote = RemoteClient(
+        max_bytes=100,
+        chunk_size=4,
+        download_concurrency=1,
+        session=FakeSession([first, second]),
+        resolver=FakeResolver(PUBLIC_DNS),
+    )
+    records = []
+    try:
+        records.append(
+            manager.start_remote(
+                url="https://files.example/first", destination="/", filename=None
+            )
+        )
+        await asyncio.wait_for(first_read.wait(), 3)
+        records.append(
+            manager.start_remote(
+                url="https://files.example/second", destination="/", filename=None
+            )
+        )
+        await asyncio.wait_for(warm_read.wait(), 3)
+        assert records[0].context["staging_size"] == 48
+        assert records[1].context["staging_size"] == 8
+        assert records[1].context["download_mode"] == "warm"
+        assert staging_usage(manager)[0] == 56
+    finally:
+        for record in records:
+            record.cancel_event.set()
+        await asyncio.gather(*(record.task for record in records))
         await manager.close()
         await pool.stop()
         store.close()

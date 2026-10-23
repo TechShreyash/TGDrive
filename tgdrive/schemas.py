@@ -69,7 +69,7 @@ class RemoteInspectRequest(RequestModel):
 class RemoteStartRequest(RemoteInspectRequest):
     path: str = Field(min_length=1, max_length=4096)
     filename: str | None = Field(default=None, max_length=255)
-    single_threaded: bool = Field(default=True, alias="singleThreaded")
+    single_threaded: bool = Field(default=False, alias="singleThreaded")
     client_request_id: str | None = Field(
         default=None, min_length=16, max_length=128, pattern=r"^[A-Za-z0-9_-]+$"
     )
@@ -120,7 +120,9 @@ class TransferTaskHistoryRequest(BaseModel):
     q: str = Field(default="", max_length=255)
     offset: int | None = Field(default=None, ge=0)
     folders: list[TransferFolderHint] = Field(default_factory=list, max_length=1000)
-    exclude_folders: list[TransferIdentity] = Field(default_factory=list, max_length=2000)
+    exclude_folders: list[TransferIdentity] = Field(
+        default_factory=list, max_length=2000
+    )
 
     @model_validator(mode="after")
     def bound_folder_members(self) -> TransferTaskHistoryRequest:

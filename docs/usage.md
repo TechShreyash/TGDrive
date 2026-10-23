@@ -494,9 +494,22 @@ still applies; see [backup and recovery](backup-recovery.md).
 ## Import from a URL
 
 Choose **New → Upload from URL** and enter a public HTTP(S) file URL.
-TGDrive downloads it to the server, then sends it to Telegram.
-**Downloading from URL** measures the first stage; the later Telegram upload
-has its own speed and progress. See [URL import performance](performance.md#url-import-intake).
+The dialog closes immediately and Transfers shows an animated **Checking source…**
+state while the server connects and checks the response. Source failures appear on
+that transfer with a retry action. You can keep browsing or cancel during checks;
+a percentage appears only when file bytes start arriving.
+
+TGDrive downloads to the server, then sends to Telegram. By default two imports
+receive at full speed. Others show **Queued · receiving slowly** when a slow source
+connection is available, **Waiting for a source connection** at the connection cap,
+or **Waiting for temporary storage** when staging is full. Slow reception can help
+avoid idle timeouts, but cannot extend a link's fixed expiry. Change full-speed
+concurrency (1–8) in **Configuration → Transfer limits → URL downloads**.
+
+**Downloading from URL** measures source intake; the later Telegram upload has its
+own speed and progress. Parallel retrieval adapts automatically where supported.
+Use **Compatibility Mode** for sources that reject it. See
+[URL import performance](performance.md#url-import-intake) for bounds and fallbacks.
 
 After submission it continues with the tab closed while TGDrive runs.
 Use the existing **Retry** after errors; imports may restart from the beginning.

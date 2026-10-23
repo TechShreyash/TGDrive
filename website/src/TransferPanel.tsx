@@ -326,8 +326,7 @@ export default function TransferPanel({
                   }}
                   onChooseBatch={() => {
                     resumeBatch.current = batch.id;
-                    if (batch.folder)
-                      folderInput.current?.click();
+                    if (batch.folder) folderInput.current?.click();
                     else bulkInput.current?.click();
                   }}
                   folderPickerSupported={folderPickerSupported}
@@ -913,6 +912,15 @@ function TransferRow({
   const finished = status === "completed" || status === "cancelled";
   const received =
     deviceStage && !needsDeviceUpload(item) && item.state !== "cancelled";
+  const checkingSource =
+    item.kind === "remote" &&
+    item.stage === "checking_source" &&
+    item.state === "uploading";
+  const sourceWaiting =
+    checkingSource &&
+    ["Checking source…", "Starting URL import…"].includes(item.phase) &&
+    item.serverStatus !== "queued" &&
+    now - (item.startedAt || item.createdAt || now) >= 5000;
   const deviceMessage =
     !compactChild && deviceUploadMessage([item], deviceUploadsPending);
   const liveMetrics =
@@ -1003,10 +1011,15 @@ function TransferRow({
             <span
               className={
                 "transfer-phase" +
-                (item.state === "verifying" ? " transfer-verification" : "")
+                (item.state === "verifying" || checkingSource
+                  ? " transfer-verification"
+                  : "")
               }
+              role={checkingSource ? "status" : undefined}
             >
-              {!received && item.state === "verifying" && <Spinner />}
+              {!received && (item.state === "verifying" || checkingSource) && (
+                <Spinner />
+              )}
               {received ? "Received" : item.phase}
             </span>
           )
@@ -1022,55 +1035,73 @@ function TransferRow({
             {displayLocation}
           </span>
         )}
-        <div className="transfer-row-details">
-          {liveMetrics && <TransferMetrics item={item} now={now} />}
-          {showPercent && liveMetrics && (
-            <span className="transfer-batch-percent">
-              {formatProgressPercent(meter.fraction!)}
-            </span>
-          )}
-          <span
-            className="transfer-bytes"
-            title={
-              !received && item.state === "receiving"
-                ? "Bytes sent by this browser. Resume positions are saved only after the server confirms each chunk."
-                : !received &&
-                    item.jobId &&
-                    ["uploading", "finalizing"].includes(item.stage || "") &&
-                    !finished
-                  ? "Bytes sent to Telegram, including parts still uploading. Each part appears in the channel after it finishes."
-                  : undefined
-            }
-          >
-            {received || finished || status === "queued"
-              ? formatBytes(item.size || item.total)
-              : formatByteProgress(meter.current, meter.total)}
-          </span>
-          {!received && !liveMetrics && !finished && status !== "queued" && (
-            <TransferMetrics item={item} now={now} />
-          )}
-          {showTimestamp && finished && validRecordedAt && (
-            <time
-              className="transfer-history-time"
-              dateTime={new Date(recordedAt).toISOString()}
-              title={new Intl.DateTimeFormat(undefined, {
-                dateStyle: "full",
-                timeStyle: "short",
-              }).format(recordedAt)}
+        {!checkingSource && (
+          <div className="transfer-row-details">
+            {liveMetrics && <TransferMetrics item={item} now={now} />}
+            {showPercent && liveMetrics && (
+              <span className="transfer-batch-percent">
+                {formatProgressPercent(meter.fraction!)}
+              </span>
+            )}
+            <span
+              className="transfer-bytes"
+              title={
+                !received && item.state === "receiving"
+                  ? "Bytes sent by this browser. Resume positions are saved only after the server confirms each chunk."
+                  : !received &&
+                      item.jobId &&
+                      ["uploading", "finalizing"].includes(item.stage || "") &&
+                      !finished
+                    ? "Bytes sent to Telegram, including parts still uploading. Each part appears in the channel after it finishes."
+                    : undefined
+              }
             >
-              {new Intl.DateTimeFormat(undefined, {
-                dateStyle: "medium",
-                timeStyle: "short",
-              }).format(recordedAt)}
-            </time>
-          )}
-        </div>
-        {liveMetrics && (
+              {received || finished || status === "queued"
+                ? formatBytes(item.size || item.total)
+                : formatByteProgress(meter.current, meter.total)}
+            </span>
+            {!received && !liveMetrics && !finished && status !== "queued" && (
+              <TransferMetrics item={item} now={now} />
+            )}
+            {showTimestamp && finished && validRecordedAt && (
+              <time
+                className="transfer-history-time"
+                dateTime={new Date(recordedAt).toISOString()}
+                title={new Intl.DateTimeFormat(undefined, {
+                  dateStyle: "full",
+                  timeStyle: "short",
+                }).format(recordedAt)}
+              >
+                {new Intl.DateTimeFormat(undefined, {
+                  dateStyle: "medium",
+                  timeStyle: "short",
+                }).format(recordedAt)}
+              </time>
+            )}
+          </div>
+        )}
+        {checkingSource && (
+          <div
+            className="transfer-precheck-progress"
+            role="progressbar"
+            aria-label={item.phase + " for " + item.name}
+          >
+            <span />
+          </div>
+        )}
+        {liveMetrics && !checkingSource && (
           <progress
             aria-label={item.phase + " for " + item.name}
             max={1}
             value={meter.fraction}
           />
+        )}
+        {sourceWaiting && (
+          <span className="transfer-source-wait">
+            {item.jobId
+              ? "The source is taking longer to respond. You can keep browsing."
+              : "Waiting for server confirmation. You can keep browsing."}
+          </span>
         )}
         {deviceMessage && (
           <span className="transfer-device-status" role="status">

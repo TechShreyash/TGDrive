@@ -24,6 +24,7 @@ class PerformancePreferences(BaseModel):
     cache_ttl_seconds: int = Field(default=86400, ge=60, le=2678400)
     auto_preload: bool = True
     preload_max_jobs: int = Field(default=2, ge=1, le=8)
+    remote_download_concurrency: int = Field(default=2, ge=1, le=8)
     telegram_upload_pipeline: int = Field(default=4, ge=1, le=16)
     telegram_request_limit: int = Field(default=8, ge=1, le=32)
     telegram_parts_per_second: int = Field(default=48, ge=1, le=128)
@@ -131,6 +132,9 @@ class PerformanceSettings:
         if remote is not None:
             remote.max_bytes = self.settings.upload_limit
             remote.min_free_bytes = value.min_free_bytes
+            scheduler = getattr(remote, "scheduler", None)
+            if scheduler is not None:
+                scheduler.configure(value.remote_download_concurrency)
         pool = getattr(self.runtime, "pool", None)
         if pool is None or not hasattr(pool, "__dict__"):
             return

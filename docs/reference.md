@@ -271,7 +271,7 @@ settings. Initialization/restore refuses existing catalog state.
 | `STAGING_BUDGET_BYTES` | 17179869184 | Positive integer; 16 GiB total reservation budget for active browser receipts. |
 | `MIN_FREE_BYTES` | 1073741824 | Nonnegative integer; preserve 1 GiB free space by default. Browser receipt admission reserves remaining bytes; URL downloads also check free space. |
 | `UPLOAD_SESSION_TTL_SECONDS` | 86400 | Integer at least 60; incomplete receipt idle lifetime in seconds, refreshed after each committed chunk. There is no declared upper bound in configuration. |
-| `MAX_CONCURRENT_TRANSFERS` | 2 | Integer 1–32; bounds local fingerprinting, URL retrieval and receive work. Receipt handlers have a separate bound from this value. It does not cap Telegram uploads across bots. |
+| `MAX_CONCURRENT_TRANSFERS` | 2 | Integer 1–32; bounds local fingerprinting and receive work. Receipt handlers have a separate bound from this value. It does not cap Telegram uploads across bots. |
 | `TELEGRAM_UPLOADS_PER_BOT` | 1 | Integer 1–4; initial per-bot Telegram media limit. **Configuration → Transfer limits** saves an override in MongoDB and applies it immediately. Premium clients remain limited to one media upload each. |
 | `TRANSFER_TTL_SECONDS` | 3600 | Integer 60-86400 inclusive; live terminal-job/context retention. Compact server-transfer history is kept separately from this cleanup; files are unaffected. |
 
@@ -308,6 +308,7 @@ retry and cancellation rules.
 | Variable | Default | Validation and behavior |
 | --- | --- | --- |
 | `ALLOW_PRIVATE_REMOTE_URLS` | false | Enables private/internal destinations only when explicitly true. It broadens what the authenticated owner can reach. |
+| `REMOTE_DOWNLOAD_CONCURRENCY` | 2 | Integer 1–8; full-speed source downloads. Configuration → Transfer limits saves and immediately applies an override. See [URL intake](performance.md#url-import-intake) for queued connections, pacing and storage bounds. |
 | `REMOTE_CONNECT_TIMEOUT` | 20 | Seconds, greater than 0 and at most 300. |
 | `REMOTE_READ_TIMEOUT` | 120 | Seconds, greater than 0 and at most 3600; individual read timeout. |
 | `REMOTE_TOTAL_TIMEOUT` | 21600 | Seconds, greater than 0 and at most 86400; total operation budget. |
@@ -1249,7 +1250,7 @@ All these POST routes are owner-only.
 | Route | JSON body | Result |
 | --- | --- | --- |
 | `/api/getFileInfoFromUrl` | `{"url":"https://example.org/file.bin"}` | status/data with file_name, file_size, content_type; size -1 means unknown. |
-| `/api/startFileDownloadFromUrl` | `{"url":"https://example.org/file.bin","path":"/","filename":null,"singleThreaded":true,"client_request_id":"<unique-safe-id>"}` | status/id. |
+| `/api/startFileDownloadFromUrl` | `{"url":"https://example.org/file.bin","path":"/","filename":null,"singleThreaded":false,"client_request_id":"<unique-safe-id>"}` | status/id. |
 | `/api/getTransferByRequest` | `{"client_request_id":"..."}` | status/id/data compatibility start snapshot. |
 | `/api/getTransferProgress` | `{"id":"<job-id>"}` | status/data base job snapshot. |
 | `/api/getSaveProgress` | Same | Progress alias. |
@@ -1257,10 +1258,16 @@ All these POST routes are owner-only.
 | `/api/getFileDownloadProgress` | Same | Progress alias. |
 | `/api/cancelUpload` | Either id or client_request_id, never both. | status/id/data cancellation snapshot. |
 
-singleThreaded is retained for compatibility; HTTP download uses one controlled
-stream. It is not a parallel download switch. Optional client_request_id is
-16–128 letters/digits/underscore/hyphen. Reusing it for a different request fails
-with `409`. This bounded compatibility mapping is **process memory**, not the
+`singleThreaded` defaults to `false` for adaptive parallel ranges with safe
+single-stream fallback. `true` forces one stream. Starting a URL import creates a
+job before contacting the source: authentication and destination errors remain
+HTTP errors, while DNS/response/size/storage checks run in that job. Its initial
+phase is `checking_source`. Snapshots may include `download_mode` of `queued`,
+`warm`, `full` or `waiting_storage`; queued/waiting intake has no completion ETA.
+See [URL intake](performance.md#url-import-intake) for exact bounds.
+
+Optional `client_request_id` is 16–128 letters/digits/underscore/hyphen. Reusing
+it for a different URL, destination, filename or connection mode fails with `409`. This bounded compatibility mapping is **process memory**, not the
 restart-durable receipt ID protocol. Prefer job-ID APIs after job creation.
 
 `POST /api/upload` accepts multipart fields file and path, optionally
