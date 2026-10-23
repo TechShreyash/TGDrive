@@ -39,6 +39,155 @@ beforeEach(() => {
   vi.stubGlobal("window", new EventTarget());
 });
 afterEach(() => vi.unstubAllGlobals());
+describe("manual transfer history clearing", () => {
+  function seedHistory(manager: TransferManager) {
+    manager.addEntries(
+      ["completed", "cancelled", "error", "queued", "awaiting_file"].map(
+        (name) => ({ file: new File(["x"], name), destination: "/" }),
+      ),
+      10,
+      true,
+    );
+    const states = [
+      "completed", "cancelled", "error", "queued", "awaiting_file",
+    ] as const;
+    manager.snapshot().forEach((item, index) => {
+      item.state = states[index];
+      if (index < 3) item.jobId = "job-" + item.name;
+    });
+    const folderUpload = {
+      id: "unfinished-folder-0001",
+      name: "Folder",
+      root_path: "/folder",
+      created_at: 1000,
+    };
+    manager.addEntries(
+      ["first", "second"].map((name) => ({
+        file: new File(["x"], name),
+        destination: "/folder",
+        relativePath: "Folder/" + name,
+      })),
+      10,
+      true,
+      { name: "Folder", folderUpload },
+    );
+    manager.snapshot().find((item) => item.name === "first")!.state = "completed";
+    return folderUpload;
+  }
+
+  it("clears saved history and local finished rows while keeping unfinished folders", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => Response.json({ cleared: 3 })));
+    const manager = managerForTest();
+    const folder = seedHistory(manager);
+    await manager.clearHistory();
+    expect(fetch).toHaveBeenCalledWith(
+      "/api/v1/transfers/history",
+      expect.objectContaining({
+        method: "DELETE",
+        body: JSON.stringify({ exclude_folders: [folder.id] }),
+      }),
+    );
+    expect(manager.snapshot().map((item) => item.name)).toEqual([
+      "queued",
+      "awaiting_file",
+      "first",
+      "second",
+    ]);
+    expect(managerForTest().snapshot().map((item) => item.name)).toEqual([
+      "queued",
+      "awaiting_file",
+      "first",
+      "second",
+    ]);
+  });
+
+  it("keeps browser history when the server cannot confirm clearing", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => Response.json(
+        { detail: "History could not be saved" },
+        { status: 503 },
+      )),
+    );
+    const manager = managerForTest();
+    seedHistory(manager);
+    const keys = manager.snapshot().map((item) => item.key);
+    await expect(manager.clearHistory()).rejects.toThrow(
+      "History could not be saved",
+    );
+    expect(manager.snapshot().map((item) => item.key)).toEqual(keys);
+  });
+
+  it("ignores terminal rows from a job poll started before clearing", async () => {
+    let resolvePoll!: (response: Response) => void;
+    const pending = new Promise<Response>((resolve) => {
+      resolvePoll = resolve;
+    });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string) =>
+        url === "/api/v1/jobs" ? pending : Response.json({ cleared: 1 }),
+      ),
+    );
+    const manager = managerForTest();
+    const published = vi.fn();
+    manager.subscribe(published);
+    try {
+      manager.setEnabled(true);
+      await manager.clearHistory();
+      published.mockClear();
+      resolvePoll(Response.json({
+        jobs: [{
+          id: "stale-finished",
+          name: "Old file",
+          kind: "upload",
+          status: "completed",
+          phase: "done",
+          current: 1,
+          total: 1,
+        }],
+      }));
+      await vi.waitFor(() => expect(fetch).toHaveBeenCalledTimes(2));
+      await vi.waitFor(() => expect(published).toHaveBeenCalled());
+      expect(manager.snapshot()).toEqual([]);
+    } finally {
+      manager.setEnabled(false);
+    }
+  });
+
+  it("settles local progress when another browser clears the completed job", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => Response.json({
+      jobs: [{
+        id: "cleared-elsewhere",
+        name: "Uploading",
+        kind: "upload",
+        status: "completed",
+        phase: "done",
+        current: 1,
+        total: 1,
+        history_cleared: true,
+      }],
+    })));
+    const manager = managerForTest();
+    manager.addEntries(
+      [{ file: new File(["x"], "Uploading"), destination: "/" }], 10, true,
+    );
+    Object.assign(manager.snapshot()[0], {
+      jobId: "cleared-elsewhere",
+      state: "uploading",
+      file: undefined,
+    });
+    const changed = vi.fn();
+    window.addEventListener("tgdrive:files-changed", changed);
+    try {
+      manager.setEnabled(true);
+      await vi.waitFor(() => expect(changed).toHaveBeenCalledOnce());
+      expect(manager.snapshot()).toEqual([]);
+    } finally {
+      manager.setEnabled(false);
+    }
+  });
+});
 describe("deletion progress", () => {
   const deletion = (status: string, id = "deletion"): Job => ({
     id,

@@ -3,6 +3,7 @@ from __future__ import annotations
 import copy
 import json
 import time
+from types import SimpleNamespace
 
 import pytest
 from fastapi.testclient import TestClient
@@ -296,6 +297,19 @@ class HistoryMongo:
     def delete_one(self, query):
         self.rows.pop(query["_id"], None)
 
+    def delete_many(self, query):
+        removed = [
+            identity
+            for identity, row in self.rows.items()
+            if row.get("archived") is True
+            and row["status"] in query["status"]["$in"]
+            and row["summary"].get("folder_upload", {}).get("id")
+            not in query["summary.folder_upload.id"]["$nin"]
+        ]
+        for identity in removed:
+            del self.rows[identity]
+        return SimpleNamespace(deleted_count=len(removed))
+
 
 @pytest.fixture(params=["memory", "sqlite", "mongo"])
 def task_registry(request, tmp_path):
@@ -317,6 +331,95 @@ def folder_metadata(identity="folder-session-0001", name="Holiday photos", creat
         "root_path": "/prepared-folder",
         "created_at": created,
     }
+
+
+async def test_clear_history_preserves_active_folders_and_recovery(task_registry):
+    registry = task_registry
+    active_folder = folder_metadata()
+    browser_folder = folder_metadata("browser-folder-0001")
+    for status in (
+        TransferStatus.COMPLETED, TransferStatus.ERROR, TransferStatus.CANCELLED
+    ):
+        add(registry, "archived-" + status, status, kind="legacy")
+    add(registry, "active-child", TransferStatus.COMPLETED, folder_upload=active_folder)
+    add(registry, "browser-child", TransferStatus.COMPLETED, folder_upload=browser_folder)
+    running = add(
+        registry, "running", TransferStatus.RUNNING, folder_upload=active_folder
+    )
+    registry.prune(now=time.time() + 2)
+    for status in (TransferStatus.COMPLETED, TransferStatus.CANCELLED):
+        add(registry, "live-" + status, status)
+    failed = add(registry, "retryable", TransferStatus.ERROR)
+    queued = add(registry, "queued", TransferStatus.QUEUED)
+    deletion = add(registry, "deletion", TransferStatus.COMPLETED, kind="delete")
+
+    assert registry.clear_history(exclude_folders=[browser_folder["id"]]) == 6
+    assert registry.clear_history(exclude_folders=[browser_folder["id"]]) == 0
+    names = {row["name"] for row in (await registry.history())["jobs"]}
+    assert names == {"active-child", "browser-child", "running", "queued"}
+    assert registry.get(failed.id).context["source_url"].endswith("token=secret")
+    assert registry.get(failed.id).history_hidden
+    assert not registry.get(running.id).history_hidden
+    assert not registry.get(queued.id).history_hidden
+    assert not registry.get(deletion.id).history_hidden
+    assert (await registry.task_history(status="finished"))["total_tasks"] == 1
+
+    registry.retry(failed.id)
+    assert not registry.get(failed.id).history_hidden
+    assert failed.id in {row["id"] for row in (await registry.history())["jobs"]}
+    registry.prune(now=time.time() + 2)
+    assert not any(
+        row["name"].startswith(("archived-", "live-"))
+        for row in (await registry.history())["jobs"]
+    )
+
+
+async def test_cleared_history_stays_cleared_after_restart_and_pruning(tmp_path):
+    path = tmp_path / "clear-history.sqlite3"
+    registry = TransferRegistry(database_path=path, ttl_seconds=1)
+    completed = add(registry, "completed", TransferStatus.COMPLETED)
+    failed = add(registry, "failed", TransferStatus.ERROR)
+    assert registry.clear_history() == 2
+    registry.close()
+    reopened = TransferRegistry(database_path=path, ttl_seconds=1)
+    try:
+        assert reopened.get(failed.id).history_hidden
+        assert (await reopened.history())["jobs"] == []
+        reopened.prune(now=time.time() + 2)
+        assert (await reopened.task_history())["total_tasks"] == 0
+        with pytest.raises(TransferNotFound):
+            reopened.get(completed.id)
+    finally:
+        reopened.close()
+
+
+def test_clear_history_api_requires_login_and_keeps_live_jobs(tmp_path):
+    settings = make_settings(tmp_path)
+    store = DriveStore(tmp_path / "clear-api.sqlite3")
+    runtime = FakeRuntime(store)
+    finished = add(runtime.transfers.registry, "finished", TransferStatus.COMPLETED)
+    queued = add(runtime.transfers.registry, "queued", TransferStatus.QUEUED)
+    try:
+        with TestClient(
+            create_app(settings, runtime=runtime), base_url="https://testserver"
+        ) as client:
+            route = "/api/v1/transfers/history"
+            assert client.request("DELETE", route, json={}).status_code == 401
+            login(client)
+            response = client.request("DELETE", route, json={"exclude_folders": []})
+            assert response.status_code == 200
+            assert response.json() == {"cleared": 1}
+            assert response.headers["cache-control"] == "no-store"
+            jobs = {row["id"]: row for row in client.get("/api/v1/jobs").json()["jobs"]}
+            assert jobs[finished.id]["history_cleared"] is True
+            assert jobs[queued.id]["history_cleared"] is False
+            assert client.get(route).json()["jobs"][0]["id"] == queued.id
+            # Existing receipt/job polling still works after its display row is cleared.
+            assert client.get("/api/v1/jobs/" + finished.id).status_code == 200
+            assert client.request("DELETE", route, json={}).json() == {"cleared": 0}
+    finally:
+        runtime.transfers.registry.close()
+        store.close()
 
 
 async def test_numbered_pages_count_folders_once_and_keep_every_member(task_registry):

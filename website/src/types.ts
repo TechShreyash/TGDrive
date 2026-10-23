@@ -31,6 +31,7 @@ export interface FolderUploadMetadata {
   created_at: number;
 }
 export interface Job {
+  history_cleared?: boolean;
   folder_upload?: FolderUploadMetadata;
   queue?: { position: number; estimated_wait_seconds: number | null } | null;
   telegram_parts?: { total: number; stored: number };

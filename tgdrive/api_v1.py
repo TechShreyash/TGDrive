@@ -44,6 +44,10 @@ class TransferLocationRequest(BaseModel):
     completed: bool = False
 
 
+class ClearTransferHistoryRequest(BaseModel):
+    exclude_folders: list[str] = Field(default_factory=list, max_length=2000)
+
+
 class UploadCreate(BaseModel):
     name: str = Field(min_length=1, max_length=1024)
     parent_id: str = Field(default="/", max_length=4096)
@@ -418,6 +422,7 @@ def register_routes(
                 else None
             ),
             "destination": record.context.get("destination", "/"),
+            "history_cleared": record.history_hidden,
         }
 
     @app.get("/api/v1/jobs", dependencies=admin)
@@ -468,6 +473,16 @@ def register_routes(
                 row["queue"] = estimate(row["id"])
         await asyncio.to_thread(enrich_locations, get_store(request), result["jobs"])
         return result
+
+    @app.delete("/api/v1/transfers/history", dependencies=admin)
+    async def clear_transfer_history(
+        payload: ClearTransferHistoryRequest, request: Request, response: Response
+    ) -> dict[str, Any]:
+        response.headers["Cache-Control"] = "no-store"
+        cleared = get_manager(request).registry.clear_history(
+            exclude_folders=payload.exclude_folders
+        )
+        return {"cleared": cleared}
 
     @app.post("/api/v1/transfers/history/tasks", dependencies=admin)
     async def transfer_task_history(

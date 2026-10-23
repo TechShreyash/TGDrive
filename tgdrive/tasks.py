@@ -157,6 +157,10 @@ class TransferRecord:
     def terminal(self) -> bool:
         return self.status in _TERMINAL
 
+    @property
+    def history_hidden(self) -> bool:
+        return self.terminal and bool(self.context.get("history_cleared"))
+
     def as_dict(self) -> dict[str, Any]:
         now = time.time()
         elapsed = (
@@ -358,6 +362,7 @@ class TransferRegistry:
             record._progress_samples.clear()
         else:
             record.finished_at = None
+            record.context.pop("history_cleared", None)
         self._last_progress_commit[record.id] = time.monotonic()
         if self._db is None and self._mongo is None:
             self._log_record(record)
@@ -575,7 +580,9 @@ class TransferRegistry:
         record = self._records[transfer_id]
         summary = (
             self.history_snapshot(record, retained=False)
-            if record.terminal and record.context.get("kind") != "delete"
+            if record.terminal
+            and not record.history_hidden
+            and record.context.get("kind") != "delete"
             else None
         )
         if self._mongo is not None:
@@ -757,7 +764,7 @@ class TransferRegistry:
         live = [
             row
             for record in self.list()
-            if self._history_matches(
+            if not record.history_hidden and self._history_matches(
                 row := self.history_snapshot(record), selected, before, query
             )
         ]
@@ -807,7 +814,9 @@ class TransferRegistry:
                     },
                     {
                         "_id": {
-                            "$in": [key[4:] for key in selected if key.startswith("job:")]
+                            "$in": [
+                                key[4:] for key in selected if key.startswith("job:")
+                            ]
                         }
                     },
                 ]
@@ -828,7 +837,7 @@ class TransferRegistry:
                     ).fetchall()
                 if not rows:
                     return
-                for identity, data in rows:
+                for _identity, data in rows:
                     row = json.loads(data)
                     if selected is None or self._history_task_id(row) in selected:
                         yield row
@@ -861,10 +870,7 @@ class TransferRegistry:
         excluded = {"folder:" + identity for identity in exclude_folders}
 
         def decorate(row):
-            if (
-                not isinstance(row.get("folder_upload"), dict)
-                and row["id"] in hints
-            ):
+            if not isinstance(row.get("folder_upload"), dict) and row["id"] in hints:
                 return row | {"folder_upload": hints[row["id"]]}
             return row
 
@@ -968,7 +974,8 @@ class TransferRegistry:
         exclude_folders=(),
     ):
         if (
-            status not in {
+            status
+            not in {
                 "all",
                 "finished",
                 "queued",
@@ -988,7 +995,11 @@ class TransferRegistry:
             raise ValueError("Invalid transfer task page")
         # Progress and recovery contexts belong to the event loop. The worker
         # sees copied public snapshots and streams archived summaries in batches.
-        live = [self.history_snapshot(record) for record in self.list()]
+        live = [
+            self.history_snapshot(record)
+            for record in self.list()
+            if not record.history_hidden
+        ]
         return await asyncio.to_thread(
             self._numbered_history,
             live,
@@ -1000,6 +1011,64 @@ class TransferRegistry:
             folders=copy.deepcopy(folders),
             exclude_folders=tuple(exclude_folders),
         )
+
+    def clear_history(self, *, exclude_folders=()) -> int:
+        """Forget finished display history without discarding recovery contexts."""
+        active_folders = set(exclude_folders)
+        for record in self._records.values():
+            folder = record.context.get("folder_upload")
+            if not record.terminal and isinstance(folder, dict):
+                active_folders.add(folder["id"])
+
+        if self._mongo is not None:
+            query: dict[str, Any] = {
+                "archived": True,
+                "status": {"$in": [status.value for status in _TERMINAL]},
+                "summary.folder_upload.id": {"$nin": sorted(active_folders)},
+            }
+            if self._mongo_backend is not None:
+                result = self._mongo_backend.write(self._mongo, "delete_many", query)
+            else:
+                result = self._mongo.delete_many(query)
+            cleared = result.deleted_count
+        elif self._db is not None:
+            parameters = sorted(active_folders)
+            clause = ""
+            if parameters:
+                clause = (
+                    " AND COALESCE(json_extract(data, '$.folder_upload.id'), '') "
+                    "NOT IN (" + ",".join("?" for _ in parameters) + ")"
+                )
+            with self._db_lock, self._db:
+                cleared = self._db.execute(
+                    "DELETE FROM transfer_history "
+                    "WHERE status IN ('completed','error','cancelled')" + clause,
+                    parameters,
+                ).rowcount
+        else:
+            removed = [
+                identity
+                for identity, row in self._history.items()
+                if row.get("folder_upload", {}).get("id") not in active_folders
+            ]
+            for identity in removed:
+                del self._history[identity]
+            cleared = len(removed)
+
+        for record in self._records.values():
+            folder = record.context.get("folder_upload", {})
+            if (
+                record.terminal
+                and not record.history_hidden
+                and record.context.get("kind") != "delete"
+                and folder.get("id") not in active_folders
+            ):
+                # Retained errors may still own staged bytes, send identities or
+                # backup barriers. Hide their history, keeping recovery intact.
+                record.context["history_cleared"] = True
+                self.persist(record)
+                cleared += 1
+        return cleared
 
     def close(self) -> None:
         if self._tasks:

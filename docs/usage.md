@@ -221,10 +221,18 @@ Double-click a completed file or choose **Show in folder** to highlight it;
 folder batches have **Show folder**. Moves/renames are followed. Trashed or
 deleted items become unavailable; unfinished/failed rows do not navigate.
 
+Choose **Clear history** beside the finished filters, then confirm to remove
+successful, failed and cancelled entries across all pages, regardless of the
+current filter or search. This also removes entries for deleted files and cannot
+be undone. Stored files, queued/running uploads and transfers waiting for an
+original file are kept. Folders with unfinished uploads keep their member rows;
+clear again after they finish. Saved server history is cleared for all devices;
+browser-only history is cleared in the browser you use.
+
 On phones, the bottom upload status opens Transfers. The desktop floating panel
 shows this browser's work; Transfers also shows other devices' server jobs.
 Clearing the panel does not erase saved history. Completed/cancelled records
-survive restart; previously expired records cannot be recreated.
+survive restart until manually cleared; previously expired records cannot be recreated.
 Start uploads in a destination in **My Files** using **New**.
 
 <details>

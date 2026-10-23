@@ -1067,6 +1067,19 @@ The Transfers UI uses `POST /api/v1/transfers/history/tasks`:
 {"status":"finished","page":1,"limit":20,"q":""}
 ```
 
+Owner-only `DELETE /api/v1/transfers/history` with JSON
+`{"exclude_folders":[]}` clears completed/error/cancelled history across every
+page and search. It returns `{"cleared":N}` (individual server records, not
+folder task count) and `Cache-Control: no-store`. `exclude_folders` accepts up
+to 2,000 folder selection IDs for browser work still waiting to reach the server.
+Queued/running jobs and their folder members are always kept. Archived summaries
+are deleted; terminal live jobs are hidden without removing recovery contexts.
+Deletion jobs and stored files are unaffected. The action is safe to repeat;
+already cleared records are not counted again. Retrying/resuming a hidden job
+makes it visible again. Live job polling includes `history_cleared:true` so
+clients can settle progress and dismiss finished rows. Existing backups may
+still contain older history.
+
 The response includes `jobs`, `page`, `page_size`, `total_tasks`, `total_pages`,
 `has_more`, `offset` and `next_offset`. `jobs` contains every member of each
 selected task, so its row count can exceed `limit`. Only explicit folder uploads
@@ -1113,7 +1126,8 @@ The response requires owner authentication and uses `Cache-Control: no-store`.
 Resolved jobs evicted from the live registry become compact summaries. MongoDB
 keeps these in archived `jobs` documents, without the private recovery context;
 startup excludes them from live registry loading. These summaries are included
-in complete encrypted database backups. They have no automatic history TTL.
+in complete encrypted database backups. They have no automatic history TTL;
+**Clear history** removes them manually.
 Existing records are visible; history already deleted before this feature
 cannot be reconstructed.
 

@@ -358,6 +358,12 @@ export const api = {
       { signal },
     );
   },
+  clearTransferHistory: (excludeFolders: string[] = []) =>
+    request<{ cleared: number }>(
+      "/api/v1/transfers/history",
+      { exclude_folders: excludeFolders },
+      { method: "DELETE" },
+    ),
   transferTaskHistory: (
     status: string,
     page: number,

@@ -309,6 +309,8 @@ barriers still apply; different selected items complete independently.
 ### Finished history
 
 Resolved jobs stay in a paged history, separate from temporary browser popups.
+The Transfers page's **Clear history** removes finished display history;
+see [the workflow](usage.md#transfer-history).
 
 <details>
 <summary>Compaction, browser ownership and destination lookup</summary>
@@ -334,6 +336,17 @@ summaries and the selected folders' members rather than every archived job.
 Numbered reads are O(history size); the legacy indexed cursor API remains
 available. Startup does not load the full archive. Dismissing a deletion popup does
 not clear history; deletion notices stay separate.
+
+Manual history clearing deletes archived summaries and persists a hidden marker
+on terminal live jobs, preserving their recovery contexts, staged-byte ownership
+and backup barriers. Hidden jobs stay out of history and are not archived when
+pruned. Job polling marks them `history_cleared` so other browsers can reconcile
+completion before removing their rows. A job that resumes or is retried becomes
+visible again.
+Queued/running jobs and members of unfinished folders are excluded. The browser
+also excludes folders still receiving device files and removes its finished
+receipts only after the server confirms success. Failed requests leave browser
+rows available for retry; a partially completed server clear is safe to repeat.
 
 Browser `initiatedHere` markers scope floating panels; global history includes
 other browsers. URL imports retain server identity/origin across reloads without

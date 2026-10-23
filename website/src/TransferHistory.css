@@ -1,6 +1,22 @@
 .transfer-history-filters {
   margin: 4px 0 16px;
 }
+.transfer-history-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 8px 16px;
+  margin: 4px 0 16px;
+}
+.transfer-history-toolbar .transfer-history-filters {
+  min-width: 0;
+  margin: 0;
+}
+.transfer-history-clear {
+  min-height: 44px;
+  flex-shrink: 0;
+}
 .transfer-history .transfer-history-filters {
   display: flex;
   flex-wrap: nowrap;

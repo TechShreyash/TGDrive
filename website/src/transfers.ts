@@ -367,6 +367,7 @@ export class TransferManager {
   private deviceRetryAttempts = new Map<string, number>();
   private admissionRetryAt = 0;
   private dismissed = new Set<string>();
+  private historyRevision = 0;
   constructor(
     private readonly sendChunk: UploadChunkTransport = sendUploadChunk,
   ) {
@@ -896,6 +897,28 @@ export class TransferManager {
     this.items = this.items.filter((item) =>
       unfinished.has(transferBatchId(item)),
     );
+    this.publish();
+  }
+  async clearHistory() {
+    const unfinished = new Set(
+      this.items
+        .filter((item) => !["completed", "cancelled", "error"].includes(item.state))
+        .map(transferBatchId),
+    );
+    const removed = this.items.filter(
+      (item) => item.kind !== "delete" && !unfinished.has(transferBatchId(item)),
+    );
+    const keys = new Set(removed.map((item) => item.key));
+    const excludeFolders = [
+      ...new Set(
+        this.items
+          .filter((item) => unfinished.has(transferBatchId(item)))
+          .flatMap((item) => (item.folderUpload ? [item.folderUpload.id] : [])),
+      ),
+    ];
+    await api.clearTransferHistory(excludeFolders);
+    this.historyRevision++;
+    this.items = this.items.filter((item) => !keys.has(item.key));
     this.publish();
   }
   private async cancelItems(items: Transfer[]) {
@@ -1443,6 +1466,7 @@ export class TransferManager {
     clearTimeout(this.timer);
     this.polling = true;
     const deletionVersion = this.deletionVersion;
+    const historyRevision = this.historyRevision;
     try {
       const payload = await api.jobs();
       let filesChanged = false;
@@ -1479,12 +1503,19 @@ export class TransferManager {
         )
       )
         filesChanged = true;
+      const clearedKeys = new Set<string>();
       for (const job of payload.jobs) {
         // Deletions are a single file-operation notice, never upload transfers.
         if (job.kind === "delete" || this.dismissed.has(job.id)) continue;
+        if (
+          historyRevision !== this.historyRevision &&
+          ["completed", "cancelled", "error"].includes(job.status)
+        )
+          continue;
         let item = this.items.find(
           (item) => item.jobId === job.id || item.uploadId === job.id,
         );
+        if (job.history_cleared && !item) continue;
         if (!item) {
           item = {
             key: crypto.randomUUID(),
@@ -1514,6 +1545,7 @@ export class TransferManager {
         const createdAt = item.createdAt;
         const startedAt = item.startedAt;
         Object.assign(item, fromJob(job, item.kind));
+        if (job.history_cleared) clearedKeys.add(item.key);
         if (startedAt)
           item.startedAt = Math.min(startedAt, item.startedAt || startedAt);
         if (createdAt)
@@ -1527,6 +1559,12 @@ export class TransferManager {
         )
           filesChanged = true;
       }
+      const unfinished = new Set(
+        this.items.filter((item) => !terminal.has(item.state)).map(transferBatchId),
+      );
+      this.items = this.items.filter(
+        (item) => !clearedKeys.has(item.key) || unfinished.has(transferBatchId(item)),
+      );
       this.publish();
       if (filesChanged)
         window.dispatchEvent(new Event("tgdrive:files-changed"));
