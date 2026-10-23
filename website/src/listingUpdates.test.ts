@@ -128,6 +128,20 @@ const folder: DriveItem = {
 };
 
 describe("incremental directory updates", () => {
+  it("updates a directory's read-only state even when its rows are unchanged", () => {
+    const previous: Directory = { contents: {}, read_only: false };
+    const restricted = reconcileDirectory(previous, {
+      contents: {},
+      read_only: true,
+    });
+    expect(restricted.read_only).toBe(true);
+    expect(restricted).not.toBe(previous);
+    expect(restricted.contents).toBe(previous.contents);
+    expect(
+      reconcileDirectory(restricted, { contents: {}, read_only: false })
+        .read_only,
+    ).toBe(false);
+  });
   it("reuses an unchanged listing and rows across fresh JSON responses", () => {
     const previous: Directory = {
       name: "Folder",

@@ -1,84 +1,60 @@
 # Status and roadmap
 
-[Docs home](README.md) · [What has been tested](development.md#ci-and-release-evidence)
+[Docs home](README.md) · [Validation evidence](development.md#ci-and-release-evidence)
 
-**Implemented** means the feature exists. It does not mean every device, file
-or failure scenario has been tested.
+TGDrive is a single-owner, self-hosted drive. This page separates available
+features from remaining validation and known limits.
 
 ## What works now
 
-| Feature | Current behavior |
+| Available | Learn more |
 | --- | --- |
-| Web file manager | Shared dark component theme, folders, selection, move, rename and scoped search |
-| File and folder uploads | Preserved hierarchy, combined batches, retry/resume and bounded concurrency |
-| Transfer history | Running/Queued/Finished sections, result filters, scoped name search and cursor-paged persistent history |
-| Files above 2 GB | Automatic ordered parts; one item for download, preview and seeking |
-| Previews | Full-window images/text/video; PDF ranges up to 256 MiB with a 64 MiB reading budget; original download for unsupported books/comics |
-| Owner monitoring | Current container CPU/RAM, network direction, 31-day measured history and lifetime traffic totals; compact positional cache coverage |
-| Multiple bots | Balanced work, account limits and persisted Telegram waits |
-| Connections page | Add/manage bots, Premium login, refresh names and verify credentials/channel access |
-| Sharing | Scoped links, expiry, rotation and revocation |
-| Trash and deletion | Reversible Trash; permanent database removal with retry, retaining Telegram originals |
-| MongoDB persistence | Reopen the same drive after reinstalling the app |
-| Telegram database backups | Complete encrypted copies, separate recovery key and empty-database restore |
-| Guided installation | Docker setup wizard; source installation is also supported |
+| File/folder uploads, multipart storage, Trash and history | [User guide](usage.md) |
+| Previews, readers and scoped sharing | [Readers](reading.md) · [Sharing](usage.md#share-and-revoke) |
+| Monitoring and multiple Telegram accounts | [Performance](performance.md) · [Configuration](configuration.md) |
+| MongoDB persistence, encrypted database backups and optional channel protection | [Recovery](operations.md) · [Channel protection](backup-recovery.md) |
 
-The default logical-file limit is 16 GiB, subject to configuration and disk.
-Large-file support does not require Premium.
+Available features still have [configured limits](configuration.md) and are not
+certified for every device or network.
 
 ## Before public release
 
-The MongoDB version is available for **public beta testing on `dev`**. The
-original automated baseline passed on 2026-10-18. Later streaming, cache,
-transfer and interface checks are recorded in the development guide; live/platform
-limits remain below.
+Use the [release procedure](release.md) against the exact commit and extracted
+archive. Publication is a separate maintainer action. Remaining live validation:
 
-| Remaining check | Status |
-| --- | --- |
-| Latest local regression on 2026-10-20 | Passed: 1,018 Python, 213 frontend and 100 Chromium tests; 84.07% Python coverage |
-| Live above-2-GB integrity on MongoDB | Verified: 4,562,805,302 bytes across three Telegram documents, full SHA-256 and boundary ranges. Broad physical-device playback remains unverified. |
-| Current deployment artifacts | Passed: AMD64 container build/runtime smoke; source ZIP integrity/manifest/private-state exclusion checks. Earlier clean dependency/install tests are recorded in the development guide. |
-| Actual Premium upload/download acceleration | Unverified; no Premium test account. New documents keep the 2000 MiB cap for all accounts. |
-| Deletion of a disposable message older than 48 hours | Unverified; no suitable message |
-| Prolonged multi-bot outages and crashes during a real Telegram send | Further live coverage needed |
-| Full deployment move, physical ARM and Render hosting | Not certified |
-
-Earlier 2.16 GB upload/download/playback evidence is useful but predates MongoDB.
-The [validation record](development.md#ci-and-release-evidence) separates those
-results from current tests. GitHub workflow results are tracked separately from
-local validation. A public beta branch does not imply a hosted deployment.
+- [ ] Fresh laptop and hosted installs, persistent volumes, stop/start and recovery.
+- [ ] Coolify DNS/TLS, trusted forwarding and isolation of the direct app port.
+- [ ] Prolonged multi-account outages and interrupted Telegram sends.
+- [ ] Actual Premium speed, broader devices/codecs, ARM and hosting platforms.
 
 ## Known correctness and recovery gaps
 
-- **Credential replacement:** revoked accounts are excluded while healthy accounts
-  continue eligible work. Same-account token/session repair still needs a restart;
-  verified channel-permission repair can re-enable a live client through Refresh.
-- **Bot-mode imports:** do not use the web queue's full durable job model.
-- **History cleanup:** operation/receipt history needs reviewed compaction that
-  preserves unresolved effects and retry identities.
-- **Large folders:** current listing slices an in-memory result; database cursor
-  pagination is a follow-up.
-- **Older APIs:** request-start mappings can be process-local and error formats vary.
-- **Changing storage channels:** needs an explicit migration design.
+| Area | Current limit |
+| --- | --- |
+| Authentication | Password-only owner login; no MFA/passkeys, idle session timeout or fresh reauthentication for sensitive settings/key exports. Login throttling is process-local. |
+| Credentials | Same-account token/session replacement needs restart; Refresh can apply verified channel-permission repair to a live client. |
+| Bot imports | Do not use the web queue's full durable job model. |
+| History | Compaction must preserve unresolved effects and retry identities. |
+| Large folders | Listings sort/materialize before slicing; database cursor pagination remains work. |
+| Direct API clients | Some request mappings are process-local and error formats vary; use documented v2 flows. |
+| Storage channel changes | Require verified channel recovery; editing an ID does not move files. |
 
-For current recovery actions, use [Troubleshooting](operations.md#troubleshooting).
+See [Troubleshooting](operations.md#troubleshooting) for current recovery actions.
+
+<details>
+<summary>Next improvements and scope</summary>
 
 ## Next improvements
 
-| Area | Useful follow-up |
-| --- | --- |
-| Video playback | Broaden physical-device and codec coverage; measure first-frame delay and seek audio/video synchronization |
-| Folder uploads | Investigate preserving empty directories the picker cannot see |
-| Recovery | Make emergency restore easier through a guided interface |
-| Book and manga readers | CBZ can read individual ZIP image entries; EPUB also needs isolated XHTML/CSS and spine/navigation support. CBR needs a reviewed RAR decoder, including solid-archive resource limits. These readers are not implemented. |
-| Backup safety | Consider independent file export/redundancy and optional payload encryption |
-| File details | Consider real modification timestamps |
+Prioritize integrity, recovery and understandable status:
 
-Prioritize integrity, recovery, useful speed and understandable status.
-A new feature needs clear limits and retry/cancel/restart behavior, as well as
-appropriate tests and updated docs.
+- Broader device/codec/reader coverage; first-frame and seek measurements.
+- Empty-directory uploads and clearer emergency restore guidance.
+- Broader real-device coverage for shared-owner sessions and simultaneous changes.
+- Consider independent export, payload encryption and real modification timestamps.
 
 ## Outside the current scope
 
 Multi-user accounts, teams, tenant permissions and clustered workers.
-The current product is a single-owner, self-hosted drive.
+
+</details>

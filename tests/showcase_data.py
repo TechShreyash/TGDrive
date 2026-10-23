@@ -14,11 +14,13 @@ import math
 import time
 import zipfile
 from collections import deque
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 from fastapi.responses import JSONResponse
 
 from tgdrive.media_reader import BLOCK
+from tgdrive.share_links import token_factory
 from tgdrive.tasks import TransferStatus
 
 
@@ -40,7 +42,14 @@ async def seed(runtime, settings):
         item = runtime.store.add_file(destination, name, index, size)
         file_path = destination + "/" + item["id"]
         if index in (400, 401):
-            runtime.store.create_share(file_path)
+            runtime.store.create_share(
+                file_path,
+                label="Project review" if index == 400 else "Design handoff",
+                expires_at=(
+                    datetime.now(UTC) + timedelta(days=7 if index == 400 else 30)
+                ).isoformat(),
+                token_factory=token_factory(settings),
+            )
         cache.register_file(
             channel_id=settings.storage_channel, message_id=index, size=size, name=name
         )

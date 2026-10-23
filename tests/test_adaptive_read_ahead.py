@@ -200,10 +200,13 @@ async def test_actual_reader_ramps_then_shares_scratch_and_reduces_slow_pipeline
         assert await anext(fast) == payload
         # The advanced reader trims to its fair share while another response
         # owns a head, even though its rate still supports the maximum window.
+        # In-flight reads keep their reservations until cancellation cleanup.
+        await wait_until(lambda: cache.scratch.used <= 17)
         assert cache.scratch.used <= 17
         await seek.aclose()
         clock.advance(1)
         assert await anext(fast) == payload
+        await wait_until(lambda: cache.scratch.used <= 3)
         assert cache.scratch.used <= 3
     finally:
         await seek.aclose()

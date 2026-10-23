@@ -1,4 +1,4 @@
-import BrandMark from "./BrandMark";
+import BrandLogo from "./BrandLogo";
 import GitHubMark from "./GitHubMark";
 import ThemeControl from "./ThemeControl";
 import {
@@ -52,13 +52,14 @@ import {
   reconcileDirectory,
   reconcileDriveItems,
 } from "./listingUpdates";
-import { Spinner, ToastNotice as Toast } from "./components";
+import { Modal, Spinner, ToastNotice as Toast } from "./components";
 import { Login, SharesView, StorageView, UploadSettings } from "./Screens";
 import SettingsManagement from "./SettingsManagement";
 import PerformanceSettings from "./PerformanceSettings";
 import Preloads from "./Preloads";
 import PerformancePanel from "./PerformancePanel";
 import FileBrowser from "./FileBrowser";
+import { COMPACT_LAYOUT_QUERY } from "./responsive";
 import type { FileSort } from "./SortMenu";
 import type { SortOrder } from "./fileSorting";
 import ActionDialog, { type ActionDialogState } from "./ActionDialog";
@@ -166,8 +167,11 @@ export default function App() {
     max_file_size: number;
     demo_data?: boolean;
     demo_mode?: boolean;
+    demo_read_only?: boolean;
+    demo_admin?: boolean;
     recovery_only?: boolean;
   }>({ max_file_size: 0 });
+  const demoReadOnly = Boolean(config.demo_read_only ?? config.demo_mode);
   const [configLoad, setConfigLoad] = useState<"loading" | "ready" | "error">(
     "loading",
   );
@@ -194,6 +198,7 @@ export default function App() {
   const [loadError, setLoadError] = useState("");
   const [refresh, setRefresh] = useState(0);
   const [dialog, setDialog] = useState<ActionDialogState | null>(null);
+  const [demoFilesReadOnly, setDemoFilesReadOnly] = useState(false);
   const [query, setQuery] = useState("");
   const [scopedQuery, setScopedQuery] = useState("");
   const [searchOffset, setSearchOffset] = useState(searchHistoryOffset);
@@ -321,10 +326,10 @@ export default function App() {
   }, [mobileNav]);
 
   const [mobile, setMobile] = useState(
-    () => window.matchMedia("(max-width: 720px)").matches,
+    () => window.matchMedia(COMPACT_LAYOUT_QUERY).matches,
   );
   useEffect(() => {
-    const media = window.matchMedia("(max-width: 720px)");
+    const media = window.matchMedia(COMPACT_LAYOUT_QUERY);
     const update = () => {
       setMobile(media.matches);
       if (!media.matches) setMobileNav(false);
@@ -418,6 +423,18 @@ export default function App() {
     (message: string, error = false) => setToast({ message, error }),
     [],
   );
+  const endSession = useCallback(() => {
+    setConfig((value) => ({
+      ...value,
+      demo_read_only: Boolean(value.demo_mode),
+      demo_admin: false,
+    }));
+    setAuthenticated(false);
+    setDialog(null);
+    setFolderSelection(null);
+    setDemoFilesReadOnly(false);
+    void loadConfig();
+  }, [loadConfig]);
   const listingRefreshAction = useManualRefresh(notify);
   useEffect(() => {
     if (
@@ -570,7 +587,7 @@ export default function App() {
   }, [authenticated, isPublic, config.recovery_only]);
   useEffect(() => {
     const expired = () => {
-      setAuthenticated(false);
+      endSession();
       notify("Your session expired. Log in to continue.", true);
     };
     window.addEventListener("tgdrive:auth-required", expired);
@@ -579,7 +596,18 @@ export default function App() {
       window.removeEventListener("tgdrive:auth-required", expired);
       window.removeEventListener("tgdrive:files-changed", reload);
     };
-  }, [notify, reload]);
+  }, [endSession, notify, reload]);
+  useEffect(() => {
+    const refused = () => {
+      setDialog(null);
+      setFolderSelection(null);
+      setNewOpen(false);
+      setDemoFilesReadOnly(true);
+    };
+    window.addEventListener("tgdrive:demo-files-read-only", refused);
+    return () =>
+      window.removeEventListener("tgdrive:demo-files-read-only", refused);
+  }, []);
   useEffect(() => {
     if (ownSearchNavigation.current === currentPath) {
       ownSearchNavigation.current = null;
@@ -1309,8 +1337,10 @@ export default function App() {
   if (authenticated === null && !isPublic)
     return (
       <div className="startup" role="status">
-        <Spinner />
-        <span>Opening TGDrive…</span>
+        <BrandLogo size="large" />
+        <span className="startup-status">
+          <Spinner /> Opening TGDrive…
+        </span>
       </div>
     );
   if (authenticated === false && !isPublic)
@@ -1318,6 +1348,7 @@ export default function App() {
       <>
         <Login
           onSuccess={() => {
+            void loadConfig();
             setAuthenticated(true);
             reload();
             setToast(null);
@@ -1331,12 +1362,11 @@ export default function App() {
       <div className="channel-recovery-shell">
         <header className="channel-recovery-topbar">
           <a href="/" className="brand">
-            <BrandMark size={28} />
-            <strong>TGDrive</strong>
+            <BrandLogo />
           </a>
           <div>
             <ThemeControl />
-            <SidebarLogout onLoggedOut={() => setAuthenticated(false)} />
+            <SidebarLogout onLoggedOut={endSession} />
           </div>
         </header>
         <main id="main-content" className="channel-recovery-main">
@@ -1346,7 +1376,11 @@ export default function App() {
             recover it.
           </p>
           {configLoad === "ready" ? (
-            <ChannelBackup recoveryOnly demoMode={config.demo_mode} onNotice={notify} />
+            <ChannelBackup
+              recoveryOnly
+              demoMode={demoReadOnly}
+              onNotice={notify}
+            />
           ) : (
             configGate
           )}
@@ -1376,16 +1410,12 @@ export default function App() {
               navigate("/");
             }}
           >
-            <span className="brand-symbol">
-              <BrandMark size={30} />
-            </span>
-            <strong>TGDrive</strong>
+            <BrandLogo />
           </a>
           {mobile && (
             <div className="mobile-nav-heading">
               <span className="mobile-drawer-brand">
-                <BrandMark size={28} />
-                <strong>TGDrive</strong>
+                <BrandLogo />
               </span>
               <button
                 className="icon-button"
@@ -1541,7 +1571,7 @@ export default function App() {
               onLoggedOut={() => {
                 setMobileNav(false);
                 setNewOpen(false);
-                setAuthenticated(false);
+                endSession();
                 notify("Logged out. Server transfers continue.");
               }}
             />
@@ -1590,8 +1620,7 @@ export default function App() {
         <header className="topbar" hidden={!mobile && !isPublic}>
           {isPublic ? (
             <a href="/" className="brand">
-              <BrandMark size={28} />
-              <strong>TGDrive</strong>
+              <BrandLogo />
             </a>
           ) : (
             <>
@@ -1617,7 +1646,7 @@ export default function App() {
                   navigate("/");
                 }}
               >
-                <BrandMark size={24} /> TGDrive
+                <BrandLogo size="compact" />
               </a>
               {view === "files" && !isSearch && !dialog && (
                 <button
@@ -1787,7 +1816,6 @@ export default function App() {
                   },
                 )
               }
-              onShare={(item) => setDialog({ type: "share", item })}
             />
           ) : view === "preloads" ? (
             <Preloads
@@ -1801,18 +1829,18 @@ export default function App() {
             configLoad !== "ready" ? (
             configGate
           ) : view === "connections" ? (
-            <SettingsManagement demoMode={config.demo_mode} onNotice={notify} />
+            <SettingsManagement demoMode={demoReadOnly} onNotice={notify} />
           ) : view === "storage" ? (
             <StorageView
               config={config}
-              demoMode={config.demo_mode}
+              demoMode={demoReadOnly}
               onNotice={notify}
               onTransfers={() => navigate("/", "activity")}
               onTrash={() => navigate("/trash", "trash")}
             />
           ) : view === "settings" ? (
             <PerformanceSettings
-              demoMode={config.demo_mode}
+              demoMode={demoReadOnly}
               onNotice={notify}
               category={
                 location.settingsSection === "transfers"
@@ -1823,16 +1851,19 @@ export default function App() {
               }
               uploadPreferences={
                 <>
-                  <UploadSettings demoMode={config.demo_mode} onNotice={notify} />
-                  <BotModeSettings demoMode={config.demo_mode} onNotice={notify} />
+                  <UploadSettings
+                    demoMode={demoReadOnly}
+                    onNotice={notify}
+                  />
+                  <BotModeSettings
+                    demoMode={demoReadOnly}
+                    onNotice={notify}
+                  />
                 </>
               }
               onSaved={(value) => {
                 setTimezone(value.timezone);
-                void api
-                  .config()
-                  .then(setConfig)
-                  .catch(() => {});
+                void loadConfig();
                 notify("Performance settings saved.");
                 reload();
               }}
@@ -1982,6 +2013,39 @@ export default function App() {
           onDelete={(targets) => action("delete", targets)}
           onRestore={(targets) => action("restore", targets, true)}
         />
+      )}
+      {demoFilesReadOnly && (
+        <Modal
+          title="Demo Files is read-only"
+          initialFocus="#demo-files-dismiss"
+          onClose={() => setDemoFilesReadOnly(false)}
+        >
+          <p>
+            Demo Files and its contents are read-only for demo visitors. You can
+            open, preview and download them. Open My Files to upload files,
+            create folders and try changes outside Demo Files.
+          </p>
+          <div className="dialog-actions">
+            <button
+              id="demo-files-dismiss"
+              type="button"
+              className="secondary-button"
+              onClick={() => setDemoFilesReadOnly(false)}
+            >
+              Close
+            </button>
+            <button
+              type="button"
+              className="primary-button"
+              onClick={() => {
+                setDemoFilesReadOnly(false);
+                navigate("/");
+              }}
+            >
+              Open My Files
+            </button>
+          </div>
+        </Modal>
       )}
       {toast && <Toast toast={toast} close={() => setToast(null)} />}
     </div>

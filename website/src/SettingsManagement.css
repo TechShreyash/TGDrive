@@ -76,7 +76,12 @@
   border-radius: 10px;
   background: var(--surface-subtle);
 }
+.management-pending > div {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
 .management-pending > svg {
+  flex-shrink: 0;
   color: var(--warning);
   margin-top: 2px;
 }
@@ -114,6 +119,8 @@
 .management-pending code {
   display: block;
   margin-top: 12px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
   user-select: text;
 }
 .managed-client-list {
@@ -279,6 +286,10 @@
   padding-block: 8px;
   color: var(--muted);
 }
+.management-running li > span {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
 .connection-api-summary {
   display: flex;
   flex-wrap: wrap;
@@ -289,6 +300,11 @@
   color: var(--muted);
   font-size: 12px;
   margin-bottom: 7px;
+}
+.connection-api-summary > div {
+  min-width: 0;
+  max-width: 100%;
+  overflow-wrap: anywhere;
 }
 .connection-api-summary dd {
   display: flex;
@@ -382,6 +398,12 @@
   color: var(--muted);
 }
 @media (max-width: 620px) {
+  .management-pending summary,
+  .management-running summary,
+  .connection-advanced summary {
+    min-height: 44px;
+    max-width: 100%;
+  }
   .managed-client-columns {
     display: none;
   }

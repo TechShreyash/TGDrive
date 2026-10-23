@@ -327,13 +327,6 @@ form > select {
   width: max-content;
   flex-shrink: 0;
 }
-.brand-symbol {
-  color: var(--action);
-  display: grid;
-  place-items: center;
-  width: 32px;
-  height: 32px;
-}
 .sidebar > .brand {
   height: 58px;
   margin: 0 10px 8px;
@@ -492,7 +485,7 @@ form > select {
 .sidebar-bottom {
   flex-shrink: 0;
   margin-top: 16px;
-  padding: 12px 8px 0;
+  padding: 12px 0 0;
   border-top: 1px solid var(--line-subtle);
   color: var(--muted);
 }
@@ -516,18 +509,23 @@ form > select {
   margin-top: 8px;
 }
 .sidebar-support .sidebar-help {
-  flex: 1;
+  flex: 0 1 auto;
   width: auto;
   min-width: 0;
   margin: 0;
-  padding-inline: 4px;
-  gap: 8px;
+  padding-inline: 13px;
+  gap: 12px;
   font-size: 13px;
+  white-space: nowrap;
+}
+.sidebar-help > svg {
+  flex-shrink: 0;
 }
 .sidebar-project {
   display: grid;
   place-items: center;
   flex: 0 0 44px;
+  margin-inline-start: auto;
   height: 44px;
   border-radius: 8px;
   color: var(--muted);
@@ -544,7 +542,7 @@ form > select {
   width: 100%;
   min-height: 44px;
   margin-top: 8px;
-  padding: 0 8px;
+  padding: 0 13px;
   border-radius: 8px;
   color: var(--muted);
   text-align: start;
@@ -1341,10 +1339,16 @@ progress::-moz-progress-bar {
 .startup {
   min-height: 100dvh;
   display: flex;
+  flex-direction: column;
   align-items: center;
   justify-content: center;
   gap: 12px;
   color: var(--muted);
+}
+.startup-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
 }
 .toast {
   position: fixed;
@@ -1453,7 +1457,8 @@ progress::-moz-progress-bar {
     grid-template-columns: 1fr;
   }
 }
-@media (max-width: 720px) {
+@media (max-width: 720px),
+  (max-width: 1000px) and (max-height: 600px) and (pointer: coarse) {
   .app-shell {
     display: block;
     height: 100dvh;
@@ -2157,7 +2162,8 @@ progress::-moz-progress-bar {
 ) {
   color: var(--file-document);
 }
-@media (max-width: 720px) {
+@media (max-width: 720px),
+  (max-width: 1000px) and (max-height: 600px) and (pointer: coarse) {
   .preview-header {
     gap: 8px;
     min-height: 64px;
@@ -2520,7 +2526,8 @@ progress::-moz-progress-bar {
 .transfer-page .transfer-batch-metrics {
   font-size: 13px;
 }
-@media (max-width: 720px) {
+@media (max-width: 720px),
+  (max-width: 1000px) and (max-height: 600px) and (pointer: coarse) {
   .transfer-heading .icon-button {
     width: 40px;
     height: 40px;
@@ -2541,7 +2548,8 @@ progress::-moz-progress-bar {
   }
 }
 
-@media (max-width: 720px) {
+@media (max-width: 720px),
+  (max-width: 1000px) and (max-height: 600px) and (pointer: coarse) {
   .page-heading {
     flex-direction: column;
     align-items: stretch;
@@ -2595,7 +2603,8 @@ progress::-moz-progress-bar {
   background: var(--danger);
   color: var(--on-danger);
 }
-@media (max-width: 720px) {
+@media (max-width: 720px),
+  (max-width: 1000px) and (max-height: 600px) and (pointer: coarse) {
   .topbar {
     gap: 8px;
   }
@@ -3234,7 +3243,8 @@ textarea,
   margin: 8px 0 0;
   font-size: 12px;
 }
-@media (max-width: 720px) {
+@media (max-width: 720px),
+  (max-width: 1000px) and (max-height: 600px) and (pointer: coarse) {
   .icon-button,
   .actions-cell .icon-button,
   .transfer-item-actions .icon-button,
@@ -3266,7 +3276,8 @@ textarea,
   }
 }
 
-@media (max-width: 720px) {
+@media (max-width: 720px),
+  (max-width: 1000px) and (max-height: 600px) and (pointer: coarse) {
   /* Keep action clearance inside the scrolling content, without an outer gap. */
   .app-shell:has(#compact-new-button) .workspace {
     max-height: none;
@@ -3354,7 +3365,8 @@ textarea,
     grid-row: 5;
   }
 }
-@media (max-width: 720px) {
+@media (max-width: 720px),
+  (max-width: 1000px) and (max-height: 600px) and (pointer: coarse) {
   .transfer-center .transfer-batch-toggle {
     min-height: 44px;
   }
@@ -3396,8 +3408,12 @@ textarea,
   justify-content: center;
   cursor: pointer;
 }
-@media (max-width: 720px) {
+@media (max-width: 720px),
+  (max-width: 1000px) and (max-height: 600px) and (pointer: coarse) {
   .text-button,
+  .primary-button,
+  .secondary-button,
+  .danger-button,
   .file-sort-trigger,
   .file-sort-menu button,
   .theme-menu button,
@@ -3424,9 +3440,29 @@ textarea,
   .search-form input {
     font-size: 16px;
   }
-  .modal input:not([type="checkbox"]):not([type="radio"]),
-  .login-form input {
+  input:not([type="checkbox"]):not([type="radio"]):not([type="range"]):not(
+      [type="file"]
+    ),
+  .app-shell select,
+  .app-shell textarea,
+  .modal select,
+  .modal textarea {
     font-size: 16px;
+  }
+  .topbar {
+    padding-inline: max(8px, env(safe-area-inset-left))
+      max(8px, env(safe-area-inset-right));
+  }
+  .public-shell .topbar {
+    flex-wrap: wrap;
+  }
+  .public-shell .topbar > .brand {
+    flex: 1;
+    min-width: 0;
+  }
+  .public-label {
+    flex: 1 0 100%;
+    padding: 0 4px 8px;
   }
 }
 
@@ -3476,7 +3512,8 @@ textarea,
 .file-toolbar > .page-heading > .theme-control {
   order: 4;
 }
-@media (max-width: 720px) {
+@media (max-width: 720px),
+  (max-width: 1000px) and (max-height: 600px) and (pointer: coarse) {
   .page-heading > .theme-control {
     display: none;
   }
@@ -3520,53 +3557,34 @@ textarea,
 .preview-quality[hidden] {
   display: none;
 }
-.preview-toolbar-reveal {
+.preview-toolbar-toggle {
   position: absolute;
   z-index: 10;
-  top: 0;
-  left: 50%;
-  transform: translateX(-50%);
+  /* Keep one stable target clear of the browser's fullscreen exit control. */
+  top: max(8px, env(safe-area-inset-top));
+  right: max(12px, env(safe-area-inset-right));
   display: inline-flex;
   align-items: center;
-  gap: 6px;
-  min-height: 36px;
-  padding: 6px 12px;
-  border: 1px solid #373b43;
-  border-top: 0;
-  border-radius: 0 0 6px 6px;
+  justify-content: center;
+  width: 44px;
+  height: 44px;
+  padding: 0;
+  border: 1px solid #535963;
+  border-radius: 8px;
   background: #181b20;
   color: #f1f3f6;
-  font: inherit;
-  font-size: 12px;
   cursor: pointer;
 }
-.preview-toolbar-reveal:hover {
+.preview-toolbar-toggle:hover {
   background: #30343c;
 }
-.preview-toolbar-reveal:focus-visible {
-  outline-offset: -3px;
+.preview-toolbar-toggle:focus-visible {
+  outline: 2px solid #f1f3f6;
+  outline-offset: -4px;
 }
-@media (max-width: 720px) {
-  .preview-toolbar-reveal {
-    min-height: 44px;
-  }
-  .preview-fullscreen-surface:fullscreen .preview-header-book {
-    grid-template-columns: 44px minmax(0, 1fr) repeat(3, 44px);
-  }
-  .preview-fullscreen-surface:fullscreen .preview-toolbar-collapse {
-    grid-column: 3;
-    grid-row: 1;
-  }
-  .preview-fullscreen-surface:fullscreen
-    .preview-header-book
-    .preview-fullscreen {
-    grid-column: 4;
-  }
-  .preview-fullscreen-surface:fullscreen
-    .preview-header-book
-    .preview-download {
-    grid-column: 5;
-  }
+.file-preview .preview-fullscreen-surface:fullscreen .preview-header {
+  /* Reserve space for the toggle in the expanded toolbar too. */
+  padding-right: calc(max(12px, env(safe-area-inset-right)) + 56px);
 }
 .file-details .preview-fullscreen-surface {
   display: contents;
@@ -3580,11 +3598,70 @@ textarea,
   flex-shrink: 0;
   object-fit: contain;
 }
+.brand-logo {
+  display: inline-block;
+  flex: 0 0 auto;
+  width: 160px;
+  aspect-ratio: 2010 / 401;
+  vertical-align: middle;
+}
+.brand-logo-compact {
+  width: 160px;
+}
+.brand-logo-large {
+  width: 192px;
+}
+.brand-logo img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+.brand-logo .brand-logo-dark,
+.brand-logo .brand-logo-icon {
+  display: none;
+}
+:root[data-theme="dark"] .brand-logo .brand-logo-light {
+  display: none;
+}
+:root[data-theme="dark"] .brand-logo .brand-logo-dark {
+  display: block;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme]) .brand-logo .brand-logo-light {
+    display: none;
+  }
+  :root:not([data-theme]) .brand-logo .brand-logo-dark {
+    display: block;
+  }
+}
 .mobile-drawer-brand,
 .mobile-brand {
   display: flex;
   align-items: center;
   gap: 8px;
+}
+.mobile-brand {
+  min-height: 44px;
+}
+.mobile-brand .brand-logo {
+  flex-shrink: 1;
+  width: 100%;
+  max-width: 160px;
+}
+@media (max-width: 374px) {
+  .mobile-brand .brand-logo {
+    flex: 0 0 32px;
+    width: 32px;
+    aspect-ratio: 1;
+  }
+  :root .mobile-brand .brand-logo .brand-logo-light,
+  :root .mobile-brand .brand-logo .brand-logo-dark {
+    display: none;
+  }
+  .mobile-brand .brand-logo .brand-logo-icon {
+    display: block;
+  }
 }
 .file-star-indicator {
   flex: 0 0 auto;

@@ -644,6 +644,43 @@ it("shows the server's actionable chunk error without persisting its details", a
   }
 });
 
+it("opens the demo protection notice when a resumed upload chunk becomes read-only", async () => {
+  const refused = vi.fn();
+  window.addEventListener("tgdrive:demo-files-read-only", refused);
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (input: string, options: RequestInit = {}) => {
+      if (input === "/api/v1/jobs") return Response.json({ jobs: [] });
+      if (options.method === "HEAD")
+        return new Response(null, {
+          headers: { "Upload-Offset": "0", "Upload-Length": "4" },
+        });
+      if (options.method === "PATCH")
+        return Response.json(
+          { code: "DEMO_FILES_READ_ONLY", detail: "Demo Files is read-only." },
+          { status: 403 },
+        );
+      return Response.json({
+        id: "protected-upload",
+        offset: 0,
+        total_size: 4,
+        chunk_size: 4,
+        checksums: [],
+      });
+    }),
+  );
+  const manager = managerForTest();
+  try {
+    manager.setEnabled(true);
+    manager.add([new File(["abcd"], "demo.bin")], "/tgdrive-demo-files", 10);
+    await vi.waitFor(() => expect(manager.snapshot()[0].state).toBe("error"));
+    expect(refused).toHaveBeenCalledOnce();
+    expect(manager.snapshot()[0].error).toBe("Demo Files is read-only.");
+  } finally {
+    manager.setEnabled(false);
+  }
+});
+
 describe("whole-batch recovery and bounded admission", () => {
   it("retains completed siblings in an unfinished batch beyond the old hundred-row limit", () => {
     const manager = managerForTest();

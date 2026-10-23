@@ -33,6 +33,8 @@ from tgdrive.client_pool import (
 )
 from tgdrive.config import Settings, get_settings
 from tgdrive.connection_errors import TelegramConnectionError
+from tgdrive.demo_access import is_demo_restricted, session_access
+from tgdrive.demo_files import annotate, check_path, check_transfer, request_policy
 from tgdrive.errors import (
     DriveError,
     DuplicateNameError,
@@ -83,6 +85,7 @@ from tgdrive.security import (
     LoginLimiter,
     SessionManager,
     credential_session_key,
+    demo_admin_session_key,
     verify_password,
 )
 from tgdrive.store import DriveStore
@@ -150,9 +153,10 @@ def _is_admin(request: Request) -> bool:
 async def require_admin(request: Request) -> None:
     if not _is_admin(request):
         raise HTTPException(status_code=401, detail="Not authenticated")
+    request_policy(request)
     # Use the matched route so proxy root paths cannot bypass demo restrictions.
     path = request.scope["route"].path
-    if request.app.state.settings.demo_mode:
+    if is_demo_restricted(request):
         management_path = any(
             path == root or path.startswith(root + "/")
             for root in ("/api/v1/settings", "/api/v1/replica", "/api/v1/backup")
@@ -253,15 +257,34 @@ def create_app(
         if settings.admin_password_hash
         else settings.admin_password.get_secret_value()
     )
+    demo_credential = (
+        settings.demo_admin_password_hash or settings.demo_admin_password
+        if settings.demo_mode
+        else None
+    )
     sessions = SessionManager(
         credential_session_key(settings.session_key, owner_credential),
         settings.session_ttl_seconds,
         settings.resolved_data_dir / "auth.sqlite3",
+        demo_admin_key=(
+            demo_admin_session_key(
+                settings.session_key, demo_credential.get_secret_value()
+            )
+            if demo_credential
+            else None
+        ),
     )
     password_hash = (
         settings.admin_password_hash.get_secret_value()
         if settings.admin_password_hash
         else PasswordHasher().hash(settings.admin_password.get_secret_value())
+    )
+    demo_password_hash = (
+        settings.demo_admin_password_hash.get_secret_value()
+        if settings.demo_admin_password_hash and demo_credential
+        else PasswordHasher().hash(demo_credential.get_secret_value())
+        if demo_credential
+        else None
     )
     limiter = LoginLimiter()
     # Argon2 is deliberately expensive. Bound its memory/CPU use and keep it off
@@ -272,6 +295,12 @@ def create_app(
     async def lifespan(_app: FastAPI):
         try:
             await app_runtime.start()
+            if settings.demo_mode and getattr(app_runtime, "store", None) is not None:
+                try:
+                    await asyncio.to_thread(app_runtime.store.ensure_demo_files)
+                except BaseException:
+                    await app_runtime.stop()
+                    raise
             from tgdrive.traffic import checkpoint_history, sample_performance
 
             sampler = asyncio.create_task(
@@ -453,7 +482,11 @@ def create_app(
         return HTMLResponse(
             "<!doctype html><html lang='en'><meta charset='utf-8'>"
             "<meta name='viewport' content='width=device-width,initial-scale=1'>"
-            "<title>TGDrive setup</title><main><h1>Build the TGDrive interface</h1>"
+            "<title>TGDrive setup</title>"
+            "<link rel='icon' type='image/svg+xml' href='/static/brand/favicon.svg'>"
+            "<main><p><img src='/static/brand/tgdrive-logo.svg' "
+            "width='251' height='50' alt='TGDrive'></p>"
+            "<h1>Build the TGDrive interface</h1>"
             "<p>In the website folder, run <code>npm ci</code>, then "
             "<code>npm run build</code>, and restart TGDrive.</p></main></html>",
             headers={"Cache-Control": "no-store"},
@@ -492,7 +525,9 @@ def create_app(
         )
 
     @app.get("/api/config")
-    async def public_config(request: Request) -> dict[str, Any]:
+    async def public_config(request: Request, response: Response) -> dict[str, Any]:
+        response.headers["Cache-Control"] = "no-store"
+        access = session_access(request)
         return {
             "status": "ok",
             "max_file_size": await current_upload_limit(
@@ -500,6 +535,8 @@ def create_app(
             ),
             "timezone": settings.timezone,
             "demo_mode": settings.demo_mode,
+            "demo_read_only": access["demo_read_only"],
+            "demo_admin": access["demo_admin"],
             "recovery_only": bool(getattr(_runtime(request), "recovery_only", False)),
         }
 
@@ -524,10 +561,17 @@ def create_app(
                 content={
                     "status": "Login busy; retry shortly",
                     "detail": "Login busy; retry shortly",
+                    "code": "LOGIN_BUSY",
                 },
             )
         async with login_lock:
             valid = await asyncio.to_thread(verify_password, payload.password, expected)
+            demo_admin = False
+            if not valid and demo_password_hash is not None:
+                demo_admin = await asyncio.to_thread(
+                    verify_password, payload.password, demo_password_hash
+                )
+                valid = demo_admin
         if not valid:
             limiter.failure(client_key)
             return _json_error("Invalid password", 401)
@@ -535,7 +579,7 @@ def create_app(
         response = JSONResponse({"status": "ok"})
         response.set_cookie(
             SESSION_COOKIE,
-            await asyncio.to_thread(sessions.create),
+            await asyncio.to_thread(sessions.create, demo_admin=demo_admin),
             max_age=settings.session_ttl_seconds,
             httponly=True,
             secure=settings.cookie_secure,
@@ -546,9 +590,9 @@ def create_app(
 
     @app.post("/api/logout")
     async def logout(request: Request) -> JSONResponse:
-        await asyncio.to_thread(
-            sessions.revoke, request.cookies.get(SESSION_COOKIE, "")
-        )
+        # Invalid cookies must not turn this public route into database work.
+        if _is_admin(request):
+            await asyncio.to_thread(sessions.revoke, request.cookies[SESSION_COOKIE])
         response = JSONResponse({"status": "ok"})
         response.delete_cookie(
             SESSION_COOKIE,
@@ -598,6 +642,8 @@ def create_app(
         else:
             await require_admin(request)
             data = store.get_directory(requested)
+        if settings.demo_mode:
+            annotate(data)
         return JSONResponse(
             {
                 "status": "ok",
@@ -612,6 +658,7 @@ def create_app(
         request: Request,
         _admin: Admin,
     ) -> dict[str, str]:
+        check_path(_store(request), payload.path)
         await asyncio.to_thread(
             _store(request).create_folder, payload.path, payload.name
         )
@@ -623,6 +670,7 @@ def create_app(
         request: Request,
         _admin: Admin,
     ) -> dict[str, str]:
+        check_path(_store(request), payload.path, descendants=True)
         await asyncio.to_thread(_store(request).rename, payload.path, payload.name)
         return {"status": "ok"}
 
@@ -632,6 +680,7 @@ def create_app(
         request: Request,
         _admin: Admin,
     ) -> dict[str, str]:
+        check_path(_store(request), payload.path, descendants=True)
         await asyncio.to_thread(
             _store(request).set_trashed, payload.path, payload.trash
         )
@@ -644,6 +693,7 @@ def create_app(
         _admin: Admin,
     ) -> dict[str, str]:
         store = _store(request)
+        check_path(store, payload.path, descendants=True)
         manager = _transfers(request)
         normalized_path = "/" + payload.path.strip("/")
         trash_paths = {
@@ -668,6 +718,7 @@ def create_app(
         expected_type: str,
     ) -> dict[str, str]:
         store = _store(request)
+        check_path(store, payload.path, descendants=True)
         if expected_type == "folder":
             store.get_directory(payload.path)
         else:
@@ -708,6 +759,7 @@ def create_app(
             Form(min_length=16, max_length=128, pattern=r"^[A-Za-z0-9_-]+$"),
         ] = None,
     ) -> JSONResponse:
+        check_path(_store(request), path)
         manager = _transfers(request)
         entry: TransferStart | None = None
         if client_request_id:
@@ -775,6 +827,7 @@ def create_app(
         request: Request,
         _admin: Admin,
     ) -> dict[str, Any]:
+        check_path(_store(request), payload.path)
         entry: TransferStart | None = None
         if payload.client_request_id:
             entry, created = starts.claim(
@@ -788,6 +841,7 @@ def create_app(
             manager = _transfers(request)
             await manager.inspect_remote(str(payload.url))
             await require_admin(request)
+            check_path(_store(request), payload.path)
             record = manager.start_remote(
                 url=str(payload.url),
                 destination=payload.path,
@@ -833,11 +887,13 @@ def create_app(
                 existing = None
             # Refuse a committed upload before setting any cancellation intent.
             if existing is not None and existing.record is not None:
+                check_transfer(_store(request), existing.record)
                 cancel(existing.record.id)
             entry = starts.cancel(payload.client_request_id)
             snapshot = entry.snapshot()
         else:
             assert payload.id is not None
+            check_transfer(_store(request), manager.registry.get(payload.id))
             snapshot = cancel(payload.id).as_dict()
         return {"status": "ok", "id": snapshot["id"], "data": snapshot}
 

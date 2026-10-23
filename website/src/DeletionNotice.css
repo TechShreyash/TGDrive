@@ -13,6 +13,11 @@
 }
 .deletion-summary > span {
   flex: 1;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.deletion-summary > svg {
+  flex-shrink: 0;
 }
 .deletion-errors {
   margin-top: 10px;
@@ -36,4 +41,10 @@
 }
 .deletion-errors li {
   margin: 8px 0;
+}
+@media (max-width: 720px) {
+  .deletion-errors summary {
+    min-height: 44px;
+    padding-block: 10px;
+  }
 }

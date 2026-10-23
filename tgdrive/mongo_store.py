@@ -18,6 +18,7 @@ from typing import Any
 
 from pymongo import DeleteOne, ReplaceOne
 
+from tgdrive.demo_files import DEMO_FILES_ID, DEMO_FILES_NAME, check_ids
 from tgdrive.errors import (
     CorruptStoreError,
     DuplicateNameError,
@@ -32,6 +33,7 @@ from tgdrive.errors import (
 )
 from tgdrive.mongo import DatabaseUnavailable, MongoBackend
 from tgdrive.store import (
+    _SHARE_UNSET,
     MAX_NAME_LENGTH,
     MAX_SEARCH_OFFSET,
     MAX_SEARCH_RESULTS,
@@ -378,6 +380,7 @@ class MongoStore(DriveStore):
         return result
 
     def _mutable(self, chain, *, descendants=False):
+        self._demo_mutable(chain, descendants=descendants)
         roots = {
             row["root_id"]
             for row in self._state["deletions"].values()
@@ -387,6 +390,37 @@ class MongoStore(DriveStore):
             descendants and roots.intersection(self._subtree(chain[-1]["id"]))
         ):
             raise ValidationError("Item is pending permanent deletion")
+
+    def _demo_mutable(self, chain, *, descendants=False):
+        from tgdrive.demo_files import restricted_writes
+
+        if not restricted_writes.get():
+            return
+        check_ids(row["id"] for row in chain)
+        if descendants:
+            check_ids(self._subtree(chain[-1]["id"]))
+
+    def ensure_demo_files(self):
+        with self._transaction(write=True):
+            node = self._state["nodes"].get(DEMO_FILES_ID)
+            if node is not None:
+                if node["kind"] != "folder":
+                    raise ValidationError(
+                        "The reserved Demo Files identity is not a folder"
+                    )
+                return self._record(node, self._path(DEMO_FILES_ID))
+            if not self._unique(ROOT_ID, DEMO_FILES_NAME):
+                raise DuplicateNameError(
+                    "A different item named Demo Files already exists. "
+                    "Disable demo mode and rename that item before enabling it again."
+                )
+            self._mutable(self._resolve("/")[2])
+            if len(self._state["nodes"]) >= MAX_TREE_ITEMS:
+                raise ValidationError("Maximum catalog size exceeded")
+            node = self._node(DEMO_FILES_ID, ROOT_ID, DEMO_FILES_NAME, "folder")
+            self._state["nodes"][DEMO_FILES_ID] = node
+            self._bump()
+            return self._record(node, "/" + DEMO_FILES_ID)
 
     def _unique(self, parent, name, exclude=""):
         return not any(
@@ -638,6 +672,7 @@ class MongoStore(DriveStore):
             node, path, chain = self._resolve(path)
             if node["id"] == ROOT_ID:
                 raise RootMutationError("The root folder cannot be renamed")
+            self._demo_mutable(chain, descendants=True)
             self._mutable(chain)
             if node["kind"] == "file":
                 _validate_file_rename(node["name"], name)
@@ -879,6 +914,7 @@ class MongoStore(DriveStore):
         with self._transaction(write=True):
             node, _, chain = self._resolve(path)
             self._visible(chain)
+            self._demo_mutable(chain, descendants=True)
             self._mutable(chain)
             if replace_existing:
                 self._revoke([node["id"]])
@@ -947,10 +983,13 @@ class MongoStore(DriveStore):
             ),
         }
 
-    def update_share(self, share_id, *, label, expires_at):
-        label = _share_label(label)
-        expiry = _validate_timestamp(expires_at) if expires_at is not None else None
-        if expiry is not None and expiry <= _utc_now():
+    def update_share(self, share_id, *, label=_SHARE_UNSET, expires_at=_SHARE_UNSET):
+        if label is not _SHARE_UNSET:
+            label = _share_label(label)
+        expiry = expires_at
+        if expires_at is not _SHARE_UNSET and expires_at is not None:
+            expiry = _validate_timestamp(expires_at)
+        if expiry is not _SHARE_UNSET and expiry is not None and expiry <= _utc_now():
             raise ValidationError("Link expiry must be in the future")
         with self._transaction(write=True):
             row = self._state["shares"].get(share_id)
@@ -958,16 +997,28 @@ class MongoStore(DriveStore):
                 raise NotFoundError("Link not found")
             _, _, chain = self._resolve(self._path(row["node_id"]))
             self._visible(chain)
+            self._demo_mutable(chain, descendants=True)
             self._mutable(chain)
-            row["expires_at"] = expiry
-            if label:
-                row["label"] = label
-            else:
-                row.pop("label", None)
+            if label is _SHARE_UNSET and expiry is _SHARE_UNSET:
+                return
+            if expiry is not _SHARE_UNSET:
+                row["expires_at"] = expiry
+            if label is not _SHARE_UNSET:
+                if label:
+                    row["label"] = label
+                else:
+                    row.pop("label", None)
             self._bump()
 
     def revoke_share(self, share_id):
         with self._transaction(write=True):
+            if share_id.startswith("/"):
+                self._demo_mutable(self._resolve(share_id)[2], descendants=True)
+            elif share_id in self._state["shares"]:
+                node_id = self._state["shares"][share_id]["node_id"]
+                self._demo_mutable(
+                    self._resolve(self._path(node_id))[2], descendants=True
+                )
             keys = (
                 [
                     key
@@ -1032,6 +1083,7 @@ class MongoStore(DriveStore):
             node, path, chain = self._resolve(path)
             if node["id"] == ROOT_ID:
                 raise RootMutationError("The root folder cannot be deleted")
+            self._demo_mutable(chain, descendants=True)
             if not self._pending_for(node["id"]):
                 self._mutable(chain, descendants=True)
                 if not node["trashed"] or any(row["trashed"] for row in chain[:-1]):
@@ -1116,6 +1168,9 @@ class MongoStore(DriveStore):
                 raise NotFoundError("Deletion intent not found")
             messages = row["message_ids"].copy()
             if row["state"] != "completed":
+                self._demo_mutable(
+                    self._resolve(self._path(row["root_id"]))[2], descendants=True
+                )
                 self._remove_subtree(row["root_id"])
                 row.update(
                     state="completed",

@@ -120,7 +120,11 @@ def test_public_config_reports_deployment_demo_mode(tmp_path, demo_mode):
         response = client.get("/api/config")
         assert response.status_code == 200
         assert response.json()["demo_mode"] is demo_mode
-        assert client.get("/api/v1/session").json() == {"authenticated": False}
+        access = client.get("/api/v1/session").json()
+        assert access["authenticated"] is False
+        if demo_mode:
+            assert access["demo_read_only"] is True
+            assert access["demo_admin"] is False
 
 
 @pytest.mark.parametrize("method,path,payload", MANAGEMENT_REQUESTS)
@@ -184,13 +188,14 @@ def test_demo_management_still_requires_authentication(
 def test_demo_preserves_same_origin_protection(demo_owner):
     client, store, _, _ = demo_owner
     login(client)
+    contents = store.list_directory("/")
     response = client.post(
         "/api/createNewFolder",
         json={"path": "/", "name": "Cross-origin"},
         headers={"Origin": "https://other.example"},
     )
     assert response.status_code == 403
-    assert store.list_directory("/") == {}
+    assert store.list_directory("/") == contents
 
 
 def test_demo_setting_cannot_be_changed_through_the_settings_api(demo_owner):
@@ -301,7 +306,11 @@ def test_demo_allows_file_crud_uploads_shares_and_preload_actions(demo_owner):
         headers=ORIGIN,
     )
     assert created.status_code == 200
-    folder = next(iter(store.list_directory("/").values()))
+    folder = next(
+        item
+        for item in store.list_directory("/").values()
+        if item["name"] == "Demo folder"
+    )
     path = "/" + folder["id"]
     assert (
         client.post(
@@ -380,7 +389,10 @@ def test_demo_allows_file_crud_uploads_shares_and_preload_actions(demo_owner):
     client.portal.call(finish_deletion)
     assert folder["id"] not in store.list_directory("/")
     assert client.post("/api/logout", json={}, headers=ORIGIN).status_code == 200
-    assert client.get("/api/v1/session").json() == {"authenticated": False}
+    access = client.get("/api/v1/session").json()
+    assert access["authenticated"] is False
+    assert access["demo_read_only"] is True
+    assert access["demo_admin"] is False
 
 
 @pytest.mark.parametrize("demo_mode", [False, True])

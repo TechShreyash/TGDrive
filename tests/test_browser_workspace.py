@@ -49,7 +49,8 @@ def test_directory_controls_stay_visible_while_only_files_scroll(
     login(page, server.url)
     page.get_by_role("button", name="Select", exact=True).click()
     page.get_by_label("Select scroll-000.txt", exact=True).check()
-    heading = page.get_by_role("heading", name="My Files", exact=True)
+    # Compact selection actions replace the visible heading in the same slot.
+    heading = page.locator(".file-toolbar h1")
     toolbar = page.locator(".file-toolbar")
     before = [heading.bounding_box()["y"], toolbar.bounding_box()["y"]]
     scroll = (

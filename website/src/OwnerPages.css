@@ -68,6 +68,7 @@
   padding-block: 5px 8px;
 }
 .storage-catalog > div {
+  min-width: 0;
   padding-inline: 22px;
   border-inline-end: 1px solid var(--line-subtle);
 }
@@ -89,6 +90,7 @@
   font-weight: 500;
   font-variant-numeric: tabular-nums;
   user-select: text;
+  overflow-wrap: anywhere;
 }
 .storage-catalog dd > span {
   display: block;
@@ -266,6 +268,27 @@
   margin-top: 20px;
 }
 @media (max-width: 480px) {
+  .storage-catalog {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 16px;
+  }
+  .storage-catalog > div {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1.5fr);
+    gap: 12px;
+    align-items: baseline;
+    padding-inline: 0;
+    border-inline-end: 0;
+  }
+  .storage-catalog dt {
+    margin-bottom: 0;
+  }
+  .storage-catalog dd {
+    text-align: end;
+  }
+  .storage-catalog .storage-count-link {
+    text-align: end;
+  }
   .upload-limit-setting {
     align-items: flex-start;
     flex-direction: column;

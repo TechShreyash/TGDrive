@@ -1,0 +1,10 @@
+Generated with built-in imagegen.
+
+Use case: logo-brand.
+Create ONE exceptional original logo for TGDrive, a personal cloud file manager powered by Telegram. Fresh brand exploration, no existing identity.
+Direction: INTERLOCK. A striking and ownable TG monogram: the T and G intelligently interlock through one shared structural stroke and broad precise negative-space channels, forming one compact asymmetric architectural symbol. BOTH T and G should be discoverable. Use bold but well-proportioned strokes and gently softened corners. The overall silhouette should remain open, contemporary and approachable, with a clear visual rhythm. No enclosing square, shield, hexagon or circle. Make it look designed by a world-class identity studio, not an ordinary typed TG ligature.
+Palette: rich electric cobalt #3157FF for the monogram, near-black #181B20 for the wordmark. Flat single-color symbol.
+Wordmark: exact text "TGDrive", spelled T G D r i v e with no spaces; capital T G D, lowercase r i v e. A precise geometric grotesk, medium-to-semibold weight, compact clean typography, slightly squared curves and customized terminal details which echo the monogram. Beautiful optical kerning.
+Composition: finished horizontal primary logo with symbol at left and wordmark at right, centered on a pure white wide landscape canvas, optically aligned. Logo occupies about 78% width, with ample clear space. Symbol modestly taller than wordmark.
+Style: sharp minimalist professional brand identity, flat vector-like artwork, confident and highly readable at small sizes.
+Avoid: cubes, folders, paper planes, Telegram logo, infinity symbols, gradients, shadows, 3D, tech circuit decoration, sports-logo styling, badge containers, slogans, extra text, mockups, watermark, multiple concepts in one image.

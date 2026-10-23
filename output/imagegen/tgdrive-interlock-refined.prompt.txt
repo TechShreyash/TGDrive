@@ -1,0 +1,15 @@
+Generated with built-in imagegen. Reference: tgdrive-02-interlock.png.
+
+Use case: logo-brand.
+Make a substantially better resolved version of this blue TGDrive logo. The supplied image is a STYLE REFERENCE for the blue palette, broad T top, compact monogram concept and horizontal lockup, not geometry to reproduce literally.
+
+CRITICAL GEOMETRY CORRECTION:
+Replace the entire existing lower/right blue glyph. It currently reads backwards.
+Build a new monogram from a real uppercase T and a real uppercase G. The T has a wide top bar and a descending shared spine on the LEFT. The G has its curved outer bowl on the LEFT, TOP and BOTTOM, with a visible OPENING ON THE RIGHT. Its short middle horizontal bar extends FROM THE RIGHT INWARD TOWARD THE LEFT. Like a normal printed capital G, not mirrored. Let the left stroke of the G share the T's vertical spine in one smart simple junction. Use the negative space beneath the T top bar to separate the letters. The right side of the G must be visibly open above its crossbar. Keep the monogram compact and beautifully balanced.
+Use uniform broad stroke weights, a large simple G counter, consistent subtle corner radii, and ONE clever shared structural connection. Both T and G must be readily recognizable. The T top has a restrained diagonal cut at its left terminal. Do not enclose the mark in a square or circle.
+
+The wordmark is the exact text "TGDrive", capital T G D and lowercase r i v e. Use a sophisticated medium/semibold geometric sans serif, visibly lighter and less bulky than the reference wordmark, with generous open counters and carefully spaced G-D. No stylized cuts in letters.
+Symbol pure solid cobalt #3157FF. Wordmark pure solid charcoal #181B20.
+Symbol to the left of text, aligned on optical center, symbol about 1.18 times the capital height. Slightly more breathing room between symbol and text than the reference.
+ONE finished horizontal logo on PURE WHITE background, centered, wide canvas with balanced margins, clear large readable design. Strictly flat two-color vector-style art with impeccable edges.
+No reversed G, no 3 shape, no mirrored letters, no tiny cutouts, no cubes, folders, paper planes, clouds, gradients, shadows, sheen, grain, texture, mockups, diagrams, annotations, extra text or watermark.

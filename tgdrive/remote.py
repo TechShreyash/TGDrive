@@ -148,12 +148,16 @@ def address_is_forbidden(address: str) -> bool:
         addresses.append(parsed.ipv4_mapped)
 
     return any(
-        ip.is_loopback
+        # Shared address space (100.64.0.0/10) is neither private nor reserved
+        # in ipaddress, but can reach internal services and cloud metadata.
+        not ip.is_global
+        or ip.is_loopback
         or ip.is_private
         or ip.is_link_local
         or ip.is_multicast
         or ip.is_reserved
         or ip.is_unspecified
+        or (isinstance(ip, ipaddress.IPv6Address) and ip.is_site_local)
         for ip in addresses
     )
 

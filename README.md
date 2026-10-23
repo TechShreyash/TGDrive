@@ -1,158 +1,148 @@
-# TGDrive
+<h1 align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="website/public/static/brand/tgdrive-logo-dark.svg">
+    <img src="website/public/static/brand/tgdrive-logo.svg" alt="TGDrive" width="400">
+  </picture>
+</h1>
 
-**Your files in Telegram. Your drive in the browser.**
+<p align="center">
+  <strong>Your personal cloud. Unlimited storage. Big files welcome.</strong>
+</p>
 
-TGDrive is a self-hosted personal file manager backed by Telegram and MongoDB.
-Upload files and folders, stream videos, preview documents, and share revocable
-links from one responsive web interface.
+Keep your media and files in one place. Upload whole folders,
+stream and read in your browser, and share a file or an entire folder with a link.
 
-[Get started](docs/setup.md) · [User guide](docs/usage.md) ·
-[Performance and caching](docs/performance.md) · [Documentation](docs/README.md)
+TGDrive is a free, open-source cloud drive you run on your laptop or server.
+It stores your files in a private channel on Telegram.
 
-## What you can do
+[Live demo](https://tgdrive.nexgenbots.us/) · [Set up your drive](docs/setup.md) ·
+[See it in action](#see-it-in-action) · [User guide](docs/usage.md) · [Documentation](docs/README.md)
 
-| Feature | How it works |
-| --- | --- |
-| **Files and folders** | Upload from your device, drag and drop, or import a public HTTP(S) URL. Search, sort, switch list/grid, organize Starred items, and restore from Trash. Small generated image/video/PDF thumbnails keep browsing efficient. |
-| **Large files** | Split across documents capped at 2000 MiB by default; smaller splits are configurable. One drive item, exact original downloads, and video byte-range seeking. Premium is optional and preferred for transfer speed; it does not raise this cap. |
-| **Media playback** | Locally bundled enhanced video player with supported embedded audio/subtitle tracks, chapter navigation, keyboard controls, and buffered timeline feedback. |
-| **Document previews** | Images, PDFs up to 256 MiB with lazy byte ranges, read-only text/code, EPUB books and CBZ/CBR comics. Fullscreen and original downloads remain available; unsupported or protected content has a download fallback. |
-| **Preload files** | Cache the whole original on the server before watching, downloading or sharing. Inspect current coverage and control RAM, disk and background work. [How to preload](docs/usage.md#preload-a-file-for-smoother-playback-and-downloads). |
-| **Transfers** | Resumable device uploads with automatic 1–4 file concurrency, independent server-side Telegram processing, safe-to-close receipt feedback, URL jobs, measured progress, retries, and durable history. [How uploads work](docs/usage.md#upload-speed-and-queue). |
-| **Sharing** | Multiple independent links per file/folder, with optional labels and separate expiry, copy, edit and revocation. Review access in Shared Links. |
-| **Recovery** | MongoDB stores the catalog and settings; encrypted database snapshots are saved separately to Telegram. An optional independent private channel copies completed payloads and enables explicit web recovery from a surviving channel. |
+<!-- MEDIA: drive-overview. Replace this SVG with a real desktop screenshot. See docs/assets/README.md. -->
+![TGDrive desktop file browser — screenshot placeholder](docs/assets/drive-overview.svg)
 
-For a public demo, [demo mode](docs/configuration.md#public-demo-mode) keeps file
-features available and locks configuration and management changes.
+## Go big with your files
 
-## Start with Docker
+- **Bring your big files.** Upload once; TGDrive handles splitting behind the scenes and keeps one file for downloads and video seeking.
+- **Press play. Start reading.** Stream video and preview photos, PDFs, text, ebooks and comics right in your browser.
+- **Share on your terms.** Send a file or an entire folder with links you can expire or revoke.
+- **Pick up where you left off.** Resumable uploads, folder uploads, URL imports and bot uploads, plus search, stars and Trash.
+- **Give your files a safety net.** Encrypted database backups and optional copies in an independent channel.
 
-You need Linux or WSL Ubuntu, Docker with Compose/Buildx, a MongoDB replica set
-(Atlas works), and a bot with administrator access to a private Telegram channel.
-The host needs Python 3.10 or newer for the guided setup script.
+## Try the public demo
 
-```bash
-git clone --branch dev https://github.com/TechShreyash/TGDrive.git
-cd TGDrive
-python3 scripts/setup.py
-```
+**[Open the live demo](https://tgdrive.nexgenbots.us/)** · Password: `password12345`
 
-The wizard checks access, creates private configuration, and starts the app.
-It preserves an existing `.env` and asks explicitly before initializing a new
-drive. [The setup guide](docs/setup.md) covers Telegram credentials, MongoDB,
-source installations, and server hosting.
+Browse, upload sample files, preview media, organize folders and test sharing.
+Configuration and Management stay visible, with changes locked.
+Browse the protected **Demo Files** collection, then use **My Files** for your own
+test uploads and changes.
 
-For **on-demand laptop use**, the default address is
-[http://127.0.0.1:8000](http://127.0.0.1:8000), accessible from this computer.
-Run `docker compose stop` when finished and `docker compose up -d` next time.
-The app stays stopped after a reboot. Keep its `.env` and persistent volumes.
-Public sharing needs a reachable server; a stopped or sleeping laptop cannot
-serve links, finish transfers or run backups. Internet is required while using it.
+It is a shared test drive: visitors can change or delete files outside Demo Files. Use only
+disposable, non-private content. [What to try →](docs/usage.md#try-the-public-demo)
 
-For **server hosting**, we recommend [Coolify](docs/setup.md#coolify): select
-`/compose.yaml` from `dev`, configure an HTTPS domain and keep credentials as
-private runtime values. [Docker Compose with your own HTTPS proxy](docs/setup.md#docker-compose-on-a-server)
-is also supported.
+## See it in action
 
-## How files move
+| Watch and read | Your drive on mobile |
+| :---: | :---: |
+| <img src="docs/assets/media-preview.svg" alt="TGDrive media viewer — screenshot placeholder" width="520"> | <img src="docs/assets/mobile-drive.svg" alt="TGDrive on a phone — screenshot placeholder" width="240"> |
 
-```text
-Your device or a file URL
-          ↓
-TGDrive server → Telegram documents
-          ↓
-       MongoDB catalog
+<!-- MEDIA: media-preview and mobile-drive. Replace with real viewer and phone captures; update paths and alt text. -->
 
-Authorized download → RAM/disk cache → Telegram for missing blocks
-```
+<details>
+<summary>Demo video · upload, watch and share</summary>
 
-Telegram holds file contents; MongoDB remembers their names, folders, shares,
-and transfer state. Local disk holds unfinished uploads and disposable cached
-bytes. Keep **one installation and one worker per drive**.
+<!-- MEDIA: demo-video. Replace this preview with a real uploaded video URL or a linked poster. See docs/assets/README.md#demo-video. -->
+![TGDrive walkthrough — demo video placeholder](docs/assets/demo-preview.svg)
 
-Device uploads start with two files in parallel and adapt between one and four
-using measured total upload speed. Each received file enters Telegram processing
-while the browser continues sending the others. Once **You can close this tab**
-appears, the server can finish the remaining work while TGDrive stays running.
-Keep originals until **Completed**. [Upload progress and tab closure](docs/usage.md#can-i-close-the-tab)
-explain the separate milestones.
+*Demo video slot: browse your drive, upload a folder, preview a file and share it.*
 
-Files above a Telegram document's limit are reconstructed transparently.
-The default logical-file limit is **16 GiB**, subject to staging capacity and
-free disk; it can be configured. This is not unlimited server storage.
+</details>
 
-## Make streaming and shared downloads smoother
+<details>
+<summary>Extra screenshots · uploads and transfers</summary>
 
-Choose **My Files → file ⋯ → Preload file** before a movie or large shared
-download. It caches the whole original on the server; wait for **Ready** with
-full coverage in **Monitor → Preloads**. Your device receives bytes when you
-play or download. [Preloading and its limits](docs/usage.md#preload-a-file-for-smoother-playback-and-downloads).
+<!-- MEDIA: upload-progress. Replace with a real Transfers capture. -->
+![TGDrive uploads and transfers — screenshot placeholder](docs/assets/upload-progress.svg)
 
-Ordinary requests use bounded adaptive read-ahead. **Preload during playback**
-also warms upcoming original audio/video by default. Download managers can
-request parallel ranges or resume gaps without automatically warming the
-whole file. [Parallel and resumed downloads](docs/usage.md#parallel-and-resumed-downloads).
+</details>
 
-The download path shares in-flight reads, reads blocks concurrently through
-available Telegram accounts, and caches verified bytes for reuse. Demand reads
-take priority over background preloading. Frequently reused content gets
-preference over a one-time scan.
+## Make it yours
 
-Use **Monitor → Performance** for traffic graphs and container resources, and
-**Monitor → Preloads** for cached media. See [Backup & recovery](docs/backup-recovery.md)
-for the recovery key and restore procedure.
+Run TGDrive on your laptop when you need it, or host it on a server for access
+and sharing while you are away.
 
-Use **Configuration → Cache settings** and **Transfer limits** to tune
-cache and transport limits, and inspect current cache
-coverage before relying on a prepared file. Cache entries remain evictable;
-restarting does not turn local cache into a separate backup.
+### Why host on a server?
 
-Uploading uses bounded MTProto chunk pipelining through **Telethon with cryptg**.
-Optional smaller file splits can engage more account slots. More bots or higher
-concurrency cannot guarantee higher speed: server bandwidth, Telegram routing,
-datacenters, cooldowns, and the viewer's connection all matter.
+- **Keep your drive online 24/7.** Access, stream and share while your laptop is off, as long as the server stays running.
+- **Let transfers finish while you are away.** URL imports, accepted uploads and manual preloads continue without an open browser.
+- **Upload through Telegram anytime.** Your configured bot stays available without keeping your computer on.
+- **Keep background work moving.** Scheduled database backups, optional backup-channel copies and queued file processing run on the server.
+- **Give transfers more headroom.** Better server connectivity and resources can improve upload/download speeds and support more concurrent visitors and transfers.
 
-[Performance guide](docs/performance.md) explains settings, queue estimates,
-cache budgets, and a practical bottleneck checklist.
+[Explore server benefits and background work →](docs/setup.md#why-host-on-a-server)
 
-## Keep your drive recoverable
+### Choose your hosting
 
-Optionally enable an **Independent backup channel** in Storage & Backups. Use
-separate Telegram owner accounts and private channels, save the recovery key
-outside Telegram, and wait for a confirmed restore point. The web UI can prepare
-and resume channel/database recovery; creating accounts/channels and adding bots
-still happens in Telegram. See the [setup and recovery guide](docs/backup-recovery.md#set-up-an-independent-backup-channel).
-A second channel reduces a single-channel failure risk, not loss of both accounts
-or access to Telegram. Keep important originals outside the provider.
+| Option | Starting price | What you get |
+| --- | --- | --- |
+| **Self-host** | Free TGDrive software | Run on your own computer or server; manage deployment yourself. |
+| **Server only** | **₹150/month** | Server hosting; deploy and manage TGDrive yourself. |
+| **Managed TGDrive** | **₹200/month** | Server hosting, TGDrive deployment and ongoing management included. |
 
+**To buy either option, contact [TechShreyash on Telegram](https://t.me/TechShreyash).**
+[BoltCloud](https://boltcloud.net/) is a pricing/server-options reference only;
+if it is unavailable, ask directly for current prices and availability.
 
-- Save the MongoDB access details and the recovery key separately.
-- Keep the Telegram storage channel private, with auto-delete off and every
-  storage bot an administrator with **Post Messages** and **Delete Messages**.
-  Make changes through TGDrive; do not edit/delete its channel messages.
-- Wait for **Completed** before discarding an upload's original or staged bytes.
-- Reinstalls reopen the same MongoDB database; do not initialize it again.
-- Encrypted database backups restore records and settings, not deleted Telegram
-  files or missing unfinished upload contents.
-- After an interruption, restart the same deployment and review Transfers,
-  Connections and Storage & Backups. [Recovery guidance](docs/operations.md#after-a-shutdown-crash-or-network-loss)
-  explains when a retry, original file or external backup is needed.
-- Share links grant access to anyone holding them. Revoke links you no longer need.
-- Permanent deletion removes records from TGDrive's database while keeping the
-  original Telegram messages. See [Trash and permanent deletion](docs/usage.md#trash-and-permanent-deletion)
-  for the separate steps needed to remove stored copies.
+For deployment management on your own server, [Coolify](docs/setup.md#coolify)
+is recommended and free to self-host. [Compare hosting options →](docs/setup.md#hosting-beyond-your-machine)
 
-[Operations and recovery](docs/operations.md) ·
-[Security boundaries](docs/reference.md#security-and-privacy)
+All TGDrive features are available when self-hosting and on every managed plan.
+There are no extra plan-based caps on file size or file count. Higher plans add
+server resources for more concurrent visitors, uploads and downloads.
 
-## Project status
+**Your drive stays yours, even when hosting expires.** Completed files remain in
+your Telegram channel. Keep your MongoDB catalog, Telegram access and recovery kit
+to reopen the same drive on your laptop or another server without re-uploading
+completed files. [Keep your drive when a plan ends →](docs/operations.md#when-a-hosting-plan-expires)
 
-TGDrive is a **public beta on `dev`**. Keep independent copies of important files.
-Automated tests cover transfer recovery, byte ranges, caching, access control,
-and browser workflows; live performance still depends on your deployment.
+[**Set up TGDrive →**](docs/setup.md) · [Explore the user guide](docs/usage.md)
 
-[Known limits and roadmap](docs/roadmap.md) ·
-[Development and verification](docs/development.md) · [MIT License](LICENSE)
+<details>
+<summary>Storage, backups and limits</summary>
 
-[Project updates](https://t.me/TechZBots) ·
-[Support](https://t.me/TechZBots_Support)
+TGDrive is a single-owner, internet-connected drive. The server needs disk for
+unfinished uploads and caching. Keep its Telegram channel private and app-managed,
+preserve persistent volumes, and save recovery keys separately.
+
+Keep originals until uploads say **Completed**. Once **You can close this tab**
+appears, server processing can continue while TGDrive stays running. Shared
+links also need a reachable running app.
+
+Unlimited means TGDrive does not meter total stored bytes. Uploads default to
+16 GiB and are configurable. Its catalog supports up to 250,000 files/folders;
+per-file limits and available staging space still apply.
+Telegram access and availability are still required. MongoDB holds the catalog
+and settings.
+
+Database backups cannot recover deleted Telegram files. Keep independent copies
+of important originals. See [Backup & recovery](docs/backup-recovery.md).
+
+</details>
+
+<details>
+<summary>Configuration and contributing</summary>
+
+[Configuration](docs/configuration.md) · [Operations](docs/operations.md) ·
+[Architecture](docs/architecture.md) · [Development](docs/development.md) ·
+[Roadmap](docs/roadmap.md)
+
+Bug reports should include the release, deployment mode and reproduction steps.
+Remove credentials and private links. Read [contributor guidance](AGENTS.md);
+maintainers can use [release verification](docs/release.md).
+
+To fill the prepared image and video slots, see [Screenshots and demos](docs/assets/README.md).
+
+</details>
+
+[MIT License](LICENSE)

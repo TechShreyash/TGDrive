@@ -1,88 +1,85 @@
 # Streaming, caching and transfer performance
 
-[Docs home](README.md) · [Using TGDrive](usage.md) · [Configuration & tuning](configuration.md)
+[Docs home](README.md) · [Using TGDrive](usage.md) · [Configuration](configuration.md)
 
-TGDrive can reuse Telegram data and overlap network requests, but the slowest
-link still determines the result. A cache improves repeat access; a cold file
-still needs to reach the server from Telegram.
+Find the slow stage before changing limits. A cold file still travels from
+Telegram; a warm cache speeds repeat access.
+
+| Goal | Start here |
+| --- | --- |
+| Prepare a video or shared file | [Preload the original](#prepare-a-file-before-sharing) |
+| Diagnose slow transfers | [Read Performance](#read-the-performance-page), then [check the symptoms](#investigate-a-slowdown) |
+| Tune capacity | [Cache budgets](#cache-limits) and [upload controls](#upload-pipeline-and-smaller-splits) |
 
 ## Follow the data path
 
-| Stage | What can limit it |
+| Stage | Typical constraints |
 | --- | --- |
-| Device → server | Your upload connection, server ingress, temporary disk, browser receiving queue |
-| Server → Telegram | Account routing/datacenter, round-trip time, request pipeline, Telegram cooldowns, server egress |
-| Telegram → server | File datacenter, network route, eligible accounts, request admission, cold-cache misses |
-| Server → viewer | Server egress, proxy behavior, viewer connection, slow concurrent viewers |
-| Video decoding | Container layout, supported codecs, browser/device decoding capacity |
+| Device → server | Uplink, server ingress, staging disk, browser receive queue |
+| Server → Telegram | Account/file datacenter, latency, pipeline, cooldowns, egress |
+| Telegram → server | Routing, eligible accounts, origin admission, cold misses |
+| Server → viewer | Egress, proxy, viewer connection, concurrent consumers |
+| Video decoding | Container/codec support and browser/device capacity |
 
-Telegram accounts and documents can refer to different datacenters. The client
-resolves file locations and account-specific authorization. A different server
-region can change latency and routing, but changing a setting cannot relocate
-an existing Telegram document or guarantee a faster route.
+TGDrive uses Telethon with cryptg, bounded upload pipelining and pooled downloads.
+Accounts and documents can use different datacenters; changing server region may
+change routing but cannot relocate a document or guarantee improvement.
 
-TGDrive retains Telethon with cryptg. It uses bounded upload chunk pipelining,
-pooled download reads, and shared caches; it does not depend on a replacement
-Telegram client library to enable these features.
+A server with stronger connectivity/resources can improve upload/download speeds
+when it removes the current bottleneck. Device uploads still depend on your
+uplink; shared downloads use server egress and each viewer's connection.
+
+For [managed hosting](setup.md#managed-tgdrive-hosting), plans scale server resources
+for concurrent visitors and transfers. All TGDrive features remain included;
+larger plans increase capacity without promising a fixed transfer speed.
 
 ## Cache limits
 
-Open **Configuration → Cache settings** for cache storage and preparation,
-**Transfer limits** for upload splitting and request limits, and **Timezone**
-for display time. Saving changes only the current category; other drafts stay unsaved. Appearance supports Light, Dark and System; logout follows the navigation in the scrollable sidebar.
-The existing `?view=settings&section=performance` deep link still opens cache controls.
+Tune the running instance in **Configuration → Cache settings**. Saved MongoDB
+preferences override initial environment values. Save affects the visible category;
+**Reset Changes** returns to its last saved values. Environment changes need a
+restart. See [exact settings](reference.md#performance-and-cache-settings).
 
-The application defaults are **256 MiB RAM** and **10 GiB disk**, with a
-**1 GiB free-disk reserve** and **24-hour disk retention after reuse**.
-These are instance-wide byte budgets, shared by playback, downloads, and preloads.
-They are separate from the upload staging budget.
+| Budget | Default |
+| --- | --- |
+| Retained RAM | 256 MiB; clamped to ¼ of available host/container memory |
+| Retained disk | 10 GiB |
+| Cache free-disk reserve | 1 GiB |
+| Disk expiry | 24 hours since last reuse |
+| RAM expiry | 10 idle minutes |
+| Transient streaming payload | 32 MiB, availability-clamped with a 2 MiB floor |
 
-These are portable app defaults, not a promise of ideal values for every server.
-The controls show the current policy and label the built-in defaults separately.
-Startup environment values can supply different initial limits; saved dashboard
-preferences in MongoDB take precedence. Both Compose files forward the optional
-performance variables. The recommended way to tune an existing installation is
-the dashboard, without an environment edit or redeployment. **Reset Changes**
-restores the last saved values. Units are binary: 1 GiB = 1024 MiB.
+Budgets are instance-wide, separate from upload staging. Units are binary
+(1 GiB = 1024 MiB). **Cache is disposable acceleration, not a backup or CDN.**
+Clearing it leaves Telegram originals and the catalog intact.
 
-- RAM is further clamped to a quarter of currently available host/container
-  memory. Configured and effective limits can therefore differ. RAM blocks
-  expire after 10 idle minutes; reuse refreshes that timer. The retention
-  control changes disk expiry only, measured from the last reuse.
-- Disk bytes are allocated as content arrives; the budget does not reserve
-  that disk space in advance. Writes stop before crossing the free-space floor.
-  This floor applies to cache writes, not all server activity. Upload staging
-  separately observes `MIN_FREE_BYTES`; other disk users can consume space.
-  Leave headroom for the operating system, uploads and backups when choosing
-  the cache cap and floor.
-- Disk blocks include integrity overhead, so disk-only preparation needs
-  slightly more space than the raw file. RAM-only preparation counts payload
-  bytes; process/index overhead remains outside the retained-byte budget.
-- RAM and disk can contain the same hot bytes. Their capacities cannot simply
-  be added when deciding whether a whole file fits.
-- The bounded disk write queue shares the RAM budget. Slow disk cannot create
-  an unbounded in-memory backlog.
-- A disk failure falls back to Telegram where possible. A full preparation
-  reports failure if verified retained coverage cannot be achieved.
+<details>
+<summary>Memory, disk integrity and eviction</summary>
 
-Active responses also share a separate transient payload budget: **32 MiB** by
-default, reduced with available host/container memory, with a **2 MiB minimum**
-to keep streaming possible when retained RAM caching is disabled. Queued,
-completed and currently yielded source blocks hold reservations until consumed
-or cancelled. New response heads can reclaim another reader's speculative
-read-ahead, including when its consumer is suspended. Awaited/yielded heads
-stay protected; cancelled I/O retains its reservation until cleanup finishes.
-A stalled download therefore cannot monopolize the entire budget with unused
-ahead blocks and block a cached metadata/seek request. This is additional to
-retained cache RAM. Transport, ASGI, TLS,
-kernel and browser decoder buffers are outside these payload budgets.
+- The legacy `?view=settings&section=performance` link still opens cache controls.
+- Disk space is consumed as blocks arrive, not reserved upfront. Cache writes
+  respect their free-space floor; upload staging separately uses `MIN_FREE_BYTES`.
+  Leave headroom for the OS, uploads and backups.
+- Disk blocks include integrity overhead. RAM and disk may retain the same hot
+  bytes, so their budgets cannot be added to decide whole-file capacity.
+- A bounded asynchronous disk-write queue shares the RAM budget. Atomic files
+  and block digests reject partial/corrupt entries; entry count scales with the
+  byte budget. Disk inventory survives clean restart; updates arriving during an
+  index flush trigger another flush.
+- New blocks enter probation; reuse promotes them into a protected area,
+  normally up to 75% of a tier. Protection favors reuse but does not pin bytes.
+- Disk failure falls back to origin where possible. Whole-file preparation fails
+  if it cannot establish verified retained coverage.
+- Separate transient reservations cover queued, completed and yielded 1 MiB
+  source blocks until consumption/cancellation. New response heads can reclaim
+  other readers' speculative blocks, including from suspended consumers, while
+  awaited/yielded heads remain protected. Cancelled I/O holds its reservation
+  until cleanup finishes.
+- Transport, ASGI, TLS, kernel and decoder buffers remain outside these payload
+  budgets. The pooled reader bypasses the old per-client payload cache to avoid
+  duplicating retained-byte budgets.
 
-Blocks first enter a probation area. Reused blocks enter a protected area,
-normally up to 75% of a tier, so one large one-time download is less likely to
-evict a frequently watched video. Protection is an eviction preference, not a pin.
-
-The cache is disposable local data. It is neither a file backup nor a CDN.
-Clearing it leaves Telegram originals and MongoDB catalog entries intact.
+</details>
 
 ## Automatic read-ahead
 
@@ -161,245 +158,140 @@ inventory before a planned viewing.
 
 ## Shared-download load and queues
 
-Warm bytes can be served repeatedly without re-fetching their payload from
-Telegram. Missing blocks are shared when viewers request them concurrently.
-Many viewers requesting unrelated files still compete for finite server and
-Telegram capacity.
+Warm bytes avoid Telegram payload work and have no fixed four-viewer gate, but
+still need authentication, server bandwidth, sockets, memory and proxy capacity.
+Cold misses share bounded account media/request admission and origin queues;
+uploads compete within the same account budget. Demand precedes background work.
 
-TGDrive bounds Telegram media operations, part RPCs, preload work, cache budgets,
-and origin wait queues. Upload/download activity shares an account budget;
-increasing upload concurrency cannot create unlimited independent read slots.
-Demand work has priority over background work. Cache hits avoid origin payload
-work but still consume server bandwidth and require access checks.
-
-Warm-cache responses are not restricted by a fixed four-viewer gate; server
-bandwidth, sockets, memory and proxy capacity still limit how many viewers can
-be served. Cold misses enter bounded origin admission.
-
-Queue position and wait time are **estimates** based on recent observed work
-and eligible account capacity. An estimate may be unavailable before enough
-samples exist. It can change after a seek, a slow viewer, an account outage,
-or a Telegram cooldown. It is not a completion deadline or reserved bandwidth.
-An overloaded bounded queue can reject work; clients must respect the returned
-status and retry guidance instead of opening unlimited parallel requests.
+Queue position/wait are estimates from recent durations and eligible capacity.
+Without enough samples, no ETA is invented. Seeks, outages and cooldowns can
+change estimates; overloaded queues can reject work. Respect response status
+and retry guidance rather than opening unlimited requests.
 
 ## Device upload receipts
 
-Browser uploads use sequential **8 MiB** resumable chunks. Live browser progress
-shows bytes sent; the confirmed offset advances only after the server has written,
-checksummed and synchronized the chunk and committed its receipt. New uploads do
-not hash the whole file on the device before sending. Reselecting a file to resume
-does verify already-received chunks against their saved checksums.
+Browser uploads use sequential **8 MiB** resumable chunks. Live progress counts
+sent bytes; acknowledgement follows server write, checksum, synchronization and
+MongoDB receipt commit. New files need no whole-device prehash; resumed files
+verify acknowledged chunks. Writes, hashing and receipt commits run off the HTTP
+event loop. Disconnect drains an active commit before releasing its lock.
 
-File writes and hashes run off the HTTP event loop. MongoDB receipt commits run
-in the same owned worker, so a slow cloud transaction does not freeze other
-playback, download or progress requests. A disconnect drains an in-progress write
-and receipt commit before releasing that upload's lock; it cannot acknowledge
-uncommitted bytes. SQLite retains its existing transaction ownership.
-
-Device-to-server receipt speed and server-to-Telegram speed are separate stages.
-More bots improve eligible Telegram capacity; they cannot increase a device's
-uplink or bypass reverse-proxy limits. Compare the transfer's device stage with
-HTTP received traffic and current server load before tuning Telegram concurrency.
-A server-local receipt benchmark measures application/disk overhead, not a
-physical viewer's upload route.
+Device receipt and Telegram dispatch are separate stages. More bots cannot
+improve the device uplink or bypass a proxy. Compare device progress with HTTP
+received traffic and server load; a server-local benchmark excludes the viewer's
+route. See [transfer durability](architecture.md#transfer-pipeline).
 
 ## Upload pipeline and smaller splits
 
-These controls govern different layers:
-
-| Control | Effect |
+| Control | Default / allowed values |
 | --- | --- |
-| Uploads per bot | Concurrent Telegram documents on a bot; default 1, allowed 1–4 |
-| Upload pipeline | Outstanding 512 KiB part-upload RPCs within a document; default 4 |
-| Account request limit | Upper bound on concurrent Telegram media/metadata RPCs; default 8, allowed 1–32 |
-| Account part rate | Application pacing ceiling including scheduled metadata work; default 48 requests/second, allowed 1–128 |
-| Combined media limit | Shared upload/download operations per account; default 3, allowed 1–16 |
-| Maximum queued operations | Waiting Telegram origin operations across the installation; default 256, allowed 1–4096. More queue space allows longer waits, not higher throughput. |
-| File split size | Preferred document cap, 1–2000 MiB for all accounts; default 2000 MiB, and 0 also uses 2000 MiB |
+| Concurrent uploads per bot | 1 / 1–4 |
+| Outstanding 512 KiB upload RPCs per document | 4; also bounded by account request limit |
+| Concurrent account media/metadata RPCs | 8 / 1–32 |
+| Account part/metadata pacing | 48 requests/s / 1–128 |
+| Combined upload/download operations per account | 3 / 1–16 |
+| Waiting origin operations, installation-wide | 256 / 1–4096 |
+| Preferred document split | 2000 MiB / 1–2000 MiB; 0 also means 2000 MiB |
 
-The defaults balance observed throughput and cooldowns on the tested deployment;
-different accounts, datacenters and routes can need lower values. More parallel
-work can trigger waits and reduce throughput. The rate ceiling is TGDrive's
-protective application setting, **not a published Telegram bandwidth entitlement**.
-Real provider waits override it.
+These count origin operations/RPCs, not viewers or whole files. More queue space
+permits longer waits, not throughput. Rate limits are protective application
+ceilings, not Telegram entitlements; provider waits take precedence.
 
-The pipeline is also bounded by the shared account request limit. Media and
-queue limits count Telegram origin work, including missing-block reads; they
-are not limits of three viewers or 256 whole files. Warm payloads do not need
-Telegram download slots. Keep the defaults initially, measure a representative
-workload, and change one control at a time. Reduce concurrency or pacing if
-cooldowns grow or playback competes with uploads; raise them only when observed
-throughput improves without those costs.
+<details>
+<summary>Splits, Premium and tuning tradeoffs</summary>
 
-Smaller documents can engage more available account slots for one file. They
-also add messages, manifests, retry/cleanup work, and download boundary setup.
-They do not change the original bytes or automatically increase download speed.
-Chunk pipelining can improve an individual document without splitting it.
-All new documents use at most 2000 MiB, including those sent by Premium accounts.
-Choose a smaller split to reduce document size; 0 uses the same 2000 MiB cap.
-Parts can use the available bot and optional Premium pool.
+Smaller parts can engage more slots but add messages, manifests, retries and
+boundary setup. Pipelining can improve one document without splitting it.
+All new documents stay within 2000 MiB, including Premium. Very large files
+raise tiny split preferences to stay within 4096 parts; journaled plans are never
+re-split by a new preference. Staging/file-size limits still apply.
 
-Premium's larger single-document allowance is unnecessary: TGDrive handles
-splitting, original downloads, streaming and byte-range seeking across parts.
-Backup catalogs retain the ordered part mappings; an enabled independent backup
-channel copies the documents under the normal [backup and recovery rules](backup-recovery.md).
-Using 4000 MiB documents is not required for these features or larger logical files.
+Ready Premium clients are preferred for parts and payload windows, with eligible
+bot fallback when busy, cooling or unhealthy. Dispatched parts retain their
+sender on retry. Premium is a potential speed benefit, not a larger TGDrive file
+limit. [Telegram's file documentation](https://core.telegram.org/api/files) describes
+Premium throttling differences; TGDrive has not measured a live Premium multiplier.
 
-For a very large file, the planner raises a tiny requested split if needed to
-stay within the 4096-part ceiling. Changing the preference does not re-split
-an already journaled transfer.
+Keep one upload per bot initially. Change one limit at a time against a representative
+workload. Retain increases only when throughput improves without harming playback
+or increasing cooldowns; reduce concurrency/pacing when contention grows. Never
+rotate identities around provider waits.
 
-Available Premium clients are preferred for upload parts and download payload
-windows; busy, cooling, disconnected or unhealthy clients fall back to eligible
-bots. Existing upload parts keep their recorded sender on retry. Premium is a
-potential per-task speed benefit, not a larger document or logical-file limit.
-Telegram documents Premium-related [upload and download throttling](https://core.telegram.org/api/files);
-actual throughput still depends on the network, server, account and provider waits.
-TGDrive has not measured a live Premium speedup, so it promises no multiplier.
-
-Keep one upload per bot initially. Compare a smaller split and a modest
-pipeline on representative files, then keep changes only when useful throughput
-improves without degrading streaming or increasing sustained cooldowns.
-Never rotate around an account/channel wait to defeat Telegram restrictions.
-
-Completed parts retain their durable identities. New preferences do not
-re-split an upload that already has a journaled plan. The logical file remains
-bounded by staging, file-size configuration, and a 4096-part manifest ceiling.
+</details>
 
 ## Video controls and startup
 
-The enhanced player loads locally when a video is opened. Supported embedded
-audio and subtitle tracks use the player's controls; codec support depends on
-the media and device. Real chapter titles/times appear without waiting for
-remote thumbnail generation, including in fullscreen.
+The local custom player keeps controls available through loading, buffering,
+seeking and errors. It supports the media's available tracks/chapters and focused
+keyboard shortcuts (**K/Space**, **M**, arrows); mobile autoplay may require tapping
+Play. Slow starts offer **Try again**; unsupported codecs retain **Download Original**.
 
-Focus the player to use its keyboard shortcuts, including **K/Space** for
-play/pause, **M** for mute, and arrow-key seeking. Text fields keep their normal
-editing behavior. Chapter controls are keyboard accessible.
-
-Startup and buffering are distinct. Advancing playback clears stale buffering
-feedback, and short interruptions do not immediately cover the picture.
-The custom player and its normal controls remain visible during opening and
-seeking. There is no separate Start Playback screen or native-browser
-compatibility mode. A mobile browser may still require a tap on the player's
-normal play control before it permits playback with sound. For a slow start,
-choose **Reload Video**. An unsupported codec stays in the custom player with
-a useful error; **Download Original** remains available in the header.
-
-The loading panel shows measured received bytes and transfer rate when
-available. It does not turn source-byte coverage into a playback-ready percentage
-or seconds ahead: decoded audio and video may still be waiting. The timeline
-highlights the engine's buffered time
-ranges, including before playback and after a seek. Movi estimates some HTTP
-time ranges from its source window and media rate, so these are approximate.
-They describe the player's current buffer, not the server's preload inventory
-or a promise that every frame can decode in real time. Server-cached bytes
-can still require network transfer to the device and local decoding.
+Compact status follows actual readiness and advancing playback, without invented
+percentages or seconds ahead. The timeline's buffered time ranges are engine
+estimates, separate from server cache coverage. Cached bytes still need delivery
+and decoding. Movi's requested 32 MiB source buffer is not a decoder-memory cap.
 
 ## Operator checklist
 
-1. Measure server HTTP download and upload capacity separately, using more than
-   one reliable endpoint. One external host can be the bottleneck.
-2. Compare cold Telegram reads with a repeat of the same authorized range.
-   A warm-cache result does not measure Telegram origin throughput.
-3. Watch cache hit/miss counts, effective RAM, disk headroom, queued operations,
-   account cooldowns, and server CPU/network utilization.
-4. Compare the real pooled HTTP path with any standalone client benchmark.
-   They use different caching, admission, and backpressure paths.
-5. Test video startup and seeks, then same-file and different-file viewers.
-   Do not infer many-viewer performance from one sequential download.
-6. Adjust one limit at a time. Keep default limits until measurements identify
-   which stage needs attention.
-
-For exact environment bounds and owner endpoints, see the
-[reference](reference.md#performance-and-cache-settings). Restart after changing
-deployment environment values; saved live performance preferences apply through
-the owner's settings controls.
+- [ ] Measure ingress/egress using multiple reliable endpoints.
+- [ ] Compare a cold authorized range with a repeat; warm results exclude origin work.
+- [ ] Watch effective budgets, disk headroom, queues, cooldowns, CPU and network.
+- [ ] Test startup/seeks and same-file/different-file viewers through the real HTTP path.
+- [ ] Change one limit and repeat the same workload.
 
 ### Read the Performance page
 
-**Monitor → Performance** separates **server network traffic**, **TGDrive HTTP
-file traffic**, and **Telegram origin activity**. These layers overlap. Do not
-add their totals together: a Telegram download followed by viewer delivery crosses
-multiple layers. Network counters include protocol overhead, URL imports and
-other traffic on the selected interface. In Docker this normally measures the
-container interface; a source installation can share an interface with other apps.
+**Monitor → Performance** separates server network, TGDrive HTTP file traffic
+and Telegram origin activity. They overlap: **do not add their totals**. Network
+counts include protocol/other interface traffic; Docker normally measures its
+container interface. Blue is **Download to server**; dashed is **Upload from server**.
+Hover or use the keyboard/touch sample scrubber. **Now** always means current.
 
-The two network lines are **Download to server** (received, blue) and **Upload
-from server** (sent, dashed). Hover anywhere in a graph to inspect the nearest
-recorded timestamp. The sample scrubber provides the same values for keyboard
-and touch. Labels marked **Now** remain current readings, even when an older
-period is selected.
+<details>
+<summary>History, totals and resource measurement</summary>
 
-Choose **Live**, **Last hour**, **Last day**, **Last week**, **Last month** (30 days)
-or **Custom**. Live keeps five minutes of three-second samples. Recorded history
-keeps 31 days of measured minute aggregates, reduced to at most 360 points for
-larger ranges. Recorded points show averages over seconds actually observed;
-they are not peaks or an assumption that unobserved time was idle. Custom inputs
-are explicitly UTC, with the applied interval shown in the configured timezone.
-There is no backfill for time before monitoring was installed. Missing/offline
-readings stay gaps, and incompatible measurement scopes are not joined together.
+- Live: five minutes of three-second samples. Recorded: 31 days of minute
+  aggregates, at most 360 plotted points. Presets include Last Month (30 days).
+- Averages cover observed seconds only. Missing/offline periods remain gaps;
+  incompatible scopes are not joined and earlier periods are not backfilled.
+  Custom inputs use UTC; the applied interval uses the configured timezone.
+- All-time totals are separate persistent checkpoints **since the displayed
+  tracking start date**. Network, Telegram and HTTP totals stay separate.
+  HTTP covers `/file` and resumable-upload bodies, including cached delivery
+  and receipt messages; it excludes assets/settings polling. Detailed process
+  counters reset on restart.
+- MongoDB stores history/totals without another metrics service. Checkpoints run
+  each minute and at clean shutdown; abrupt crashes can lose roughly a minute.
+  Diagnostic outages can lose observations without affecting file data. Telemetry
+  is excluded from encrypted backups.
+- CPU uses 0–100% of available container cores/quota. RAM uses cgroup usage and
+  a finite limit where present; otherwise its observed scale is explicit.
+  Host CPU is a labelled fallback. Load average is not CPU percentage; process,
+  container, host-available and cache memory are different measurements.
 
-**All-time totals** are stored separately and survive restarts and rolling
-history pruning. “All-time” means **since the displayed tracking start date**.
-Server network, Telegram upload/download and tracked HTTP body totals stay
-separate. The HTTP counters cover `/file` and resumable-upload bodies, including
-cached delivery and small receipt messages; assets and settings polling are
-excluded. Existing detailed process counters still reset on restart. No total is
-presented as the physical network capacity or as a bandwidth-savings percentage.
-
-History and totals use the existing MongoDB in production. Local SQLite installs
-use `DATA_DIR/telemetry.sqlite3`. There is no extra metrics service, volume or
-required environment value. Checkpoints run once per minute and at clean
-shutdown. An abrupt crash can lose roughly the last minute of statistics;
-a diagnostics-storage outage can lose chart observations. This does not affect
-file data. Telemetry is disposable and excluded from encrypted catalog backups.
-
-CPU uses a fixed 0–100% scale, measured against available container cores and
-quota. RAM shows current cgroup usage and its finite limit when present. If no
-limit is configured, the chart explicitly uses an observed scale rather than
-implying that the container is full. Host CPU is a labelled fallback; load
-averages are diagnostic context, not CPU percentages. Process memory, container
-memory, host availability and retained cache bytes measure different things.
+</details>
 
 ### Investigate a slowdown
 
-Compare signals during the actual problem; a high value by itself does not
-identify a cause. Use the same time window for the network, CPU and RAM graphs.
-Account activity, provider cooldowns and detailed queue observations are current
-or recent process state; they are not a month-long per-request log.
-
-| What you observe | What to check next |
+| Observation | Check next |
 | --- | --- |
-| Cold reads wait, warm reads are quick | Telegram account capacity, request queues/cooldowns and whether the requested ranges are cached |
-| Bot slots are full and demand is queued | Active foreground work versus manual preloads; compare throughput before adding capacity |
-| High CPU with poor throughput | Container CPU quota and workload; compare a raw download with video processing |
-| RAM approaches its configured limit | Container usage, active stream memory and effective cache budget; host totals alone do not show container headroom |
-| Cache filesystem reaches its reserve | Free disk and configured budgets; cache may stop admitting bytes even though originals remain available |
-| Server delivery is quick but one browser is slow | Browser protocol, viewer route, device decoding and actual client buffered data; a warm server cache does not prove fast browser delivery |
-| URL import completed but current download rate is zero | Check the historical interval and lifetime network receive total; current idle rate correctly returns to zero |
+| Cold slow, warm quick | Account capacity, cooldowns, queue and requested-range coverage |
+| Full bot slots and waiting demand | Foreground versus preloads; measured effect of capacity changes |
+| High CPU, low throughput | CPU quota; raw download versus video processing |
+| RAM near limit | Container usage, stream memory, effective cache budget |
+| Cache reaches disk reserve | Free space and cache/staging budgets |
+| Server fast, one browser slow | Protocol, viewer route, decoder and client buffer |
+| Completed import, zero current rate | Historical interval and lifetime receive total |
 
-Change one setting at a time and compare the same workload. Queue position and
-wait estimates can change with eligible bots, ongoing requests and Telegram
-cooldowns. They cannot promise a precise completion time. Cache lookup hits and
-misses count lookups, not bytes saved.
-
-**Preloads** lists cached files above their associated jobs, newest downloaded
-data first. Reading cached bytes or refreshing does not change that order.
-Every row shows bytes, percent and positional coverage: blue segments mark
-cached regions in a **Partial** file; full coverage and **Ready**
-label mark complete coverage. Matching preparation jobs show their loading,
-queue or error status with the file. Clear one file or the whole cache after
-confirmation; Telegram originals stay unchanged. Change instance budgets in
-**Configuration → Cache settings**.
+Compare graphs over the same interval. Account/request details are current/recent
+state, not a month-long request log. Cache hits/misses count lookups, not saved
+bytes. **Preloads** shows current verified coverage and jobs; clearing cached
+bytes requires confirmation and leaves originals intact.
 
 ### Browser transport with a full cache
 
-A ready server cache removes Telegram payload work; it does not measure delivery
-to the viewer. Browser-selected HTTP/3 can behave differently from Python/curl
-HTTP/1.1 or HTTP/2 on a particular connection. TGDrive defaults to clearing
-alternative-service advertisements for predictable HTTPS delivery. See
-[proxy operation](operations.md#http-delivery-and-proxy-configuration) and the
-[fresh-browser validation](streaming-validation-2026-10-18.md) before attributing
-a warm-cache stall to Telegram or raising cache budgets.
+A ready cache removes origin payload work, not viewer transport. Browser HTTP/3
+can differ from curl/Python HTTP/1.1 or HTTP/2. TGDrive clears alternative-service
+advertisements by default. Check [proxy configuration](operations.md#http-delivery-and-proxy-configuration)
+and [fresh-browser validation](streaming-validation-2026-10-18.md) before attributing
+warm-cache stalls to Telegram or raising budgets.

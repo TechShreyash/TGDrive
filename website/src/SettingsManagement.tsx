@@ -74,7 +74,7 @@ export default function SettingsManagement({
 }: {
   onNotice?: (message: string, error?: boolean) => void;
   demoMode?: boolean;
-} = {}) {
+}) {
   const [settings, setSettings] = useState<ManagementSettings | null>(null);
   const [draft, setDraft] = useState<ConnectionDraft | null>(null);
   const [target, setTarget] = useState<string | null>(null);

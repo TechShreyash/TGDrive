@@ -140,11 +140,14 @@ def test_seek_waits_for_delayed_decoded_audio_without_fake_buffer_percentage(
     expect(status).to_be_visible(timeout=1500)
     expect(status).not_to_contain_text("% buffered")
     expect(status).not_to_contain_text("s ahead")
-    indicator = status.get_by_role(
-        "progressbar", name="Preparing audio and video frames"
-    )
+    indicator = status.get_by_role("progressbar", name="Loading video")
     expect(indicator).to_be_visible()
     assert indicator.get_attribute("value") is None
+    expect(status).not_to_contain_text("received")
+    expect(status).not_to_contain_text("/s")
+    expect(status).to_contain_text("Loading this part…")
+    # Wait feedback never intercepts the controls or offers an early reload.
+    expect(status.get_by_role("button", name="Try again")).to_have_count(0)
     page.screenshot(path=ARTIFACTS / "seek-waiting-for-real-audio.png", full_page=False)
     page.wait_for_function(
         "()=>document.querySelector('movi-player')?.currentTime>2.15"
@@ -214,3 +217,58 @@ def test_seek_audio_exceptions_do_not_deadlock(
     page.wait_for_function("()=>document.querySelector('movi-player')?.currentTime>2.2")
     expect(page.locator(".advanced-state")).to_have_count(0)
     assert page.evaluate("window.exceptionSeeks") == 1
+
+
+@pytest.mark.parametrize("failure", ["reconnecting", "error"])
+def test_playback_recovers_without_a_stale_error_panel(
+    server: Server, desktop: tuple[Any, Any], failure: str
+) -> None:
+    _, page = desktop
+    login(page, server.url)
+    page.get_by_role("button", name="Preview samples", exact=True).dblclick()
+    page.get_by_role("button", name="multitrack.mkv", exact=True).dblclick()
+    player = page.locator("movi-player")
+    page.wait_for_function("()=>document.querySelector('movi-player')?.duration>4")
+    player.evaluate(
+        """(el,failure)=>{
+          if(failure==='reconnecting')el.dispatchEvent(new CustomEvent('errordisplay',{
+            detail:{title:'Reconnecting…',message:'Retrying automatically…'}
+          }));
+          else el.dispatchEvent(new Event('error'));
+        }""",
+        failure,
+    )
+    if failure == "error":
+        expect(page.get_by_role("alert")).to_contain_text("The video could not play")
+    else:
+        expect(page.get_by_role("alert")).to_have_count(0)
+    # Genuine playback events/frames clear a temporary failure automatically.
+    player.locator("button.movi-play-pause").click()
+    page.wait_for_function("()=>document.querySelector('movi-player')?.currentTime>0.3")
+    expect(page.get_by_role("alert")).to_have_count(0)
+    expect(page.locator(".advanced-state")).to_have_count(0)
+
+
+def test_try_again_restores_position_without_starting_a_paused_video(
+    server: Server, desktop: tuple[Any, Any]
+) -> None:
+    _, page = desktop
+    login(page, server.url)
+    page.get_by_role("button", name="Preview samples", exact=True).dblclick()
+    page.get_by_role("button", name="multitrack.mkv", exact=True).dblclick()
+    player = page.locator("movi-player")
+    page.wait_for_function("()=>document.querySelector('movi-player')?.duration>4")
+    player.evaluate("el=>{window.originalPlayer=el;el.currentTime=1.5}")
+    page.wait_for_function(
+        "()=>Math.abs(document.querySelector('movi-player').currentTime-1.5)<0.1"
+        "&&!document.querySelector('movi-player').seeking"
+    )
+    player.evaluate("el=>el.dispatchEvent(new Event('error'))")
+    page.get_by_role("button", name="Try again", exact=True).click()
+    page.wait_for_function(
+        "()=>{const el=document.querySelector('movi-player');"
+        "return el&&el!==window.originalPlayer&&el.duration>4"
+        "&&Math.abs(el.currentTime-1.5)<0.1&&!el.seeking}"
+    )
+    assert player.evaluate("el=>el.paused") is True
+    expect(page.get_by_role("alert")).to_have_count(0)

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import re
+import time
 
 import pytest
 
@@ -49,7 +50,20 @@ def test_management_waits_for_deployment_policy(demo_server, desktop, config_fai
         page.unroute("**/api/config", deployment_config)
         state.get_by_role("button", name="Try Again", exact=True).click()
     else:
-        pending[0].fulfill(json=config)
+        # Login refreshes session-specific permissions. An earlier response
+        # must never apply owner capability to the newly authenticated visitor.
+        deadline = time.monotonic() + 5
+        while len(pending) < 2 and time.monotonic() < deadline:
+            page.wait_for_timeout(10)
+        assert len(pending) >= 2, "Expected a fresh configuration after login"
+        pending[0].fulfill(json={**config, "demo_read_only": False, "demo_admin": True})
+        # Let the fetch body and React state updates settle before asserting
+        # that the stale response leaves the management gate in place.
+        page.evaluate("() => new Promise(requestAnimationFrame)")
+        expect(state).to_be_visible()
+        expect(page.get_by_label("Memory cache (MiB)", exact=True)).to_have_count(0)
+        for route in pending[1:]:
+            route.fulfill(json=config)
 
     expect(state).to_have_count(0)
     expect(page.get_by_label("Memory cache (MiB)", exact=True)).to_be_disabled()

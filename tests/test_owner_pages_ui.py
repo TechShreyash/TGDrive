@@ -118,7 +118,7 @@ def test_shared_links_concise_expiry_keeps_exact_timezone(server, browser):
             has=page.get_by_role("button", name="Weekend trip.mp4", exact=True),
         )
         expect(row).to_have_count(1)
-        expect(row).not_to_contain_text("Created")
+        expect(row).to_contain_text("Created")
         expect(page.get_by_text("Details", exact=True)).to_have_count(0)
         expect(
             page.get_by_text("Anyone with an active link", exact=False)
@@ -128,7 +128,7 @@ def test_shared_links_concise_expiry_keeps_exact_timezone(server, browser):
             "timeStyle:'long', timeZone:'Asia/Kolkata'}).format(new Date(value))",
             expires,
         )
-        expiry = row.locator("time")
+        expiry = row.locator(".share-expiry time")
         # Jan 2 in New York is Jan 3 in the configured instance timezone.
         expect(expiry).to_contain_text("Jan 3, 2031")
         expect(expiry).to_have_attribute("aria-label", "Expires " + exact)
@@ -137,7 +137,7 @@ def test_shared_links_concise_expiry_keeps_exact_timezone(server, browser):
         expiry.focus()
         expect(tooltip).to_be_visible()
         expect(tooltip).to_have_text(exact)
-        row.get_by_role("button", name="Copy Link", exact=True).focus()
+        row.locator(".share-copy").focus()
         expect(tooltip).not_to_be_visible()
         expect(
             row.get_by_role("button", name="Show Weekend trip.mp4 in folder")

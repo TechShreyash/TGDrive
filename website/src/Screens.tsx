@@ -1,4 +1,4 @@
-import BrandMark from "./BrandMark";
+import BrandLogo from "./BrandLogo";
 import ChannelBackup from "./ChannelBackup";
 import DemoModeNotice from "./DemoModeNotice";
 import { Button, Paper } from "@mantine/core";
@@ -56,10 +56,7 @@ export function Login({ onSuccess }: { onSuccess: () => void }) {
   return (
     <main className="login-page">
       <a href="/" className="brand">
-        <span className="brand-symbol">
-          <BrandMark size={32} />
-        </span>
-        <strong>TGDrive</strong>
+        <BrandLogo size="large" />
       </a>
       <section
         id="login-dialog"
@@ -607,7 +604,9 @@ export function UploadSettings({
                   type="button"
                   className="icon-button"
                   aria-label="Fewer Uploads per Bot"
-                  disabled={demoMode || busy || !Number.isInteger(value) || value <= 1}
+                  disabled={
+                    demoMode || busy || !Number.isInteger(value) || value <= 1
+                  }
                   onClick={() => {
                     setValue(value - 1);
                     setNotice("");
@@ -634,7 +633,9 @@ export function UploadSettings({
                   type="button"
                   className="icon-button"
                   aria-label="More Uploads per Bot"
-                  disabled={demoMode || busy || !Number.isInteger(value) || value >= 4}
+                  disabled={
+                    demoMode || busy || !Number.isInteger(value) || value >= 4
+                  }
                   onClick={() => {
                     setValue(value + 1);
                     setNotice("");

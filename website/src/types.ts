@@ -7,9 +7,12 @@ export interface DriveItem {
   upload_date?: string;
   parent_names?: string[];
   starred?: boolean;
+  read_only?: boolean;
+  demo_files?: boolean;
 }
 export interface Directory {
   name?: string;
+  read_only?: boolean;
   contents: Record<string, DriveItem>;
 }
 export interface TransferLocation {
@@ -76,6 +79,8 @@ export interface Share {
 export interface PublicConfig {
   demo_data?: boolean;
   demo_mode?: boolean;
+  demo_read_only?: boolean;
+  demo_admin?: boolean;
   max_file_size: number;
   timezone?: string;
 }

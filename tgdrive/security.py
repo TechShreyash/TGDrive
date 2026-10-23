@@ -37,6 +37,14 @@ def credential_session_key(key: bytes, credential: str) -> bytes:
     ).digest()
 
 
+def demo_admin_session_key(key: bytes, credential: str) -> bytes:
+    """Keep demo administrator sessions independent of ordinary owner sessions."""
+
+    return hmac.new(
+        key, b"tgdrive/demo-admin-session/v1\0" + credential.encode(), hashlib.sha256
+    ).digest()
+
+
 class InvalidSession(ValueError):
     """Raised when a session token is invalid or expired."""
 
@@ -54,11 +62,21 @@ class SessionManager:
     """Create and verify compact HMAC-authenticated admin sessions."""
 
     def __init__(
-        self, key: bytes, ttl_seconds: int, database_path: Path | None = None
+        self,
+        key: bytes,
+        ttl_seconds: int,
+        database_path: Path | None = None,
+        *,
+        demo_admin_key: bytes | None = None,
     ) -> None:
         if len(key) < 32:
             raise ValueError("session key must contain at least 32 bytes")
+        if demo_admin_key is not None and len(demo_admin_key) < 32:
+            raise ValueError(
+                "demo administrator session key must contain at least 32 bytes"
+            )
         self._key = key
+        self._demo_admin_key = demo_admin_key
         self._ttl_seconds = ttl_seconds
         self._db = None
         # Range authorization runs in worker threads; share one connection safely.
@@ -112,7 +130,9 @@ class SessionManager:
                     (hashlib.sha256(token.encode()).hexdigest(),),
                 )
 
-    def create(self, *, now: int | None = None) -> str:
+    def create(self, *, now: int | None = None, demo_admin: bool = False) -> str:
+        if demo_admin and self._demo_admin_key is None:
+            raise ValueError("Demo administrator sign-in is not configured")
         issued_at = int(time.time() if now is None else now)
         payload = {
             "v": _TOKEN_VERSION,
@@ -120,11 +140,17 @@ class SessionManager:
             "exp": issued_at + self._ttl_seconds,
             "nonce": secrets.token_urlsafe(18),
         }
+        if demo_admin:
+            payload["demo_admin"] = True
         encoded = _b64encode(
             json.dumps(payload, separators=(",", ":"), sort_keys=True).encode()
         )
         signature = _b64encode(
-            hmac.new(self._key, encoded.encode("ascii"), hashlib.sha256).digest()
+            hmac.new(
+                self._demo_admin_key if demo_admin else self._key,
+                encoded.encode("ascii"),
+                hashlib.sha256,
+            ).digest()
         )
         token = f"{encoded}.{signature}"
         if self._db is not None:
@@ -157,9 +183,29 @@ class SessionManager:
             expected_signature = _b64encode(
                 hmac.new(self._key, encoded.encode("ascii"), hashlib.sha256).digest()
             )
-            if not hmac.compare_digest(supplied_signature, expected_signature):
+            ordinary_signature = hmac.compare_digest(
+                supplied_signature, expected_signature
+            )
+            administrator_signature = False
+            if self._demo_admin_key is not None:
+                administrator_signature = hmac.compare_digest(
+                    supplied_signature,
+                    _b64encode(
+                        hmac.new(
+                            self._demo_admin_key,
+                            encoded.encode("ascii"),
+                            hashlib.sha256,
+                        ).digest()
+                    ),
+                )
+            if not (ordinary_signature or administrator_signature):
                 raise InvalidSession("invalid session signature")
             payload = json.loads(_b64decode(encoded))
+            if not isinstance(payload, dict):
+                raise InvalidSession("malformed session")
+            elevated = payload.get("demo_admin") is True
+            if not (administrator_signature if elevated else ordinary_signature):
+                raise InvalidSession("invalid session capability signature")
             current_time = int(time.time() if now is None else now)
             if payload.get("v") != _TOKEN_VERSION:
                 raise InvalidSession("unsupported session version")

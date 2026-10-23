@@ -336,7 +336,6 @@ def test_hosted_and_local_compose_resolve_without_real_credentials(tmp_path):
         "compose.yaml",
         "compose.override.yaml",
         "compose.server.yaml",
-        "compose.coolify.yaml",
     ):
         shutil.copyfile(root / name, tmp_path / name)
     fixture = {
@@ -404,9 +403,7 @@ def test_hosted_and_local_compose_resolve_without_real_credentials(tmp_path):
     assert server["environment"]["COOKIE_SECURE"] == "true"
     assert server["environment"]["TGDRIVE_PROXY_HOSTS"] == ""
     assert server["restart"] == "unless-stopped"
-    legacy = config("compose.coolify.yaml")
-    assert not legacy.get("ports")
-    for deployment in (hosted, local, server, legacy):
+    for deployment in (hosted, local, server):
         for key, value in policy_defaults.items():
             assert deployment["environment"][key] == value
 
@@ -421,6 +418,6 @@ def test_hosted_and_local_compose_resolve_without_real_credentials(tmp_path):
         "TIMEZONE": "UTC",
     }
     environment.update(overrides)
-    for files in (("compose.yaml",), (), ("compose.coolify.yaml",)):
+    for files in (("compose.yaml",), (), ("compose.yaml", "compose.server.yaml")):
         rendered = config(*files)["environment"]
         assert {key: rendered[key] for key in overrides} == overrides

@@ -74,28 +74,16 @@ a {
 .player-brand {
     display: inline-flex;
     align-items: center;
-    gap: 11px;
+    flex: 0 0 auto;
     text-decoration: none;
 }
 
-.player-brand > span {
-    display: grid;
-    width: 42px;
-    height: 42px;
-    place-items: center;
-    background: rgba(255, 255, 255, 0.08);
-    border: 1px solid var(--line);
-    border-radius: 13px;
-}
-
 .player-brand img {
-    width: 23px;
-    height: 23px;
-}
-
-.player-brand strong {
-    font-size: 17px;
-    letter-spacing: -0.02em;
+    display: block;
+    width: 160px;
+    height: auto;
+    aspect-ratio: 2010 / 401;
+    object-fit: contain;
 }
 
 .back-link {
@@ -285,8 +273,8 @@ h1 {
 }
 
 @media (max-width: 430px) {
-    .player-brand strong {
-        display: none;
+    .player-brand img {
+        width: 160px;
     }
 
     .back-link {

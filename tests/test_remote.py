@@ -101,6 +101,13 @@ class FakeSession:
 
 
 PUBLIC_DNS = {"files.example": ["93.184.216.34"]}
+NON_PUBLIC_REMOTE_ADDRESSES = (
+    "100.64.0.1",
+    "100.100.100.200",
+    "100.127.255.254",
+    "::ffff:100.100.100.200",
+    "fec0::1",
+)
 
 
 class ConstructionTests(unittest.TestCase):
@@ -118,22 +125,50 @@ class ResolverPolicyTests(unittest.IsolatedAsyncioTestCase):
         with self.assertRaisesRegex(UnsafeRemoteURL, "non-public"):
             await resolver.resolve("mixed.example", 443, socket.AF_UNSPEC)
 
-    async def test_explicit_allow_private_bypasses_address_policy(self) -> None:
-        response = FakeResponse(
-            200,
-            headers={"Content-Length": "1", "Content-Type": "text/plain"},
-        )
-        client = RemoteClient(
-            allow_private=True,
-            session=FakeSession([response]),
-            resolver=FakeResolver({}),
-        )
+    async def test_shared_and_site_local_dns_answers_are_not_public(self) -> None:
+        for address in NON_PUBLIC_REMOTE_ADDRESSES:
+            with self.subTest(address=address):
+                resolver = ValidatingResolver(
+                    FakeResolver({"mixed.example": ["93.184.216.34", address]})
+                )
+                with self.assertRaisesRegex(UnsafeRemoteURL, "non-public"):
+                    await resolver.resolve("mixed.example", 443, socket.AF_UNSPEC)
 
-        info = await client.inspect("http://127.0.0.1/file.txt")
-        self.assertEqual(info.size, 1)
+    async def test_explicit_allow_private_bypasses_address_policy(self) -> None:
+        for address in ("127.0.0.1", *NON_PUBLIC_REMOTE_ADDRESSES):
+            with self.subTest(address=address):
+                session = FakeSession(
+                    [
+                        FakeResponse(200, headers={"Content-Length": "1"})
+                        for _ in range(2)
+                    ]
+                )
+                client = RemoteClient(
+                    allow_private=True,
+                    session=session,
+                    resolver=FakeResolver({"internal.example": [address]}),
+                )
+
+                info = await client.inspect("http://internal.example/file.txt")
+                self.assertEqual(info.size, 1)
+                host = f"[{address}]" if ":" in address else address
+                info = await client.inspect(f"http://{host}/file.txt")
+                self.assertEqual(info.size, 1)
+                self.assertEqual(len(session.calls), 2)
 
 
 class RemoteInspectionTests(unittest.IsolatedAsyncioTestCase):
+    async def test_shared_and_site_local_literals_are_rejected_before_request(
+        self,
+    ) -> None:
+        session = FakeSession([])
+        client = RemoteClient(session=session, resolver=FakeResolver({}))
+        for address in NON_PUBLIC_REMOTE_ADDRESSES:
+            host = f"[{address}]" if ":" in address else address
+            with self.subTest(address=address), self.assertRaises(UnsafeRemoteURL):
+                await client.inspect(f"http://{host}/file.txt")
+        self.assertEqual(session.calls, [])
+
     async def test_rejects_non_http_and_url_userinfo_before_request(self) -> None:
         session = FakeSession([])
         client = RemoteClient(
@@ -196,6 +231,26 @@ class RemoteInspectionTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(len(session.calls), 1)
         self.assertTrue(redirect.released)
+
+    async def test_redirect_cannot_reach_shared_or_site_local_dns_answers(self) -> None:
+        for address in NON_PUBLIC_REMOTE_ADDRESSES:
+            with self.subTest(address=address):
+                redirect = FakeResponse(
+                    302, headers={"Location": "http://internal.example/secret"}
+                )
+                session = FakeSession([redirect])
+                client = RemoteClient(
+                    session=session,
+                    resolver=FakeResolver(
+                        {**PUBLIC_DNS, "internal.example": [address]}
+                    ),
+                )
+
+                with self.assertRaises(UnsafeRemoteURL):
+                    await client.inspect("https://files.example/file")
+
+                self.assertEqual(len(session.calls), 1)
+                self.assertTrue(redirect.released)
 
     async def test_manual_redirect_limit_is_bounded(self) -> None:
         redirects = [

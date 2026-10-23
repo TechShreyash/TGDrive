@@ -137,6 +137,7 @@ class TransferManager:
         self.store = store
         self.remote = remote
         self.registry = registry
+        self.registry.demo_mode = bool(getattr(settings, "demo_mode", False))
         self._ensure_backup = ensure_backup
         self._ensure_lineage = ensure_lineage
         self._ensure_channel = ensure_channel

@@ -1,4 +1,10 @@
-import { api, ApiError, errorMessage, request } from "./api";
+import {
+  api,
+  ApiError,
+  errorMessage,
+  notifyDemoFilesReadOnly,
+  request,
+} from "./api";
 import type { Job, UploadSnapshot, TransferLocation } from "./types";
 import { sampleProgress, type ProgressSample } from "./progress";
 import { sendUploadChunk, type UploadChunkTransport } from "./uploadTransport";
@@ -1168,13 +1174,16 @@ export class TransferManager {
         if (response.status === 401)
           window.dispatchEvent(new Event("tgdrive:auth-required"));
         let detail = "";
+        let code = "";
         try {
           const failure = await response.json();
           if (typeof failure.detail === "string")
             detail = failure.detail.slice(0, 500);
+          if (typeof failure.code === "string") code = failure.code;
         } catch {
           /* A proxy may return a non-JSON error page. */
         }
+        notifyDemoFilesReadOnly(code);
         throw new ApiError(
           detail ||
             (response.status === 409
@@ -1183,7 +1192,7 @@ export class TransferManager {
                 ? "Temporary Storage is full. Free space or cancel a transfer, then retry."
                 : "Sending this file was interrupted. Retry to resume."),
           response.status,
-          "",
+          code,
           Math.max(0, Number(response.headers.get("Retry-After")) || 0),
         );
       }

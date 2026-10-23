@@ -23,6 +23,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
+from tgdrive.demo_files import DEMO_FILES_ID, DEMO_FILES_NAME, check_ids
 from tgdrive.errors import (
     CorruptStoreError,
     DuplicateNameError,
@@ -52,6 +53,7 @@ MAX_SEARCH_RESULTS = 500
 MAX_SEARCH_OFFSET = MAX_TREE_ITEMS
 # Bound independent capabilities without evicting somebody else's link.
 MAX_SHARE_TOKENS_PER_ITEM = 100
+_SHARE_UNSET = object()
 
 _ID_RE = re.compile(r"^[A-Za-z0-9_-]{1,128}$")
 _HASH_RE = re.compile(r"^[0-9a-f]{64}$")
@@ -1317,6 +1319,7 @@ class DriveStore:
     def _mutable(
         db: sqlite3.Connection, chain: list[sqlite3.Row], *, descendants: bool = False
     ) -> None:
+        DriveStore._demo_mutable(db, chain, descendants=descendants)
         roots = {
             row[0]
             for row in db.execute(
@@ -1328,6 +1331,16 @@ class DriveStore:
             and roots.intersection(DriveStore._subtree_ids(db, chain[-1]["id"]))
         ):
             raise ValidationError("item is pending permanent deletion")
+
+    @staticmethod
+    def _demo_mutable(db, chain, *, descendants=False):
+        from tgdrive.demo_files import restricted_writes
+
+        if not restricted_writes.get():
+            return
+        check_ids(row["id"] for row in chain)
+        if descendants:
+            check_ids(DriveStore._subtree_ids(db, chain[-1]["id"]))
 
     @staticmethod
     def _record(
@@ -1859,6 +1872,46 @@ class DriveStore:
     def create_folder(self, parent_path: str, name: str) -> dict[str, Any]:
         return self._add(parent_path, name, None)
 
+    def ensure_demo_files(self) -> dict[str, Any]:
+        """Create the reserved demo folder once; preserve its stable identity."""
+        with self._transaction(write=True) as db:
+            node = db.execute(
+                "SELECT * FROM nodes WHERE id=?", (DEMO_FILES_ID,)
+            ).fetchone()
+            if node is not None:
+                if node["kind"] != "folder":
+                    raise ValidationError(
+                        "The reserved Demo Files identity is not a folder"
+                    )
+                return self._record(node, self._path_for_id(db, DEMO_FILES_ID))
+            if not self._unique(db, ROOT_ID, DEMO_FILES_NAME):
+                raise DuplicateNameError(
+                    "A different item named Demo Files already exists. "
+                    "Disable demo mode and rename that item before enabling it again."
+                )
+            self._mutable(db, self._resolve(db, "/")[2])
+            if db.execute("SELECT count(*) FROM nodes").fetchone()[0] >= MAX_TREE_ITEMS:
+                raise ValidationError("maximum item count exceeded")
+            db.execute(
+                "INSERT INTO nodes(id,parent_id,kind,name,name_key,upload_date) "
+                "VALUES(?,?,?,?,?,?)",
+                (
+                    DEMO_FILES_ID,
+                    ROOT_ID,
+                    "folder",
+                    DEMO_FILES_NAME,
+                    _name_key(DEMO_FILES_NAME),
+                    _utc_now(),
+                ),
+            )
+            self._bump(db)
+            return self._record(
+                db.execute(
+                    "SELECT * FROM nodes WHERE id=?", (DEMO_FILES_ID,)
+                ).fetchone(),
+                "/" + DEMO_FILES_ID,
+            )
+
     def add_file(
         self,
         parent_path: str,
@@ -1895,6 +1948,7 @@ class DriveStore:
             node, path, chain = self._resolve(db, path)
             if node["id"] == ROOT_ID:
                 raise RootMutationError("the root folder cannot be renamed")
+            self._demo_mutable(db, chain, descendants=True)
             self._mutable(db, chain)
             if node["kind"] == "file":
                 _validate_file_rename(node["name"], name)
@@ -2198,6 +2252,7 @@ class DriveStore:
         with self._transaction(write=True) as db:
             node, _, chain = self._resolve(db, path)
             self._visible(chain)
+            self._demo_mutable(db, chain, descendants=True)
             self._mutable(db, chain)
             identity = secrets.token_urlsafe(16)
             token = (
@@ -2273,32 +2328,52 @@ class DriveStore:
                 )
             return result
 
-    def update_share(self, share_id: str, *, label: str, expires_at: str | None):
-        label = _share_label(label)
-        expiry = _validate_timestamp(expires_at) if expires_at is not None else None
-        if expiry is not None and expiry <= _utc_now():
+    def update_share(
+        self, share_id: str, *, label=_SHARE_UNSET, expires_at=_SHARE_UNSET
+    ):
+        # Omission preserves the current value; explicit None removes expiry.
+        if label is not _SHARE_UNSET:
+            label = _share_label(label)
+        expiry = expires_at
+        if expires_at is not _SHARE_UNSET and expires_at is not None:
+            expiry = _validate_timestamp(expires_at)
+        if expiry is not _SHARE_UNSET and expiry is not None and expiry <= _utc_now():
             raise ValidationError("Link expiry must be in the future")
         with self._transaction(write=True) as db:
-            row = db.execute(
-                "SELECT node_id FROM shares WHERE id=?", (share_id,)
-            ).fetchone()
+            row = db.execute("SELECT * FROM shares WHERE id=?", (share_id,)).fetchone()
             if row is None:
                 raise NotFoundError("Link not found")
             _, _, chain = self._resolve(db, self._path_for_id(db, row["node_id"]))
             self._visible(chain)
+            self._demo_mutable(db, chain, descendants=True)
             self._mutable(db, chain)
+            if label is _SHARE_UNSET and expiry is _SHARE_UNSET:
+                return
             db.execute(
                 "UPDATE shares SET label=?,expires_at=? WHERE id=?",
-                (label, expiry, share_id),
+                (
+                    row["label"] if label is _SHARE_UNSET else label,
+                    row["expires_at"] if expiry is _SHARE_UNSET else expiry,
+                    share_id,
+                ),
             )
             self._bump(db)
 
     def revoke_share(self, share_id: str) -> bool:
         with self._transaction(write=True) as db:
             if share_id.startswith("/"):
-                node, _, _ = self._resolve(db, share_id)
+                node, _, chain = self._resolve(db, share_id)
+                self._demo_mutable(db, chain, descendants=True)
                 cursor = db.execute("DELETE FROM shares WHERE node_id=?", (node["id"],))
             else:
+                share = db.execute(
+                    "SELECT node_id FROM shares WHERE id=?", (share_id,)
+                ).fetchone()
+                if share is not None:
+                    _, _, chain = self._resolve(
+                        db, self._path_for_id(db, share["node_id"])
+                    )
+                    self._demo_mutable(db, chain, descendants=True)
                 cursor = db.execute("DELETE FROM shares WHERE id=?", (share_id,))
             if cursor.rowcount:
                 self._bump(db)
@@ -2354,6 +2429,7 @@ class DriveStore:
             node, path, chain = self._resolve(db, path)
             if node["id"] == ROOT_ID:
                 raise RootMutationError("the root folder cannot be deleted")
+            self._demo_mutable(db, chain, descendants=True)
             existing = db.execute(
                 "SELECT 1 FROM deletion_intents WHERE root_id=? AND state!='completed'",
                 (node["id"],),
@@ -2375,6 +2451,7 @@ class DriveStore:
             node, path, chain = self._resolve(db, path)
             if node["id"] == ROOT_ID:
                 raise RootMutationError("the root folder cannot be deleted")
+            self._demo_mutable(db, chain, descendants=True)
             existing = db.execute(
                 "SELECT * FROM deletion_intents WHERE root_id=? AND state!='completed'",
                 (node["id"],),
@@ -2497,6 +2574,10 @@ class DriveStore:
                 raise NotFoundError("deletion intent not found")
             record = self._deletion_record(db, intent)
             if intent["state"] != "completed":
+                _, _, chain = self._resolve(
+                    db, self._path_for_id(db, intent["root_id"])
+                )
+                self._demo_mutable(db, chain, descendants=True)
                 db.execute("DELETE FROM nodes WHERE id=?", (intent["root_id"],))
                 db.execute(
                     "DELETE FROM deletion_messages WHERE intent_id=?", (intent_id,)

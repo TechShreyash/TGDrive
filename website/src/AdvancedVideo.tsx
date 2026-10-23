@@ -1,10 +1,19 @@
 import { useEffect, useReducer, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { RefreshCw } from "lucide-react";
+import { LoaderCircle, RefreshCw } from "lucide-react";
 import type { MoviElement } from "movi-player/element/slim";
 import wasmUrl from "movi-player/movi.wasm?url";
-import { formatBytes } from "./types";
 import MovTextRenderer, { isMovTextCodec } from "./MovTextRenderer";
+import {
+  attachVideoPresentation,
+  refreshVideoActions,
+  clearVideoQualityControl,
+  installVideoPresentation,
+  setVideoQualityControl,
+  type VideoQualityControl,
+} from "./videoPlayerPresentation";
+import { installVideoPlayerPip } from "./videoPlayerPip";
+import { attachVideoGestures } from "./videoPlayerGestures";
 import "./AdvancedVideo.css";
 import advancedStyles from "./AdvancedVideo.css?inline";
 
@@ -228,64 +237,90 @@ export function videoBufferSnapshot(player: {
     bytesPerSecond: positive(stats?.currentSpeed),
   };
 }
-const emptyBuffer: VideoBufferSnapshot = {
-  ranges: [],
-  received: 0,
-  bytesPerSecond: 0,
-};
 const phaseCopy = {
-  player: { title: "Loading player", description: "Loading playback tools…" },
-  opening: {
-    title: "Opening video",
-    description: "Reading video data and tracks…",
-  },
-  preparing: {
-    title: "Preparing playback",
-    description: "Reading video data and tracks…",
-  },
-  buffering: {
-    title: "Buffering video",
-    description: "Waiting for audio and video to be ready…",
-  },
-  seeking: {
-    title: "Moving to this position",
-    description: "Preparing audio and video at this position…",
-  },
+  player: "Loading video…",
+  opening: "Loading video…",
+  preparing: "Loading video…",
+  buffering: "Waiting for video…",
+  seeking: "Loading this part…",
 };
 export default function AdvancedVideo({
   src,
   name,
   playback,
+  qualityControl,
 }: {
   src: string;
   name: string;
   playback: { current: { time: number; playing: boolean } | null };
+  qualityControl?: VideoQualityControl;
 }) {
   const host = useRef<HTMLDivElement>(null);
   const activePlayer = useRef<MoviElement | null>(null);
+  const restorePlayerFocus = useRef(false);
+  const qualityControlRef = useRef(qualityControl);
+  qualityControlRef.current = qualityControl;
+  const currentQualityControl = (): VideoQualityControl | undefined => {
+    const control = qualityControlRef.current;
+    if (!control) return;
+    return {
+      ...control,
+      onChange: (value) => {
+        restorePlayerFocus.current = true;
+        const surface = host.current?.parentElement;
+        // Keep the stable player surface fullscreen while replacing its engine.
+        // Request synchronously from the quality button's user activation.
+        if (document.fullscreenElement === activePlayer.current && surface) {
+          void surface
+            .requestFullscreen()
+            .catch(() => {})
+            .then(() => {
+              qualityControlRef.current?.onChange(value);
+            });
+        } else control.onChange(value);
+      },
+    };
+  };
+  useEffect(() => {
+    if (activePlayer.current)
+      setVideoQualityControl(activePlayer.current, currentQualityControl());
+  }, [qualityControl]);
   const [state, dispatch] = useReducer(
     videoLoadTransition,
     initialVideoLoadState,
   );
   const [attempt, setAttempt] = useState(0);
   const [slow, setSlow] = useState(false);
-  const [playRequested, setPlayRequested] = useState(false);
+  const [showStatus, setShowStatus] = useState(false);
   const [playbackError, setPlaybackError] = useState("");
-  const [buffer, setBuffer] = useState<VideoBufferSnapshot>(emptyBuffer);
   const [visible, setVisible] = useState(!document.hidden);
   const [chapterSurface, setChapterSurface] = useState<ShadowRoot | null>(null);
+  useEffect(() => {
+    setShowStatus(false);
+    if (state.phase === "ready") return;
+    // Short startup work stays quiet. Playback waits are already debounced below.
+    const timer = window.setTimeout(
+      () => setShowStatus(true),
+      state.ready ? 0 : 500,
+    );
+    return () => clearTimeout(timer);
+  }, [state.phase, state.ready, attempt]);
   useEffect(() => {
     const update = () => setVisible(!document.hidden);
     document.addEventListener("visibilitychange", update);
     return () => document.removeEventListener("visibilitychange", update);
   }, []);
   useEffect(() => {
-    const update = () =>
+    const update = () => {
+      activePlayer.current?.setHostFullscreen(
+        document.fullscreenElement === host.current?.parentElement,
+      );
       setChapterSurface(
         document.fullscreenElement === activePlayer.current
           ? activePlayer.current?.shadowRoot || null
           : null,
       );
+    };
     document.addEventListener("fullscreenchange", update);
     return () => document.removeEventListener("fullscreenchange", update);
   }, []);
@@ -299,6 +334,7 @@ export default function AdvancedVideo({
   useEffect(() => {
     let cancelled = false;
     let failed = false;
+    let codecRejected = false;
     let usable = false;
     let player: MoviElement | null = null;
     let subtitleRenderer: MovTextRenderer | null = null;
@@ -306,24 +342,11 @@ export default function AdvancedVideo({
     let frameCallback: number | undefined;
     let previousTime = Number.NaN;
     let latestProgressAt = 0;
-    let receivedBaseline = 0;
     let chapterEntries: VideoChapter[] = [];
     let chapterRegistered = false;
-    const chapterKeyboardGuard = (event: KeyboardEvent) => {
-      if (
-        (event.key === " " || event.key === "Enter") &&
-        event
-          .composedPath()
-          .some(
-            (node) =>
-              node instanceof HTMLButtonElement &&
-              node.dataset.customControl === "tgdrive-chapters",
-          )
-      )
-        // Preserve native button activation, but keep Space out of the player's
-        // global play shortcut. Delegation survives compact-control rebuilding.
-        event.stopPropagation();
-    };
+    let detachPresentation: (() => void) | undefined;
+    let detachPip: (() => void) | undefined;
+    let detachGestures: (() => void) | undefined;
     const hideChapters = () => player?.hideOverlay("tgdrive-chapters");
     const showChapters = () => {
       if (!player || cancelled) return;
@@ -392,6 +415,7 @@ export default function AdvancedVideo({
         if (chapterRegistered) player.removeControl("tgdrive-chapters");
         chapterRegistered = false;
         hideChapters();
+        refreshVideoActions(player);
         return;
       }
       if (!chapterRegistered) {
@@ -408,6 +432,7 @@ export default function AdvancedVideo({
           onSelect: showChapters,
         });
       }
+      refreshVideoActions(player);
     };
     const updateSubtitleRenderer = () => {
       if (!player || cancelled) return;
@@ -430,22 +455,38 @@ export default function AdvancedVideo({
       playRequested: boolean;
     } | null = null;
     let waitingTimer: number | undefined;
+    let pendingSeek = false;
     let pendingWait: "waiting" | "seeking" = "waiting";
     const listeners: [string, EventListener][] = [];
     dispatch("reset");
-    setPlayRequested(false);
     setPlaybackError("");
-    setBuffer(emptyBuffer);
     const clearWaiting = () => {
       clearTimeout(waitingTimer);
       waitingTimer = undefined;
     };
-    const fail = () => {
+    const recover = () => {
+      if (!failed || codecRejected) return;
+      failed = false;
+      setPlaybackError("");
+    };
+    const fail = (event?: Event) => {
+      if (cancelled) return;
+      // Movi retries dropped connections itself. A reconnect is a wait, not a
+      // permanent error, and playback can recover without the user's help.
+      if (
+        event?.type === "errordisplay" &&
+        (event as CustomEvent<{ title?: string }>).detail?.title ===
+          "Reconnecting…"
+      ) {
+        recover();
+        waiting("waiting");
+        return;
+      }
       if (!cancelled && !failed) {
         failed = true;
         clearWaiting();
         setPlaybackError(
-          "Video playback could not load. Reload the video to try again.",
+          "The video could not play. Try again, or download it to watch on your device.",
         );
       }
     };
@@ -465,10 +506,6 @@ export default function AdvancedVideo({
     const updateBuffer = () => {
       if (!player || cancelled || failed) return;
       const sample = videoBufferSnapshot(player);
-      setBuffer({
-        ...sample,
-        received: Math.max(0, sample.received - receivedBaseline),
-      });
       // Pinned Movi 0.4.1 can leave this documented CSS part at zero while
       // paused, even with a ready buffer. Paint its own public TimeRanges,
       // including the seek origin, instead of converting server byte offsets.
@@ -477,8 +514,7 @@ export default function AdvancedVideo({
       );
       const range = sample.ranges[0]; // This engine exposes one contiguous source window.
       if (bar && Number.isFinite(player.duration) && player.duration > 0) {
-        bar.title =
-          "Estimated loaded source range; audio and video may still need decoding";
+        bar.title = "Loaded video (approximate)";
         bar.style.left =
           (range ? (range.start / player.duration) * 100 : 0) + "%";
         bar.style.width =
@@ -489,11 +525,14 @@ export default function AdvancedVideo({
     const ready = (
       event: "loadedmetadata" | "loadeddata" | "canplay" | "ready" | "playing",
     ) => {
-      if (cancelled || failed) return;
+      if (cancelled || codecRejected) return;
+      if (failed && (event === "loadedmetadata" || event === "loadeddata"))
+        return;
       if (event === "canplay" || event === "ready") {
         const codec = unavailableVideoCodec(player?.player);
         if (codec) {
           failed = true;
+          codecRejected = true;
           clearWaiting();
           setPlaybackError(
             "This video’s codec" +
@@ -503,6 +542,7 @@ export default function AdvancedVideo({
           return;
         }
       }
+      recover();
       usable = true;
       updateBuffer();
       updateChapters();
@@ -516,8 +556,8 @@ export default function AdvancedVideo({
         return;
       }
       clearWaiting();
+      pendingSeek = false;
       dispatch(event);
-      setPlayRequested(false);
 
       updateStartPosition();
       if (resume && player && !resume.playRequested) {
@@ -536,12 +576,11 @@ export default function AdvancedVideo({
       }
       if (kind === "waiting" && player?.paused) return;
       if (kind === "seeking" && player) {
+        pendingSeek = true;
         previousTime = Number.NaN;
         latestProgressAt = 0;
-        receivedBaseline = videoBufferSnapshot(player).received;
-        setBuffer(emptyBuffer);
       }
-      pendingWait = kind;
+      pendingWait = pendingSeek ? "seeking" : kind;
       if (waitingTimer !== undefined) return;
       waitingTimer = window.setTimeout(() => {
         waitingTimer = undefined;
@@ -557,15 +596,20 @@ export default function AdvancedVideo({
     const settle = (event: "pause" | "seeked" | "ended") => {
       if (cancelled || failed) return;
       clearWaiting();
+      if (event !== "seeked") pendingSeek = false;
       dispatch(event);
     };
     void import("movi-player/element/slim")
       .then(({ MoviElement }) => {
         if (cancelled || !host.current) return;
         installLocalStyles(MoviElement);
+        installVideoPresentation(MoviElement);
         player = document.createElement("movi-player");
         activePlayer.current = player;
-        player.addEventListener("keydown", chapterKeyboardGuard, true);
+        setVideoQualityControl(player, currentQualityControl());
+        detachPresentation = attachVideoPresentation(player);
+        detachPip = installVideoPlayerPip(player);
+        detachGestures = attachVideoGestures(player);
         player.setAttribute("wasmurl", wasmUrl);
         player.setAttribute("engine", "wasm");
         player.setAttribute("sw", "auto");
@@ -579,7 +623,7 @@ export default function AdvancedVideo({
         player.setAttribute("fastseek", "keys gestures");
         // Chapter titles and times work immediately, even on a slow Telegram link.
         // notimeline disables thumbnail generation, not the normal seek/progress bar.
-        player.setAttribute("controlslist", "notimeline");
+        player.setAttribute("controlslist", "notimeline nospinner");
         player.setAttribute("aria-label", "Enhanced video player for " + name);
         const saved = playback.current;
         if (saved) {
@@ -597,6 +641,8 @@ export default function AdvancedVideo({
           listeners.push([type, callback]);
         };
         listen("loadstart", () => {
+          codecRejected = false;
+          recover();
           usable = false;
           clearWaiting();
           dispatch("loadstart");
@@ -608,9 +654,6 @@ export default function AdvancedVideo({
         // TrackManager emits this synchronously before choosing the decoder.
         // Install the public extension in time to receive raw MP4 text packets.
         listen("subtitletrackchange", updateSubtitleRenderer);
-        listen("play", () => {
-          if (!usable && !cancelled) setPlayRequested(true);
-        });
         listen("loadedmetadata", () => ready("loadedmetadata"));
         listen("loadeddata", () => ready("loadeddata"));
         listen("canplay", () => ready("canplay"));
@@ -624,9 +667,10 @@ export default function AdvancedVideo({
           // A new position can be available before its audio/video refill is ready.
           // Keep the actual engine wait visible instead of treating seeked as play.
           if (player?.player?.getState() === "buffering") waiting("waiting");
+          else pendingSeek = false;
         });
         const observeProgress = () => {
-          if (!player || cancelled || failed) return;
+          if (!player || cancelled) return;
           observeResumePosition();
           updateBuffer();
         };
@@ -648,14 +692,22 @@ export default function AdvancedVideo({
         listen("errordisplay", fail);
         dispatch("engine-loaded");
         host.current.append(player);
+        player.setHostFullscreen(
+          document.fullscreenElement === host.current.parentElement,
+        );
+        if (restorePlayerFocus.current) {
+          restorePlayerFocus.current = false;
+          player.focus({ preventScroll: true });
+        }
         player.src = new URL(src, window.location.origin).href;
         const presentedFrame = (_now: number, metadata: unknown) => {
-          if (!player || cancelled || failed) return;
+          if (!player || cancelled) return;
           const mediaTime = (metadata as { mediaTime?: number } | null)
             ?.mediaTime;
           // A clock jump or prefetched source range is not proof of moving pictures.
           // Reset at every seek and require successive presented frames instead.
           if (
+            !codecRejected &&
             videoIsAdvancing(
               previousTime,
               mediaTime ?? Number.NaN,
@@ -663,6 +715,8 @@ export default function AdvancedVideo({
               player.seeking,
             )
           ) {
+            recover();
+            pendingSeek = false;
             latestProgressAt = performance.now();
             clearWaiting();
             dispatch("playing");
@@ -678,8 +732,12 @@ export default function AdvancedVideo({
       cancelled = true;
       clearWaiting();
       clearInterval(progressTimer);
+      detachPresentation?.();
+      detachPip?.();
+      detachGestures?.();
       if (player) {
-        player.removeEventListener("keydown", chapterKeyboardGuard, true);
+        restorePlayerFocus.current ||= document.activeElement === player;
+        clearVideoQualityControl(player);
         if (frameCallback !== undefined)
           player.cancelVideoFrameCallback(frameCallback);
         if (resume && !resume.positionApplied)
@@ -704,57 +762,56 @@ export default function AdvancedVideo({
       }
     };
   }, [src, name, playback, attempt]);
-  const copy = playbackError
-    ? { title: "Playback unavailable", description: playbackError }
-    : state.phase !== "ready"
-      ? phaseCopy[state.phase]
-      : null;
-  const loadingStatus = copy ? (
-    <div
-      className="advanced-state advanced-state-buffering"
-      data-phase={state.phase}
-      data-hidden={!visible}
-      data-error={Boolean(playbackError)}
-    >
-      <div className="advanced-state-content">
-        <div
-          role={playbackError ? "alert" : "status"}
-          aria-live="polite"
-          aria-atomic="true"
-        >
-          <h3>{copy.title}</h3>
-          <p>
-            {playbackError ||
-              (playRequested
-                ? "Playback will start when the video is ready."
-                : copy.description)}
-          </p>
-        </div>
-        {!playbackError && (
-          <div className="advanced-buffer-progress">
-            <progress aria-label="Preparing audio and video frames" />
-            <p className="advanced-buffer-metrics" aria-live="off">
-              {buffer.received > 0
-                ? formatBytes(buffer.received) + " received"
-                : "Preparing audio and video frames…"}
-              {buffer.bytesPerSecond > 0 &&
-                " · " + formatBytes(buffer.bytesPerSecond) + "/s"}
+  const copy = state.phase !== "ready" ? phaseCopy[state.phase] : null;
+  const loadingStatus =
+    playbackError || (copy && showStatus) ? (
+      <div
+        className={
+          "advanced-state " +
+          (playbackError ? "advanced-state-error" : "advanced-state-buffering")
+        }
+        data-phase={state.phase}
+        data-hidden={!visible}
+        data-error={Boolean(playbackError)}
+      >
+        <div className="advanced-state-content">
+          <div
+            role={playbackError ? "alert" : "status"}
+            aria-live="polite"
+            aria-atomic="true"
+          >
+            {playbackError ? (
+              <>
+                <h3>Can’t play this video</h3>
+                <p>{playbackError}</p>
+              </>
+            ) : (
+              <div className="advanced-wait-label">
+                <span role="progressbar" aria-label="Loading video">
+                  <LoaderCircle size={18} aria-hidden="true" />
+                </span>
+                <span>{copy}</span>
+              </div>
+            )}
+          </div>
+          {!playbackError && slow && (
+            <p className="advanced-wait-help">
+              Taking longer than usual. You can wait or try again.
             </p>
-          </div>
-        )}
-        {(slow || playbackError) && (
-          <div className="advanced-state-actions">
-            <button
-              type="button"
-              onClick={() => setAttempt((value) => value + 1)}
-            >
-              <RefreshCw size={16} /> Reload Video
-            </button>
-          </div>
-        )}
+          )}
+          {(slow || playbackError) && (
+            <div className="advanced-state-actions">
+              <button
+                type="button"
+                onClick={() => setAttempt((value) => value + 1)}
+              >
+                <RefreshCw size={16} aria-hidden="true" /> Try again
+              </button>
+            </div>
+          )}
+        </div>
       </div>
-    </div>
-  ) : null;
+    ) : null;
   return (
     <div className="advanced-video" data-phase={state.phase}>
       <div

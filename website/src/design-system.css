@@ -25,9 +25,6 @@
   color: var(--muted);
   letter-spacing: 0;
 }
-.sidebar .brand-symbol {
-  color: var(--action);
-}
 .drive-nav a {
   transition:
     background-color 140ms ease-out,
@@ -116,6 +113,16 @@
 .configuration-value .mantine-NumberInput-control {
   color: var(--muted);
   border-color: var(--line);
+}
+@media (max-width: 720px), (pointer: coarse) {
+  .configuration-value input.mantine-NumberInput-input,
+  .performance-field input.mantine-TextInput-input {
+    min-height: 44px;
+    font-size: 16px;
+  }
+  .mantine-Tabs-tab {
+    min-height: 44px;
+  }
 }
 .configuration-auto-preload {
   border-top: 1px solid var(--line);
@@ -368,7 +375,8 @@
 .performance-chart-now {
   color: var(--success);
 }
-@media (max-width: 720px) {
+@media (max-width: 720px),
+  (max-width: 1000px) and (max-height: 600px) and (pointer: coarse) {
   .main-content {
     padding-top: 0;
   }
@@ -534,7 +542,8 @@ textarea {
 .preference-section .upload-settings-actions {
   margin-top: 8px;
 }
-@media (max-width: 720px) {
+@media (max-width: 720px),
+  (max-width: 1000px) and (max-height: 600px) and (pointer: coarse) {
   .preference-section.mantine-Paper-root {
     padding: 14px;
     margin-top: 8px;

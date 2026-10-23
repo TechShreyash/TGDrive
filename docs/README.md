@@ -1,60 +1,44 @@
-# TGDrive documentation
+<h1><img src="../website/public/static/brand/tgdrive-icon.svg" alt="" width="36" height="36"> TGDrive documentation</h1>
 
-**New here? Start with [Setup](setup.md), then [Using TGDrive](usage.md).**
+**New here? [Try the live demo](usage.md#try-the-public-demo), or start with [Setup](setup.md).**
+These guides describe fresh TGDrive 2.0.0 deployments with MongoDB.
 
-TGDrive is your own file manager. You run the app; Telegram holds your files,
-and MongoDB remembers their names, folders and sharing settings.
-
-## What do you want to do?
+[Install](setup.md) → [Upload and share](usage.md) → [Protect your drive](backup-recovery.md)
 
 | I want to… | Read |
 | --- | --- |
-| Run TGDrive on my laptop only when needed | [Private Docker setup](setup.md) |
-| Host TGDrive for remote access and sharing | [Recommended: Coolify](setup.md#coolify), or [server Compose](setup.md#docker-compose-on-a-server) |
+| Try TGDrive before hosting it | [Live demo and password](usage.md#try-the-public-demo) |
+| Understand 24/7 access and background processing | [Why host on a server?](setup.md#why-host-on-a-server) |
+| Run locally on Windows, macOS or Linux | [Docker installation](setup.md#before-you-start) · [TGDrive setup](setup.md#4-start-locally) |
+| Manage deployment on my own server | [Free, self-hosted Coolify](setup.md#coolify) · [Server Compose](setup.md#docker-compose-on-a-server) |
+| Buy a server and manage TGDrive myself | [Server-only hosting; order through Telegram](setup.md#server-only-hosting) |
+| Have TGDrive hosted and managed for me | [Managed hosting by TechShreyash](setup.md#managed-tgdrive-hosting) |
+| Keep my drive after hosting expires | [Move to a laptop or another server](operations.md#when-a-hosting-plan-expires) |
 | Offer a public demo with settings locked | [Public demo mode](configuration.md#public-demo-mode) |
-| Upload, organize, preview or share files | [Using TGDrive](usage.md) |
-| Preload a whole file before watching/sharing and understand automatic read-ahead | [Preloading](usage.md#preload-a-file-for-smoother-playback-and-downloads) |
-| Use a download manager with parallel or resumed ranges | [Parallel and resumed downloads](usage.md#parallel-and-resumed-downloads) |
-| Understand adaptive uploads, device/server stages or when a tab can close | [Upload speed and queue](usage.md#upload-speed-and-queue), [tab closure](usage.md#can-i-close-the-tab) |
-| Read PDFs, ebooks or comics without downloading every byte first | [Reading books and comics](reading.md) |
-| Understand generated image, video and PDF covers | [Thumbnail generation](thumbnails.md) |
+| Upload, browse, preview or share | [User guide](usage.md) |
+| Read ebooks/comics or understand covers | [Readers](reading.md) · [Thumbnails](thumbnails.md) |
+| Change settings or improve speed | [Configuration](configuration.md) · [Performance](performance.md) |
 | Restart, upgrade or fix a problem | [Operations](operations.md) |
-| Configure an independent backup channel, save recovery keys or restore after data loss | [Backup & recovery](backup-recovery.md) |
-| Understand settings, restore safe defaults or tune a larger server | [Configuration & tuning](configuration.md) |
-| Improve streaming, control cache budgets or prepare shared downloads | [Performance and caching](performance.md) |
-| Review fresh-browser playback, protocol and cached-seek checks | [Streaming validation](streaming-validation-2026-10-18.md) |
-| Check what works and what still needs work | [Roadmap](roadmap.md) |
+| Protect files or recover a drive | [Backup & recovery](backup-recovery.md) |
 
-## For contributors
+Keep originals until **Completed**. **You can close this tab** means the server
+has accepted the files; TGDrive must keep running to finish processing them.
 
-| I need… | Read |
+<details>
+<summary>Contributor and technical documentation</summary>
+
+| Topic | Guide |
 | --- | --- |
-| A map of how the app works | [Architecture](architecture.md) |
-| An environment variable or API contract | [Reference](reference.md) |
-| Build commands, tests or release instructions | [Development](development.md) |
+| Components, data flow and durability | [Architecture](architecture.md) |
+| Environment variables and API contracts | [Reference](reference.md) |
+| Build commands and validation | [Development](development.md) |
+| Source artifacts and release checks | [Release verification](release.md) |
+| Implemented features and remaining gaps | [Roadmap](roadmap.md) |
+| Dated playback measurements | [Streaming validation](streaming-validation-2026-10-18.md) |
+| Add the prepared screenshots and demo video | [Media slots and replacement guide](assets/README.md) |
 
-## Three things to know
+Follow [contributor guidance](../AGENTS.md). Keep each topic in one place and link
+to it. Documentation describes behavior; [validation evidence](development.md#ci-and-release-evidence)
+records what was actually tested.
 
-- **Premium is optional.** Large files can be split across Telegram messages
-  while appearing as one file. Every account uses the same default and maximum
-  2000 MiB document size, which you can reduce. Premium is preferred for transfer speed.
-- **Keep your database access and recovery key.** Reinstalling the app can reopen
-  the same MongoDB drive. Telegram database backups offer a separate recovery route.
-- **Close the tab after server acceptance; keep originals until “Completed”.**
-  The upload panel confirms when all selected files have reached the server.
-  Telegram processing can then continue while TGDrive itself stays running.
-  Unfinished uploads can still need originals or staged bytes during recovery.
-
-Local access uses this computer's loopback address. Other people cannot open its
-share links, and nothing runs while the app is stopped. Keep the private Telegram
-channel app-managed: no manual message edits/deletions or automatic cleanup.
-
-## Current release status
-
-This is an **unreleased development version**. Focused MongoDB and live Chrome
-checks have passed; final release testing and packaging remain pending.
-See [tested versus unverified](development.md#ci-and-release-evidence).
-
-These pages are the maintained documentation. Behavior changes should
-update the relevant page, rather than add another overlapping guide. Contributor
-and agent changes follow the [documentation maintenance rules](../AGENTS.md).
+</details>

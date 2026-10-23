@@ -98,7 +98,8 @@ def test_selective_reader_controls_and_mobile_layout(
 
 
 def test_independent_share_ui_and_public_reader_revocation(server, desktop, browser):
-    _, page = desktop
+    context, page = desktop
+    context.grant_permissions(["clipboard-read", "clipboard-write"], origin=server.url)
     login(page, server.url)
     folder = page.request.post(server.url + "/__test__/books", headers=CONTROL).json()[
         "path"
@@ -113,6 +114,19 @@ def test_independent_share_ui_and_public_reader_revocation(server, desktop, brow
     ).json()
     page.get_by_role("link", name="Shared Links", exact=True).click()
     expect(page.locator(".share-row")).to_have_count(2)
+    expect(page.get_by_text("Unnamed link", exact=False)).to_have_count(0)
+    expect(page.get_by_role("button", name="New Link", exact=True)).to_have_count(0)
+    for share, label in [(first, "Alex"), (second, "Book club")]:
+        row = page.locator(".share-row").filter(has_text=label)
+        copy = row.locator(".share-copy")
+        expect(copy).to_have_text("")
+        copy.click()
+        expect(copy).to_have_attribute(
+            "aria-label", __import__("re").compile("^Link copied")
+        )
+        copied_url = page.evaluate("navigator.clipboard.readText()")
+        assert share["auth"] in copied_url and folder.strip("/") in copied_url
+    assert len(page.request.get(server.url + "/api/v1/shares").json()["shares"]) == 2
     page.get_by_role("button", name="Edit link Alex", exact=True).click()
     page.get_by_label("Link label", exact=True).fill("Alex review")
     page.get_by_label("No expiry", exact=True).check()
@@ -207,3 +221,68 @@ def test_create_multiple_links_from_share_dialog(server, desktop):
     rows = page.request.get(server.url + "/api/v1/shares").json()["shares"]
     assert {row["label"] for row in rows} == {"Alex", "Project team"}
     assert len({row["id"] for row in rows}) == 2
+
+
+@pytest.mark.parametrize("kind", ["file", "folder"])
+def test_same_item_links_keep_their_copy_edit_and_revoke_scope(server, desktop, kind):
+    context, page = desktop
+    context.grant_permissions(["clipboard-read", "clipboard-write"], origin=server.url)
+    login(page, server.url)
+    path = server.control()["seed"][kind]
+    links = [
+        page.request.post(
+            server.url + "/api/v1/shares",
+            data={"path": path, "label": label, "expires_in_days": days},
+        ).json()
+        for label, days in [("Review", 1), ("Archive", 30)]
+    ]
+    assert links[0]["auth"] != links[1]["auth"]
+    page.goto(server.url + "/?view=shares")
+    expect(page.locator(".share-row")).to_have_count(2)
+
+    for link in links:
+        row = page.locator(f'[data-share-id="{link["id"]}"]')
+        expect(row).to_contain_text(link["label"])
+        assert row.locator(".share-expiry time").evaluate(
+            "(node, expiry) => Date.parse(node.dateTime) === Date.parse(expiry)",
+            link["expires_at"],
+        )
+        copy = row.locator(".share-copy")
+        expect(copy).to_have_text("")
+        copy.click()
+        expect(copy).to_have_attribute(
+            "aria-label", __import__("re").compile("^Link copied")
+        )
+        assert link["auth"] in page.evaluate("navigator.clipboard.readText()")
+
+    first_row = page.locator(f'[data-share-id="{links[0]["id"]}"]')
+    first_row.get_by_role("button", name="Edit link Review", exact=True).click()
+    page.get_by_label("Link label", exact=True).fill("Review updated")
+    page.get_by_role("button", name="Save changes", exact=True).click()
+    expect(first_row).to_contain_text("Review updated")
+    listed = page.request.get(server.url + "/api/v1/shares").json()["shares"]
+    assert len(listed) == 2
+    by_id = {link["id"]: link for link in listed}
+    assert by_id[links[0]["id"]]["expires_at"] == links[0]["expires_at"]
+    assert by_id[links[1]["id"]]["expires_at"] == links[1]["expires_at"]
+    assert by_id[links[1]["id"]]["label"] == "Archive"
+
+    first_row.get_by_role(
+        "button", name=__import__("re").compile("^Revoke Link for ")
+    ).click()
+    dialog = page.get_by_role("dialog", name="Revoke This Link?", exact=True)
+    expect(dialog).to_contain_text("Review updated")
+    dialog.get_by_role("button", name="Revoke Link", exact=True).click()
+    expect(page.locator(".share-row")).to_have_count(1)
+
+    for link, expected_status in [(links[0], 403), (links[1], 200)]:
+        if kind == "folder":
+            response = page.request.post(
+                server.url + "/api/getDirectory",
+                data={"path": "/share_" + path.strip("/"), "auth": link["auth"]},
+            )
+        else:
+            response = page.request.head(
+                server.url + "/file", params={"path": path, "auth": link["auth"]}
+            )
+        assert response.status == expected_status

@@ -91,6 +91,9 @@ class FakeRuntime:
         self.ready = True
 
     async def stop(self) -> None:
+        uploads = getattr(self.transfers, "uploads", None)
+        if uploads is not None:
+            uploads.close()
         self.ready = False
         self.stopped = True
 
@@ -583,6 +586,192 @@ def test_owner_logout_revokes_copied_session_cookie(app_client):
     assert client.get("/api/v1/jobs").status_code == 401
 
 
+@pytest.mark.parametrize("session_backend", ["sqlite", "mongodb"])
+async def test_devices_share_owner_access_but_keep_independent_sessions(
+    tmp_path, monkeypatch, session_backend
+):
+    import asyncio
+    from contextlib import AsyncExitStack
+
+    import httpx2
+
+    from tgdrive.security import SESSION_COOKIE
+
+    settings = make_settings(tmp_path)
+    store = DriveStore.create(tmp_path / "drive.json")
+    runtime = FakeRuntime(store)
+    app = create_app(settings, runtime=runtime)
+    saved_sessions = {}
+    if session_backend == "mongodb":
+        collection = object()
+
+        def write(target, method, record):
+            assert target is collection
+            if method == "insert_one":
+                saved_sessions[record["_id"]] = dict(record)
+            elif method == "delete_one":
+                saved_sessions.pop(record["_id"], None)
+            else:
+                assert method == "delete_many"
+                cutoff = record["expires"]["$lte"]
+                for key, row in list(saved_sessions.items()):
+                    if row["expires"] <= cutoff:
+                        del saved_sessions[key]
+
+        sessions = app.state.sessions
+        monkeypatch.setattr(sessions, "_db", None)
+        monkeypatch.setattr(sessions, "_mongo", collection)
+        monkeypatch.setattr(sessions, "_mongo_backend", SimpleNamespace(write=write))
+
+    try:
+        async with app.router.lifespan_context(app), AsyncExitStack() as stack:
+            devices = [
+                await stack.enter_async_context(
+                    httpx2.AsyncClient(
+                        transport=httpx2.ASGITransport(app=app),
+                        base_url="https://testserver",
+                    )
+                )
+                for _ in range(3)
+            ]
+            password = {"pass": "correct horse battery staple"}
+            simultaneous_logins = await asyncio.gather(
+                *(
+                    device.post("/api/checkPassword", json=password)
+                    for device in devices[:2]
+                )
+            )
+            assert sorted(response.status_code for response in simultaneous_logins) == [
+                200,
+                429,
+            ]
+            for device, response in zip(devices, simultaneous_logins, strict=False):
+                if response.status_code == 429:
+                    assert response.headers["retry-after"] == "1"
+                    assert response.json()["detail"] == "Login busy; retry shortly"
+                    assert response.json()["code"] == "LOGIN_BUSY"
+                    assert (
+                        await device.post("/api/checkPassword", json=password)
+                    ).status_code == 200
+
+            original_tokens = [
+                device.cookies.get(SESSION_COOKIE) for device in devices[:2]
+            ]
+            assert all(original_tokens) and original_tokens[0] != original_tokens[1]
+            changes = await asyncio.gather(
+                *(
+                    device.post(
+                        "/api/createNewFolder",
+                        json={"path": "/", "name": f"Device {index}"},
+                    )
+                    for index, device in enumerate(devices[:2])
+                )
+            )
+            assert [response.status_code for response in changes] == [200, 200]
+            assert (
+                await devices[2].post("/api/checkPassword", json=password)
+            ).status_code == 200
+            assert [
+                device.cookies.get(SESSION_COOKIE) for device in devices[:2]
+            ] == original_tokens
+            assert len({device.cookies.get(SESSION_COOKIE) for device in devices}) == 3
+            assert all(
+                response.status_code == 200
+                for response in await asyncio.gather(
+                    *(device.get("/api/v1/nodes") for device in devices)
+                )
+            )
+            if session_backend == "mongodb":
+                assert len(saved_sessions) == 3
+
+            assert (await devices[0].post("/api/logout")).status_code == 200
+            assert devices[0].cookies.get(SESSION_COOKIE) is None
+            devices[0].cookies.set(SESSION_COOKIE, original_tokens[0])
+            assert (await devices[0].get("/api/v1/nodes")).status_code == 401
+            assert (
+                await devices[0].post(
+                    "/api/createNewFolder", json={"path": "/", "name": "Revoked device"}
+                )
+            ).status_code == 401
+            if session_backend == "mongodb":
+                assert len(saved_sessions) == 2
+            remaining = await asyncio.gather(
+                *(
+                    device.post(
+                        "/api/createNewFolder",
+                        json={"path": "/", "name": f"Still active {index}"},
+                    )
+                    for index, device in enumerate(devices[1:], 1)
+                )
+            )
+            assert [response.status_code for response in remaining] == [200, 200]
+            for device in devices[1:]:
+                listing = await device.get("/api/v1/nodes")
+                assert listing.status_code == 200
+                assert {item["name"] for item in listing.json()["items"]} == {
+                    "Device 0",
+                    "Device 1",
+                    "Still active 1",
+                    "Still active 2",
+                }
+    finally:
+        store.close()
+
+
+@pytest.mark.parametrize(
+    "cookie_state", ["missing", "invalid", "expired", "revoked", "valid"]
+)
+def test_logout_only_writes_for_active_owner_sessions(
+    app_client, monkeypatch, cookie_state
+):
+    import hashlib
+    import time
+    from unittest.mock import Mock
+
+    from tgdrive.security import SESSION_COOKIE, InvalidSession
+
+    client, _, _, _ = app_client
+    sessions = client.app.state.sessions
+    collection = object()
+    backend = SimpleNamespace(write=Mock())
+    # Exercise the production MongoDB session path without any external service.
+    monkeypatch.setattr(sessions, "_db", None)
+    monkeypatch.setattr(sessions, "_mongo", collection)
+    monkeypatch.setattr(sessions, "_mongo_backend", backend)
+    token = None
+    if cookie_state == "invalid":
+        token = "forged-owner-session"
+    elif cookie_state == "expired":
+        token = sessions.create(now=int(time.time()) - sessions._ttl_seconds - 1)
+    elif cookie_state in {"revoked", "valid"}:
+        token = sessions.create()
+        if cookie_state == "revoked":
+            sessions.revoke(token)
+    if token is not None:
+        client.cookies.set(SESSION_COOKIE, token)
+    backend.write.reset_mock()
+    revoke = Mock(wraps=sessions.revoke)
+    monkeypatch.setattr(sessions, "revoke", revoke)
+
+    response = client.post("/api/logout")
+
+    assert response.status_code == 200
+    assert response.json() == {"status": "ok"}
+    assert "Max-Age=0" in response.headers["set-cookie"]
+    if cookie_state == "valid":
+        revoke.assert_called_once_with(token)
+        backend.write.assert_called_once_with(
+            collection,
+            "delete_one",
+            {"_id": hashlib.sha256(token.encode()).hexdigest()},
+        )
+        with pytest.raises(InvalidSession, match="revoked"):
+            sessions.verify(token)
+    else:
+        revoke.assert_not_called()
+        backend.write.assert_not_called()
+
+
 def test_local_http_owner_session_and_origin_protection(tmp_path):
     settings = make_settings(tmp_path).model_copy(update={"cookie_secure": False})
     store = DriveStore.create(tmp_path / "drive.json")
@@ -774,6 +963,7 @@ def test_password_hashing_does_not_stall_health_or_spawn_unbounded_work(
             busy = client.post("/api/checkPassword", json={"pass": "test"})
             assert busy.status_code == 429
             assert busy.headers["retry-after"] == "1"
+            assert busy.json()["code"] == "LOGIN_BUSY"
         finally:
             release.set()
         assert first.result(timeout=5).status_code == 200

@@ -1,0 +1,17 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1440" height="810" viewBox="0 0 1440 810" role="img" aria-labelledby="title desc">
+  <title id="title">Demo video placeholder</title>
+  <desc id="desc">A labelled media slot for a future real TGDrive capture. This is a placeholder, not a product screenshot.</desc>
+  <rect width="1440" height="810" rx="16" fill="#f5f7f9"/>
+  <rect x="24" y="24" width="1392" height="762" rx="12" fill="#fff" stroke="#dce1e6" stroke-width="2"/>
+  <g font-family="Inter, Segoe UI, Arial, sans-serif" text-anchor="middle">
+    <text x="720" y="90" fill="#687078" font-size="18" letter-spacing="3">TGDRIVE / MEDIA SLOT</text>
+  </g>
+  <circle cx="720" cy="280" r="50" fill="#3157ff"/>
+  <path d="M708 256 L744 280 L708 304 Z" fill="#fff"/>
+  <g font-family="Inter, Segoe UI, Arial, sans-serif" text-anchor="middle">
+    <text x="720" y="385" fill="#181b20" font-size="44" font-weight="700">See TGDrive in action</text>
+    <text x="720" y="433" fill="#3157ff" font-size="26" font-weight="600">Demo video placeholder</text>
+    <text x="720" y="477" fill="#687078" font-size="22">Replace this slot with your own capture</text>
+    <text x="720" y="730" fill="#687078" font-size="16" letter-spacing="2">UPLOAD / WATCH / SHARE</text>
+  </g>
+</svg>

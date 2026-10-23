@@ -57,25 +57,51 @@
   transform: rotate(270deg) translateX(-100%);
 }
 
-@media (max-width: 720px) {
-  .pdf-controls .pdf-toolbar {
+@media (max-width: 720px), (pointer: coarse) {
+  .file-preview .pdf-options-toggle {
+    display: inline-flex;
+  }
+  .file-preview .pdf-controls .pdf-toolbar {
+    display: none;
     position: fixed;
-    inset: calc(64px + env(safe-area-inset-top)) 12px auto;
+    inset: calc(64px + env(safe-area-inset-top))
+      max(12px, env(safe-area-inset-right)) auto
+      max(12px, env(safe-area-inset-left));
     width: auto;
     max-width: none;
     flex-direction: column;
     align-items: stretch;
+    z-index: 5;
+    gap: 10px;
+    padding: 8px 12px;
+    border: 1px solid #454b55;
+    border-radius: 10px;
+    background: #25292f;
+    box-shadow: 0 6px 20px #0005;
+    max-height: calc(
+      100dvh - 80px - env(safe-area-inset-top) - env(safe-area-inset-bottom)
+    );
+    overflow: auto;
+    overscroll-behavior: contain;
   }
-  .pdf-toolbar .inline-actions {
+  .file-preview .pdf-controls[data-open="true"] .pdf-toolbar {
+    display: flex;
+  }
+  .file-preview .pdf-toolbar .inline-actions {
     flex-wrap: wrap;
     gap: 6px;
   }
-  .pdf-toolbar .pdf-fit {
+  .file-preview .pdf-toolbar .pdf-fit {
     width: auto;
     gap: 6px;
     padding: 6px 10px;
   }
-  .pdf-toolbar .pdf-fit-label {
+  .file-preview .pdf-toolbar .pdf-fit-label {
     display: inline;
+  }
+  .file-preview .pdf-toolbar .icon-button,
+  .file-preview .pdf-toolbar .pdf-fit {
+    min-width: 44px;
+    min-height: 44px;
   }
 }

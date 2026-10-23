@@ -30,10 +30,20 @@ def expect_collapsed_fullscreen_toolbar(page):
     }""")
 
 
+def expect_expanded_fullscreen_toolbar(page):
+    page.wait_for_function(
+        "document.fullscreenElement === "
+        "document.querySelector('.preview-fullscreen-surface')"
+    )
+    expect(page.locator(".preview-header")).to_be_visible()
+    expect(
+        page.get_by_role("button", name="Hide Toolbar", exact=True)
+    ).to_have_attribute("aria-expanded", "true")
+
+
 def expand_fullscreen_toolbar(page):
     page.get_by_role("button", name="Show Toolbar", exact=True).click()
-    expect(page.locator(".preview-header")).to_be_visible()
-    expect(page.get_by_role("button", name="Hide Toolbar", exact=True)).to_be_visible()
+    expect_expanded_fullscreen_toolbar(page)
 
 
 @pytest.mark.parametrize("width", [1440, 390, 320])
@@ -71,6 +81,10 @@ def test_pdf_real_fit_width_page_and_fullscreen(server, desktop, width):
     if width < 721:
         page.get_by_role("button", name="PDF View Options", exact=True).click()
     page.get_by_role("button", name="Enter Fullscreen", exact=True).click()
+    expect_expanded_fullscreen_toolbar(page)
+    hide = page.get_by_role("button", name="Hide Toolbar", exact=True)
+    expect(hide).to_be_focused()
+    hide.press("Enter")
     expect_collapsed_fullscreen_toolbar(page)
     page.screenshot(path=ARTIFACTS / f"pdf-fullscreen-collapsed-{width}.png")
     show = page.get_by_role("button", name="Show Toolbar", exact=True)
@@ -143,6 +157,10 @@ def test_supported_previews_enter_exit_fullscreen_and_close(
     enter = page.get_by_role("button", name="Enter Fullscreen", exact=True)
     expect(enter).to_be_visible()
     enter.click()
+    expect_expanded_fullscreen_toolbar(page)
+    if name == "sample.png":
+        expect(page.locator(".preview-quality")).to_be_visible()
+    page.get_by_role("button", name="Hide Toolbar", exact=True).click()
     expect_collapsed_fullscreen_toolbar(page)
     if name == "sample.png":
         expect(page.locator(".preview-quality")).to_be_hidden()
@@ -159,14 +177,15 @@ def test_supported_previews_enter_exit_fullscreen_and_close(
         page.get_by_role("button", name="Increase text size", exact=True).click()
         expect(page.locator(".book-reader")).to_have_class("book-reader book-font-20")
         page.get_by_label("Reading options", exact=True).click()
-    page.get_by_role("button", name="Exit Fullscreen", exact=True).click()
+    page.get_by_role("button", name="Hide Toolbar", exact=True).click()
+    expect_collapsed_fullscreen_toolbar(page)
+    page.keyboard.press("Escape")
     page.wait_for_function("!document.fullscreenElement")
     expect(page.locator(".preview-header")).to_be_visible()
     expect(enter).to_be_focused()
     expect(page.get_by_role("button", name="Show Toolbar", exact=True)).to_have_count(0)
     enter.click()
-    expect_collapsed_fullscreen_toolbar(page)
-    expand_fullscreen_toolbar(page)
+    expect_expanded_fullscreen_toolbar(page)
     page.get_by_role("button", name="Close Preview", exact=True).click()
     page.wait_for_function("!document.fullscreenElement")
     expect(page.locator(".file-preview")).to_have_count(0)

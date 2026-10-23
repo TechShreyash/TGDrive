@@ -177,9 +177,7 @@ def test_transfer_search_resets_cursor_and_filters_active_and_old_finished_names
     expect(finished.locator(".transfer-item-name")).to_have_count(50)
 
 
-def test_touch_activation_tracks_item_identity_and_ignores_management_actions(
-    server, browser
-):
+def test_touch_selection_is_explicit_and_ignores_management_actions(server, browser):
     context = browser.new_context(
         viewport={"width": 390, "height": 844}, has_touch=True, is_mobile=True
     )
@@ -188,16 +186,16 @@ def test_touch_activation_tracks_item_identity_and_ignores_management_actions(
         login(page, server.url)
         first = page.get_by_role("button", name="Preview samples", exact=True)
         second = page.get_by_role("button", name="Private folder", exact=True)
+        page.get_by_role("button", name="Select", exact=True).tap()
         first.tap()
         second.tap()
-        # A tap on a different row selects it, even within the double-tap interval.
-        expect(page.get_by_role("heading", name="My Files", exact=True)).to_be_visible()
+        # Selection mode supports independent, additive taps on different rows.
+        expect(page.get_by_text("2 selected", exact=True)).to_be_visible()
+        expect(page.get_by_label("Select Preview samples", exact=True)).to_be_checked()
         expect(page.get_by_label("Select Private folder", exact=True)).to_be_checked()
-        # An intervening action cannot become the first tap of a later activation.
         page.get_by_label("Actions for Private folder", exact=True).tap()
         page.keyboard.press("Escape")
-        second.tap()
-        expect(page.get_by_role("heading", name="My Files", exact=True)).to_be_visible()
+        page.get_by_role("button", name="Done", exact=True).tap()
         second.tap()
         expect(
             page.get_by_role("heading", name="Private folder", exact=True)
@@ -209,7 +207,7 @@ def test_touch_activation_tracks_item_identity_and_ignores_management_actions(
         context.close()
 
 
-def test_touch_file_activation_after_selection_layout_change(server, browser):
+def test_touch_file_opens_without_entering_selection(server, browser):
     context = browser.new_context(
         viewport={"width": 390, "height": 844}, has_touch=True, is_mobile=True
     )
@@ -219,8 +217,6 @@ def test_touch_file_activation_after_selection_layout_change(server, browser):
         page.get_by_role("button", name="Preview samples", exact=True).focus()
         page.keyboard.press("Enter")
         primary = page.get_by_role("button", name="sample.json", exact=True)
-        primary.tap()
-        expect(page.get_by_label("Select sample.json", exact=True)).to_be_checked()
         primary.tap()
         expect(page.locator("dialog.file-preview")).to_be_visible()
     finally:

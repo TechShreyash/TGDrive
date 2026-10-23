@@ -5,6 +5,11 @@
 .advanced-player-host {
   z-index: 0;
 }
+/* Focus may scroll an overflow:hidden host when a settings page changes height.
+   Only the menu should scroll; the video and its controls stay in place. */
+.advanced-video movi-player {
+  overflow: clip;
+}
 .advanced-video movi-player::part(spinner) {
   visibility: hidden;
 }
@@ -14,12 +19,16 @@
   z-index: 2;
   display: grid;
   place-items: center;
-  padding: 24px;
+  padding: 20px;
   background: transparent;
-  color: #eef2fa;
+  color: #f5f5f5;
+  pointer-events: none;
+}
+.advanced-state[data-hidden="true"] {
+  visibility: hidden;
 }
 .advanced-state-content {
-  width: min(100%, 390px);
+  width: min(100%, 420px);
   text-align: center;
 }
 .advanced-state h3 {
@@ -32,7 +41,7 @@
 .advanced-state p {
   max-width: 38ch;
   margin: 10px auto 0;
-  color: #b8c1d0;
+  color: #c4c7cc;
   font-size: 14px;
   line-height: 1.65;
   overflow-wrap: anywhere;
@@ -42,7 +51,7 @@
   flex-wrap: wrap;
   justify-content: center;
   gap: 10px;
-  margin-top: 12px;
+  margin-top: 10px;
   pointer-events: auto;
 }
 .advanced-state-actions button {
@@ -50,19 +59,19 @@
   align-items: center;
   justify-content: center;
   gap: 8px;
-  min-height: 42px;
-  padding: 10px 15px;
-  border: 1px solid #505b6d;
-  border-radius: 7px;
-  background: #1e2632;
-  color: #e8eef9;
+  min-height: 44px;
+  padding: 8px 14px;
+  border: 1px solid #64686e;
+  border-radius: 6px;
+  background: #303236;
+  color: #f5f5f5;
   font-size: 14px;
   line-height: 1.4;
   cursor: pointer;
 }
 .advanced-state-actions button:hover {
-  border-color: #91a5cb;
-  background: #2a3546;
+  border-color: #c4c7cc;
+  background: #414449;
 }
 .advanced-state-actions button:focus-visible {
   outline: 2px solid #b6c9ff;
@@ -73,22 +82,52 @@
   cursor: default;
 }
 .advanced-state-buffering {
-  pointer-events: none;
-  inset: 16px 16px auto auto;
-  width: min(340px, calc(100% - 32px));
+  inset: auto 16px 102px;
   padding: 0;
   background: transparent;
+  max-height: calc(100% - 118px);
+  overflow-y: auto;
+  overscroll-behavior: contain;
 }
 .advanced-state-buffering .advanced-state-content {
-  padding: 12px 16px;
-  border-radius: 7px;
-  background: rgb(8 10 13 / 90%);
+  width: fit-content;
+  max-width: min(100%, 420px);
+  padding: 8px 12px;
+  border-radius: 6px;
+  background: rgb(0 0 0 / 82%);
 }
-.advanced-state-buffering h3 {
-  font-size: 15px;
+.advanced-wait-label {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  font-size: 14px;
+  line-height: 1.5;
 }
-.advanced-state-buffering p {
-  margin-top: 4px;
+.advanced-wait-label [role="progressbar"] {
+  display: flex;
+  flex-shrink: 0;
+}
+.advanced-wait-label svg {
+  animation: advanced-loading 1s linear infinite;
+}
+.advanced-state-buffering .advanced-wait-help {
+  margin-top: 6px;
+  font-size: 13px;
+}
+.advanced-state-error .advanced-state-content {
+  max-height: 100%;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  pointer-events: auto;
+  padding: 20px;
+  border-radius: 8px;
+  background: rgb(20 21 23 / 96%);
+}
+@keyframes advanced-loading {
+  to {
+    transform: rotate(360deg);
+  }
 }
 .advanced-chapters {
   width: min(360px, calc(100vw - 48px));
@@ -155,13 +194,15 @@
   outline: 2px solid #b6c9ff;
   outline-offset: 2px;
 }
-@media (max-width: 480px) {
-  .advanced-state {
-    padding: 20px;
+@media (max-width: 720px), (pointer: coarse) {
+  .advanced-state-actions button,
+  .advanced-chapters .advanced-chapters-close {
+    min-height: 44px;
   }
+}
+@media (max-width: 480px) {
   .advanced-state-buffering {
-    inset: 66px 12px auto;
-    width: auto;
+    inset-inline: 12px;
   }
 }
 
@@ -172,45 +213,114 @@
 .advanced-video movi-player::part(error-screen) {
   display: none;
 }
-.advanced-buffer-progress {
-  margin-top: 10px;
-}
-.advanced-buffer-progress progress {
-  display: block;
-  width: 100%;
-  height: 4px;
-  overflow: hidden;
-  border: 0;
-  border-radius: 2px;
-  color: #b8caff;
-  background: #354154;
-  accent-color: #b8caff;
-}
-.advanced-buffer-progress progress::-webkit-progress-bar {
-  background: #354154;
-}
-.advanced-buffer-progress progress::-webkit-progress-value {
-  background: #b8caff;
-}
-.advanced-buffer-progress progress::-moz-progress-bar {
-  background: #b8caff;
-}
-.advanced-state-buffering .advanced-buffer-metrics {
-  font-size: 12px;
-  font-variant-numeric: tabular-nums;
-}
-
 /* Movi's controls-visible blanket rule otherwise makes its collapsed tray
    interactive. Keep hidden compact controls out of pointer and keyboard paths. */
 @container movi-host (max-width: 720px) {
-  :host(:not(.movi-single-extra))
-    .movi-controls-right:not(.expanded)
-    .movi-mobile-expandable,
-  :host(:not(.movi-single-extra))
-    .movi-controls-right:not(.expanded)
-    .movi-mobile-expandable
-    * {
-    pointer-events: none !important;
-    visibility: hidden !important;
+  :host .movi-more-btn,
+  :host .movi-gear-btn,
+  :host .movi-mobile-expandable,
+  :host .movi-controls-right .movi-aspect-ratio-btn,
+  :host .movi-controls-right .movi-pip-btn,
+  :host .movi-controls-bar [data-custom-control="tgdrive-chapters"] {
+    display: none !important;
+  }
+  :host .movi-controls-right .movi-settings-container,
+  :host .movi-controls-right .movi-settings-btn,
+  :host .movi-controls-right > .movi-fullscreen-btn {
+    display: flex !important;
+  }
+  :host .movi-controls-right .movi-settings-btn,
+  :host .movi-controls-right > .movi-fullscreen-btn {
+    width: 44px !important;
+    height: 44px !important;
+    flex: 0 0 44px;
+  }
+}
+
+/* These rules are adopted inside the pinned player's shadow root as well. */
+.movi-settings-row-label,
+.advanced-setting-choice-label {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+  white-space: normal;
+}
+.advanced-setting-description {
+  display: block;
+  color: #bfc2c8;
+  font-size: 12px;
+  font-weight: 400;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+.movi-settings-row:has(.advanced-setting-description) {
+  min-height: 58px;
+  align-items: center;
+}
+.movi-settings-menu {
+  width: 320px;
+  min-width: 0;
+  max-width: calc(100% - 16px);
+  max-height: min(calc(var(--movi-player-height, 70vh) - 96px), 520px);
+  border-radius: 8px;
+  border-color: #393c41;
+  background: #191a1c;
+  box-shadow: 0 4px 12px rgb(0 0 0 / 25%);
+}
+.movi-settings-row,
+.movi-settings-choice {
+  min-height: 44px;
+  padding: 8px 10px;
+  font-size: 14px;
+}
+.advanced-quality-list {
+  display: grid;
+  gap: 2px;
+}
+.advanced-quality-list button {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  width: 100%;
+  min-height: 44px;
+  padding: 10px 12px;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-size: 14px;
+  text-align: start;
+  cursor: pointer;
+}
+.advanced-quality-list button:hover,
+.advanced-quality-list button[aria-pressed="true"] {
+  background: #303236;
+}
+.advanced-quality-list button span {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.advanced-quality-list svg {
+  flex-shrink: 0;
+  width: 18px;
+  height: 18px;
+}
+.movi-settings-section-label {
+  font-size: 12px;
+  font-weight: 500;
+  text-transform: none;
+  letter-spacing: normal;
+  color: #bfc2c8;
+}
+.movi-settings-row:hover,
+.movi-settings-row:active {
+  transform: none;
+}
+@media (prefers-reduced-motion: reduce) {
+  .advanced-wait-label svg {
+    animation: none;
   }
 }

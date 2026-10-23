@@ -281,12 +281,15 @@
 }
 @media (max-width: 720px) {
   .channel-recovery-topbar {
-    padding: 8px 12px;
+    flex-wrap: wrap;
+    gap: 4px 12px;
+    padding: max(8px, env(safe-area-inset-top)) 12px 8px;
   }
   .channel-recovery-topbar > div {
     gap: 4px;
+    margin-inline-start: auto;
   }
   .channel-recovery-main {
-    padding: 20px 12px;
+    padding: 20px 12px max(20px, env(safe-area-inset-bottom));
   }
 }

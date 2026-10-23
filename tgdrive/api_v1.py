@@ -14,6 +14,15 @@ from pydantic import BaseModel, Field, StrictBool
 
 from tgdrive.backup import RecoveryConflict
 from tgdrive.client_pool import current_upload_limit
+from tgdrive.demo_access import session_access
+from tgdrive.demo_files import (
+    annotate,
+    check_path,
+    check_receipt,
+    check_transfer,
+    restricted_writes,
+    write_policy,
+)
 from tgdrive.errors import ValidationError as DriveValidationError
 from tgdrive.management_api import register_management_routes
 from tgdrive.schemas import FolderTreeRequest
@@ -100,6 +109,9 @@ def register_routes(
     admin = [Depends(require_admin)]
     chunk_receivers = asyncio.Semaphore(settings.max_concurrent_transfers)
 
+    def describe(value):
+        return annotate(value) if settings.demo_mode else value
+
     def uploads(request: Request) -> ResumableUploads:
         manager = get_manager(request)
         if not hasattr(manager, "uploads"):
@@ -113,7 +125,10 @@ def register_routes(
         )
 
     @app.get("/api/v1/session")
-    async def session(request: Request) -> dict[str, bool]:
+    async def session(request: Request, response: Response) -> dict[str, bool]:
+        response.headers["Cache-Control"] = "no-store"
+        if settings.demo_mode:
+            return session_access(request)
         return {"authenticated": is_admin(request)}
 
     @app.get("/api/v1/status", dependencies=admin)
@@ -222,8 +237,10 @@ def register_routes(
         order: Literal["asc", "desc"] | None = None,
     ) -> dict[str, Any]:
         try:
-            return get_store(request).search_page(
-                q, offset=offset, limit=limit, sort=sort, order=order
+            return describe(
+                get_store(request).search_page(
+                    q, offset=offset, limit=limit, sort=sort, order=order
+                )
             )
         except DriveValidationError as error:
             raise HTTPException(422, str(error)) from None
@@ -236,11 +253,12 @@ def register_routes(
     ):
         response.headers["Cache-Control"] = "no-store"
         items = await asyncio.to_thread(get_store(request).list_starred, q)
-        return {"data": {"contents": items}}
+        return describe({"data": {"contents": items}})
 
     @app.patch("/api/v1/starred", dependencies=admin)
     async def star_item(body: StarItem, request: Request, response: Response):
         response.headers["Cache-Control"] = "no-store"
+        check_path(get_store(request), body.path)
         result = await asyncio.to_thread(
             get_store(request).set_starred, body.path, body.starred
         )
@@ -256,7 +274,7 @@ def register_routes(
         contents = await asyncio.to_thread(
             get_store(request).list_trash, unicodedata.normalize("NFC", q.strip())
         )
-        return {"data": {"contents": contents}}
+        return describe({"data": {"contents": contents}})
 
     @app.get("/api/v1/nodes", dependencies=admin)
     async def nodes(
@@ -283,14 +301,17 @@ def register_routes(
                 item["id"],
             )
         )
-        return {
-            "items": items[offset : offset + limit],
-            "total": len(items),
-            "offset": offset,
-        }
+        return describe(
+            {
+                "items": items[offset : offset + limit],
+                "total": len(items),
+                "offset": offset,
+            }
+        )
 
     @app.post("/api/v1/folders/tree", dependencies=admin, status_code=201)
     async def prepare_folder_tree(payload: FolderTreeRequest, request: Request) -> Any:
+        check_path(get_store(request), payload.destination)
         try:
             return await asyncio.to_thread(
                 get_store(request).prepare_folder_tree,
@@ -306,10 +327,12 @@ def register_routes(
 
     @app.post("/api/v1/uploads", dependencies=admin, status_code=201)
     async def create_upload(payload: UploadCreate, request: Request) -> dict[str, Any]:
+        check_path(get_store(request), payload.parent_id)
         limit = await current_upload_limit(
             settings, getattr(get_runtime(request), "pool", None)
         )
         await require_admin(request)  # Recheck after awaiting live account health.
+        check_path(get_store(request), payload.parent_id)
         if payload.total_size > limit:
             raise UploadError(
                 f"File exceeds the currently available {limit}-byte upload limit", 413
@@ -320,11 +343,13 @@ def register_routes(
 
     @app.get("/api/v1/uploads/{upload_id}", dependencies=admin)
     async def inspect_upload(upload_id: str, request: Request) -> dict[str, Any]:
-        return uploads(request).get(upload_id)
+        with write_policy(False):
+            return uploads(request).get(upload_id)
 
     @app.head("/api/v1/uploads/{upload_id}", dependencies=admin)
     async def upload_offset(upload_id: str, request: Request) -> Response:
-        item = uploads(request).get(upload_id)
+        with write_policy(False):
+            item = uploads(request).get(upload_id)
         return Response(
             headers={
                 "Upload-Offset": str(item["offset"]),
@@ -344,6 +369,8 @@ def register_routes(
             != "application/octet-stream"
         ):
             raise HTTPException(415, "Use application/octet-stream")
+        if restricted_writes.get():
+            check_receipt(get_store(request), uploads(request).get_unchecked(upload_id))
         async with chunk_receivers:
             body = bytearray()
             async for part in request.stream():
@@ -351,6 +378,7 @@ def register_routes(
                     raise UploadError("Upload chunk is too large", 413)
                 body.extend(part)
             await require_admin(request)
+            check_receipt(get_store(request), uploads(request).get_unchecked(upload_id))
             item = await uploads(request).append(upload_id, offset, body)
         return Response(status_code=204, headers={"Upload-Offset": str(item["offset"])})
 
@@ -359,11 +387,13 @@ def register_routes(
     )
     async def complete_upload(upload_id: str, request: Request) -> dict[str, Any]:
         await require_admin(request)
+        check_receipt(get_store(request), uploads(request).get_unchecked(upload_id))
         record = await uploads(request).complete(upload_id)
         return {"id": record.id, "job": record.as_dict()}
 
     @app.post("/api/v1/uploads/{upload_id}/cancel", dependencies=admin)
     async def cancel_upload(upload_id: str, request: Request) -> dict[str, Any]:
+        check_receipt(get_store(request), uploads(request).get_unchecked(upload_id))
         return await uploads(request).cancel(upload_id)
 
     def job_snapshot(record: Any, request: Request) -> dict[str, Any]:
@@ -442,6 +472,7 @@ def register_routes(
 
     @app.post("/api/v1/jobs/{job_id}/cancel", dependencies=admin)
     async def cancel_job(job_id: str, request: Request) -> dict[str, Any]:
+        check_transfer(get_store(request), get_manager(request).registry.get(job_id))
         try:
             return job_snapshot(get_manager(request).cancel_job(job_id), request)
         except ValueError as exc:
@@ -451,6 +482,11 @@ def register_routes(
 
     @app.post("/api/v1/jobs/{job_id}/retry", dependencies=admin)
     async def retry_job(job_id: str, request: Request) -> dict[str, Any]:
+        manager = get_manager(request)
+        record = manager.registry.get(job_id)
+        check_transfer(get_store(request), record)
+        record.context["demo_read_only"] = restricted_writes.get()
+        manager.registry.persist(record)
         try:
             return job_snapshot(get_manager(request).retry_job(job_id), request)
         except ValueError as exc:
@@ -487,8 +523,8 @@ def register_routes(
             if not row["copyable"]:
                 raise HTTPException(
                     409,
-                    "This older link cannot be recovered. "
-                    "Create a separate new link instead.",
+                    "The original link URL is unavailable. Existing copies still "
+                    "work until this link expires or is revoked.",
                 )
             return {
                 "auth": token_factory(settings)(row["id"]),
@@ -504,6 +540,7 @@ def register_routes(
 
     @app.post("/api/v1/shares", dependencies=admin, status_code=201)
     async def create_share(payload: ShareCreate, request: Request) -> Response:
+        check_path(get_store(request), payload.path, descendants=True)
         expires = (
             payload.expires_at.isoformat()
             if payload.expires_at
@@ -545,11 +582,15 @@ def register_routes(
 
     @app.patch("/api/v1/shares", dependencies=admin)
     async def update_share(payload: ShareUpdate, request: Request) -> dict[str, str]:
+        changes = {}
+        if "label" in payload.model_fields_set:
+            changes["label"] = payload.label
+        if "expires_at" in payload.model_fields_set:
+            changes["expires_at"] = (
+                payload.expires_at.isoformat() if payload.expires_at else None
+            )
         await asyncio.to_thread(
-            get_store(request).update_share,
-            payload.share_id,
-            label=payload.label,
-            expires_at=payload.expires_at.isoformat() if payload.expires_at else None,
+            get_store(request).update_share, payload.share_id, **changes
         )
         return {"status": "ok"}
 
@@ -643,6 +684,9 @@ def register_routes(
     @app.post("/api/v1/nodes/move", dependencies=admin)
     def move_items(payload: MoveItems, request: Request) -> Any:
         store = get_store(request)
+        check_path(store, payload.destination)
+        for path in payload.paths:
+            check_path(store, path, descendants=True)
         with store.metadata_batch():
             if (
                 public_destination(store, payload.destination)
@@ -674,6 +718,8 @@ def register_routes(
     async def bulk_items(payload: BulkItems, request: Request) -> Any:
         store = get_store(request)
         selected = selection(payload.paths)
+        for path in selected:
+            check_path(store, path, descendants=True)
         results = []
         if payload.action == "delete":
             for path in selected:

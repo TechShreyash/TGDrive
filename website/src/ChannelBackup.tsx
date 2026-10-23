@@ -941,7 +941,9 @@ export default function ChannelBackup({
             <button
               type="submit"
               className="secondary-button"
-              disabled={demoMode || !!busy || !source.trim() || !sourceToken.trim()}
+              disabled={
+                demoMode || !!busy || !source.trim() || !sourceToken.trim()
+              }
             >
               {busy === "inspect" ? <Spinner /> : <RefreshCw size={16} />}
               {busy === "inspect" ? "Inspecting…" : "Inspect recovery copy"}

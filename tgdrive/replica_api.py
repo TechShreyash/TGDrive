@@ -130,6 +130,26 @@ def register_replica_routes(app, settings, require_admin, get_runtime):
                 )
             async with current._operation:
                 if payload.activate:
+                    candidate = current.journal.get("candidate")
+                    if candidate and candidate.get("complete"):
+                        catalog = candidate.get("catalog")
+                        destination = (
+                            catalog.get("storage_channel_id")
+                            if isinstance(catalog, dict)
+                            else None
+                        )
+                        if type(destination) is not int or destination >= 0:
+                            raise SettingsProblem(
+                                "The recovery destination is invalid. "
+                                "Inspect recovery again.",
+                                status=409,
+                            )
+                        if payload.confirm_channel != str(destination):
+                            raise SettingsProblem(
+                                "Type the recovered destination channel ID "
+                                "to confirm activation.",
+                                status=422,
+                            )
                     return current.activate()
                 if payload.target_channel is not None:
                     return await invoke(

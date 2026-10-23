@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import sqlite3
+from contextlib import closing
 
 import pytest
 import test_app as fixtures
@@ -57,7 +58,7 @@ def test_starred_survives_paths_backup_and_v5_upgrade(tmp_path):
     store.create_folder("/", "Old")
     expected = store.export()
     store.close()
-    with sqlite3.connect(fresh) as db:
+    with closing(sqlite3.connect(fresh)) as db, db:
         db.executescript(
             "ALTER TABLE nodes DROP COLUMN starred; PRAGMA user_version=5;"
         )

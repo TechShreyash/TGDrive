@@ -1,4 +1,5 @@
 import AdvancedVideo from "./AdvancedVideo";
+import "./Preview.css";
 import { readBoundedResponse, PreviewLimitError } from "./previewIO";
 import { lazy, Suspense, useEffect, useRef, useState } from "react";
 import {
@@ -188,16 +189,20 @@ export default function Preview({
     const surface = fullscreenSurface.current;
     let wasFullscreen = false;
     const update = () => {
-      const active = document.fullscreenElement === surface;
-      const exited = wasFullscreen && !active;
-      wasFullscreen = active;
+      const fullscreenElement = document.fullscreenElement;
+      const active = fullscreenElement === surface;
+      const containsFullscreen = Boolean(
+        fullscreenElement && surface?.contains(fullscreenElement),
+      );
+      const exited = wasFullscreen && !containsFullscreen;
+      wasFullscreen = containsFullscreen;
       setFullscreen(active);
-      setToolbarCollapsed(active);
+      setToolbarCollapsed(false);
       if (active || exited)
         requestAnimationFrame(() =>
           surface
             ?.querySelector<HTMLButtonElement>(
-              active ? ".preview-toolbar-reveal" : ".preview-fullscreen",
+              active ? ".preview-toolbar-toggle" : ".preview-fullscreen",
             )
             ?.focus({ preventScroll: true }),
         );
@@ -239,47 +244,10 @@ export default function Preview({
       );
     }
   }
-  function toggleToolbar(collapsed: boolean) {
-    setToolbarCollapsed(collapsed);
-    requestAnimationFrame(() =>
-      fullscreenSurface.current
-        ?.querySelector<HTMLButtonElement>(
-          collapsed ? ".preview-toolbar-reveal" : ".preview-toolbar-collapse",
-        )
-        ?.focus({ preventScroll: true }),
-    );
-  }
   const [queue, setQueue] = useState<{
     position: number;
     estimated_wait_seconds: number | null;
   } | null>(null);
-  useEffect(() => {
-    const controller = new AbortController();
-    const params = new URLSearchParams({
-      path,
-      request_id: mediaRequestId(path, auth),
-    });
-    if (auth) params.set("auth", auth);
-    let timer: ReturnType<typeof setTimeout>;
-    const poll = async () => {
-      try {
-        const data = await request<{ queue: typeof queue }>(
-          "/api/v1/file-status?" + params,
-          undefined,
-          { signal: controller.signal },
-        );
-        if (!controller.signal.aborted) setQueue(data.queue);
-      } catch {
-        /* Playback remains usable if queue diagnostics are unavailable. */
-      }
-      if (!controller.signal.aborted) timer = setTimeout(poll, 2500);
-    };
-    void poll();
-    return () => {
-      controller.abort();
-      clearTimeout(timer);
-    };
-  }, [path, auth]);
   const [toolbarTarget, setToolbarTarget] = useState<HTMLDivElement | null>(
     null,
   );
@@ -322,6 +290,37 @@ export default function Preview({
   } | null>(null);
   const descriptor = preview?.path === path ? preview.value : null;
   const kind = nativeKind || (descriptor?.kind === "video" ? "video" : null);
+  useEffect(() => {
+    setQueue(null);
+    // The player's own readiness state is authoritative for video. A server
+    // transfer queue can stay busy while cached video is already playing.
+    if (kind === "video" || (!nativeKind && !descriptor)) return;
+    const controller = new AbortController();
+    const params = new URLSearchParams({
+      path,
+      request_id: mediaRequestId(path, auth),
+    });
+    if (auth) params.set("auth", auth);
+    let timer: ReturnType<typeof setTimeout>;
+    const poll = async () => {
+      try {
+        const data = await request<{ queue: typeof queue }>(
+          "/api/v1/file-status?" + params,
+          undefined,
+          { signal: controller.signal },
+        );
+        if (!controller.signal.aborted) setQueue(data.queue);
+      } catch {
+        /* Previews remain usable if queue diagnostics are unavailable. */
+      }
+      if (!controller.signal.aborted) timer = setTimeout(poll, 2500);
+    };
+    void poll();
+    return () => {
+      controller.abort();
+      clearTimeout(timer);
+    };
+  }, [path, auth, kind, nativeKind, descriptor]);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(!nativeKind);
   const [attempt, setAttempt] = useState(0);
@@ -426,16 +425,21 @@ export default function Preview({
       }}
     >
       <div className="preview-fullscreen-surface" ref={fullscreenSurface}>
-        {fullscreen && toolbarCollapsed && (
+        {fullscreen && (
           <button
-            className="preview-toolbar-reveal"
+            className="preview-toolbar-toggle"
             type="button"
-            aria-label="Show Toolbar"
+            aria-label={toolbarCollapsed ? "Show Toolbar" : "Hide Toolbar"}
+            title={toolbarCollapsed ? "Show Toolbar" : "Hide Toolbar"}
             aria-controls="preview-header"
-            aria-expanded={false}
-            onClick={() => toggleToolbar(false)}
+            aria-expanded={!toolbarCollapsed}
+            onClick={() => setToolbarCollapsed((collapsed) => !collapsed)}
           >
-            <ChevronDown size={16} /> Show Toolbar
+            {toolbarCollapsed ? (
+              <ChevronDown size={19} aria-hidden="true" />
+            ) : (
+              <ChevronUp size={19} aria-hidden="true" />
+            )}
           </button>
         )}
         <header
@@ -469,19 +473,6 @@ export default function Preview({
               {documentPreview && (
                 <div className="preview-toolbar-slot" ref={setToolbarTarget} />
               )}
-              {fullscreen && (
-                <button
-                  className="icon-button preview-toolbar-collapse"
-                  type="button"
-                  aria-label="Hide Toolbar"
-                  title="Hide Toolbar"
-                  aria-controls="preview-header"
-                  aria-expanded={true}
-                  onClick={() => toggleToolbar(true)}
-                >
-                  <ChevronUp size={19} />
-                </button>
-              )}
               <button
                 className="icon-button preview-fullscreen"
                 aria-label={fullscreen ? "Exit Fullscreen" : "Enter Fullscreen"}
@@ -508,7 +499,7 @@ export default function Preview({
             {fullscreenError}
           </p>
         )}
-        {queue && queue.position > 0 && (
+        {kind !== "video" && queue && queue.position > 0 && (
           <p className="preview-limit" role="status">
             Waiting for Telegram · Queue position {queue.position}
             {queue.estimated_wait_seconds != null
@@ -563,7 +554,7 @@ export default function Preview({
           </section>
         ) : (
           <>
-            {variants.length > 0 && (
+            {kind !== "video" && variants.length > 0 && (
               <label
                 className="preview-quality"
                 hidden={fullscreen && toolbarCollapsed}
@@ -592,7 +583,8 @@ export default function Preview({
                   ? "pdf"
                   : descriptor?.kind === "text"
                     ? "text"
-                    : kind || "other")
+                    : kind || "other") +
+                (error || failed ? " preview-surface-message" : "")
               }
             >
               {loading ? (
@@ -641,6 +633,18 @@ export default function Preview({
                   src={src}
                   name={item.name}
                   playback={playback}
+                  qualityControl={
+                    variants.length > 0
+                      ? {
+                          variants,
+                          selected: quality,
+                          onChange: (value) => {
+                            setFailed(false);
+                            setQuality(value);
+                          },
+                        }
+                      : undefined
+                  }
                 />
               ) : kind === "audio" ? (
                 <audio

@@ -191,12 +191,14 @@ class TransferRegistry:
         database_path: Path | None = None,
         mongo=None,
         mongo_backend=None,
+        demo_mode: bool = False,
     ) -> None:
         if cancel_grace_seconds < 0:
             raise ValueError("cancel_grace_seconds cannot be negative")
         self._ttl = ttl_seconds
         self._max_entries = max_entries
         self._cancel_grace = cancel_grace_seconds
+        self.demo_mode = demo_mode
         self._records: dict[str, TransferRecord] = {}
         self._tasks: set[asyncio.Task[None]] = set()
         self._shutting_down = False
@@ -682,6 +684,10 @@ class TransferRegistry:
         if transfer_id in self._records:
             return self._records[transfer_id]
         record = TransferRecord(id=transfer_id, phase=phase, total=max(0, total))
+        from tgdrive.demo_files import restricted_writes
+
+        if self.demo_mode and restricted_writes.get():
+            record.context["demo_read_only"] = True
         self._records[transfer_id] = record
         try:
             self.persist(record)
@@ -812,7 +818,12 @@ class TransferRegistry:
 
         async def runner() -> None:
             try:
-                await work(record)
+                from tgdrive.demo_files import write_policy
+
+                with write_policy(
+                    self.demo_mode and record.context.get("demo_read_only") is True
+                ):
+                    await work(record)
             except asyncio.CancelledError:
                 if (
                     (self._db is not None or self._mongo is not None)

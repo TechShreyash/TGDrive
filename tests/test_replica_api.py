@@ -1,9 +1,12 @@
 """Recovery remains owner-only and reachable when the live catalog is missing."""
 
+import json
+
 import pytest
 from fastapi.testclient import TestClient
 from test_app import FakeRuntime, login, make_settings
 from test_replica import TOKEN, Telegram
+from test_replica_activation import NEW, candidate
 
 from tgdrive.app import create_app
 from tgdrive.mongo import DatabaseUnavailable
@@ -103,6 +106,64 @@ def test_request_validation_hides_rejected_secrets_and_no_unverified_activation(
         client.post("/api/v1/replica/recover", json={"activate": True}).status_code
         == 409
     )
+
+
+@pytest.mark.parametrize("confirmation", [None, "", "-100999888777"])
+def test_activation_requires_pending_destination_and_preserves_plan_on_failure(
+    owner, confirmation
+):
+    client, runtime, replica = owner
+    runtime.store.add_file("/", "preserved.bin", 123, 42)
+    pending = candidate(runtime.store.export())
+    replica.journal.set("candidate", pending)
+    recovery = {"target": NEW, "phase": "ready_to_activate"}
+    replica.journal.set("recovery", recovery)
+    manifest = replica.settings.resolved_data_dir / "channel-activation.json"
+    original_catalog = runtime.store.export()
+    login(client)
+
+    payload = {"activate": True, "target_channel": -100999888777}
+    if confirmation is not None:
+        payload["confirm_channel"] = confirmation
+    rejected = client.post("/api/v1/replica/recover", json=payload)
+    assert rejected.status_code == 422
+    assert "confirm activation" in rejected.json()["detail"]
+    assert replica.journal.get("candidate") == pending
+    assert replica.journal.get("recovery") == recovery
+    assert not replica.journal.get("activation")
+    assert not manifest.exists()
+    assert runtime.store.export() == original_catalog
+
+    accepted = client.post(
+        "/api/v1/replica/recover",
+        json={"activate": True, "confirm_channel": str(NEW)},
+    )
+    assert accepted.status_code == 200
+    assert accepted.json()["phase"] == "restart_required"
+    assert replica.journal.get("activation") is True
+    assert replica.journal.get("candidate") == pending
+    assert replica.journal.get("recovery") == recovery
+    assert (
+        json.loads(manifest.read_text())["candidate"]["catalog"]["storage_channel_id"]
+        == NEW
+    )
+    assert runtime.store.export() == original_catalog
+
+
+def test_matching_destination_cannot_activate_incomplete_recovery(owner):
+    client, runtime, replica = owner
+    pending = candidate(runtime.store.export())
+    pending["complete"] = False
+    replica.journal.set("candidate", pending)
+    login(client)
+    response = client.post(
+        "/api/v1/replica/recover",
+        json={"activate": True, "confirm_channel": str(NEW)},
+    )
+    assert response.status_code == 409
+    assert replica.journal.get("candidate") == pending
+    assert not replica.journal.get("activation")
+    assert not (replica.settings.resolved_data_dir / "channel-activation.json").exists()
 
 
 def test_missing_catalog_starts_authenticated_recovery_shell_without_telegram_writes(

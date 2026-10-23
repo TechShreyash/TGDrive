@@ -88,7 +88,12 @@ export function reconcileDirectory(
   const unchanged =
     Object.keys(previous.contents).length === entries.length &&
     entries.every(([id, item]) => previous.contents[id] === item);
-  if (unchanged && previous.name === next.name) return previous;
+  if (
+    unchanged &&
+    previous.name === next.name &&
+    previous.read_only === next.read_only
+  )
+    return previous;
   return {
     ...next,
     contents: unchanged ? previous.contents : Object.fromEntries(entries),

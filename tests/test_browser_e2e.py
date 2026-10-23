@@ -1130,21 +1130,14 @@ def test_enhanced_mkv_real_audio_subtitles_and_local_assets(
     page.screenshot(path=ARTIFACTS / "enhanced-desktop.png", full_page=False)
     page.set_viewport_size({"width": 390, "height": 844})
     player.hover()
-    more_button = player.get_by_role("button", name="More Settings", exact=True)
-    expect(more_button).to_be_visible()
-    expandable_controls = player.locator(".movi-mobile-expandable")
-    # Desktop audio/subtitle menu state can carry into the compact layout.
-    # Establish a closed tray before verifying the actual mobile toggle.
-    if expandable_controls.evaluate(
-        "element=>element.closest('.movi-controls-right').classList.contains('expanded')"
-    ):
-        more_button.click()
-    expect(expandable_controls).to_have_css("pointer-events", "none")
-    more_button.click()
-    expect(expandable_controls).to_have_css("pointer-events", "auto")
-    expect(audio_button).to_be_visible()
-    audio_button.click()
-    first_audio = player.locator(
+    settings_button = player.get_by_role("button", name="Settings", exact=True)
+    expect(settings_button).to_be_visible()
+    expect(player.locator("button.movi-more-btn")).not_to_be_visible()
+    settings_button.click()
+    settings_menu = player.locator(".movi-settings-menu")
+    expect(settings_menu).to_be_visible()
+    settings_menu.locator('.movi-settings-row[data-page="audio"]').click()
+    first_audio = settings_menu.locator(
         f'.movi-audio-track-item[data-track-id="{tracks[0]["id"]}"]'
     )
     first_audio.click()
@@ -1153,8 +1146,12 @@ def test_enhanced_mkv_real_audio_subtitles_and_local_assets(
         player.evaluate("element=>element.player.trackManager.getActiveAudioTrack().id")
         == tracks[0]["id"]
     )
-    player.get_by_role("button", name="Subtitles/Captions", exact=True).click()
-    subtitles_off = player.locator('.movi-subtitle-track-item[data-track-id="null"]')
+    expect(settings_menu).not_to_be_visible()
+    settings_button.click()
+    settings_menu.locator('.movi-settings-row[data-page="subtitles"]').click()
+    subtitles_off = settings_menu.locator(
+        '.movi-subtitle-track-item[data-track-id="null"]'
+    )
     subtitles_off.click()
     expect(subtitles_off).to_have_class(
         "movi-subtitle-track-item movi-subtitle-track-active"
@@ -1254,24 +1251,45 @@ def test_mp4_movtext_real_cues_seek_track_switch_off_and_original(
     expect(page.locator("dialog.file-preview")).to_have_count(0)
 
 
-def test_file_and_folder_activation_focus_escape_and_mobile_double_tap(
+def test_mouse_double_click_and_mobile_tap_preserve_focus(
     server: Server, desktop: tuple[Any, Any], browser: Any
 ) -> None:
     _, page = desktop
     login(page, server.url)
+    directory_requests = []
+    page.on(
+        "request",
+        lambda request: (
+            directory_requests.append(request.post_data_json["path"])
+            if request.url.endswith("/api/getDirectory")
+            else None
+        ),
+    )
     folder = page.get_by_role("button", name="Preview samples", exact=True)
     folder.click()
-    expect(page.get_by_label("Select Preview samples", exact=True)).to_be_checked()
+    expect(page.get_by_role("heading", name="My Files", exact=True)).to_be_visible()
     expect(page.get_by_role("button", name="sample.json", exact=True)).to_have_count(0)
+    expect(page.get_by_role("checkbox")).to_have_count(0)
+    assert directory_requests == []
+    history_length = page.evaluate("history.length")
     folder.dblclick()
     primary = page.get_by_role("button", name="sample.json", exact=True)
-    primary.click()
-    expect(page.get_by_label("Select sample.json", exact=True)).to_be_checked()
-    expect(page.locator("dialog.file-preview")).to_have_count(0)
+    expect(primary).to_be_visible()
+    assert len(set(directory_requests)) == 1
+    assert page.evaluate("history.length") == history_length + 1
     page.evaluate("document.body.style.minHeight='220vh'")
     prior_overflow = page.evaluate("getComputedStyle(document.body).overflow")
+    primary.click()
+    expect(page.locator("dialog.file-preview")).to_have_count(0)
+    expect(page.get_by_role("checkbox")).to_have_count(0)
+    file_row = page.locator(".file-row").filter(has=primary)
+    file_row.locator(".size-cell").click()
+    expect(page.locator("dialog.file-preview")).to_have_count(0)
+    expect(page.get_by_role("checkbox")).to_have_count(0)
+    history_length = page.evaluate("history.length")
     primary.dblclick()
     dialog = preview_dialog(page)
+    assert page.evaluate("history.length") == history_length + 1
     background_y = page.evaluate("scrollY")
     page.mouse.move(20, 20)
     page.mouse.wheel(0, 600)
@@ -1296,6 +1314,17 @@ def test_file_and_folder_activation_focus_escape_and_mobile_double_tap(
     dialog.get_by_role("button", name="Close Preview", exact=True).click()
     expect(actions).to_be_focused()
 
+    page.get_by_role("button", name="Select", exact=True).click()
+    primary.click()
+    expect(page.get_by_label("Select sample.json", exact=True)).to_be_checked()
+    expect(page.locator("dialog.file-preview")).to_have_count(0)
+    primary.click()
+    expect(page.get_by_label("Select sample.json", exact=True)).not_to_be_checked()
+    file_row.locator(".size-cell").click()
+    expect(page.get_by_label("Select sample.json", exact=True)).to_be_checked()
+    expect(page.locator("dialog.file-preview")).to_have_count(0)
+    page.get_by_role("button", name="Done", exact=True).click()
+
     context = browser.new_context(
         viewport={"width": 390, "height": 844}, has_touch=True, is_mobile=True
     )
@@ -1304,17 +1333,7 @@ def test_file_and_folder_activation_focus_escape_and_mobile_double_tap(
         login(mobile, server.url)
         folder = mobile.get_by_role("button", name="Preview samples", exact=True)
         folder.tap()
-        expect(
-            mobile.get_by_label("Select Preview samples", exact=True)
-        ).to_be_checked()
-        expect(
-            mobile.get_by_role("button", name="sample.json", exact=True)
-        ).to_have_count(0)
-        folder.tap()
         primary = mobile.get_by_role("button", name="sample.json", exact=True)
-        primary.tap()
-        expect(mobile.get_by_label("Select sample.json", exact=True)).to_be_checked()
-        expect(mobile.locator("dialog.file-preview")).to_have_count(0)
         primary.tap()
         mobile_dialog = preview_dialog(mobile)
         expect(mobile_dialog.locator("pre")).to_contain_text('"count": 3')
@@ -1529,15 +1548,13 @@ def test_enhanced_video_delayed_startup_shows_status_and_recovers(
             dialog.get_by_role("button", name="Use Compatibility Playback", exact=True)
         ).to_have_count(0)
         expect(dialog.locator(".preview-surface > video")).to_have_count(0)
-        progress = status.get_by_role(
-            "progressbar", name="Preparing audio and video frames"
-        )
+        progress = status.get_by_role("progressbar", name="Loading video")
         expect(progress).to_be_visible()
         assert progress.evaluate("element=>!element.hasAttribute('value')"), (
             "Unknown duration must not manufacture a loading percentage"
         )
         expect(
-            status.get_by_role("button", name="Reload Video", exact=True)
+            status.get_by_role("button", name="Try again", exact=True)
         ).to_be_visible(timeout=12000)
         expect(
             dialog.get_by_role("link", name="Download Original", exact=True)
@@ -1547,16 +1564,14 @@ def test_enhanced_video_delayed_startup_shows_status_and_recovers(
         preview_dialog(page)
         expect(status).to_be_visible()
         expect(
-            status.get_by_role("button", name="Reload Video", exact=True)
+            status.get_by_role("button", name="Try again", exact=True)
         ).to_be_visible()
         page.screenshot(
             path=ARTIFACTS / "video-startup-delayed-mobile.png", full_page=False
         )
         if play_during_open:
             player.locator("button.movi-play-pause").click()
-            expect(status).to_contain_text(
-                "Playback will start when the video is ready."
-            )
+            expect(status).to_contain_text("Loading video…")
         holding = False
         for route in pending:
             route.continue_()
@@ -1628,12 +1643,24 @@ def test_enhanced_video_quality_switch_restores_settled_paused_position(
         pytest.fail(f"Real video engine did not restore the saved 3s position: {state}")
 
     wait_for_restored_position()
-    quality = dialog.get_by_role("combobox", name="Preview Quality", exact=True)
-    expect(quality).to_be_visible()
+    expect(dialog.locator(".preview-quality")).to_have_count(0)
 
     def switch_source(value: str) -> None:
+        player.hover()
+        settings = player.locator("button.movi-settings-btn")
+        if not settings.is_visible():
+            player.locator("button.movi-more-btn").click()
+        settings.click()
+        player.locator('.movi-settings-row[data-page="quality"]').click()
+        menu = player.locator(".movi-settings-menu")
+        expect(menu.locator(".movi-settings-page-title")).to_have_text("Quality")
+        labels = {
+            "original": "Original",
+            "fixture-same-bytes": "Fixture alternate source",
+        }
+        expect(menu.get_by_role("button", name="Original", exact=True)).to_be_visible()
         player.evaluate("element=>window.previousResumePlayer=element")
-        quality.select_option(value)
+        menu.get_by_role("button", name=labels[value], exact=True).click()
         deadline = time.monotonic() + 15
         replaced = False
         while time.monotonic() < deadline:
@@ -1835,11 +1862,7 @@ def test_unsupported_details_are_compact_explicit_and_shared_readonly(
         login(mobile, server.url)
         folder = mobile.get_by_role("button", name="Preview samples", exact=True)
         folder.tap()
-        mobile.wait_for_timeout(80)
-        folder.tap()
         mobile_primary = mobile.get_by_role("button", name=filename, exact=True)
-        mobile_primary.tap()
-        mobile.wait_for_timeout(80)
         mobile_primary.tap()
         mobile_dialog, _ = file_details_dialog(mobile, filename)
         assert mobile_downloads == []
@@ -1983,6 +2006,7 @@ def test_background_listing_failure_preserves_files_and_navigation_loads_normall
     held: list[Any] = []
     page.route("**/api/getDirectory", lambda route: held.append(route))
     try:
+        page.get_by_role("button", name="Done", exact=True).click()
         primary.press("Enter")
         expect(page.locator(".loading-state")).to_be_visible()
         expect(page.locator(".file-table")).to_have_count(0)
@@ -2544,9 +2568,7 @@ def test_actual_unavailable_wmv_codec_stays_in_custom_player_with_original_downl
     expect(dialog.get_by_role("alert")).to_contain_text(
         "is not supported by the player on this device"
     )
-    expect(
-        dialog.get_by_role("button", name="Reload Video", exact=True)
-    ).to_be_visible()
+    expect(dialog.get_by_role("button", name="Try again", exact=True)).to_be_visible()
     assert dialog.evaluate("element => element.matches(':modal')")
     expect(dialog.locator(".preview-surface > video")).to_have_count(0)
     with page.expect_download() as result:
@@ -3115,9 +3137,9 @@ def test_ui_polish_batched_visual_states(
 
     page.set_viewport_size({"width": 1440, "height": 960})
     page.route(
-        "**/api/v1/jobs",
+        "**/api/v1/uploads",
         lambda route: route.fulfill(
-            status=503, json={"detail": "Synthetic progress service unavailable"}
+            status=507, json={"detail": "Synthetic upload staging full"}
         ),
     )
     page.reload()
@@ -3139,7 +3161,7 @@ def test_ui_polish_batched_visual_states(
     if batch.get_by_role("button", name="Show Files", exact=True).count():
         batch.get_by_role("button", name="Show Files", exact=True).click()
     expect(batch.locator(".transfer-item[data-status=cancelled]")).to_have_count(3)
-    page.unroute("**/api/v1/jobs")
+    page.unroute("**/api/v1/uploads")
     page.get_by_role("button", name="Clear Finished", exact=True).click()
     page.set_viewport_size({"width": 1440, "height": 960})
     open_admin(page)
@@ -3353,7 +3375,8 @@ def test_transfer_history_filters_cleared_records_and_empty_state(
     deadline = time.monotonic() + 10
     while not held and time.monotonic() < deadline:
         page.wait_for_timeout(30)
-    assert len(held) == 1
+    # History behavior is independent of the browser's receive concurrency.
+    assert held
     page.get_by_role("link", name="Transfers", exact=False).click()
     filters.get_by_role("button", name="Failed", exact=True).click()
     expect(
@@ -3906,10 +3929,45 @@ def test_shared_links_compact_views_copy_location_and_indicators(server, desktop
     )
     page.get_by_role("button", name="Refresh Shared Links", exact=True).click()
     expect(page.locator(".share-row")).to_have_count(2)
-    page.get_by_role("button", name="Copy Link", exact=True).click()
-    expect(page.get_by_role("button", name="Copied", exact=True)).to_be_visible()
+    active_row = page.locator(
+        ".share-row", has=page.get_by_role("button", name="資料", exact=True)
+    )
+    copy_button = active_row.locator(".share-copy")
+    expect(copy_button).to_have_text("")
+    copy_button.click()
+    expect(copy_button).to_have_attribute(
+        "aria-label", __import__("re").compile("^Link copied")
+    )
     copied = page.evaluate("navigator.clipboard.readText()")
     assert created["auth"] in copied and folder["id"] in copied
+    expect(page.get_by_text("Unnamed link", exact=False)).to_have_count(0)
+    unavailable_row = page.locator(".share-row").filter(has_text="Previous link.txt")
+    expect(unavailable_row.locator(".share-copy")).to_have_attribute(
+        "aria-disabled", "true"
+    )
+    expect(unavailable_row.locator(".share-copy")).to_be_disabled()
+    copy_requests = []
+    page.on(
+        "request",
+        lambda request: (
+            copy_requests.append(request.url)
+            if request.url.endswith("/api/v1/shares/link")
+            else None
+        ),
+    )
+    unavailable_control = unavailable_row.locator(".share-copy-control")
+    unavailable_control.focus()
+    expect(unavailable_control.get_by_role("tooltip")).to_have_text(
+        "Original link is unavailable; existing copies still work."
+    )
+    unavailable_control.press("Escape")
+    expect(unavailable_control).not_to_be_focused()
+    unavailable_control.click()
+    expect(unavailable_control).to_be_focused()
+    unavailable_row.locator(".share-copy").evaluate("button => button.click()")
+    expect(page.locator(".toast-error")).to_have_count(0)
+    assert not copy_requests
+    expect(page.get_by_role("button", name="New Link", exact=True)).to_have_count(0)
     assert (
         page.request.post(
             server.url + "/api/getDirectory",
@@ -3941,14 +3999,12 @@ def test_shared_links_compact_views_copy_location_and_indicators(server, desktop
     page.set_viewport_size({"width": 1440, "height": 960})
     page.get_by_role("button", name="Expired 1", exact=True).click()
     expect(page.locator(".share-row")).to_have_count(1)
-    expect(page.get_by_role("button", name="New Link", exact=True)).to_be_visible()
-    page.get_by_role("button", name="New Link", exact=True).click()
-    expiry = page.get_by_role("group", name="Link Expires", exact=True)
-    expiry.get_by_role("button", name="30 days", exact=True).click()
-    expect(expiry.get_by_role("button", name="30 days", exact=True)).to_have_attribute(
-        "aria-pressed", "true"
+    expect(page.locator(".share-row .share-copy")).to_have_attribute(
+        "aria-disabled", "true"
     )
-    page.get_by_role("button", name="Cancel", exact=True).click()
+    expect(page.locator(".share-row .share-copy")).to_be_disabled()
+    expect(page.get_by_role("button", name="New Link", exact=True)).to_have_count(0)
+    expect(page.get_by_role("dialog")).to_have_count(0)
     page.get_by_role("button", name="Active 2", exact=True).click()
     page.get_by_role("button", name="Show 資料 in folder", exact=True).click()
     expect(page.get_by_role("heading", name="My Files", exact=True)).to_be_visible()
@@ -3957,7 +4013,7 @@ def test_shared_links_compact_views_copy_location_and_indicators(server, desktop
     ).to_have_class(__import__("re").compile("selected"))
     page.get_by_role("link", name="Shared Links", exact=True).click()
     page.get_by_role("button", name="Revoke Link for 資料", exact=True).click()
-    page.get_by_role("button", name="Keep Sharing", exact=True).click()
+    page.get_by_role("dialog").get_by_role("button", name="Cancel", exact=True).click()
     assert (
         page.request.post(
             server.url + "/api/getDirectory",
@@ -4129,7 +4185,7 @@ def test_revoke_failure_stays_in_dialog_and_management_drops_do_not_upload(
     expect(dialog.get_by_role("alert")).to_have_text(
         "Could not revoke this link. Try again."
     )
-    dialog.get_by_role("button", name="Keep Sharing", exact=True).click()
+    dialog.get_by_role("button", name="Cancel", exact=True).click()
     expect(dialog).to_have_count(0)
     page.get_by_role("link", name="Transfers", exact=False).click()
     requests = []

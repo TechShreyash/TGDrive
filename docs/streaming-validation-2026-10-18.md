@@ -1,20 +1,26 @@
 # Streaming validation — 18 October 2026
 
-This follow-up reproduces the reported 17 MB playback failure and separates
-browser cache, server cache and delivery protocol. For deployment guidance and
-Telegram datacenter considerations, see [Performance and caching](performance.md).
+[Docs home](README.md) · [Findings](#findings) · [Measurements](#fresh-browser-controls) · [Coverage](#player-behavior-and-coverage) · [Current performance guide](performance.md)
+
+This dated report reproduces a 17 MB playback failure, separating browser cache,
+server cache and delivery protocol. Results and deployment status describe
+**18 October 2026**; use the [performance guide](performance.md) for current guidance.
+
+> [!NOTE]
+> Live browser checks and synthetic server checks are identified separately below.
+> These results establish behavior on the tested paths, not performance on every network or device.
 
 ## Findings
 
 Two independent problems were reproduced:
 
-1. The same 17,839,845-byte MP4 downloaded in **93.668 seconds over HTTP/3** and
+1. **Delivery protocol.** The same 17,839,845-byte MP4 downloaded in **93.668 seconds over HTTP/3** and
    **1.028 seconds over HTTP/2**. A direct IPv4 control reproduced the difference:
    a 4 MiB range took 20.487 seconds over HTTP/3 and 0.436 seconds over HTTP/2.
    All checksums matched. This isolates a QUIC-path bottleneck on the tested
    connection, without identifying the responsible network component or claiming
    that HTTP/3 is slow everywhere.
-2. A suspended response could retain the entire global transient buffer. New
+2. **Transient buffer contention.** A suspended response could retain the entire global transient buffer. New
    cached seeks and metadata reads then waited for that older client. The new
    regression fails against the old reader and passes with reclamation of
    speculative frames. Awaited/yielded frames and shared fills remain protected.
@@ -23,6 +29,9 @@ Increasing retained RAM cannot fix either condition: retained cache and transien
 stream-delivery memory serve different purposes.
 
 ## Fresh-browser controls
+
+<details>
+<summary>Cache isolation and test media</summary>
 
 Each browser run used a fresh Chromium context, disabled browser network caching
 through CDP and bypassed service workers. Recorded browser cache hits were zero.
@@ -33,6 +42,8 @@ catalog and shares.
 The MP4 is 30.526667 seconds of 1920×1080 H.264 High/yuv420p with stereo AAC.
 Its SHA-256 is
 `d6617a009c0c6c9aebf7398d43cad6d1985ddc1b9ab0479e2ea977362b8af5b0`.
+
+</details>
 
 | Test | Ready after | First complete playback, wall time | Mid-play buffering | Frames |
 | --- | ---: | ---: | ---: | ---: |
@@ -113,6 +124,8 @@ initialize the shared cache. Tests cover RAM/disk cache, actual Uvicorn/TCP
 backpressure, disconnect/resume, concurrent readers, multipart seams, conditional
 responses and resource cleanup.
 
+**Automated results recorded for this validation:**
+
 | Automated check | Result |
 | --- | --- |
 | Integrated Python suite, including isolated MongoDB and Node bridge | 947 passed; 15 subtests passed |
@@ -124,10 +137,15 @@ responses and resource cleanup.
 | Public release packaging after adding this report | 3 passed |
 | Changed Python lint/format and whitespace checks | Passed |
 
+<details>
+<summary>Cancellation regression synchronization</summary>
+
 A cancellation regression originally waited for 100 zero-delay event-loop turns,
 which could finish before a filesystem worker ran. It now awaits an explicit
 origin-entry event before canceling; cancellation, shared-fill drainage, memory
 and lease assertions are unchanged.
+
+</details>
 
 ## Deployment and limits
 

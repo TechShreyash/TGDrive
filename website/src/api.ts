@@ -26,6 +26,10 @@ export class ApiError extends Error {
     this.name = "ApiError";
   }
 }
+export function notifyDemoFilesReadOnly(code: unknown) {
+  if (code === "DEMO_FILES_READ_ONLY")
+    window.dispatchEvent(new Event("tgdrive:demo-files-read-only"));
+}
 export async function request<T>(
   url: string,
   body?: unknown,
@@ -80,6 +84,7 @@ export async function request<T>(
       window.dispatchEvent(new Event("tgdrive:auth-required"));
     if (data.code === "SETTINGS_RESTART_REQUIRED")
       window.dispatchEvent(new Event("tgdrive:restart-required"));
+    notifyDemoFilesReadOnly(data.code);
     throw new ApiError(
       detail,
       response.status,
@@ -142,10 +147,31 @@ export const api = {
       { uploads_per_bot },
       { method: "PATCH" },
     ),
-  config: () => request<PublicConfig>("/api/config"),
-  session: () => request<{ authenticated: boolean }>("/api/v1/session"),
-  login: (password: string) =>
-    request("/api/checkPassword", { pass: password }),
+  config: () =>
+    request<PublicConfig>("/api/config", undefined, { cache: "no-store" }),
+  session: () =>
+    request<{
+      authenticated: boolean;
+      demo_read_only?: boolean;
+      demo_admin?: boolean;
+    }>("/api/v1/session", undefined, { cache: "no-store" }),
+  login: async (password: string) => {
+    for (let attempt = 1; ; attempt++) {
+      try {
+        return await request("/api/checkPassword", { pass: password });
+      } catch (error) {
+        if (
+          !(error instanceof ApiError) ||
+          error.status !== 429 ||
+          error.code !== "LOGIN_BUSY" ||
+          attempt >= 3
+        )
+          throw error;
+        const delay = Math.min(2, Math.max(1, error.retryAfter));
+        await new Promise<void>((resolve) => setTimeout(resolve, delay * 1000));
+      }
+    }
+  },
   logout: () => request("/api/logout", {}),
   directory: (path: string, auth = "", signal?: AbortSignal) =>
     request<{ data: Directory; auth_home_path?: string }>(

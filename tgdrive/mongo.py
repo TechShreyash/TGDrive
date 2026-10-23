@@ -271,6 +271,8 @@ def save_bootstrap(settings: Any, backend: MongoBackend) -> None:
             "DATA_DIR",
             "CACHE_DIR",
             "DEMO_MODE",
+            "DEMO_ADMIN_PASSWORD",
+            "DEMO_ADMIN_PASSWORD_HASH",
             "ADMIN_PASSWORD",
             "managed_revision",
             "managed_client_ids",

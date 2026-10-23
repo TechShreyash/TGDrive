@@ -18,6 +18,7 @@ import {
 } from "lucide-react";
 import "./SortMenu.css";
 import type { SortOrder } from "./fileSorting";
+import { COMPACT_LAYOUT_QUERY } from "./responsive";
 
 export const SORT_OPTIONS = [
   { value: "name", label: "Name" },
@@ -43,10 +44,10 @@ export default function SortMenu({
 }) {
   const [open, setOpen] = useState(false);
   const [mobile, setMobile] = useState(
-    () => window.matchMedia("(max-width: 720px)").matches,
+    () => window.matchMedia(COMPACT_LAYOUT_QUERY).matches,
   );
   useEffect(() => {
-    const media = window.matchMedia("(max-width: 720px)");
+    const media = window.matchMedia(COMPACT_LAYOUT_QUERY);
     const update = () => setMobile(media.matches);
     media.addEventListener("change", update);
     return () => media.removeEventListener("change", update);

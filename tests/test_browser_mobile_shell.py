@@ -130,8 +130,21 @@ def test_sidebar_keeps_rare_tools_collapsed_and_exposes_project_link(
     assert github.bounding_box()["height"] >= 44
     docs = support.get_by_role("link", name="Documentation", exact=True)
     assert abs(docs.bounding_box()["y"] - github.bounding_box()["y"]) <= 1
-    expect(page.get_by_role("button", name="Log Out", exact=True)).to_be_in_viewport()
+    logout = page.get_by_role("button", name="Log Out", exact=True)
+    expect(logout).to_be_in_viewport()
+    assert docs.evaluate("""element => {
+      const style = getComputedStyle(element);
+      return style.paddingLeft === style.paddingRight && style.flexGrow === '0';
+    }""")
+    nav_icon = page.get_by_role("link", name="My Files", exact=True).locator("svg")
+    for icon in (docs.locator("svg"), logout.locator("svg")):
+        assert abs(icon.bounding_box()["x"] - nav_icon.bounding_box()["x"]) <= 1
     ARTIFACTS.mkdir(parents=True, exist_ok=True)
+    docs.hover()
+    page.screenshot(
+        path=ARTIFACTS / f"sidebar-documentation-hover-{theme}-{width}.png",
+        animations="disabled",
+    )
     page.screenshot(
         path=ARTIFACTS / f"sidebar-simple-{theme}-{width}.png", animations="disabled"
     )
@@ -188,20 +201,21 @@ def test_brand_asset_and_sidebar_footer_stay_clear_in_both_themes(
     page.emulate_media(color_scheme=theme)
     page.goto(server.url)
     expect(page.locator("#login-dialog")).to_be_visible()
-    logo = page.locator(".login-page .brand-mark")
-    expect(logo).to_have_attribute("src", "/static/tgdrive-symbol.svg")
+    logo = page.locator(f".login-page .brand-logo-{theme}")
+    expect(logo).to_be_visible()
+    expected_logo = "tgdrive-logo-dark.svg" if theme == "dark" else "tgdrive-logo.svg"
+    expect(logo).to_have_attribute("src", "/static/brand/" + expected_logo)
     logo.evaluate("img => img.decode()")
     assert logo.evaluate("img => img.complete && img.naturalWidth > 0")
-    expect(page.locator('link[rel="icon"]')).to_have_attribute(
-        "href", "/static/tgdrive-symbol.svg"
+    expect(page.locator('link[rel="icon"][type="image/svg+xml"]')).to_have_attribute(
+        "href", "/static/brand/favicon.svg"
     )
     ARTIFACTS.mkdir(parents=True, exist_ok=True)
     page.screenshot(
         path=ARTIFACTS / f"brand-login-{theme}-{width}.png", animations="disabled"
     )
     login(page)
-    for image in page.locator(".brand-mark").all():
-        expect(image).to_have_attribute("src", "/static/tgdrive-symbol.svg")
+    for image in page.locator(".brand-logo img").all():
         image.evaluate("img => img.decode()")
         assert image.evaluate("img => img.complete && img.naturalWidth > 0")
     if width <= 720:

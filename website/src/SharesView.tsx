@@ -14,8 +14,8 @@ import {
   formatLocationLabel,
   formatDate,
   formatTimestamp,
+  getTimezone,
   type Share,
-  type DriveItem,
 } from "./types";
 import { FileIcon, Spinner, ErrorNotice, Modal } from "./components";
 import "./SharesView.css";
@@ -29,6 +29,38 @@ export function shareExpired(share: Share) {
         : share.expires_at,
     ).getTime() <= Date.now()
   );
+}
+export function shareCopyIssue(share: Share) {
+  if (!share.id) return "Refresh Shared Links before managing this entry.";
+  if (shareExpired(share)) return "This link has expired.";
+  if (!share.copyable)
+    return "Original link is unavailable; existing copies still work.";
+  return "";
+}
+function createdTime(share: Share) {
+  const date = new Date(share.created_at);
+  return Number.isNaN(date.getTime())
+    ? "—"
+    : new Intl.DateTimeFormat(undefined, {
+        dateStyle: "medium",
+        timeStyle: "medium",
+        timeZone: getTimezone(),
+      }).format(date);
+}
+function expiryDescription(share: Share) {
+  return share.expires_at == null
+    ? "No expiry"
+    : `${shareExpired(share) ? "Expired" : "Expires"} ${formatTimestamp(share.expires_at)}`;
+}
+function shareDescription(share: Share) {
+  return [
+    share.name || "Shared Item",
+    share.label,
+    expiryDescription(share),
+    "Created " + formatTimestamp(share.created_at),
+  ]
+    .filter(Boolean)
+    .join(". ");
 }
 export function shareUrl(auth: string, nodeId: string, folder: boolean) {
   return (
@@ -46,7 +78,6 @@ export default function SharesView({
   onError,
   onChange,
   onLocate,
-  onShare,
   onNotice,
   query = "",
 }: {
@@ -54,7 +85,6 @@ export default function SharesView({
   onError: (message: string) => void;
   onChange: () => void;
   onLocate: (share: Share) => void;
-  onShare: (item: DriveItem) => void;
   onNotice?: (message: string, error?: boolean) => void;
   query?: string;
 }) {
@@ -65,7 +95,10 @@ export default function SharesView({
   const generation = useRef(0);
   const manualPending = useRef(false);
   const { refreshing, run } = useManualRefresh(onNotice);
-  const [busy, setBusy] = useState("");
+  const [busy, setBusy] = useState<{
+    id: string;
+    action: "copy" | "revoke";
+  } | null>(null);
   const [copied, setCopied] = useState("");
   const [confirm, setConfirm] = useState<Share | null>(null);
   const [revokeError, setRevokeError] = useState("");
@@ -147,7 +180,12 @@ export default function SharesView({
         Date.parse(b.created_at) - Date.parse(a.created_at),
     );
   const revoke = async (share: Share) => {
-    setBusy(share.id || share.path);
+    if (busy) return;
+    if (!share.id) {
+      onError("Refresh Shared Links before managing this entry.");
+      return;
+    }
+    setBusy({ id: share.id, action: "revoke" });
     setRevokeError("");
     try {
       await api.revoke(share.path, share.id);
@@ -157,11 +195,15 @@ export default function SharesView({
       if (confirm) setRevokeError(errorMessage(cause));
       else onError(errorMessage(cause));
     } finally {
-      setBusy("");
+      setBusy(null);
     }
   };
   const copy = async (share: Share) => {
-    setBusy(share.id || share.path);
+    if (busy) return;
+    const issue = shareCopyIssue(share);
+    if (issue) return;
+    setBusy({ id: share.id!, action: "copy" });
+    setCopied("");
     try {
       const result = await api.shareLink(share.path, share.id);
       const url = shareUrl(
@@ -171,18 +213,20 @@ export default function SharesView({
       );
       try {
         await navigator.clipboard.writeText(url);
-        setCopied(share.id || share.path);
+        setCopied(share.id!);
       } catch {
         setManualLink(url);
       }
     } catch (cause) {
       onError(errorMessage(cause));
     } finally {
-      setBusy("");
+      setBusy(null);
     }
   };
   const locate = async (share: Share) => {
     try {
+      if (!share.id)
+        throw new Error("Refresh Shared Links before managing this entry.");
       const latest = (await api.shares()).shares.find(
         (row) => row.id === share.id,
       );
@@ -195,17 +239,7 @@ export default function SharesView({
       onError(errorMessage(cause));
     }
   };
-  const newLink = (share: Share) =>
-    onShare({
-      id: share.node_id || share.path.split("/").pop() || "",
-      path:
-        share.folder_path ||
-        share.path.slice(0, share.path.lastIndexOf("/")) ||
-        "/",
-      name: share.name || "Shared Item",
-      type: share.type || "file",
-      size: share.size,
-    });
+  const copiedShare = shares.find((share) => share.id === copied);
   return (
     <div className="shares-page" aria-busy={loading || refreshing}>
       <div className="shares-toolbar">
@@ -282,13 +316,27 @@ export default function SharesView({
         <>
           <div className="share-columns" aria-hidden="true">
             <span>Shared item</span>
-            <span>Expires</span>
+            <span>Link dates</span>
             <span>Actions</span>
           </div>
           <ul className="shares-rows" aria-label="Shared Links">
             {visible.map((share) => {
               const ended = shareExpired(share);
               const name = share.name || "Shared Item";
+              const copyIssue = shareCopyIssue(share);
+              const copying = busy?.id === share.id && busy?.action === "copy";
+              const revoking =
+                busy?.id === share.id && busy?.action === "revoke";
+              const wasCopied = !!share.id && copied === share.id;
+              const detailsId = share.id
+                ? `share-details-${share.id}`
+                : undefined;
+              const description = shareDescription(share);
+              const copyTitle = copying
+                ? "Copying link"
+                : wasCopied
+                  ? "Link copied"
+                  : "Copy link";
               const expiryDate = new Date(
                 typeof share.expires_at === "number"
                   ? share.expires_at * 1000
@@ -296,8 +344,9 @@ export default function SharesView({
               );
               return (
                 <li
-                  key={share.id || share.path}
+                  key={share.id || `${share.path}:${share.created_at}`}
                   className="share-row"
+                  data-share-id={share.id}
                   data-status={ended ? "expired" : "active"}
                   onDoubleClick={(event) => {
                     if (!(event.target as HTMLElement).closest("button,a"))
@@ -309,114 +358,152 @@ export default function SharesView({
                     <button
                       className="share-name"
                       title={name}
+                      aria-describedby={detailsId}
                       onClick={() => void locate(share)}
                     >
                       {name}
                     </button>
                     <span
                       className="share-location"
-                      title={
-                        formatLocationLabel(share.folder_label) || "My Files"
-                      }
+                      title={[
+                        share.label,
+                        formatLocationLabel(share.folder_label) || "My Files",
+                      ]
+                        .filter(Boolean)
+                        .join(" · ")}
                     >
-                      <span className="share-link-label">
-                        {share.label || "Unnamed link"}
-                      </span>
-                      {" · "}
+                      {share.label && (
+                        <>
+                          <span className="share-link-label">
+                            {share.label}
+                          </span>
+                          {" · "}
+                        </>
+                      )}
                       {formatLocationLabel(share.folder_label) || "My Files"}
                     </span>
+                    <span className="sr-only" id={detailsId}>
+                      {description}
+                    </span>
                   </div>
-                  <div className={"share-expiry" + (ended ? " ended" : "")}>
-                    {share.expires_at ? (
-                      <time
-                        dateTime={
-                          Number.isFinite(expiryDate.getTime())
-                            ? expiryDate.toISOString()
-                            : undefined
-                        }
-                        tabIndex={0}
-                        aria-label={`${ended ? "Expired" : "Expires"} ${formatTimestamp(share.expires_at)}`}
-                      >
-                        <span className="share-expiry-label">
-                          {ended ? "Expired" : "Expires"}
-                        </span>
-                        {formatDate(share.expires_at)}
-                        <span className="share-expiry-tooltip" role="tooltip">
-                          {formatTimestamp(share.expires_at)}
-                        </span>
-                      </time>
-                    ) : (
-                      "No expiry"
-                    )}
+                  <div className="share-dates">
+                    <div className={"share-expiry" + (ended ? " ended" : "")}>
+                      {share.expires_at ? (
+                        <time
+                          dateTime={
+                            Number.isFinite(expiryDate.getTime())
+                              ? expiryDate.toISOString()
+                              : undefined
+                          }
+                          tabIndex={0}
+                          aria-label={`${ended ? "Expired" : "Expires"} ${formatTimestamp(share.expires_at)}`}
+                        >
+                          <span className="share-expiry-label">
+                            {ended ? "Expired" : "Expires"}
+                          </span>
+                          {formatDate(share.expires_at)}
+                          <span className="share-expiry-tooltip" role="tooltip">
+                            {formatTimestamp(share.expires_at)}
+                          </span>
+                        </time>
+                      ) : (
+                        "No expiry"
+                      )}
+                    </div>
+                    <time
+                      className="share-created"
+                      dateTime={share.created_at}
+                      title={"Created " + formatTimestamp(share.created_at)}
+                    >
+                      Created {createdTime(share)}
+                    </time>
                   </div>
                   <div className="share-row-actions">
-                    {ended || !share.copyable ? (
+                    <span
+                      className="share-copy-control"
+                      data-unavailable={!!copyIssue}
+                      role={copyIssue ? "group" : undefined}
+                      tabIndex={copyIssue ? 0 : undefined}
+                      aria-label={
+                        copyIssue
+                          ? `Copy link unavailable for ${share.label || name}. ${copyIssue}`
+                          : undefined
+                      }
+                      aria-describedby={copyIssue ? detailsId : undefined}
+                      onClick={
+                        copyIssue
+                          ? (event) => event.currentTarget.focus()
+                          : undefined
+                      }
+                      onKeyDown={(event) => {
+                        if (event.key === "Escape") event.currentTarget.blur();
+                      }}
+                    >
                       <button
-                        className="secondary-button share-copy"
-                        onClick={() => newLink(share)}
-                        title={
-                          ended
-                            ? "Create a new link"
-                            : "Create a separate new link; the existing link is unaffected"
-                        }
-                      >
-                        <RefreshCw size={15} />
-                        New Link
-                      </button>
-                    ) : (
-                      <button
-                        className="secondary-button share-copy"
-                        disabled={busy === (share.id || share.path)}
+                        className="icon-button share-copy"
+                        disabled={!!busy || !!copyIssue}
+                        aria-disabled={!!copyIssue}
+                        aria-busy={copying}
+                        aria-label={`${copyTitle} for ${share.label || name}${copyIssue ? ". " + copyIssue : ""}`}
+                        aria-describedby={detailsId}
+                        title={copyIssue ? undefined : copyTitle}
                         onClick={() => void copy(share)}
                       >
-                        {busy === (share.id || share.path) ? (
+                        {copying ? (
                           <Spinner />
-                        ) : copied === (share.id || share.path) ? (
-                          <Check size={15} />
+                        ) : wasCopied ? (
+                          <Check size={18} aria-hidden="true" />
                         ) : (
-                          <Copy size={15} />
+                          <Copy size={18} aria-hidden="true" />
                         )}
-                        {copied === (share.id || share.path)
-                          ? "Copied"
-                          : "Copy Link"}
                       </button>
-                    )}
+                      {copyIssue && (
+                        <span className="share-copy-explanation" role="tooltip">
+                          {copyIssue}
+                        </span>
+                      )}
+                    </span>
                     {share.id && (
                       <button
                         className="icon-button"
+                        disabled={!!busy}
                         title="Edit link"
                         aria-label={
                           "Edit link " + (share.label || "for " + name)
                         }
+                        aria-describedby={detailsId}
                         onClick={() => setEditing(share)}
                       >
-                        <Pencil size={18} />
+                        <Pencil size={18} aria-hidden="true" />
                       </button>
                     )}
                     <button
                       className="icon-button share-locate"
-                      title="Show in Folder"
+                      title="Show in folder"
                       aria-label={"Show " + name + " in folder"}
+                      aria-describedby={detailsId}
                       onClick={() => void locate(share)}
                     >
-                      <FolderOpen size={18} />
+                      <FolderOpen size={18} aria-hidden="true" />
                     </button>
                     <button
                       className="icon-button"
-                      disabled={busy === (share.id || share.path)}
-                      title={ended ? "Remove Expired Entry" : "Revoke Link"}
+                      disabled={!!busy || !share.id}
+                      aria-busy={revoking}
+                      title={ended ? "Remove expired link" : "Revoke link"}
                       aria-label={
                         (ended
                           ? "Remove Expired Link for "
                           : "Revoke Link for ") + name
                       }
-                      onClick={() =>
-                        ended
-                          ? void revoke(share)
-                          : (setRevokeError(""), setConfirm(share))
-                      }
+                      aria-describedby={detailsId}
+                      onClick={() => (setRevokeError(""), setConfirm(share))}
                     >
-                      <X size={18} />
+                      {revoking ? (
+                        <Spinner />
+                      ) : (
+                        <X size={18} aria-hidden="true" />
+                      )}
                     </button>
                   </div>
                 </li>
@@ -426,18 +513,27 @@ export default function SharesView({
         </>
       )}
       <span className="sr-only" role="status">
-        {copied ? "Share Link copied" : ""}
+        {busy?.action === "copy"
+          ? "Copying share link"
+          : copiedShare
+            ? "Share link copied. " + shareDescription(copiedShare)
+            : ""}
       </span>
       {confirm && (
         <Modal
-          title="Revoke This Link?"
+          title={
+            shareExpired(confirm) ? "Remove Expired Link?" : "Revoke This Link?"
+          }
           onClose={() => {
             if (!busy) setConfirm(null);
           }}
         >
+          <ShareIdentity share={confirm} />
           <p>
-            People with the link to <strong>{confirm.name}</strong> will lose
-            access. Other links are unaffected.
+            {shareExpired(confirm)
+              ? "Remove this expired entry from Shared Links."
+              : "People with this link will lose access."}{" "}
+            Other links are unaffected.
           </p>
           <ErrorNotice message={revokeError} />
           <div className="dialog-actions">
@@ -446,14 +542,15 @@ export default function SharesView({
               disabled={!!busy}
               onClick={() => setConfirm(null)}
             >
-              Keep Sharing
+              Cancel
             </button>
             <button
               className="danger-button"
               disabled={!!busy}
               onClick={() => void revoke(confirm)}
             >
-              {busy ? <Spinner /> : <X size={16} />} Revoke Link
+              {busy ? <Spinner /> : <X size={16} aria-hidden="true" />}
+              {shareExpired(confirm) ? "Remove Entry" : "Revoke Link"}
             </button>
           </div>
         </Modal>
@@ -492,6 +589,17 @@ export default function SharesView({
   );
 }
 
+function ShareIdentity({ share }: { share: Share }) {
+  return (
+    <div className="share-dialog-identity">
+      <strong>{share.name || "Shared Item"}</strong>
+      {share.label && <span>{share.label}</span>}
+      <span>{expiryDescription(share)}</span>
+      <span>Created {formatTimestamp(share.created_at)}</span>
+    </div>
+  );
+}
+
 function EditShare({
   share,
   onClose,
@@ -518,6 +626,27 @@ function EditShare({
   const [never, setNever] = useState(!share.expires_at);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  const save = async () => {
+    if (busy) return;
+    setBusy(true);
+    setError("");
+    try {
+      const changes: {
+        share_id: string;
+        label?: string;
+        expires_at?: string | null;
+      } = { share_id: share.id! };
+      if (label !== (share.label || "")) changes.label = label;
+      if (never !== !share.expires_at || (!never && expiry !== localDate))
+        changes.expires_at = never ? null : new Date(expiry).toISOString();
+      await request("/api/v1/shares", changes, { method: "PATCH" });
+      onSaved();
+    } catch (cause) {
+      setError(errorMessage(cause));
+    } finally {
+      setBusy(false);
+    }
+  };
   return (
     <Modal
       title="Edit share link"
@@ -528,19 +657,10 @@ function EditShare({
       <form
         onSubmit={(event) => {
           event.preventDefault();
-          setBusy(true);
-          setError("");
-          void api
-            .updateShare(
-              share.id!,
-              label,
-              never ? null : new Date(expiry).toISOString(),
-            )
-            .then(onSaved)
-            .catch((cause) => setError(errorMessage(cause)))
-            .finally(() => setBusy(false));
+          void save();
         }}
       >
+        <ShareIdentity share={share} />
         <label htmlFor="edit-share-label">Link label</label>
         <input
           id="edit-share-label"

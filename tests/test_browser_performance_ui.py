@@ -176,6 +176,11 @@ def test_cache_inventory_filters_verified_coverage_and_clear_actions(server, des
     ]:
         page.set_viewport_size({"width": width, "height": 900})
         page.evaluate("theme => document.documentElement.dataset.theme = theme", theme)
+        if width == 320 and theme == "dark":
+            brand = page.locator(".mobile-brand .brand-logo")
+            expect(brand.locator("img:visible")).to_have_count(1)
+            expect(brand.locator(".brand-logo-dark")).not_to_be_visible()
+            expect(brand.locator(".brand-logo-icon")).to_be_visible()
         if width <= 640:
             selector = page.get_by_role("combobox", name="Filter cached files")
             selector.select_option("ready")

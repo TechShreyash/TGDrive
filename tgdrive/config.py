@@ -79,6 +79,12 @@ class Settings(BaseSettings):
         default=None, alias="DATABASE_BACKUP_MSG_ID", gt=0
     )
     admin_password: SecretStr = Field(default=SecretStr(""), alias="ADMIN_PASSWORD")
+    demo_admin_password: SecretStr | None = Field(
+        default=None, alias="DEMO_ADMIN_PASSWORD"
+    )
+    demo_admin_password_hash: SecretStr | None = Field(
+        default=None, alias="DEMO_ADMIN_PASSWORD_HASH"
+    )
     session_secret: SecretStr = Field(alias="SESSION_SECRET")
 
     string_sessions_csv: SecretStr = Field(
@@ -250,7 +256,12 @@ class Settings(BaseSettings):
                 bootstrap = {
                     key: value
                     for key, value in saved.items()
-                    if key != "DEMO_MODE"
+                    if key
+                    not in {
+                        "DEMO_MODE",
+                        "DEMO_ADMIN_PASSWORD",
+                        "DEMO_ADMIN_PASSWORD_HASH",
+                    }
                     and base.get(key) in (None, "")
                     and not (
                         key == "ADMIN_PASSWORD_HASH" and base.get("ADMIN_PASSWORD")
@@ -333,7 +344,13 @@ class Settings(BaseSettings):
     def optional_backup_id(cls, value):
         return None if value in ("", None) else value
 
-    @field_validator("admin_password_hash", "mongodb_backup_key", mode="before")
+    @field_validator(
+        "admin_password_hash",
+        "mongodb_backup_key",
+        "demo_admin_password",
+        "demo_admin_password_hash",
+        mode="before",
+    )
     @classmethod
     def optional_password_hash(cls, value):
         raw = value.get_secret_value() if isinstance(value, SecretStr) else value
@@ -349,17 +366,21 @@ class Settings(BaseSettings):
             raise ValueError("API hash must contain exactly 32 hexadecimal characters")
         return SecretStr(raw)
 
-    @field_validator("admin_password", "session_secret")
+    @field_validator("admin_password", "session_secret", "demo_admin_password")
     @classmethod
     def validate_non_empty_secret(
-        cls, value: SecretStr, info: ValidationInfo
-    ) -> SecretStr:
+        cls, value: SecretStr | None, info: ValidationInfo
+    ) -> SecretStr | None:
+        if value is None:
+            return None
         raw = value.get_secret_value().strip()
         if raw.startswith("<"):
             raise ValueError("Replace the example placeholder with a generated secret")
         if info.field_name == "admin_password" and not raw:
             return SecretStr("")
-        minimum = 12 if info.field_name == "admin_password" else 32
+        minimum = (
+            12 if info.field_name in {"admin_password", "demo_admin_password"} else 32
+        )
         if len(raw) < minimum:
             label = info.field_name.replace("_", " ")
             raise ValueError(f"{label} must contain at least {minimum} characters")
@@ -388,31 +409,47 @@ class Settings(BaseSettings):
             and self.admin_password_hash is None
         ):
             raise ValueError("ADMIN_PASSWORD or ADMIN_PASSWORD_HASH is required")
-        if self.admin_password_hash is not None:
+        for name in ("admin_password_hash", "demo_admin_password_hash"):
+            encoded = getattr(self, name)
+            if encoded is None:
+                continue
+            label = name.upper()
             try:
-                parameters = extract_parameters(
-                    self.admin_password_hash.get_secret_value()
-                )
+                parameters = extract_parameters(encoded.get_secret_value())
                 if parameters.type is not Type.ID:
-                    raise ValueError("ADMIN_PASSWORD_HASH must use Argon2id")
+                    raise ValueError(f"{label} must use Argon2id")
                 if parameters.memory_cost < 19456 or parameters.time_cost < 2:
-                    raise ValueError(
-                        "Owner password hash is below the supported security floor"
-                    )
+                    raise ValueError(f"{label} is below the supported security floor")
                 if (
                     parameters.memory_cost > 262144
                     or parameters.time_cost > 10
                     or parameters.parallelism > 16
                 ):
                     raise ValueError(
-                        "ADMIN_PASSWORD_HASH exceeds supported login costs "
+                        f"{label} exceeds supported login costs "
                         "(256 MiB memory, 10 iterations, 16 lanes); generate a new "
                         "hash with the password-hash command"
                     )
             except InvalidHashError as exc:
+                raise ValueError(f"{label} must be a valid Argon2id hash") from exc
+        if self.demo_mode:
+            from tgdrive.security import verify_password
+
+            owner = self.admin_password_hash or self.admin_password
+            demo = self.demo_admin_password_hash or self.demo_admin_password
+            collision = bool(demo and demo == owner)
+            if demo and self.demo_admin_password_hash is None:
+                collision = verify_password(
+                    demo.get_secret_value(), owner.get_secret_value()
+                )
+            elif demo and self.admin_password_hash is None:
+                collision = verify_password(
+                    owner.get_secret_value(), demo.get_secret_value()
+                )
+            if collision:
                 raise ValueError(
-                    "ADMIN_PASSWORD_HASH must be a valid Argon2id hash"
-                ) from exc
+                    "Demo administrator password must differ from the regular password"
+                )
         if not self.bot_tokens:
             raise ValueError("BOT_TOKENS must contain at least one bot token")
         if len(set(self.bot_tokens)) != len(self.bot_tokens):

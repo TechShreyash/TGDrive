@@ -1,12 +1,9 @@
 # Configuration and API reference
 
-[Docs home](README.md) · For operators and contributors
+[Docs home](README.md) · [Settings guide](configuration.md) · [Development](development.md)
 
-**Using the web app? You can skip this page.**
-Start with [Setup](setup.md) or [Using TGDrive](usage.md).
-
-Open a section below when you need a specific setting or API contract.
-Detailed tables and examples are expandable.
+Look up an exact setting, limit or request contract. Tables and examples expand
+on demand. For everyday workflows, start with [Using TGDrive](usage.md).
 
 | Looking for… | Go to |
 | --- | --- |
@@ -45,9 +42,10 @@ Settings are case-insensitive. Unknown names are ignored, so check for typos.
 
 | Deployment flag | Default | Behavior |
 | --- | --- | --- |
-| `DEMO_MODE` | false | Lock Configuration and Management changes and recovery-key exports while keeping file features available. Requires container recreation/redeploy; cannot be edited through the dashboard. See [public demo mode](configuration.md#public-demo-mode). |
+| `DEMO_MODE` | false | Give the usual password restricted visitor access; protect Demo Files and lock management writes/key exports. A separately configured demo administrator can bypass those restrictions. Requires container recreation/redeploy. See [public demo mode](configuration.md#public-demo-mode). |
 
-Never publish real values or use the example placeholders as credentials.
+> [!IMPORTANT]
+> Keep real credentials private. Example placeholders are not working credentials.
 
 ### File syntax and secret handling
 
@@ -66,14 +64,13 @@ and Python dotenv parse the file themselves.
 Optional does not always mean that a blank value is accepted:
 
 - Omit ADMIN_PASSWORD_HASH when unused; a blank value is treated as absent.
-- ADMIN_PASSWORD= is allowed only when a valid hash is supplied.
-- DATABASE_BACKUP_MSG_ID= means no historical reference.
+- ADMIN_PASSWORD= requires a valid explicit hash or the original saved hash
+  loaded from an existing MongoDB drive.
 - STRING_SESSIONS=, MAIN_BOT_TOKEN=, and TELEGRAM_ADMIN_IDS= disable their
   optional features.
 - MAX_FILE_SIZE= means the bounded default logical-file limit.
 - With standard Compose auto-secrets enabled, blank SESSION_SECRET and
   MONGODB_BACKUP_KEY reuse original saved keys, or generate them for a new drive.
-  With manual source setup, configure valid explicit keys.
 
 Invalid settings fail before serving the application. Secret wrappers and
 hidden validation inputs reduce accidental disclosure in exception text; they
@@ -96,7 +93,6 @@ do not make a configuration file safe to publish.
 | `MAIN_BOT_TOKEN` | Omitted/empty by default, secret | Optional bot-mode token. A nonempty value requires TELEGRAM_ADMIN_IDS. |
 | `PUBLIC_URL` | Omitted/empty by default | Optional HTTP(S) website origin for the bot's `/set_folder` link. Otherwise the website address is remembered when saving its bot upload folder. |
 | `TELEGRAM_ADMIN_IDS` | Empty by default | Comma-separated positive numeric Telegram user IDs allowed to use bot mode. |
-| `DATABASE_BACKUP_MSG_ID` | None by default | Legacy positive checkpoint message ID; blank is accepted. Unused by MongoDB startup and restore-mongodb. |
 
 Storage bots are the required baseline. The running pool can remain ready with
 a healthy storage bot when additional bots or Premium sessions fail.
@@ -108,19 +104,17 @@ connectivity, not merely a nonempty STRING_SESSIONS value. See
 
 ### Performance and cache settings
 
-Saved owner performance preferences override their startup defaults and apply
-to new work without replacing Telegram credentials. MongoDB stores them in the
-settings collection, included in encrypted database backups. Environment
-changes require process/container restart; recreating a container does not
-override a saved preference. The separate connection editor still requires a
-restart after credential changes.
+<details>
+<summary>Live preferences, defaults and cache limits</summary>
 
-The table lists built-in app defaults, also shown beside dashboard controls.
-Startup environment values may differ; the inputs show the current policy.
-Both Compose files forward these optional performance variables, so leaving
-them unset keeps the app defaults. Dashboard saves need no environment edits
-or redeployment. **Reset Changes** restores the last saved values, not the
-built-in defaults. Units are binary: 1 GiB = 1024 MiB and 1 MiB = 1024 KiB.
+Saved dashboard preferences override startup defaults, persist in MongoDB and
+apply to new work immediately. Environment changes require a restart; recreating
+a container does not override saved preferences. Telegram credential edits use
+the separate restart-based connection editor.
+
+**Reset Changes** restores the last saved values. **Restore defaults** creates a
+category-scoped draft; Save validates and applies it. Defaults below use binary
+units: 1 GiB = 1024 MiB.
 
 | Variable | Default | Meaning and bounds |
 | --- | --- | --- |
@@ -138,36 +132,25 @@ built-in defaults. Units are binary: 1 GiB = 1024 MiB and 1 MiB = 1024 KiB.
 | `UPLOAD_SPLIT_MIB` | 2000 | Default and maximum document size for every account, including Premium. Explicit 1–2000 values choose a smaller preferred cap; 0 also uses 2000 MiB. The minimum grows when needed to stay within 4096 parts, without exceeding 2000 MiB. Persisted plans keep their original boundaries. |
 | `TIMEZONE` | Asia/Kolkata | Installation-wide display timezone for owner and public dates/share expiry. Use a valid IANA name; the default is IST. |
 
-The memory budget also covers the bounded asynchronous disk write backlog.
-Disk retention is independent of RAM's 10-minute idle expiry; capacity pressure
-may evict either tier sooner. Cache and staging budgets do not preallocate
-storage, and the cache free-space floor is not a global disk-space guarantee.
-Active responses share an additional transient payload budget, default 32 MiB,
-clamped by available memory with a 2 MiB streaming floor. A response's read-ahead
-window scales with active consumers; a single consumer can use the full budget.
-New response heads reclaim suspended readers' speculative blocks; only their
-awaited/yielded heads stay protected. Pending cancellation drains before a
-reservation is released, and shared fills continue for remaining subscribers.
-This is an internal policy, not an
-additional owner setting. `cache.scratch` reports current/effective/configured
-bytes, peak reservations, waiting heads and active streams. Transport and
-server buffers are outside retained payload-cache and scratch budgets.
-RAM/disk can hold duplicate hot blocks; summing the tiers is not a whole-file
-retention guarantee. Preparation admission counts complete aligned Telegram
-blocks, including multipart boundaries, competing active reservations and
-a 32-byte integrity prefix per disk block.
+RAM includes the asynchronous disk-write backlog. Active responses have a separate
+32 MiB transient payload budget, reduced by available memory with a 2 MiB floor;
+transport/server buffers are outside these budgets. `cache.scratch` reports current,
+effective and configured bytes, peak reservations, waiting heads and active streams.
+RAM and disk may duplicate blocks, so their sum is not whole-file capacity.
 
-Extra automatic preparation requires original audio/video playback identified
-by `preview=1` or `Sec-Fetch-Dest: audio/video`; `download=1` always excludes it.
-Average media rate from valid duration metadata, otherwise sustained delivered
-cadence, sizes a bounded ahead window. Whole-file promotion requires overlapping
-qualified runs from distinct stable viewer IDs; retries by one viewer and
-anonymous requests do not qualify. See [thresholds and cancellation rules](performance.md#automatic-read-ahead).
+Preload admission counts complete aligned Telegram blocks, multipart boundaries,
+a 32-byte disk integrity prefix per block and competing reservations. Retention
+never guarantees a pin: TTL, eviction and disk failure still apply.
 
-Background jobs and block reads are bounded separately. Cache admission, TTL and eviction
-remain active during and after preparation.
+Dashboard saves reject enabled disk caching with a free-space floor below 64 MiB
+(`422`); a zero disk budget remains valid. Existing environment values are not
+rewritten. Read-only defaults cannot be submitted as a preference.
 
-See [performance policy and tuning](performance.md) before raising these values.
+See [performance policy](performance.md), including
+[automatic read-ahead](performance.md#automatic-read-ahead), for scheduling and
+warming thresholds. Settings do not guarantee bandwidth or free disk.
+
+</details>
 
 ### Owner authentication
 
@@ -178,8 +161,10 @@ See [performance policy and tuning](performance.md) before raising these values.
 | --- | --- | --- |
 | `ADMIN_PASSWORD_HASH` | None by default, secret | Recommended owner credential. Valid Argon2id; memory cost 19,456–262,144 KiB, time cost 2–10, at most 16 lanes. Generate it with the owner CLI. |
 | `ADMIN_PASSWORD` | Empty by default, secret | Plaintext fallback when no hash is configured. At least 12 characters after trimming. If a hash is present, clear the example plaintext value. A malformed nonempty plaintext value still fails validation. |
+| `DEMO_ADMIN_PASSWORD` | Empty by default, secret | Optional different password granting full access only while `DEMO_MODE=true`. At least 12 characters after trimming. Not stored/restored in bootstrap preferences. |
+| `DEMO_ADMIN_PASSWORD_HASH` | None by default, secret | Optional Argon2id alternative to `DEMO_ADMIN_PASSWORD`, with the same validation bounds as `ADMIN_PASSWORD_HASH`. Takes precedence over demo administrator plaintext. Not stored/restored in bootstrap preferences. |
 | `SESSION_SECRET` | Required, secret | Independent random signing secret of at least 32 characters after trimming. Do not reuse an account or password credential. |
-| `SESSION_TTL_SECONDS` | 86400 | Integer 300-2592000 inclusive: browser session lifetime, in seconds. |
+| `SESSION_TTL_SECONDS` | 86400 | Integer 300-2592000 inclusive: absolute browser session lifetime in seconds (24 hours by default). No separate idle timeout. |
 | `COOKIE_SECURE` | true | Secure cookies require HTTPS. Use false only for local plain HTTP on loopback. |
 
 At least one password representation is required. The hash takes precedence
@@ -187,9 +172,24 @@ when both valid forms are configured. The plaintext fallback is hashed in
 memory when the application is created; the .env value itself remains
 plaintext.
 
+During initial setup MongoDB's `settings` collection stores a bootstrap document
+(`_id: "bootstrap"`) containing `ADMIN_PASSWORD_HASH`, never the plaintext
+`ADMIN_PASSWORD`. A missing explicit owner credential can reuse that saved hash.
+The private `DATA_DIR/replica-bootstrap.json` recovery file also retains the
+owner hash so recovery-only login remains possible. Encrypted database backups
+can contain those saved credentials. These copies do not reveal the original
+password; plaintext remains readable wherever you configured it. Demo
+administrator credentials stay in deployment configuration, outside these
+bootstrap records. See [reset instructions](operations.md#forgotten-login-password).
+
 Blank or whitespace-only plaintext values are canonicalized to empty and
-require a valid hash. Nonempty plaintext values must meet the minimum after
+require a valid explicit or saved bootstrap hash. Nonempty plaintext values must meet the minimum after
 trimming. The generated Argon2id hash setup is recommended.
+
+Use a unique password or passphrase of **15+ characters**; the implementation's
+minimum remains 12. There is no built-in MFA or passkey login. The stronger
+length recommendation follows [OWASP authentication guidance](https://cheatsheetseries.owasp.org/cheatsheets/Authentication_Cheat_Sheet.html)
+for password-only authentication.
 
 The owner password is not a Telegram password. Browser session signatures derive
 from SESSION_SECRET and the effective configured owner credential, and sessions
@@ -198,9 +198,32 @@ signing secret invalidates existing owner cookies; an unchanged configuration
 preserves sessions across restarts. Share links are separate credentials. See
 [rotation and access recovery](operations.md#https-and-private-configuration).
 
-Generate a hash using either installation's password-hash command. It prompts
-twice, enforces a 12-character minimum, and does not require valid Telegram
-settings. Encrypted MongoDB restore needs only database access and the recovery key.
+Each successful login creates an independent session. Different devices and
+browser profiles may use the same owner credentials concurrently; a later login
+does not replace earlier sessions. Logout revokes only the presented session.
+Tabs sharing a browser cookie jar share that session. Demo mode adds a signed
+`demo_admin` capability only for the separate full-access password. Legacy and
+ordinary-password cookies remain restricted in demo mode; clients cannot add
+this capability to their cookies. Its signature derives from a separate key
+bound to the demo administrator credential and `SESSION_SECRET`. Rotating or
+removing the demo administrator password invalidates elevated sessions without
+invalidating ordinary sessions. Outside demo mode the extra password is ignored.
+
+Password verification stays limited to one concurrent check. A simultaneous
+login can receive `429` with code `LOGIN_BUSY`; the website retries that response
+up to three total attempts, waiting 1–2 seconds between tries. Incorrect passwords,
+the five-failure throttle and network errors are not automatically retried.
+
+After configuring Compose's required variables, generate a hash in the container:
+
+```bash
+docker compose run --rm --no-deps app python -m tgdrive password-hash
+```
+
+It prompts twice, enforces a 12-character minimum, and does not connect to
+Telegram. Save the hash privately in `ADMIN_PASSWORD_HASH`, single-quote it in
+`.env`, and clear `ADMIN_PASSWORD`. Encrypted MongoDB restore needs only database
+access and the recovery key; use the [dedicated restore container](backup-recovery.md#restore-a-lost-database-from-telegram).
 
 </details>
 
@@ -211,15 +234,12 @@ settings. Encrypted MongoDB restore needs only database access and the recovery 
 
 | Variable | Default | Validation and behavior |
 | --- | --- | --- |
-| `MONGODB_URI` | None in legacy/test settings | Secret URI beginning mongodb:// or mongodb+srv://. Required by documented deployment. |
+| `MONGODB_URI` | Required for v2 deployment | Secret URI beginning mongodb:// or mongodb+srv://. Required by documented deployment. |
 | `MONGODB_DATABASE` | tgdrive | 1–63 ASCII letters/digits, underscores or hyphens; dedicated to one drive. |
 | `MONGODB_BACKUP_KEY` | None | Secret 64-hex-character AES-256 key. Keep a separate recovery copy. |
 | `MONGODB_BACKUP_SECONDS` | 3600 | Integer 60–604800 seconds between successful automatic safety copies. |
 | `DATA_DIR` | data | Persistent generated keys, Telegram sessions, helper locks, recovery/activation state and media cache. MongoDB holds the live catalog and durable job/receipt records. |
 | `CACHE_DIR` | cache | Persistent unfinished upload payloads and encrypted temporary database backup files. Keep unfinished bytes. |
-| `INITIALIZE_EMPTY_DRIVE` | false | Legacy setting; no automatic startup initialization. |
-| `DATABASE_BACKUP_TIME` | 60 | Legacy SQLite checkpoint interval; unused by MongoDB mode. |
-| `DATABASE_BACKUP_MSG_ID` | None | Legacy recovery reference; unused by MongoDB startup/snapshots. |
 | `LOG_LEVEL` | INFO | DEBUG, INFO, WARNING, ERROR or CRITICAL. |
 
 DATA_DIR and CACHE_DIR must be writable distinct paths, not a filesystem
@@ -227,12 +247,11 @@ root or account home, equal or nested. Compose sets /app/data and /app/cache.
 The container runs as UID/GID 10001:10001; custom bind mounts must allow that
 account to write. Do not replace missing writable volumes with disposable mounts.
 
-The standard Compose deployment enables `TGDRIVE_AUTO_SECRETS=true`. Missing
+Standard Compose enables `TGDRIVE_AUTO_SECRETS=true`. Missing
 `SESSION_SECRET` and `MONGODB_BACKUP_KEY` values are generated once for a new
 drive and saved as mode 0600 in `DATA_DIR/deployment-secrets.json`. Explicit
 values and existing MongoDB bootstrap settings take precedence. Existing drives
-with missing keys fail rather than silently receiving replacement keys. Source
-installations retain explicit-secret configuration unless this mode is enabled.
+with missing keys fail rather than silently receiving replacement keys.
 
 The storage_channel_id binding is a nonzero signed 64-bit integer. Switching
 channels cannot silently reinterpret message IDs. Use a MongoDB replica set;
@@ -244,7 +263,7 @@ settings. Initialization/restore refuses existing catalog state.
 ### File capacity, staging, and work limits
 
 <details>
-<summary>Exact sizes, disk reservations and concurrency bounds</summary>
+<summary>Exact sizes, staging reservations and concurrency</summary>
 
 | Variable | Default | Validation and behavior |
 | --- | --- | --- |
@@ -252,61 +271,32 @@ settings. Initialization/restore refuses existing catalog state.
 | `STAGING_BUDGET_BYTES` | 17179869184 | Positive integer; 16 GiB total reservation budget for active browser receipts. |
 | `MIN_FREE_BYTES` | 1073741824 | Nonnegative integer; preserve 1 GiB free space by default. Browser receipt admission reserves remaining bytes; URL downloads also check free space. |
 | `UPLOAD_SESSION_TTL_SECONDS` | 86400 | Integer at least 60; incomplete receipt idle lifetime in seconds, refreshed after each committed chunk. There is no declared upper bound in configuration. |
-| `MAX_CONCURRENT_TRANSFERS` | 2 | Integer 1–32; bounds local fingerprinting, URL retrieval and legacy receive work. Receipt handlers have a separate bound from this value. It does not cap Telegram uploads across bots. |
+| `MAX_CONCURRENT_TRANSFERS` | 2 | Integer 1–32; bounds local fingerprinting, URL retrieval and receive work. Receipt handlers have a separate bound from this value. It does not cap Telegram uploads across bots. |
 | `TELEGRAM_UPLOADS_PER_BOT` | 1 | Integer 1–4; initial per-bot Telegram media limit. **Configuration → Transfer limits** saves an override in MongoDB and applies it immediately. Premium clients remain limited to one media upload each. |
-| `MAX_CONCURRENT_STREAMS` | 4 | Compatibility configuration; the file-response path uses bounded origin/media admission instead of a fixed viewer-count gate. It does not cap cached viewers at four. |
 | `TRANSFER_TTL_SECONDS` | 3600 | Integer 60-86400 inclusive; live terminal-job/context retention. Compact server-transfer history is kept separately from this cleanup; files are unaffected. |
 
-The conservative per-document ceiling for new uploads is 2000 MiB
-(2,097,152,000 bytes) for every account, including Premium. This is the app's
-safe approximately-2-GB cap, expressed in binary MiB. The logical-file ceiling advertised by /api/config is
-the minimum of STAGING_BUDGET_BYTES, optional MAX_FILE_SIZE and 2000 MiB × 4096
-parts; the default is therefore 16 GiB. Sufficient free disk is still required.
+New documents use at most **2000 MiB (2,097,152,000 bytes)** for every account,
+including Premium. `UPLOAD_SPLIT_MIB=0` uses that cap. Larger logical files use
+ordered parts and appear as one item with original downloads and range seeking.
+The `/api/config` logical limit is the minimum of `STAGING_BUDGET_BYTES`, optional
+`MAX_FILE_SIZE` and 2000 MiB x 4096 parts: **16 GiB by default**, subject to disk.
+TGDrive has no aggregate stored-byte quota; its catalog is bounded to 250,000
+file/folder entries, including the root.
+Premium is preferred when eligible; bot fallback and existing sender identities
+remain supported.
 
-Premium's larger single-document allowance is unnecessary for TGDrive: ordered
-parts support larger logical files, exact original downloads, streaming and
-byte-range seeking. Database backups preserve their mappings, and an enabled
-independent backup channel copies the documents for recovery. None of these
-features requires 4000 MiB documents. See [backup coverage](backup-recovery.md)
-for what each backup protects.
+Browser chunks are 8 MiB except the last. At most 1,000 unfinished receipts and
+2,000 rows in unfinished browser batches are tracked. Finished browser history
+keeps at most 30 batches/2,000 rows, retaining unresolved batches. Browser bounds
+are per controller; staging and Telegram account limits apply across callers.
+Allow disk headroom for URL work, logs, metadata and backups beyond receipt
+reservations.
 
-- Files above the bot document limit use ordered bot-sized messages while retaining one
-  drive item and logical progress.
-- Split size 0 uses 2000 MiB, just like the default. Premium never raises the cap.
-- An explicit split cap of 1–2000 MiB keeps parts bot-compatible. Available
-  Premium slots are preferred for upload parts and download payload windows,
-  with bot fallback when busy, cooling, disconnected or unhealthy.
-- Larger files remain multipart; the logical cap does not depend on Premium.
-- Multipart worker count follows healthy eligible account capacity, including live
-  uploads-per-bot increases. Occupied or cooling slots still wait at the shared
-  lease gate. Bot-compatible parts may use bots or Premium accounts. Older persisted
-  Premium-sized plans still use only Premium accounts for recovery.
-  Confirmed/replayed parts retain sender identity.
-- Accepted receipts retain their durable offset and checksum recovery rules.
-
-Browser chunks are fixed at 8 MiB, except the final chunk. That chunk size and
-the maximum 1000 unfinished receipt records are implementation limits, not
-environment settings. The staging budget covers browser receipt reservations;
-allow separate headroom for URL work, metadata, logs, and backups. Increasing
-the budget without adding disk does not create usable capacity.
-
-- The web controller receives one file at a time, independently of Telegram jobs.
-  Each received file is queued immediately; it does not wait for the rest of its batch.
-- If staging is full or the receipt limit is reached, the next device file stays queued
-  and retries automatically while the tab remains open.
-- Each connected bot admits one Telegram media upload by default. More bots add slots;
-  the saved per-bot setting can increase this to four. Multipart parts consume slots too.
-  Lowering the setting waits for running uploads to finish; it never interrupts them.
-- Account FloodWait deadlines and shared channel pacing still apply at every setting.
-- It tracks up to 2,000 rows in unfinished batches, retaining completed siblings.
-- Browser tracking bounds are per controller. Server staging reservations and
-  per-bot media slots apply across tabs and API callers.
-- Server reservation, job and handler limits still apply independently.
-- Finished browser history is pruned by whole batches, up to 30 batches/2,000 rows;
-  unresolved batches are retained.
-
-See [transfers](architecture.md#transfer-pipeline) for offsets, cancellation, retries, empty-file
-handling, and ordered logical file parts.
+Device receives start at two concurrent files and adapt between one and four.
+Each accepted file queues immediately. Staging/account waits still apply; reducing
+Telegram concurrency lets active uploads finish. See the canonical
+[transfer pipeline](architecture.md#transfer-pipeline) for adaptation, admission,
+retry and cancellation rules.
 
 </details>
 
@@ -322,7 +312,6 @@ handling, and ordered logical file parts.
 | `REMOTE_READ_TIMEOUT` | 120 | Seconds, greater than 0 and at most 3600; individual read timeout. |
 | `REMOTE_TOTAL_TIMEOUT` | 21600 | Seconds, greater than 0 and at most 86400; total operation budget. |
 | `REMOTE_MAX_REDIRECTS` | 5 | Integer 0-20 inclusive; manually validated redirect count. |
-| `SLEEP_THRESHOLD` | 60 | Integer 0-3600 inclusive. Compatibility setting currently not consumed by transfer or transport code. It does not shorten Telegram flood waits. |
 
 URL requests validate destinations and redirects, request identity encoding,
 and enforce declared and observed sizes. The configured global ceiling still
@@ -330,6 +319,11 @@ bounds HTTP retrieval, while runtime admission applies current account
 capacity. Telegram flood waits are persisted with a server-provided retry time;
 the transport disables Telethon's automatic flood sleeping. Details and limits
 are in [transfers](architecture.md#transfer-pipeline) and [security](reference.md#security-and-privacy).
+
+With the default private-network policy, IP literals and every DNS/redirect
+destination must be globally routable. Shared/CGNAT addresses (`100.64.0.0/10`),
+IPv6 site-local addresses and IPv4-mapped versions of blocked addresses are
+rejected alongside private, loopback, link-local, multicast and reserved ranges.
 
 </details>
 
@@ -341,10 +335,10 @@ are in [transfers](architecture.md#transfer-pipeline) and [security](reference.m
 | Variable/control | Shipped behavior |
 | --- | --- |
 | `BIND_ADDRESS` | Compose interpolation only; defaults to 127.0.0.1 for the host binding. It is not a Settings field. |
-| `PORT` | Compose's host port defaults to 8000; the supplied container command always listens on internal port 8000. A source launch uses its explicit --port argument. |
+| `PORT` | Local Compose's host port defaults to 8000; the supplied container command always listens on internal port 8000. |
 | `FORWARDED_ALLOW_IPS` | Optional explicit Uvicorn proxy trust override. The container launcher defaults to loopback plus the private IPs resolved from `TGDRIVE_PROXY_HOSTS`; the hosted Compose file sets that hostname to `coolify-proxy`. Unset or `auto` enables discovery. |
 | `TGDRIVE_PROXY_HOSTS` | Deployment-owned, comma-separated internal proxy hostnames. Only their resolved private IPs are trusted. A DNS failure retains loopback trust and logs an actionable warning; it never enables wildcard trust. |
-| `TGDRIVE_AUTO_SECRETS` | Standard Compose sets true. Generates missing session/backup keys once for a new drive in persistent DATA_DIR; source setups default to explicit keys. Existing drives must reuse their original keys. |
+| `TGDRIVE_AUTO_SECRETS` | Standard Compose sets true in the container environment. Generates missing session/backup keys once for a new drive in persistent DATA_DIR. Existing drives must reuse their original keys. |
 | `TGDRIVE_RESTART_POLICY` | Compose interpolation only. Laptop override defaults to no, hosted/server mode to unless-stopped. Choose deliberately; restart policies do not restart a running container merely because it is unhealthy. |
 | --workers | Must remain 1. This is a launch argument, not an environment feature for scaling the drive. |
 
@@ -353,12 +347,8 @@ its published port to 127.0.0.1; Coolify's base Compose publishes no host port.
 `COOKIE_SECURE=true`, the internal data/cache paths, explicit initialization and
 the single-worker launcher are enforced by the hosted Compose definitions.
 
-A .env entry read only by Pydantic does not automatically export variables to
-Uvicorn in a source launch. Pass --forwarded-allow-ips explicitly there, or set
-the actual process environment. The Render template passes environment
-variables directly and uses wildcard proxy trust on the assumption that its
-managed proxy is the only untrusted-client ingress. Do not copy that assumption
-to an exposed standalone app port.
+Compose forwards `FORWARDED_ALLOW_IPS` to the container. Trust only the reverse
+proxy addresses the app actually sees; keep direct access to the app port restricted.
 
 Apply settings using [operations](operations.md), then diagnose errors using
 [troubleshooting](operations.md#troubleshooting). The [development chapter](development.md)
@@ -370,9 +360,20 @@ owns the version compatibility baseline.
 
 Run initialization/restore with the service stopped.
 
-| Command after python -m tgdrive | Behavior |
+Run maintenance through Docker Compose from the installation folder:
+
+```bash
+docker compose run --rm --no-deps app python -m tgdrive COMMAND
+```
+
+Replace `COMMAND` with a command below. Server deployments use their usual
+`-f compose.yaml -f compose.server.yaml` arguments. In a Coolify application
+terminal, run `python -m tgdrive COMMAND` inside the container. Database disaster
+restore uses its [dedicated Docker instructions](backup-recovery.md#restore-a-lost-database-from-telegram).
+
+| Command | Behavior |
 | --- | --- |
-| password-hash | Locally prompts and prints an Argon2id owner hash. |
+| password-hash | Prompts in the container and prints an Argon2id owner hash. |
 | login | Authorizes an optional Premium account and saves a private session export. |
 | init | Creates a new MongoDB catalog/settings, refusing an existing drive. |
 | restore-mongodb --file FILE | Authenticates/decrypts a complete .tgdb archive and transactionally restores an empty database; revokes browser sessions. |
@@ -382,15 +383,25 @@ MONGODB_BACKUP_KEY before normal settings are restored. It does not include
 local unsent file bytes. The guided wizard inspects/prepares a new or existing
 MongoDB drive and checks Telegram access without a backup-pin requirement.
 
-Legacy SQLite init/recover/JSON restore branches remain for older installers
-and compatibility tests; they are not the documented MongoDB operation path.
+Prefer **Connections → Connect Premium account** for Premium login. The CLI
+alternative saves `/app/data/premium-session.txt` in the private data volume.
+Copy it out only when needed:
+
+```bash
+docker compose cp app:/app/data/premium-session.txt ./premium-session.txt
+```
+
+Treat its contents as an account credential. Paste it privately into Connections,
+remove the exported file after use, and restart to apply saved connection changes.
 
 ## HTTP API
 
-Owner-only `POST /api/v1/transfers/location` accepts `transfer_id`, `destination` and `completed`. It resolves the current folder and exact saved item without mutation; missing/trashed items return `available:false`.
-
 The web app uses these owner-session and scoped-share endpoints.
 There are no API keys or multi-user accounts. Interactive OpenAPI pages are disabled.
+
+[Authentication](#conventions-and-authentication) · [Files and folders](#listing-and-metadata) ·
+[Uploads](#resumable-browser-receipts) · [Jobs](#jobs) · [Shares and downloads](#shares-downloads-and-ranges) ·
+[Cache and preloads](#performance-cache-inventory-and-preparation) · [Errors](#errors-and-retry-discipline)
 
 ### Conventions and authentication
 
@@ -429,7 +440,7 @@ permanent third-party API compatibility.
 | `GET /` | Public shell | None | React HTML; build instructions if frontend source is not built. |
 | `GET /api/config` | Public | None | Includes `status`, `max_file_size` (default 16 GiB logical limit), `timezone`, `recovery_only` and `demo_mode` (default false). |
 | `POST /api/checkPassword` | Public, throttled | `{"pass":"<owner-password>"}` | `200 {"status":"ok"}` plus session cookie. |
-| `POST /api/logout` | Cookie if present | `{}` | `200 {"status":"ok"}`; revokes supplied session and clears cookie. |
+| `POST /api/logout` | Cookie if present | `{}` | `200 {"status":"ok"}`; revokes an active owner session and clears the cookie. Missing/invalid/expired/revoked cookies do not trigger a session database write. |
 | `GET /api/v1/session` | Public | None | `{"authenticated":true}` or false. |
 | `GET /api/v1/status` | Owner | None | Connection, capacity, committed revision, backend, encrypted snapshot history and client health. |
 | `POST /api/v1/backup` | Owner | `{}` | `{"recovery":{...}}` after an encrypted MongoDB safety copy is verified; `503` if not confirmed. |
@@ -445,14 +456,29 @@ not require Premium. Status includes telegram_ready, demo, max_file_size,
 staging_budget_bytes, metadata_revision, backup, clients, restart_required and
 admission_paused.
 
-With `DEMO_MODE=true`, authenticated requests that mutate `/api/v1/settings`
+With `DEMO_MODE=true`, restricted visitor requests that mutate `/api/v1/settings`
 or its subroutes, `/api/v1/replica` or its subroutes, and `POST /api/v1/backup`
 return `403` with `code: "DEMO_MODE_READ_ONLY"`. This includes connection refresh
 and Premium login/cancellation. `GET /api/v1/backup/recovery-key` and
 `GET /api/v1/replica/key` return the same denial to prevent secret export.
 Status/settings reads and the secret-free replica report remain available under
 normal authentication. The status field `demo` identifies a synthetic test
-runtime; it is separate from the deployment's `demo_mode` flag.
+runtime; it is separate from the deployment's `demo_mode` flag. Authenticated
+full-access demo sessions can use management and key exports normally.
+
+`GET /api/config` includes `demo_read_only` and `demo_admin`, computed from the
+current signed cookie. `GET /api/v1/session` includes these permission fields
+and `demo_mode` during demo mode, alongside `authenticated`. Both responses
+use `Cache-Control: no-store` so changing access cannot reuse another session's
+permissions. No response contains either password or password hash.
+
+Demo Files has the reserved catalog ID `tgdrive-demo-files`. Restricted writes
+to it, its descendants, or ancestors whose move/delete would affect it return
+`403 DEMO_FILES_READ_ONLY`. Upload destinations, share changes and durable job
+retry/cancel are checked before side effects; catalog writes also check ancestry
+under the store transaction. Restricted jobs keep their policy in the durable
+context as `demo_read_only: true`, reapplied on resume only while demo mode is
+enabled. Full-access retries can explicitly authorize privileged work.
 
 The compatibility-named recovery object includes state:protected|pending|error,
 backend:mongodb, metadata_revision, protected_revision, last_success_at,
@@ -472,6 +498,9 @@ Client health distinguishes configured accounts from healthy started accounts.
 
 ### Independent channel backup and recovery
 
+<details>
+<summary>Channel copy, recovery and activation endpoints</summary>
+
 This optional feature is configured by the owner through Storage & Backups rather
 than by placing bot tokens in URLs. See the [operator guide](backup-recovery.md#set-up-an-independent-backup-channel)
 for channel preparation, private permissions, key custody and recovery drills.
@@ -485,7 +514,7 @@ for channel preparation, private permissions, key custody and recovery drills.
 | `GET /api/v1/replica/report` | None | Secret-free owner status/report attachment; file/channel names and IDs may still be private. |
 | `POST /api/v1/replica/recover` | `source_channel`, write-only `bot_token`, 64-hex `key`, optional positive `message_id` | Downloads/authenticates a surviving recovery capsule and records a candidate for inspection. |
 | `POST /api/v1/replica/recover` | `target_channel`, write-only `target_bot_token`, matching typed `confirm_channel`, optional `catalog_only: true` | Uses the inspected server-side candidate to copy into an empty private destination, or verify an existing surviving catalog without copying files. |
-| `POST /api/v1/replica/recover` | `activate: true` | Explicitly activates a completed candidate; service restart is required. Incomplete candidates cannot be activated. |
+| `POST /api/v1/replica/recover` | `activate: true`, `confirm_channel` matching the pending candidate's destination channel ID | Explicitly activates a completed candidate; service restart is required. Missing/wrong confirmation or incomplete candidates cannot be activated. |
 
 All routes require owner authentication and normal same-origin mutation checks.
 A recovery-only startup exposes the authenticated recovery surface when the local
@@ -506,15 +535,15 @@ persistent data directory through restarts. Status is confirmed-part progress,
 not speculative queued bytes. Old remote copied messages and capsules are
 retained; changing the configured destination is not a command to erase them.
 
+</details>
+
 ### Owner connection management
 
 <details>
 <summary>Connections, Refresh, saving and Premium login</summary>
 
-All routes require the owner cookie and mutation-origin checks. Secret values
-are accepted in request bodies only and are never returned by GET/success/error
-snapshots. Storage channel and owner-authentication settings cannot be edited
-through these endpoints.
+Owner cookie and mutation-origin checks apply. Secrets are write-only body fields.
+These routes cannot edit the storage channel or owner credentials.
 
 | Method and route | Request | Success |
 | --- | --- | --- |
@@ -522,103 +551,64 @@ through these endpoints.
 | GET /api/v1/settings/uploads | None | Uploads per bot, connected bot count and available configured bot slots. Owner only; no-store. |
 | PATCH /api/v1/settings/uploads | uploads_per_bot: integer 1–4 | Save in MongoDB and apply immediately to new Telegram leases. Existing transfers finish; provider waits are preserved. |
 | PATCH /api/v1/settings | expected_revision, optional api_id/api_hash/clients | Complete redacted snapshot after isolated verification and atomic save. |
-| POST /api/v1/settings/refresh | Empty object | 202 settings snapshot; schedules bounded background saved-credential/channel-permission checks and name refreshes for enabled clients without changing configuration revision. Legacy /refresh-names is an alias. |
+| POST /api/v1/settings/refresh | Empty object | 202 settings snapshot; schedules bounded background saved-credential/channel-permission checks and name refreshes for enabled clients without changing configuration revision. `/refresh-names` is an alias. |
 | POST /api/v1/settings/premium-login/start | expected_revision, phone, label | challenge_id, stage:code and expires_in_seconds. |
 | POST /api/v1/settings/premium-login/verify | challenge_id and exactly one code/password for the current stage | stage:password with the challenge, or stage:complete plus settings snapshot. |
 | DELETE /api/v1/settings/premium-login/{challenge_id} | No body | status:cancelled; discards an owned unfinished challenge. |
 
-Connection snapshots may include per-client state in
-`connection_check` (queued, checking, waiting, passed, failed), a sanitized
-`connection_check_error`, and Unix timestamps
-`connection_checked_at` / `connection_retry_at`.
-These manual-check results describe the last probe; runtime socket health remains
-separate and no extra Telegram work is triggered by reading settings.
+**Snapshots.** Settings include `revision`, `applied_revision`, `restart_required`,
+`admission_paused`, `application_mode:restart`, API credential presence,
+`storage_channel`, `clients`, `active_clients`, `stats` and `recovery`. Client rows
+include opaque ID, label, bot/user kind, enabled/configured/connected/healthy/
+Premium state, active leases and sanitized errors. `active_clients` describes
+the applied pool, including accounts removed from the saved candidate.
 
-- A settings snapshot includes revision, applied_revision, restart_required,
-  admission_paused, application_mode:restart, api_id, api_hash_configured,
-  storage_channel, clients, active_clients, stats and recovery.
-- Saved clients have opaque id, label, kind:bot/user, enabled, configured, connected,
-  healthy, premium, active_leases, a sanitized error and optional error_code.
-  Account failures use TELEGRAM_CREDENTIALS_REVOKED, TELEGRAM_CHANNEL_ACCESS or
-  TELEGRAM_ACCOUNT_REMOVED. Operation failures return HTTP 503 with detail/code.
-  Owner status includes telegram_issues for the connection warning.
-- Read-only display_name, username, identity_refreshing and identity_retry_at describe
-  optional cached Telegram names and startup name retrieval.
-- The saved label remains a local fallback.
-- Polling settings never calls Telegram.
-- Manual Refresh checks all enabled saved accounts, including ones whose runtime client
-  failed to start.
-- It validates credentials and channel permissions in isolated sessions, updates cached
-  names, and reports probe health separately from runtime health.
-- It does not reconnect the live pool or apply pending credential changes.
-  active_clients reports the actual applied pool separately, including clients
-  removed/disabled in the saved candidate.
-- A newly saved account is not thereby connected; null/false health is not a live
-  failure diagnosis before it starts.
+`connection_check` is queued/checking/waiting/passed/failed, with optional error
+and Unix `connection_checked_at`/`connection_retry_at`. Cached `display_name`,
+`username`, `identity_refreshing` and `identity_retry_at` are read-only; labels
+remain the fallback. Reading settings never calls Telegram. Refresh probes saved
+enabled accounts in isolated sessions, including failed starters; it does not
+apply pending credentials or reconnect the pool. Probe and runtime health differ.
+Account errors include `TELEGRAM_CREDENTIALS_REVOKED`, `TELEGRAM_CHANNEL_ACCESS`
+and `TELEGRAM_ACCOUNT_REMOVED`; operation failures return `503` with detail/code.
+Owner status exposes `telegram_issues`.
 
-The clients array in PATCH is a full desired list. Include an existing id to keep
-that identity; omit credential to keep its secret. A new row omits id and requires
-credential. Omitted existing rows are removed; omitting clients keeps the entire
-list. api_hash omission also preserves its secret. Empty-string replacement is
-not the keep-secret protocol.
+**Saving.** `clients` is the full desired list: retain an existing `id`, omit its
+`credential` to keep the secret, and omit removed rows. New rows omit `id` and
+require a credential. Omitting `clients` or `api_hash` preserves that whole value;
+an empty credential is not a keep-secret marker.
 
-- Limits: at most 50 managed account rows, at least one enabled bot, labels 1–80 visible trimmed
-  characters, credentials 1–8192 trimmed characters without whitespace, API ID
-  1–2147483647, and a 32-hex-character API hash.
-- Fifty accounts is TGDrive's management bound, not a promise that Telegram
-  allows every bot/account combination or scales throughput linearly.
-- Storage-bot tokens and imported Telethon sessions receive structural checks.
-- Enabled accounts receive read-only Telegram identity/Premium/channel-permission
-  preflight through isolated temporary sessions.
-- Disabled rows can be saved without authenticating an expired account.
-- Duplicate Telegram identities and structurally invalid candidate configurations are
-  rejected.
+Limits: 50 managed rows, at least one enabled bot, trimmed visible labels 1-80
+characters, credentials 1-8192 characters without whitespace, API ID 1-2147483647,
+and a 32-hex API hash. Enabled accounts undergo identity/Premium/permission
+preflight; disabled rows need not authenticate. Duplicate identities fail.
+Management capacity does not imply linear Telegram throughput.
 
-- Changes to API credentials, account identities or enabled membership require
-  no retained unfinished/error jobs, active receipt reservations or unavailable
-  database ownership.
-- A credential repair can replace tokens/sessions for the same existing Telegram
-  accounts while work is pending. Keep API credentials, client IDs/order, kinds
-  and enabled states unchanged. Every changed credential must verify as its
-  original Telegram identity before saving; a different identity returns
-  SETTINGS_BUSY. Saved repairs still require a restart and retain pending journals.
-- The current catalog must be committed.
-- A narrow repair case permits an error state when its confirmed/protected/current
-  revisions match exactly and no recovery conflict/work is pending; that does not turn
-  the backup display green.
-- Revision races return 409 SETTINGS_CONFLICT, busy state returns 409 SETTINGS_BUSY,
-  invalid candidates return 422 SETTINGS_INVALID, and verification outages return 503
-  SETTINGS_PREFLIGHT_FAILED.
-- No candidate is partially committed after a failed preflight.
+Membership/API changes need settled jobs/receipts, valid database ownership and
+a committed catalog. Same-account credential repair may preserve pending work
+if API credentials, client IDs/order, kinds and enabled states stay unchanged;
+each replacement must verify its original identity. A narrow error-state repair
+requires exactly matching confirmed/protected/current revisions and no recovery
+conflict. Failed preflight never partially saves.
 
-Successful save atomically replaces private configuration, then pauses new
-catalog/upload mutations with 409 SETTINGS_RESTART_REQUIRED until the service
-restarts. Current clients are not hot-swapped; read/media requests, auth,
-cancellation and management remain available unless a separate recovery
-conflict blocks media. Restart applies the saved revision. The browser must not
-automatically retry a mutation with a stale full-client list.
+Errors: `409 SETTINGS_CONFLICT` for revision races, `409 SETTINGS_BUSY` for blocked
+changes, `422 SETTINGS_INVALID`, `503 SETTINGS_PREFLIGHT_FAILED`. A successful
+save pauses new catalog/upload mutations with `409 SETTINGS_RESTART_REQUIRED`
+until restart. Reads, authentication, cancellation and management remain available
+unless recovery separately blocks them. Do not replay a stale full client list.
 
-- Premium challenges live only in memory for five minutes, at most two per service, and
-  belong to the initiating owner session.
-- Codes and two-step passwords are not persisted.
-- Current rate limits include six starts per 15 minutes, a per-phone one-minute start
-  interval and at most five verification attempts; Telegram FloodWait adds an actual
-  Retry-After.
-- Expired/foreign challenges return 410 TELEGRAM_LOGIN_EXPIRED.
-- Invalid code/password can be retried while the challenge survives; consumed/failed-
-  save challenges need a new login.
-- Non-Premium accounts cannot be added as Premium.
-- A successful authorization is passed directly to the private managed-settings path; no
-  StringSession is returned to the browser.
-- Cancellation/expiry/unsuccessful post-authentication save revoke an unsaved
-  authorization.
-- Server restart does not preserve login challenges.
+**Premium login.** Owner-bound in-memory challenges last five minutes, at most
+two per service. Limits are six starts/15 minutes, one start/phone/minute and five
+verification attempts; FloodWait supplies `Retry-After`. Foreign/expired challenges
+return `410 TELEGRAM_LOGIN_EXPIRED`. Retry invalid codes/passwords while the
+challenge lives; consumed/failed-save challenges need a new login. Non-Premium
+accounts fail. Codes/passwords are not saved, and StringSessions never reach the
+browser. Cancellation, expiry and failed post-auth save revoke unsaved
+authorizations; restart loses challenges.
 
-Statistics include active file/folder counts and total_bytes, trashed_files/
-trashed_bytes (including files under trashed folders), active_jobs, queued_jobs,
-failed_jobs, staging_budget_bytes, staging_reserved_bytes and free_disk_bytes
-(nullable). Folders exclude the root. These are catalog/local-resource counts,
-not a Telegram quota or a proof that every referenced message is readable.
+`stats` includes active/trashed file counts and bytes, folders excluding root,
+active/queued/failed jobs, staging budget/reservations and nullable free disk.
+These are catalog/resource counts, not Telegram quota or proof of readable files.
 
 </details>
 
@@ -784,13 +774,15 @@ file age. Completed intents no longer retain message references. This is TGDrive
 catalog-only deletion policy; see
 [permanent deletion](usage.md#why-permanent-deletion-keeps-the-telegram-files).
 Retain/poll each accepted job and refresh actual state after an interrupted
-response; selected items do not complete atomically as one batch. Legacy failed
-remote-deletion jobs use catalog-only removal when retried. The older single-item
-compatibility routes do not provide the v1 exposure-confirmation flow.
+response; selected items do not complete atomically as one batch. Retried deletion jobs also use catalog-only removal. The single-item
+routes do not provide the `/api/v1` exposure-confirmation flow.
 
 </details>
 
 ### Performance, cache inventory and preparation
+
+<details>
+<summary>Performance preferences, telemetry and preload endpoints</summary>
 
 These are owner-session endpoints; public shares do not grant operator access.
 Responses expose bounded operational state rather than credentials or raw
@@ -866,8 +858,7 @@ Lifetime `totals` keys are `network_received_bytes`, `network_sent_bytes`,
 null. These overlapping accounting layers must not be summed together. Totals
 survive process restarts and 31-day chart pruning, but only describe activity
 since `tracked_since`; no pre-installation history can be recovered.
-Production uses MongoDB `telemetry_minutes`/`telemetry_state`; local deployments
-use `DATA_DIR/telemetry.sqlite3`. Minute checkpoints and clean shutdown persist
+Laptop and hosted deployments use MongoDB `telemetry_minutes`/`telemetry_state`. Minute checkpoints and clean shutdown persist
 state; an abrupt crash may lose the latest uncheckpointed statistics. Telemetry
 is excluded from encrypted catalog backups and never gates file service.
 
@@ -875,6 +866,8 @@ The preparation queue and ordinary media queues have separate bounds.
 Cancelling/clearing a preparation leaves originals intact and does not abort
 shared work belonging to other authorized subscribers. See
 [cache behavior](performance.md#prepare-a-file-before-sharing).
+
+</details>
 
 ### Resumable browser receipts
 
@@ -952,10 +945,10 @@ reconstruct the selected logical interval.
 ### Previews and media
 
 <details>
-<summary>Descriptors, format bounds and quality selection</summary>
+<summary>Preview descriptors, bounds and quality selection</summary>
 
-These routes require the owner cookie or a valid file/folder share capability.
-Supply path (an ID path) and optional auth query, just as for /file.
+Owner cookie or scoped file/folder capability required; supply `path` and optional
+`auth` as for `/file`.
 
 | Route | Response |
 | --- | --- |
@@ -965,68 +958,37 @@ Supply path (an ID path) and optional auth query, just as for /file.
 | GET /api/v1/thumbnail | TGDrive-generated JPEG cover when cached, otherwise a provider JPEG/PNG/WebP thumbnail, at most 128 KiB; optional `If-None-Match` can return `304`. |
 | GET /api/v1/file-status | Authorized `path`, opaque `request_id`, optional `auth`; request-specific queue estimate and logical size, without listing other callers. |
 
-Thumbnail requests authorize before reading cached or remote data and again after
-awaiting it, including cache hits and conditional `304` responses. Payload caching
-never grants file access; revoked/expired shares and trashed files remain blocked.
-Responses use `Cache-Control: private, no-cache`, `Vary: Cookie` and a content ETag.
-The endpoint tries the bounded local generated-cover cache, then a small Telegram
-thumbnail (including a TGDrive-generated cover attached during upload). It never
-downloads or assembles the original to generate a cover while browsing. Multipart
-files use the first part's cover. Generation, limits and retention are documented
-in [Thumbnail generation](thumbnails.md). Unsupported or unavailable
-thumbnails return `404` with `code: "THUMBNAIL_UNAVAILABLE"`; temporary work/capacity
-failures return `503` with `code: "THUMBNAIL_BUSY"` and `Retry-After: 5`.
-The grid falls back to a file-type icon. Visible/nearby tiles use a bounded lazy
-queue, cancel work outside that region, and skip thumbnails when the browser
-reports Save-Data mode.
+**Thumbnails:** authorize before and after asynchronous reads, including cache hits
+and `304`. Responses use `Cache-Control: private, no-cache`, `Vary: Cookie` and an
+ETag. The endpoint tries a generated cover, then a small provider thumbnail;
+multipart uses the first part. It never fetches originals to generate grid covers.
+Unavailable returns `404 THUMBNAIL_UNAVAILABLE`; temporary capacity failure returns
+`503 THUMBNAIL_BUSY`, `Retry-After: 5`. See [generation limits](thumbnails.md).
 
-- Text/code/JSON/CSV and related allowlisted formats return at most the first 256 KiB of
-  source text, with a truncation indicator.
-- HTML/XML are displayed as text, not executed.
-- The web viewer routes SVG files directly to a passive HTML img element using the
-  authorized original /file URL; the bounded descriptor API can still return SVG source
-  as XML for callers requesting text.
-- UTF-8 (optional BOM) and BOM-marked UTF-16 are supported; invalid encodings/binary-
-  looking content get a fallback instead of replacement- decoded source.
-- Ambiguous .ts/.mts files return kind:video only after bounded repeated MPEG transport-
-  packet evidence, with Telegram MIME used as corroboration rather than proof.
-- Otherwise valid TypeScript source stays text; .cts source also maps to TypeScript.
-- The video viewer uses the same authorized original /file URL, not a remote URL from
-  the file.
-- This source-byte limit does not promise only that many internal Telegram transfer
-  bytes.
+**Text:** allowlisted formats return at most 256 KiB with a truncation marker.
+HTML/XML stay text. UTF-8 (optional BOM) and BOM-marked UTF-16 are supported;
+invalid/binary content falls back to download. SVG uses a passive image in the UI;
+the descriptor may expose its XML. Ambiguous `.ts`/`.mts` require repeated MPEG
+packet evidence to become video; valid TypeScript and `.cts` remain source text.
+The source-byte cap does not bound all internal Telegram transfer bytes.
 
-PDF descriptors support files up to 256 MiB and point to /file?preview=1.
-The UI renders them using locally bundled PDF.js and its worker, not an external
-Office service or active document iframe. Only requested byte ranges are read;
-streaming and PDF.js automatic full-file prefetch are disabled. Every range
-uses the normal fresh authorization path, shared cache and logical multipart
-mapping. PDF preview requests do not trigger automatic background preparation;
-manual Prepare and ordinary original downloads retain their existing policy.
-A 256 MiB source cap bounds PDF.js's source-sized worker buffer. Each preview
-session may fetch at most 64 MiB, with two simultaneous HTTP ranges of at most
-1 MiB and bounded pending work. These are practical browser-memory protections,
-including on mobile, not a total process-memory guarantee. Complex PDFs can need
-more source data than a single visible page suggests. A reading-limit message
-keeps Download Original available; this is a bounded preview, not an unlimited
-book reader. Closing the preview aborts pending and active range requests.
-Unsupported/oversized files retain original download. These are implementation limits, not environment settings.
+**PDF:** at most 256 MiB source, 64 MiB fetched per opening, two simultaneous
+ranges up to 1 MiB with bounded pending work. Local PDF.js disables streaming and
+full-file prefetch; closing aborts requests. Normal authorization, range cache and
+multipart mapping apply, without automatic background preparation. These are
+preview limits, not total browser-memory guarantees. A failed/limited preview
+retains original download. See [readers](reading.md) for EPUB/CBZ/CBR contracts.
 
-For image/video playback, /file accepts quality=<opaque-descriptor-id>.
-A variant ID is bound to that source message and does not grant authorization.
-Unknown/unavailable variants return 404. Range/HEAD headers describe the selected
-representation. No client may supply arbitrary Telegram document locations.
+**Representations:** `/file?quality=<opaque-descriptor-id>` chooses an actual
+message-bound variant; it never grants access. Unknown variants return `404`.
+Range/HEAD describe the selected representation. `download=1` always selects the
+original attachment, overriding `quality`. Arbitrary Telegram locations are rejected.
 
-The original download URL uses download=1. That flag always selects the
-original stored representation and attachment disposition, even when quality
-was also supplied. A preview choice never replaces canonical file metadata.
-
-Browser uploads remain byte-preserving documents with force_file=True.
-Telegram-native messages may contain actual alternate video documents or photo
-sizes; only discovered choices are exposed. A native photo's original means its
-best stored Telegram representation, not proof of pre-upload camera bytes.
-There is no guaranteed transcode request, invented resolution list, companion
-message or locally generated derivative.
+Browser uploads remain byte-preserving documents (`force_file=True`). Telegram-native
+messages may offer real video variants/photo sizes; a photo's original means its
+best stored representation, not guaranteed camera bytes. No invented transcodes
+or resolutions are exposed. See [video behavior](usage.md#open-preview-and-download)
+and [viewer notices/source](../website/public/third-party/README.txt).
 
 </details>
 
@@ -1072,6 +1034,10 @@ Live job records are limited by retention/capacity. Unresolved send/cleanup
 effects are protected from ordinary eviction. Do not treat this as a permanent
 audit log. Retry retains operation identities. See [transfers](architecture.md#transfer-pipeline).
 
+Live job snapshots include `telegram_parts: {total, stored}`. `stored` counts
+confirmed messages; byte progress includes in-flight uploads. Sender identities
+and the recovery journal remain private.
+
 </details>
 
 ### Transfer history
@@ -1109,21 +1075,25 @@ not a durable server history record until a job exists.
 The floating panel only displays browser-initiated receipts; the global history
 continues to show server jobs initiated on other devices.
 
+Owner-only `POST /api/v1/transfers/location` accepts `transfer_id`, `destination` and `completed`. It resolves the current folder and exact saved item without mutation; missing/trashed items return `available:false`.
+
 </details>
 
 ### Starred items
 
-Owner-session only; public capabilities do not grant access to this inventory.
+<details>
+<summary>Owner stars and move/restore behavior</summary>
 
 | Route | Request | Response |
 | --- | --- | --- |
 | `GET /api/v1/starred?q=...` | Optional literal filename query | `{data:{contents:{<id>:<item>}}}` with current paths and parent names. |
 | `PATCH /api/v1/starred` | `{path:"/<id-path>",starred:true}` (strict boolean) | `{item:<updated item>}`; idempotent when already set. |
 
-Stars are references to nodes, follow moves/renames, and are hidden for trashed
-subtrees. Restoring an item restores its visibility in Starred. Removing a star
-never deletes or moves its original. Responses are no-store; node annotations are
-preserved in metadata snapshots. The root drive itself cannot be starred.
+Owner-only, no-store. Stars follow node moves/renames, hide with trashed subtrees
+and reappear after restore. Unstarring never deletes or moves the original.
+Snapshots preserve annotations; the drive root cannot be starred.
+
+</details>
 
 ### Shares, downloads, and ranges
 
@@ -1134,11 +1104,11 @@ preserved in metadata snapshots. The root drive itself cannot be starred.
 | --- | --- | --- | --- |
 | `GET /api/v1/shares` | Owner | None | `{"shares":[...]}` includes active and expired entries, IDs, current path/name/type/size, folder_path/folder_label, created_at/expires_at, optional label and copyable. No bearer tokens. |
 | `POST /api/v1/shares` | Owner | `{"path":"/<id>","label":"Alex","expires_in_days":7}`; optional ISO `expires_at` overrides the days. | `201 {"auth":"<bearer-token>","id":"<share-id>","path":"...","expires_at":"<ISO-date>","label":"Alex"}`. Adds an independent link. |
-| `POST /api/v1/shares/link` | Owner | `{"share_id":"<share-id>"}` | Existing active link auth/path/type/node_id; no rotation. `409` if unrecoverable, `410` if expired/revoked. Legacy path selection returns `409` when multiple links exist. No-store response. |
-| `PATCH /api/v1/shares` | Owner | `{"share_id":"<share-id>","label":"Alex","expires_at":"<future ISO-date>"}`; null expiry means never. | Updated link metadata; changes only this link. |
+| `POST /api/v1/shares/link` | Owner | `{"share_id":"<share-id>"}` | Existing active link auth/path/type/node_id; no rotation. `409` if unrecoverable, `410` if expired/revoked. Path selection returns `409` when multiple links exist. No-store response. |
+| `PATCH /api/v1/shares` | Owner | `{"share_id":"<share-id>","label":"Alex","expires_at":"<future ISO-date>"}`; omitted fields stay unchanged; explicit null expiry means never. | Updated link metadata; changes only this link. |
 | `POST /api/v1/download-links` | Owner | `{"path":"/<id>"}` | Signed attachment `url`, canonical `path`, and `expires_at`; reuse an active copyable file share labelled `Download link` or create one expiring in one day. Other recipient links are left alone. Visible in Shared Links; no-store response. |
-| `DELETE /api/v1/shares` | Owner | `{"share_id":"<share-id>"}` | `{"status":"ok"}`. Revokes one link. Legacy `{"path":"/<id>"}` revokes all direct links for that node. |
-| `POST /api/getFolderShareAuth` | Owner | `{"path":"/<folder-id>"}` | Compatibility creation: status and auth. |
+| `DELETE /api/v1/shares` | Owner | `{"share_id":"<share-id>"}` | `{"status":"ok"}`. Revokes one link. Alternate `{"path":"/<id>"}` revokes all direct links for that node. |
+| `POST /api/getFolderShareAuth` | Owner | `{"path":"/<folder-id>"}` | Alternate creation: status and auth. |
 | `POST /api/getFileShareAuth` | Owner | `{"path":"/<file-id>"}` | Same, for a file. |
 | `GET /file`, `HEAD /file` | Owner or scoped capability | Required path, optional auth/Range; quality selects a discovered preview, preview=1 marks a preview (including the supported PDF path and original media playback), download=1 forces the original attachment. | Bytes/headers or access/not-found error. |
 
@@ -1146,7 +1116,7 @@ Share expiry accepts 1–3650 days (default 7), null for no expiry, or a future
 ISO `expires_at`. Labels are optional, at most 80 characters, and cannot contain
 control characters. Labels are organizational, not recipient authentication.
 Each item permits up to 100 independent links; reaching the limit rejects the
-new link without evicting existing ones. Compatibility creation also appends.
+new link without evicting existing ones. Link creation also appends.
 New capabilities are HMAC-SHA256
 of a random share ID under the persistent SESSION_SECRET, with the
 `tgdrive/share-link/v1` domain separator. Only the capability hash is stored
@@ -1154,11 +1124,12 @@ in the catalog; the owner-only copy endpoint reconstructs it and checks that
 the stored hash matches. Listing never includes the token. Preserve SESSION_SECRET
 to retain re-copy capability across installations; changing it does not invalidate
 previously issued links, but those links then require their original URL or explicit
-creation of a separate new link. Legacy random tokens cannot be reconstructed and are never silently
-rotated. Store list_shares defaults to active entries for access/exposure checks;
-the owner listing opts into expired entries. The SQLite database upgrades to
-version 6 for independent share rows and starred node metadata; existing links
-and files are preserved. Portable backup schema remains 4, with optional share
+creation of a separate new link. Store list_shares defaults to active entries
+for access/exposure checks; the owner listing opts into expired entries.
+The Shared Links page copies by share ID and never creates a replacement link.
+Unavailable/expired links keep a disabled copy control with an explanation. Labels
+are shown only when supplied; creation time and expiry distinguish separate rows.
+Portable backup schema is 4, with optional share
 labels and `starred: true` on bookmarked nodes. Trash
 revokes subtree shares; explicit
 complete MongoDB restore revokes owner browser sessions and preserves share scope/expiry.
@@ -1206,7 +1177,7 @@ or browser-buffered bytes cannot be recalled.
 
 </details>
 
-### URL imports and older transfer routes
+### URL imports and transfer routes
 
 <details>
 <summary>Current compatibility endpoints and their limits</summary>
@@ -1282,7 +1253,7 @@ belong in [the roadmap](roadmap.md), not in this implemented API reference.
 
 | Boundary | What to know |
 | --- | --- |
-| Owner access | One owner; no public signup, teams or tenant isolation |
+| Owner access | One shared drive; demo mode optionally separates visitor and full-access passwords. No built-in MFA/passkeys, public signup, teams or tenant isolation. |
 | Shared Links | Anyone with a valid scoped link can read its contents |
 | Encryption | Database backups are encrypted; original files and local staging are not encrypted by TGDrive |
 | Original file safety | A database record cannot recreate a deleted Telegram file |
@@ -1292,108 +1263,50 @@ belong in [the roadmap](roadmap.md), not in this implemented API reference.
 | Public access | Use HTTPS and a restricted/trusted reverse proxy |
 
 <details>
-<summary>Authentication, browser policy, networking and backup details</summary>
+<summary>Authentication, browser policy and data handling</summary>
 
-One owner controls the host and Telegram credentials. There is no registration,
-tenant isolation, RBAC, OIDC or API-key system. Channel storage is not
-application-managed end-to-end encryption; local staging and original payloads
-are not encrypted by TGDrive. Protect disks and backups appropriately.
+- **Sessions:** HttpOnly, SameSite=Strict cookies with Secure under HTTPS, signed
+  nonces and server-side token-hash tracking. Logout revokes the record; changing
+  the effective owner credential or `SESSION_SECRET` invalidates owner cookies
+  after restart. Shares use separate credentials. Recovery can roll access back;
+  [review credentials after restore](operations.md#https-and-private-configuration).
+  Credential rotation does not erase old session rows: restoring the old
+  credential and signing key can reactivate their still-unexpired cookies.
+  Use a fresh signing secret when earlier sessions must stay invalid.
+  Sessions have an absolute 24-hour default lifetime, with no separate idle
+  timeout. Sensitive settings and recovery-key export accept an active owner
+  session without a fresh password prompt.
+- **Requests:** mutations check Origin/Fetch Metadata; private routes authenticate
+  before body processing. JSON bodies are capped at 64 KiB, receipt PATCH at
+  8 MiB. Login allows five failures per client IP in five minutes and bounds
+  expensive password verification to one concurrent check. The throttle resets
+  after restart and does not stop distributed attempts. Add login rate limiting
+  at a public deployment's trusted proxy; there are no per-share traffic quotas.
+- **Shares:** hashed bearer credentials with scope, expiry and revocation. Folder
+  links include accessible descendants; Trash revokes subtree links. MongoDB
+  restore preserves scope/expiry and revokes owner sessions. Previously delivered
+  bytes cannot be withdrawn. Compatibility single-item mutations lack v1's public
+  exposure confirmation; direct callers must check sharing themselves.
+- **Browser:** local scripts/fonts/assets use CSP, nosniff, frame and referrer
+  restrictions. The trusted video decoder permits WASM compilation, blob workers/
+  media, inline styles and `data:` decoder connections; arbitrary script eval and
+  inline scripts stay disabled. HTML/code stays passive; PDF scripts, forms and
+  annotations do not execute. Selected images/audio/video can render inline;
+  active document types download as attachments. See [preview contracts](#previews-and-media).
+- **Remote imports:** public-address and redirect validation, no URL credentials,
+  identity encoding, no inherited environment proxy, bounded time/bytes/disk.
+  `ALLOW_PRIVATE_REMOTE_URLS` explicitly broadens reachability. Signed source URLs
+  may persist in private jobs.
+- **Backups/deletion:** complete MongoDB archives use AES-256-GCM before disk or
+  Telegram storage and need their matching key. They exclude unsent staging and
+  cannot recreate missing Telegram originals. Permanent deletion removes catalog
+  references; it does not erase originals, caches, old backups or recipients'
+  copies. Old backups may restore removed records.
 
-Use a generated Argon2id hash and independent signing secret. Cookies are
-HttpOnly, SameSite=Strict and Secure under HTTPS, with a signed nonce and
-server-side token-hash tracking. Logout revokes its record. A changed effective
-owner credential or SESSION_SECRET invalidates old owner cookies after restart;
-verify rotation using [the operations procedure](operations.md#https-and-private-configuration).
-This does not revoke share links. Restoring an older database or volume can roll
-credentials or shares back; review access after recovery.
-
-Mutations check browser Origin/Fetch Metadata; private routes authenticate
-before body processing. JSON is capped at 64 KiB and receipt PATCH at 8 MiB.
-Telegram admission and shared memory budgets bound media work. These are not distributed abuse protection
-or per-share quotas. Login limits are process-local.
-
-Shares are bearer credentials stored as hashes, with scoped access, rotation,
-expiry and revocation. Folder shares grant accessible descendants; Trash revokes subtree shares. Complete MongoDB restore preserves share scope/expiry
-and revokes owner browser sessions. Downloaded copies cannot be retracted.
-The v1/UI exposure-confirmation flow is absent from older compatibility mutation
-routes.
-
-- Names are normalized metadata, not arbitrary paths.
-- React renders text; assets are local with CSP/nosniff/frame/referrer restrictions.
-- Scripts and style elements load from this origin.
-- The enhanced viewer allows WebAssembly compilation with wasm-unsafe-eval, blob
-  workers/media and inline style attributes for its trusted component templates.
-- A worker-compatible data: connect source supports trusted decoder JPEG-frame/poster
-  conversion; it is not a remote host allowlist.
-- The policy does not enable arbitrary JavaScript eval or inline scripts.
-- Viewer code/fonts stay local.
-- Selected image/audio/video can be inline; active document types are sandboxed
-  attachments.
-- There is no malware scanning.
-
-- Supported previews use a full-window native dialog with owned browser history, scroll
-  locking and focus restoration.
-- Unsupported formats use a compact file-details dialog with their reason/type/size/date
-  and original download; content is not executed to manufacture a preview.
-- PDF pages scroll continuously with a bounded shared rendering budget, selectable text,
-  and zoom/fit controls within the same header (an options popover on phones); the
-  viewer does not execute annotations, forms or embedded scripts.
-- A failed PDF viewer chunk keeps Close and original download usable.
-
-- The enhanced video viewer lazily loads Movi Player 0.4.1 and its separate locally
-  served WASM asset.
-- It demuxes locally and attempts hardware video decoding with software fallback; EAC3
-  audio and subtitle handling use the bundled codec stack.
-- The 32 MiB source-buffer setting is applied by Movi after its initial load.
-- Initial demux/ prebuffer reads and separate decoder/cache allocations can exceed that
-  setting; it is not a total browser-memory cap or a guarantee of buffered seconds or
-  realtime decoding on every device.
-- All video previews use it by default; audio/subtitle selection stays in its own menus.
-- The custom player remains visible and operable while opening/seeking; there is
-  no native-browser compatibility fallback or separate Start Playback gate.
-- Buffer feedback uses measured received bytes/rate and the engine's approximate
-  buffered time ranges, including a loaded-section timeline. Server preload byte
-  coverage is separate from device buffering and decode readiness.
-- Original download remains available for unsupported codecs.
-  [Viewer notices and source access](../website/public/third-party/README.txt) are served under /third-party; the source/relink archive is a manual
-  download, not an initial-page dependency.
-
-Remote requests validate public addresses and redirects, reject URL credentials,
-request identity encoding, disable environment proxy inheritance, and bound
-time/bytes/disk. ALLOW_PRIVATE_REMOTE_URLS deliberately broadens reachability.
-Signed source URLs can persist in private job records.
-
-- Complete MongoDB safety copies contain credentials and are encrypted with AES-256-GCM
-  before they reach disk/Telegram.
-- The separately retained recovery key is required for restore.
-- Local upload staging and original Telegram file contents are not encrypted by this
-  snapshot feature.
-- Telegram is not an application-managed end-to-end encrypted file store.
-- A catalog/snapshot cannot recover original Telegram documents that have been removed
-  or become inaccessible.
-- Restore revokes browser sessions; ordinary restart preserves legitimate registrations
-  and share scopes.
-
-Sessions, hashes, secrets, metadata, share URLs and staged bytes are sensitive.
-Redaction is conservative; disable raw query/cookie logging in proxies as well.
-Never publish .env, StringSessions, session DBs or unreviewed traces.
-Permanent deletion removes TGDrive's catalog references, not Telegram originals,
-local caches, historical backups or copies held by recipients. It does not promise
-physical erasure; older backups may restore the removed catalog records.
-
-Use [operations](operations.md) for HTTPS, incident preservation and recovery;
-remaining gaps are in [roadmap](roadmap.md).
+Keep `.env`, sessions, hashes, keys, metadata and private traces out of public
+reports. Disable raw query/cookie logging at proxies. TGDrive does not encrypt
+original payloads or local staging and does not scan for malware. See
+[Operations](operations.md), [Backup & recovery](backup-recovery.md) and
+[known gaps](roadmap.md).
 
 </details>
-
-Live job snapshots include telegram_parts {total, stored} for multipart uploads.
-The stored count uses confirmed Telegram messages, independently of current byte
-progress, which includes in-flight part uploads. Private send identities and the
-multipart recovery journal are never included in this summary.
-
-Dashboard disk-cache budget/reserve changes are rejected with 422 if disk caching
-would be enabled with less than 64 MiB of free-space floor. Disabling disk caching
-with a zero budget remains supported. Existing deployment environment values are
-not silently rewritten. Restore defaults is a category-scoped draft in the UI,
-then an ordinary validated PATCH on Save; the read-only defaults object itself
-cannot be submitted as a preference. See [Configuration & tuning](configuration.md).

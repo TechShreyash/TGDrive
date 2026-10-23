@@ -148,9 +148,11 @@
 .book-font-24 .book-chapter {
   font-size: 24px;
 }
-@media (max-width: 720px) {
+@media (max-width: 720px), (pointer: coarse) {
   .book-content {
-    padding: 16px;
+    padding: 16px max(16px, env(safe-area-inset-right))
+      max(16px, env(safe-area-inset-bottom))
+      max(16px, env(safe-area-inset-left));
   }
   .book-toolbar {
     gap: 4px;
@@ -161,6 +163,7 @@
   }
   .book-toolbar select {
     height: 44px;
+    font-size: 16px;
   }
   .book-toolbar #book-entry {
     max-width: 180px;
@@ -215,6 +218,11 @@
   flex-wrap: wrap;
   width: max-content;
   max-width: 260px;
+  max-height: calc(
+    100dvh - 140px - env(safe-area-inset-top) - env(safe-area-inset-bottom)
+  );
+  overflow: auto;
+  overscroll-behavior: contain;
   padding: 12px;
   background: var(--surface);
   color: var(--ink);

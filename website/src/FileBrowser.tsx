@@ -37,6 +37,7 @@ import { FileIcon, Spinner } from "./components";
 import SortMenu, { type FileSort } from "./SortMenu";
 import "./FileBrowser.css";
 import FileThumbnail from "./FileThumbnail";
+import { COMPACT_LAYOUT_QUERY } from "./responsive";
 import {
   defaultSortOrder,
   sortDriveItems,
@@ -182,6 +183,7 @@ export default function FileBrowser({
   };
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [selectionMode, setSelectionMode] = useState(false);
+  const pointerKind = useRef("");
   const selectionActive = useRef(false);
   selectionActive.current = selectionMode || selected.size > 0;
   const [localSort, setLocalSort] = useState<FileSort>("name");
@@ -290,7 +292,11 @@ export default function FileBrowser({
     );
   }, [allItems]);
   useEffect(() => {
-    document.querySelector(".file-list-scroll")?.scrollTo({ top: 0 });
+    const list = document.querySelector<HTMLElement>(".file-list-scroll");
+    const scroller = window.matchMedia(COMPACT_LAYOUT_QUERY).matches
+      ? list?.closest(".workspace")
+      : list;
+    scroller?.scrollTo({ top: 0 });
   }, [page, listingKey, layout]);
   const highlighted = useRef("");
   useEffect(() => {
@@ -324,12 +330,6 @@ export default function FileBrowser({
   }, [allItems, listingKey, highlightId, loading, sort, order, layout]);
   const visibleItems = allItems.slice(page * 100, (page + 1) * 100);
   const chosen = allItems.filter((item) => selected.has(item.id));
-  const pointerKind = useRef("");
-  const pendingTouch = useRef<{ id: string; at: number } | null>(null);
-  const touchOrigin = useRef<{ x: number; y: number } | null>(null);
-  useEffect(() => {
-    pendingTouch.current = null;
-  }, [listingKey]);
   const closeItemMenus = () => {
     const trigger = document.activeElement
       ?.closest(".item-actions")
@@ -344,38 +344,28 @@ export default function FileBrowser({
   const openPrimary = (
     item: DriveItem,
     keyboard = false,
-    additive = false,
-    touch = false,
+    doubleClick = false,
   ) => {
-    if (isTrash && keyboard) return;
-    if (keyboard) {
-      pendingTouch.current = null;
-      onOpen(item);
-    } else {
-      if (touch && !isTrash && !additive) {
-        const now = performance.now();
-        const previous = pendingTouch.current;
-        pendingTouch.current = { id: item.id, at: now };
-        if (previous?.id === item.id && now - previous.at <= 700) {
-          pendingTouch.current = null;
-          onOpen(item);
-          return;
-        }
-      } else pendingTouch.current = null;
-      if (!isPublic) setSelectionMode(true);
+    // Opening never enters selection mode. Explicit selection has the same
+    // behavior for touch, mouse and keyboard, without double-tap timing.
+    if (!isPublic && selectionMode) {
       setSelected((current) => {
-        const next = additive ? new Set(current) : new Set<string>();
-        if (additive && next.has(item.id)) next.delete(item.id);
+        const next = new Set(current);
+        if (next.has(item.id)) next.delete(item.id);
         else next.add(item.id);
         return next;
       });
+    } else if (
+      !isTrash &&
+      (pointerKind.current !== "mouse" || keyboard || doubleClick)
+    ) {
+      setSelected(new Set());
+      onOpen(item);
     }
   };
   useEffect(() => {
     const close = (event: MouseEvent) => {
       if (!(event.target as Element).closest(".item-actions")) hideItemMenus();
-      if (!(event.target as Element).closest(".file-row"))
-        pendingTouch.current = null;
     };
     const reposition = (event: Event) => {
       if ((event.target as Element)?.closest?.(".action-menu")) return;
@@ -413,21 +403,64 @@ export default function FileBrowser({
   const Row = layout === "grid" ? "li" : "tr";
   const Cell = layout === "grid" ? "div" : "td";
   return (
-    <div className="file-browser">
+    <div
+      className="file-browser"
+      onPointerDownCapture={(event) => {
+        pointerKind.current = event.pointerType;
+      }}
+    >
       <div
         className="file-toolbar"
-        data-selection={chosen.length && !isPublic ? "true" : undefined}
+        data-selection={selectionMode && !isPublic ? "true" : undefined}
       >
         {header}
         <div className="file-toolbar-controls">
-          {chosen.length && !isPublic ? (
+          {selectionMode && !isPublic ? (
             <>
-              <span className="selection-count">{chosen.length} selected</span>
+              {layout === "grid" && (
+                <label className="grid-select-all file-checkbox-target">
+                  <input
+                    type="checkbox"
+                    aria-label="Select All Files on This Page"
+                    checked={
+                      visibleItems.length > 0 &&
+                      visibleItems.every((item) => selected.has(item.id))
+                    }
+                    ref={(input) => {
+                      if (input) {
+                        const count = visibleItems.filter((item) =>
+                          selected.has(item.id),
+                        ).length;
+                        input.indeterminate =
+                          count > 0 && count < visibleItems.length;
+                      }
+                    }}
+                    onChange={(event) => {
+                      const next = new Set(selected);
+                      for (const item of visibleItems)
+                        event.target.checked
+                          ? next.add(item.id)
+                          : next.delete(item.id);
+                      setSelected(next);
+                    }}
+                  />
+                </label>
+              )}
+              <span className="selection-count" role="status">
+                {chosen.length} selected
+              </span>
               <button
                 className="text-button"
                 onClick={() => {
                   setSelected(new Set());
                   setSelectionMode(false);
+                  requestAnimationFrame(() => {
+                    document
+                      .querySelector<HTMLButtonElement>(
+                        ".file-selection-toggle",
+                      )
+                      ?.focus({ preventScroll: true });
+                  });
                 }}
               >
                 Done
@@ -436,33 +469,45 @@ export default function FileBrowser({
               {isTrash ? (
                 <>
                   <button
-                    className="text-button"
+                    className="text-button file-bulk-action"
+                    disabled={!chosen.length}
+                    aria-label="Restore"
+                    title="Restore"
                     onClick={() => onAction("restore", chosen)}
                   >
-                    <RefreshCw size={16} /> Restore
+                    <RefreshCw size={16} /> <span>Restore</span>
                   </button>
                   <button
-                    className="text-button danger-text"
+                    className="text-button danger-text file-bulk-action"
+                    disabled={!chosen.length}
+                    aria-label="Delete Permanently"
+                    title="Delete Permanently"
                     onClick={() =>
                       showDialog({ type: "delete", items: chosen })
                     }
                   >
-                    <Trash2 size={16} /> Delete Permanently
+                    <Trash2 size={16} /> <span>Delete Permanently</span>
                   </button>
                 </>
               ) : (
                 <>
                   <button
-                    className="text-button"
+                    className="text-button file-bulk-action"
+                    disabled={!chosen.length}
+                    aria-label="Move"
+                    title="Move"
                     onClick={() => showDialog({ type: "move", items: chosen })}
                   >
-                    <Move size={16} /> Move
+                    <Move size={16} /> <span>Move</span>
                   </button>
                   <button
-                    className="text-button"
+                    className="text-button file-bulk-action"
+                    disabled={!chosen.length}
+                    aria-label="Trash"
+                    title="Trash"
                     onClick={() => onAction("trash", chosen)}
                   >
-                    <Trash2 size={16} /> Trash
+                    <Trash2 size={16} /> <span>Trash</span>
                   </button>
                 </>
               )}
@@ -487,6 +532,7 @@ export default function FileBrowser({
                   <button
                     type="button"
                     className="text-button file-selection-toggle"
+                    title="Select files and folders"
                     aria-pressed={selectionMode}
                     onClick={() => {
                       setSelectionMode(!selectionMode);
@@ -507,36 +553,6 @@ export default function FileBrowser({
                 />
               </div>
             </>
-          )}
-          {layout === "grid" && selectionMode && !isPublic && (
-            <label className="grid-select-all">
-              <input
-                type="checkbox"
-                aria-label="Select All Files on This Page"
-                checked={
-                  visibleItems.length > 0 &&
-                  visibleItems.every((item) => selected.has(item.id))
-                }
-                ref={(input) => {
-                  if (input) {
-                    const count = visibleItems.filter((item) =>
-                      selected.has(item.id),
-                    ).length;
-                    input.indeterminate =
-                      count > 0 && count < visibleItems.length;
-                  }
-                }}
-                onChange={(event) => {
-                  const next = new Set(selected);
-                  for (const item of visibleItems)
-                    event.target.checked
-                      ? next.add(item.id)
-                      : next.delete(item.id);
-                  setSelected(next);
-                }}
-              />{" "}
-              All
-            </label>
           )}
           <div className="file-view-toggle" role="group" aria-label="File view">
             <button
@@ -562,42 +578,18 @@ export default function FileBrowser({
           </div>
         </div>
       </div>
+      {!isPublic && directory.read_only && (
+        <p className="settings-help demo-files-read-only-note" role="note">
+          Demo Files is read-only. You can open, preview and download these
+          files. Use My Files to upload files, create folders and try changes.
+        </p>
+      )}
       <div
         className={
           "file-list-scroll" + (layout === "grid" ? " file-grid-scroll" : "")
         }
         tabIndex={0}
         aria-label="File list"
-        onPointerDownCapture={(event) => {
-          touchOrigin.current =
-            event.pointerType === "touch"
-              ? { x: event.clientX, y: event.clientY }
-              : null;
-        }}
-        onPointerMoveCapture={(event) => {
-          const origin = touchOrigin.current;
-          if (
-            origin &&
-            (Math.abs(event.clientX - origin.x) > 12 ||
-              Math.abs(event.clientY - origin.y) > 12)
-          ) {
-            pendingTouch.current = null;
-            touchOrigin.current = null;
-          }
-        }}
-        onPointerUpCapture={() => {
-          touchOrigin.current = null;
-        }}
-        onPointerCancelCapture={() => {
-          pendingTouch.current = null;
-          touchOrigin.current = null;
-        }}
-        onWheel={() => {
-          pendingTouch.current = null;
-        }}
-        onKeyDownCapture={() => {
-          pendingTouch.current = null;
-        }}
       >
         {error ? (
           <div className="empty-state">
@@ -678,40 +670,46 @@ export default function FileBrowser({
                         }
                       >
                         <div className="name-header-content">
-                          <span className="file-selection-slot">
-                            {!isPublic && selectionMode && (
-                              <label className="file-checkbox-target">
-                                <input
-                                  type="checkbox"
-                                  aria-label="Select All Files on This Page"
-                                  ref={(input) => {
-                                    if (input) {
-                                      const count = visibleItems.filter(
-                                        (item) => selected.has(item.id),
-                                      ).length;
-                                      input.indeterminate =
-                                        count > 0 &&
-                                        count < visibleItems.length;
+                          {!isPublic && selectionMode && (
+                            <span className="file-selection-slot">
+                              {selectionMode && (
+                                <label className="file-checkbox-target">
+                                  <input
+                                    type="checkbox"
+                                    aria-label="Select All Files on This Page"
+                                    ref={(input) => {
+                                      if (input) {
+                                        const count = visibleItems.filter(
+                                          (item) => selected.has(item.id),
+                                        ).length;
+                                        input.indeterminate =
+                                          count > 0 &&
+                                          count < visibleItems.length;
+                                      }
+                                    }}
+                                    checked={
+                                      visibleItems.length > 0 &&
+                                      visibleItems.every((item) =>
+                                        selected.has(item.id),
+                                      )
                                     }
-                                  }}
-                                  checked={
-                                    visibleItems.length > 0 &&
-                                    visibleItems.every((item) =>
-                                      selected.has(item.id),
-                                    )
-                                  }
-                                  onChange={(event) => {
-                                    const next = new Set(selected);
-                                    for (const item of visibleItems)
-                                      event.target.checked
-                                        ? next.add(item.id)
-                                        : next.delete(item.id);
-                                    setSelected(next);
-                                  }}
-                                />
-                              </label>
-                            )}
-                          </span>
+                                    onChange={(event) => {
+                                      const next = new Set(selected);
+                                      for (const item of visibleItems)
+                                        event.target.checked
+                                          ? next.add(item.id)
+                                          : next.delete(item.id);
+                                      setSelected(next);
+                                    }}
+                                  />
+                                </label>
+                              )}
+                            </span>
+                          )}
+                          <span
+                            className="file-icon-spacer"
+                            aria-hidden="true"
+                          />
                           <button
                             type="button"
                             className="column-sort-button"
@@ -795,39 +793,28 @@ export default function FileBrowser({
                         "file-row " + (selected.has(item.id) ? "selected" : "")
                       }
                       data-item-id={item.id}
-                      onPointerDown={(event) => {
-                        pointerKind.current = event.pointerType;
-                        if (
-                          (event.target as Element).closest(
-                            "a,input,summary,details,button:not(.item-name-button)",
-                          )
-                        )
-                          pendingTouch.current = null;
-                      }}
                       onClick={(event) => {
                         if (
+                          (event.detail > 1 &&
+                            pointerKind.current === "mouse" &&
+                            !selectionMode) ||
                           (event.target as Element).closest(
-                            "button,a,input,summary,details",
+                            "button,a,input,label,summary,details",
                           )
                         )
                           return;
-                        openPrimary(
-                          item,
-                          false,
-                          event.ctrlKey || event.metaKey,
-                          pointerKind.current === "touch",
-                        );
+                        openPrimary(item);
                       }}
                       onDoubleClick={(event) => {
                         if (
-                          isTrash ||
-                          pointerKind.current === "touch" ||
+                          selectionMode ||
+                          pointerKind.current !== "mouse" ||
                           (event.target as Element).closest(
-                            "a,input,summary,details",
+                            "a,input,label,summary,details,button:not(.item-name-button)",
                           )
                         )
                           return;
-                        onOpen(item);
+                        openPrimary(item, false, true);
                       }}
                     >
                       <Cell className="name-cell">
@@ -839,43 +826,56 @@ export default function FileBrowser({
                           />
                         )}
                         <div className="name-cell-content">
-                          <span className="file-selection-slot">
-                            {!isPublic && selectionMode ? (
-                              <label className="file-checkbox-target">
-                                <input
-                                  type="checkbox"
-                                  aria-label={"Select " + item.name}
-                                  checked={selected.has(item.id)}
-                                  onChange={() => toggle(item.id)}
-                                />
-                              </label>
-                            ) : (
-                              <FileIcon
-                                name={item.name}
-                                folder={item.type === "folder"}
-                              />
-                            )}
-                          </span>
+                          {!isPublic && selectionMode && (
+                            <span className="file-selection-slot">
+                              {selectionMode && (
+                                <label className="file-checkbox-target">
+                                  <input
+                                    type="checkbox"
+                                    aria-label={"Select " + item.name}
+                                    checked={selected.has(item.id)}
+                                    onChange={() => toggle(item.id)}
+                                  />
+                                </label>
+                              )}
+                            </span>
+                          )}
+                          {layout === "list" && (
+                            <FileIcon
+                              name={item.name}
+                              folder={item.type === "folder"}
+                            />
+                          )}
                           <div className="file-name-details">
                             <div className="file-title-line">
                               <button
                                 className="file-name item-name-button"
                                 title={item.name}
-                                onClick={(event) =>
-                                  openPrimary(
-                                    item,
-                                    event.detail === 0,
-                                    event.ctrlKey || event.metaKey,
-                                    pointerKind.current === "touch",
+                                onClick={(event) => {
+                                  if (
+                                    event.detail > 1 &&
+                                    pointerKind.current === "mouse" &&
+                                    !selectionMode
                                   )
-                                }
+                                    return;
+                                  openPrimary(item, event.detail === 0);
+                                }}
                               >
                                 {item.name}
                               </button>
                               {!isPublic &&
                                 ((!isStarred && item.starred) ||
-                                  (!isTrash && sharing(item))) && (
+                                  (!isTrash && sharing(item)) ||
+                                  item.read_only) && (
                                   <span className="file-item-status">
+                                    {item.read_only && (
+                                      <span
+                                        className="file-status-label demo-files-read-only-label"
+                                        title="Read-only in the public demo"
+                                      >
+                                        Read-only
+                                      </span>
+                                    )}
                                     {!isStarred && item.starred && (
                                       <span className="file-status-label">
                                         Starred
@@ -893,6 +893,11 @@ export default function FileBrowser({
                                   </span>
                                 )}
                             </div>
+                            <span className="file-size-mobile">
+                              {item.type === "folder"
+                                ? "Folder"
+                                : formatBytes(item.size)}
+                            </span>
                             {(isSearch || isTrash || isStarred) && (
                               <span
                                 className="search-result-location"

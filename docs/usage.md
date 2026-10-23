@@ -2,8 +2,41 @@
 
 [Docs home](README.md) · [Setup](setup.md) · [Help with problems](operations.md#troubleshooting)
 
-TGDrive is a personal drive for the owner of one installation.
-Other people can view or download only what you share with them.
+Upload in **My Files**, follow progress in **Transfers**, and share only what
+you choose.
+
+[Public demo](#try-the-public-demo) · [Upload](#upload-files-or-folders) · [Browse](#browse-and-organize) · [Preview](#open-preview-and-download) · [Preload](#preload-a-file-for-smoother-playback-and-downloads) · [Share](#share-and-revoke)
+
+## Use several devices
+
+You can sign in on several devices or browsers with the same owner password and
+use them at the same time. Each login has its own session; signing in again does
+not disconnect other devices, and **Log Out** signs out only that session.
+Tabs in the same browser profile share their session. Everyone using the owner
+credentials has full access to the same drive, settings and files. Use share
+links for people who should only read selected content.
+
+## Try the public demo
+
+Open **[TGDrive's live demo](https://tgdrive.nexgenbots.us/)** and sign in with
+password **`password12345`**. No installation is needed.
+
+**Demo Files** contains the operator's sample collection. You can browse, preview
+and download it, but attempts to change the folder or its contents open a
+read-only notice. Choose **Open My Files** in that notice to upload or organize
+your own test files outside the protected folder.
+
+Try browsing, uploading disposable sample files, organizing folders, previews,
+downloads, sharing and preloads. **Configuration** and **Management** pages can
+be viewed, but their settings and management actions are locked. Recovery keys
+cannot be downloaded.
+
+> [!IMPORTANT]
+> Everyone shares the same files and changes. Other visitors can edit or delete
+> files outside Demo Files. Use non-private, disposable content and keep your own copy.
+> Do not rely on the demo to store files; automatic resets are not provided by demo mode.
+
+Hosting a demo? See [Public demo mode](configuration.md#public-demo-mode).
 
 ## Find your way around
 
@@ -22,19 +55,9 @@ Other people can view or download only what you share with them.
 | **Configuration → Transfer limits** | Set upload concurrency, splitting and shared Telegram request budgets |
 | **Configuration → Timezone** | Choose the installation's timezone |
 
-The sidebar keeps **Monitor**, **Configuration**, and **Management** visible as
-separate groups. Monitor shows activity and reusable media; Configuration changes
-instance-wide policies; Management handles connections and recovery.
-
-TGDrive offers Light, Dark and System appearances with shared controls. The whole sidebar
-scrolls naturally; Documentation and **Log Out** follow the navigation rather than
-reserving fixed space. Logging out closes this browser's access; server transfers continue.
-See [Configuration & tuning](configuration.md) for safe defaults, restoring values
-and larger-server tuning.
-
-On a [public demo deployment](configuration.md#public-demo-mode), Configuration
-and Management show the current settings with changes disabled. File features
-remain available; everyone using the demo shares its files and changes.
+Choose Light, Dark or System in the appearance menu. **Log Out** closes this
+browser's access; server transfers continue. See [configuration](configuration.md)
+for defaults and tuning.
 
 **Refresh** and **Check Again** show progress and stay disabled until their
 requests finish. A successful refresh shows a brief confirmation; failures show
@@ -47,89 +70,51 @@ an error so you can retry. Automatic background updates stay quiet.
 3. Select the files or folder. For a folder, confirm the short upload summary.
 4. Follow the batch in **Transfers** and wait for **Completed**.
 
-You can also drag files into the file area.
-A single file has one row with its progress and actions. Multiple files appear
-as a combined batch. Select its name or chevron to expand the files underneath.
-Batch rows align the name, destination, total size and completion date. Folder
-uploads keep their folder name and file count, including folders with one file.
-Filters inside a batch appear only when its files have different statuses.
-A folder header's chevron and name only expand/collapse its files. Use the
-separate **Show Folder** action to open its directory. Rapid clicks on the
-disclosure never navigate. Expanded children omit repeated group locations
-and dates; nested or changed locations still appear when useful.
-
-A folder appears in just one section: **Running** while any file is active,
-**Queued** while queued files remain, then **Finished** once no work is running
-or queued. Finished includes successful, failed and cancelled uploads. A folder
-with a failed child remains queued while another child is waiting. Filters keep
-known batches together; expand a folder to inspect its individual file states.
+You can also drag files into the file area. Multiple files form an expandable
+batch; select its name/chevron for individual states, or **Show Folder** to open
+its directory. A batch stays **Running** while any file is active, then
+**Queued** while work remains, then **Finished** (successful, failed or cancelled).
 
 ### Upload speed and queue
 
+Device-to-server and server-to-Telegram uploads run independently.
+Defaults are usually the best starting point.
+
+<details>
+<summary>Upload concurrency and large-file scheduling</summary>
+
 #### Telegram upload capacity
 
-Open **Configuration → Transfer limits → Parallel uploads** to choose simultaneous uploads per bot: **1–4**.
-The default is **1**; adding bots adds upload slots. A large file's parts use
-all eligible client slots, rather than stopping at two simultaneous parts.
-Available Premium clients are preferred for upload parts and download payload
-windows, with bot fallback when busy or unavailable. Premium's benefit is
-potential speed per task; every account uses the same split cap. Telegram
-cooldowns and channel pacing still apply.
-
-Changes apply immediately. Reducing the limit lets running uploads finish.
-Telegram wait limits still apply; a higher setting does not guarantee more speed.
-
-Upload chunk pipelining and file splitting are separate controls. A smaller
-split can use more available account slots for one file, while pipelining
-overlaps part requests within a Telegram document. Keep conservative limits
-and compare actual throughput before increasing concurrency.
-See [performance and caching](performance.md) for the tradeoffs.
+**Configuration → Transfer limits → Parallel uploads** allows **1–4 per bot**,
+default **1**. Changes apply immediately; lowering the limit lets running work
+finish. Large-file parts use eligible slots, preferring available Premium
+clients with bot fallback. All accounts share the same split cap.
+More slots do not remove Telegram cooldowns or guarantee speed.
+Splitting controls document size; pipelining overlaps requests within a document.
+See [performance tradeoffs](performance.md).
 
 #### Automatic device upload concurrency
 
-Your device sends files to the server while Telegram uploads run independently.
-Device uploads start with two parallel files and adapt between one and four,
-independently of Telegram upload slots and progress polling. TGDrive tries an
-extra transfer after sustained activity and keeps it only when total measured
-upload speed improves. Connection failures, sustained slowdowns and sending
-stalls reduce concurrency for new transfers while running transfers continue.
-Background-tab pauses and server confirmation time are excluded from
-these measurements. Each received file is queued for Telegram immediately;
-TGDrive does not wait for the rest of the selection or folder. If temporary
-storage fills, remaining device files wait and retry automatically. Smaller
-files can still be received when they fit the available space. Keep the tab open
-until those files have reached the server.
+Device uploads start with **two files**, adapting between **one and four** using
+measured total throughput. Failures/stalls reduce new concurrency; running files
+continue. Background pauses and server confirmation time are excluded.
+Each received file queues for Telegram immediately. If staging fills, remaining
+files wait/retry; smaller files may proceed when they fit. Keep the tab open
+until server receipt is confirmed. Small batches may finish before adaptation.
+See [measurement rules](architecture.md#adaptive-device-upload-concurrency).
 
-Device concurrency is automatic and separate from **Parallel uploads** per bot.
-The files share your connection's upload bandwidth; four active files do not
-create four times that bandwidth. Small batches can finish before there is enough
-measurement to try an increase. The controller uses actual transfer progress,
-without requiring browser support for detecting Wi-Fi or cellular connections.
-See [the scheduling policy](architecture.md#adaptive-device-upload-concurrency)
-for the measurement rules and bounds.
+</details>
 
 ### Files above 2 GB
 
-**Large-file splitting is automatic.** TGDrive stores the file in Telegram-sized
-parts but shows one item. Downloads rebuild the original; previews and video
-seeking use the same file.
+**Splitting is automatic; Premium is optional.** Files appear as one item;
+downloads reconstruct original bytes and seeking crosses part boundaries.
+Database backups retain part mappings; independent backup copies the documents.
 
-**Premium's larger single-document allowance is unnecessary for TGDrive.**
-TGDrive splits large files automatically and tracks the ordered parts as one
-logical file. Full downloads reconstruct the original bytes; streaming and
-byte-range seeking work across part boundaries. Database backups preserve the
-part mappings, and an enabled independent backup channel copies the underlying
-documents for recovery. These operations do not require 4000 MiB Premium
-documents. Premium's intended benefit here is potential upload/download speed
-per task. See [backup and recovery](backup-recovery.md) for backup coverage and
-requirements.
-
-- Premium is not required.
-- Each Telegram document defaults to at most **2000 MiB**, including Premium.
-  Reduce **File split size** in Configuration to split sooner; 0 also uses 2000 MiB.
-- The default limit is **16 GiB per file**, subject to free disk space.
-- The limit is configurable; it is not unlimited storage.
-- See [exact capacity limits](reference.md#file-capacity-staging-and-work-limits).
+Default: **16 GiB per file**, subject to staging space. Telegram documents use
+at most **2000 MiB** for every account; **File split size** can lower that
+(0 also means 2000 MiB). See [capacity limits](reference.md#file-capacity-staging-and-work-limits)
+and [backup coverage](backup-recovery.md).
 
 ### What upload progress means
 
@@ -141,59 +126,39 @@ requirements.
 | Publishing to the channel | Finishing channel messages and saving the file record |
 | Completed | The file and its record are confirmed |
 
-For large files, **Uploading to Telegram** counts bytes across parallel
-parts, including unfinished parts. Each part appears in the Telegram channel
-only after its upload finishes. **Parts in Channel** counts confirmed channel
-messages; TGDrive adds the complete file to My Files after all parts are confirmed.
+Progress/speed describe the current stage. **A full device bar is not a completed
+upload.** Wait for **Device upload complete** to confirm durable server receipt;
+**Waiting for server confirmation** means bytes are not yet acknowledged.
+Recovery resumes from the last confirmed offset.
 
-A full **device** progress bar does not mean the Telegram upload is complete.
-Device progress updates as bytes are sent, including within a large chunk.
-“Waiting for server confirmation” means that the browser finished sending the
-chunk but has not received its acknowledgement. Only confirmed offsets are saved
-for recovery; a failed chunk can move the displayed progress back to that offset.
-For a single file, the bar and byte count describe the current stage. Telegram
-upload starts from zero after the device transfer. Multi-file batches show actual
-Telegram bytes, including partial uploads; device bytes are not counted twice.
-Sizes show up to two decimal places. Progress counters share the unit when possible,
-and active transfers show bytes remaining above 95% so rounding cannot hide the tail.
-Active rows show speed and **About … remaining** when an estimate is available.
-Both describe the current stage, not the complete device-to-Telegram journey.
-Queued batches have no elapsed timer.
+<details>
+<summary>Upload progress screenshot — placeholder</summary>
+
+<!-- MEDIA: Replace assets/upload-progress.svg with a screenshot showing device receipt, Telegram transfer and a completed file. -->
+![Placeholder for a screenshot of upload progress](assets/upload-progress.svg)
+
+**Uploading to Telegram** includes unfinished parallel parts. **Parts in Channel**
+counts confirmed messages. My Files receives the item after every part is confirmed.
+Batches count Telegram bytes without double-counting device receipt.
+
+</details>
 
 ### Can I close the tab?
 
-- **Still sending from your device:** keep the tab open, or reselect the original
-  files later to resume.
-- **Received by the server:** Telegram uploading can continue with the tab closed,
-  while TGDrive itself stays running.
-- **Completed:** the local source is no longer needed by that upload.
+| Upload state | Can I close the tab? |
+| --- | --- |
+| **Still sending from your device** | Keep it open, or reselect the originals later to resume. Leaving early triggers a browser warning. |
+| **Device upload complete** | Yes. Telegram uploading continues while TGDrive stays running. |
+| **Completed** | Yes. This upload no longer needs the local source. |
 
-Each upload batch shows how many files the server has accepted. **Device upload
-complete** means you can close the tab even while Telegram uploads are queued or
-running. Sending 100% of the bytes alone is not enough; TGDrive waits for the
-server's durable receipt confirmation. Closing or reloading before that point
-shows the browser's leave-page warning. Directory listings update in place as
-files become available, preserving the current view and selection.
+To resume, use **Choose files / Choose folder / Choose file** in the existing
+batch and select the same originals. TGDrive checks received bytes, then continues
+from the acknowledged offset without resending them. Use the existing **Retry**
+action after failure to avoid duplicates.
 
-To resume, choose **Choose files**, **Choose folder** or **Choose file** in the
-existing batch. Select the same originals. TGDrive checks the received bytes
-before continuing. This local file check keeps the received-byte progress in place;
-it does not resend those bytes or show hashing speed as upload speed. Once
-verified, sending resumes from the server's acknowledged offset. Speed measures
-browser-to-server sending or Telegram uploading according to the current stage.
-When the original is needed, **Choose file** appears beside
-the resume message as the main recovery action.
-
-Use **Retry** on the existing failed transfer to avoid starting a duplicate.
-Cancel can take time if Telegram has already received part of the work.
-**Cancel all** asks for confirmation before stopping the selected unfinished uploads;
-files already in your drive are kept. New uploads added after opening the
-confirmation are not included.
-
-On desktop, **Hide/Show** collapses or expands the floating panel's details without stopping
-uploads. **Clear finished** appears when completed/cancelled groups can be removed
-from the list; it does not delete their files. Upload through the sidebar's
-**New** menu.
+Cancel may take time after Telegram work begins. **Cancel all** confirms the
+currently selected unfinished work; completed files and later uploads are kept.
+Desktop **Hide/Show** only collapses the panel; **Clear finished** only clears its list.
 
 <details>
 <summary>Folder upload limits and interrupted preparation</summary>
@@ -218,62 +183,28 @@ from the list; it does not delete their files. Upload through the sidebar's
 
 ## Transfer history
 
-Transfers show **Running** first, **Queued** next, and **Finished** below them.
-Finished includes successful, failed and cancelled work. Its **All**,
-**Successful**, **Failed** and **Cancelled** filters apply only to finished
-history; current running and queued work stays visible above them.
+**Transfers** keeps **Running** and **Queued** above finished history.
+Filter finished work by **All / Successful / Failed / Cancelled**; search finds
+names across history pages and current browser uploads. A search/filter change
+returns to page 1. Use **Previous / Next / Latest** to navigate.
 
-- Finished rows show the size and date, without repeated progress or elapsed time.
-- Rows use columns on wide screens and compact stacked details on smaller screens.
-  Long filenames and paths truncate; hover to read their full text.
-- The location shows its current TGDrive folder.
-- **Double-click a completed transfer**, or choose **Show in folder**, to open that folder
-  with the exact saved item highlighted. Preview or manage it there as usual.
-- Completed folder upload groups also have **Show folder**.
-- Running, queued, paused, failed and cancelled uploads have no location action
-  or double-click navigation.
-- Moves and renames are followed automatically. Trashed or deleted items show
-  an unavailable state; TGDrive never selects another file with the same name.
+Double-click a completed file or choose **Show in folder** to highlight it;
+folder batches have **Show folder**. Moves/renames are followed. Trashed or
+deleted items become unavailable; unfinished/failed rows do not navigate.
 
-Open **Transfers** to follow current work and browse finished uploads.
-
-- Current progress and past server transfers appear together.
-- On phones, the bottom upload status row opens **Transfers**. It occupies its
-  own space and never covers file rows. **New** sits in the top bar; file browsing
-  uses one scrolling workspace. The navigation drawer opens from the top edge.
-- The desktop floating upload panel shows work started from this browser. Uploads
-  discovered from another device remain visible in **Transfers**, without
-  opening a new floating completion panel on this device.
-- Finished records include dates and sizes. **Previous** and **Next** replace
-  the current history page; the page number shows your position. **Latest**
-  returns to the newest page. Changing the finished-status filter starts at page 1.
-- **Search Transfers** finds names across saved history, including older pages,
-  and filters current browser uploads too. Changing the search starts at page 1.
-- Older pages show their own records, while live running and queued work remains
-  at the top. Recent local completions are not added to every older page.
-- Clearing the floating panel does not erase this history.
-- Completed/cancelled server records stay in MongoDB after live-job cleanup and restart.
-- Previously expired records cannot be recreated.
-
-Start uploads from a chosen folder in **My Files**. There is no upload button
-on the history page. Clicking the sidebar's **New** from another page first
-opens My Files so the destination is visible.
+On phones, the bottom upload status opens Transfers. The desktop floating panel
+shows this browser's work; Transfers also shows other devices' server jobs.
+Clearing the panel does not erase saved history. Completed/cancelled records
+survive restart; previously expired records cannot be recreated.
+Start uploads in a destination in **My Files** using **New**.
 
 <details>
 <summary>History storage and limits</summary>
 
-History pages load up to 50 server records at a time, rather than accumulating
-the entire archive in the browser. TGDrive remembers up to 128 previous page
-cursors for back navigation; **Latest** is always available on older pages.
-Known browser batches remain grouped. Older server records may appear as
-individual files when the original browser's batch information is unavailable.
-Compact finished summaries
-are kept in MongoDB and included in encrypted database backups; they omit
-payloads, source URLs and private recovery context. They do not expire with the
-short-lived live-job journal. History consumes database space.
-
-Device-only work that has not become a server job remains browser-scoped.
-Queued/resumable device files still need their originals.
+Pages load up to 50 server records, with 128 remembered back-navigation cursors.
+Older jobs may lack browser batch grouping. Compact MongoDB summaries are included
+in encrypted backups, omit payloads/source URLs/private recovery context, and
+consume database space. Device-only work remains browser-scoped and needs originals.
 
 </details>
 
@@ -281,47 +212,34 @@ Queued/resumable device files still need their originals.
 
 | Action | How |
 | --- | --- |
-| Select | Click once; selection mode shows checkboxes |
-| Open a file or folder | Double-click, use Enter on its focused name, or choose Open |
-| Open on a touch screen | Tap twice |
-| Select several items | Use Select or Ctrl/Cmd-click |
+| Select | Choose Select to turn on selection mode; icons remain visible beside checkboxes |
+| Open a file or folder with a mouse | Double-click, use Enter on its focused name, or choose Open |
+| Open on a touch screen | Tap once |
+| Select several items | Choose Select, then tap rows or check their boxes |
 | Clear selection | Done or Escape |
 | Create a folder | New → New folder |
 | Rename, move or trash | Open the item's menu, or use the selection actions |
 | Sort | Choose Name, Date Added or File Size, then Ascending or Descending |
 | Change view | Choose List view or Grid view |
 
-Sorting works in folders and search results. Ascending means A–Z, oldest first
-or smallest first; Descending reverses that order. Folders stay first in either
-direction. Clicking the active list column heading reverses its order.
-The list/grid choice is remembered in this browser.
+Folders stay first when sorting; click an active column to reverse order.
+The browser remembers list/grid view. Phones combine these controls in
+**View and sort**; Select/Done remains available.
 
-On phones, **View and sort** combines the view, sort field and direction in one
-menu beside the title. The selection icon keeps Select/Done available.
-
-For new supported uploads TGDrive generates a small cover from the staged file:
-a scaled image, an early video frame or the first PDF page. It keeps the original
-unchanged. Grid tiles request only the small thumbnail when visible or nearby;
-they never fetch the whole original to manufacture a cover. See
-[Thumbnail generation](thumbnails.md) for supported formats and existing files.
-A browser reporting data-saving mode uses icons without thumbnail requests.
-
-A name conflict lets you keep both or skip; it does not silently replace another
-file.
+New supported uploads get small image/video/PDF covers without changing originals.
+Grid view fetches nearby thumbnails, not whole files; data-saving browsers use
+icons. See [thumbnail formats](thumbnails.md). Name conflicts offer **keep both**
+or **skip**, without silent replacement.
 
 ### Starred files and folders
 
-Choose **Add to Starred** from a file or folder's actions menu. **Starred** in the
-sidebar collects those originals in one place, with their current locations.
-Open, search, sort or switch list/grid views as usual. **Remove from Starred**
-removes only the bookmark; the file stays in its folder. Stars follow renames and
-moves, stay hidden while an item or its parent is in Trash, and return on restore.
-They are owner metadata and are included in backups, not shared-folder access.
+Use **Add to Starred / Remove from Starred** in an item's menu. Stars are owner
+bookmarks included in backups; removing one keeps the file. They follow moves/
+renames, hide while trashed and return on restore. They do not grant shared access.
 
 ### Search
 
-Search sits beside the page heading and stays within that page. On phones,
-choose the search icon to open the field; it stays compact while unused:
+Search finds names within the current page, not document contents:
 
 | Page | What search finds |
 | --- | --- |
@@ -332,25 +250,18 @@ choose the search icon to open the field; it stays compact while unused:
 | **Shared Links** | Names in your shared-link inventory |
 | **Preloads** | Cached filenames and preparation jobs |
 
-It does not search inside documents. Switching pages clears the search so a
-query cannot silently hide items in a different page.
-
-- Press Enter to search immediately.
-- In My Files, clear the search or press Escape to return to your previous folder.
-  On the other pages, this clears the filter without leaving the page.
-- Press `/` or Ctrl/Cmd+K to open and focus search when you are not editing another field.
-- On phones, Close Search or Escape collapses an empty search field.
+**Enter** searches immediately; **Escape** clears and returns My Files to the
+previous folder. Switching pages clears the query. **/** or **Ctrl/Cmd+K** focuses
+search outside an editing field. On phones, the search icon opens it; Close
+Search/Escape collapses an empty field.
 
 ## Open, preview, and download
 
-Double-click a supported file to open a full-window preview.
-Use the header's **Download** action for the original file. **Enter Fullscreen**
-in the preview header fills the display for supported previews; **Exit Fullscreen**
-returns to the browser. Some mobile browsers restrict native fullscreen.
-For PDFs, **Fit width** fills the available reading width; **Fit page** shows the
-whole current page. Manual zoom leaves the selected fit mode. The temporary
-“Rendering page…” message means the browser is fetching missing PDF data and
-drawing that page's text/images.
+Double-click with a mouse or tap on touch to preview. **Download** gets the
+original; **Escape** or browser **Back** closes the preview. Use the header's
+fullscreen control where supported. Non-video previews enter fullscreen with
+the toolbar visible; use the top-right icon to hide or show it. Video keeps its
+own player controls. Download the original if the device cannot decode it.
 
 | File | Preview |
 | --- | --- |
@@ -363,36 +274,37 @@ drawing that page's text/images.
 | CBZ and CBR | Comic pages, page fit and right-to-left navigation |
 | Other unsupported formats | Original download |
 
-- PDFs load the sections needed for visible pages instead of downloading the
-  whole document first. The preview keeps canvas/text work bounded and has a
-  64 MiB reading budget per opening; large or complex books may reach it.
-  **Download Original** remains available. The 256 MiB file ceiling protects
-  browser memory; it does not mean that all those bytes are downloaded.
-- EPUB and comic readers request archive sections and the selected chapter/page.
-  They do not start a whole-file download or automatic preload. Complex or solid
-  archives can require more bytes; reader limits keep that work bounded. See
-  [Reading books and comics](reading.md) for controls and supported formats.
-- **Escape** or browser **Back** closes the preview.
-- Every video uses the custom player. Its normal play control remains available
-  while opening; your browser may require a tap before playback with sound.
-- The timeline highlights estimated loaded source ranges. Loading status shows
-  measured received bytes and speed; it does not turn downloaded bytes into a
-  playback-readiness percentage. Decoding audio and video can still take time.
-  This source window is separate from the server's preload coverage.
-- TGDrive reads ahead using available clients and reuses recently fetched data.
-  Replaying or seeking within cached content avoids fetching those bytes again.
-- Real chapters list their titles and times immediately, without waiting for
-  preview thumbnails. Open **Chapters** from the player controls; it follows
-  their visibility and also works in fullscreen.
-- Focus the player for **K/Space** to play/pause, **M** to mute, and arrow-key
-  seeking. Audio/subtitle menus show the tracks available in that file.
-- For a slow start, use **Reload Video** within the custom player.
-- Download the original if your device cannot decode the file.
-- Codec support depends on the file and your device.
-- **Preview quality** appears only when Telegram actually provides alternatives.
-  It never changes the original download.
-- Web uploads preserve their source bytes. TGDrive does not promise that
-  Telegram will create lower-quality versions.
+PDFs, EPUB and comics request needed sections without automatically preloading
+the whole file. PDFs have a **64 MiB reading budget per opening**; complex files
+may reach it. See [book/comic controls](reading.md).
+
+<details>
+<summary>Video, PDF and keyboard controls</summary>
+
+| Control | Action |
+| --- | --- |
+| Video **K/Space**, **M**, arrows | Play/pause, mute, seek when focused |
+| Double-tap picture left/right | Seek 10 seconds; further taps add 10 seconds |
+| Single touch | Show/hide controls; outside an open menu, dismiss it |
+| Settings **Up/Down**, **Home/End**, **Enter/Space** | Navigate and select |
+| Settings **Escape** | Return from subpage, then close menu before preview |
+| **Chapters** | Real chapter titles/times; also available in fullscreen |
+| **Settings → Quality** | Telegram alternatives, when available; preserves position/play state |
+| **Try again** after a long wait | Retry video preserving position/play state |
+| PDF **Fit width / Fit page** | Reading width / whole page; manual zoom leaves fit mode |
+
+Phones put chapters/picture in picture in Settings when available. Audio/subtitle
+choices depend on the file. **Video glow** uses the picture's colors;
+**Reduce loud sounds** softens volume changes; **Video fit** explains cropping.
+Controls hide when idle but remain visible for keyboard focus.
+
+The video timeline estimates the device's loaded ranges, separate from server
+cache coverage. Longer waits show **Waiting for video… / Loading this part…**.
+Browsers may require a tap for sound; codec/fullscreen support varies by device.
+Image alternatives use **Preview quality**. Web uploads preserve original bytes;
+Telegram may not create lower-quality versions.
+
+</details>
 
 ## Preload a file for smoother playback and downloads
 
@@ -404,8 +316,6 @@ receives bytes when you play or download.
 2. Follow **Monitor → Preloads**. **Ready** with full coverage means the whole
    file is cached; blue segments mean partial coverage.
 3. Play, download or share normally. Recheck coverage before relying on it.
-
-Expand **About preloading** on that page for the manual/automatic distinction.
 
 Preloading continues with the tab closed while TGDrive runs; foreground playback/
 downloads take priority. **Cancel** keeps cached bytes; clearing cache keeps
@@ -419,9 +329,7 @@ Preloading is not a backup and does not keep a sleeping server online.
 
 Preloading is optional. Requested sections are cached with bounded adaptive
 read-ahead. **Preload during playback** (default On) also warms upcoming original
-audio/video after sustained delivery, adjusting for estimated media rate and seeks.
-Turn it off to reduce speculative Telegram traffic and cache use; requested-range
-read-ahead and manual preloading still work.
+audio/video after sustained delivery, adjusting for bitrate and seeks.
 A first viewer does not trigger a whole-file preload; separate viewers may
 justify one within cache policy. One player's overlapping requests do not count
 as extra viewers. PDFs/books/comics stay sparse; lower-quality previews do not
@@ -450,54 +358,41 @@ decoding can still buffer. See [cache limits](performance.md).
 
 ## Share and revoke
 
-1. Create a link from the item's share action.
-2. Optionally label it, for example **Alex** or **Project review**.
-3. Choose one day, seven days, 30 days, no expiry, or a custom date and time.
-4. Copy the link. You can copy it again from **Shared Links**.
+1. Use the item's share action; optionally add a label.
+2. Choose one day, seven days, 30 days, no expiry or a custom date/time.
+3. Copy the link, or copy it later from **Shared Links**.
 
-You can create up to 100 independent links for the same file or folder. Each
-has its own label and expiry; creating one leaves existing links working.
-**Anyone with the link can read its contents.** Labels help you organize links;
-they do not restrict a link to a named person. A folder link includes its
-accessible descendants.
+> [!IMPORTANT]
+> Anyone with the link can read its contents, including a folder's accessible
+> descendants. Labels organize links; they do not restrict them to named people.
 
-In **Shared Links**:
+Each item supports up to **100 independent links** with separate labels/expiries.
+Create additional links through the item's share action in **My Files**.
+**Shared Links** keeps one row per link, showing its purpose when labelled,
+location, creation time and expiry so links for the same item stay distinguishable.
 
 | Action | What it does |
 | --- | --- |
 | **Active / Expired / All** | Filter links by whether they still grant access. |
-| **Copy link** | Copy this active link again. |
+| Copy icon | Copy this exact active link again; no replacement or extra link is created. |
 | **Edit link** | Change this link's label or expiry, including a custom date or no expiry. |
 | Click the name or **Show in folder** | Open its current directory and highlight the item. |
 | **Revoke link** | Confirm before blocking this link. Other links keep working. |
-| **New link** | Create a separate link when an old link is expired or cannot be copied. |
 
-Rows show the item, link label, current directory and a short expiry date. Hover,
-focus or tap an expiry date for the exact time and instance timezone.
+Hover/focus/tap expiry for its exact time/timezone. Expired or unavailable links
+have a disabled copy icon with an explanation. If TGDrive cannot reconstruct
+a URL, such as after changing `SESSION_SECRET`, use its original copy; existing URLs
+keep working until expiry or revocation. Create any replacement through
+**My Files** and revoke the old link separately when appropriate.
 
-New links can be copied again without replacing them. Older links stored only
-as random-token hashes keep working, but cannot be reconstructed. **New link**
-does not revoke them; revoke an old link separately when you want to stop access.
+Explicit links survive moves/renames. Moving/restoring into a shared folder asks
+for confirmation; moving out removes inherited access but keeps explicit links.
+Trash revokes subtree links. Revocation stops future authorized stream blocks,
+not already downloaded copies. Invalid tokens fail even in an owner's browser.
 
-A small link icon in **My Files** identifies items shared directly or through
-a parent folder. Explicit file and folder links keep working after rename or
-move; the Shared Links page shows the current name and directory.
-
-Moving or restoring an item into a shared folder can expose it; TGDrive asks
-for confirmation. Moving it out removes inherited access, but an explicit
-file link may still work. Trash revokes links for the affected subtree.
-Revocation cannot remove copies someone already downloaded.
-
-An owner-only download address can depend on your signed-in browser cookie.
-Copying that address into an incognito window or a download tool does not
-grant access. Use **Copy download link** to create or reuse an explicit shared
-capability labelled **Download link**; this stays separate from recipient links.
-A newly created download link lasts one day and appears in
-**Shared Links**, where you can revoke it. Treat the copied URL as a secret.
-
-A supplied invalid, expired, or revoked token is rejected even if the same
-browser is signed in as the owner. Revocation also stops future authorized
-blocks of an active stream; bytes already delivered remain with the recipient.
+For download tools, use **Copy download link**, not an owner address that needs
+browser cookies. It creates/reuses a separate **Download link** capability;
+new links last **one day** and can be revoked in Shared Links. Keep the URL secret.
 
 ## Trash and permanent deletion
 
@@ -513,65 +408,43 @@ folder before restoring or deleting it.
 
 ### Why permanent deletion keeps the Telegram files
 
-TGDrive's permanent-delete operation uses database-only removal for every file
-age. It does not attempt to erase the original Telegram messages or require a
-Telegram user session. Completion confirms that the selected database records
-and their TGDrive access were removed; it does not confirm remote erasure.
+> [!WARNING]
+> Permanent deletion removes database records and TGDrive access, regardless of
+> file age. It leaves original Telegram messages in the channel.
 
-Permanent deletion removes TGDrive's references and access through TGDrive; it
-does not erase Telegram's copies, copies held by recipients, local caches or
-older database/channel backups. Channel members with access may still read the
-original messages. Older backups may restore the removed records. If you need
-to remove the originals, manage them separately in Telegram with an authorized
-user account; that is outside TGDrive's permanent-delete operation.
+Channel members may still read those messages; older backups may restore records.
+Recipient copies and caches also remain. Erasing Telegram originals separately
+requires an authorized account.
 
-Previously failed Telegram-deletion jobs can be retried after upgrading. They
-remove the remaining database records without attempting further remote deletion;
-messages already deleted by an older version cannot be brought back by this change.
+<details>
+<summary>Deletion progress and retries</summary>
 
-Bulk deletion has one combined operation notice, rather than upload rows for
-every file. If some items fail, expand the failed-item details and retry them.
-Wait for the completion notice; merely disappearing from a list is not confirmation.
-On the Trash page, the notice appears as soon as deletion is accepted and shows
-how many selected items are still processing and how many have finished. Successful
-completion uses the normal notification popup, which disappears after six seconds
-or can be dismissed immediately. Its timer pauses while hovered or keyboard focused.
-Completed results do not return on navigation or reload. Running jobs and failure
-details appear only on the Trash page.
-Items stay in Trash while their jobs run; the list refreshes
-automatically after completion. Backup checks or upload cleanup may delay removal.
-If progress checks lose connection, TGDrive displays a warning and retries. A
-temporary failure refreshing the file list is also retried automatically.
-When independent channel backup is enabled, its existing protection check still
-applies before the catalog is removed; see [backup and recovery](backup-recovery.md).
+Wait for the combined completion notice on **Trash**. Items remain listed while
+jobs run; failed items can be expanded/retried. Connection/list-refresh failures
+retry automatically. Backup protection checks or upload cleanup may delay removal.
+Running/failure details stay on Trash; successful notices dismiss after six
+seconds (paused on hover/focus) and do not return after navigation/reload.
+
+Old failed Telegram-deletion jobs now retry database-only removal. Previously
+erased messages cannot be restored by this change. Independent backup protection
+still applies; see [backup and recovery](backup-recovery.md).
+
+</details>
 
 ## Import from a URL
 
 Choose **New → Upload from URL** and enter a public HTTP(S) file URL.
 TGDrive downloads it to the server, then sends it to Telegram.
 
-Use the existing transfer's Retry action after an error. URL imports may restart
-from the beginning. Private network URLs are blocked by default.
-
-After submission, a URL import is a server job and continues when the tab is
-closed. Refreshing the browser retains that job's identity and URL-import kind;
-it must not ask you to choose a local original. If the server job no longer
-exists, start a new URL import rather than selecting an unrelated device file.
+After submission it continues with the tab closed while TGDrive runs.
+Use the existing **Retry** after errors; imports may restart from the beginning.
+Private network URLs are blocked by default. URL jobs never need a device file;
+if the server job is gone, submit a new URL import.
 
 ## Settings and connections
 
-Use **Management → Connections** for bots, Premium accounts and Telegram API credentials.
-Use **Configuration → Cache settings** for instance-wide storage and preparation
-budgets, **Transfer limits** for transfer policy, and **Timezone** for
-display timezone. Each category shows only its related controls; advanced Telegram
-limits stay collapsed until needed. Saving applies only the current category;
-unsaved changes in other categories remain drafts. Upload concurrency has its
-own save action.
-
-Existing links to `?view=settings&section=performance` continue to open cache
-settings. Switching between these settings categories preserves unsaved drafts.
-The former standalone `?view=settings` page opens **My Files**; use the categorized
-Admin links to change server settings.
+Use **Management → Connections** for accounts/API credentials and
+[Configuration](configuration.md) for cache, transfer limits and timezone.
 
 | Action | Result |
 | --- | --- |
@@ -580,39 +453,29 @@ Admin links to change server settings.
 | **Add storage bot** | Connect another administrator bot in the same channel |
 | **Connect Premium account** | Sign in with a phone number, Telegram code and optional two-step password |
 
-Refresh runs in the background. A failed check keeps the saved name and shows
-an error; temporary failures retry with Telegram's wait times. Disabled accounts
-are skipped. Keep at least one working storage bot. The confirmation means
-connection checks were requested; watch each connection’s result for verification.
+Refresh runs in the background, skips disabled accounts and retries temporary
+failures with Telegram waits. Its confirmation means the checks were requested;
+watch each connection's result for verification. Keep at least one working
+storage bot.
+Revoked/lost-access connections are excluded and show a repair action;
+see [connection recovery](operations.md#revoked-tokens-removed-sessions-and-lost-channel-access).
 
-If Telegram revokes a token/session or removes channel access, TGDrive excludes
-that connection and shows a warning with the repair action. Downloads can use
-another healthy account; upload parts switch only before message dispatch.
-Already dispatched parts retain their sender and staged bytes for safe retry.
-Restore channel permissions and Refresh, or replace a revoked credential for the
-same account and restart. See [connection recovery](operations.md#revoked-tokens-removed-sessions-and-lost-channel-access).
-
-Finish or cancel unfinished transfers before changing the account list, enabled
-states or Telegram API credentials. A replacement bot token or Premium session
-for the **same Telegram account** can repair a broken credential while transfers
-remain pending; keep all other connection settings unchanged. TGDrive checks the
-replacement identity and preserves pending work. A different account needs the
-normal idle workflow.
-Saved changes require a restart; the UI pauses new uploads until they apply.
-For Docker, restart from the installation folder:
+Finish/cancel pending transfers before changing accounts, enabled states or API
+credentials. Replacing credentials for the **same Telegram account** can repair
+pending work; keep other settings unchanged. Saved changes pause new uploads
+until restart. For local Docker:
 
 ~~~bash
 docker compose restart app
 ~~~
 
-A blank replacement field keeps its current secret. Secrets are never shown
-back in the page. The web password and storage channel are installation settings.
+Blank replacement fields keep current secrets; secrets are never displayed back.
+The web password/storage channel are installation settings.
 
 ### Storage and backup
 
-On **Management → Storage & Backups**, **Saved to MongoDB** means the drive's record is saved
-in the cloud. Database status is not repeated in the app header.
-It does not mean an unfinished upload is complete.
+**Management → Storage & Backups → Saved to MongoDB** confirms the saved catalog,
+not completion of unfinished uploads.
 
 - **Temporary storage** is disk reserved for unfinished uploads, not a Telegram quota.
 - **Back up now** makes a complete encrypted database copy in your private channel.
@@ -620,9 +483,8 @@ It does not mean an unfinished upload is complete.
 - **Save recovery key** downloads the key needed to restore those copies.
   Store it separately.
 
-Deleting the local installation can be recovered by reconnecting the same
-MongoDB database. Losing the database itself needs the separate
-[Backup & recovery guide](backup-recovery.md).
+Reconnect the same MongoDB after losing the local installation. For database
+loss, follow [backup and recovery](backup-recovery.md).
 
 <details>
 <summary>Optional Telegram bot interface</summary>
@@ -637,23 +499,16 @@ Only those administrators can use it, in a private chat with the bot.
    then confirms the filename and destination. Send photos as files to preserve
    their original quality.
 
-The default is **My Files / TGDriveBotModeFiles**. The folder is created on the
-first bot upload and reused afterwards. One website setting controls the
-upload destination for every bot administrator. Changes apply to the next file
-without a restart; files already being imported keep their original destination.
+Default: **My Files / TGDriveBotModeFiles**, created on first use. The shared
+destination setting applies to every administrator's next file without restart.
+Existing imports keep their destination; moving/deleting it pauses new imports
+until an available folder is chosen.
 
-Use `/set_folder` in Telegram for a link to this website setting. The website
-address is remembered when you save the bot upload folder. Optionally set
-`PUBLIC_URL=https://your-drive.example` to provide the link before that first
-save, or to specify the public address when accessing the site locally.
-The link opens the normal owner login and contains no authentication tokens.
-
-`/start` and `/help` explain how to send files. `/current_folder` (also the
-**Current folder** button) shows the current destination. Folder selection is
-handled on the website. If the selected folder is moved or deleted, imports
-pause until you choose an available folder; they do not fall back to the root.
-
-Bot-mode imports do not use the web interface's durable upload queue.
-See [known limits](roadmap.md#known-correctness-and-recovery-gaps).
+**/start**, **/help** explain uploads; **/current_folder** shows the destination;
+**/set_folder** links to its website setting (normal owner login, no token).
+The website address is remembered on save; optional `PUBLIC_URL` supplies it
+beforehand or when local access differs from the public domain.
+Bot imports lack the web queue's durability; see
+[known limits](roadmap.md#known-correctness-and-recovery-gaps).
 
 </details>
