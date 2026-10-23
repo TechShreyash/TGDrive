@@ -21,6 +21,8 @@ ORIGIN = {"Origin": "https://testserver"}
 TOKEN = "654321:" + "y" * 30
 CHALLENGE = "a" * 32
 MANAGEMENT_REQUESTS = [
+    ("POST", "/api/v1/settings/thumbnails/rebuild", {"confirmed": True}),
+    ("POST", "/api/v1/settings/thumbnails/rebuild/cancel", {}),
     ("PATCH", "/api/v1/settings", {"expected_revision": 0, "api_id": 99999}),
     ("PATCH", "/api/v1/settings/uploads", {"uploads_per_bot": 2}),
     ("PATCH", "/api/v1/settings/performance", {"timezone": "UTC"}),

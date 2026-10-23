@@ -33,3 +33,7 @@ The compressed source window grows toward its time goal within a device-derived
 memory ceiling. Growth preserves retained data and stream state; background
 writers refresh storage after awaited reads. Allocation failure retains the
 existing window and caps subsequent growth for the opening (2026-10-23).
+
+The read-ahead gate counts bytes only within the current source window. Distant
+seeks do not count the skipped file gap as already buffered, allowing the first
+range at the new position to arrive before the demuxer advances (2026-10-23).

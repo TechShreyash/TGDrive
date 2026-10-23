@@ -113,7 +113,11 @@ export const GATE_AFTER = `  playbackAheadBytes = Infinity;
   }
   async awaitPrefetchGate() {
     while (this.atomicIsStreaming() && !this.closed) {
-      const ahead = Math.max(0, this.bufferEnd - this.getPosition());
+      // A distant seek starts a new source window before the demuxer can
+      // finish its first read and advance position. Skipped bytes are not
+      // buffered data; counting that gap deadlocks the new window at zero.
+      const consumed = Math.max(this.atomicGetBufferStart(), this.getPosition());
+      const ahead = Math.max(0, this.bufferEnd - consumed);
       if (ahead >= this.playbackAheadBytes) this.playbackPrefetchHeld = true;
       else if (ahead < 0.75 * this.playbackAheadBytes)
         this.playbackPrefetchHeld = false;
@@ -182,6 +186,17 @@ export function patchMoviSource(source, version) {
     );
   const marked = source.startsWith(NOTICE);
   let original = marked ? source.slice(NOTICE.length) : source;
+  // The previous reviewed gate is recognized so an existing npm install can
+  // receive this update; the reconstructed upstream bundle must still hash.
+  const previousGate = GATE_AFTER.replace(
+    `      // A distant seek starts a new source window before the demuxer can
+      // finish its first read and advance position. Skipped bytes are not
+      // buffered data; counting that gap deadlocks the new window at zero.
+      const consumed = Math.max(this.atomicGetBufferStart(), this.getPosition());
+      const ahead = Math.max(0, this.bufferEnd - consumed);`,
+    `      const ahead = Math.max(0, this.bufferEnd - this.getPosition());`,
+  );
+  original = original.replace(previousGate, GATE_BEFORE);
   for (const [before, after] of PATCHES)
     original = original.replace(after, before);
   if (

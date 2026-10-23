@@ -36,6 +36,7 @@ import {
 } from "./performanceApi";
 import "./Performance.css";
 import DemoModeNotice from "./DemoModeNotice";
+import ThumbnailSettings from "./ThumbnailSettings";
 
 export default function PerformanceSettings({
   onSaved,
@@ -451,6 +452,7 @@ export default function PerformanceSettings({
         </Button>
       )}
       <ErrorNotice message={error} />
+      {category === "cache" && <ThumbnailSettings demoMode={demoMode} />}
     </section>
   );
 }

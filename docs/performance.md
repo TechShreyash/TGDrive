@@ -189,9 +189,27 @@ Large, known-length sources with a strong ETag use adaptive parallel HTTP
 ranges: TGDrive starts with two streams and probes four, then eight when aggregate
 throughput improves. Every range must match the original representation and exact
 requested interval. Unsuitable range responses abandon the partial attempt and
-restart once as a single stream; rate-limit responses respect `Retry-After`.
+restart as a single stream within the retry budget; rate-limit responses respect
+`Retry-After`.
 Small files, unknown lengths, sources without a strong ETag, and **Compatibility
-Mode** use one stream. Neither mode can exceed the source, route or server capacity.
+Mode** use one stream.
+Temporary source connection failures, timeouts, incomplete bodies and HTTP
+408/429/500/502/503/504 are retried automatically, with at most **four source
+attempts per running cycle**, including a parallel-to-single-stream fallback.
+Ordinary backoff is **2, 4, then 8 seconds**; a valid `Retry-After` can make it
+longer. Unsupported ranges can fall back immediately. After a transport failure,
+remaining attempts use one stream. Invalid/unsafe URLs, TLS verification failures,
+permanent HTTP errors, size limits and local storage errors do not enter this loop.
+
+**Source interrupted · retrying automatically** shows the next attempt and wait.
+Before waiting, TGDrive drains writers, deletes the unpublished partial, and
+releases source slots and staging claims. The retry rejoins normal admission and
+checks storage again, then restarts at byte zero. It never combines bytes across
+attempts or sends a partial original to Telegram. Cancellation interrupts the wait.
+The existing total timeout includes retries and backoff. Server restart starts a
+fresh cycle, honoring a saved source retry deadline; no browser tab is required.
+Only exhausted attempts or permanent errors need user action.
+Neither mode can exceed the source, route or server capacity.
 
 **Transfer limits → URL downloads → Full-speed URL downloads** defaults to **2**,
 configurable from **1 to 8** without a restart. Lowering it lets existing full-speed
@@ -424,3 +442,13 @@ can differ from curl/Python HTTP/1.1 or HTTP/2. TGDrive clears alternative-servi
 advertisements by default. Check [proxy configuration](operations.md#http-delivery-and-proxy-configuration)
 and [fresh-browser validation](streaming-validation-2026-10-18.md) before attributing
 warm-cache stalls to Telegram or raising budgets.
+
+### Distant video seeks
+
+Compressed read-ahead counts only bytes inside the current source window.
+Moving to a distant position must fetch its first range even while the demuxer
+still reports its old read position; skipped file bytes are not buffered data.
+The loading overlay shows time spent waiting and bytes received for that seek,
+rather than repeating a cumulative count from earlier playback. It remains a
+waiting state until actual playback frames advance. Source delivery, codec/device
+support and decoding still affect seek latency.

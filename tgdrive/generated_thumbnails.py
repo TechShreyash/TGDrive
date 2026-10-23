@@ -21,8 +21,25 @@ MAX_BYTES = 64 * 1024
 DISK_BYTES = 128 * 1024**2
 MAX_ENTRIES = 4096
 _slots = weakref.WeakKeyDictionary()
+_background_slots = weakref.WeakKeyDictionary()
 PROJECT_ROOT = str(Path(__file__).resolve().parent.parent)
 SUPPORTED = {
+    ".cbr",
+    ".docx",
+    ".pptx",
+    ".xlsx",
+    ".odt",
+    ".odp",
+    ".ods",
+    ".mp3",
+    ".flac",
+    ".m4a",
+    ".ogg",
+    ".opus",
+    ".wav",
+    ".aac",
+    ".epub",
+    ".cbz",
     ".jpg",
     ".jpeg",
     ".png",
@@ -284,12 +301,20 @@ class CachedThumbnailRepair:
 
 
 async def generate(
-    path: Path, name: str, *, raise_busy=False, on_start=None
+    path: Path,
+    name: str,
+    *,
+    raise_busy=False,
+    on_start=None,
+    background=False,
+    remote_url=None,
+    source_size=None,
 ) -> bytes | None:
     suffix = Path(name).suffix.lower()
     if suffix not in SUPPORTED:
         return None
-    slot = _slots.setdefault(asyncio.get_running_loop(), asyncio.Semaphore(1))
+    slots = _background_slots if background else _slots
+    slot = slots.setdefault(asyncio.get_running_loop(), asyncio.Semaphore(1))
     try:
         await asyncio.wait_for(slot.acquire(), timeout=NATIVE_ADMISSION_SECONDS)
     except TimeoutError as exc:
@@ -299,14 +324,21 @@ async def generate(
     try:
         process = None
         try:
-            async with asyncio.timeout(12):
+            async with asyncio.timeout(120 if remote_url else 12):
                 opening = asyncio.create_task(
                     asyncio.create_subprocess_exec(
                         sys.executable,
                         "-m",
                         "tgdrive.thumbnail_worker",
-                        str(await asyncio.to_thread(path.resolve)),
+                        remote_url or str(await asyncio.to_thread(path.resolve)),
                         suffix,
+                        *(
+                            ["remote", str(source_size)]
+                            if remote_url
+                            else ["background"]
+                            if background
+                            else []
+                        ),
                         stdout=asyncio.subprocess.PIPE,
                         stderr=asyncio.subprocess.DEVNULL,
                         start_new_session=os.name == "posix",

@@ -296,6 +296,7 @@ def create_app(
         try:
             await _app.state.thumbnail_repair.start()
             await app_runtime.start()
+            await _app.state.thumbnail_rebuild.restore()
             if settings.demo_mode and getattr(app_runtime, "store", None) is not None:
                 try:
                     await asyncio.to_thread(app_runtime.store.ensure_demo_files)
@@ -335,6 +336,7 @@ def create_app(
                 connection_manager = getattr(app_runtime, "connection_manager", None)
                 if connection_manager is not None:
                     await connection_manager.close()
+                await _app.state.thumbnail_rebuild.close()
                 await _app.state.thumbnails.close()
                 await app_runtime.stop()
         finally:
@@ -358,6 +360,9 @@ def create_app(
     app.state.thumbnail_repair = CachedThumbnailRepair(
         settings.resolved_cache_dir / "thumbnails"
     )
+    from tgdrive.thumbnail_rebuild import register_thumbnail_routes
+
+    register_thumbnail_routes(app, settings, require_admin)
     starts = TransferStarts(ttl_seconds=settings.transfer_ttl_seconds)
     app.state.transfer_starts = starts
 
@@ -1138,11 +1143,9 @@ def create_app(
         # authorization. Nothing in the payload cache grants access to a file.
         recheck()
         if thumbnail is None:
-            return JSONResponse(
-                {"code": "THUMBNAIL_UNAVAILABLE", "detail": "No thumbnail available"},
-                status_code=404,
-                headers=headers,
-            )
+            # Optional derivative absence is a successful icon fallback, not a
+            # missing original. Keep real authorization/file failures distinct.
+            return Response(status_code=204, headers=headers)
         headers["ETag"] = thumbnail.etag
         if request.headers.get("if-none-match") == thumbnail.etag:
             return Response(status_code=304, headers=headers)

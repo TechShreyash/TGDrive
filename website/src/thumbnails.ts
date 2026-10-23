@@ -4,6 +4,22 @@ export const MAX_THUMBNAIL_BYTES = 128 * 1024;
 export const THUMBNAIL_CONCURRENCY = 2;
 export const THUMBNAIL_PENDING = 32;
 const candidates = new Set([
+  "cbr",
+  "docx",
+  "pptx",
+  "xlsx",
+  "odt",
+  "odp",
+  "ods",
+  "mp3",
+  "flac",
+  "m4a",
+  "ogg",
+  "opus",
+  "wav",
+  "aac",
+  "epub",
+  "cbz",
   "jpg",
   "jpeg",
   "png",

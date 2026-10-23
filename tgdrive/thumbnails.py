@@ -193,6 +193,24 @@ class ThumbnailCache:
                 del self._entries[key]
                 self.bytes -= len(value.content) if value is not None else 0
 
+    async def invalidate_file(self, channel: int, message: int):
+        keys = {
+            key
+            for key in (*self._entries, *self._flights)
+            if key[:2] == (channel, message)
+        }
+        tasks = []
+        for key in keys:
+            flight = self._flights.get(key)
+            if flight is not None:
+                flight.task.cancel()
+                tasks.append(flight.task)
+            cached = self._entries.pop(key, None)
+            if cached is not None and cached[1] is not None:
+                self.bytes -= len(cached[1].content)
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)
+
     async def close(self):
         self._closed = True
         tasks = [flight.task for flight in self._flights.values()]

@@ -24,7 +24,7 @@ MAX_OUTPUT = 24 * BLOCK
 PROJECT_ROOT = str(Path(__file__).resolve().parent.parent)
 
 
-async def read_range(pool, channel, data, start, count, authorize):
+async def read_range(pool, channel, data, start, count, authorize, *, background=False):
     await authorize()
     selection = ByteRange(start, start + count - 1, data["size"], is_partial=True)
     result = bytearray()
@@ -33,7 +33,9 @@ async def read_range(pool, channel, data, start, count, authorize):
             data["parts"], size=data["size"], message_id=data["message_id"]
         )
         for part, interval in part_ranges(parts, selection):
-            lease = await PartLease(pool, channel, part, authorize=authorize).open()
+            lease = await PartLease(
+                pool, channel, part, authorize=authorize, background=background
+            ).open()
             stream = lease.read(interval)
             try:
                 async for block in stream:
@@ -42,7 +44,9 @@ async def read_range(pool, channel, data, start, count, authorize):
                 await stream.aclose()
                 await lease.close()
     else:
-        async with lease_media(pool, channel, data["message_id"]) as (
+        async with lease_media(
+            pool, channel, data["message_id"], background=background
+        ) as (
             client,
             message,
             media,
@@ -58,6 +62,7 @@ async def read_range(pool, channel, data, start, count, authorize):
                 offset=plan.offset // plan.chunk_size,
                 limit=plan.part_count,
                 authorize=authorize,
+                background=background,
             )
             try:
                 index = 0
@@ -82,9 +87,13 @@ async def read_range(pool, channel, data, start, count, authorize):
     return bytes(result)
 
 
-async def parse_book(data, fetch, entry=None):
+async def parse_book(data, fetch, entry=None, *, thumbnail=False):
     fmt = PurePath(data["name"]).suffix.lower().lstrip(".")
-    if fmt not in {"epub", "cbz", "cbr"}:
+    if fmt not in (
+        {"epub", "cbz", "cbr", "docx", "pptx", "xlsx", "odt", "odp", "ods"}
+        if thumbnail
+        else {"epub", "cbz", "cbr"}
+    ):
         raise HTTPException(415, "This file is not an EPUB, CBZ or CBR book.")
     # Deliberately do not pass Telegram credentials, owner secrets or inherited
     # application environment into a parser handling untrusted archive bytes.
@@ -110,7 +119,12 @@ async def parse_book(data, fetch, entry=None):
         async with asyncio.timeout(45):
             process.stdin.write(
                 json.dumps(
-                    {"size": data["size"], "format": fmt, "entry": entry}
+                    {
+                        "size": data["size"],
+                        "format": fmt,
+                        "entry": entry,
+                        "thumbnail": thumbnail,
+                    }
                 ).encode()
                 + b"\n"
             )

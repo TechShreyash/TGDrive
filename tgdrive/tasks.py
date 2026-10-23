@@ -79,7 +79,12 @@ def _failure_diagnostic(error: Exception) -> tuple[str, str]:
     """Stable categories/actions without formatting private exception messages."""
     from tgdrive.backup import BackupError, RecoveryConflict
     from tgdrive.connection_errors import connection_problem
-    from tgdrive.remote import RemoteHTTPError, RemoteTooLarge, UnsafeRemoteURL
+    from tgdrive.remote import (
+        RemoteHTTPError,
+        RemoteRetriesExhausted,
+        RemoteTooLarge,
+        UnsafeRemoteURL,
+    )
 
     if isinstance(error, RecoveryConflict):
         return (
@@ -104,6 +109,11 @@ def _failure_diagnostic(error: Exception) -> tuple[str, str]:
             else "REMOTE_HTTP_ERROR"
         )
         return code, "check source availability and access before retrying"
+    if isinstance(error, RemoteRetriesExhausted):
+        return (
+            "REMOTE_RETRIES_EXHAUSTED",
+            "check source availability or use another link",
+        )
     if isinstance(error, UnsafeRemoteURL):
         return "REMOTE_URL_BLOCKED", "check the source URL and outbound network policy"
     if isinstance(error, RemoteTooLarge):
@@ -193,9 +203,12 @@ class TransferRecord:
         )
         if download_mode in {"warm", "queued", "waiting_storage"}:
             eta = None
+        deadline_keys = ["retry_at", "backup_retry_at", "lineage_retry_at"]
+        if self.phase == "source_retry_wait":
+            deadline_keys.append("source_retry_at")
         deadlines = [
             value
-            for key in ("retry_at", "backup_retry_at", "lineage_retry_at")
+            for key in deadline_keys
             if type(value := self.context.get(key)) in (int, float)
             and math.isfinite(value)
         ]
@@ -216,6 +229,11 @@ class TransferRecord:
             "speed_bytes_per_second": speed,
             "eta_seconds": eta,
         }
+        if self.phase in {"checking_source", "source_retry_wait", "downloading"}:
+            from tgdrive.remote import REMOTE_MAX_ATTEMPTS
+
+            result["source_attempt"] = self.context.get("source_attempt", 1)
+            result["source_max_attempts"] = REMOTE_MAX_ATTEMPTS
         plan = self.context.get("multipart_plan")
         if download_mode in {"full", "warm", "queued", "waiting_storage"}:
             result["download_mode"] = download_mode

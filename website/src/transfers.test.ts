@@ -49,7 +49,11 @@ describe("manual transfer history clearing", () => {
       true,
     );
     const states = [
-      "completed", "cancelled", "error", "queued", "awaiting_file",
+      "completed",
+      "cancelled",
+      "error",
+      "queued",
+      "awaiting_file",
     ] as const;
     manager.snapshot().forEach((item, index) => {
       item.state = states[index];
@@ -71,12 +75,16 @@ describe("manual transfer history clearing", () => {
       true,
       { name: "Folder", folderUpload },
     );
-    manager.snapshot().find((item) => item.name === "first")!.state = "completed";
+    manager.snapshot().find((item) => item.name === "first")!.state =
+      "completed";
     return folderUpload;
   }
 
   it("clears saved history and local finished rows while keeping unfinished folders", async () => {
-    vi.stubGlobal("fetch", vi.fn(async () => Response.json({ cleared: 3 })));
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => Response.json({ cleared: 3 })),
+    );
     const manager = managerForTest();
     const folder = seedHistory(manager);
     await manager.clearHistory();
@@ -93,21 +101,22 @@ describe("manual transfer history clearing", () => {
       "first",
       "second",
     ]);
-    expect(managerForTest().snapshot().map((item) => item.name)).toEqual([
-      "queued",
-      "awaiting_file",
-      "first",
-      "second",
-    ]);
+    expect(
+      managerForTest()
+        .snapshot()
+        .map((item) => item.name),
+    ).toEqual(["queued", "awaiting_file", "first", "second"]);
   });
 
   it("keeps browser history when the server cannot confirm clearing", async () => {
     vi.stubGlobal(
       "fetch",
-      vi.fn(async () => Response.json(
-        { detail: "History could not be saved" },
-        { status: 503 },
-      )),
+      vi.fn(async () =>
+        Response.json(
+          { detail: "History could not be saved" },
+          { status: 503 },
+        ),
+      ),
     );
     const manager = managerForTest();
     seedHistory(manager);
@@ -136,17 +145,21 @@ describe("manual transfer history clearing", () => {
       manager.setEnabled(true);
       await manager.clearHistory();
       published.mockClear();
-      resolvePoll(Response.json({
-        jobs: [{
-          id: "stale-finished",
-          name: "Old file",
-          kind: "upload",
-          status: "completed",
-          phase: "done",
-          current: 1,
-          total: 1,
-        }],
-      }));
+      resolvePoll(
+        Response.json({
+          jobs: [
+            {
+              id: "stale-finished",
+              name: "Old file",
+              kind: "upload",
+              status: "completed",
+              phase: "done",
+              current: 1,
+              total: 1,
+            },
+          ],
+        }),
+      );
       await vi.waitFor(() => expect(fetch).toHaveBeenCalledTimes(2));
       await vi.waitFor(() => expect(published).toHaveBeenCalled());
       expect(manager.snapshot()).toEqual([]);
@@ -156,21 +169,30 @@ describe("manual transfer history clearing", () => {
   });
 
   it("settles local progress when another browser clears the completed job", async () => {
-    vi.stubGlobal("fetch", vi.fn(async () => Response.json({
-      jobs: [{
-        id: "cleared-elsewhere",
-        name: "Uploading",
-        kind: "upload",
-        status: "completed",
-        phase: "done",
-        current: 1,
-        total: 1,
-        history_cleared: true,
-      }],
-    })));
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () =>
+        Response.json({
+          jobs: [
+            {
+              id: "cleared-elsewhere",
+              name: "Uploading",
+              kind: "upload",
+              status: "completed",
+              phase: "done",
+              current: 1,
+              total: 1,
+              history_cleared: true,
+            },
+          ],
+        }),
+      ),
+    );
     const manager = managerForTest();
     manager.addEntries(
-      [{ file: new File(["x"], "Uploading"), destination: "/" }], 10, true,
+      [{ file: new File(["x"], "Uploading"), destination: "/" }],
+      10,
+      true,
     );
     Object.assign(manager.snapshot()[0], {
       jobId: "cleared-elsewhere",
@@ -864,7 +886,9 @@ describe("whole-batch recovery and bounded admission", () => {
     ]);
     expect(new Set(original.map(transferBatchId)).size).toBe(2);
     const restored = managerForTest().snapshot();
-    expect(restored.map(transferBatchId)).toEqual(original.map(transferBatchId));
+    expect(restored.map(transferBatchId)).toEqual(
+      original.map(transferBatchId),
+    );
     expect(restored.every((item) => !item.folderUpload)).toBe(true);
   });
   it("persists explicit folder task metadata and reads the same identity from server jobs", () => {
@@ -1098,7 +1122,9 @@ describe("independent browser receiving and Telegram backlog", () => {
       expect(
         manager
           .snapshot()
-          .filter((item) => item.state === "queued" && item.stage === "retry_wait"),
+          .filter(
+            (item) => item.state === "queued" && item.stage === "retry_wait",
+          ),
       ).toHaveLength(2);
       expect(
         manager
@@ -2140,4 +2166,56 @@ it("keeps near-complete byte counters precise without implying completion", () =
   );
   expect(remainingBytesHint(4.25 * gb, 4.25 * gb)).toBe("");
   expect(remainingBytesHint(gb, 4.25 * gb)).toBe("");
+});
+
+describe("finished popup dismissal across reloads and open tabs", () => {
+  it("does not let a stale controller overwrite another tab's dismissals", () => {
+    const first = managerForTest();
+    first.addJob("completed-job", "finished.jpg", "/");
+    first.snapshot()[0].state = "completed";
+    first.addJob("active-job", "active.mov", "/");
+    const second = managerForTest();
+    expect(
+      second.snapshot().some((item) => item.jobId === "completed-job"),
+    ).toBe(true);
+    first.clearFinished();
+    expect(first.snapshot().map((item) => item.jobId)).toEqual(["active-job"]);
+    // The stale tab writes after the clear, as a normal progress poll would.
+    second.addJob("another-job", "another.mov", "/");
+    expect(
+      second.snapshot().some((item) => item.jobId === "completed-job"),
+    ).toBe(false);
+    expect(
+      JSON.parse(localStorage.getItem("tgdrive.dismissed-jobs.v1")!),
+    ).toContain("completed-job");
+    expect(
+      managerForTest()
+        .snapshot()
+        .some((item) => item.jobId === "completed-job"),
+    ).toBe(false);
+  });
+  it("suppresses stale saved completed rows during construction", () => {
+    localStorage.setItem(
+      "tgdrive.dismissed-jobs.v1",
+      JSON.stringify(["finished-job"]),
+    );
+    localStorage.setItem(
+      "tgdrive.uploads.v2",
+      JSON.stringify([
+        {
+          key: "saved",
+          name: "finished.jpg",
+          destination: "/",
+          size: 1,
+          state: "completed",
+          current: 1,
+          total: 1,
+          lastModified: 0,
+          jobId: "finished-job",
+          initiatedHere: true,
+        },
+      ]),
+    );
+    expect(managerForTest().snapshot()).toEqual([]);
+  });
 });

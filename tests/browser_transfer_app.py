@@ -1105,7 +1105,7 @@ async def seed_large_pdf(request: Request):
 
 
 def seed_reading_samples(target):
-    from book_samples import cbr, cbz, epub
+    from book_samples import cbr, cbz, epub, manga_epub
 
     if hasattr(target, "reading_path"):
         return target.reading_path
@@ -1116,6 +1116,7 @@ def seed_reading_samples(target):
             "The little journey.epub": epub(unsafe=True),
             "Sample comic.cbz": cbz(),
             "Sample manga.cbr": cbr(),
+            "Image-based manga.epub": manga_epub(),
         }.items(),
         980,
     ):

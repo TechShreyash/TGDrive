@@ -51,9 +51,11 @@ class PartLease:
         *,
         authorize=None,
         request_id=None,
+        background=False,
     ):
         self.pool, self.channel, self.part = pool, channel, part
         self.authorize, self.request_id = authorize, request_id
+        self.background = background
         self.lease: Any = None
         self.client: Any = None
         self.message: Any = None
@@ -84,7 +86,10 @@ class PartLease:
                 )
 
     async def _acquire(self, *, prefer_premium: bool = False) -> None:
-        lease = self.pool.lease(prefer_premium=prefer_premium, respect_cooldown=True)
+        priority = {"priority": "preload", "download": True} if self.background else {}
+        lease = self.pool.lease(
+            prefer_premium=prefer_premium, respect_cooldown=True, **priority
+        )
         client = await lease.__aenter__()
         # A context that never yielded owns no client lease to release.
         self.lease, self.client = lease, client
@@ -154,6 +159,7 @@ class PartLease:
             offset=plan.offset // plan.chunk_size,
             authorize=authorize or self.authorize,
             request_id=request_id or self.request_id,
+            background=self.background,
         )
         emitted = 0
         count = 0

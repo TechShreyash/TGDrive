@@ -114,3 +114,22 @@ it("names queue and storage states without a made-up preflight percentage", () =
     fromJob({ ...job, download_mode: "waiting_storage" }, "remote").phase,
   ).toBe("Waiting for temporary storage");
 });
+
+it("shows a source retry countdown and its bounded attempt count", () => {
+  vi.spyOn(Date, "now").mockReturnValue(100_000);
+  const state = fromJob(
+    {
+      ...job,
+      phase: "source_retry_wait",
+      retry_at: 104,
+      source_attempt: 2,
+      source_max_attempts: 4,
+    },
+    "remote",
+  );
+  expect(state.state).toBe("uploading");
+  expect(state.phase).toBe(
+    "Source interrupted · retrying automatically in 4s · attempt 2 of 4",
+  );
+  expect(state.phase).not.toContain("Telegram");
+});

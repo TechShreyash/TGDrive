@@ -265,11 +265,13 @@ Folders stay first when sorting; click an active column to reverse order.
 The browser remembers list/grid view. Phones combine these controls in
 **View and sort**; Select/Done remains available.
 
-New supported uploads get small image/video/PDF covers without changing originals.
+New supported uploads generate small covers without changing originals.
 Grid view fetches nearby thumbnails, not whole files; data-saving browsers use
 icons. An existing missing cover can be repaired after preloading the full original
 (up to 128 MiB), then returning to its folder in Grid view. See [thumbnail formats
-and limits](thumbnails.md). Name conflicts offer **keep both**
+and limits](thumbnails.md). To refresh existing covers, use **Configuration →
+Cache settings → Regenerate all thumbnails**, review the bandwidth warning, and
+follow its background progress there. Name conflicts offer **keep both**
 or **skip**, without silent replacement.
 
 ### Starred files and folders
@@ -512,7 +514,9 @@ Use **Compatibility Mode** for sources that reject it. See
 [URL import performance](performance.md#url-import-intake) for bounds and fallbacks.
 
 After submission it continues with the tab closed while TGDrive runs.
-Use the existing **Retry** after errors; imports may restart from the beginning.
+Temporary source interruptions retry automatically and show a countdown and
+attempt number. **Retry** is needed after the bounded retry budget is exhausted
+or after correcting a permanent error; intake restarts from the beginning.
 Private network URLs are blocked by default. URL jobs never need a device file;
 if the server job is gone, submit a new URL import.
 

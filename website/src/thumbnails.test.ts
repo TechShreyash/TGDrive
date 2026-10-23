@@ -49,12 +49,15 @@ describe("bounded provider thumbnails", () => {
       }),
     );
   });
-  it.each([401, 403, 404, 503])(
+  it.each([204, 401, 403, 404, 503])(
     "leaves an icon fallback for HTTP %s",
     async (status) => {
       vi.stubGlobal(
         "fetch",
-        vi.fn(async () => new Response("unavailable", { status })),
+        vi.fn(
+          async () =>
+            new Response(status === 204 ? null : "unavailable", { status }),
+        ),
       );
       expect(
         await fetchThumbnail("/api/v1/thumbnail", new AbortController().signal),

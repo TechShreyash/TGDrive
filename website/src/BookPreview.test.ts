@@ -1,5 +1,12 @@
 import { describe, expect, it, vi, afterEach } from "vitest";
-import { bookUrl, validateBook, safeNodes, bookJson } from "./BookPreview";
+import {
+  bookUrl,
+  validateBook,
+  safeNodes,
+  bookJson,
+  bookEntryLabel,
+  isIllustratedPage,
+} from "./BookPreview";
 
 afterEach(() => vi.unstubAllGlobals());
 describe("bounded reader descriptors", () => {
@@ -73,4 +80,36 @@ describe("bounded reader descriptors", () => {
       bookJson("/api/v1/books?path=x", new AbortController().signal),
     ).rejects.toThrow("encrypted");
   });
+});
+
+it("keeps real chapter names and turns generated wrapper filenames into readable labels", () => {
+  expect(bookEntryLabel({ name: "c2.xhtml", label: "CHAPTER II." }, 2)).toBe(
+    "CHAPTER II.",
+  );
+  expect(
+    bookEntryLabel({ name: "wrap0000.xhtml", label: "wrap0000.xhtml" }, 0),
+  ).toBe("Cover");
+  expect(
+    bookEntryLabel(
+      { name: "long-cover.wrap.xhtml", label: "long-cover.wrap.xhtml" },
+      12,
+    ),
+  ).toBe("Cover");
+  expect(
+    bookEntryLabel(
+      { name: "image.jpg.wrap.xhtml", label: "image.jpg.wrap.xhtml" },
+      12,
+    ),
+  ).toBe("Illustration 13");
+});
+
+it("fits image-based EPUB manga pages without treating illustrated prose as a comic page", () => {
+  const image = { tag: "img", children: [], src: "pages/01.jpg" };
+  expect(isIllustratedPage([{ tag: "div", children: [image, "Page 1"] }])).toBe(
+    true,
+  );
+  expect(
+    isIllustratedPage([image, "A long prose paragraph. ".repeat(20)]),
+  ).toBe(false);
+  expect(isIllustratedPage(["A text-only chapter."])).toBe(false);
 });

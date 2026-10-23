@@ -979,8 +979,18 @@ deadline. It never fetches original Telegram payloads for the grid. Cached misse
 are reconsidered after new data arrives for that file; positive covers remain
 reusable. Repair rechecks authorization/source identity and leaves Telegram and
 the catalog unchanged.
-Unavailable returns `404 THUMBNAIL_UNAVAILABLE`; temporary capacity failure returns
-`503 THUMBNAIL_BUSY`, `Retry-After: 5`. See [generation limits](thumbnails.md).
+`204 No Content` means an optional thumbnail is unavailable and the client should
+keep its file icon. Missing originals and authorization failures retain their HTTP
+errors. Temporary thumbnail failures return `503 THUMBNAIL_BUSY`, `Retry-After: 5`. See [generation limits](thumbnails.md).
+
+**Thumbnail rebuild:** owner-only `GET /api/v1/settings/thumbnails/rebuild`
+returns the latest run. `POST` to that route requires `{"confirmed": true}` and
+returns **202** immediately, reusing an active run rather than starting duplicates.
+`POST /api/v1/settings/thumbnails/rebuild/cancel` stops it. Public demo sessions
+can read status but cannot start/cancel management work. Snapshots include `status`,
+`phase`, `total`, `processed`, `generated`, `skipped`, `failed`, `source_bytes`,
+current filename/read bytes and up to five recent issues. Byte counts include
+cache reads, not measured network traffic. See [rebuild policy](thumbnails.md#rebuild-existing-thumbnails).
 
 **Text:** allowlisted formats return at most 256 KiB with a truncation marker.
 HTML/XML stay text. UTF-8 (optional BOM) and BOM-marked UTF-16 are supported;
@@ -989,8 +999,10 @@ the descriptor may expose its XML. Ambiguous `.ts`/`.mts` require repeated MPEG
 packet evidence to become video; valid TypeScript and `.cts` remain source text.
 The source-byte cap does not bound all internal Telegram transfer bytes.
 
-**PDF:** at most 256 MiB source, 64 MiB fetched per opening, two simultaneous
-ranges up to 1 MiB with bounded pending work. Local PDF.js disables streaming and
+**PDF:** at most 256 MiB source, lazy reads with no cumulative session cap.
+At most two reader requests run together; HTTP ranges are up to 1 MiB. Active
+response buffers share a 64 MiB target; a larger request runs alone, bounded by
+source size. Pending work holds bounded descriptors. Local PDF.js disables streaming and
 full-file prefetch; closing aborts requests. Normal authorization, range cache and
 multipart mapping apply, without automatic background preparation. These are
 preview limits, not total browser-memory guarantees. A failed/limited preview
@@ -1133,7 +1145,9 @@ Existing records are visible; history already deleted before this feature
 cannot be reconstructed.
 
 The floating panel's **Clear finished** only dismisses browser display rows.
-It does not erase server history or stored files. Browser-only queued work is
+Dismissals survive reloads in the same browser; open tabs merge saved dismissals
+before polling/writing so a stale tab does not resurrect cleared rows. Server
+history and original files remain available. Browser-only queued work is
 not a durable server history record until a job exists.
 The floating panel only displays browser-initiated receipts; the global history
 continues to show server jobs initiated on other devices.
@@ -1262,7 +1276,9 @@ All these POST routes are owner-only.
 single-stream fallback. `true` forces one stream. Starting a URL import creates a
 job before contacting the source: authentication and destination errors remain
 HTTP errors, while DNS/response/size/storage checks run in that job. Its initial
-phase is `checking_source`. Snapshots may include `download_mode` of `queued`,
+phase is `checking_source`. Temporary failures use `source_retry_wait`,
+`retry_at`, `source_attempt` and `source_max_attempts` for a visible automatic retry.
+Snapshots may include `download_mode` of `queued`,
 `warm`, `full` or `waiting_storage`; queued/waiting intake has no completion ETA.
 See [URL intake](performance.md#url-import-intake) for exact bounds.
 

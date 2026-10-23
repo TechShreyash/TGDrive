@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   checkPdfSize,
-  MAX_PDF_SESSION_BYTES,
+  PDF_RANGE_BUFFER_BUDGET_BYTES,
   MAX_PDF_SOURCE_BYTES,
   PdfRangeReader,
 } from "./pdfRange";
@@ -140,25 +140,64 @@ describe("bounded PDF byte ranges", () => {
     expect(signals.every((signal) => signal.aborted)).toBe(true);
     await expect(reader.read(30, 40)).rejects.toThrow();
   });
-  it("counts earlier reads toward the session budget before starting more I/O", async () => {
-    const fetcher = ranged(MAX_PDF_SOURCE_BYTES);
+  it("keeps reading after 64 MiB of cumulative traffic", async () => {
+    const size = 2 * 1024 ** 2;
+    const fetcher = ranged(size);
     vi.stubGlobal("fetch", fetcher);
-    const reader = new PdfRangeReader("/file", MAX_PDF_SOURCE_BYTES);
-    await reader.read(0, 32);
-    await expect(reader.read(32, 32 + MAX_PDF_SESSION_BYTES)).rejects.toThrow(
-      "64 MiB reading limit",
-    );
-    expect(fetcher).toHaveBeenCalledOnce();
+    const reader = new PdfRangeReader("/file", size);
+    for (let index = 0; index < 66; index++)
+      expect((await reader.read(0, 1024 ** 2)).byteLength).toBe(1024 ** 2);
+    expect(fetcher).toHaveBeenCalledTimes(66);
     reader.close();
   });
-  it("rejects unbounded source sizes and cumulative session reads before fetch", async () => {
+  it.each([40 * 1024 ** 2, PDF_RANGE_BUFFER_BUDGET_BYTES + 1])(
+    "queues peers while a %s-byte active buffer owns the budget",
+    async (length) => {
+      const signals: AbortSignal[] = [];
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(
+          (_url, options) =>
+            new Promise((_resolve, reject) => {
+              const signal = options.signal as AbortSignal;
+              signals.push(signal);
+              signal.addEventListener("abort", () => reject(signal.reason), {
+                once: true,
+              });
+            }),
+        ),
+      );
+      const reader = new PdfRangeReader("/file", MAX_PDF_SOURCE_BYTES);
+      const pending = [reader.read(0, length), reader.read(0, 40 * 1024 ** 2)];
+      const results = Promise.allSettled(pending);
+      expect(signals).toHaveLength(1);
+      reader.close();
+      expect(
+        (await results).every((result) => result.status === "rejected"),
+      ).toBe(true);
+    },
+  );
+  it("releases active buffer claims after failures so queued requests proceed", async () => {
+    const length = 40 * 1024 ** 2;
+    const fetcher = vi.fn(async () => new Response(null, { status: 503 }));
+    vi.stubGlobal("fetch", fetcher);
+    const reader = new PdfRangeReader("/file", MAX_PDF_SOURCE_BYTES);
+    const results = await Promise.allSettled([
+      reader.read(0, length),
+      reader.read(0, length),
+    ]);
+    expect(results.every((result) => result.status === "rejected")).toBe(true);
+    expect(fetcher).toHaveBeenCalledTimes(2);
+    reader.close();
+  });
+  it("rejects invalid ranges and unbounded source sizes before fetch", async () => {
     const fetcher = vi.fn();
     vi.stubGlobal("fetch", fetcher);
     expect(() => checkPdfSize(MAX_PDF_SOURCE_BYTES + 1)).toThrow("256 MiB");
     expect(() => checkPdfSize(NaN)).toThrow("invalid size");
     const reader = new PdfRangeReader("/file", MAX_PDF_SOURCE_BYTES);
-    await expect(reader.read(0, MAX_PDF_SESSION_BYTES + 1)).rejects.toThrow(
-      "64 MiB reading limit",
+    await expect(reader.read(0, MAX_PDF_SOURCE_BYTES + 1)).rejects.toThrow(
+      "invalid byte range",
     );
     await expect(reader.read(-1, 20)).rejects.toThrow("invalid byte range");
     expect(fetcher).not.toHaveBeenCalled();

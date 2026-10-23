@@ -151,11 +151,12 @@ def _is_mpeg_transport_stream(data: bytes, mime_type: str | None) -> bool:
 
 @asynccontextmanager
 async def lease_media(
-    pool: Any, channel_id: int, message_id: int
+    pool: Any, channel_id: int, message_id: int, *, background: bool = False
 ) -> AsyncIterator[tuple[Any, Any, Any]]:
     """Release even when metadata fetch fails before response construction."""
 
-    lease = pool.lease(prefer_premium=True)
+    priority = {"priority": "preload", "download": True} if background else {}
+    lease = pool.lease(prefer_premium=True, **priority)
     client = await lease.__aenter__()
     try:
         try:
@@ -170,7 +171,7 @@ async def lease_media(
                 raise
             await lease.__aexit__(None, None, None)
             lease = None
-            replacement = pool.lease()
+            replacement = pool.lease(**priority)
             client = await replacement.__aenter__()
             lease = replacement
             message = await get_message(client, channel_id, message_id)

@@ -47,6 +47,8 @@ export interface Job {
   destination?: string;
   kind?: string;
   retry_at?: number | null;
+  source_attempt?: number;
+  source_max_attempts?: number;
   created_at?: number;
   started_at?: number | null;
   updated_at?: number;

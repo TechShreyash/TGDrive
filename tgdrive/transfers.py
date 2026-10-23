@@ -34,7 +34,13 @@ from tgdrive.errors import (
     TrashedItemError,
     ValidationError,
 )
-from tgdrive.remote import RemoteCancelled, RemoteClient, RemoteFileInfo, RemoteTooLarge
+from tgdrive.remote import (
+    REMOTE_MAX_ATTEMPTS,
+    RemoteCancelled,
+    RemoteClient,
+    RemoteFileInfo,
+    RemoteTooLarge,
+)
 from tgdrive.security import safe_name
 from tgdrive.staging import StorageUnavailable, check_staging
 from tgdrive.store import DriveStore
@@ -386,8 +392,14 @@ class TransferManager:
             admission_limit = await current_upload_limit(self.settings, self.pool)
             if self._check_upload_allowed is not None:
                 self._check_upload_allowed()
+            retry_not_before = record.context.get("source_retry_at", 0)
+            record.context["source_attempt"] = 1
             self.registry.update(
-                record.id, status=TransferStatus.RUNNING, phase="checking_source"
+                record.id,
+                status=TransferStatus.RUNNING,
+                phase="source_retry_wait"
+                if retry_not_before > time.time()
+                else "checking_source",
             )
             admitted = False
             source_size = None
@@ -397,6 +409,41 @@ class TransferManager:
                 nonlocal mode
                 mode = value
                 record.context["download_mode"] = value
+                if value == "queued" and record.phase == "source_retry_wait":
+                    record.context.pop("source_retry_at", None)
+                    self.registry.update(record.id, phase="checking_source", error=None)
+
+            def retry_scheduled(attempt: int, delay: float, error: Exception):
+                nonlocal admitted, source_size
+                admitted, source_size = False, None
+                # The remote client has drained writers and removed its partial
+                # file. Release the old claim before other jobs seek admission.
+                record.context.update(
+                    staging_size=0,
+                    staging_written=0,
+                    source_attempt=attempt,
+                    source_retry_at=time.time() + delay,
+                )
+                record.context.pop("download_mode", None)
+                self.registry.update(
+                    record.id,
+                    phase="source_retry_wait",
+                    current=0,
+                    total=0,
+                    error=None,
+                )
+                scheduler = getattr(self.remote, "scheduler", None)
+                if scheduler is not None:
+                    scheduler.refresh()
+                logger.info(
+                    "Source retry scheduled id=%s attempt=%s/%s "
+                    "error_type=%s retry_after_seconds=%.3f",
+                    record.id,
+                    attempt,
+                    REMOTE_MAX_ATTEMPTS,
+                    type(error).__name__,
+                    delay,
+                )
 
             def can_promote():
                 if source_size is None:
@@ -479,7 +526,10 @@ class TransferManager:
                 single_threaded=bool(record.context.get("single_threaded", False)),
                 can_promote=can_promote,
                 mode_changed=mode_changed,
+                retry=retry_scheduled,
+                retry_not_before=retry_not_before,
             )
+            record.context.pop("source_retry_at", None)
             await self._upload_path(
                 record,
                 result.path,

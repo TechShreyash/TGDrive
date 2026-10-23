@@ -132,6 +132,38 @@ export function safeNodes(data: unknown): Node[] {
   if (!Array.isArray(data)) throw new Error("The chapter could not be read.");
   return data.map((node) => visit(node, 0));
 }
+export function bookEntryLabel(entry: Entry, index: number): string {
+  if (!/\.(xhtml|html?)$/i.test(entry.label)) return entry.label;
+  if (index === 0 || /cover/i.test(entry.label)) return "Cover";
+  if (/wrap|spine/i.test(entry.label)) return "Illustration " + (index + 1);
+  return "Section " + (index + 1);
+}
+export function isIllustratedPage(nodes: Node[]): boolean {
+  let images = 0;
+  let textLength = 0;
+  const visit = (node: Node) => {
+    if (typeof node === "string") textLength += node.trim().length;
+    else {
+      if (node.tag === "img" && node.src) images++;
+      node.children.forEach(visit);
+    }
+  };
+  nodes.forEach(visit);
+  return images > 0 && textLength <= 80;
+}
+function readerPreferences() {
+  try {
+    const value = JSON.parse(
+      localStorage.getItem("tgdrive.reader.preferences") || "{}",
+    );
+    return {
+      font: [16, 18, 20, 22, 24].includes(value.font) ? Number(value.font) : 18,
+      typeface: value.typeface === "sans" ? "sans" : "serif",
+    };
+  } catch {
+    return { font: 18, typeface: "serif" };
+  }
+}
 function BookImage({ src, alt }: { src: string; alt: string }) {
   const [failed, setFailed] = useState(false);
   const [retry, setRetry] = useState(0);
@@ -176,7 +208,18 @@ export default function BookPreview({
   const [indexAttempt, setIndexAttempt] = useState(0);
   const [attempt, setAttempt] = useState(0);
   const [rtl, setRtl] = useState(false);
-  const [font, setFont] = useState(18);
+  const [font, setFont] = useState(() => readerPreferences().font);
+  const [typeface, setTypeface] = useState(() => readerPreferences().typeface);
+  useEffect(() => {
+    try {
+      localStorage.setItem(
+        "tgdrive.reader.preferences",
+        JSON.stringify({ font, typeface }),
+      );
+    } catch {
+      /* Reading works without persistence. */
+    }
+  }, [font, typeface]);
   const [fit, setFit] = useState<"width" | "page">("width");
   const content = useRef<HTMLDivElement>(null);
   const fragment = useRef("");
@@ -324,7 +367,7 @@ export default function BookPreview({
       >
         {book.entries.map((entry, i) => (
           <option key={i} value={entry.name}>
-            {entry.label}
+            {bookEntryLabel(entry, i)}
           </option>
         ))}
       </select>
@@ -373,36 +416,47 @@ export default function BookPreview({
               >
                 <Plus size={17} />
               </button>
-            </>
-          ) : (
-            <>
-              <label className="sr-only" htmlFor="comic-fit">
-                Page fit
-              </label>
-              <select
-                id="comic-fit"
-                value={fit}
-                onChange={(event) => setFit(event.target.value as typeof fit)}
-              >
-                <option value="width">Fit width</option>
-                <option value="page">Fit page</option>
-              </select>
-              <label className="book-direction">
-                <input
-                  type="checkbox"
-                  checked={rtl}
-                  onChange={(event) => setRtl(event.target.checked)}
-                />
-                Right to left
+              <label className="book-typeface-control">
+                Typeface
+                <select
+                  value={typeface}
+                  onChange={(event) => setTypeface(event.target.value)}
+                >
+                  <option value="serif">Serif</option>
+                  <option value="sans">Sans serif</option>
+                </select>
               </label>
             </>
-          )}{" "}
+          ) : null}
+          <>
+            <label className="sr-only" htmlFor="comic-fit">
+              Page fit
+            </label>
+            <select
+              id="comic-fit"
+              value={fit}
+              onChange={(event) => setFit(event.target.value as typeof fit)}
+            >
+              <option value="width">Fit width</option>
+              <option value="page">Fit page</option>
+            </select>
+            <label className="book-direction">
+              <input
+                type="checkbox"
+                checked={rtl}
+                onChange={(event) => setRtl(event.target.checked)}
+              />
+              Right to left
+            </label>
+          </>
         </div>
       </details>
     </div>
   );
   return (
-    <div className={"book-reader book-font-" + font}>
+    <div
+      className={"book-reader book-font-" + font + " book-typeface-" + typeface}
+    >
       {toolbarTarget && toolbar
         ? createPortal(toolbar, toolbarTarget)
         : toolbar}
@@ -455,7 +509,14 @@ export default function BookPreview({
           />
         )}
         {!error && !loading && book?.kind === "epub" && (
-          <article className="book-chapter">{nodes.map(render)}</article>
+          <article
+            className={
+              "book-chapter" +
+              (isIllustratedPage(nodes) ? " book-illustrated-page" : "")
+            }
+          >
+            {nodes.map(render)}
+          </article>
         )}
       </div>
     </div>

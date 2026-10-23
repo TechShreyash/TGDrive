@@ -16,7 +16,7 @@ These guides describe fresh TGDrive 2.0.0 deployments with MongoDB.
 | Keep my drive after hosting expires | [Move to a laptop or another server](operations.md#when-a-hosting-plan-expires) |
 | Offer a public demo with settings locked | [Public demo mode](configuration.md#public-demo-mode) |
 | Upload, browse, preview or share | [User guide](usage.md) |
-| Read ebooks/comics or understand covers | [Readers](reading.md) · [Thumbnails](thumbnails.md) |
+| Read ebooks/comics or understand covers | [Readers](reading.md) · [Thumbnails and rebuilds](thumbnails.md) |
 | Change settings or improve speed | [Configuration](configuration.md) · [Performance](performance.md) |
 | Restart, upgrade or fix a problem | [Operations](operations.md) |
 | Protect files or recover a drive | [Backup & recovery](backup-recovery.md) |

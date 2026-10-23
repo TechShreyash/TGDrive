@@ -141,13 +141,24 @@ For URL intake changes, the focused offline checks are:
 
 ```bash
 uv run --frozen --all-groups python -m pytest -W error \
-  tests/test_remote.py tests/test_transfers.py \
+  tests/test_remote.py tests/test_remote_ranges.py tests/test_remote_retries.py \
+  tests/test_remote_scheduler.py tests/test_transfers.py \
   tests/test_transfer_metrics.py tests/test_staging_admission.py -q
 ```
 
 These cover fake HTTP responses, staging admission, advisory progress versus
 durable state, cancellation and handoff to fake Telegram. They do not measure
 live download speed or confirm a deployment.
+
+For thumbnail regeneration and selective readers, focus on
+`tests/test_thumbnail_rebuild.py`, `tests/test_generated_thumbnails.py`,
+`tests/test_thumbnails.py`, `tests/test_books.py`, `tests/test_books_api.py` and
+`tests/test_multipart_previews.py`. The rebuild tests use generated images/books,
+a loopback range bridge and fake Telegram reads, including padded archives that
+must not be fetched in full. `tests/test_browser_thumbnail_rebuild.py` covers
+confirmation, progress/reload/cancellation and image-based EPUB manga fit/direction.
+These synthetic checks do not establish live Telegram throughput or universal
+codec/device support.
 
 <details>
 <summary>Full lint, tests, security and build checks</summary>

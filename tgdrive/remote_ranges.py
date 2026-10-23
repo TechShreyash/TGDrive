@@ -9,7 +9,7 @@ from dataclasses import dataclass
 from email.utils import parsedate_to_datetime
 from typing import TYPE_CHECKING, Any
 
-from aiohttp import ClientConnectionError, ClientPayloadError
+from aiohttp import ClientConnectionError, ClientPayloadError, ClientSSLError
 
 from tgdrive.remote import RemoteCancelled, RemoteError
 
@@ -98,7 +98,7 @@ def _retry_after(value: str | None) -> float:
     if value is not None:
         try:
             return max(0.0, float(int(value)))
-        except ValueError:
+        except (ValueError, OverflowError):
             try:
                 return max(0.0, parsedate_to_datetime(value).timestamp() - time.time())
             except (ValueError, TypeError, OverflowError):
@@ -193,6 +193,8 @@ async def download_ranges(
                 if length is not None and length.strip() != str(end - start):
                     raise RangeFallback(size)
                 await consume(response, start, end, exact=True)
+        except ClientSSLError:
+            raise
         except (ClientConnectionError, ClientPayloadError, TimeoutError) as error:
             raise RangeFallback(size) from error
         finally:
@@ -204,6 +206,14 @@ async def download_ranges(
             if prefix:
                 try:
                     await consume(initial, initial_offset, prefix_end, exact=False)
+                except ClientSSLError:
+                    raise
+                except (
+                    ClientConnectionError,
+                    ClientPayloadError,
+                    TimeoutError,
+                ) as error:
+                    raise RangeFallback(size) from error
                 finally:
                     await client._release_response(initial)
                 return

@@ -47,6 +47,9 @@ function policy(rate, ceilingMiB = 128, duration = 600) {
     getPosition() {
       return this.position;
     },
+    atomicGetBufferStart() {
+      return this.windowStart || 0;
+    },
     atomicIsStreaming() {
       return true;
     },
@@ -229,3 +232,24 @@ test("unknown versions and tampered original/patched bundles fail clearly", () =
     /was modified/,
   );
 });
+
+test(
+  "distant forward and backward seeks do not count the skipped file gap as buffered",
+  { timeout: 1000 },
+  async () => {
+    for (const offset of [3 * 1024 ** 3, 5 * 1024 ** 3]) {
+      const source = policy(8_000_000, 512, 734);
+      source.position = 67 * 1024 ** 2;
+      source.windowStart = offset;
+      source.bufferEnd = offset;
+      source.playbackPrefetchHeld = true;
+      await source.awaitPrefetchGate();
+      assert.equal(source.playbackPrefetchHeld, false);
+      source.position = offset + 1_000_000;
+      source.windowStart = 0;
+      source.bufferEnd = 0;
+      await source.awaitPrefetchGate();
+      assert.equal(source.playbackPrefetchHeld, false);
+    }
+  },
+);

@@ -310,6 +310,7 @@ export default function AdvancedVideo({
   );
   const [attempt, setAttempt] = useState(0);
   const [slow, setSlow] = useState(false);
+  const [waitSeconds, setWaitSeconds] = useState(0);
   const [showStatus, setShowStatus] = useState(false);
   const [playbackError, setPlaybackError] = useState("");
   const [transfer, setTransfer] = useState<VideoBufferSnapshot | null>(null);
@@ -346,6 +347,16 @@ export default function AdvancedVideo({
     document.addEventListener("fullscreenchange", update);
     return () => document.removeEventListener("fullscreenchange", update);
   }, []);
+  useEffect(() => {
+    setWaitSeconds(0);
+    if (state.phase === "ready") return;
+    const began = performance.now();
+    const timer = window.setInterval(
+      () => setWaitSeconds(Math.floor((performance.now() - began) / 1000)),
+      1000,
+    );
+    return () => clearInterval(timer);
+  }, [state.phase, attempt]);
   useEffect(() => {
     setSlow(false);
     if (state.phase === "ready") return;
@@ -487,6 +498,7 @@ export default function AdvancedVideo({
     setPlaybackError("");
     setTransfer(null);
     let lastTransferAt = 0;
+    let waitReceivedFrom = 0;
     const clearWaiting = () => {
       clearTimeout(waitingTimer);
       waitingTimer = undefined;
@@ -548,7 +560,10 @@ export default function AdvancedVideo({
         performance.now() - lastTransferAt >= 500
       ) {
         lastTransferAt = performance.now();
-        setTransfer(sample);
+        setTransfer({
+          ...sample,
+          received: Math.max(0, sample.received - waitReceivedFrom),
+        });
       }
       // Pinned Movi 0.4.1 can leave this documented CSS part at zero while
       // paused, even with a ready buffer. Paint its own public TimeRanges,
@@ -627,6 +642,8 @@ export default function AdvancedVideo({
       }
       if (kind === "waiting" && player?.paused) return;
       if (kind === "seeking" && player) {
+        if (!pendingSeek)
+          waitReceivedFrom = videoBufferSnapshot(player).received;
         pendingSeek = true;
         previousTime = Number.NaN;
         latestProgressAt = 0;
@@ -880,13 +897,19 @@ export default function AdvancedVideo({
                   <LoaderCircle size={18} aria-hidden="true" />
                 </span>
                 <span>{copy}</span>
+                {state.ready && waitSeconds > 0 && (
+                  <span className="advanced-wait-elapsed">{waitSeconds}s</span>
+                )}
               </div>
             )}
           </div>
           {!playbackError && transfer?.measured && (
             <div className="advanced-transfer" aria-live="off">
               <div className="advanced-transfer-network">
-                <span>{formatBytes(transfer.received)} received</span>
+                <span>
+                  {formatBytes(transfer.received)} received
+                  {state.phase === "seeking" ? " for this seek" : ""}
+                </span>
                 {transfer.bytesPerSecond > 0 && (
                   <span>{formatBytes(transfer.bytesPerSecond)}/s</span>
                 )}

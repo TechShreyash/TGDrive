@@ -101,10 +101,11 @@ def test_video_first_frame_fallback_after_unsuccessful_seek(monkeypatch, failure
             )
         return SimpleNamespace(returncode=0, stdout=cover)
 
+    monkeypatch.setattr(thumbnail_worker, "video_seek_time", lambda *_: "600")
     monkeypatch.setattr(thumbnail_worker.subprocess, "run", run)
     assert thumbnail_worker.render(Path("staged.mov"), ".mov") == cover
-    assert [command[command.index("-ss") + 1] for command, _ in calls] == ["1", "0"]
-    assert [timeout for _, timeout in calls] == [8, 3]
+    assert [command[command.index("-ss") + 1] for command, _ in calls] == ["600", "0"]
+    assert [timeout for _, timeout in calls] == [6, 3]
 
 
 def test_video_first_frame_fallback_remains_bounded(monkeypatch):
@@ -116,9 +117,10 @@ def test_video_first_frame_fallback_remains_bounded(monkeypatch):
         timeouts.append(kwargs["timeout"])
         raise subprocess.TimeoutExpired(command, kwargs["timeout"])
 
+    monkeypatch.setattr(thumbnail_worker, "video_seek_time", lambda *_: "600")
     monkeypatch.setattr(thumbnail_worker.subprocess, "run", run)
     assert thumbnail_worker.render(Path("staged.mov"), ".mov") == b""
-    assert timeouts == [8, 3]
+    assert timeouts == [6, 3]
 
 
 async def test_disguised_playlist_and_invalid_images_do_not_render(tmp_path):
@@ -199,3 +201,131 @@ async def test_native_upload_keeps_original_and_own_cover_when_thumbnail_is_opti
     assert published[-1].random_id == 22
     assert bool(published[-1].media.thumb) == (reject == "none")
     assert path.read_bytes() == original
+
+
+@pytest.mark.parametrize("kind", ["epub", "cbz", "cbr", "docx"])
+async def test_archive_cover_generation_is_bounded_and_preserves_original(
+    tmp_path, kind
+):
+    from book_samples import cbr, cbz, epub
+
+    if kind == "cbr":
+        try:
+            import libarchive  # noqa: F401
+        except (ImportError, OSError, AttributeError):
+            pytest.skip("Native libarchive is not installed")
+
+    if not shutil.which("ffmpeg"):
+        pytest.skip("native ffmpeg not installed")
+    if kind == "docx":
+        import io
+        from zipfile import ZipFile
+
+        archive = io.BytesIO()
+        with ZipFile(archive, "w") as output:
+            output.writestr("docProps/thumbnail.png", png())
+        original = archive.getvalue()
+    else:
+        original = epub() if kind == "epub" else cbr() if kind == "cbr" else cbz()
+    path = tmp_path / ("book." + kind)
+    path.write_bytes(original)
+    cover = await generate(path, path.name)
+    assert cover and cover.startswith(b"\xff\xd8\xff") and cover.endswith(b"\xff\xd9")
+    assert len(cover) <= MAX_BYTES
+    assert path.read_bytes() == original
+
+
+def test_large_jpeg_uses_decoder_downsampling_before_scaling(tmp_path, monkeypatch):
+    from tgdrive import thumbnail_worker
+
+    path = tmp_path / "large.jpg"
+    with path.open("wb") as source:
+        source.truncate(9 * 1024**2)
+    commands = []
+    cover = b"\xff\xd8\xffcover\xff\xd9"
+
+    def run(command, **kwargs):
+        commands.append(command)
+        return SimpleNamespace(returncode=0, stdout=cover)
+
+    monkeypatch.setattr(thumbnail_worker.subprocess, "run", run)
+    assert thumbnail_worker.render(path, ".jpg") == cover
+    assert commands[0][commands[0].index("-lowres") + 1] == "3"
+    assert commands[0].index("-lowres") < commands[0].index("-i")
+
+
+@pytest.mark.parametrize("duration", [60, 7200])
+@pytest.mark.parametrize("offset", [0, 10, 20])
+def test_video_thumbnail_chooses_middle_duration_with_bounded_probe(
+    monkeypatch, duration, offset
+):
+    from tgdrive import thumbnail_worker
+
+    def run(command, **kwargs):
+        assert command[0] == "ffprobe"
+        assert command[command.index("-f") + 1] == "mov"
+        assert command[command.index("-protocol_whitelist") + 1] == "file,pipe"
+        assert kwargs["timeout"] == 1.5
+        return SimpleNamespace(returncode=0, stdout=str(duration).encode())
+
+    monkeypatch.setattr(thumbnail_worker.subprocess, "run", run)
+    monkeypatch.setattr(thumbnail_worker.secrets, "randbelow", lambda limit: offset)
+    position = float(thumbnail_worker.video_seek_time(Path("staged.mov"), ".mov"))
+    assert position == duration * (40 + offset) / 100
+    assert duration * 0.4 <= position <= duration * 0.6
+
+
+@pytest.mark.parametrize("duration", [b"N/A", b"nan", b"inf", b"-1", b"0"])
+def test_video_unknown_duration_uses_safe_seek_fallback(monkeypatch, duration):
+    from tgdrive import thumbnail_worker
+
+    monkeypatch.setattr(
+        thumbnail_worker.subprocess,
+        "run",
+        lambda *_, **__: SimpleNamespace(returncode=0, stdout=duration),
+    )
+    assert thumbnail_worker.video_seek_time(Path("staged.mov"), ".mov") == "10"
+
+
+async def test_audio_embedded_artwork_generates_cover_without_altering_audio(tmp_path):
+    if not shutil.which("ffmpeg"):
+        pytest.skip("native encoder unavailable")
+    image = tmp_path / "cover.png"
+    image.write_bytes(png())
+    audio = tmp_path / "music.flac"
+    encoded = await asyncio.to_thread(
+        subprocess.run,
+        [
+            "ffmpeg",
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-f",
+            "lavfi",
+            "-i",
+            "anullsrc=r=8000:cl=mono",
+            "-i",
+            str(image),
+            "-map",
+            "0:a",
+            "-map",
+            "1:v",
+            "-t",
+            "1",
+            "-c:a",
+            "flac",
+            "-c:v",
+            "png",
+            "-disposition:v",
+            "attached_pic",
+            str(audio),
+        ],
+        capture_output=True,
+        timeout=15,
+        check=False,
+    )
+    assert encoded.returncode == 0, encoded.stderr
+    original = audio.read_bytes()
+    cover = await generate(audio, audio.name)
+    assert cover and cover.startswith(b"\xff\xd8\xff")
+    assert audio.read_bytes() == original

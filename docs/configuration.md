@@ -119,6 +119,10 @@ An apply failure attempts rollback and reports if a restart is still needed.
 | Concurrent preloads | 2 | Manual/automatic jobs; consider 1 on a constrained server. |
 | Preload during playback | On | Warm bounded upcoming original audio/video. Downloads do not start extra warming. |
 
+**Regenerate all thumbnails** refreshes existing file covers in the background
+after confirmation. New uploads generate them automatically. See
+[progress, bandwidth and rebuild limits](thumbnails.md#rebuild-existing-thumbnails).
+
 Clearing/expiring cache keeps Telegram originals and MongoDB metadata.
 Active-stream RAM and upload staging have separate budgets but share host resources.
 Disabling playback warming retains requested-range read-ahead and manual

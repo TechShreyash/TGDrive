@@ -3,7 +3,10 @@ import { readBoundedResponse } from "./previewIO";
 // PDF.js ChunkedStream allocates new Uint8Array(length), even in range mode.
 // Bound its source buffer as well as fetched data and visible-page rendering.
 export const MAX_PDF_SOURCE_BYTES = 256 * 1024 ** 2;
-export const MAX_PDF_SESSION_BYTES = 64 * 1024 ** 2;
+// Bound buffers held by active requests, not all bytes read during an opening.
+// PDF.js itself retains its source buffer; a cumulative cap prevents valid large
+// documents from opening even when very few HTTP bytes have arrived.
+export const PDF_RANGE_BUFFER_BUDGET_BYTES = 64 * 1024 ** 2;
 export const PDF_RANGE_CHUNK_BYTES = 64 * 1024;
 const HTTP_RANGE_BYTES = 1024 ** 2;
 // PDF.js can fan out page-tree metadata reads before any pages render.
@@ -56,19 +59,12 @@ export class PdfRangeReader {
       return Promise.reject(
         new Error("The PDF requested an invalid byte range."),
       );
-    if (this.reserved + end - begin > MAX_PDF_SESSION_BYTES)
-      return Promise.reject(
-        new Error(
-          "This preview has reached its 64 MiB reading limit to protect browser memory. Download the original to continue reading the complete PDF.",
-        ),
-      );
     if (this.queue.length >= MAX_QUEUED_RANGES)
       return Promise.reject(
         new Error(
           "This PDF requires too many simultaneous reads. Download the original instead.",
         ),
       );
-    this.reserved += end - begin;
     return new Promise((resolve, reject) => {
       this.queue.push({ begin, end, resolve, reject });
       this.pump();
@@ -85,12 +81,23 @@ export class PdfRangeReader {
 
   private pump(): void {
     while (!this.stopped && this.active < 2 && this.queue.length) {
-      const job = this.queue.shift()!;
+      const job = this.queue[0];
+      const length = job.end - job.begin;
+      // One PDF.js metadata request may span most of a valid document. Run
+      // that request alone rather than rejecting it or allocating peers too.
+      if (
+        this.active > 0 &&
+        this.reserved + length > PDF_RANGE_BUFFER_BUDGET_BYTES
+      )
+        break;
+      this.queue.shift();
       this.active += 1;
+      this.reserved += length;
       void this.fetchRange(job.begin, job.end)
         .then(job.resolve, job.reject)
         .finally(() => {
           this.active -= 1;
+          this.reserved -= length;
           this.pump();
         });
     }

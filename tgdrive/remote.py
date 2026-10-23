@@ -5,12 +5,14 @@ from __future__ import annotations
 import asyncio
 import inspect
 import ipaddress
+import logging
 import mimetypes
 import os
 import re
 import shutil
 import socket
 import tempfile
+import time
 from collections.abc import Awaitable, Callable, Mapping
 from contextvars import ContextVar
 from dataclasses import dataclass
@@ -28,6 +30,8 @@ if TYPE_CHECKING:
 
 DEFAULT_MAX_BYTES = 4 * 1024 * 1024 * 1024
 DEFAULT_CHUNK_SIZE = 1024 * 1024
+REMOTE_MAX_ATTEMPTS = 4
+logger = logging.getLogger(__name__)
 _REDIRECT_STATUSES = frozenset({301, 302, 303, 307, 308})
 _CONTENT_RANGE_RE = re.compile(r"^bytes\s+\d+-\d+/(\d+|\*)$", re.IGNORECASE)
 _UNSAFE_FILENAME_CHARS = re.compile(r'[<>:"/\\|?*\x00-\x1f\x7f]')
@@ -58,14 +62,25 @@ class TooManyRedirects(RemoteError):
 
 
 class RemoteHTTPError(RemoteError):
-    def __init__(self, status: int, url: str) -> None:
+    def __init__(
+        self, status: int, url: str, *, retry_after: str | None = None
+    ) -> None:
         self.status = status
         self.url = url
+        self.retry_after = retry_after
         super().__init__(f"remote server returned HTTP {status}")
 
 
 class RemoteProtocolError(RemoteError):
     """The response cannot safely represent the requested file."""
+
+
+class RemoteIncompleteResponse(RemoteProtocolError):
+    """A known-length response ended before all promised bytes arrived."""
+
+
+class RemoteRetriesExhausted(RemoteError):
+    """A bounded source-retrieval retry cycle has failed."""
 
 
 class RemoteTooLarge(RemoteError):
@@ -89,6 +104,28 @@ class RemoteDestinationExists(RemoteError):
 
 
 ProgressCallback: TypeAlias = Callable[[int, int | None], Awaitable[None] | None]
+RetryCallback: TypeAlias = Callable[[int, float, Exception], Awaitable[None] | None]
+
+
+def source_retryable(error: Exception) -> bool:
+    # Invalid URLs, unsafe redirects, certificate failures, size/storage errors
+    # and permanent HTTP responses must not become automatic request loops.
+    if isinstance(error, aiohttp.ClientSSLError):
+        return False
+    if isinstance(error, RemoteHTTPError):
+        return error.status in {408, 429, 500, 502, 503, 504}
+    return isinstance(
+        error,
+        (
+            aiohttp.ClientConnectionError,
+            aiohttp.ClientPayloadError,
+            ConnectionError,
+            TimeoutError,
+            RemoteResolutionError,
+            RemoteTimeout,
+            RemoteIncompleteResponse,
+        ),
+    )
 
 
 class HTTPSessionLike(Protocol):
@@ -361,68 +398,94 @@ class RemoteClient:
         single_threaded: bool = False,
         can_promote: Callable[[], bool] | None = None,
         mode_changed: Callable[[str], None] | None = None,
+        retry: RetryCallback | None = None,
+        retry_not_before: float = 0,
     ) -> DownloadResult:
-        """Retrieve original bytes, falling back once if ranges are unsuitable."""
+        """Retry temporary source failures within one shared operation budget."""
+        from tgdrive.remote_ranges import RangeFallback, _retry_after
 
+        parallel = not single_threaded
         try:
             async with asyncio.timeout(self.timeouts.total):
-                async with self.scheduler.admit(
-                    lambda wait: self._cancelable(wait, cancel_event),
-                    can_promote,
-                    mode_changed,
-                ) as ticket:
-                    token = self._download_ticket.set(ticket)
+                if retry_not_before:
+                    await self._wait_for_retry(
+                        max(0, retry_not_before - time.time()), cancel_event
+                    )
+                for attempt in range(1, REMOTE_MAX_ATTEMPTS + 1):
+                    self._raise_if_cancelled(cancel_event)
+                    failure = None
                     try:
-                        return await self._download_with_fallback(
-                            url,
-                            Path(output_dir),
-                            filename=filename,
-                            overwrite=overwrite,
-                            cancel_event=cancel_event,
-                            progress=progress,
-                            max_bytes=max_bytes,
-                            single_threaded=single_threaded,
+                        async with self.scheduler.admit(
+                            lambda wait: self._cancelable(wait, cancel_event),
+                            can_promote,
+                            mode_changed,
+                        ) as ticket:
+                            token = self._download_ticket.set(ticket)
+                            try:
+                                return await self._download(
+                                    url,
+                                    Path(output_dir),
+                                    filename=filename,
+                                    overwrite=overwrite,
+                                    cancel_event=cancel_event,
+                                    progress=progress,
+                                    max_bytes=self.max_bytes
+                                    if max_bytes is None
+                                    else max_bytes,
+                                    parallel=parallel,
+                                )
+                            finally:
+                                self._download_ticket.reset(token)
+                    except RangeFallback as error:
+                        # The initial full response can also break while ranges
+                        # are running. All remaining attempts stay single-stream.
+                        parallel = False
+                        failure = error
+                        delay = error.retry_after
+                        if delay or (
+                            error.__cause__ is not None
+                            and source_retryable(error.__cause__)
+                        ):
+                            delay = max(2.0**attempt, delay)
+                    except Exception as error:
+                        if not source_retryable(error):
+                            raise
+                        parallel = False
+                        failure = error
+                        delay = 2.0**attempt
+                        if (
+                            isinstance(error, RemoteHTTPError)
+                            and error.retry_after is not None
+                        ):
+                            delay = max(delay, _retry_after(error.retry_after))
+                    if attempt == REMOTE_MAX_ATTEMPTS:
+                        raise RemoteRetriesExhausted(
+                            "Source download failed after 4 attempts. "
+                            "Try again later or use another source link."
+                        ) from failure
+                    self._raise_if_cancelled(cancel_event)
+                    # The failed response/file and scheduler slot are released
+                    # before callbacks or backoff can block another download.
+                    if retry is not None:
+                        result = retry(attempt + 1, delay, failure)
+                        if inspect.isawaitable(result):
+                            await result
+                    else:
+                        logger.info(
+                            "Source retry scheduled attempt=%s/%s error_type=%s "
+                            "retry_after_seconds=%.3f",
+                            attempt + 1,
+                            REMOTE_MAX_ATTEMPTS,
+                            type(failure).__name__,
+                            delay,
                         )
-                    finally:
-                        self._download_ticket.reset(token)
+                    await self._wait_for_retry(delay, cancel_event)
         except TimeoutError as error:
             raise RemoteTimeout("remote download timed out") from error
+        raise AssertionError("remote retry loop exhausted unexpectedly")
 
-    async def _download_with_fallback(
-        self,
-        url,
-        output_dir,
-        *,
-        filename,
-        overwrite,
-        cancel_event,
-        progress,
-        max_bytes,
-        single_threaded,
-    ):
-        from tgdrive.remote_ranges import RangeFallback
-
-        for parallel in (not single_threaded, False):
-            try:
-                return await self._download(
-                    url,
-                    output_dir,
-                    filename=filename,
-                    overwrite=overwrite,
-                    cancel_event=cancel_event,
-                    progress=progress,
-                    max_bytes=self.max_bytes if max_bytes is None else max_bytes,
-                    parallel=parallel,
-                )
-            except RangeFallback as error:
-                if not parallel:
-                    raise
-                await self._report_progress(progress, 0, error.size)
-                if error.retry_after:
-                    await self._cancelable(
-                        asyncio.sleep(error.retry_after), cancel_event
-                    )
-        raise AssertionError("remote fallback exhausted unexpectedly")
+    async def _wait_for_retry(self, delay: float, cancel_event) -> None:
+        await self._cancelable(asyncio.sleep(delay), cancel_event)
 
     async def _inspect(
         self,
@@ -439,7 +502,11 @@ class RemoteClient:
                 cancel_event=cancel_event,
             )
             if response.status not in (200, 206):
-                raise RemoteHTTPError(response.status, final_url)
+                raise RemoteHTTPError(
+                    response.status,
+                    final_url,
+                    retry_after=self._header(response.headers, "Retry-After"),
+                )
             self._require_identity_encoding(response.headers)
             size = self._declared_size(response.status, response.headers)
             self._enforce_size(size)
@@ -481,7 +548,11 @@ class RemoteClient:
                 cancel_event=cancel_event,
             )
             if response.status != 200:
-                raise RemoteHTTPError(response.status, final_url)
+                raise RemoteHTTPError(
+                    response.status,
+                    final_url,
+                    retry_after=self._header(response.headers, "Retry-After"),
+                )
             self._require_identity_encoding(response.headers)
             declared_size = self._declared_size(response.status, response.headers)
             self._enforce_size(declared_size, max_bytes)
@@ -553,7 +624,12 @@ class RemoteClient:
                 await self._report_progress(progress, downloaded, declared_size)
 
             if declared_size is not None and downloaded != declared_size:
-                raise RemoteProtocolError(
+                error_type = (
+                    RemoteIncompleteResponse
+                    if downloaded < declared_size
+                    else RemoteProtocolError
+                )
+                raise error_type(
                     f"remote stream ended at {downloaded} of {declared_size} bytes"
                 )
 

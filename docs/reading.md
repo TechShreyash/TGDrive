@@ -9,14 +9,22 @@ original available if previewing fails.
 
 | Format | Controls | Fetching |
 | --- | --- | --- |
-| PDF, up to 256 MiB | Scroll, zoom, fit, selectable text | Visible-page ranges, up to 64 MiB per opening. |
-| EPUB | Chapters, text size | Metadata, selected chapter and raster images. |
+| PDF, up to 256 MiB | Scroll, zoom, fit, selectable text | Lazy byte ranges; no cumulative reading cap. |
+| EPUB | Chapters, text size/typeface, image-page fit, right-to-left | Metadata, selected chapter and raster images. |
 | CBZ / CBR | Pages, fit, right-to-left | Selected image; solid RAR may also need earlier compressed entries. |
 
-EPUB/comics remember your place in this browser for up to 50 books. Use
+EPUB/comics remember your place in this browser for up to 50 books. EPUB text uses
+a narrower serif reading column by default; **Reading options** remembers your
+text size and serif/sans-serif choice in this browser. Generated resource filenames
+appear as readable cover, illustration or section labels. Use
 **Reading options** for text size or comic fit/direction, and **Enter Fullscreen**
 where supported. Arrow keys navigate while focused; right-to-left mode reverses
 them. Escape or browser Back closes the reader.
+
+Image-based manga works in EPUB and CBZ. Image-only EPUB chapters use the page-fit
+controls instead of the prose column. Choose **Fit width** for readable panels or
+**Fit page** for a whole page, and enable **Right to left** for reversed arrow-key
+navigation. The archive/spine order stays unchanged.
 
 <details>
 <summary>Reader screenshot — placeholder</summary>
@@ -33,7 +41,7 @@ book. Small files may fit in one fetched block; solid RAR can require earlier
 entries. Byte savings vary.
 
 EPUB supports passive text, tables and raster images in TGDrive's theme.
-Publisher scripts/styles, remote resources, fixed layouts, SVG illustrations,
+Publisher scripts/styles, remote resources, exact fixed layouts, SVG illustrations,
 interactive features and DRM/encryption (including encrypted font metadata) are
 unsupported. Comics accept PNG/JPEG/GIF/WebP/AVIF when the browser can decode them;
 password-protected archives are unsupported.
@@ -42,6 +50,18 @@ password-protected archives are unsupported.
 <summary>Reader limits and container dependencies</summary>
 
 ## Reader limits
+
+EPUB chapters containing images and at most 80 characters of surrounding text
+use the illustrated-page layout. More complex publisher layouts can differ.
+
+PDF.js retains a source buffer up to the **256 MiB** file limit. HTTP requests are
+split into at most **1 MiB** ranges, with at most **two** reader requests active.
+Combined active response buffers normally stay within **64 MiB**. A larger
+PDF.js metadata request may run alone, bounded by the accepted source size;
+queued requests hold descriptors rather than response buffers. Buffer claims are
+released after each success/failure. Reading more than 64 MiB over time does not
+close the document. Canvas/page/text budgets still apply; complex PDFs can be
+slow or exceed device memory. These are bounds, not a fixed RAM reservation.
 
 | Bound | Limit |
 | --- | --- |

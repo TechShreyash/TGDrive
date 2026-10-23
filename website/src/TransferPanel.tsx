@@ -914,7 +914,7 @@ function TransferRow({
     deviceStage && !needsDeviceUpload(item) && item.state !== "cancelled";
   const checkingSource =
     item.kind === "remote" &&
-    item.stage === "checking_source" &&
+    ["checking_source", "source_retry_wait"].includes(item.stage || "") &&
     item.state === "uploading";
   const sourceWaiting =
     checkingSource &&
@@ -1210,7 +1210,12 @@ export function TransferMetrics({
   const meter = transferProgress(item);
   const remaining =
     ["receiving", "uploading"].includes(item.state) &&
-    !["queued", "retry_wait", "waiting_for_telegram"].includes(item.stage || "")
+    ![
+      "queued",
+      "retry_wait",
+      "source_retry_wait",
+      "waiting_for_telegram",
+    ].includes(item.stage || "")
       ? remainingBytesHint(meter.current, meter.total)
       : "";
   return (
@@ -1233,7 +1238,11 @@ export function TransferMetrics({
         <span className="transfer-timing-state">No recent progress</span>
       )}
       {details.timing === "waiting" && (
-        <span className="transfer-timing-state">Waiting for Telegram</span>
+        <span className="transfer-timing-state">
+          {item.stage === "source_retry_wait"
+            ? "Waiting to retry source"
+            : "Waiting for Telegram"}
+        </span>
       )}
       {details.timing === "finishing" && (
         <span className="transfer-timing-state">Finishing this stage…</span>

@@ -130,7 +130,9 @@ export function transferDetails(item: ProgressTransfer, now: number) {
       : undefined;
   const timing =
     item.state === "uploading" &&
-    ["retry_wait", "waiting_for_telegram"].includes(item.stage || "")
+    ["retry_wait", "source_retry_wait", "waiting_for_telegram"].includes(
+      item.stage || "",
+    )
       ? "waiting"
       : (item.state === "receiving" && item.stage === "confirming") ||
           (item.state === "uploading" &&

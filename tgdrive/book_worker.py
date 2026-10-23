@@ -483,7 +483,7 @@ def read_book(source, fmt, entry=None):
     source.seek(0)
     try:
         import libarchive
-    except (ImportError, OSError) as exc:
+    except (ImportError, OSError, AttributeError) as exc:
         raise BookError(
             "CBR support needs libarchive. "
             "Use the TGDrive Docker image or install libarchive."
@@ -553,9 +553,31 @@ def run():
         return base64.b64decode(reply["data"], validate=True)
 
     try:
-        result = read_book(
-            RemoteFile(request["size"], fetch), request["format"], request.get("entry")
-        )
+        source = RemoteFile(request["size"], fetch)
+        if request.get("thumbnail") and request["format"] in {
+            "epub",
+            "cbz",
+            "docx",
+            "pptx",
+            "xlsx",
+            "odt",
+            "odp",
+            "ods",
+        }:
+            from tgdrive.thumbnail_worker import archive_cover_from_source
+
+            cover = archive_cover_from_source(source, "." + request["format"])
+            result = (
+                {"kind": "missing"}
+                if cover is None
+                else {
+                    "kind": "image",
+                    "mime": image_type(cover[0]),
+                    "data": base64.b64encode(cover[0]).decode(),
+                }
+            )
+        else:
+            result = read_book(source, request["format"], request.get("entry"))
         print(json.dumps({"result": result}), flush=True)
     except Exception as exc:
         message = (

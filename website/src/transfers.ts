@@ -269,27 +269,39 @@ export function fromJob(job: Job, previousKind?: string): Partial<Transfer> {
               ? "Deleting from Telegram"
               : job.phase === "backup_pending"
                 ? "Securing your drive backup in Telegram"
-                : job.phase === "retry_wait"
-                  ? "Waiting for Telegram; retry scheduled"
-                  : ["checking_source", "downloading"].includes(job.phase) &&
-                      job.download_mode === "waiting_storage"
-                    ? "Waiting for temporary storage"
-                    : job.phase === "checking_source" &&
-                        job.download_mode === "queued"
-                      ? "Waiting for a source connection"
-                      : job.phase === "checking_source"
-                        ? job.status === "queued"
-                          ? "Waiting to check source"
-                          : "Checking source…"
-                        : job.phase === "downloading"
-                          ? job.download_mode === "warm"
-                            ? "Queued · receiving slowly"
-                            : "Downloading from URL"
-                          : job.phase === "finalizing"
-                            ? "Publishing to the channel"
-                            : job.status === "queued"
-                              ? "Queued for Telegram"
-                              : "Uploading to Telegram";
+                : job.phase === "source_retry_wait"
+                  ? "Source interrupted · retrying automatically in " +
+                    Math.max(
+                      0,
+                      Math.ceil(
+                        (job.retry_at || Date.now() / 1000) - Date.now() / 1000,
+                      ),
+                    ) +
+                    "s · attempt " +
+                    (job.source_attempt || 2) +
+                    " of " +
+                    (job.source_max_attempts || 4)
+                  : job.phase === "retry_wait"
+                    ? "Waiting for Telegram; retry scheduled"
+                    : ["checking_source", "downloading"].includes(job.phase) &&
+                        job.download_mode === "waiting_storage"
+                      ? "Waiting for temporary storage"
+                      : job.phase === "checking_source" &&
+                          job.download_mode === "queued"
+                        ? "Waiting for a source connection"
+                        : job.phase === "checking_source"
+                          ? job.status === "queued"
+                            ? "Waiting to check source"
+                            : "Checking source…"
+                          : job.phase === "downloading"
+                            ? job.download_mode === "warm"
+                              ? "Queued · receiving slowly"
+                              : "Downloading from URL"
+                            : job.phase === "finalizing"
+                              ? "Publishing to the channel"
+                              : job.status === "queued"
+                                ? "Queued for Telegram"
+                                : "Uploading to Telegram";
   if (
     state === "uploading" &&
     job.status === "running" &&
@@ -459,6 +471,7 @@ export class TransferManager {
       this.recoveryWarning =
         "Your browser could not load transfer recovery information. Keep this tab open until device transfers finish.";
     }
+    this.mergeDismissed();
   }
   subscribe = (listener: () => void) => {
     this.listeners.add(listener);
@@ -533,7 +546,35 @@ export class TransferManager {
     // A poll started before this retry must be followed by a fresh request.
     this.refreshJobs();
   }
+  private mergeDismissed() {
+    try {
+      const saved: unknown = JSON.parse(
+        localStorage.getItem("tgdrive.dismissed-jobs.v1") || "[]",
+      );
+      if (Array.isArray(saved))
+        for (const id of saved)
+          if (typeof id === "string") this.dismissed.add(id);
+      this.dismissed = new Set([...this.dismissed].slice(-1000));
+    } catch {
+      /* Keep in-memory dismissals when browser storage is unavailable. */
+    }
+    const unfinished = new Set(
+      this.items
+        .filter((item) => !["completed", "cancelled"].includes(item.state))
+        .map(transferBatchId),
+    );
+    this.items = this.items.filter(
+      (item) =>
+        !item.jobId ||
+        !this.dismissed.has(item.jobId) ||
+        !["completed", "cancelled"].includes(item.state) ||
+        unfinished.has(transferBatchId(item)),
+    );
+  }
   private publish(persist = true) {
+    // Another TGDrive tab can clear finished rows while this controller is
+    // still polling. Merge before writing so it cannot erase those dismissals.
+    this.mergeDismissed();
     const now = Date.now();
     if (this.enabled && !this.admissionPaused)
       this.batchProgress.observe(summarizeBatches(this.items, now), now);
@@ -1037,12 +1078,6 @@ export class TransferManager {
     for (const item of this.items)
       if (item.jobId && ["completed", "cancelled"].includes(item.state))
         this.dismissed.add(item.jobId);
-    try {
-      localStorage.setItem(
-        "tgdrive.dismissed-jobs.v1",
-        JSON.stringify([...this.dismissed].slice(-1000)),
-      );
-    } catch {}
     const unfinished = new Set(
       this.items
         .filter((item) => !["completed", "cancelled"].includes(item.state))
@@ -1675,6 +1710,7 @@ export class TransferManager {
         )
       )
         filesChanged = true;
+      this.mergeDismissed();
       const clearedKeys = new Set<string>();
       for (const job of payload.jobs) {
         // Deletions are a single file-operation notice, never upload transfers.

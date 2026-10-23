@@ -143,3 +143,21 @@ def cbr():
         output += header(0x74, 0x8000, fields) + data
     output += header(0x7B, 0)
     return bytes(output)
+
+
+def manga_epub():
+    """A two-page image-based EPUB using the same generated panels as CBZ."""
+    output = io.BytesIO()
+    with (
+        ZipFile(io.BytesIO(epub())) as original,
+        ZipFile(output, "w", ZIP_STORED) as archive,
+    ):
+        for info in original.infolist():
+            content = original.read(info.filename)
+            if info.filename in {"OPS/one.xhtml", "OPS/two.xhtml"}:
+                content = (
+                    b'<html xmlns="http://www.w3.org/1999/xhtml"><body><div><img '
+                    b'src="images/page.png" alt="Manga page"/></div></body></html>'
+                )
+            archive.writestr(info.filename, content)
+    return output.getvalue()

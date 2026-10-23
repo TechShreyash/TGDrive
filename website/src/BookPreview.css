@@ -57,9 +57,9 @@
   overscroll-behavior: contain;
 }
 .book-chapter {
-  max-width: 70ch;
+  max-width: min(64ch, 760px);
   margin: 0 auto;
-  line-height: 1.75;
+  line-height: 1.7;
   overflow-wrap: anywhere;
 }
 .book-chapter :is(h1, h2, h3, h4, h5, h6) {
@@ -268,4 +268,65 @@
   .book-toolbar .icon-button {
     flex: 0 0 44px;
   }
+}
+
+.book-typeface-serif .book-chapter {
+  font-family: Georgia, "Times New Roman", serif;
+}
+.book-chapter > :first-child {
+  margin-block-start: 0;
+}
+.book-chapter :is(h1, h2, h3) {
+  text-wrap: balance;
+  font-weight: 600;
+}
+.book-chapter h2 {
+  font-size: 1.45em;
+}
+.book-chapter h3 {
+  font-size: 1.15em;
+}
+.book-chapter p {
+  margin-block: 1em;
+}
+.book-chapter .book-reference:has(img) {
+  display: inline-block;
+  vertical-align: middle;
+}
+.book-chapter .book-reference img {
+  margin: 0;
+}
+.book-chapter img {
+  max-height: 80dvh;
+  object-fit: contain;
+}
+.book-typeface-control {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+}
+.book-typeface-control select {
+  flex: 1;
+}
+
+/* Image-only EPUB chapters use the same page fit as comic archives. */
+.book-chapter.book-illustrated-page {
+  max-width: 1100px;
+}
+.book-illustrated-page :is(p, div, figure) {
+  margin: 0;
+}
+.book-fit-width .book-illustrated-page img {
+  width: 100%;
+  max-height: none;
+  height: auto;
+  margin: 0 auto;
+}
+.book-fit-page .book-illustrated-page img {
+  width: auto;
+  max-width: 100%;
+  max-height: calc(100dvh - 180px);
+  height: auto;
+  margin: 0 auto;
 }

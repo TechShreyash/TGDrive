@@ -225,8 +225,8 @@ def test_missing_or_unsafe_thumbnail_is_small_cached_fallback(app_client, conten
     login(client)
     for _ in range(2):
         response = client.get("/api/v1/thumbnail", params={"path": path})
-        assert response.status_code == 404
-        assert response.json()["code"] == "THUMBNAIL_UNAVAILABLE"
+        assert response.status_code == 204
+        assert response.content == b""
     assert account.reads == 1
 
 

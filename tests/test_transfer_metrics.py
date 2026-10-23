@@ -276,3 +276,19 @@ def test_waiting_url_does_not_extrapolate_a_completion_eta(clock, mode):
     registry.update(record.id, current=50)
     assert record.as_dict()["eta_seconds"] == 2
     assert "download_mode" not in record.as_dict()
+
+
+def test_source_retry_status_exposes_its_deadline_without_telegram_eta(clock):
+    registry = TransferRegistry()
+    record = running(registry)
+    record.context.update(source_attempt=2, source_retry_at=clock.now + 4)
+    registry.update(record.id, phase="source_retry_wait", current=0)
+    snapshot = record.as_dict()
+    assert snapshot["source_attempt"] == 2
+    assert snapshot["source_max_attempts"] == 4
+    assert snapshot["retry_at"] == clock.now + 4
+    assert snapshot["speed_bytes_per_second"] is None
+    assert snapshot["eta_seconds"] is None
+    registry.update(record.id, phase="uploading")
+    assert record.as_dict()["retry_at"] is None
+    assert "source_attempt" not in record.as_dict()
