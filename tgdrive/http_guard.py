@@ -346,7 +346,7 @@ class SecurityHeadersMiddleware:
                     "script-src 'self' 'wasm-unsafe-eval'; worker-src 'self' blob:; "
                     "style-src 'self'; style-src-elem 'self'; "
                     "style-src-attr 'unsafe-inline'; "
-                    "img-src 'self' data:; media-src 'self' blob:; "
+                    "img-src 'self' data: blob:; media-src 'self' blob:; "
                     # Movi's worker fetches generated JPEG data URLs for local
                     # frame/poster conversion. This permits in-memory bytes,
                     # without allowing another network origin or script source.

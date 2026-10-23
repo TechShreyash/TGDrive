@@ -4,10 +4,13 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import hashlib
 import json
 import os
 import sys
-from contextlib import suppress
+import time
+from collections import OrderedDict
+from contextlib import asynccontextmanager, suppress
 from pathlib import Path, PurePath
 
 from fastapi import HTTPException
@@ -21,6 +24,9 @@ from tgdrive.ranges import ByteRange, plan_telegram_chunks
 BLOCK = 1024 * 1024
 MAX_READ = 32 * BLOCK
 MAX_OUTPUT = 24 * BLOCK
+MAX_PAGE = 64 * BLOCK
+MAX_PAGE_READ = 96 * BLOCK
+RASTER_TYPES = {"image/png", "image/jpeg", "image/gif", "image/webp", "image/avif"}
 PROJECT_ROOT = str(Path(__file__).resolve().parent.parent)
 
 
@@ -87,7 +93,7 @@ async def read_range(pool, channel, data, start, count, authorize, *, background
     return bytes(result)
 
 
-async def parse_book(data, fetch, entry=None, *, thumbnail=False):
+async def parse_book(data, fetch, entry=None, *, thumbnail=False, raw_images=False):
     fmt = PurePath(data["name"]).suffix.lower().lstrip(".")
     if fmt not in (
         {"epub", "cbz", "cbr", "docx", "pptx", "xlsx", "odt", "odp", "ods"}
@@ -114,6 +120,13 @@ async def parse_book(data, fetch, entry=None, *, thumbnail=False):
         env=environment,
         limit=MAX_OUTPUT,
     )
+    raster = (
+        raw_images
+        and not thumbnail
+        and PurePath(entry or "").suffix.lower()
+        in {".png", ".jpg", ".jpeg", ".gif", ".webp", ".avif"}
+    )
+    maximum = MAX_PAGE_READ if raster else MAX_READ
     total = 0
     try:
         async with asyncio.timeout(45):
@@ -124,6 +137,7 @@ async def parse_book(data, fetch, entry=None, *, thumbnail=False):
                         "format": fmt,
                         "entry": entry,
                         "thumbnail": thumbnail,
+                        "raw_images": raw_images,
                     }
                 ).encode()
                 + b"\n"
@@ -146,7 +160,7 @@ async def parse_book(data, fetch, entry=None, *, thumbnail=False):
                         or start < 0
                         or not 0 < count <= BLOCK
                         or start + count > data["size"]
-                        or total + count > MAX_READ
+                        or total + count > maximum
                     ):
                         raise HTTPException(
                             422,
@@ -162,6 +176,18 @@ async def parse_book(data, fetch, entry=None, *, thumbnail=False):
                         + b"\n"
                     )
                     await process.stdin.drain()
+                elif isinstance(message.get("image"), dict):
+                    image = message["image"]
+                    length, mime = image.get("length"), image.get("mime")
+                    if (
+                        not raster
+                        or type(length) is not int
+                        or not 0 < length <= MAX_PAGE
+                        or mime not in RASTER_TYPES
+                    ):
+                        raise HTTPException(422, "The book returned an invalid image.")
+                    content = await process.stdout.readexactly(length)
+                    return {"kind": "image", "mime": mime, "content": content}
                 elif "error" in message:
                     raise HTTPException(422, str(message["error"])[:500])
                 elif isinstance(message.get("result"), dict):
@@ -172,7 +198,13 @@ async def parse_book(data, fetch, entry=None, *, thumbnail=False):
         raise HTTPException(
             422, "This book took too long to read. Download it in a dedicated reader."
         ) from exc
-    except (ValueError, KeyError, BrokenPipeError, ConnectionResetError) as exc:
+    except (
+        ValueError,
+        KeyError,
+        BrokenPipeError,
+        ConnectionResetError,
+        asyncio.IncompleteReadError,
+    ) as exc:
         raise HTTPException(
             422, "This book could not be read. Download the original instead."
         ) from exc
@@ -183,3 +215,70 @@ async def parse_book(data, fetch, entry=None, *, thumbnail=False):
         await asyncio.shield(process.wait())
         if process.stdin:
             process.stdin.close()
+
+
+class BookCache:
+    """Bounded original-byte/metadata reuse; authorization stays in the route."""
+
+    def __init__(self, *, maximum=64 * BLOCK, entries=16, ttl=300):
+        self.maximum, self.entries, self.ttl = maximum, entries, ttl
+        self.bytes = 0
+        self.items = OrderedDict()
+        self.locks = {}
+
+    @staticmethod
+    def key(data, entry):
+        source = {key: data.get(key) for key in ("message_id", "size", "parts", "name")}
+        return hashlib.sha256(
+            json.dumps([source, entry], sort_keys=True).encode()
+        ).hexdigest()
+
+    def get(self, key):
+        now = time.monotonic()
+        for stale, (expires, content, _mime, _etag) in list(self.items.items()):
+            if expires <= now:
+                self.bytes -= len(content)
+                del self.items[stale]
+        result = self.items.get(key)
+        if result is not None:
+            self.items.move_to_end(key)
+            return result[1:]
+        return None
+
+    def put(self, key, result):
+        mime = (
+            result.get("mime") if result.get("kind") == "image" else "application/json"
+        )
+        content = (
+            result["content"]
+            if result.get("kind") == "image"
+            else json.dumps(result).encode()
+        )
+        etag = '"' + hashlib.sha256(content).hexdigest() + '"'
+        if len(content) <= self.maximum:
+            previous = self.items.pop(key, None)
+            if previous:
+                self.bytes -= len(previous[1])
+            while self.items and (
+                self.bytes + len(content) > self.maximum
+                or len(self.items) >= self.entries
+            ):
+                _, old = self.items.popitem(last=False)
+                self.bytes -= len(old[1])
+            self.items[key] = (time.monotonic() + self.ttl, content, mime, etag)
+            self.bytes += len(content)
+        return content, mime, etag
+
+    @asynccontextmanager
+    async def hold(self, key):
+        lock, users = self.locks.get(key, (asyncio.Lock(), 0))
+        self.locks[key] = lock, users + 1
+        try:
+            async with lock:
+                yield
+        finally:
+            remaining = self.locks[key][1] - 1
+            if remaining:
+                self.locks[key] = lock, remaining
+            else:
+                del self.locks[key]

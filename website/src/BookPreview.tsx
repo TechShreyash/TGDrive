@@ -18,6 +18,7 @@ import { readBoundedResponse } from "./previewIO";
 import { errorMessage } from "./api";
 import { ErrorNotice, Spinner } from "./components";
 import "./BookPreview.css";
+import BookImage from "./BookImage";
 
 type Entry = { name: string; label: string };
 type Book = { kind: "epub" | "comic"; title?: string; entries: Entry[] };
@@ -163,33 +164,6 @@ function readerPreferences() {
   } catch {
     return { font: 18, typeface: "serif" };
   }
-}
-function BookImage({ src, alt }: { src: string; alt: string }) {
-  const [failed, setFailed] = useState(false);
-  const [retry, setRetry] = useState(0);
-  return failed ? (
-    <span className="book-image-error">
-      {alt || "Image unavailable"}{" "}
-      <button
-        className="text-button"
-        onClick={() => {
-          setFailed(false);
-          setRetry((n) => n + 1);
-        }}
-      >
-        Retry image
-      </button>
-    </span>
-  ) : (
-    <img
-      key={retry}
-      src={src}
-      alt={alt}
-      loading="lazy"
-      decoding="async"
-      onError={() => setFailed(true)}
-    />
-  );
 }
 export default function BookPreview({
   path,
@@ -504,6 +478,7 @@ export default function BookPreview({
         {!error && book?.kind === "comic" && selected && (
           <BookImage
             key={selected + attempt}
+            eager
             src={bookUrl(path, auth, selected)}
             alt={"Page " + (index + 1) + " of " + book.entries.length}
           />

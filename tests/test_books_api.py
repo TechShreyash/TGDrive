@@ -37,7 +37,7 @@ def test_book_owner_share_revocation_and_passive_resources(app_client, monkeypat
         params={"path": path, "auth": second, "entry": "OPS/images/page.png"},
     )
     assert image.status_code == 200 and image.headers["content-type"] == "image/png"
-    assert image.headers["cache-control"] == "private, no-store"
+    assert image.headers["cache-control"] == "private, no-cache"
     row = store.list_shares(path)[0]
     store.revoke_share(row["id"])
     assert (
@@ -88,4 +88,45 @@ def test_book_resource_requests_are_bounded(app_client, monkeypatch, entry):
     assert (
         client.get("/api/v1/books", params={"path": path, "entry": entry}).status_code
         == 422
+    )
+
+
+def test_cached_book_bytes_and_conditional_responses_still_require_access(
+    app_client, monkeypatch
+):
+    client, store, _, _ = app_client
+    content = cbz()
+    file = store.add_file("/", "cached.cbz", 253, len(content))
+    path = "/" + file["id"]
+    share = store.create_share(path)
+    reads = []
+
+    async def fetch(_pool, _channel, data, start, count, authorize):
+        await authorize()
+        reads.append((start, count))
+        return content[start : start + count]
+
+    monkeypatch.setattr("tgdrive.books.read_range", fetch)
+    params = {"path": path, "auth": share, "entry": "pages/2.png"}
+    first = client.get("/api/v1/books", params=params)
+    assert first.status_code == 200
+    before = len(reads)
+    second = client.get("/api/v1/books", params=params)
+    assert second.content == first.content and len(reads) == before
+    conditional = client.get(
+        "/api/v1/books", params=params, headers={"If-None-Match": first.headers["etag"]}
+    )
+    assert (
+        conditional.status_code == 304
+        and not conditional.content
+        and len(reads) == before
+    )
+    store.revoke_share(path)
+    assert (
+        client.get(
+            "/api/v1/books",
+            params=params,
+            headers={"If-None-Match": first.headers["etag"]},
+        ).status_code
+        == 403
     )

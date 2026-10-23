@@ -384,12 +384,16 @@ def _preview_pdf(page_count: int = 3) -> bytes:
     )
 
 
-def _large_preview_pdf(page_count: int = 48) -> bytes:
+def _large_preview_pdf(
+    page_count: int = 48, *, shared_resources=False, filtered=False
+) -> bytes:
     """A real 36 MiB image document, with distinct uncompressed page images."""
     result = io.BytesIO()
     result.write(b"%PDF-1.4\n")
     offsets = [0]
     font_id = 3 + page_count * 3
+    resources_id = font_id + 1
+    mask_id = resources_id + int(shared_resources)
 
     def obj(identity, body):
         offsets.append(result.tell())
@@ -403,10 +407,14 @@ def _large_preview_pdf(page_count: int = 48) -> bytes:
         obj(
             identity,
             (
-                f"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 420 594] "
-                f"/Resources << /Font << /F1 {font_id} 0 R >> "
-                f"/XObject << /Im0 {identity + 1} 0 R >> >> "
-                f"/Contents {identity + 2} 0 R >>"
+                "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 420 594] "
+                + (
+                    f"/Resources {resources_id} 0 R "
+                    if shared_resources
+                    else f"/Resources << /Font << /F1 {font_id} 0 R >> "
+                    f"/XObject << /Im{number} {identity + 1} 0 R >> >> "
+                )
+                + f"/Contents {identity + 2} 0 R >>"
             ).encode(),
         )
         pixels = bytes(
@@ -415,18 +423,25 @@ def _large_preview_pdf(page_count: int = 48) -> bytes:
             for x in range(512)
             for channel in ((x + number * 7) % 256, y % 256, (x + y + number * 3) % 256)
         )
+        if filtered:
+            import zlib
+
+            pixels = zlib.compress(pixels, level=0)
+        filter_clause = "/Filter /FlateDecode " if filtered else ""
+        mask_clause = f"/SMask {mask_id} 0 R " if filtered and number == 0 else ""
         obj(
             identity + 1,
             (
                 f"<< /Type /XObject /Subtype /Image /Width 512 /Height 512 "
                 f"/ColorSpace /DeviceRGB /BitsPerComponent 8 "
+                f"{filter_clause}{mask_clause}"
                 f"/Length {len(pixels)} >>\nstream\n"
             ).encode()
             + pixels
             + b"\nendstream",
         )
         content = (
-            f"q 360 0 0 450 30 80 cm /Im0 Do Q "
+            f"q 360 0 0 450 30 80 cm /Im{number} Do Q "
             f"BT /F1 18 Tf 24 550 Td (TGDrive large PDF page {number + 1}) Tj ET"
         ).encode()
         obj(
@@ -436,6 +451,24 @@ def _large_preview_pdf(page_count: int = 48) -> bytes:
             + b"\nendstream",
         )
     obj(font_id, b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>")
+    if shared_resources:
+        images = " ".join(f"/Im{i} {4 + i * 3} 0 R" for i in range(page_count))
+        obj(
+            resources_id,
+            f"<< /Font << /F1 {font_id} 0 R >> /XObject << {images} >> >>".encode(),
+        )
+    if filtered:
+        mask = bytes([200]) * (512 * 512)
+        obj(
+            mask_id,
+            (
+                "<< /Type /XObject /Subtype /Image /Width 512 /Height 512 "
+                f"/ColorSpace /DeviceGray /BitsPerComponent 8 /Length {len(mask)} "
+                ">>\nstream\n"
+            ).encode()
+            + mask
+            + b"\nendstream",
+        )
     start = result.tell()
     result.write(f"xref\n0 {len(offsets)}\n0000000000 65535 f \n".encode())
     for offset in offsets[1:]:
@@ -1074,7 +1107,10 @@ async def fail_deletion(request: Request, transfer_id: str) -> dict[str, str]:
 async def seed_large_pdf(request: Request):
     """Opt-in heavy fixture; ordinary browser tests pay no large-PDF cost."""
     _control(request)
-    content = _large_preview_pdf()
+    content = _large_preview_pdf(
+        shared_resources=request.query_params.get("shared") == "1",
+        filtered=request.query_params.get("filtered") == "1",
+    )
     runtime.payloads[900] = content
     single = runtime.store.add_file(
         runtime.preview_path, "large-images.pdf", 900, len(content)
@@ -1141,6 +1177,45 @@ def seed_reading_samples(target):
 async def seed_books(request: Request):
     _control(request)
     return {"path": seed_reading_samples(runtime)}
+
+
+@app.post("/__test__/books/large-page")
+async def seed_large_book_page(request: Request):
+    """Opt-in encoded-page limit fixture; original PNG stays byte-for-byte intact."""
+    _control(request)
+    import struct
+    import zlib
+    from zipfile import ZipFile
+
+    from book_samples import png
+
+    small = png(2)
+    # A legal private ancillary chunk keeps decoded pixels small while exercising
+    # a genuinely large original PNG through parsing, HTTP, CSP and image decode.
+    payload = b"p" * (39 * 1024**2)
+    chunk = b"tgDr" + payload
+    image = (
+        small[:-12]
+        + struct.pack(">I", len(payload))
+        + chunk
+        + struct.pack(">I", zlib.crc32(chunk))
+        + small[-12:]
+    )
+    output = io.BytesIO()
+    with ZipFile(output, "w") as archive:
+        archive.writestr("unused.bin", b"x" * (48 * 1024**2))
+        archive.writestr("page.png", image)
+    data = output.getvalue()
+    folder = seed_reading_samples(runtime)
+    runtime.payloads[985] = data
+    item = runtime.store.add_file(folder, "Large original page.cbz", 985, len(data))
+    return {
+        "path": folder,
+        "file": folder + "/" + item["id"],
+        "image_size": len(image),
+        "image_sha256": hashlib.sha256(image).hexdigest(),
+        "size": len(data),
+    }
 
 
 async def seed_thumbnail_samples(target):

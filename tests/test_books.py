@@ -81,7 +81,7 @@ def test_zip_bomb_and_duplicate_resources_are_rejected():
     output = io.BytesIO()
     with ZipFile(output, "w", ZIP_DEFLATED) as archive:
         archive.writestr("page.png", b"x" * (17 * 1024**2))
-    with pytest.raises(BookError, match="limits"):
+    with pytest.raises(BookError, match="16 MiB"):
         read_book(source(output.getvalue())[0], "cbz", "page.png")
     output = io.BytesIO()
     with ZipFile(output, "w") as archive:
@@ -123,3 +123,82 @@ async def test_real_isolated_worker_protocol_and_fetch_bounds():
     with pytest.raises(HTTPException) as error:
         await parse_book({"name": "broken.epub", "size": 100}, broken)
     assert error.value.status_code == 422
+
+
+async def test_large_selected_page_keeps_original_bytes_without_reading_whole_archive():
+    from tgdrive.book_worker import BLOCK
+
+    image = png() + b"p" * (39 * BLOCK)
+    output = io.BytesIO()
+    with ZipFile(output, "w") as archive:
+        archive.writestr("unused.bin", b"x" * (48 * BLOCK))
+        archive.writestr("page.png", image)
+    data = output.getvalue()
+    reads = []
+
+    async def fetch(start, count):
+        reads.append((start, count))
+        return data[start : start + count]
+
+    result = await parse_book(
+        {"name": "large.cbz", "size": len(data)}, fetch, "page.png", raw_images=True
+    )
+    assert result["content"] == image
+    assert "data" not in result
+    assert sum(count for _, count in reads) < 43 * BLOCK
+    assert all(count <= BLOCK for _, count in reads)
+
+
+def test_selected_image_limit_does_not_expand_text_or_legacy_thumbnail_limits():
+    from tgdrive.book_worker import BLOCK, MAX_PAGE_READ
+
+    image = png() + b"p" * (17 * BLOCK)
+    output = io.BytesIO()
+    with ZipFile(output, "w") as archive:
+        archive.writestr("page.png", image)
+        archive.writestr("chapter.xhtml", b"x" * (3 * BLOCK))
+    data = output.getvalue()
+
+    def stream():
+        return RemoteFile(
+            len(data),
+            lambda start, count: data[start : start + count],
+            maximum=MAX_PAGE_READ,
+        )
+
+    with pytest.raises(BookError, match="16 MiB"):
+        read_book(stream(), "cbz", "page.png")
+    with pytest.raises(BookError, match="2 MiB"):
+        read_book(stream(), "epub", "chapter.xhtml", raw_images=True)
+
+
+async def test_book_cache_bounds_expiry_and_same_page_waiters(monkeypatch):
+    import asyncio
+
+    import tgdrive.books as books
+
+    clock = [100]
+    monkeypatch.setattr(books.time, "monotonic", lambda: clock[0])
+    cache = books.BookCache(maximum=8, entries=2, ttl=5)
+
+    def result(content):
+        return {"kind": "image", "mime": "image/png", "content": content}
+
+    cache.put("a", result(b"12345"))
+    cache.put("b", result(b"6789"))
+    assert cache.get("a") is None and cache.bytes == 4
+    clock[0] += 6
+    assert cache.get("b") is None and cache.bytes == 0
+    calls = []
+
+    async def request():
+        async with cache.hold("shared"):
+            value = cache.get("shared")
+            if value is None:
+                calls.append(1)
+                await asyncio.sleep(0)
+                value = cache.put("shared", result(b"page"))
+            return value[0]
+
+    assert await asyncio.gather(request(), request()) == [b"page", b"page"]
+    assert len(calls) == 1 and not cache.locks

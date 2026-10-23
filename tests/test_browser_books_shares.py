@@ -64,7 +64,7 @@ def test_selective_reader_controls_and_mobile_layout(
         expect(image).to_be_visible()
         expect(image).to_have_js_property("naturalWidth", 480)
     else:
-        image = page.locator(".book-content > img")
+        image = page.locator(".book-content > .book-image > img")
         expect(image).to_be_visible()
         expect(image).to_have_js_property("naturalWidth", 480)
         page.locator('summary[aria-label="Reading options"]').click()
@@ -286,3 +286,143 @@ def test_same_item_links_keep_their_copy_edit_and_revoke_scope(server, desktop, 
                 server.url + "/file", params={"path": path, "auth": link["auth"]}
             )
         assert response.status == expected_status
+
+
+def test_comic_image_error_details_and_automatic_recovery(server, desktop):
+    _, page = desktop
+    login(page, server.url)
+    folder = page.request.post(server.url + "/__test__/books", headers=CONTROL).json()[
+        "path"
+    ]
+    page.goto(server.url + "/?path=" + folder)
+    calls = []
+
+    def page_resource(route):
+        if "entry=" not in route.request.url:
+            route.continue_()
+        else:
+            calls.append(route.request.url)
+            if len(calls) == 1:
+                route.fulfill(
+                    status=503,
+                    content_type="application/json",
+                    body='{"detail":"Reader busy"}',
+                    headers={"Retry-After": "1"},
+                )
+            else:
+                route.continue_()
+
+    page.route("**/api/v1/books?**", page_resource)
+    page.get_by_role("button", name="Sample comic.cbz", exact=True).press("Enter")
+    expect(
+        page.get_by_text("Connection interrupted. Retrying page…", exact=True)
+    ).to_be_visible()
+    expect(page.locator(".book-content > .book-image > img")).to_be_visible(
+        timeout=15000
+    )
+    assert len(calls) == 2
+    page.unroute("**/api/v1/books?**", page_resource)
+
+    def refused(route):
+        route.fulfill(
+            status=422,
+            content_type="application/json",
+            body='{"detail":"This resource exceeds the 64 MiB preview limit."}',
+        )
+
+    page.route("**/api/v1/books?**entry=**", refused)
+    page.get_by_role("button", name="Next chapter or page", exact=True).click()
+    expect(page.get_by_role("alert")).to_contain_text("64 MiB preview limit")
+    expect(page.get_by_role("button", name="Retry image", exact=True)).to_be_visible()
+
+
+def test_large_original_comic_page_renders_and_revalidates_without_resending(
+    server, desktop
+):
+    import hashlib
+    from urllib.parse import parse_qs
+
+    _, page = desktop
+    login(page, server.url)
+    sample = page.request.post(
+        server.url + "/__test__/books/large-page", headers=CONTROL
+    ).json()
+    responses = []
+
+    def record(response):
+        if urlparse(response.url).path == "/api/v1/books" and "entry=" in response.url:
+            responses.append(response)
+
+    page.on("response", record)
+    page.goto(server.url + "/?path=" + sample["path"])
+    page.get_by_role("button", name="Large original page.cbz", exact=True).press(
+        "Enter"
+    )
+    image = page.locator(".book-content > .book-image > img")
+    expect(image).to_be_visible(timeout=45000)
+    expect(image).to_have_js_property("naturalWidth", 480)
+    assert len(responses) == 1
+    result = responses[0]
+    assert result.status == 200
+    assert int(result.headers["content-length"]) == sample["image_size"]
+    # Native decode must succeed under the shipped CSP, using the unchanged bytes.
+    assert image.get_attribute("src").startswith("blob:")
+    assert parse_qs(urlparse(result.url).query)["entry"] == ["page.png"]
+    # Inspector caches can evict a 39 MiB response. Verify its declared wire size
+    # above and the authorized API bytes against the fixture's independent hash.
+    again = page.request.get(result.url)
+    assert len(again.body()) == sample["image_size"]
+    assert hashlib.sha256(again.body()).hexdigest() == sample["image_sha256"]
+    conditional = page.request.get(
+        result.url, headers={"If-None-Match": result.headers["etag"]}
+    )
+    assert conditional.status == 304 and not conditional.body()
+    assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
+
+
+def test_epub_offscreen_images_release_blobs_and_load_only_near_viewport(
+    server, desktop
+):
+    _, page = desktop
+    login(page, server.url)
+    folder = page.request.post(server.url + "/__test__/books", headers=CONTROL).json()[
+        "path"
+    ]
+    nodes = [
+        {
+            "tag": "img",
+            "src": "OPS/images/page.png",
+            "alt": "First image",
+            "children": [],
+        }
+    ]
+    nodes.extend(
+        {"tag": "p", "children": ["A chapter with illustrations. " * 8]}
+        for _ in range(80)
+    )
+    nodes.append(
+        {
+            "tag": "img",
+            "src": "OPS/images/page.png",
+            "alt": "Last image",
+            "children": [],
+        }
+    )
+    page.route(
+        "**/api/v1/books?**entry=OPS%2Fone.xhtml",
+        lambda route: route.fulfill(json={"kind": "chapter", "nodes": nodes}),
+    )
+    page.goto(server.url + "/?path=" + folder)
+    page.get_by_role("button", name="The little journey.epub", exact=True).press(
+        "Enter"
+    )
+    first = page.get_by_role("img", name="First image", exact=True)
+    last = page.get_by_role("img", name="Last image", exact=True)
+    expect(first).to_be_visible()
+    expect(last).to_have_count(0)
+    page.locator(".book-content").evaluate("node => node.scrollTop = node.scrollHeight")
+    expect(last).to_be_visible()
+    expect(first).to_have_count(0)
+    page.locator(".book-content").evaluate("node => node.scrollTop = 0")
+    expect(first).to_be_visible()
+    expect(last).to_have_count(0)

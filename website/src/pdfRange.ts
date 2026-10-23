@@ -39,10 +39,12 @@ export class PdfRangeReader {
   private reserved = 0;
   private stopped = false;
   private etag: string | null | undefined;
+  private received = 0;
 
   constructor(
     private url: string,
     private size: number,
+    private onProgress?: (received: number) => void,
   ) {
     checkPdfSize(size);
   }
@@ -151,6 +153,8 @@ export class PdfRangeReader {
           "A PDF section arrived incomplete. Reload the preview or download the original.",
         );
       bytes.set(part, start - begin);
+      this.received += part.byteLength;
+      this.onProgress?.(this.received);
     }
     return bytes;
   }

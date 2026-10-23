@@ -14,6 +14,8 @@ import {
 } from "react";
 import {
   ArrowLeftRight,
+  ChevronLeft,
+  ChevronRight,
   Minus,
   Plus,
   Scan,
@@ -30,7 +32,7 @@ import {
   type PDFPageProxy,
   type RenderTask,
 } from "pdfjs-dist";
-import workerUrl from "pdfjs-dist/build/pdf.worker.min.mjs?url";
+import workerUrl from "pdfjs-dist/build/pdf.worker.mjs?worker&url";
 import { ErrorNotice, Spinner } from "./components";
 import { errorMessage } from "./api";
 import "./PdfPreview.css";
@@ -131,6 +133,8 @@ function PdfPage({
   textRunBudget,
   textCharacterBudget,
   onMeasure,
+  onReady,
+  received,
 }: {
   document: PDFDocumentProxy;
   number: number;
@@ -140,6 +144,8 @@ function PdfPage({
   textRunBudget: number;
   textCharacterBudget: number;
   onMeasure: (number: number, size: PageSize) => void;
+  onReady: () => void;
+  received: number;
 }) {
   const canvas = useRef<HTMLCanvasElement>(null);
   const textContainer = useRef<HTMLDivElement>(null);
@@ -198,6 +204,7 @@ function PdfPage({
       await render.promise;
       if (cancelled) return;
       setBusy(false);
+      onReady();
       text.style.setProperty(
         "--total-scale-factor",
         String(viewport.scale * viewport.userUnit),
@@ -244,6 +251,7 @@ function PdfPage({
     textRunBudget,
     textCharacterBudget,
     onMeasure,
+    onReady,
   ]);
   return (
     <div
@@ -260,7 +268,12 @@ function PdfPage({
     >
       {busy && (
         <div className="pdf-page-loading" role="status">
-          <Spinner /> Rendering page {number}…
+          <Spinner /> Loading page {number}…
+          {received > 0 && (
+            <span>
+              {(received / 1024 / 1024).toFixed(1)} MiB received for this PDF
+            </span>
+          )}
         </div>
       )}
       {error && (
@@ -322,6 +335,9 @@ export default function PdfPreview({
   const [document, setDocument] = useState<PDFDocumentProxy | null>(null);
   const [sizes, setSizes] = useState<Map<number, PageSize>>(new Map());
   const [busy, setBusy] = useState(true);
+  const [received, setReceived] = useState(0);
+  const [firstPaint, setFirstPaint] = useState(false);
+  const onReady = useCallback(() => setFirstPaint(true), []);
   const [error, setError] = useState("");
   const [zoom, setZoom] = useState<number | null>(null);
   const [fit, setFit] = useState<"width" | "page">("width");
@@ -388,6 +404,8 @@ export default function PdfPreview({
         .catch(() => {});
     };
     setBusy(true);
+    setFirstPaint(false);
+    setReceived(0);
     setError("");
     setDocument(null);
     setSizes(new Map());
@@ -397,7 +415,9 @@ export default function PdfPreview({
     if (scroll.current) scroll.current.scrollTop = 0;
     void (async () => {
       checkPdfSize(size);
-      reader = new PdfRangeReader(url, size);
+      reader = new PdfRangeReader(url, size, (value) => {
+        if (!controller.signal.aborted) setReceived(value);
+      });
       const ranges = reader;
       const transport = new (class extends PDFDataRangeTransport {
         requestDataRange(begin: number, end: number) {
@@ -529,7 +549,10 @@ export default function PdfPreview({
     lastVisible -= 1;
   const visibleCount = Math.max(1, lastVisible - firstVisible + 1);
   // Five is an overscan target, never a cap on pages that intersect the view.
-  const targetCount = Math.max(OVERSCAN_PAGE_TARGET, visibleCount);
+  const targetCount = Math.max(
+    firstPaint ? OVERSCAN_PAGE_TARGET : 1,
+    visibleCount,
+  );
   const start = Math.max(
     0,
     Math.min(
@@ -579,6 +602,65 @@ export default function PdfPreview({
                 setToolsOpen(false);
             }}
           >
+            <div
+              className="reader-navigation"
+              role="group"
+              aria-label="Page navigation"
+            >
+              <button
+                className="icon-button"
+                aria-label="Previous page"
+                disabled={!document || current === 0}
+                onClick={() => {
+                  scroll.current?.scrollTo({
+                    top: layout.pages[current - 1]?.top ?? 0,
+                  });
+                  syncView();
+                }}
+              >
+                <ChevronLeft size={20} />
+              </button>
+              <label className="sr-only" htmlFor={toolsId + "-page"}>
+                Page
+              </label>
+              <select
+                id={toolsId + "-page"}
+                value={current + 1}
+                disabled={!document}
+                onChange={(event) => {
+                  scroll.current?.scrollTo({
+                    top: layout.pages[Number(event.target.value) - 1]?.top ?? 0,
+                  });
+                  syncView();
+                }}
+              >
+                {document ? (
+                  Array.from({ length: document.numPages }, (_, i) => (
+                    <option key={i} value={i + 1}>
+                      Page {i + 1}
+                    </option>
+                  ))
+                ) : (
+                  <option value={1}>Loading PDF</option>
+                )}
+              </select>
+              <span className="book-position" aria-live="polite">
+                {document ? current + 1 + " / " + document.numPages : ""}
+              </span>
+              <button
+                className="icon-button"
+                aria-label="Next page"
+                disabled={!document || current >= document.numPages - 1}
+                onClick={() => {
+                  scroll.current?.scrollTo({
+                    top: layout.pages[current + 1]?.top ?? 0,
+                  });
+                  syncView();
+                }}
+              >
+                <ChevronRight size={20} />
+              </button>
+            </div>
             <button
               ref={toolsToggle}
               type="button"
@@ -596,11 +678,6 @@ export default function PdfPreview({
               role="group"
               aria-label="PDF View Controls"
             >
-              <span className="pdf-page-count">
-                {document
-                  ? "Page " + (current + 1) + " of " + document.numPages
-                  : "Loading PDF"}
-              </span>
               <div className="inline-actions">
                 <button
                   className="icon-button"
@@ -649,6 +726,9 @@ export default function PdfPreview({
       {busy && (
         <div className="preview-loading" role="status">
           <Spinner /> Loading PDF…
+          {received > 0 && (
+            <span>{(received / 1024 / 1024).toFixed(1)} MiB received</span>
+          )}
         </div>
       )}
       {error && (
@@ -684,6 +764,8 @@ export default function PdfPreview({
               textRunBudget={textRunBudget}
               textCharacterBudget={textCharacterBudget}
               onMeasure={measure}
+              onReady={onReady}
+              received={received}
             />
           ))}
         </div>

@@ -23,11 +23,19 @@ pytestmark = pytest.mark.e2e
 browser, desktop, server = browser_fixture, desktop_fixture, server_fixture
 
 
-@pytest.mark.parametrize("kind", ["single", "split"])
+@pytest.mark.parametrize("kind", ["single", "split", "shared", "shared-filtered"])
 def test_large_pdf_first_page_and_distant_page_need_only_sparse_ranges(
     server: Server, desktop, kind
 ):
-    data = server.control("/pdf/large", method="POST")
+    data = server.control(
+        "/pdf/large"
+        + (
+            "?shared=1" + ("&filtered=1" if kind == "shared-filtered" else "")
+            if kind.startswith("shared")
+            else ""
+        ),
+        method="POST",
+    )
     assert data["size"] > 30 * 1024**2
     context, page = desktop
     cdp = context.new_cdp_session(page)
@@ -55,10 +63,23 @@ def test_large_pdf_first_page_and_distant_page_need_only_sparse_ranges(
     page.on("requestfinished", completed)
     login(page, server.url)
     page.get_by_role("button", name="Preview samples", exact=True).dblclick()
-    name = "large-images.pdf" if kind == "single" else "split-images.pdf"
+    name = "split-images.pdf" if kind == "split" else "large-images.pdf"
     page.get_by_role("button", name=name, exact=True).dblclick()
     dialog = preview_dialog(page)
     assert_rendered_pdf_page(page, name, 1)
+    if kind.startswith("shared"):
+        canvas = dialog.locator('.pdf-page[data-page-number="1"] canvas')
+        assert canvas.evaluate("""canvas => {
+          const ctx = canvas.getContext('2d');
+          const pixels = ctx.getImageData(
+            0, 0, canvas.width, canvas.height).data;
+          let color = 0;
+          for(let i = 0; i < pixels.length; i += 16) {
+            const channels = [pixels[i], pixels[i+1], pixels[i+2]];
+            if (Math.max(...channels) - Math.min(...channels) > 40) color++;
+          }
+          return color > 1000;
+        }"""), "Rendered text alone must not hide a missing image or soft mask"
     page.wait_for_function(
         "() => [...document.querySelectorAll('.pdf-page')].every("
         "e => e.getAttribute('aria-busy') === 'false')"

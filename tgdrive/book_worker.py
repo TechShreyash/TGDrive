@@ -19,6 +19,8 @@ from defusedxml import ElementTree as ET
 BLOCK = 1024 * 1024
 MAX_READ = 32 * BLOCK
 MAX_ENTRY = 16 * BLOCK
+MAX_PAGE = 64 * BLOCK
+MAX_PAGE_READ = 96 * BLOCK
 MAX_TEXT = 2 * BLOCK
 MAX_ENTRIES = 10000
 IMAGES = {".png", ".jpg", ".jpeg", ".gif", ".webp", ".avif"}
@@ -62,8 +64,9 @@ def local_ref(base, value):
 
 
 class RemoteFile(io.RawIOBase):
-    def __init__(self, size, fetch):
+    def __init__(self, size, fetch, *, maximum=MAX_READ):
         self.size, self.fetch, self.pos = size, fetch, 0
+        self.maximum = maximum
         self.cache = OrderedDict()
         self.used = 0
         self.failure = None
@@ -95,7 +98,7 @@ class RemoteFile(io.RawIOBase):
     def read(self, amount=-1):
         if amount is None or amount < 0:
             amount = self.size - self.pos
-        if amount > MAX_READ:
+        if amount > self.maximum:
             raise BookError(
                 "This book needs too much data for a selective preview. "
                 "Download it instead."
@@ -106,9 +109,10 @@ class RemoteFile(io.RawIOBase):
             block = self.pos // BLOCK
             if block not in self.cache:
                 count = min(BLOCK, self.size - block * BLOCK)
-                if self.used + count > MAX_READ:
+                if self.used + count > self.maximum:
                     raise BookError(
-                        "This archive needs more than 32 MiB to read this page. "
+                        f"This archive needs more than {self.maximum // BLOCK} MiB "
+                        "to read this page. "
                         "Download it instead."
                     )
                 data = self.fetch(block * BLOCK, count)
@@ -213,12 +217,14 @@ def zip_bytes(archive, name, maximum=MAX_TEXT):
         entry = archive.getinfo(name)
     except KeyError as exc:
         raise BookError("This book resource is missing.") from exc
-    if (
-        entry.file_size > maximum
-        or entry.compress_type not in {0, 8}
-        or entry.file_size > max(1, entry.compress_size) * 1000
-    ):
-        raise BookError("This book resource exceeds the reader limits.")
+    if entry.file_size > maximum:
+        raise BookError(
+            f"This resource exceeds the {maximum // BLOCK} MiB preview limit."
+        )
+    if entry.compress_type not in {0, 8}:
+        raise BookError("This resource uses an unsupported ZIP compression method.")
+    if entry.file_size > max(1, entry.compress_size) * 1000:
+        raise BookError("This resource has an excessive compression ratio.")
     with archive.open(entry) as stream:
         data = stream.read(maximum + 1)
     if len(data) > maximum:
@@ -429,7 +435,8 @@ def epub_index(archive):
     return {"kind": "epub", "title": title, "entries": entries}
 
 
-def read_book(source, fmt, entry=None):
+def read_book(source, fmt, entry=None, *, raw_images=False):
+    image_limit = MAX_PAGE if raw_images else MAX_ENTRY
     if fmt in {"epub", "cbz"}:
         with open_zip(source) as archive:
             if entry is None:
@@ -458,7 +465,7 @@ def read_book(source, fmt, entry=None):
                 entry,
                 MAX_TEXT
                 if posixpath.splitext(entry)[1].lower() in {".html", ".xhtml", ".htm"}
-                else MAX_ENTRY,
+                else image_limit,
             )
             if fmt == "epub" and posixpath.splitext(entry)[1].lower() in {
                 ".html",
@@ -473,7 +480,11 @@ def read_book(source, fmt, entry=None):
             return {
                 "kind": "image",
                 "mime": mime,
-                "data": base64.b64encode(data).decode(),
+                **(
+                    {"content": data}
+                    if raw_images
+                    else {"data": base64.b64encode(data).decode()}
+                ),
             }
     if fmt != "cbr":
         raise BookError("Unsupported reading format.")
@@ -506,20 +517,24 @@ def read_book(source, fmt, entry=None):
                     raise BookError("This comic contains duplicate page names.")
                 pages.append(name)
             elif name == entry:
-                if member.size is None or member.size > MAX_ENTRY:
+                if member.size is None or member.size > image_limit:
                     raise BookError("This page is too large to preview.")
                 output = bytearray()
                 for block in member.get_blocks():
                     output.extend(block)
                     if source.failure:
                         raise source.failure
-                    if len(output) > MAX_ENTRY:
+                    if len(output) > image_limit:
                         raise BookError("This page is too large to preview.")
                 data = bytes(output)
                 return {
                     "kind": "image",
                     "mime": image_type(data),
-                    "data": base64.b64encode(data).decode(),
+                    **(
+                        {"content": data}
+                        if raw_images
+                        else {"data": base64.b64encode(data).decode()}
+                    ),
                 }
     if source.failure:
         raise source.failure
@@ -553,7 +568,16 @@ def run():
         return base64.b64decode(reply["data"], validate=True)
 
     try:
-        source = RemoteFile(request["size"], fetch)
+        # The larger budget applies only to a selected original raster page.
+        # Indexes, text and thumbnail extraction retain their smaller limits.
+        raw_images = bool(request.get("raw_images")) and not request.get("thumbnail")
+        raster = (
+            raw_images
+            and posixpath.splitext(request.get("entry") or "")[1].lower() in IMAGES
+        )
+        source = RemoteFile(
+            request["size"], fetch, maximum=MAX_PAGE_READ if raster else MAX_READ
+        )
         if request.get("thumbnail") and request["format"] in {
             "epub",
             "cbz",
@@ -577,8 +601,19 @@ def run():
                 }
             )
         else:
-            result = read_book(source, request["format"], request.get("entry"))
-        print(json.dumps({"result": result}), flush=True)
+            result = read_book(
+                source, request["format"], request.get("entry"), raw_images=raw_images
+            )
+        if result.get("kind") == "image" and "content" in result:
+            content = result.pop("content")
+            print(
+                json.dumps({"image": {"mime": result["mime"], "length": len(content)}}),
+                flush=True,
+            )
+            sys.stdout.buffer.write(content)
+            sys.stdout.buffer.flush()
+        else:
+            print(json.dumps({"result": result}), flush=True)
     except Exception as exc:
         message = (
             str(exc)

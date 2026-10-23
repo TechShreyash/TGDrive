@@ -495,3 +495,21 @@ need disposable private source/target channels and unrelated bots; rehearse both
 directions and database-only recovery without risking the only copy.
 
 </details>
+
+### Selective book pages and shared PDF resources
+
+The pinned PDF.js worker patch (`website/scripts/patch-pdf-worker.js`) keeps image substreams sparse during parsing, defers image
+stream bodies in page resource discovery and loads a painted image's dependencies
+before decoding. Version/source identity guards reject unknown upstream bundles;
+`predev`, `prebuild`, and `pretest` apply it. The browser bundles this worker locally.
+Review the patch when updating PDF.js. Integrity tests live in
+`website/scripts/check-pdf-worker.js`; the `shared` case in
+`tests/test_browser_pdf_ranges.py` exercises a generated PDF with every page image
+in one shared resource dictionary. These are synthetic fixtures, not a guarantee
+for all PDFs or devices.
+
+`tests/test_books.py` covers unchanged large original page bytes and bounded result
+reuse. `tests/test_books_api.py` covers access checks on cached/conditional responses.
+`website/src/bookImage.test.ts` covers download progress, errors, retry and cancellation;
+the comic error/recovery, large original page and EPUB offscreen-image cases in
+`tests/test_browser_books_shares.py` exercise the shipped UI and HTTP path.

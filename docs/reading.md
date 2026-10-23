@@ -40,6 +40,34 @@ Readers use the authorized range cache without automatically preloading the whol
 book. Small files may fit in one fetched block; solid RAR can require earlier
 entries. Byte savings vary.
 
+Pages keep their original image bytes: TGDrive does not upscale, transcode or
+recompress them. Some colour pages or spreads are much larger than the average.
+The reader shows received bytes after the server has prepared the selected
+resource, retries temporary image download failures up to three attempts
+(2/4-second waits, or a longer server retry hint up to 30 seconds),
+and reports permanent errors without repeatedly requesting them. Leaving the page
+cancels that browser's download/retries. EPUB images start loading near the
+viewport; offscreen image blobs are released
+while placeholders preserve scroll space. Returning to an image revalidates its
+private browser cache entry.
+
+The server reuses extracted original pages and parsed chapters/indexes in a
+**64 MiB**, 16-result memory cache for up to **five minutes**. Requests for the same
+result wait for one extraction. Cache eviction or restart requires parsing again;
+source ranges can still be reused from the normal range cache. Browser responses
+are private and revalidated, allowing an unchanged authorized page to return 304
+without sending its image again. Every request, including cache hits and 304s,
+checks current access and source identity. Results are never publicly cached.
+
+PDF, EPUB and comics share the application-themed toolbar and page/chapter
+navigation; PDF keeps zoom/text selection and EPUB keeps text preferences. PDF.js
+loads shared image resource payloads only when used by a rendered page, instead of
+eagerly loading every image in a shared dictionary. Visible pages render before
+nearby-page overscan starts. A PDF can still require distant metadata, fonts,
+shared masks, or large images before its first page appears; there is no promise
+of a fixed number of startup bytes. All PDF rendering happens in the browser,
+without server-side page conversion.
+
 EPUB supports passive text, tables and raster images in TGDrive's theme.
 Publisher scripts/styles, remote resources, exact fixed layouts, SVG illustrations,
 interactive features and DRM/encryption (including encrypted font metadata) are
@@ -65,12 +93,16 @@ slow or exceed device memory. These are bounds, not a fixed RAM reservation.
 
 | Bound | Limit |
 | --- | --- |
-| One index/chapter/image operation | 32 MiB fetched; aligned 1 MiB reads and a four-block parser cache |
+| Index/chapter/thumbnail operation | 32 MiB fetched; aligned 1 MiB reads and a four-block parser cache |
+| One selected original raster image | 64 MiB encoded image; up to 96 MiB source reads, without loading unrelated ZIP entries |
 | Archive | 10,000 entries; 2 MiB ZIP directory; stored/deflate ZIP methods |
-| EPUB / entries | 5,000 spine entries; 2 MiB/text entry; 16 MiB/image |
-| Parser work | Two simultaneous operations, bounded queue, 45-second timeout |
+| EPUB / entries | 5,000 spine entries; 2 MiB/text entry; 16 MiB thumbnail-source image (independent of the 64 MiB reader page limit) |
+| Parser work | Two simultaneous operations, 16 pending requests, 45-second parser timeout; 55-second total route deadline including coalesced waits |
 | Linux container parser process | 384 MiB address space, 10 CPU-seconds on every supported host |
 
+Raster image bytes cross the parser boundary as bounded binary output, avoiding
+base64 expansion. This does not change the image delivered to the browser. CBR
+may need earlier compressed bytes and can exhaust its read budget before a page.
 Unsafe/duplicate names and extreme compression ratios fail. Busy readers receive
 retry guidance. Budgets apply per operation; cached content may be reused.
 Authorization is rechecked during reads. Revocation stops later reads through

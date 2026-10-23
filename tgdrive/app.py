@@ -986,11 +986,13 @@ def create_app(
         auth: Annotated[str | None, Query(max_length=512)] = None,
         entry: Annotated[str | None, Query(min_length=1, max_length=1024)] = None,
     ) -> Response:
-        import base64
-
-        from tgdrive.books import parse_book, read_range
+        from tgdrive.books import BookCache, parse_book, read_range
 
         path, data = authorized_file(request, path, auth)
+        cache = getattr(app.state, "book_cache", None)
+        if cache is None:
+            cache = app.state.book_cache = BookCache()
+        key = cache.key(data, entry)
         pending = getattr(app.state, "book_requests", 0)
         if pending >= 16:
             raise HTTPException(
@@ -1022,27 +1024,47 @@ def create_app(
                 authorize,
             )
 
-        try:
-            try:
-                await asyncio.wait_for(semaphore.acquire(), timeout=10)
-                acquired = True
-            except TimeoutError as exc:
-                raise HTTPException(
-                    503,
-                    "The reader is busy. Try again shortly.",
-                    headers={"Retry-After": "2"},
-                ) from exc
-            await authorize()
-            result = await parse_book(data, fetch, entry)
-            await authorize()
+        def response(payload):
+            content, mime, etag = payload
             headers = {
-                "Cache-Control": "private, no-store",
+                "Cache-Control": "private, no-cache",
+                "Vary": "Cookie",
+                "ETag": etag,
                 "X-Content-Type-Options": "nosniff",
             }
-            if result.get("kind") == "image":
-                content = base64.b64decode(result["data"], validate=True)
-                return Response(content, media_type=result["mime"], headers=headers)
-            return JSONResponse(result, headers=headers)
+            if etag in [
+                value.strip()
+                for value in request.headers.get("if-none-match", "").split(",")
+            ]:
+                return Response(status_code=304, headers=headers)
+            return Response(content, media_type=mime, headers=headers)
+
+        try:
+            # Waiters hold only descriptors; no parser slot or page buffer.
+            async with asyncio.timeout(55), cache.hold(key):
+                await authorize()
+                cached = cache.get(key)
+                if cached is not None:
+                    return response(cached)
+                try:
+                    await asyncio.wait_for(semaphore.acquire(), timeout=10)
+                    acquired = True
+                except TimeoutError as exc:
+                    raise HTTPException(
+                        503,
+                        "The reader is busy. Try again shortly.",
+                        headers={"Retry-After": "2"},
+                    ) from exc
+                await authorize()
+                result = await parse_book(data, fetch, entry, raw_images=True)
+                await authorize()
+                return response(cache.put(key, result))
+        except TimeoutError as exc:
+            raise HTTPException(
+                503,
+                "The reader is busy. Try again shortly.",
+                headers={"Retry-After": "2"},
+            ) from exc
         finally:
             if acquired:
                 semaphore.release()

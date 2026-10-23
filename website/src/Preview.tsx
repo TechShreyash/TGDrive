@@ -1,5 +1,6 @@
 import AdvancedVideo from "./AdvancedVideo";
 import "./Preview.css";
+import "./Reader.css";
 import { readBoundedResponse, PreviewLimitError } from "./previewIO";
 import { lazy, Suspense, useEffect, useRef, useState } from "react";
 import {
@@ -447,7 +448,9 @@ export default function Preview({
           hidden={fullscreen && toolbarCollapsed}
           className={
             "preview-header" +
-            (documentPreview ? " preview-header-pdf" : "") +
+            (documentPreview
+              ? " preview-header-pdf preview-header-reader"
+              : "") +
             (descriptor?.kind === "book" ? " preview-header-book" : "")
           }
         >
