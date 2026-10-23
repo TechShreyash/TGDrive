@@ -634,7 +634,9 @@ def test_queued_deletion_is_not_reported_complete_early(
         "button", name="Delete Permanently", exact=True
     ).click()
     expect(page.get_by_role("dialog")).to_have_count(0)
-    expect(page.get_by_text("Deletion started.", exact=True)).to_be_visible()
+    expect(
+        page.get_by_role("region", name="File Deletion").get_by_role("status")
+    ).to_have_text("Deleting 1 item…")
     expect(
         page.get_by_role("button", name="Private folder", exact=True)
     ).to_be_visible()
@@ -642,8 +644,62 @@ def test_queued_deletion_is_not_reported_complete_early(
     deletion_id = next(
         key for key, value in records.items() if value["phase"] == "deleting"
     )
+    failed_refreshes = []
+
+    def trash_refresh(route):
+        if not failed_refreshes:
+            failed_refreshes.append(True)
+            route.fulfill(status=503, json={"detail": "Temporary listing failure"})
+        else:
+            route.continue_()
+
+    page.route("**/api/v1/trash*", trash_refresh)
     server.finish(deletion_id)
+    expect(page.get_by_role("heading", name="Trash Is Empty")).to_be_visible(
+        timeout=10000
+    )
+    assert failed_refreshes
+
+
+def test_fast_deletion_is_visible_when_an_older_job_poll_is_in_flight(
+    server: Server, desktop: tuple[Any, Any]
+) -> None:
+    _, page = desktop
+    held = []
+    hold = True
+
+    def jobs(route):
+        if hold:
+            held.append(route)
+        else:
+            route.continue_()
+
+    page.route("**/api/v1/jobs", jobs)
+    login(page, server.url)
+    select_item(page, "Private folder")
+    page.get_by_role("button", name="Trash", exact=True).click()
+    page.get_by_role("link", name="Trash", exact=True).click()
+    select_item(page, "Private folder")
+    page.get_by_role("button", name="Delete Permanently", exact=True).click()
+    page.get_by_role("dialog").get_by_role(
+        "button", name="Delete Permanently", exact=True
+    ).click()
+    expect(page.get_by_role("dialog")).to_have_count(0)
+    notice = page.get_by_role("region", name="File Deletion", exact=True)
+    expect(notice.get_by_role("status")).to_have_text("Deleting 1 item…")
+    records = server.control()["records"]
+    deletion_id = next(
+        key for key, value in records.items() if value["phase"] == "deleting"
+    )
+    server.finish(deletion_id)
+    assert held
+    hold = False
+    for route in held:
+        route.fulfill(status=200, json={"jobs": []})
+    expect(notice.get_by_role("status")).to_have_text("Permanently deleted 1 item.")
     expect(page.get_by_role("heading", name="Trash Is Empty")).to_be_visible()
+    notice.get_by_role("button", name="Dismiss Deletion Result").click()
+    expect(notice).to_have_count(0)
 
 
 def test_keyboard_dialog_focus_and_unicode_search(
@@ -2891,6 +2947,7 @@ def test_bulk_deletion_is_one_notice_with_refresh_failure_and_retry(
     assert len(ids) == 3
     server.finish(ids[0])
     expect(notice.get_by_role("status")).to_contain_text("Deleting 2 items…")
+    expect(notice).to_contain_text("1 completed.")
     server.control("/fail-deletion/" + ids[1], method="POST")
     server.finish(ids[2])
     expect(notice.get_by_role("status")).to_have_text("1 item could not be deleted.")

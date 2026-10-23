@@ -116,6 +116,7 @@ async def test_unavailable_backup_blocks_delete_without_erasing_main_or_its_refs
         await job.task
         assert job.status is TransferStatus.ERROR
         manager._ensure_replica.assert_awaited_once()
+        assert job.phase == "checking_backup"
         assert not telegram.deleted
         assert store.pending_deletions()[0]["pending_message_ids"] == [77]
         assert manager.store.message_ids(path, include_trashed=True) == [77]

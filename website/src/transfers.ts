@@ -285,10 +285,32 @@ export function fromJob(job: Job, previousKind?: string): Partial<Transfer> {
     ...(job.finished_at ? { finishedAt: job.finished_at * 1000 } : {}),
   };
 }
+export interface DeletionProgress {
+  jobs: Job[];
+  completed: number;
+  error: string;
+}
+
+const deletionTerminal = new Set([
+  "completed",
+  "cancelled",
+  "error",
+  "failed",
+  "interrupted",
+]);
+
 export class TransferManager {
   recoveryWarning = "";
   private items: Transfer[] = [];
   private deletionJobs: Job[] = [];
+  private noticedDeletions = new Set<string>();
+  private deletionVersion = 0;
+  private deletionUpdates = new Map<string, number>();
+  private deletionProgress: DeletionProgress = {
+    jobs: [],
+    completed: 0,
+    error: "",
+  };
   private listeners = new Set<() => void>();
   private enabled = false;
   private admissionPaused = false;
@@ -362,7 +384,47 @@ export class TransferManager {
     };
   };
   snapshot = () => this.items;
-  deletionSnapshot = () => this.deletionJobs;
+  deletionSnapshot = () => this.deletionProgress;
+  private updateDeletionProgress(error = "") {
+    this.deletionProgress = {
+      jobs: this.deletionJobs,
+      completed: this.deletionJobs.filter(
+        (job) =>
+          job.status === "completed" && this.noticedDeletions.has(job.id),
+      ).length,
+      error,
+    };
+  }
+  trackDeletions(jobs: Pick<Job, "id" | "name">[]) {
+    if (!jobs.length) return;
+    if (!this.deletionJobs.some((job) => !deletionTerminal.has(job.status)))
+      this.noticedDeletions.clear();
+    for (const job of jobs) {
+      const queued: Job = {
+        ...job,
+        kind: "delete",
+        status: "queued",
+        phase: "queued",
+        current: 0,
+        total: 0,
+      };
+      this.deletionJobs = [
+        ...this.deletionJobs.filter((old) => old.id !== job.id),
+        queued,
+      ];
+      this.noticedDeletions.add(job.id);
+      this.deletionUpdates.set(job.id, ++this.deletionVersion);
+    }
+    this.updateDeletionProgress();
+    this.publish(false);
+    this.refreshJobs();
+  }
+  dismissDeletionResult = () => {
+    for (const job of this.deletionJobs)
+      if (job.status === "completed") this.noticedDeletions.delete(job.id);
+    this.updateDeletionProgress(this.deletionProgress.error);
+    this.publish(false);
+  };
   refreshJobs = () => {
     if (this.polling) this.refreshRequested = true;
     else void this.poll();
@@ -372,8 +434,20 @@ export class TransferManager {
       !this.deletionJobs.some((job) => job.id === id && job.kind === "delete")
     )
       return;
-    await request("/api/v1/jobs/" + encodeURIComponent(id) + "/retry", {});
-    await this.poll();
+    const job = await request<Job>(
+      "/api/v1/jobs/" + encodeURIComponent(id) + "/retry",
+      {},
+    );
+    this.deletionJobs = [
+      ...this.deletionJobs.filter((old) => old.id !== id),
+      job,
+    ];
+    this.noticedDeletions.add(id);
+    this.deletionUpdates.set(id, ++this.deletionVersion);
+    this.updateDeletionProgress();
+    this.publish(false);
+    // A poll started before this retry must be followed by a fresh request.
+    this.refreshJobs();
   }
   private publish(persist = true) {
     if (!persist) {
@@ -992,13 +1066,35 @@ export class TransferManager {
     if (!this.enabled || this.polling) return;
     clearTimeout(this.timer);
     this.polling = true;
+    const deletionVersion = this.deletionVersion;
     try {
       const payload = await api.jobs();
       this.capacityKnown = true;
       const previousDeletions = new Map(
         this.deletionJobs.map((job) => [job.id, job.status]),
       );
-      this.deletionJobs = payload.jobs.filter((job) => job.kind === "delete");
+      const latestDeletions = new Map(
+        this.deletionJobs.map((job) => [job.id, job]),
+      );
+      this.deletionJobs = payload.jobs
+        .filter((job) => job.kind === "delete")
+        .map((job) => {
+          // Do not replace accepted work with a response captured before it started.
+          if ((this.deletionUpdates.get(job.id) || 0) > deletionVersion)
+            return latestDeletions.get(job.id) || job;
+          this.deletionUpdates.delete(job.id);
+          return job;
+        });
+      for (const [id, version] of this.deletionUpdates)
+        if (
+          version > deletionVersion &&
+          !this.deletionJobs.some((job) => job.id === id)
+        )
+          this.deletionJobs.push(latestDeletions.get(id)!);
+      for (const job of this.deletionJobs)
+        if (!deletionTerminal.has(job.status))
+          this.noticedDeletions.add(job.id);
+      this.updateDeletionProgress();
       if (
         this.deletionJobs.some(
           (job) =>
@@ -1060,6 +1156,11 @@ export class TransferManager {
       this.publish();
     } catch {
       this.capacityKnown = false;
+      this.updateDeletionProgress(
+        this.deletionJobs.some((job) => !deletionTerminal.has(job.status))
+          ? "Could not check deletion progress. Retrying automatically…"
+          : "",
+      );
       for (const item of this.items)
         if (item.jobId && !terminal.has(item.state))
           item.error = "Progress connection lost. Trying again…";

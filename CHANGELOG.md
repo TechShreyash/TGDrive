@@ -28,6 +28,9 @@ this candidate.
 
 ### Permanent deletion
 
+- Show accepted deletions immediately and retain completion results even when
+  deletion finishes before the first status poll. Preserve retry state across
+  older in-flight polls; display connection/backup waits and retry stale listings.
 - Remove file/folder references and shares from the database while retaining
   original Telegram messages, for every file age.
 - Complete retried legacy deletion intents without further Telegram deletion;

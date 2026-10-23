@@ -959,6 +959,7 @@ class TransferManager:
             await self._verify_lineage(record)
             protect = getattr(self, "_ensure_replica", None)
             if protect is not None:
+                self.registry.update(record.id, phase="checking_backup")
                 await protect()
             self.registry.update(
                 record.id, status=TransferStatus.RUNNING, phase="deleting"
@@ -977,6 +978,7 @@ class TransferManager:
                     continue
                 self.cancel_job(other.id)
                 if other.task is not None:
+                    self.registry.update(record.id, phase="waiting_for_uploads")
                     await asyncio.wait_for(asyncio.shield(other.task), timeout=60)
                 if other.status is not TransferStatus.CANCELLED:
                     raise TransferError(
@@ -986,6 +988,7 @@ class TransferManager:
             # documents. This policy applies consistently to every file age.
             # This also completes legacy intents with unconfirmed remote messages.
             await self._verify_lineage(record)
+            self.registry.update(record.id, phase="deleting")
             await asyncio.to_thread(self.store.finish_deletion, intent["id"])
             self.registry.update(
                 record.id,

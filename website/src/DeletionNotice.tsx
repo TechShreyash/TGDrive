@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useState } from "react";
 import { Check, RefreshCw, Trash2, X } from "lucide-react";
 import { Spinner } from "./components";
 import { transfers } from "./transfers";
@@ -10,23 +10,19 @@ const failedStates = new Set(["error", "failed", "interrupted"]);
 const terminalStates = new Set(["completed", "cancelled", ...failedStates]);
 
 /** Deletion is one operation notice; per-file details are useful only on failure. */
-export default function DeletionNotice({ jobs }: { jobs: Job[] }) {
+export default function DeletionNotice({
+  jobs,
+  completed,
+  progressError,
+}: {
+  jobs: Job[];
+  completed: number;
+  progressError: string;
+}) {
   const active = jobs.filter((job) => !terminalStates.has(job.status));
   const failed = jobs.filter((job) => failedStates.has(job.status));
-  const observed = useRef(new Set<string>());
-  const [completed, setCompleted] = useState(0);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
-  useEffect(() => {
-    for (const job of jobs)
-      if (!terminalStates.has(job.status)) observed.current.add(job.id);
-    if (active.length || !observed.current.size) return;
-    const done = jobs.filter(
-      (job) => observed.current.has(job.id) && job.status === "completed",
-    ).length;
-    observed.current.clear();
-    setCompleted(done);
-  }, [jobs, active.length]);
   if (!active.length && !failed.length && !completed) return null;
   return (
     <section className="deletion-notice" aria-label="File Deletion">
@@ -56,12 +52,24 @@ export default function DeletionNotice({ jobs }: { jobs: Job[] }) {
           <button
             className="icon-button"
             aria-label="Dismiss Deletion Result"
-            onClick={() => setCompleted(0)}
+            onClick={transfers.dismissDeletionResult}
           >
             <X size={17} />
           </button>
         )}
       </div>
+      {active.length > 0 && (
+        <p className="deletion-progress-detail">
+          {completed > 0 ? completed + " completed. " : ""}
+          {active.some((job) => job.phase === "checking_backup")
+            ? "Checking backup protection before deletion. "
+            : active.some((job) => job.phase === "waiting_for_uploads")
+              ? "Waiting for uploads into these items to stop. "
+              : ""}
+          Items stay in Trash until deletion finishes.
+        </p>
+      )}
+      {progressError && <p role="alert">{progressError}</p>}
       {failed.length > 0 && (
         <details className="deletion-errors">
           <summary>View Failed Items ({failed.length})</summary>

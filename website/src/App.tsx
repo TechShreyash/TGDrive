@@ -360,7 +360,7 @@ export default function App() {
     if (workspace.current) workspace.current.scrollTop = 0;
   }, [currentPath, view, location.settingsSection, searchOffset]);
   const items = useSyncExternalStore(transfers.subscribe, transfers.snapshot);
-  const deletionJobs = useSyncExternalStore(
+  const deletionProgress = useSyncExternalStore(
     transfers.subscribe,
     transfers.deletionSnapshot,
   );
@@ -579,6 +579,8 @@ export default function App() {
     }
     const controller = new AbortController();
     // Keep the current table mounted when uploads update the same listing.
+    let retryTimer: ReturnType<typeof setTimeout> | undefined;
+    const retryNotice = "Could not update your files. Retrying automatically.";
     const background = loadedListing.current === listingKey;
     if (!background) loadedListing.current = null;
     setLoading(!background);
@@ -620,6 +622,9 @@ export default function App() {
       .then((result) => {
         if (controller.signal.aborted) return;
         loadedListing.current = listingKey;
+        setToast((current) =>
+          current?.message === retryNotice ? null : current,
+        );
         setDirectory(result.data);
         setShareRoot(result.auth_home_path || "");
         if (result.data.name) names.current.set(currentPath, result.data.name);
@@ -634,7 +639,8 @@ export default function App() {
               error.status === 429 ||
               error.status >= 500)
           ) {
-            notify("Could not update your files. " + errorMessage(error), true);
+            notify(retryNotice, true);
+            retryTimer = setTimeout(reload, 3000);
             return;
           }
           loadedListing.current = null;
@@ -654,7 +660,10 @@ export default function App() {
       .finally(() => {
         if (!controller.signal.aborted) setLoading(false);
       });
-    return () => controller.abort();
+    return () => {
+      controller.abort();
+      clearTimeout(retryTimer);
+    };
   }, [
     authenticated,
     isPublic,
@@ -670,6 +679,7 @@ export default function App() {
     listingKey,
     notify,
     config.recovery_only,
+    reload,
   ]);
   useEffect(() => {
     if (
@@ -902,6 +912,18 @@ export default function App() {
   ) => {
     try {
       const response = await api.bulk(targets.map(itemPath), type, allowPublic);
+      if (type === "delete") {
+        const names = new Map(
+          targets.map((item) => [itemPath(item), item.name]),
+        );
+        transfers.trackDeletions(
+          (response.results || []).flatMap((result) =>
+            result.id
+              ? [{ id: result.id, name: names.get(result.path) || "Item" }]
+              : [],
+          ),
+        );
+      }
       const failed =
         response.results?.filter(
           (result) => result.error || result.status === "error",
@@ -912,7 +934,6 @@ export default function App() {
             " item(s) could not be processed. " +
             (failed[0].error || "Refresh and try again."),
         );
-      if (type === "delete") transfers.refreshJobs();
       notify(
         type === "trash"
           ? "Moved to trash. Public access has been removed."
@@ -1556,7 +1577,13 @@ export default function App() {
             </div>
           )}
           {!isFiles && pageHeading}
-          {!isPublic && <DeletionNotice jobs={deletionJobs} />}
+          {!isPublic && (
+            <DeletionNotice
+              jobs={deletionProgress.jobs}
+              completed={deletionProgress.completed}
+              progressError={deletionProgress.error}
+            />
+          )}
           {isFiles ? (
             <FileBrowser
               header={pageHeading}

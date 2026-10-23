@@ -17,6 +17,9 @@
 .deletion-errors {
   margin-top: 10px;
 }
+.deletion-progress-detail {
+  margin: 10px 0 0;
+}
 .deletion-errors summary {
   cursor: pointer;
   text-underline-offset: 3px;

@@ -295,7 +295,8 @@ export const api = {
       undefined,
       { method: "DELETE" },
     ),
-  jobs: () => request<{ jobs: Job[] }>("/api/v1/jobs"),
+  jobs: () =>
+    request<{ jobs: Job[] }>("/api/v1/jobs", undefined, { cache: "no-store" }),
   transferHistory: (
     status: string,
     cursor?: { before: number; before_id: string },
@@ -314,7 +315,10 @@ export const api = {
       { signal },
     );
   },
-  job: (id: string) => request<Job>("/api/v1/jobs/" + encodeURIComponent(id)),
+  job: (id: string) =>
+    request<Job>("/api/v1/jobs/" + encodeURIComponent(id), undefined, {
+      cache: "no-store",
+    }),
   cancelJob: async (id: string) => ({
     data: await request<Job>(
       "/api/v1/jobs/" + encodeURIComponent(id) + "/cancel",

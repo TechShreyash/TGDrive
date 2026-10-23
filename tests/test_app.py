@@ -227,6 +227,11 @@ def test_folder_lifecycle_search_trash_and_permanent_delete(
 
     assert client.portal is not None
     client.portal.call(wait_for_deletion)
+    assert client.get("/api/v1/jobs").headers["cache-control"] == "no-store"
+    assert (
+        client.get("/api/v1/jobs/" + deleted.json()["id"]).headers["cache-control"]
+        == "no-store"
+    )
     assert runtime.transfers.deleted_messages == []
     assert store.list_directory("/") == {}
 

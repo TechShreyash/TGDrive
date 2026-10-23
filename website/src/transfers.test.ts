@@ -14,6 +14,7 @@ import {
   formatBytes,
   formatByteProgress,
   remainingBytesHint,
+  type Job,
 } from "./types";
 const managerForTest = () =>
   new TransferManager((url, options) => fetch(url, options));
@@ -36,6 +37,134 @@ beforeEach(() => {
   vi.stubGlobal("window", new EventTarget());
 });
 afterEach(() => vi.unstubAllGlobals());
+describe("deletion progress", () => {
+  const deletion = (status: string, id = "deletion"): Job => ({
+    id,
+    kind: "delete",
+    name: "Old file",
+    status,
+    phase: status,
+    current: 0,
+    total: 1,
+  });
+
+  it("shows accepted work immediately and retains completion first seen after it finished", async () => {
+    const changes = vi.fn();
+    window.addEventListener("tgdrive:files-changed", changes);
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () =>
+        Response.json({
+          jobs: [deletion("completed", "historic"), deletion("completed")],
+        }),
+      ),
+    );
+    const manager = managerForTest();
+    try {
+      manager.trackDeletions([{ id: "deletion", name: "Old file" }]);
+      expect(manager.deletionSnapshot().jobs[0].status).toBe("queued");
+      manager.setEnabled(true);
+      await vi.waitFor(() =>
+        expect(manager.deletionSnapshot().completed).toBe(1),
+      );
+      expect(changes).toHaveBeenCalledOnce();
+      manager.dismissDeletionResult();
+      expect(manager.deletionSnapshot().completed).toBe(0);
+      manager.refreshJobs();
+      await vi.waitFor(() => expect(fetch).toHaveBeenCalledTimes(2));
+      expect(manager.deletionSnapshot().completed).toBe(0);
+    } finally {
+      manager.setEnabled(false);
+    }
+  });
+
+  it("does not show success for historical completed jobs after a reload", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => Response.json({ jobs: [deletion("completed")] })),
+    );
+    const manager = managerForTest();
+    try {
+      manager.setEnabled(true);
+      await vi.waitFor(() =>
+        expect(manager.deletionSnapshot().jobs).toHaveLength(1),
+      );
+      expect(manager.deletionSnapshot().completed).toBe(0);
+    } finally {
+      manager.setEnabled(false);
+    }
+  });
+
+  it("rechecks a retry after an older poll and ignores its stale failure", async () => {
+    let polls = 0;
+    let resolveOld!: (response: Response) => void;
+    const oldPoll = new Promise<Response>((resolve) => {
+      resolveOld = resolve;
+    });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string) => {
+        if (url.endsWith("/retry")) return Response.json(deletion("queued"));
+        polls++;
+        if (polls === 2) return oldPoll;
+        return Response.json({
+          jobs: [deletion(polls === 1 ? "error" : "completed")],
+        });
+      }),
+    );
+    const manager = managerForTest();
+    const statuses: string[] = [];
+    manager.subscribe(() =>
+      statuses.push(manager.deletionSnapshot().jobs[0]?.status),
+    );
+    try {
+      manager.setEnabled(true);
+      await vi.waitFor(() =>
+        expect(manager.deletionSnapshot().jobs[0]?.status).toBe("error"),
+      );
+      manager.refreshJobs();
+      await vi.waitFor(() => expect(polls).toBe(2));
+      await manager.retryDeletion("deletion");
+      expect(manager.deletionSnapshot().jobs[0].status).toBe("queued");
+      statuses.length = 0;
+      resolveOld(Response.json({ jobs: [deletion("error")] }));
+      await vi.waitFor(() =>
+        expect(manager.deletionSnapshot().completed).toBe(1),
+      );
+      expect(polls).toBe(3);
+      expect(statuses).not.toContain("error");
+    } finally {
+      manager.setEnabled(false);
+    }
+  });
+
+  it("keeps active deletion visible with a connection warning until polling recovers", async () => {
+    const fetcher = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("offline"))
+      .mockResolvedValueOnce(Response.json({ jobs: [deletion("completed")] }));
+    vi.stubGlobal("fetch", fetcher);
+    const manager = managerForTest();
+    try {
+      manager.trackDeletions([{ id: "deletion" }]);
+      manager.setEnabled(true);
+      await vi.waitFor(() =>
+        expect(manager.deletionSnapshot().error).toContain(
+          "Retrying automatically",
+        ),
+      );
+      expect(manager.deletionSnapshot().jobs[0].status).toBe("queued");
+      manager.refreshJobs();
+      await vi.waitFor(() =>
+        expect(manager.deletionSnapshot().completed).toBe(1),
+      );
+      expect(manager.deletionSnapshot().error).toBe("");
+    } finally {
+      manager.setEnabled(false);
+    }
+  });
+});
+
 describe("safe resume and browser persistence", () => {
   it("checks all uploaded chunks before allowing a same-sized reselected file", async () => {
     const file = new File(["original"], "name.txt");
@@ -974,7 +1103,7 @@ describe("deletion operation tracking", () => {
     try {
       manager.setEnabled(true);
       await vi.waitFor(() =>
-        expect(manager.deletionSnapshot()).toHaveLength(2),
+        expect(manager.deletionSnapshot().jobs).toHaveLength(2),
       );
       expect(manager.snapshot().map((item) => item.jobId)).toEqual([
         "upload-1",
@@ -1012,7 +1141,7 @@ describe("deletion operation tracking", () => {
     try {
       manager.setEnabled(true);
       await vi.waitFor(() =>
-        expect(manager.deletionSnapshot()).toHaveLength(1),
+        expect(manager.deletionSnapshot().jobs).toHaveLength(1),
       );
       expect(changed).not.toHaveBeenCalled();
       completed = true;

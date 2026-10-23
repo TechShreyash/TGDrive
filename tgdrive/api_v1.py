@@ -381,7 +381,8 @@ def register_routes(
         }
 
     @app.get("/api/v1/jobs", dependencies=admin)
-    async def jobs(request: Request) -> dict[str, Any]:
+    async def jobs(request: Request, response: Response) -> dict[str, Any]:
+        response.headers["Cache-Control"] = "no-store"
         return {
             "jobs": [
                 job_snapshot(record, request)
@@ -435,7 +436,8 @@ def register_routes(
         )
 
     @app.get("/api/v1/jobs/{job_id}", dependencies=admin)
-    async def job(job_id: str, request: Request) -> dict[str, Any]:
+    async def job(job_id: str, request: Request, response: Response) -> dict[str, Any]:
+        response.headers["Cache-Control"] = "no-store"
         return job_snapshot(get_manager(request).registry.get(job_id), request)
 
     @app.post("/api/v1/jobs/{job_id}/cancel", dependencies=admin)
