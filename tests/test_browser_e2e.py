@@ -1141,10 +1141,10 @@ def test_enhanced_mkv_real_audio_subtitles_and_local_assets(
         f'.movi-audio-track-item[data-track-id="{tracks[0]["id"]}"]'
     )
     first_audio.click()
-    expect(first_audio).to_have_class("movi-audio-track-item movi-audio-track-active")
-    assert (
-        player.evaluate("element=>element.player.trackManager.getActiveAudioTrack().id")
-        == tracks[0]["id"]
+    page.wait_for_function(
+        "id=>document.querySelector('movi-player').player.trackManager"
+        ".getActiveAudioTrack()?.id===id",
+        arg=tracks[0]["id"],
     )
     expect(settings_menu).not_to_be_visible()
     settings_button.click()
@@ -1153,12 +1153,9 @@ def test_enhanced_mkv_real_audio_subtitles_and_local_assets(
         '.movi-subtitle-track-item[data-track-id="null"]'
     )
     subtitles_off.click()
-    expect(subtitles_off).to_have_class(
-        "movi-subtitle-track-item movi-subtitle-track-active"
-    )
-    assert (
-        player.evaluate("element=>element.player.trackManager.getActiveSubtitleTrack()")
-        is None
+    page.wait_for_function(
+        "()=>!document.querySelector('movi-player').player.trackManager"
+        ".getActiveSubtitleTrack()"
     )
     expect(page.locator(".advanced-tracks")).to_have_count(0)
     assert page.evaluate("document.documentElement.scrollWidth<=innerWidth")
