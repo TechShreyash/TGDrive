@@ -22,6 +22,7 @@ import {
   type Transfer,
 } from "./transfers";
 import { historyStatus } from "./transferHistory";
+import { deviceUploadMessage, needsDeviceUpload } from "./deviceUploadStatus";
 import {
   summarizeBatches,
   batchCategory,
@@ -103,6 +104,16 @@ export default function TransferPanel({
     return () => clearInterval(timer);
   }, [active]);
   const batches = summarizeBatches(items, now);
+  const deviceUploadsPending =
+    items.some(needsDeviceUpload) ||
+    transfers.snapshot().some(needsDeviceUpload);
+  const deviceMessage = deviceUploadMessage(items, deviceUploadsPending);
+  const collapsedDeviceLabel =
+    !expandedPage && collapsed && deviceMessage
+      ? deviceUploadsPending
+        ? "Keep this tab open"
+        : "You can close this tab"
+      : null;
   const categories = expandedPage
     ? [
         { key: "running", label: "Running" },
@@ -201,12 +212,19 @@ export default function TransferPanel({
         <h2
           id="transfer-summary"
           className={expandedPage ? "sr-only" : undefined}
+          title={collapsedDeviceLabel ? deviceMessage || undefined : undefined}
         >
           <Upload size={18} />
-          {expandedPage
-            ? items.length +
-              (items.length === 1 ? " transfer shown" : " transfers shown")
-            : heading}
+          {expandedPage ? (
+            items.length +
+            (items.length === 1 ? " transfer shown" : " transfers shown")
+          ) : collapsedDeviceLabel ? (
+            <span className="transfer-collapsed-status" role="status">
+              {collapsedDeviceLabel}
+            </span>
+          ) : (
+            heading
+          )}
         </h2>
         <div className="inline-actions">
           {cancellable.length > 0 && (
@@ -270,6 +288,7 @@ export default function TransferPanel({
                 <BatchTransfer
                   key={batch.id}
                   batch={batch}
+                  deviceUploadsPending={deviceUploadsPending}
                   expanded={expandedBatches.has(batch.id)}
                   onToggleExpanded={() =>
                     setExpandedBatches((previous) => {
@@ -418,6 +437,7 @@ function batchStatus(batch: TransferBatch) {
 
 function BatchTransfer({
   batch,
+  deviceUploadsPending,
   expanded,
   onToggleExpanded,
   now,
@@ -430,6 +450,7 @@ function BatchTransfer({
 }: {
   onLocate?: (item: Transfer, folder?: boolean) => void;
   batch: TransferBatch;
+  deviceUploadsPending: boolean;
   expanded: boolean;
   onToggleExpanded: () => void;
   showTimestamp?: boolean;
@@ -443,10 +464,12 @@ function BatchTransfer({
   const [limit, setLimit] = useState(20);
   const listId = useId();
   const hasFolder = batch.items.some((item) => item.relativePath);
+  const deviceMessage = deviceUploadMessage(batch.items, deviceUploadsPending);
   if (batch.count === 1 && !hasFolder)
     return (
       <TransferRow
         item={batch.items[0]}
+        deviceUploadsPending={deviceUploadsPending}
         onLocate={onLocate}
         showTimestamp={showTimestamp}
         now={now}
@@ -624,6 +647,9 @@ function BatchTransfer({
         {batch.pending && (
           <p className="transfer-batch-status" aria-live="polite">
             {batchStatus(batch)}
+            {deviceMessage && (
+              <span className="transfer-device-status">{deviceMessage}</span>
+            )}
           </p>
         )}
         {showTimestamp && finishedAt && (
@@ -809,6 +835,7 @@ function BatchTransfer({
 
 function TransferRow({
   item,
+  deviceUploadsPending,
   now,
   showTimestamp = false,
   compactChild = false,
@@ -821,6 +848,7 @@ function TransferRow({
   groupLocation?: string;
   onLocate?: (item: Transfer, folder?: boolean) => void;
   item: Transfer;
+  deviceUploadsPending?: boolean;
   now: number;
   showTimestamp?: boolean;
   run: (task: Promise<unknown>) => void;
@@ -842,6 +870,8 @@ function TransferRow({
   const meter = usePresentedProgress(item);
   const status = historyStatus(item);
   const finished = status === "completed" || status === "cancelled";
+  const deviceMessage =
+    !compactChild && deviceUploadMessage([item], deviceUploadsPending);
   const liveMetrics =
     !finished &&
     status !== "queued" &&
@@ -993,6 +1023,11 @@ function TransferRow({
             max={1}
             value={meter.fraction}
           />
+        )}
+        {deviceMessage && (
+          <span className="transfer-device-status" role="status">
+            {deviceMessage}
+          </span>
         )}
         {item.state !== "cancelled" && item.error && (
           <span className="transfer-error">{item.error}</span>

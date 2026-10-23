@@ -151,11 +151,12 @@ Cancelled/expired/unsaved authorizations are revoked.
 
 ## Transfer pipeline
 
-Browser receiving and Telegram dispatch are independent. One browser receive
-runs at a time; its completed receipt immediately creates a durable server job.
-There is no four-job browser backlog gate. Staging reservations, free-disk
-headroom and the 1,000 unfinished receipt bound control admission; a 429/507
-queues the next device file for automatic retry without discarding its original.
+Browser receiving and Telegram dispatch are independent. Browser receives start
+with two slots and adapt between one and four. Each completed receipt immediately
+creates a durable server job: Telegram work can start for that file while the
+browser sends later files. Neither stage waits for the whole folder or batch.
+Staging reservations, free-disk headroom and the 1,000 unfinished receipt bound
+still control admission.
 
 ### From a browser to one drive file
 
@@ -169,10 +170,56 @@ queues the next device file for automatic retry without discarding its original.
 After a lost response, resume from the acknowledged offset.
 Names and sizes alone never prove that a reselected file has matching bytes.
 
+Full device progress means the browser has sent the bytes; the server must still
+confirm durable ownership. **You can close this tab** requires accepted server
+jobs for all remaining device uploads. Fully received files finish verification
+and durable enqueue even if the completion request disconnects; polling can
+recover the accepted job identity after a lost response. Telegram work continues
+while TGDrive stays running. Use **Completed** as the point for deleting local
+originals. Restart recovery still needs unfinished staged bytes on the server;
+database backups do not include them.
+
+Receipt durability is implemented in [uploads.py](../tgdrive/uploads.py);
+browser handoff and recovery are in [transfers.ts](../website/src/transfers.ts)
+and [deviceUploadStatus.ts](../website/src/deviceUploadStatus.ts).
+
+### Adaptive device upload concurrency
+
+The browser adapts simultaneous file receives to measured aggregate throughput,
+independently of Telegram slots. Increasing concurrency is useful only when more
+pending files are ready and existing payload transfers are busy. A freed receive
+slot immediately admits another eligible file. Lowering the limit lets active
+files finish; it does not abort or restart them.
+
+| Policy | Current behavior |
+| --- | --- |
+| Starting and allowed limits | Start at 2 concurrent files; adapt from 1 to 4; reset to 2 after device work and its queue drain |
+| Measurement | Aggregate HTTP PATCH payload progress in 4-second windows, with confirmed bytes as a fallback for transports without progress events |
+| Eligible windows | A ready backlog and payload requests occupying at least 70% of the available receive slots over the window |
+| Probe for more capacity | After 2 stable windows, try one extra file; rates within 25% of baseline count as stable |
+| Keep or roll back a probe | Compare the next 2 eligible windows with the baseline; keep the increase only for at least 10% aggregate throughput gain |
+| Sustained degradation | Reduce by one after 2 eligible windows with nonzero throughput below 65% of baseline |
+| Payload stall | Reduce after 15 seconds without progress once actual browser payload progress has been observed; waiting for a first event or a completed body's acknowledgement is not a stall |
+| Transient pressure | Reduce for device network failures and HTTP 408, 429, 500, 502, 503 or 504 before server handoff; cancellation, authentication, checksum and storage failures do not lower the limit |
+| Settling time | Wait 30 seconds before probing again after pressure or an unsuccessful probe; wait 12 seconds after a successful probe |
+| Unreliable measurements | Discard trends while hidden/paused or after a sample gap or window longer than 12 seconds; exclude hashing, acknowledged resume offsets and Telegram work |
+
+The policy and its thresholds live in
+[deviceUploadConcurrency.ts](../website/src/deviceUploadConcurrency.ts).
+[transfers.ts](../website/src/transfers.ts) supplies payload observations,
+visibility state and transient errors, and applies the resulting admission limit.
+
 ### Bounds and retries
 
-- One browser receive runs at a time, independently of Telegram's upload backlog.
-  Temporary-storage admission can pause/retry the next receipt.
+- HTTP 429 pauses new device admission globally and reduces adaptive concurrency;
+  HTTP 507 defers only the affected file so smaller files can use remaining space.
+  Both retry automatically after at least 5 seconds or the longer server
+  `Retry-After` deadline, retaining the source file and acknowledged offset.
+- Listing invalidations from completed uploads are coalesced and applied without
+  remounting the current directory. Existing rows stay visible during refresh;
+  selection, focus, pagination and scroll stay in place. See
+  [listingUpdates.ts](../website/src/listingUpdates.ts) for refresh coalescing and
+  row reconciliation.
 - The controller retains up to 2,000 rows in unfinished batches.
 - Media leases default to one upload per bot, configurable to 1–4; each Premium
   client has one slot. Multipart workers scale to eligible client capacity, with

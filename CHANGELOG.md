@@ -60,6 +60,15 @@ this candidate.
 
 ### Reliability and Performance Controls
 
+- Adapt device uploads between one and four concurrent files, starting at two,
+  using measured aggregate throughput, bounded probes and connection pressure.
+  Preserve running files while reducing admission, and keep Telegram uploads
+  and progress polling independent. Keep smaller receipts flowing when larger files need
+  staging space, and finish durable handoff through completion disconnects.
+- Show confirmed device-receipt counts and safe-to-close guidance, with a
+  leave-page warning while selected files still depend on the browser.
+- Coalesce upload listing updates without cancelling active reads, preserve
+  unchanged rows and selection, and show files as soon as they enter the drive.
 - Add operator-owned RAM/disk budgets, free-space reserves, frequency-aware
   retention, shared block fills and bounded demand-first adaptive preloading.
 - Prepare complete files manually and inspect all retained byte ranges in

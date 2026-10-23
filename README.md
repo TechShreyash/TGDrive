@@ -18,7 +18,7 @@ links from one responsive web interface.
 | **Media playback** | Locally bundled enhanced video player with supported embedded audio/subtitle tracks, chapter navigation, keyboard controls, and buffered timeline feedback. |
 | **Document previews** | Images, PDFs up to 256 MiB with lazy byte ranges, read-only text/code, EPUB books and CBZ/CBR comics. Fullscreen and original downloads remain available; unsupported or protected content has a download fallback. |
 | **Cache and preload** | Reuse recently streamed blocks, prepare a file before sharing, and limit RAM, disk, and background work. Inspect ready bytes and evict cached data. |
-| **Transfers** | Resumable device uploads, server-side URL jobs, measured speed and remaining time, cancellation, retries, and durable history. Phone upload status opens Transfers without covering the file list. |
+| **Transfers** | Resumable device uploads with automatic 1–4 file concurrency, independent server-side Telegram processing, safe-to-close receipt feedback, URL jobs, measured progress, retries, and durable history. [How uploads work](docs/usage.md#upload-speed-and-queue). |
 | **Sharing** | Multiple independent links per file/folder, with optional labels and separate expiry, copy, edit and revocation. Review access in Shared Links. |
 | **Recovery** | MongoDB stores the catalog and settings; encrypted database snapshots are saved separately to Telegram. An optional independent private channel copies completed payloads and enables explicit web recovery from a surviving channel. |
 
@@ -66,6 +66,13 @@ Authorized download → RAM/disk cache → Telegram for missing blocks
 Telegram holds file contents; MongoDB remembers their names, folders, shares,
 and transfer state. Local disk holds unfinished uploads and disposable cached
 bytes. Keep **one installation and one worker per drive**.
+
+Device uploads start with two files in parallel and adapt between one and four
+using measured total upload speed. Each received file enters Telegram processing
+while the browser continues sending the others. Once **You can close this tab**
+appears, the server can finish the remaining work while TGDrive stays running.
+Keep originals until **Completed**. [Upload progress and tab closure](docs/usage.md#can-i-close-the-tab)
+explain the separate milestones.
 
 Files above a Telegram document's limit are reconstructed transparently.
 The default logical-file limit is **16 GiB**, subject to staging capacity and

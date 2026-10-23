@@ -2,6 +2,11 @@ import { api, ApiError, errorMessage, request } from "./api";
 import type { Job, UploadSnapshot, TransferLocation } from "./types";
 import { sampleProgress, type ProgressSample } from "./progress";
 import { sendUploadChunk, type UploadChunkTransport } from "./uploadTransport";
+import {
+  DeviceUploadConcurrency,
+  INITIAL_DEVICE_UPLOAD_CONCURRENCY,
+  MAX_DEVICE_UPLOAD_CONCURRENCY,
+} from "./deviceUploadConcurrency";
 export type TransferState =
   | "queued"
   | "verifying"
@@ -51,7 +56,10 @@ export interface Transfer {
 }
 const STORAGE_KEY = "tgdrive.uploads.v2";
 export const MAX_BROWSER_QUEUE = 2000;
-export const BROWSER_RECEIVE_CONCURRENCY = 1;
+// Device receipts have their own slots; Telegram work never holds one.
+export const BROWSER_RECEIVE_CONCURRENCY = MAX_DEVICE_UPLOAD_CONCURRENCY;
+export const BROWSER_RECEIVE_INITIAL_CONCURRENCY =
+  INITIAL_DEVICE_UPLOAD_CONCURRENCY;
 const MAX_HISTORY_BATCHES = 30;
 const MAX_HISTORY_ROWS = 2000;
 export interface UploadEntry {
@@ -314,12 +322,15 @@ export class TransferManager {
   private listeners = new Set<() => void>();
   private enabled = false;
   private admissionPaused = false;
-  private receiving = false;
+  private receiving = new Set<string>();
+  private deviceConcurrency = new DeviceUploadConcurrency();
+  private concurrencyTimer: ReturnType<typeof setInterval> | undefined;
   private timer: ReturnType<typeof setTimeout> | undefined;
+  private stagingTimer: ReturnType<typeof setTimeout> | undefined;
   private polling = false;
   private refreshRequested = false;
-  private capacityKnown = false;
-  private stagingRetryAt = 0;
+  private stagingRetries = new Map<string, number>();
+  private admissionRetryAt = 0;
   private dismissed = new Set<string>();
   constructor(
     private readonly sendChunk: UploadChunkTransport = sendUploadChunk,
@@ -501,9 +512,12 @@ export class TransferManager {
   setEnabled(enabled: boolean) {
     if (this.enabled === enabled) return;
     this.enabled = enabled;
-    this.capacityKnown = false;
     if (!enabled) {
       clearTimeout(this.timer);
+      clearTimeout(this.stagingTimer);
+      clearInterval(this.concurrencyTimer);
+      this.concurrencyTimer = undefined;
+      this.deviceConcurrency.pauseMeasurements(Date.now());
       for (const item of this.items) item.controller?.abort();
       return;
     }
@@ -513,6 +527,8 @@ export class TransferManager {
   setAdmissionPaused(paused: boolean) {
     if (this.admissionPaused === paused) return;
     this.admissionPaused = paused;
+    this.deviceConcurrency.pauseMeasurements(Date.now());
+    this.updateConcurrencyTimer();
     if (!paused) void this.startNext();
   }
   canQueue(count: number): boolean {
@@ -758,6 +774,7 @@ export class TransferManager {
   async cancel(key: string) {
     const item = this.items.find((item) => item.key === key);
     if (!item || !canCancelTransfer(item)) return;
+    this.stagingRetries.delete(item.key);
     this.update(key, {
       state: "cancelling",
       phase: "Cancelling and cleaning up",
@@ -859,35 +876,157 @@ export class TransferManager {
       ),
     );
   }
-  private async startNext() {
-    if (
-      !this.enabled ||
-      this.admissionPaused ||
-      this.receiving ||
-      !this.capacityKnown ||
-      Date.now() < this.stagingRetryAt
-    )
-      return;
-    const item = this.items.find(
-      (item) => item.state === "queued" && item.file,
+  private startNext() {
+    try {
+      if (!this.enabled || this.admissionPaused) return;
+      clearTimeout(this.stagingTimer);
+      if (Date.now() < this.admissionRetryAt) {
+        this.stagingTimer = setTimeout(
+          () => this.startNext(),
+          this.admissionRetryAt - Date.now(),
+        );
+        return;
+      }
+      while (this.receiving.size < this.deviceConcurrency.limit) {
+        const item = this.items.find(
+          (item) =>
+            item.state === "queued" &&
+            item.file &&
+            !this.receiving.has(item.key) &&
+            Date.now() >= (this.stagingRetries.get(item.key) || 0),
+        );
+        if (!item) break;
+        this.stagingRetries.delete(item.key);
+        this.receiving.add(item.key);
+        void this.receiveNext(item);
+      }
+      const retryTimes = this.items
+        .filter((item) => item.state === "queued" && item.file)
+        .map((item) => this.stagingRetries.get(item.key) || 0)
+        .filter((at) => at > Date.now());
+      if (retryTimes.length)
+        this.stagingTimer = setTimeout(
+          () => this.startNext(),
+          Math.max(0, Math.min(...retryTimes) - Date.now()),
+        );
+    } finally {
+      this.updateConcurrencyTimer();
+    }
+  }
+  private canMeasureDeviceUpload() {
+    return (
+      this.enabled &&
+      !this.admissionPaused &&
+      (typeof document === "undefined" || document.visibilityState !== "hidden")
     );
-    if (!item) return;
-    this.receiving = true;
+  }
+  private sampleDeviceConcurrency() {
+    const now = Date.now();
+    if (!this.canMeasureDeviceUpload()) {
+      this.deviceConcurrency.pauseMeasurements(now);
+      return;
+    }
+    const previous = this.deviceConcurrency.limit;
+    const hasBacklog =
+      now >= this.admissionRetryAt &&
+      this.items.some(
+        (item) =>
+          item.state === "queued" &&
+          item.file &&
+          !this.receiving.has(item.key) &&
+          now >= (this.stagingRetries.get(item.key) || 0),
+      );
+    this.deviceConcurrency.sample(now, hasBacklog);
+    if (previous !== this.deviceConcurrency.limit) this.startNext();
+  }
+  private updateConcurrencyTimer() {
+    if (this.enabled && !this.admissionPaused && this.receiving.size) {
+      this.concurrencyTimer ??= setInterval(
+        () => this.sampleDeviceConcurrency(),
+        1000,
+      );
+      return;
+    }
+    clearInterval(this.concurrencyTimer);
+    this.concurrencyTimer = undefined;
+    this.deviceConcurrency.pauseMeasurements(Date.now());
+    if (
+      !this.receiving.size &&
+      !this.items.some(
+        (item) =>
+          !item.jobId &&
+          item.file &&
+          !["completed", "cancelled"].includes(item.state),
+      )
+    )
+      this.deviceConcurrency.reset(Date.now());
+  }
+  private async sendDeviceChunk(
+    chunkId: string,
+    expectedOffset: number,
+    url: string,
+    options: Parameters<UploadChunkTransport>[1],
+    progress: Parameters<UploadChunkTransport>[2],
+  ) {
+    if (!this.canMeasureDeviceUpload())
+      this.deviceConcurrency.pauseMeasurements(Date.now());
+    this.deviceConcurrency.chunkStarted(chunkId, Date.now(), options.body.size);
+    let confirmedBytes: number | undefined;
+    try {
+      const response = await this.sendChunk(url, options, (sent) => {
+        if (options.signal.aborted) return;
+        if (!this.canMeasureDeviceUpload())
+          this.deviceConcurrency.pauseMeasurements(Date.now());
+        this.deviceConcurrency.chunkProgress(chunkId, sent, Date.now());
+        progress(sent);
+      });
+      if (
+        response.ok &&
+        Number(response.headers.get("Upload-Offset")) === expectedOffset
+      )
+        confirmedBytes = options.body.size;
+      return response;
+    } catch (error) {
+      if (error instanceof TypeError) throw new ApiError(errorMessage(error));
+      throw error;
+    } finally {
+      this.deviceConcurrency.chunkFinished(chunkId, Date.now(), confirmedBytes);
+      this.sampleDeviceConcurrency();
+    }
+  }
+  private async receiveNext(item: Transfer) {
     try {
       await this.receive(item);
     } catch (error) {
       if (
+        this.enabled &&
+        !this.admissionPaused &&
+        !item.controller?.signal.aborted &&
+        !item.jobId &&
+        !["cancelling", "cancelled"].includes(item.state) &&
+        error instanceof ApiError &&
+        [0, 408, 429, 500, 502, 503, 504].includes(error.status)
+      )
+        this.deviceConcurrency.reportPressure(Date.now());
+      if (item.jobId) {
+        // The server can accept a receipt before its HTTP response is lost.
+        // Its polled job remains authoritative over late device-request errors.
+        this.refreshJobs();
+      } else if (
         item.state !== "cancelling" &&
         item.state !== "cancelled" &&
         error instanceof ApiError &&
         [429, 507].includes(error.status)
       ) {
-        this.stagingRetryAt =
-          Date.now() + Math.max(5000, error.retryAfter * 1000);
+        const retryAt = Date.now() + Math.max(5000, error.retryAfter * 1000);
+        if (error.status === 429)
+          this.admissionRetryAt = Math.max(this.admissionRetryAt, retryAt);
+        else this.stagingRetries.set(item.key, retryAt);
         this.update(item.key, {
           state: "queued",
           phase: "Waiting for server space",
           error: undefined,
+          ...(item.uploadId ? {} : { startedAt: undefined }),
         });
       } else if (item.state !== "cancelling" && item.state !== "cancelled")
         this.update(item.key, {
@@ -900,8 +1039,8 @@ export class TransferManager {
         });
     } finally {
       item.controller = undefined;
-      this.receiving = false;
-      void this.startNext();
+      this.receiving.delete(item.key);
+      this.startNext();
     }
   }
   private async receive(item: Transfer) {
@@ -931,6 +1070,9 @@ export class TransferManager {
       method: "HEAD",
       credentials: "same-origin",
       signal: controller.signal,
+    }).catch((error) => {
+      if (error instanceof TypeError) throw new ApiError(errorMessage(error));
+      throw error;
     });
     if (!head.ok) {
       if (head.status === 401)
@@ -940,6 +1082,8 @@ export class TransferManager {
           ? "This upload has expired. Cancel it and start a new upload."
           : "Could not check the upload position. Try Again.",
         head.status,
+        "",
+        Math.max(0, Number(head.headers.get("Retry-After")) || 0),
       );
     }
     const offsetHeader = head.headers.get("Upload-Offset");
@@ -957,6 +1101,7 @@ export class TransferManager {
     )
       throw new Error("The server returned an invalid upload position.");
     const snapshot = await api.upload(id);
+    if (controller.signal.aborted || item.jobId) return;
     if (offset) {
       this.update(item.key, {
         state: "verifying",
@@ -992,7 +1137,9 @@ export class TransferManager {
       if (controller.signal.aborted)
         throw new DOMException("Upload paused", "AbortError");
       const end = Math.min(offset + chunkSize, file.size);
-      const response = await this.sendChunk(
+      const response = await this.sendDeviceChunk(
+        item.key + ":" + offset,
+        end,
         "/api/v1/uploads/" + encodeURIComponent(id),
         {
           method: "PATCH",
@@ -1036,6 +1183,8 @@ export class TransferManager {
                 ? "Temporary Storage is full. Free space or cancel a transfer, then retry."
                 : "Sending this file was interrupted. Retry to resume."),
           response.status,
+          "",
+          Math.max(0, Number(response.headers.get("Retry-After")) || 0),
         );
       }
       const nextOffset = Number(response.headers.get("Upload-Offset"));
@@ -1052,15 +1201,23 @@ export class TransferManager {
       stage: "confirming",
     });
     const result = await api.completeUpload(id);
-    this.update(item.key, {
-      jobId: result.id,
-      state: "uploading",
-      phase: "Queued for Telegram",
-      current: 0,
-      total: file.size,
-      file: undefined,
-    });
-    void this.poll();
+    // Polling or cancellation can finish while the receipt response is in flight.
+    // Attach ownership without replacing that newer server/cancellation state.
+    if (
+      item.jobId ||
+      ["cancelling", "cancelled", "completed"].includes(item.state)
+    )
+      this.update(item.key, { jobId: result.id, file: undefined });
+    else
+      this.update(item.key, {
+        jobId: result.id,
+        state: "uploading",
+        phase: "Queued for Telegram",
+        current: 0,
+        total: file.size,
+        file: undefined,
+      });
+    this.refreshJobs();
   }
   private async poll() {
     if (!this.enabled || this.polling) return;
@@ -1069,7 +1226,7 @@ export class TransferManager {
     const deletionVersion = this.deletionVersion;
     try {
       const payload = await api.jobs();
-      this.capacityKnown = true;
+      let filesChanged = false;
       const previousDeletions = new Map(
         this.deletionJobs.map((job) => [job.id, job.status]),
       );
@@ -1102,15 +1259,7 @@ export class TransferManager {
             previousDeletions.get(job.id) !== "completed",
         )
       )
-        window.dispatchEvent(new Event("tgdrive:files-changed"));
-      for (const item of this.items)
-        if (
-          item.state === "queued" &&
-          item.phase === "Waiting for server connection"
-        ) {
-          item.phase = "Waiting to send from this device";
-          item.error = undefined;
-        }
+        filesChanged = true;
       for (const job of payload.jobs) {
         // Deletions are a single file-operation notice, never upload transfers.
         if (job.kind === "delete" || this.dismissed.has(job.id)) continue;
@@ -1139,7 +1288,8 @@ export class TransferManager {
           item.jobId = job.id;
           item.file = undefined;
         }
-        const wasComplete = item.state === "completed";
+        const wasVisible =
+          item.state === "completed" || item.stage === "backup_pending";
         const createdAt = item.createdAt;
         const startedAt = item.startedAt;
         Object.assign(item, fromJob(job, item.kind));
@@ -1150,12 +1300,16 @@ export class TransferManager {
         if (terminal.has(item.state)) item.finishedAt ??= Date.now();
         else item.finishedAt = undefined;
         item.meter = undefined;
-        if (!wasComplete && item.state === "completed")
-          window.dispatchEvent(new Event("tgdrive:files-changed"));
+        if (
+          !wasVisible &&
+          (item.state === "completed" || item.stage === "backup_pending")
+        )
+          filesChanged = true;
       }
       this.publish();
+      if (filesChanged)
+        window.dispatchEvent(new Event("tgdrive:files-changed"));
     } catch {
-      this.capacityKnown = false;
       this.updateDeletionProgress(
         this.deletionJobs.some((job) => !deletionTerminal.has(job.status))
           ? "Could not check deletion progress. Retrying automatically…"
@@ -1164,10 +1318,6 @@ export class TransferManager {
       for (const item of this.items)
         if (item.jobId && !terminal.has(item.state))
           item.error = "Progress connection lost. Trying again…";
-        else if (item.state === "queued") {
-          item.phase = "Waiting for server connection";
-          item.error = "Could not check server queue capacity. Trying again…";
-        }
       this.publish();
     } finally {
       this.polling = false;

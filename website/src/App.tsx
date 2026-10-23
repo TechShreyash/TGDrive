@@ -46,6 +46,12 @@ import {
   type View,
 } from "./types";
 import { transfers, type Transfer } from "./transfers";
+import { needsDeviceUpload } from "./deviceUploadStatus";
+import {
+  createListingRefreshQueue,
+  reconcileDirectory,
+  reconcileDriveItems,
+} from "./listingUpdates";
 import { Spinner, ToastNotice as Toast } from "./components";
 import { Login, SharesView, StorageView, UploadSettings } from "./Screens";
 import SettingsManagement from "./SettingsManagement";
@@ -355,6 +361,9 @@ export default function App() {
     ["trash", "starred"].includes(view) ? scopedQuery : "",
   ]);
   const loadedListing = useRef<string | null>(null);
+  const listingRefresh = useRef<ReturnType<
+    typeof createListingRefreshQueue
+  > | null>(null);
   const workspace = useRef<HTMLElement>(null);
   useLayoutEffect(() => {
     if (workspace.current) workspace.current.scrollTop = 0;
@@ -371,6 +380,17 @@ export default function App() {
     (item) =>
       item.initiatedHere && ["error", "awaiting_file"].includes(item.state),
   );
+  const deviceUploadPending =
+    authenticated === true && !isPublic && items.some(needsDeviceUpload);
+  useEffect(() => {
+    if (!deviceUploadPending) return;
+    const beforeUnload = (event: BeforeUnloadEvent) => {
+      event.preventDefault();
+      event.returnValue = "";
+    };
+    window.addEventListener("beforeunload", beforeUnload);
+    return () => window.removeEventListener("beforeunload", beforeUnload);
+  }, [deviceUploadPending]);
   const notify = useCallback(
     (message: string, error = false) => setToast({ message, error }),
     [],
@@ -590,6 +610,9 @@ export default function App() {
     };
   }, [authenticated, isPublic, searchLabel, revealSearch]);
   useEffect(() => {
+    listingRefresh.current?.request();
+  }, [refresh]);
+  useEffect(() => {
     if (config.recovery_only || (!authenticated && !isPublic) || !isFiles) {
       loadedListing.current = null;
       setLoading(false);
@@ -599,87 +622,97 @@ export default function App() {
     // Keep the current table mounted when uploads update the same listing.
     let retryTimer: ReturnType<typeof setTimeout> | undefined;
     const retryNotice = "Could not update your files. Retrying automatically.";
-    const background = loadedListing.current === listingKey;
-    if (!background) loadedListing.current = null;
-    setLoading(!background);
-    setLoadError("");
-    const resultPromise =
-      view === "starred"
-        ? api.starred(scopedQuery, controller.signal)
-        : view === "trash"
-          ? api.trash(scopedQuery, controller.signal)
-          : isSearch && !isPublic
-            ? api
-                .search(
-                  currentPath.slice(8),
-                  searchOffset,
-                  searchSort === "modified" ? "date" : searchSort,
-                  controller.signal,
-                  searchOrder,
-                )
-                .then((result) => {
-                  if (!controller.signal.aborted) {
-                    setSearchMore(result.has_more);
-                    setNextSearchOffset(result.next_offset);
-                    setSearchItems(result.items);
-                    if (!result.items.length && searchOffset > 0)
-                      setSearchOffset(0);
-                  }
-                  return {
-                    data: {
-                      name: "Search Results",
-                      contents: Object.fromEntries(
-                        result.items.map((item) => [item.id, item]),
-                      ),
-                    } as Directory,
-                    auth_home_path: undefined,
-                  };
-                })
-            : api.directory(currentPath, location.auth, controller.signal);
-    void resultPromise
-      .then((result) => {
-        if (controller.signal.aborted) return;
-        loadedListing.current = listingKey;
-        setToast((current) =>
-          current?.message === retryNotice ? null : current,
-        );
-        setDirectory(result.data);
-        setShareRoot(result.auth_home_path || "");
-        if (result.data.name) names.current.set(currentPath, result.data.name);
-      })
-      .catch((error) => {
-        if (controller.signal.aborted) return;
-        if (error.name !== "AbortError") {
-          if (
-            background &&
-            (!error.status ||
-              error.status === 408 ||
-              error.status === 429 ||
-              error.status >= 500)
-          ) {
-            notify(retryNotice, true);
-            retryTimer = setTimeout(reload, 3000);
-            return;
-          }
-          loadedListing.current = null;
-          if (isSearch) {
-            setSearchItems([]);
-            setSearchMore(false);
-            setNextSearchOffset(null);
-          }
-          setLoadError(
-            isPublic && (error.status === 401 || error.status === 403)
-              ? "This link has expired, was revoked, or is not valid. Ask the owner for a new link."
-              : errorMessage(error),
+    const queue = createListingRefreshQueue(async () => {
+      clearTimeout(retryTimer);
+      const background = loadedListing.current === listingKey;
+      if (!background) loadedListing.current = null;
+      setLoading(!background);
+      setLoadError("");
+      const resultPromise =
+        view === "starred"
+          ? api.starred(scopedQuery, controller.signal)
+          : view === "trash"
+            ? api.trash(scopedQuery, controller.signal)
+            : isSearch && !isPublic
+              ? api
+                  .search(
+                    currentPath.slice(8),
+                    searchOffset,
+                    searchSort === "modified" ? "date" : searchSort,
+                    controller.signal,
+                    searchOrder,
+                  )
+                  .then((result) => {
+                    if (!controller.signal.aborted) {
+                      setSearchMore(result.has_more);
+                      setNextSearchOffset(result.next_offset);
+                      setSearchItems((previous) =>
+                        reconcileDriveItems(previous, result.items),
+                      );
+                      if (!result.items.length && searchOffset > 0)
+                        setSearchOffset(0);
+                    }
+                    return {
+                      data: {
+                        name: "Search Results",
+                        contents: Object.fromEntries(
+                          result.items.map((item) => [item.id, item]),
+                        ),
+                      } as Directory,
+                      auth_home_path: undefined,
+                    };
+                  })
+              : api.directory(currentPath, location.auth, controller.signal);
+      await resultPromise
+        .then((result) => {
+          if (controller.signal.aborted) return;
+          loadedListing.current = listingKey;
+          setToast((current) =>
+            current?.message === retryNotice ? null : current,
           );
-          setDirectory({ contents: {} });
-        }
-      })
-      .finally(() => {
-        if (!controller.signal.aborted) setLoading(false);
-      });
+          setDirectory((previous) => reconcileDirectory(previous, result.data));
+          setShareRoot(result.auth_home_path || "");
+          if (result.data.name)
+            names.current.set(currentPath, result.data.name);
+        })
+        .catch((error) => {
+          if (controller.signal.aborted) return;
+          if (error.name !== "AbortError") {
+            if (
+              background &&
+              (!error.status ||
+                error.status === 408 ||
+                error.status === 429 ||
+                error.status >= 500)
+            ) {
+              notify(retryNotice, true);
+              retryTimer = setTimeout(reload, 3000);
+              return;
+            }
+            loadedListing.current = null;
+            if (isSearch) {
+              setSearchItems([]);
+              setSearchMore(false);
+              setNextSearchOffset(null);
+            }
+            setLoadError(
+              isPublic && (error.status === 401 || error.status === 403)
+                ? "This link has expired, was revoked, or is not valid. Ask the owner for a new link."
+                : errorMessage(error),
+            );
+            setDirectory({ contents: {} });
+          }
+        })
+        .finally(() => {
+          if (!controller.signal.aborted) setLoading(false);
+        });
+    });
+    listingRefresh.current = queue;
+    queue.request();
     return () => {
       controller.abort();
+      queue.dispose();
+      if (listingRefresh.current === queue) listingRefresh.current = null;
       clearTimeout(retryTimer);
     };
   }, [
@@ -689,7 +722,6 @@ export default function App() {
     isSearch,
     currentPath,
     location.auth,
-    refresh,
     searchOffset,
     searchSort,
     searchOrder,
@@ -1611,6 +1643,7 @@ export default function App() {
               }
               directory={directory}
               listingKey={listingKey}
+              refresh={refresh}
               highlightId={location.highlightId}
               loading={loading}
               error={loadError}

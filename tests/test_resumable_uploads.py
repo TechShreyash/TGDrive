@@ -187,6 +187,42 @@ async def test_request_disconnect_waits_for_thread_and_records_committed_offset(
     assert uploads.path(item["id"]).read_bytes() == b"one"
 
 
+async def test_request_disconnect_during_verification_still_enqueues_receipt(
+    tmp_path, monkeypatch
+):
+    uploads, manager = make(tmp_path)
+    item = uploads.create("one.bin", "/", 3)
+    await uploads.append(item["id"], 0, b"one")
+    started, release = threading.Event(), threading.Event()
+    verify = uploads._verify
+
+    def blocked(state, path):
+        started.set()
+        assert release.wait(3)
+        verify(state, path)
+
+    monkeypatch.setattr(uploads, "_verify", blocked)
+    completion = asyncio.create_task(uploads.complete(item["id"]))
+    try:
+        assert await asyncio.to_thread(started.wait, 2)
+        completion.cancel()
+        await asyncio.sleep(0)
+        completion.cancel()
+        await asyncio.sleep(0)
+        assert not completion.done()
+        assert uploads.locks[item["id"]].locked()
+        release.set()
+        with pytest.raises(asyncio.CancelledError):
+            await completion
+    finally:
+        release.set()
+    assert uploads.get(item["id"])["state"] == "queued"
+    job = manager.registry.get(item["id"])
+    assert job.context["local_path"] == str(uploads.path(item["id"]))
+    assert (await uploads.complete(item["id"])).id == job.id
+    assert manager.enqueued == 1
+
+
 async def test_budget_free_space_expiration_and_postrestart_release(
     tmp_path, monkeypatch
 ):

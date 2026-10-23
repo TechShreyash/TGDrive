@@ -6,6 +6,7 @@ import {
   verifyReceivedChunks,
   TransferManager,
   retainTransferBatches,
+  BROWSER_RECEIVE_INITIAL_CONCURRENCY,
   type Transfer,
 } from "./transfers";
 import {
@@ -770,6 +771,166 @@ describe("whole-batch recovery and bounded admission", () => {
 });
 
 describe("independent browser receiving and Telegram backlog", () => {
+  it("notifies the listing once per poll when files become available before backup finishes", async () => {
+    const changed = vi.fn();
+    window.addEventListener("tgdrive:files-changed", changed);
+    const jobs = Array.from({ length: 3 }, (_, index) => ({
+      id: "visible-" + index,
+      kind: "upload",
+      status: "running",
+      phase: "backup_pending",
+      current: 4,
+      total: 4,
+    }));
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => Response.json({ jobs })),
+    );
+    const manager = managerForTest();
+    try {
+      manager.setEnabled(true);
+      await vi.waitFor(() => expect(manager.snapshot()).toHaveLength(3));
+      expect(changed).toHaveBeenCalledTimes(1);
+      for (const job of jobs) job.status = "completed";
+      manager.refreshJobs();
+      await vi.waitFor(() =>
+        expect(
+          manager.snapshot().every((item) => item.state === "completed"),
+        ).toBe(true),
+      );
+      expect(changed).toHaveBeenCalledTimes(1);
+    } finally {
+      manager.setEnabled(false);
+    }
+  });
+  it("admits smaller files while larger files wait for staging space", async () => {
+    const complete: string[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: string, options: RequestInit = {}) => {
+        if (input === "/api/v1/jobs") return Response.json({ jobs: [] });
+        if (input === "/api/v1/uploads") {
+          const body = JSON.parse(String(options.body));
+          if (body.name.startsWith("large"))
+            return Response.json(
+              { detail: "Not enough space" },
+              { status: 507 },
+            );
+          return Response.json({ id: body.name });
+        }
+        const id = input.split("/")[4];
+        if (options.method === "HEAD")
+          return new Response(null, {
+            headers: { "Upload-Offset": "0", "Upload-Length": "4" },
+          });
+        if (options.method === "PATCH")
+          return new Response(null, {
+            status: 204,
+            headers: { "Upload-Offset": "4" },
+          });
+        if (input.endsWith("/complete")) {
+          complete.push(id);
+          return Response.json({ id });
+        }
+        return Response.json({
+          id,
+          offset: 0,
+          total_size: 4,
+          chunk_size: 4,
+          checksums: [],
+        });
+      }),
+    );
+    const manager = managerForTest();
+    try {
+      manager.add(
+        [
+          ...Array.from(
+            { length: 4 },
+            (_, i) => new File(["large-data"], "large-" + i),
+          ),
+          new File(["data"], "small"),
+        ],
+        "/",
+        100,
+      );
+      manager.setEnabled(true);
+      await vi.waitFor(() => expect(complete).toEqual(["small"]));
+      expect(
+        manager
+          .snapshot()
+          .slice(0, 4)
+          .every((item) => item.state === "queued"),
+      ).toBe(true);
+    } finally {
+      manager.setEnabled(false);
+    }
+  });
+  it("keeps sending around a slow file even when progress polling is unavailable", async () => {
+    let receipts = 0;
+    const completed: string[] = [];
+    let release!: () => void;
+    const slow = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: string, options: RequestInit = {}) => {
+        if (input === "/api/v1/jobs")
+          return Response.json(
+            { detail: "Progress unavailable" },
+            { status: 503 },
+          );
+        if (input === "/api/v1/uploads")
+          return Response.json({ id: "receipt-" + ++receipts });
+        if (options.method === "HEAD")
+          return new Response(null, {
+            headers: { "Upload-Offset": "0", "Upload-Length": "4" },
+          });
+        const id = input.split("/")[4];
+        if (input.endsWith("/complete")) {
+          completed.push(id);
+          return Response.json({ id });
+        }
+        return Response.json({
+          id,
+          offset: 0,
+          total_size: 4,
+          chunk_size: 4,
+          checksums: [],
+        });
+      }),
+    );
+    const manager = new TransferManager(async (url) => {
+      if (url.endsWith("receipt-1")) await slow;
+      return new Response(null, {
+        status: 204,
+        headers: { "Upload-Offset": "4" },
+      });
+    });
+    try {
+      manager.add(
+        Array.from({ length: 7 }, (_, i) => new File(["data"], "file-" + i)),
+        "/",
+        10,
+      );
+      manager.setEnabled(true);
+      await vi.waitFor(() => expect(completed).toHaveLength(6));
+      expect(receipts).toBe(7);
+      expect(manager.snapshot()[0].state).toBe("receiving");
+      expect(
+        manager
+          .snapshot()
+          .slice(1)
+          .every((item) => item.jobId),
+      ).toBe(true);
+      release();
+      await vi.waitFor(() => expect(completed).toHaveLength(7));
+    } finally {
+      release();
+      manager.setEnabled(false);
+    }
+  });
   it("receives all five files while earlier Telegram uploads remain busy", async () => {
     let receipts = 0;
     let complete = 0;
@@ -849,7 +1010,7 @@ describe("independent browser receiving and Telegram backlog", () => {
       await vi.waitFor(() => expect(complete).toBe(5));
       expect(receipts).toBe(5);
       expect(jobs.every((job) => job.status === "running")).toBe(true);
-      expect(maxPatching).toBe(1);
+      expect(maxPatching).toBe(BROWSER_RECEIVE_INITIAL_CONCURRENCY);
     } finally {
       manager.setEnabled(false);
     }
@@ -1263,12 +1424,12 @@ it("queues device files for automatic retry when staging is full", async () => {
       10,
     );
     manager.setEnabled(true);
-    await vi.waitFor(() => expect(receipts).toBe(1));
-    expect(manager.snapshot()[0].state).toBe("queued");
+    await vi.waitFor(() => expect(receipts).toBe(2));
+    await vi.waitFor(() => expect(manager.snapshot()[0].state).toBe("queued"));
     expect(manager.snapshot()[0].phase).toBe("Waiting for server space");
     expect(manager.snapshot()[0].file).toBeDefined();
     await new Promise((resolve) => setTimeout(resolve, 20));
-    expect(receipts).toBe(1);
+    expect(receipts).toBe(2);
   } finally {
     manager.setEnabled(false);
   }

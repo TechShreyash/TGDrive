@@ -58,6 +58,8 @@ known batches together; expand a folder to inspect its individual file states.
 
 ### Upload speed and queue
 
+#### Telegram upload capacity
+
 Open **Configuration → Transfer limits → Parallel uploads** to choose simultaneous uploads per bot: **1–4**.
 The default is **1**; adding bots adds upload slots. A large file's parts use
 all eligible client slots, rather than stopping at two simultaneous parts.
@@ -65,11 +67,6 @@ Available Premium clients are preferred for upload parts and download payload
 windows, with bot fallback when busy or unavailable. Premium's benefit is
 potential speed per task; every account uses the same split cap. Telegram
 cooldowns and channel pacing still apply.
-
-Your device sends files to the server while Telegram uploads run independently.
-Each ready file starts as soon as a slot is free. If temporary storage fills,
-remaining device files wait and retry automatically. Keep the tab open until
-those files have reached the server.
 
 Changes apply immediately. Reducing the limit lets running uploads finish.
 Telegram wait limits still apply; a higher setting does not guarantee more speed.
@@ -79,6 +76,29 @@ split can use more available account slots for one file, while pipelining
 overlaps part requests within a Telegram document. Keep conservative limits
 and compare actual throughput before increasing concurrency.
 See [performance and caching](performance.md) for the tradeoffs.
+
+#### Automatic device upload concurrency
+
+Your device sends files to the server while Telegram uploads run independently.
+Device uploads start with two parallel files and adapt between one and four,
+independently of Telegram upload slots and progress polling. TGDrive tries an
+extra transfer after sustained activity and keeps it only when total measured
+upload speed improves. Connection failures, sustained slowdowns and sending
+stalls reduce concurrency for new transfers while running transfers continue.
+Background-tab pauses and server confirmation time are excluded from
+these measurements. Each received file is queued for Telegram immediately;
+TGDrive does not wait for the rest of the selection or folder. If temporary
+storage fills, remaining device files wait and retry automatically. Smaller
+files can still be received when they fit the available space. Keep the tab open
+until those files have reached the server.
+
+Device concurrency is automatic and separate from **Parallel uploads** per bot.
+The files share your connection's upload bandwidth; four active files do not
+create four times that bandwidth. Small batches can finish before there is enough
+measurement to try an increase. The controller uses actual transfer progress,
+without requiring browser support for detecting Wi-Fi or cellular connections.
+See [the scheduling policy](architecture.md#adaptive-device-upload-concurrency)
+for the measurement rules and bounds.
 
 ### Files above 2 GB
 
@@ -139,6 +159,13 @@ Queued batches have no elapsed timer.
 - **Received by the server:** Telegram uploading can continue with the tab closed,
   while TGDrive itself stays running.
 - **Completed:** the local source is no longer needed by that upload.
+
+Each upload batch shows how many files the server has accepted. **Device upload
+complete** means you can close the tab even while Telegram uploads are queued or
+running. Sending 100% of the bytes alone is not enough; TGDrive waits for the
+server's durable receipt confirmation. Closing or reloading before that point
+shows the browser's leave-page warning. Directory listings update in place as
+files become available, preserving the current view and selection.
 
 To resume, choose **Choose files**, **Choose folder** or **Choose file** in the
 existing batch. Select the same originals. TGDrive checks the received bytes

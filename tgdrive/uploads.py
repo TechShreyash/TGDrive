@@ -366,7 +366,19 @@ class ResumableUploads:
             if item["offset"] != item["total_size"]:
                 raise UploadError("Upload is incomplete")
             self._destination(item)
-            await asyncio.to_thread(self._verify, item, self.path(upload_id))
+            verification = asyncio.get_running_loop().run_in_executor(
+                None, self._verify, item, self.path(upload_id)
+            )
+            cancelled = False
+            while True:
+                try:
+                    await asyncio.shield(verification)
+                    break
+                except asyncio.CancelledError:
+                    # All bytes already belong to the server. A browser leaving
+                    # during verification must not strand a complete receipt, or
+                    # release its lock while its disk worker is still reading.
+                    cancelled = True
             # A folder may move while disk verification yields. Resolve its UUID
             # immediately before enqueue, rather than reusing the old ancestry.
             destination = self._destination(item)
@@ -379,6 +391,8 @@ class ResumableUploads:
             )
             item["state"] = "queued"
             self._save(item)
+            if cancelled:
+                raise asyncio.CancelledError
             return record
 
     def _cancel_receiving(self, item: dict[str, Any]) -> None:

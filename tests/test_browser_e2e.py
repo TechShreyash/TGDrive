@@ -2694,9 +2694,9 @@ def test_queued_uploads_have_no_elapsed_speed_or_eta(
 ) -> None:
     _, page = desktop
     page.route(
-        "**/api/v1/jobs",
+        "**/api/v1/uploads",
         lambda route: route.fulfill(
-            status=503, json={"detail": "Synthetic progress service unavailable"}
+            status=507, json={"detail": "Synthetic upload staging full"}
         ),
     )
     login(page, server.url)

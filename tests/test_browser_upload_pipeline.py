@@ -1,0 +1,275 @@
+"""Device receipts flow independently of Telegram and update listings in place."""
+
+from __future__ import annotations
+
+import time
+from pathlib import Path
+from typing import Any
+from urllib.parse import urlencode
+
+import pytest
+from test_browser_e2e import (
+    ARTIFACTS,
+    Server,
+    expect,
+    fixture_nodes,
+    login,
+    select_folder,
+    select_item,
+    upload,
+)
+from test_browser_e2e import browser as browser_fixture
+from test_browser_e2e import desktop as desktop_fixture
+from test_browser_e2e import server as server_fixture
+
+pytestmark = pytest.mark.e2e
+browser, desktop, server = browser_fixture, desktop_fixture, server_fixture
+
+
+def _wait_started(page: Any, server: Server, count: int) -> list[dict[str, Any]]:
+    deadline = time.monotonic() + 10
+    while time.monotonic() < deadline:
+        started = server.control()["started"]
+        if len(started) >= count:
+            return started
+        # Keep servicing browser routing callbacks while receipt requests run.
+        page.wait_for_timeout(50)
+    pytest.fail(f"Expected {count} accepted uploads: {server.control()}")
+
+
+def _wait_completed(server: Server, started: list[dict[str, Any]]) -> None:
+    deadline = time.monotonic() + 10
+    while time.monotonic() < deadline:
+        records = server.control()["records"]
+        if all(records[item["id"]]["status"] == "completed" for item in started):
+            return
+        time.sleep(0.05)
+    pytest.fail(f"Server uploads did not finish: {server.control()}")
+
+
+def _device_close_blocked(page: Any) -> bool:
+    return page.evaluate("""() => {
+      const event=new Event('beforeunload', {cancelable:true});
+      window.dispatchEvent(event);
+      return event.defaultPrevented;
+    }""")
+
+
+@pytest.mark.parametrize("selection", ["files", "folder"])
+def test_device_receipts_finish_while_telegram_waits_and_survive_tab_close(
+    server: Server, desktop: tuple[Any, Any], tmp_path: Path, selection: str
+) -> None:
+    context, page = desktop
+    login(page, server.url)
+    names = [f"pipeline-{index:02}.txt" for index in range(8)]
+    held: list[Any] = []
+    first_patch = True
+
+    def hold_later_receipts(route: Any) -> None:
+        nonlocal first_patch
+        if route.request.method != "PATCH":
+            route.continue_()
+        elif first_patch:
+            first_patch = False
+            route.continue_()
+        else:
+            held.append(route)
+
+    page.route("**/api/v1/uploads/*", hold_later_receipts)
+    try:
+        if selection == "folder":
+            directory = tmp_path / "Flow folder"
+            directory.mkdir()
+            for name in names:
+                (directory / name).write_bytes(b"x" * 65536)
+            dialog = select_folder(page, directory)
+            dialog.get_by_role("button", name="Upload", exact=True).click()
+            expect(dialog).not_to_be_visible()
+        else:
+            upload(page, names)
+        first = _wait_started(page, server, 1)
+        assert len(first) == 1, "Telegram must start before the remaining receipts"
+        assert held, "Other device receipts must still be in flight"
+        assert all(
+            record["status"] != "completed"
+            for record in server.control()["records"].values()
+        )
+        assert _device_close_blocked(page), "Unsent device data must guard tab close"
+    finally:
+        # Playwright releases any pending routes when this handler is removed.
+        page.unroute("**/api/v1/uploads/*", hold_later_receipts)
+
+    started = _wait_started(page, server, len(names))
+    assert {item["name"] for item in started} == set(names)
+    assert all(
+        record["status"] != "completed"
+        for record in server.control()["records"].values()
+    ), "Receiving later files must not require earlier Telegram jobs to finish"
+    safe = page.locator(".transfer-device-status, .transfer-notice").filter(
+        has_text="Device upload complete. You can close this tab"
+    )
+    expect(safe.first).to_be_visible()
+    assert not _device_close_blocked(page)
+    saved = page.evaluate(
+        "JSON.parse(localStorage.getItem('tgdrive.uploads.v2') || '[]')"
+    )
+    assert len(saved) == len(names)
+    assert all(item.get("jobId") for item in saved)
+    destination = started[0]["destination"]
+    assert {item["destination"] for item in started} == {destination}
+    assert set(names).isdisjoint(
+        item["name"] for item in fixture_nodes(page, server, destination)
+    )
+    page.screenshot(path=ARTIFACTS / f"pipeline-{selection}-safe-to-close.png")
+
+    dialogs: list[str] = []
+
+    def accept_unexpected_dialog(dialog: Any) -> None:
+        dialogs.append(dialog.type)
+        dialog.accept()
+
+    page.on("dialog", accept_unexpected_dialog)
+    page.close(run_before_unload=True)
+    reopened = context.new_page()
+    assert page.is_closed()
+    assert dialogs == [], "Confirmed server receipts must remove the close warning"
+    for item in started:
+        server.finish(item["id"])
+    _wait_completed(server, started)
+
+    errors: list[str] = []
+    reopened.on("pageerror", lambda error: errors.append(str(error)))
+    reopened.goto(server.url + "/?" + urlencode({"path": destination}))
+    for name in names:
+        expect(
+            reopened.locator(".item-name-button").filter(has_text=name)
+        ).to_have_count(1)
+    assert set(names).issubset(
+        item["name"] for item in fixture_nodes(reopened, server, destination)
+    )
+    assert errors == []
+    reopened.screenshot(path=ARTIFACTS / f"pipeline-{selection}-server-finished.png")
+
+
+def test_slow_listing_refresh_coalesces_upload_bursts_without_unmounting_rows(
+    server: Server, desktop: tuple[Any, Any]
+) -> None:
+    _, page = desktop
+    held: list[tuple[Any, Any, dict[str, Any]]] = []
+    refresh_requests: list[Any] = []
+    failed_requests: list[str] = []
+    recording = False
+    hold = False
+
+    def listing(route: Any) -> None:
+        response = route.fetch()
+        payload = response.json()
+        root = route.request.post_data_json["path"] == "/"
+        if root:
+            payload["data"]["contents"].update(
+                {
+                    f"stable-{index}": {
+                        "id": f"stable-{index}",
+                        "name": f"stable-{index:03}.txt",
+                        "type": "file",
+                        "path": "/",
+                        "size": 10,
+                    }
+                    for index in range(130)
+                }
+            )
+            if recording:
+                refresh_requests.append(route.request)
+        if root and hold:
+            held.append((route, response, payload))
+        else:
+            route.fulfill(response=response, json=payload)
+
+    def failed(request: Any) -> None:
+        if recording and request.url.endswith("/api/getDirectory"):
+            failed_requests.append(request.failure or "Listing failed")
+
+    page.route("**/api/getDirectory", listing)
+    page.on("requestfailed", failed)
+    login(page, server.url)
+    names = [f"zz-upload-{index}.txt" for index in range(6)]
+    upload(page, names)
+    started = _wait_started(page, server, len(names))
+    expect(
+        page.locator(".transfer-device-status, .transfer-notice")
+        .filter(has_text="Device upload complete")
+        .first
+    ).to_be_visible()
+    hide = page.get_by_role("button", name="Hide Transfer Details", exact=True)
+    if hide.is_visible():
+        hide.click()
+    next_page = page.get_by_role("button", name="Next Page", exact=True)
+    next_page.focus()
+    next_page.press("Enter")
+    select_item(page, "stable-110.txt")
+    checkbox = page.get_by_label("Select stable-110.txt", exact=True)
+    checkbox.focus()
+    page.evaluate("""() => {
+      window.stableTable=document.querySelector('.file-table');
+      window.stableRow=document.querySelector('[data-item-id="stable-110"]');
+      window.tableRemovals=0;
+      new MutationObserver(records => {
+        for(const record of records) for(const removed of record.removedNodes)
+          if(removed===window.stableTable || removed.contains?.(window.stableTable))
+            window.tableRemovals++;
+      }).observe(document.querySelector('.workspace'), {childList:true,subtree:true});
+      window.stableScroll=document.querySelector('.file-list-scroll');
+      window.stableScroll.scrollTop=250;
+    }""")
+    scroll = page.evaluate("window.stableScroll.scrollTop")
+    assert scroll > 0
+    recording = True
+    hold = True
+    try:
+        page.evaluate("window.dispatchEvent(new Event('tgdrive:files-changed'))")
+        deadline = time.monotonic() + 10
+        while not held and time.monotonic() < deadline:
+            page.wait_for_timeout(50)
+        assert len(held) == 1
+        for item in started:
+            server.finish(item["id"])
+        page.wait_for_function("""() => {
+          const items=JSON.parse(localStorage.getItem('tgdrive.uploads.v2')||'[]');
+          return items.length===6 && items.every(item=>item.state==='completed');
+        }""")
+        page.evaluate("""async () => {
+          for(let index=0;index<30;index++)
+            window.dispatchEvent(new Event('tgdrive:files-changed'));
+          await new Promise(resolve=>requestAnimationFrame(
+            ()=>requestAnimationFrame(resolve)));
+        }""")
+        assert len(refresh_requests) == 1, "A slow fetch must finish before its retry"
+        assert failed_requests == [], "Upload updates must not abort listing requests"
+        expect(page.locator(".loading-state")).to_have_count(0)
+        expect(checkbox).to_be_checked()
+        expect(checkbox).to_be_focused()
+        hold = False
+        route, response, payload = held.pop()
+        route.fulfill(response=response, json=payload)
+        for name in names:
+            expect(
+                page.locator(".item-name-button").filter(has_text=name)
+            ).to_have_count(1)
+        assert len(refresh_requests) == 2, "Completion bursts need one trailing fetch"
+        assert failed_requests == []
+        expect(checkbox).to_be_checked()
+        expect(checkbox).to_be_focused()
+        expect(page.locator(".pagination")).to_contain_text("Showing 101\u2013")
+        assert page.evaluate("window.stableScroll.scrollTop") == scroll
+        assert page.evaluate(
+            "window.stableTable===document.querySelector('.file-table')"
+        )
+        assert page.evaluate(
+            "window.stableRow===document.querySelector('[data-item-id=stable-110]')"
+        )
+        assert page.evaluate("window.tableRemovals") == 0
+        page.screenshot(path=ARTIFACTS / "pipeline-listing-burst-preserves-state.png")
+    finally:
+        hold = False
+        for route, response, payload in held:
+            route.fulfill(response=response, json=payload)
