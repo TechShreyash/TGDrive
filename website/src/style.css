@@ -3504,8 +3504,61 @@ textarea,
   background: #202328;
 }
 .preview-fullscreen-surface:fullscreen {
+  position: relative;
   width: 100vw;
   height: 100dvh;
+}
+.preview-header[hidden],
+.preview-quality[hidden] {
+  display: none;
+}
+.preview-toolbar-reveal {
+  position: absolute;
+  z-index: 10;
+  top: 0;
+  left: 50%;
+  transform: translateX(-50%);
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 36px;
+  padding: 6px 12px;
+  border: 1px solid #373b43;
+  border-top: 0;
+  border-radius: 0 0 6px 6px;
+  background: #181b20;
+  color: #f1f3f6;
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+.preview-toolbar-reveal:hover {
+  background: #30343c;
+}
+.preview-toolbar-reveal:focus-visible {
+  outline-offset: -3px;
+}
+@media (max-width: 720px) {
+  .preview-toolbar-reveal {
+    min-height: 44px;
+  }
+  .preview-fullscreen-surface:fullscreen .preview-header-book {
+    grid-template-columns: 44px minmax(0, 1fr) repeat(3, 44px);
+  }
+  .preview-fullscreen-surface:fullscreen .preview-toolbar-collapse {
+    grid-column: 3;
+    grid-row: 1;
+  }
+  .preview-fullscreen-surface:fullscreen
+    .preview-header-book
+    .preview-fullscreen {
+    grid-column: 4;
+  }
+  .preview-fullscreen-surface:fullscreen
+    .preview-header-book
+    .preview-download {
+    grid-column: 5;
+  }
 }
 .file-details .preview-fullscreen-surface {
   display: contents;

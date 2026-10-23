@@ -4,6 +4,8 @@ import { lazy, Suspense, useEffect, useRef, useState } from "react";
 import {
   AlertCircle,
   ArrowLeft,
+  ChevronDown,
+  ChevronUp,
   Download,
   Maximize,
   Minimize,
@@ -180,33 +182,72 @@ export default function Preview({
   const viewer = useRef<HTMLDialogElement>(null);
   const fullscreenSurface = useRef<HTMLDivElement>(null);
   const [fullscreen, setFullscreen] = useState(false);
+  const [toolbarCollapsed, setToolbarCollapsed] = useState(false);
   const [fullscreenError, setFullscreenError] = useState("");
   useEffect(() => {
     const surface = fullscreenSurface.current;
-    const update = () => setFullscreen(document.fullscreenElement === surface);
+    let wasFullscreen = false;
+    const update = () => {
+      const active = document.fullscreenElement === surface;
+      const exited = wasFullscreen && !active;
+      wasFullscreen = active;
+      setFullscreen(active);
+      setToolbarCollapsed(active);
+      if (active || exited)
+        requestAnimationFrame(() =>
+          surface
+            ?.querySelector<HTMLButtonElement>(
+              active ? ".preview-toolbar-reveal" : ".preview-fullscreen",
+            )
+            ?.focus({ preventScroll: true }),
+        );
+    };
     document.addEventListener("fullscreenchange", update);
     return () => {
       document.removeEventListener("fullscreenchange", update);
-      if (document.fullscreenElement === surface)
+      if (
+        document.fullscreenElement &&
+        surface?.contains(document.fullscreenElement)
+      )
         void document.exitFullscreen().catch(() => {});
     };
   }, []);
   async function toggleFullscreen() {
     setFullscreenError("");
     try {
-      if (document.fullscreenElement === fullscreenSurface.current)
-        await document.exitFullscreen();
-      else if (
-        document.fullscreenEnabled &&
-        fullscreenSurface.current?.requestFullscreen
+      const surface = fullscreenSurface.current;
+      const target =
+        kind === "video"
+          ? surface?.querySelector<HTMLElement>("movi-player")
+          : surface;
+      if (
+        document.fullscreenElement &&
+        surface?.contains(document.fullscreenElement)
       )
-        await fullscreenSurface.current.requestFullscreen();
-      else setFullscreenError("Fullscreen is not available in this browser.");
+        await document.exitFullscreen();
+      else if (kind === "video" && !target)
+        setFullscreenError(
+          "The video player is still loading. Try fullscreen again in a moment.",
+        );
+      else if (document.fullscreenEnabled && target?.requestFullscreen) {
+        await target.requestFullscreen();
+        if (kind === "video") target.focus({ preventScroll: true });
+      } else setFullscreenError("Fullscreen is not available in this browser.");
     } catch {
       setFullscreenError(
         "Fullscreen could not open. Try again or use your browser's fullscreen control.",
       );
     }
+  }
+  function toggleToolbar(collapsed: boolean) {
+    setToolbarCollapsed(collapsed);
+    requestAnimationFrame(() =>
+      fullscreenSurface.current
+        ?.querySelector<HTMLButtonElement>(
+          collapsed ? ".preview-toolbar-reveal" : ".preview-toolbar-collapse",
+        )
+        ?.focus({ preventScroll: true }),
+    );
   }
   const [queue, setQueue] = useState<{
     position: number;
@@ -373,11 +414,32 @@ export default function Preview({
       }}
       onCancel={(event) => {
         event.preventDefault();
+        if (
+          document.fullscreenElement &&
+          fullscreenSurface.current?.contains(document.fullscreenElement)
+        ) {
+          void document.exitFullscreen().catch(() => {});
+          return;
+        }
         onClose();
       }}
     >
       <div className="preview-fullscreen-surface" ref={fullscreenSurface}>
+        {fullscreen && toolbarCollapsed && (
+          <button
+            className="preview-toolbar-reveal"
+            type="button"
+            aria-label="Show Toolbar"
+            aria-controls="preview-header"
+            aria-expanded={false}
+            onClick={() => toggleToolbar(false)}
+          >
+            <ChevronDown size={16} /> Show Toolbar
+          </button>
+        )}
         <header
+          id="preview-header"
+          hidden={fullscreen && toolbarCollapsed}
           className={
             "preview-header" +
             (documentPreview ? " preview-header-pdf" : "") +
@@ -405,6 +467,19 @@ export default function Preview({
               </div>
               {documentPreview && (
                 <div className="preview-toolbar-slot" ref={setToolbarTarget} />
+              )}
+              {fullscreen && (
+                <button
+                  className="icon-button preview-toolbar-collapse"
+                  type="button"
+                  aria-label="Hide Toolbar"
+                  title="Hide Toolbar"
+                  aria-controls="preview-header"
+                  aria-expanded={true}
+                  onClick={() => toggleToolbar(true)}
+                >
+                  <ChevronUp size={19} />
+                </button>
               )}
               <button
                 className="icon-button preview-fullscreen"
@@ -488,7 +563,10 @@ export default function Preview({
         ) : (
           <>
             {variants.length > 0 && (
-              <label className="preview-quality">
+              <label
+                className="preview-quality"
+                hidden={fullscreen && toolbarCollapsed}
+              >
                 Preview Quality
                 <select
                   value={quality}
