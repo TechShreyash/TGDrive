@@ -38,18 +38,38 @@
     display: flex;
     align-items: center;
     justify-content: start;
+    width: 100%;
 }
 
-.sidebar-header img {
-    width: 40px;
-    height: 40px;
-    margin-right: 10px;
+.brand-link {
+    display: inline-flex;
+    align-items: center;
+    min-height: 44px;
+    max-width: 100%;
 }
 
-.sidebar-header span {
-    font-size: 1.2rem;
-    font-weight: 500;
-    color: #444746;
+.brand-link:focus-visible {
+    outline: 2px solid #3157ff;
+    outline-offset: 4px;
+}
+
+.sidebar-header .brand-logo {
+    display: block;
+    width: 180px;
+    max-width: 100%;
+    height: auto;
+}
+
+#get-password {
+    max-width: calc(100vw - 32px);
+}
+
+#get-password .login-brand {
+    display: block;
+    width: 180px;
+    max-width: 100%;
+    height: auto;
+    margin-bottom: 20px;
 }
 
 .sidebar .new-button {

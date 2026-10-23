@@ -4,7 +4,25 @@
 <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>TG Drive</title>
+    <title>TGDrive</title>
+    <meta name="theme-color" content="#f8fafd" />
+    <meta name="description" content="Manage, upload and share files stored in Telegram with TGDrive." />
+    <link rel="icon" href="/static/brand/favicon.ico" sizes="16x16 32x32 48x48" />
+    <link rel="icon" type="image/svg+xml" href="/static/brand/favicon.svg" sizes="any" />
+    <link rel="apple-touch-icon" href="/static/brand/apple-touch-icon.png" sizes="180x180" />
+    <link rel="manifest" href="/static/brand/manifest.json" />
+    <meta property="og:type" content="website" />
+    <meta property="og:title" content="TGDrive" />
+    <meta property="og:description" content="Manage, upload and share files stored in Telegram with TGDrive." />
+    <meta property="og:image" content="https://raw.githubusercontent.com/TechShreyash/TGDrive/main/website/static/brand/social-preview.png" />
+    <meta property="og:image:width" content="1200" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:image:alt" content="TGDrive — your files in Telegram, your drive in the browser." />
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:title" content="TGDrive" />
+    <meta name="twitter:description" content="Manage, upload and share files stored in Telegram with TGDrive." />
+    <meta name="twitter:image" content="https://raw.githubusercontent.com/TechShreyash/TGDrive/main/website/static/brand/social-preview.png" />
+    <meta name="twitter:image:alt" content="TGDrive — your files in Telegram, your drive in the browser." />
     <link rel="stylesheet" href="static/home.css" />
 
     <!-- Fonts Start -->
@@ -21,8 +39,9 @@
         <!-- Sidebar Start -->
         <div class="sidebar">
             <div class="sidebar-header">
-                <img src="https://ssl.gstatic.com/images/branding/product/1x/drive_2020q4_48dp.png" />
-                <span>TG Drive</span>
+                <a class="brand-link" href="/" aria-label="TGDrive home">
+                    <img class="brand-logo" src="/static/brand/tgdrive-logo.svg" alt="TGDrive" width="180" height="36" />
+                </a>
             </div>
 
             <button id="new-button" class="new-button">
@@ -98,6 +117,7 @@
 
         <!-- Get Password Start -->
         <div id="get-password" class="create-new-folder">
+            <img class="login-brand" src="/static/brand/tgdrive-logo.svg" alt="TGDrive" width="180" height="36" />
             <span>Admin Login</span>
             <input type="text" id="auth-pass" placeholder="Enter Password" autocomplete="off" />
             <div>

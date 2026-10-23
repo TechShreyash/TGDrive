@@ -4,7 +4,25 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>TG Drive - Video Player</title>
+    <title>TGDrive - Video Player</title>
+    <meta name="theme-color" content="#ffffff">
+    <meta name="description" content="Stream files stored in Telegram with TGDrive.">
+    <link rel="icon" href="/static/brand/favicon.ico" sizes="16x16 32x32 48x48">
+    <link rel="icon" type="image/svg+xml" href="/static/brand/favicon.svg" sizes="any">
+    <link rel="apple-touch-icon" href="/static/brand/apple-touch-icon.png" sizes="180x180">
+    <link rel="manifest" href="/static/brand/manifest.json">
+    <meta property="og:type" content="website">
+    <meta property="og:title" content="TGDrive - Video Player">
+    <meta property="og:description" content="Stream files stored in Telegram with TGDrive.">
+    <meta property="og:image" content="https://raw.githubusercontent.com/TechShreyash/TGDrive/main/website/static/brand/social-preview.png">
+    <meta property="og:image:width" content="1200">
+    <meta property="og:image:height" content="630">
+    <meta property="og:image:alt" content="TGDrive — your files in Telegram, your drive in the browser.">
+    <meta name="twitter:card" content="summary_large_image">
+    <meta name="twitter:title" content="TGDrive - Video Player">
+    <meta name="twitter:description" content="Stream files stored in Telegram with TGDrive.">
+    <meta name="twitter:image" content="https://raw.githubusercontent.com/TechShreyash/TGDrive/main/website/static/brand/social-preview.png">
+    <meta name="twitter:image:alt" content="TGDrive — your files in Telegram, your drive in the browser.">
 
     <link href="//vjs.zencdn.net/8.3.0/video-js.min.css" rel="stylesheet">
     <script src="//vjs.zencdn.net/8.3.0/video.min.js"></script>
@@ -17,6 +35,27 @@
             height: 100vh;
             margin: 0;
             font-family: Arial, sans-serif;
+        }
+
+        .brand-link {
+            display: inline-flex;
+            align-items: center;
+            min-height: 44px;
+            max-width: calc(100% - 32px);
+            flex-shrink: 0;
+            margin-bottom: 20px;
+        }
+
+        .brand-link:focus-visible {
+            outline: 2px solid #3157ff;
+            outline-offset: 4px;
+        }
+
+        .brand-logo {
+            display: block;
+            width: 180px;
+            max-width: 100%;
+            height: auto;
         }
 
         .video-container {
@@ -50,6 +89,10 @@
 </head>
 
 <body>
+
+    <a class="brand-link" href="/" aria-label="TGDrive home">
+        <img class="brand-logo" src="/static/brand/tgdrive-logo.svg" alt="TGDrive" width="180" height="36">
+    </a>
 
     <div class="video-container">
         <video id="my-player" class="video-js vjs-fluid" controls preload="auto" data-setup='{}'>
