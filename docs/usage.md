@@ -468,9 +468,13 @@ messages already deleted by an older version cannot be brought back by this chan
 Bulk deletion has one combined operation notice, rather than upload rows for
 every file. If some items fail, expand the failed-item details and retry them.
 Wait for the completion notice; merely disappearing from a list is not confirmation.
-The notice appears as soon as deletion is accepted, shows how many selected items
-are still processing and how many have finished, and keeps the result visible
-until dismissed. Items stay in Trash while their jobs run; the list refreshes
+On the Trash page, the notice appears as soon as deletion is accepted and shows
+how many selected items are still processing and how many have finished. Successful
+completion uses the normal notification popup, which disappears after six seconds
+or can be dismissed immediately. Its timer pauses while hovered or keyboard focused.
+Completed results do not return on navigation or reload. Running jobs and failure
+details appear only on the Trash page.
+Items stay in Trash while their jobs run; the list refreshes
 automatically after completion. Backup checks or upload cleanup may delay removal.
 If progress checks lose connection, TGDrive displays a warning and retries. A
 temporary failure refreshing the file list is also retried automatically.

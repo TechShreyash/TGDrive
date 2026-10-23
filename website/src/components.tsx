@@ -76,12 +76,43 @@ export function Modal({
     const node = dialog.current!;
     const trigger = document.activeElement as HTMLElement | null;
     node.showModal();
+    const cycleFocus = (event: KeyboardEvent) => {
+      if (event.key !== "Tab") return;
+      const controls = Array.from(
+        node.querySelectorAll<HTMLElement>(
+          "a[href], button, input, select, textarea, summary, [tabindex]",
+        ),
+      ).filter(
+        (node) =>
+          node.tabIndex >= 0 &&
+          !node.matches(":disabled") &&
+          !node.closest("[inert]") &&
+          node.getClientRects().length > 0 &&
+          getComputedStyle(node).visibility !== "hidden",
+      );
+      const first = controls[0];
+      const last = controls.at(-1);
+      if (!first || !last) {
+        event.preventDefault();
+        return;
+      }
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault();
+        first.focus();
+      }
+    };
+    // Use a DOM listener so notifications portaled into this dialog participate.
+    node.addEventListener("keydown", cycleFocus);
     node
       .querySelector<HTMLElement>(
         initialFocus || "input:not([type=checkbox]), select, textarea",
       )
       ?.focus();
     return () => {
+      node.removeEventListener("keydown", cycleFocus);
       node.close();
       if (trigger?.isConnected && trigger !== document.body) trigger.focus();
       else document.getElementById("main-content")?.focus();
@@ -149,8 +180,20 @@ export function ToastNotice({
 }) {
   const [container, setContainer] = useState<HTMLElement>(document.body);
   const notice = useRef<HTMLDivElement>(null);
+  const returnFocus = useRef<HTMLElement | null>(null);
+  useEffect(() => {
+    if (!notice.current?.contains(document.activeElement))
+      returnFocus.current = document.activeElement as HTMLElement | null;
+  }, [toast]);
   const closeNotice = useRef(close);
   closeNotice.current = close;
+  const [hovered, setHovered] = useState(false);
+  const [focused, setFocused] = useState(false);
+  useEffect(() => {
+    if (toast.error || hovered || focused) return;
+    const timer = window.setTimeout(() => closeNotice.current(), 6000);
+    return () => window.clearTimeout(timer);
+  }, [toast, hovered, focused]);
   useEffect(() => {
     const modal = () => {
       const dialogs =
@@ -174,8 +217,7 @@ export function ToastNotice({
   }, [toast.message, toast.error]);
   useEffect(() => {
     const node = notice.current;
-    // Closing a dialog can detach its portal before the observer relocates it.
-    // The next container render raises the same notice without stealing focus.
+    // Portals move into the current modal before entering the top layer.
     if (!node?.isConnected || typeof node.showPopover !== "function") return;
     node.showPopover();
     return () => {
@@ -189,12 +231,28 @@ export function ToastNotice({
       className={"toast " + (toast.error ? "toast-error" : "")}
       role={toast.error ? "alert" : "status"}
       aria-live={toast.error ? "assertive" : "polite"}
+      onMouseEnter={() => setHovered(true)}
+      onMouseLeave={() => setHovered(false)}
+      onFocusCapture={() => setFocused(true)}
+      onBlurCapture={(event) => {
+        if (!event.currentTarget.contains(event.relatedTarget))
+          setFocused(false);
+      }}
     >
-      <span>{toast.message}</span>
+      <span tabIndex={toast.error ? 0 : undefined}>{toast.message}</span>
       <button
         className="icon-button"
+        type="button"
         aria-label="Dismiss Notification"
-        onClick={close}
+        onClick={() => {
+          const restore = notice.current?.contains(document.activeElement);
+          close();
+          if (restore) {
+            const target = returnFocus.current;
+            if (target?.isConnected && target !== document.body) target.focus();
+            else document.getElementById("main-content")?.focus();
+          }
+        }}
       >
         <X size={17} />
       </button>

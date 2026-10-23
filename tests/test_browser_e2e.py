@@ -640,6 +640,10 @@ def test_queued_deletion_is_not_reported_complete_early(
     expect(
         page.get_by_role("button", name="Private folder", exact=True)
     ).to_be_visible()
+    page.locator(".drive-nav").get_by_role("link", name="My Files", exact=True).click()
+    expect(page.get_by_role("region", name="File Deletion")).to_have_count(0)
+    page.get_by_role("link", name="Trash", exact=True).click()
+    expect(page.get_by_role("region", name="File Deletion")).to_be_visible()
     records = server.control()["records"]
     deletion_id = next(
         key for key, value in records.items() if value["phase"] == "deleting"
@@ -661,8 +665,9 @@ def test_queued_deletion_is_not_reported_complete_early(
     assert failed_refreshes
 
 
+@pytest.mark.parametrize("automatic_dismissal", [False, True])
 def test_fast_deletion_is_visible_when_an_older_job_poll_is_in_flight(
-    server: Server, desktop: tuple[Any, Any]
+    server: Server, desktop: tuple[Any, Any], automatic_dismissal: bool
 ) -> None:
     _, page = desktop
     held = []
@@ -696,10 +701,21 @@ def test_fast_deletion_is_visible_when_an_older_job_poll_is_in_flight(
     hold = False
     for route in held:
         route.fulfill(status=200, json={"jobs": []})
-    expect(notice.get_by_role("status")).to_have_text("Permanently deleted 1 item.")
-    expect(page.get_by_role("heading", name="Trash Is Empty")).to_be_visible()
-    notice.get_by_role("button", name="Dismiss Deletion Result").click()
+    expect(page.get_by_text("Permanently deleted 1 item.", exact=True)).to_be_visible()
     expect(notice).to_have_count(0)
+    expect(page.get_by_role("heading", name="Trash Is Empty")).to_be_visible()
+    if not automatic_dismissal:
+        page.get_by_role("button", name="Dismiss Notification", exact=True).click()
+    expect(page.get_by_text("Permanently deleted 1 item.", exact=True)).to_have_count(
+        0, timeout=9000
+    )
+    page.locator(".drive-nav").get_by_role("link", name="My Files", exact=True).click()
+    expect(notice).to_have_count(0)
+    page.get_by_role("link", name="Trash", exact=True).click()
+    with page.expect_response(lambda response: response.url.endswith("/api/v1/jobs")):
+        page.reload()
+    expect(notice).to_have_count(0)
+    expect(page.get_by_text("Permanently deleted 1 item.", exact=True)).to_have_count(0)
 
 
 def test_keyboard_dialog_focus_and_unicode_search(
@@ -2955,13 +2971,18 @@ def test_bulk_deletion_is_one_notice_with_refresh_failure_and_retry(
     expect(page.locator(".transfer-batch")).to_have_count(0)
     page.reload()
     expect(notice.get_by_role("status")).to_have_text("1 item could not be deleted.")
+    page.locator(".drive-nav").get_by_role("link", name="My Files", exact=True).click()
+    expect(notice).to_have_count(0)
+    page.get_by_role("link", name="Trash", exact=True).click()
+    expect(notice.get_by_role("status")).to_have_text("1 item could not be deleted.")
     expect(page.locator(".transfer-batch")).to_have_count(0)
     notice.get_by_text("View Failed Items (1)", exact=True).click()
     expect(notice).to_contain_text("Synthetic catalog deletion failed")
     notice.get_by_role("button", name="Retry Failed deletions", exact=True).click()
     expect(notice.get_by_role("status")).to_contain_text("Deleting 1 item…")
     server.finish(ids[1])
-    expect(notice.get_by_role("status")).to_contain_text("Permanently deleted 1 item.")
+    expect(page.get_by_text("Permanently deleted 1 item.", exact=True)).to_be_visible()
+    expect(notice).to_have_count(0)
     expect(
         page.get_by_role("heading", name="Trash Is Empty", exact=True)
     ).to_be_visible()

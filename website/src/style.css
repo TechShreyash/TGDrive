@@ -1362,7 +1362,7 @@ progress::-moz-progress-bar {
   color: var(--toast-ink);
   border-radius: 10px;
   padding: 10px 12px 10px 20px;
-  max-width: calc(100vw - 32px);
+  max-width: min(560px, calc(100vw - 32px));
   box-shadow: 0 5px 22px #14243b22;
   font-size: 13px;
 }
@@ -1371,6 +1371,14 @@ progress::-moz-progress-bar {
 }
 .toast .icon-button {
   color: inherit;
+  flex-shrink: 0;
+}
+.toast > span {
+  min-width: 0;
+  max-height: min(240px, calc(100dvh - 96px));
+  overflow-y: auto;
+  overflow-wrap: anywhere;
+  overscroll-behavior: contain;
 }
 .toast .icon-button:hover {
   background: #ffffff18;

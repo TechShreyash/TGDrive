@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Check, RefreshCw, Trash2, X } from "lucide-react";
+import { RefreshCw, Trash2 } from "lucide-react";
 import { Spinner } from "./components";
 import { transfers } from "./transfers";
 import { errorMessage } from "./api";
@@ -23,40 +23,21 @@ export default function DeletionNotice({
   const failed = jobs.filter((job) => failedStates.has(job.status));
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
-  if (!active.length && !failed.length && !completed) return null;
+  if (!active.length && !failed.length) return null;
   return (
     <section className="deletion-notice" aria-label="File Deletion">
       <div className="deletion-summary" role="status" aria-live="polite">
-        {active.length ? (
-          <Spinner />
-        ) : failed.length ? (
-          <Trash2 size={18} />
-        ) : (
-          <Check size={18} />
-        )}
+        {active.length ? <Spinner /> : <Trash2 size={18} />}
         <span>
           {active.length
             ? "Deleting " +
               active.length +
               (active.length === 1 ? " item…" : " items…")
-            : failed.length
-              ? failed.length +
-                (failed.length === 1
-                  ? " item could not be deleted."
-                  : " items could not be deleted.")
-              : "Permanently deleted " +
-                completed +
-                (completed === 1 ? " item." : " items.")}
+            : failed.length +
+              (failed.length === 1
+                ? " item could not be deleted."
+                : " items could not be deleted.")}
         </span>
-        {!active.length && !failed.length && (
-          <button
-            className="icon-button"
-            aria-label="Dismiss Deletion Result"
-            onClick={transfers.dismissDeletionResult}
-          >
-            <X size={17} />
-          </button>
-        )}
       </div>
       {active.length > 0 && (
         <p className="deletion-progress-detail">

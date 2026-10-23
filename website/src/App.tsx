@@ -375,6 +375,29 @@ export default function App() {
     (message: string, error = false) => setToast({ message, error }),
     [],
   );
+  useEffect(() => {
+    if (
+      !deletionProgress.completed ||
+      deletionProgress.jobs.some(
+        (job) =>
+          ![
+            "completed",
+            "cancelled",
+            "error",
+            "failed",
+            "interrupted",
+          ].includes(job.status),
+      )
+    )
+      return;
+    notify(
+      "Permanently deleted " +
+        deletionProgress.completed +
+        (deletionProgress.completed === 1 ? " item." : " items."),
+    );
+    // Acknowledge the result once so later polls and page changes cannot replay it.
+    transfers.dismissDeletionResult();
+  }, [deletionProgress, notify]);
   const reload = useCallback(() => setRefresh((value) => value + 1), []);
   const navigate = useCallback(
     (
@@ -514,11 +537,6 @@ export default function App() {
       window.removeEventListener("tgdrive:files-changed", reload);
     };
   }, [notify, reload]);
-  useEffect(() => {
-    if (!toast || toast.error) return;
-    const timer = setTimeout(() => setToast(null), 6000);
-    return () => clearTimeout(timer);
-  }, [toast]);
   useEffect(() => {
     if (ownSearchNavigation.current === currentPath) {
       ownSearchNavigation.current = null;
@@ -949,7 +967,8 @@ export default function App() {
         error.code.includes("PUBLIC_EXPOSURE")
       )
         setDialog({ type: "restore", items: targets });
-      else notify(errorMessage(error), true);
+      else if (type !== "delete" && !allowPublic)
+        notify(errorMessage(error), true);
       reload();
       throw error;
     }
@@ -1577,7 +1596,7 @@ export default function App() {
             </div>
           )}
           {!isFiles && pageHeading}
-          {!isPublic && (
+          {!isPublic && view === "trash" && (
             <DeletionNotice
               jobs={deletionProgress.jobs}
               completed={deletionProgress.completed}
