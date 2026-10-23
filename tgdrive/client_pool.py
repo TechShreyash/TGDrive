@@ -409,6 +409,7 @@ class ClientPool:
         prefer_premium first considers healthy users and otherwise bots,
         so reads continue when no usable optional user is present.
         allow_users admits both account kinds for bot-compatible media parts;
+        with prefer_premium, ready user slots are selected before bot slots.
         premium-required documents remain restricted to user accounts.
         """
 
@@ -592,6 +593,7 @@ class ClientPool:
                         slot = min(
                             eligible,
                             key=lambda item: (
+                                prefer_premium and item.kind != "user",
                                 item.download_active
                                 if download
                                 else item.media_active

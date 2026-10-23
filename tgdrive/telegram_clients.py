@@ -27,6 +27,7 @@ from telethon.errors import (
     FileReferenceExpiredError,
     FileReferenceInvalidError,
     FilerefUpgradeNeededError,
+    FloodPremiumWaitError,
     FloodWaitError,
     RPCError,
 )
@@ -651,7 +652,7 @@ class Client:
         self.identity_retry_at = None
         await self.native.disconnect()
 
-    async def _defer_read(self, error: FloodWaitError) -> None:
+    async def _defer_read(self, error: FloodWaitError | FloodPremiumWaitError) -> None:
         deadline = time.time() + max(1, error.seconds) + 0.25
         pool = getattr(self, "_identity_pool", None)
         if pool is not None:
@@ -883,7 +884,7 @@ class Client:
                             )
                     self._media_scheduler.record_bytes(count, upload=True)
                     return count
-                except FloodWaitError as error:
+                except (FloodWaitError, FloodPremiumWaitError) as error:
                     await self._media_scheduler.flood(max(1, error.seconds) + 0.25)
                     await self._defer_read(error)
                     # The shared scheduler, not each worker, observes the wait.
@@ -1147,7 +1148,7 @@ class Client:
                     return None
                 data.extend(part)
             return bytes(data) or None
-        except FloodWaitError as error:
+        except (FloodWaitError, FloodPremiumWaitError) as error:
             if scheduler is not None:
                 await scheduler.flood(max(1, error.seconds) + 0.25)
             await self._defer_read(error)
@@ -1237,7 +1238,7 @@ class Client:
                         if len(data) == _DOWNLOAD_BLOCK:
                             break
                     return bytes(data)
-                except FloodWaitError as error:
+                except (FloodWaitError, FloodPremiumWaitError) as error:
                     scheduler = getattr(self, "_media_scheduler", None)
                     if scheduler is not None:
                         await scheduler.flood(max(1, error.seconds) + 0.25)

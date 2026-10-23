@@ -58,7 +58,7 @@ processes can still fill the volume. Upload staging has its own budget and reser
 | Setting | Built-in default | What it controls | Tuning advice |
 | --- | --- | --- | --- |
 | Simultaneous uploads per bot | 1 | Whole uploads leased to each connected healthy bot | Add eligible bots before increasing parallelism. Extra slots share each account's request/media limits. |
-| File split size | 2000 MiB | Document size for newly planned large uploads | Keep the default for ordinary bot uploads. 0 selects the safe eligible-account maximum. Smaller parts increase document and request overhead. |
+| File split size | 2000 MiB | Document size for newly planned large uploads | Default and maximum for all accounts, including Premium. Choose 1–2000 MiB to reduce it; 0 also uses 2000 MiB. Smaller parts increase document and request overhead. |
 | Upload pipeline | 4 | Upload part requests outstanding within one document | Try a small increase only when outbound throughput is low and there are no provider waits. |
 | Requests per account | 8 | Shared in-flight Telegram requests | Uploads, downloads and metadata compete for these slots. Increasing can hurt cold playback. |
 | Requests per second | 48 | Application pacing ceiling per account | Telegram cooldowns always win. This is not guaranteed throughput or a provider allowance. |

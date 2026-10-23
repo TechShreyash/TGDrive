@@ -5,7 +5,7 @@ import time
 from unittest.mock import AsyncMock
 
 import pytest
-from telethon.errors import FloodWaitError
+from telethon.errors import FloodPremiumWaitError, FloodWaitError
 from test_streaming import make_request, response_body
 from test_telegram_cache import MIB, Native, message, transport
 
@@ -28,6 +28,46 @@ def account(name, payload, gate=None, native_type=Native):
         )
     )
     return client
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "unavailable", [None, "busy", "cooling", "unhealthy", "disconnected"]
+)
+async def test_payload_prefers_ready_premium_with_bot_fallback(unavailable):
+    payload = b"original payload"
+    bot, user = account("bot", payload), account("premium", payload)
+    pool = ClientPool([bot], [user], media_per_bot=1)
+    await pool.start()
+    occupied = None
+    try:
+        if unavailable == "busy":
+            occupied = pool.lease(
+                download=True, allow_users=True, client_name=user.name
+            )
+            await occupied.__aenter__()
+        elif unavailable == "cooling":
+            await pool.defer_client(user.name, time.time() + 60)
+        elif unavailable == "unhealthy":
+            await pool.mark_unhealthy(user)
+        elif unavailable == "disconnected":
+            user.native.is_connected = lambda: False
+        response = await stream_telegram_file(
+            pool=pool,
+            channel_id=-100123,
+            message_id=77,
+            file_name="data.bin",
+            expected_size=len(payload),
+            request=make_request(),
+        )
+        assert await asyncio.wait_for(response_body(response), 2) == payload
+        assert bool(user.native.requests) is (unavailable is None)
+        assert bool(bot.native.requests) is (unavailable is not None)
+    finally:
+        if occupied is not None:
+            await occupied.__aexit__(None, None, None)
+        assert all(row.active_leases == 0 for row in await pool.status())
+        await pool.stop()
 
 
 @pytest.mark.asyncio
@@ -121,10 +161,11 @@ async def test_read_ahead_is_bounded_and_disconnect_drains_workers():
 
 
 @pytest.mark.asyncio
-async def test_flood_wait_defers_account_and_other_account_continues():
+@pytest.mark.parametrize("flood_error", [FloodWaitError, FloodPremiumWaitError])
+async def test_flood_wait_defers_account_and_other_account_continues(flood_error):
     class Flooded(Native):
         def iter_download(self, *args, **kwargs):
-            raise FloodWaitError(request=None, capture=60)
+            raise flood_error(request=None, capture=60)
 
     payload = b"x" * (4 * MIB)
     flooded = account("flooded", payload, native_type=Flooded)

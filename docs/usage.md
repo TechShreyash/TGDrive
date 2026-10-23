@@ -61,8 +61,10 @@ known batches together; expand a folder to inspect its individual file states.
 Open **Configuration → Transfer limits → Parallel uploads** to choose simultaneous uploads per bot: **1–4**.
 The default is **1**; adding bots adds upload slots. A large file's parts use
 all eligible client slots, rather than stopping at two simultaneous parts.
-Bot-sized parts can also use connected Premium clients; larger Premium-only
-parts require those accounts. Telegram cooldowns and channel pacing still apply.
+Available Premium clients are preferred for upload parts and download payload
+windows, with bot fallback when busy or unavailable. Premium's benefit is
+potential speed per task; every account uses the same split cap. Telegram
+cooldowns and channel pacing still apply.
 
 Your device sends files to the server while Telegram uploads run independently.
 Each ready file starts as soon as a slot is free. If temporary storage fills,
@@ -84,7 +86,19 @@ See [performance and caching](performance.md) for the tradeoffs.
 parts but shows one item. Downloads rebuild the original; previews and video
 seeking use the same file.
 
+**Premium's larger single-document allowance is unnecessary for TGDrive.**
+TGDrive splits large files automatically and tracks the ordered parts as one
+logical file. Full downloads reconstruct the original bytes; streaming and
+byte-range seeking work across part boundaries. Database backups preserve the
+part mappings, and an enabled independent backup channel copies the underlying
+documents for recovery. These operations do not require 4000 MiB Premium
+documents. Premium's intended benefit here is potential upload/download speed
+per task. See [backup and recovery](backup-recovery.md) for backup coverage and
+requirements.
+
 - Premium is not required.
+- Each Telegram document defaults to at most **2000 MiB**, including Premium.
+  Reduce **File split size** in Configuration to split sooner; 0 also uses 2000 MiB.
 - The default limit is **16 GiB per file**, subject to free disk space.
 - The limit is configurable; it is not unlimited storage.
 - See [exact capacity limits](reference.md#file-capacity-staging-and-work-limits).

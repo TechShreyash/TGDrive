@@ -221,7 +221,7 @@ Earlier evidence, **before MongoDB**, includes:
 - Broader Python, browser, container and recovery checks.
 
 These results do not certify the current database revision or every codec/device.
-Premium near-limit/speed checks and deletion of a message older than 48 hours
+Live Premium upload/download speed checks and deletion of a message older than 48 hours
 remain unverified. See [remaining checks](roadmap.md#before-public-release).
 
 A configured GitHub workflow is not proof that it ran. Local results above do

@@ -328,8 +328,10 @@ async def test_cancel_cleanup_failure_retains_bytes_and_retries_cleanup(tmp_path
 
 
 @pytest.mark.parametrize("healthy", [True, False])
-async def test_optional_premium_direct_or_bot_parts_chosen_once(tmp_path, healthy):
-    manager, _ledger = await manager_for(tmp_path, users=True)
+@pytest.mark.parametrize("split_mib", [0, 2000])
+async def test_premium_never_raises_new_part_size(tmp_path, healthy, split_mib):
+    manager, ledger = await manager_for(tmp_path, users=True)
+    manager.settings.upload_split_mib = split_mib
     if not healthy:
         user = next(slot.client for slot in manager.pool._slots if slot.kind == "user")
         await manager.pool.mark_unhealthy(user)
@@ -338,10 +340,54 @@ async def test_optional_premium_direct_or_bot_parts_chosen_once(tmp_path, health
     try:
         await record.task
         assert record.status == TransferStatus.COMPLETED
-        assert len(stored(manager)["parts"]) == (1 if healthy else 2)
-        assert record.context["multipart_plan"]["kind"] == (
-            "user" if healthy else "bot"
+        assert [part["size"] for part in stored(manager)["parts"]] == [4, 2]
+        assert record.context["multipart_plan"]["kind"] == "bot"
+        assert ledger.calls[0][0] == ("premium" if healthy else "bot-one")
+    finally:
+        await dispose(manager)
+
+
+async def test_smaller_split_applies_to_premium_and_preserves_original(tmp_path):
+    manager, ledger = await manager_for(tmp_path, users=True)
+    manager.settings.bot_upload_limit = 4 * 1024**2
+    manager.settings.upload_split_mib = 1
+    payload = b"a" * (3 * 1024**2 + 7)
+    record = manager.enqueue_upload(
+        staged(manager, payload), "/", "data.bin", len(payload)
+    )
+    try:
+        await record.task
+        assert record.status == TransferStatus.COMPLETED
+        parts = stored(manager)["parts"]
+        assert [part["size"] for part in parts] == [1024**2] * 3 + [7]
+        assert ledger.calls[0][0] == "premium"
+        assert (
+            b"".join(ledger.messages[p["message_id"]].content for p in parts) == payload
         )
+    finally:
+        await dispose(manager)
+
+
+async def test_saved_premium_sized_plan_keeps_boundaries_and_sender(tmp_path):
+    from tgdrive.multipart_transfer import fingerprint
+
+    manager, ledger = await manager_for(tmp_path, users=True)
+    payload = b"abcdef"
+    source = staged(manager, payload)
+    checksum, parts = fingerprint(source, len(payload), len(payload))
+    parts[0]["sender"] = "premium"
+    record = manager.registry.create("queued", total=len(payload))
+    record.context.update(
+        sha256=checksum,
+        multipart_plan=dict(version=1, kind="user", parts=parts),
+    )
+    manager.registry.persist(record)
+    try:
+        await manager._upload_path(record, source, "/", "old.bin", len(payload))
+        assert record.status == TransferStatus.COMPLETED
+        assert [p["size"] for p in stored(manager)["parts"]] == [len(payload)]
+        assert ledger.calls[0][0] == "premium"
+        assert record.context["multipart_plan"]["kind"] == "user"
     finally:
         await dispose(manager)
 

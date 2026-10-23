@@ -32,7 +32,8 @@ and MongoDB remembers their names, folders and sharing settings.
 ## Three things to know
 
 - **Premium is optional.** Large files can be split across Telegram messages
-  while appearing as one file.
+  while appearing as one file. Every account uses the same default and maximum
+  2000 MiB document size, which you can reduce. Premium is preferred for transfer speed.
 - **Keep your database access and recovery key.** Reinstalling the app can reopen
   the same MongoDB drive. Telegram database backups offer a separate recovery route.
 - **Wait for “Completed” before removing local files.** Unfinished uploads can

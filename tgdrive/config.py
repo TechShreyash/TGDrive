@@ -14,8 +14,8 @@ from pydantic import Field, SecretStr, ValidationInfo, field_validator, model_va
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 _BOT_TOKEN_RE = re.compile(r"^[1-9][0-9]{4,14}:[A-Za-z0-9_-]{20,}$")
-# Conservative per-account media limits in binary MiB. Runtime admission
-# also checks whether a usable Premium account is actually connected.
+# Conservative document cap in binary MiB; new uploads use it for every account.
+# The Premium limit is retained for compatibility with existing upload journals.
 _DEFAULT_BOT_LIMIT = 2000 * 1024**2
 _DEFAULT_PREMIUM_LIMIT = 4000 * 1024**2
 
@@ -452,7 +452,7 @@ class Settings(BaseSettings):
 
     @property
     def available_upload_limit(self) -> int:
-        return _DEFAULT_PREMIUM_LIMIT if self.string_sessions else _DEFAULT_BOT_LIMIT
+        return _DEFAULT_BOT_LIMIT
 
     @property
     def bot_upload_limit(self) -> int:
@@ -472,7 +472,7 @@ class Settings(BaseSettings):
         )
 
     def upload_limit_for(self, premium_available: bool) -> int:
-        """Multipart uploads work with bots; Premium only changes message sizing."""
+        """Logical capacity and new document sizing are independent of Premium."""
         return self.upload_limit
 
     @property

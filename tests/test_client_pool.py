@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import time
 import unittest
 from dataclasses import dataclass
 
@@ -231,6 +232,26 @@ class ClientPoolTests(unittest.IsolatedAsyncioTestCase):
             async with pool.lease(premium=True, prefer_premium=True):
                 self.fail("a bot cannot satisfy a required user lease")
         await pool.stop()
+
+    async def test_media_prefers_premium_then_falls_back_without_changing_sender(self):
+        bot, user = FakeClient("bot"), FakeClient("premium")
+        pool = ClientPool([bot], [user])
+        await pool.start()
+        try:
+            options = dict(media=True, allow_users=True, prefer_premium=True)
+            async with pool.lease(**options) as first:
+                self.assertIs(first, user)
+                async with pool.lease(**options) as second:
+                    self.assertIs(second, bot)
+            # A recorded bot sender wins even while Premium is available.
+            async with pool.lease(**options, client_name=bot.name) as fixed:
+                self.assertIs(fixed, bot)
+            await pool.defer_client(user.name, time.time() + 60)
+            async with pool.lease(**options) as cooling_fallback:
+                self.assertIs(cooling_fallback, bot)
+            self.assertEqual((await pool.health()).active_leases, 0)
+        finally:
+            await pool.stop()
 
     async def test_partial_start_keeps_healthy_bot_and_cleans_failed_accounts(
         self,

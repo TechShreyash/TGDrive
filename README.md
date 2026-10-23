@@ -14,7 +14,7 @@ links from one responsive web interface.
 | Feature | How it works |
 | --- | --- |
 | **Files and folders** | Upload from your device, drag and drop, or import a public HTTP(S) URL. Search, sort, switch list/grid, organize Starred items, and restore from Trash. Small generated image/video/PDF thumbnails keep browsing efficient. |
-| **Large files** | Split across Telegram documents while retaining one drive item, exact original downloads, and video byte-range seeking. Premium is optional. |
+| **Large files** | Split across documents capped at 2000 MiB by default; smaller splits are configurable. One drive item, exact original downloads, and video byte-range seeking. Premium is optional and preferred for transfer speed; it does not raise this cap. |
 | **Media playback** | Locally bundled enhanced video player with supported embedded audio/subtitle tracks, chapter navigation, keyboard controls, and buffered timeline feedback. |
 | **Document previews** | Images, PDFs up to 256 MiB with lazy byte ranges, read-only text/code, EPUB books and CBZ/CBR comics. Fullscreen and original downloads remain available; unsupported or protected content has a download fallback. |
 | **Cache and preload** | Reuse recently streamed blocks, prepare a file before sharing, and limit RAM, disk, and background work. Inspect ready bytes and evict cached data. |

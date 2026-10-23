@@ -38,7 +38,7 @@ limits remain below.
 | Latest local regression on 2026-10-20 | Passed: 1,018 Python, 213 frontend and 100 Chromium tests; 84.07% Python coverage |
 | Live above-2-GB integrity on MongoDB | Verified: 4,562,805,302 bytes across three Telegram documents, full SHA-256 and boundary ranges. Broad physical-device playback remains unverified. |
 | Current deployment artifacts | Passed: AMD64 container build/runtime smoke; source ZIP integrity/manifest/private-state exclusion checks. Earlier clean dependency/install tests are recorded in the development guide. |
-| Near-cap Premium uploads and actual Premium acceleration | Unverified; no Premium test account |
+| Actual Premium upload/download acceleration | Unverified; no Premium test account. New documents keep the 2000 MiB cap for all accounts. |
 | Deletion of a disposable message older than 48 hours | Unverified; no suitable message |
 | Prolonged multi-bot outages and crashes during a real Telegram send | Further live coverage needed |
 | Full deployment move, physical ARM and Render hosting | Not certified |

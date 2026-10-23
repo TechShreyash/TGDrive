@@ -6,6 +6,14 @@ TGDrive stores file bytes as Telegram documents and keeps a catalog that maps
 those documents to files, folders, split parts and shares. The catalog is stored
 in the selected metadata backend: MongoDB or local SQLite.
 
+Split files use the same backup and recovery model: database backups retain
+their ordered part mappings, and an enabled independent backup channel copies
+the constituent documents and remaps their locations in its recovery catalog.
+Premium's larger single-document allowance is unnecessary for this support.
+After recovery, the mapped parts still form one logical file for original
+downloads, streaming and byte-range seeking. Independent-copy protection applies
+to the confirmed restore point; check backup status for any pending parts.
+
 These are different kinds of protection:
 
 | Protection | What it does | What it cannot do |

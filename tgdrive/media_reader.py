@@ -14,7 +14,7 @@ from contextlib import suppress
 from pathlib import Path
 from typing import Any
 
-from telethon.errors import FloodWaitError, RPCError
+from telethon.errors import FloodPremiumWaitError, FloodWaitError, RPCError
 
 from tgdrive.media_cache import DiskMediaCache
 from tgdrive.media_policy import MediaCachePolicy, merge_ranges
@@ -839,6 +839,7 @@ async def stream_pooled_media(
             kwargs = {
                 "download": True,
                 "allow_users": True,
+                "prefer_premium": True,
                 "priority": media_priority.get(),
             }
             if request_id is not None:
@@ -855,7 +856,7 @@ async def stream_pooled_media(
                         return data
                     finally:
                         await iterator.aclose()
-                except FloodWaitError as error:
+                except (FloodWaitError, FloodPremiumWaitError) as error:
                     await pool.defer_client(
                         account.name, time.time() + max(1, error.seconds)
                     )

@@ -31,7 +31,7 @@ def test_settings_parse_csv_and_derive_non_premium_limit() -> None:
     assert len(settings.session_key) == 32
 
 
-def test_premium_sessions_raise_the_available_limit() -> None:
+def test_premium_sessions_do_not_raise_new_document_or_logical_limits() -> None:
     settings = Settings(
         _env_file=None,
         **settings_values(
@@ -43,6 +43,8 @@ def test_premium_sessions_raise_the_available_limit() -> None:
     assert settings.string_sessions == ("session-one", "session-two")
     assert settings.telegram_admin_ids == (123, 456)
     assert settings.upload_limit == settings.staging_budget_bytes
+    assert settings.available_upload_limit == settings.bot_upload_limit
+    assert settings.upload_split_mib == 2000
     assert settings.premium_upload_limit == 4000 * 1024**2
 
 

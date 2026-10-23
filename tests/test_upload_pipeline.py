@@ -8,7 +8,7 @@ from unittest.mock import AsyncMock, Mock
 
 import pytest
 from telethon import functions, types
-from telethon.errors import FloodWaitError
+from telethon.errors import FloodPremiumWaitError, FloodWaitError
 
 from tgdrive.media_scheduler import MediaScheduler
 from tgdrive.telegram_clients import Client
@@ -27,6 +27,7 @@ class Native:
         self.flood_part = None
         self.flood_seconds = 1
         self.flood_count = 1
+        self.flood_error = FloodWaitError
         self.hold = None
         self.get_input_entity = AsyncMock(return_value="channel")
 
@@ -49,7 +50,7 @@ class Native:
                     self.calls[request.file_part] <= self.flood_count
                     and request.file_part == self.flood_part
                 ):
-                    raise FloodWaitError(request, capture=self.flood_seconds)
+                    raise self.flood_error(request, capture=self.flood_seconds)
                 if (
                     self.calls[request.file_part] == 1
                     and request.file_part == self.fail_part
@@ -209,8 +210,9 @@ async def test_pipeline_refuses_publication_after_integrity_failure(tmp_path):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("seconds, occurrences", [(1, 1), (45, 4)])
+@pytest.mark.parametrize("flood_error", [FloodWaitError, FloodPremiumWaitError])
 async def test_pipeline_flood_feedback_retries_individual_part(
-    tmp_path, seconds, occurrences
+    tmp_path, seconds, occurrences, flood_error
 ):
     path = tmp_path / "staged"
     path.write_bytes(b"x" * (PART * 3))
@@ -218,6 +220,7 @@ async def test_pipeline_flood_feedback_retries_individual_part(
     native.flood_part = 1
     native.flood_seconds = seconds
     native.flood_count = occurrences
+    native.flood_error = flood_error
     adapter = client(native, limit=4)
     original = adapter._media_scheduler.flood
 

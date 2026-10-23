@@ -127,7 +127,7 @@ export const numericPreferences: {
     max: 2000,
     appDefault: 2000,
     unitLabel: "MiB",
-    help: "Split large files into Telegram documents of this size. 0 uses the safe account maximum. Existing transfers keep their plan.",
+    help: "Default and maximum: 2000 MiB per Telegram document for every account. Choose a smaller size to split sooner; 0 uses 2000 MiB. Existing transfers keep their plan.",
   },
   {
     key: "telegram_upload_pipeline",

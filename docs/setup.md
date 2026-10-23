@@ -386,6 +386,16 @@ All storage accounts need access to the same channel.
 - **Refresh** checks saved credentials, channel permissions and Telegram names.
 - Saved connection changes apply after an app restart.
 - Premium is optional; bots already support larger files through splitting.
+- Premium's larger single-document allowance is unnecessary. TGDrive handles
+  splitting, streaming, original downloads and part-aware backup/recovery while
+  keeping one logical file. See [large files](usage.md#files-above-2-gb) and
+  [backup coverage](backup-recovery.md).
+- Premium clients are preferred for upload/download speed when available. They
+  use the same default and maximum 2000 MiB document cap; choose a smaller split
+  in Configuration if wanted. Premium does not raise the logical-file limit.
+- Telegram documents Premium-related [upload and download throttling](https://core.telegram.org/api/files).
+  This can improve per-task speed, but TGDrive has not measured a live Premium
+  speedup and does not guarantee higher throughput.
 - More accounts can add transfer capacity, but cannot guarantee faster Telegram
   routing or remove provider cooldowns. Start with conservative live limits.
 

@@ -130,7 +130,7 @@ built-in defaults. Units are binary: 1 GiB = 1024 MiB and 1 MiB = 1024 KiB.
 | `TELEGRAM_PARTS_PER_SECOND` | 48 | Application request pacing ceiling, 1–128, including scheduled metadata work. This is not a Telegram-provided bandwidth limit. |
 | `TELEGRAM_MEDIA_PER_BOT` | 3 | Shared concurrent origin media operations per account, 1–16. Uploads also retain their separate per-bot/user lane limits. |
 | `TELEGRAM_MAX_QUEUE` | 256 | Global queued origin operations, 1–4096; overflow returns retry guidance. |
-| `UPLOAD_SPLIT_MIB` | 2000 | 0 uses the safe account/document maximum: 2000 MiB bots, or an eligible 4000 MiB Premium document. Explicit 1–2000 values choose a smaller preferred cap. The minimum grows when needed to stay within 4096 parts. Persisted plans keep their original boundaries. |
+| `UPLOAD_SPLIT_MIB` | 2000 | Default and maximum document size for every account, including Premium. Explicit 1–2000 values choose a smaller preferred cap; 0 also uses 2000 MiB. The minimum grows when needed to stay within 4096 parts, without exceeding 2000 MiB. Persisted plans keep their original boundaries. |
 | `TIMEZONE` | Asia/Kolkata | Installation-wide display timezone for owner and public dates/share expiry. Use a valid IANA name; the default is IST. |
 
 The memory budget also covers the bounded asynchronous disk write backlog.
@@ -253,24 +253,31 @@ settings. Initialization/restore refuses existing catalog state.
 | `MAX_CONCURRENT_STREAMS` | 4 | Compatibility configuration; the file-response path uses bounded origin/media admission instead of a fixed viewer-count gate. It does not cap cached viewers at four. |
 | `TRANSFER_TTL_SECONDS` | 3600 | Integer 60-86400 inclusive; live terminal-job/context retention. Compact server-transfer history is kept separately from this cleanup; files are unaffected. |
 
-The conservative per-document ceilings are 2000 MiB (2,097,152,000 bytes) for
-bots and 4000 MiB (4,194,304,000 bytes) for Premium users. These are binary-MiB
-application limits. The logical-file ceiling advertised by /api/config is
+The conservative per-document ceiling for new uploads is 2000 MiB
+(2,097,152,000 bytes) for every account, including Premium. This is the app's
+safe approximately-2-GB cap, expressed in binary MiB. The logical-file ceiling advertised by /api/config is
 the minimum of STAGING_BUDGET_BYTES, optional MAX_FILE_SIZE and 2000 MiB × 4096
 parts; the default is therefore 16 GiB. Sufficient free disk is still required.
 
+Premium's larger single-document allowance is unnecessary for TGDrive: ordered
+parts support larger logical files, exact original downloads, streaming and
+byte-range seeking. Database backups preserve their mappings, and an enabled
+independent backup channel copies the documents for recovery. None of these
+features requires 4000 MiB documents. See [backup coverage](backup-recovery.md)
+for what each backup protects.
+
 - Files above the bot document limit use ordered bot-sized messages while retaining one
   drive item and logical progress.
-- With automatic split size 0 and a healthy connected Premium account, an eligible
-  file above 2000 MiB and at most 4000 MiB may use a single Premium document.
-- An explicit split cap of 1–2000 MiB keeps parts bot-compatible and can use bots
-  or eligible optional users rather than forcing the Premium-only lane.
-- Unknown/disconnected accounts do not unlock that optimization.
+- Split size 0 uses 2000 MiB, just like the default. Premium never raises the cap.
+- An explicit split cap of 1–2000 MiB keeps parts bot-compatible. Available
+  Premium slots are preferred for upload parts and download payload windows,
+  with bot fallback when busy, cooling, disconnected or unhealthy.
 - Larger files remain multipart; the logical cap does not depend on Premium.
 - Multipart worker count follows healthy eligible account capacity, including live
   uploads-per-bot increases. Occupied or cooling slots still wait at the shared
-  lease gate. Bot-compatible parts may use bots or Premium accounts; Premium-sized
-  parts use only Premium accounts. Confirmed/replayed parts retain sender identity.
+  lease gate. Bot-compatible parts may use bots or Premium accounts. Older persisted
+  Premium-sized plans still use only Premium accounts for recovery.
+  Confirmed/replayed parts retain sender identity.
 - Accepted receipts retain their durable offset and checksum recovery rules.
 
 Browser chunks are fixed at 8 MiB, except the final chunk. That chunk size and

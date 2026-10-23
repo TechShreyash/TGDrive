@@ -10,7 +10,7 @@ import time
 from pathlib import Path
 from typing import Any
 
-from telethon.errors import FloodWaitError
+from telethon.errors import FloodPremiumWaitError, FloodWaitError
 
 from tgdrive.client_pool import ClientPoolNotRunning, NoClientAvailable
 from tgdrive.connection_errors import TelegramConnectionError
@@ -204,24 +204,11 @@ async def upload_multipart(manager, record, local_path, destination, file_name, 
             if record.cancel_event.is_set():
                 raise TransferCancelled("Transfer cancelled")
             bot_limit = manager.settings.bot_upload_limit
-            premium_limit = getattr(
-                manager.settings, "premium_upload_limit", bot_limit * 2
-            )
-            healthy_users = any(
-                item.kind == "user"
-                and item.started
-                and item.healthy
-                and item.connected is True
-                for item in await manager.pool.status()
-            )
             configured = getattr(manager.settings, "upload_split_mib", 2000)
-            requested = configured * 1024**2 if configured else premium_limit
-            premium = (
-                bot_limit < size <= premium_limit
-                and healthy_users
-                and requested > bot_limit
-            )
-            maximum = premium_limit if premium else bot_limit
+            # Premium affects account selection, never new document boundaries.
+            # Keep 0 compatible with saved preferences as the default safe cap.
+            requested = configured * 1024**2 if configured else bot_limit
+            maximum = bot_limit
             part_size = min(maximum, requested)
             # Preserve bounded manifest size even for a deliberately tiny preference.
             part_size = max(part_size, (size + MAX_FILE_PARTS - 1) // MAX_FILE_PARTS)
@@ -243,7 +230,7 @@ async def upload_multipart(manager, record, local_path, destination, file_name, 
             context["sha256"] = checksum
             context["multipart_plan"] = dict(
                 version=1,
-                kind="user" if premium else "bot",
+                kind="bot",
                 parts=parts,
             )
             persist()
@@ -316,6 +303,7 @@ async def upload_multipart(manager, record, local_path, destination, file_name, 
                         manager.pool.lease(
                             premium=plan["kind"] == "user",
                             allow_users=plan["kind"] == "bot",
+                            prefer_premium=True,
                             client_name=part.get("sender"),
                             media=True,
                             request_id=record.id,
@@ -486,7 +474,7 @@ async def upload_multipart(manager, record, local_path, destination, file_name, 
                     if part.get("send_started"):
                         raise
                     return
-                except FloodWaitError as exc:
+                except (FloodWaitError, FloodPremiumWaitError) as exc:
                     active_parts.discard(part["index"])
                     in_flight.pop(part["index"], None)
                     deadline = time.time() + exc.seconds + 0.25

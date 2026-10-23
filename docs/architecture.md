@@ -99,9 +99,10 @@ Local unfinished file bytes are still needed after a restart.
 - Upload preferences live in MongoDB's settings collection, are included in full
   database backups, and load before recovered transfers start.
 - Large files use bot-compatible parts with the default 2000 MiB split cap.
-  Automatic sizing (0) can use a healthy Premium account for an eligible
-  above-bot-limit file as one larger message. Explicit smaller caps keep parts
-  eligible for the bot-compatible pool, including optional user accounts.
+  All accounts, including Premium, use at most 2000 MiB per new document.
+  Smaller explicit caps reduce part size; 0 uses the same 2000 MiB maximum.
+  Ready Premium slots are preferred for uploads and download payload windows,
+  with eligible bot fallback when those slots are busy or unavailable.
 - Initial media lookup can prefer healthy Premium users, then bots. Independent
   payload windows bind the same immutable media through each selected account;
   the pooled reader may use different healthy accounts for different windows.
@@ -176,8 +177,8 @@ Names and sizes alone never prove that a reselected file has matching bytes.
 - Media leases default to one upload per bot, configurable to 1–4; each Premium
   client has one slot. Multipart workers scale to eligible client capacity, with
   a one-second check for live limit increases. Database backups are separately serialized.
-- Bot-compatible parts can use both bot and Premium clients. Parts requiring a
-  Premium-sized document stay on Premium clients. Retry and cleanup retain the
+- Bot-compatible parts can use both bot and Premium clients. Older persisted
+  plans requiring a Premium-sized document stay on Premium clients. Retry and cleanup retain the
   original sender; fair leases and shared channel pacing apply to every part.
 - Folder upload prepares an atomic, repeatable tree before queuing file bytes.
   Later file uploads can succeed or fail independently.

@@ -201,7 +201,7 @@ These controls govern different layers:
 | Account part rate | Application pacing ceiling including scheduled metadata work; default 48 requests/second, allowed 1–128 |
 | Combined media limit | Shared upload/download operations per account; default 3, allowed 1–16 |
 | Maximum queued operations | Waiting Telegram origin operations across the installation; default 256, allowed 1–4096. More queue space allows longer waits, not higher throughput. |
-| File split size | Preferred document cap, 1–2000 MiB; 0 uses the safe account maximum, including an eligible Premium document |
+| File split size | Preferred document cap, 1–2000 MiB for all accounts; default 2000 MiB, and 0 also uses 2000 MiB |
 
 The defaults balance observed throughput and cooldowns on the tested deployment;
 different accounts, datacenters and routes can need lower values. More parallel
@@ -221,12 +221,27 @@ Smaller documents can engage more available account slots for one file. They
 also add messages, manifests, retry/cleanup work, and download boundary setup.
 They do not change the original bytes or automatically increase download speed.
 Chunk pipelining can improve an individual document without splitting it.
-Automatic sizing can use an eligible Premium document up to 4000 MiB; bots use
-the 2000 MiB safe maximum. An explicit cap at or below 2000 MiB creates
-bot-compatible parts that can use the available bot and optional-user pool.
+All new documents use at most 2000 MiB, including those sent by Premium accounts.
+Choose a smaller split to reduce document size; 0 uses the same 2000 MiB cap.
+Parts can use the available bot and optional Premium pool.
+
+Premium's larger single-document allowance is unnecessary: TGDrive handles
+splitting, original downloads, streaming and byte-range seeking across parts.
+Backup catalogs retain the ordered part mappings; an enabled independent backup
+channel copies the documents under the normal [backup and recovery rules](backup-recovery.md).
+Using 4000 MiB documents is not required for these features or larger logical files.
+
 For a very large file, the planner raises a tiny requested split if needed to
 stay within the 4096-part ceiling. Changing the preference does not re-split
 an already journaled transfer.
+
+Available Premium clients are preferred for upload parts and download payload
+windows; busy, cooling, disconnected or unhealthy clients fall back to eligible
+bots. Existing upload parts keep their recorded sender on retry. Premium is a
+potential per-task speed benefit, not a larger document or logical-file limit.
+Telegram documents Premium-related [upload and download throttling](https://core.telegram.org/api/files);
+actual throughput still depends on the network, server, account and provider waits.
+TGDrive has not measured a live Premium speedup, so it promises no multiplier.
 
 Keep one upload per bot initially. Compare a smaller split and a modest
 pipeline on representative files, then keep changes only when useful throughput

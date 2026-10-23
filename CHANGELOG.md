@@ -6,6 +6,17 @@ This release rebuilds TGDrive as a self-hosted, single-owner drive. Run one
 service instance and one Uvicorn worker. No public deployment is implied by
 this candidate.
 
+### Premium transfers and file splitting
+
+- Prefer available Premium clients for upload parts and download payloads, with
+  eligible bot fallback when busy or unavailable and fixed senders on retries.
+- Keep new Telegram documents at or below 2000 MiB for every account; smaller
+  splits remain configurable and 0 uses the same cap. Preserve existing plans.
+- Document Premium as a potential per-task upload/download speed benefit;
+  actual acceleration remains unmeasured and does not raise file-size limits.
+- Honor Telegram's Premium-specific transfer waits with shared cooldowns and
+  retry acknowledged upload parts without restarting the whole document.
+
 ### Telegram connection recovery
 
 - Quarantine revoked tokens/sessions and lost channel access, retry eligible
