@@ -52,6 +52,7 @@ from tgdrive.store import (
     _strict_int,
     _utc_now,
     _validate_channel_id,
+    _validate_file_rename,
     _validate_id,
     _validate_timestamp,
 )
@@ -638,6 +639,8 @@ class MongoStore(DriveStore):
             if node["id"] == ROOT_ID:
                 raise RootMutationError("The root folder cannot be renamed")
             self._mutable(chain)
+            if node["kind"] == "file":
+                _validate_file_rename(node["name"], name)
             if not self._unique(node["parent_id"], name, node["id"]):
                 raise DuplicateNameError("An item with this name already exists")
             if node["name"] != name:

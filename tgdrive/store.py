@@ -120,6 +120,21 @@ def _name_key(value: str) -> str:
     return unicodedata.normalize("NFC", value).casefold()
 
 
+def _validate_file_rename(current_name: str, new_name: str) -> None:
+    """Keep an existing file suffix when changing its display name."""
+    separator = current_name.rfind(".")
+    if 0 < separator < len(current_name) - 1:
+        extension = current_name[separator:]
+        new_separator = new_name.rfind(".")
+        new_extension = (
+            new_name[new_separator:] if 0 < new_separator < len(new_name) - 1 else ""
+        )
+        if extension.lower() != new_extension.lower():
+            raise InvalidNameError(
+                f"The file extension cannot be changed. Keep the {extension} extension."
+            )
+
+
 def _validate_share_hashes(value: object) -> list[str]:
     if not isinstance(value, list):
         raise ValidationError("share_hashes must be a list")
@@ -1881,6 +1896,8 @@ class DriveStore:
             if node["id"] == ROOT_ID:
                 raise RootMutationError("the root folder cannot be renamed")
             self._mutable(db, chain)
+            if node["kind"] == "file":
+                _validate_file_rename(node["name"], name)
             self._ensure_unique(db, node["parent_id"], name, node["id"])
             if node["name"] != name:
                 db.execute(

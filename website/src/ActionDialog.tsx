@@ -14,6 +14,7 @@ import { api, request, ApiError, errorMessage } from "./api";
 import { itemPath, formatTimestamp, type DriveItem } from "./types";
 import { transfers } from "./transfers";
 import { Modal, ErrorNotice, Spinner } from "./components";
+import "./ActionDialog.css";
 export type ActionDialogState =
   | { type: "folder" }
   | { type: "rename"; item: DriveItem }
@@ -44,8 +45,17 @@ export default function ActionDialog({
   onDelete: (items: DriveItem[]) => Promise<void>;
   onRestore: (items: DriveItem[]) => Promise<void>;
 }) {
+  const originalName = dialog.type === "rename" ? dialog.item.name : "";
+  const extensionStart = originalName.lastIndexOf(".");
+  const extension =
+    dialog.type === "rename" &&
+    dialog.item.type === "file" &&
+    extensionStart > 0 &&
+    extensionStart < originalName.length - 1
+      ? originalName.slice(extensionStart)
+      : "";
   const [name, setName] = useState(
-    dialog.type === "rename" ? dialog.item.name : "",
+    extension ? originalName.slice(0, -extension.length) : originalName,
   );
   const [url, setUrl] = useState("");
   const [compat, setCompat] = useState(false);
@@ -385,7 +395,7 @@ export default function ActionDialog({
               onNotice("Folder created.");
               onChanged();
             } else if (isRename) {
-              await api.rename(itemPath(dialog.item), name);
+              await api.rename(itemPath(dialog.item), name + extension);
               onNotice("Name updated.");
               onChanged();
             } else {
@@ -411,13 +421,26 @@ export default function ActionDialog({
             <label htmlFor="item-name">
               {isFolder ? "Folder Name" : "Name"}
             </label>
-            <input
-              id="item-name"
-              required
-              maxLength={255}
-              value={name}
-              onChange={(event) => setName(event.target.value)}
-            />
+            <div className="item-name-field">
+              <input
+                id="item-name"
+                required
+                maxLength={255 - extension.length}
+                value={name}
+                aria-describedby={extension ? "item-name-hint" : undefined}
+                onChange={(event) => setName(event.target.value)}
+              />
+              {extension && (
+                <span className="rename-extension" aria-hidden="true">
+                  {extension}
+                </span>
+              )}
+            </div>
+            {extension && (
+              <p id="item-name-hint" className="muted">
+                The {extension} extension will stay the same.
+              </p>
+            )}
           </>
         ) : (
           <>

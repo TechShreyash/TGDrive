@@ -343,6 +343,38 @@ def test_upload_remote_and_progress_compatibility_endpoints(
     ]
 
 
+@pytest.mark.parametrize(
+    ("original", "name", "supported"),
+    [
+        ("earth.mp4", "earth", "planet.mp4"),
+        ("earth.mp4", "earth.pdf", "planet.mp4"),
+        ("earth.mp4", "earth.mp4.exe", "planet.mp4"),
+        ("image.svg", "image.\u017fvg", "renamed.svg"),
+        ("file.ss", "file.\u00df", "renamed.ss"),
+    ],
+)
+def test_rename_api_rejects_file_extension_changes(
+    app_client, original, name, supported
+):
+    client, store, _, _ = app_client
+    item = store.add_file("/", original, 5, 2)
+    path = "/" + item["id"]
+    login(client)
+    before = store.export()
+
+    response = client.post("/api/renameFileFolder", json={"path": path, "name": name})
+
+    assert response.status_code == 400
+    assert "extension cannot be changed" in response.json()["detail"]
+    assert store.export() == before
+
+    renamed = client.post(
+        "/api/renameFileFolder", json={"path": path, "name": supported}
+    )
+    assert renamed.status_code == 200
+    assert store.get_file(path)["name"] == supported
+
+
 def test_mutation_validation_and_file_share_scope(
     app_client: tuple[Any, ...], monkeypatch: pytest.MonkeyPatch
 ) -> None:

@@ -1,0 +1,19 @@
+.item-name-field {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 16px;
+}
+.item-name-field input {
+  flex: 1;
+  min-width: 0;
+}
+.rename-extension {
+  max-width: 50%;
+  overflow-wrap: anywhere;
+  color: var(--muted);
+}
+#item-name-hint {
+  margin-top: -8px;
+  overflow-wrap: anywhere;
+}
