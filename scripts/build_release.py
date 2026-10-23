@@ -64,6 +64,8 @@ SOURCE_TREES = {
         ".tsx",
         ".json",
         ".svg",
+        ".png",
+        ".ico",
         ".woff2",
     },
 }

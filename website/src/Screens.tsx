@@ -1,4 +1,4 @@
-import BrandMark from "./BrandMark";
+import BrandLogo from "./BrandLogo";
 import ChannelBackup from "./ChannelBackup";
 import { Button, Paper } from "@mantine/core";
 import {
@@ -54,10 +54,7 @@ export function Login({ onSuccess }: { onSuccess: () => void }) {
   return (
     <main className="login-page">
       <a href="/" className="brand">
-        <span className="brand-symbol">
-          <BrandMark size={32} />
-        </span>
-        <strong>TGDrive</strong>
+        <BrandLogo size="large" />
       </a>
       <section
         id="login-dialog"

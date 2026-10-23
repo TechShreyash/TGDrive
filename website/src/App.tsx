@@ -1,4 +1,4 @@
-import BrandMark from "./BrandMark";
+import BrandLogo from "./BrandLogo";
 import GitHubMark from "./GitHubMark";
 import ThemeControl from "./ThemeControl";
 import {
@@ -1184,8 +1184,10 @@ export default function App() {
   if (authenticated === null && !isPublic)
     return (
       <div className="startup" role="status">
-        <Spinner />
-        <span>Opening TGDrive…</span>
+        <BrandLogo size="large" />
+        <span className="startup-status">
+          <Spinner /> Opening TGDrive…
+        </span>
       </div>
     );
   if (authenticated === false && !isPublic)
@@ -1206,8 +1208,7 @@ export default function App() {
       <div className="channel-recovery-shell">
         <header className="channel-recovery-topbar">
           <a href="/" className="brand">
-            <BrandMark size={28} />
-            <strong>TGDrive</strong>
+            <BrandLogo />
           </a>
           <div>
             <ThemeControl />
@@ -1247,16 +1248,12 @@ export default function App() {
               navigate("/");
             }}
           >
-            <span className="brand-symbol">
-              <BrandMark size={30} />
-            </span>
-            <strong>TGDrive</strong>
+            <BrandLogo />
           </a>
           {mobile && (
             <div className="mobile-nav-heading">
               <span className="mobile-drawer-brand">
-                <BrandMark size={28} />
-                <strong>TGDrive</strong>
+                <BrandLogo />
               </span>
               <button
                 className="icon-button"
@@ -1461,8 +1458,7 @@ export default function App() {
         <header className="topbar" hidden={!mobile && !isPublic}>
           {isPublic ? (
             <a href="/" className="brand">
-              <BrandMark size={28} />
-              <strong>TGDrive</strong>
+              <BrandLogo />
             </a>
           ) : (
             <>
@@ -1488,7 +1484,7 @@ export default function App() {
                   navigate("/");
                 }}
               >
-                <BrandMark size={24} /> TGDrive
+                <BrandLogo size="compact" />
               </a>
               {view === "files" && !isSearch && !dialog && (
                 <button

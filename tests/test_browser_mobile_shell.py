@@ -188,20 +188,21 @@ def test_brand_asset_and_sidebar_footer_stay_clear_in_both_themes(
     page.emulate_media(color_scheme=theme)
     page.goto(server.url)
     expect(page.locator("#login-dialog")).to_be_visible()
-    logo = page.locator(".login-page .brand-mark")
-    expect(logo).to_have_attribute("src", "/static/tgdrive-symbol.svg")
+    logo = page.locator(f".login-page .brand-logo-{theme}")
+    expect(logo).to_be_visible()
+    expected_logo = "tgdrive-logo-dark.svg" if theme == "dark" else "tgdrive-logo.svg"
+    expect(logo).to_have_attribute("src", "/static/brand/" + expected_logo)
     logo.evaluate("img => img.decode()")
     assert logo.evaluate("img => img.complete && img.naturalWidth > 0")
-    expect(page.locator('link[rel="icon"]')).to_have_attribute(
-        "href", "/static/tgdrive-symbol.svg"
+    expect(page.locator('link[rel="icon"][type="image/svg+xml"]')).to_have_attribute(
+        "href", "/static/brand/favicon.svg"
     )
     ARTIFACTS.mkdir(parents=True, exist_ok=True)
     page.screenshot(
         path=ARTIFACTS / f"brand-login-{theme}-{width}.png", animations="disabled"
     )
     login(page)
-    for image in page.locator(".brand-mark").all():
-        expect(image).to_have_attribute("src", "/static/tgdrive-symbol.svg")
+    for image in page.locator(".brand-logo img").all():
         image.evaluate("img => img.decode()")
         assert image.evaluate("img => img.complete && img.naturalWidth > 0")
     if width <= 720:

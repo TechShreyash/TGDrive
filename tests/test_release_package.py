@@ -61,6 +61,17 @@ def test_source_archive_excludes_local_state_and_private_documents(
     patch_script = source / "website" / "scripts" / "patch-movi-player.js"
     patch_script.parent.mkdir(parents=True, exist_ok=True)
     patch_script.write_text("// reviewed portable seek fix\n", encoding="utf-8")
+    brand_assets = (
+        "website/public/static/brand/tgdrive-icon.svg",
+        "website/public/static/brand/favicon-32.png",
+        "website/public/static/brand/favicon.ico",
+        "website/public/static/brand/apple-touch-icon.png",
+        "website/public/static/brand/social-preview.png",
+    )
+    for name in brand_assets:
+        asset = source / name
+        asset.parent.mkdir(parents=True, exist_ok=True)
+        asset.write_bytes(b"public brand asset")
     archive_path, checksum_path = build_release(source, tmp_path / "output")
     with zipfile.ZipFile(archive_path) as archive:
         names = archive.namelist()
@@ -69,6 +80,8 @@ def test_source_archive_excludes_local_state_and_private_documents(
         assert "tgdrive-2.0.0/website/src/App.tsx" in names
         assert "tgdrive-2.0.0/website/package-lock.json" in names
         assert "tgdrive-2.0.0/website/scripts/patch-movi-player.js" in names
+        for name in brand_assets:
+            assert f"tgdrive-2.0.0/{name}" in names
         for public_asset in (
             "docs/backup-recovery.md",
             "docs/configuration.md",

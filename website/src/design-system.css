@@ -25,9 +25,6 @@
   color: var(--muted);
   letter-spacing: 0;
 }
-.sidebar .brand-symbol {
-  color: var(--action);
-}
 .drive-nav a {
   transition:
     background-color 140ms ease-out,

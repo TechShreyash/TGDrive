@@ -18,7 +18,7 @@ def test_starred_page_add_find_open_and_remove(server, desktop, width):
     _, page = desktop
     page.set_viewport_size({"width": width, "height": 844})
     login(page, server.url)
-    assert page.locator(".brand-mark").first.evaluate(
+    assert page.locator(".brand-logo img").first.evaluate(
         "img => img.complete && img.naturalWidth > 0"
     )
     page.locator('summary[aria-label="Actions for 資料"]').click()

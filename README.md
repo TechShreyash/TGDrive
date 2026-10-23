@@ -1,4 +1,9 @@
-# TGDrive
+<h1>
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="website/public/static/brand/tgdrive-logo-dark.svg">
+    <img src="website/public/static/brand/tgdrive-logo.svg" alt="TGDrive" width="400">
+  </picture>
+</h1>
 
 **Your files in Telegram. Your drive in the browser.**
 

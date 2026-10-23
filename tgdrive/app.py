@@ -432,7 +432,11 @@ def create_app(
         return HTMLResponse(
             "<!doctype html><html lang='en'><meta charset='utf-8'>"
             "<meta name='viewport' content='width=device-width,initial-scale=1'>"
-            "<title>TGDrive setup</title><main><h1>Build the TGDrive interface</h1>"
+            "<title>TGDrive setup</title>"
+            "<link rel='icon' type='image/svg+xml' href='/static/brand/favicon.svg'>"
+            "<main><p><img src='/static/brand/tgdrive-logo.svg' "
+            "width='251' height='50' alt='TGDrive'></p>"
+            "<h1>Build the TGDrive interface</h1>"
             "<p>In the website folder, run <code>npm ci</code>, then "
             "<code>npm run build</code>, and restart TGDrive.</p></main></html>",
             headers={"Cache-Control": "no-store"},

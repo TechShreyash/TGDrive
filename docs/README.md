@@ -1,4 +1,4 @@
-# TGDrive documentation
+<h1><img src="../website/public/static/brand/tgdrive-icon.svg" alt="" width="36" height="36"> TGDrive documentation</h1>
 
 **New here? Start with [Setup](setup.md), then [Using TGDrive](usage.md).**
 
