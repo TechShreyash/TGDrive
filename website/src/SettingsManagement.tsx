@@ -26,6 +26,7 @@ import {
   clientConnectionLabel,
   clientDisplayName,
   createConnectionDraft,
+  isCredentialRepair,
   prepareConnectionUpdate,
   type ClientDraft,
   type ConnectionDraft,
@@ -191,6 +192,7 @@ export default function SettingsManagement() {
       : recovery?.backend === "mongodb"
         ? "Restore the database connection before saving connection changes."
         : "Wait for your drive backup to be confirmed before saving connection changes.";
+  const credentialRepair = isCredentialRepair(draft, settings);
   const closeEditor = () => {
     setDraft(null);
     setTarget(null);
@@ -255,7 +257,7 @@ export default function SettingsManagement() {
   const save = async (event: FormEvent) => {
     event.preventDefault();
     if (!draft || saving || !dirty) return;
-    if (blocked) {
+    if (blocked && !credentialRepair) {
       setFormError(blockedReason);
       return;
     }
@@ -300,7 +302,9 @@ export default function SettingsManagement() {
     <div className="connection-editor-footer">
       {blocked && (
         <p className="management-caption">
-          {blockedReason}{" "}
+          {credentialRepair
+            ? "You can repair a token or session for the same Telegram account while keeping pending transfers. Other connection changes must wait."
+            : blockedReason}{" "}
           <button
             type="button"
             className="inline-link"
@@ -320,7 +324,7 @@ export default function SettingsManagement() {
             className="primary-button"
             disabled={
               saving ||
-              blocked ||
+              (blocked && !credentialRepair) ||
               Boolean(settings && draft && settings.revision !== draft.revision)
             }
           >
@@ -473,6 +477,19 @@ export default function SettingsManagement() {
           {notice}
         </p>
       )}
+      {settings?.storage_channel_error && (
+        <div className="management-pending" role="alert">
+          <AlertCircle size={20} aria-hidden="true" />
+          <div>
+            <strong>Storage channel needs attention</strong>
+            <p>{settings.storage_channel_error}</p>
+            <p>
+              Resolve the issue above, then restart TGDrive to check the channel
+              again. Keep the same storage channel for this drive.
+            </p>
+          </div>
+        </div>
+      )}
       {settings?.restart_required && (
         <div className="management-pending" role="status">
           <AlertCircle size={20} />
@@ -503,8 +520,9 @@ export default function SettingsManagement() {
               <div>
                 <h2 id="storage-clients-heading">Storage Clients</h2>
                 <p>
-                  Bots store your files. Premium accounts add their own upload
-                  and read capability.
+                  Bots store your files. Available Premium accounts are
+                  preferred for upload and download speed. All accounts use the
+                  same file split size, capped at 2000 MiB per document.
                 </p>
                 <p className="connection-summary">
                   {connectedClients} connected · {settings.clients.length}{" "}

@@ -16,7 +16,7 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  UV_VERSION: "0.13.1"
+  UV_VERSION: "0.13.4"
 
 jobs:
   quality:
@@ -242,6 +242,8 @@ jobs:
         run: |
           test "$(docker image inspect tgdrive:ci --format '{{.Config.User}}')" = "10001:10001"
           docker image inspect tgdrive:ci --format '{{json .Config.Healthcheck.Test}}' | grep -q healthz
+          docker run --rm --network none --entrypoint python tgdrive:ci \
+            -c 'import ssl; roots = str(ssl.create_default_context().get_ca_certs()); assert "emSign ECC Root CA - G3" not in roots'
           docker run --rm --network none --entrypoint python tgdrive:ci \
             -c 'import tgdrive.app, aiohttp, telethon, cryptg, argon2; print("runtime imports passed")'
           docker run --rm --network none --entrypoint sh tgdrive:ci -c \

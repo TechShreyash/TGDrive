@@ -120,42 +120,62 @@ class SameOriginMiddleware:
     def __init__(self, app: ASGIApp) -> None:
         self.app = app
 
+    @staticmethod
+    def _matches_origin(raw: bytes, scope: Scope, *, referrer: bool = False) -> bool:
+        headers = scope.get("headers", [])
+        hosts = [value for name, value in headers if name.lower() == b"host"]
+        if len(hosts) != 1:
+            return False
+        try:
+            origin = urlsplit(raw.decode("ascii"))
+            host = urlsplit("//" + hosts[0].decode("ascii"))
+            scheme = scope.get("scheme", "http")
+            default_port = 443 if scheme == "https" else 80
+            return (
+                origin.scheme == scheme
+                and origin.hostname == host.hostname
+                and (origin.port if origin.port is not None else default_port)
+                == (host.port if host.port is not None else default_port)
+                and (referrer or (origin.path in {"", "/"} and not origin.query))
+                and not origin.fragment
+                and origin.username is None
+                and host.username is None
+                and not host.path
+                and not host.query
+                and not host.fragment
+                and host.hostname is not None
+            )
+        except (UnicodeError, ValueError):
+            return False
+
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         if (
             scope["type"] == "http"
             and scope.get("path", "").startswith("/api/")
             and scope.get("method") in {"POST", "PUT", "PATCH", "DELETE"}
         ):
-            headers = dict(scope.get("headers", []))
-            raw_origin = headers.get(b"origin")
-            if raw_origin is not None:
-                try:
-                    origin = urlsplit(raw_origin.decode("ascii"))
-                    host = urlsplit("//" + headers.get(b"host", b"").decode("ascii"))
-                    scheme = scope.get("scheme", "http")
-                    default_port = 443 if scheme == "https" else 80
-                    same = (
-                        origin.scheme == scheme
-                        and origin.hostname == host.hostname
-                        and (origin.port or default_port) == (host.port or default_port)
-                        and origin.path in {"", "/"}
-                        and not origin.query
-                        and not origin.fragment
-                        and origin.username is None
-                        and host.hostname is not None
-                    )
-                except (UnicodeError, ValueError):
-                    same = False
-                if not same:
-                    await UploadGuardMiddleware._reject(
-                        scope,
-                        receive,
-                        send,
-                        "Cross-origin requests are not allowed",
-                        403,
-                    )
-                    return
-            elif headers.get(b"sec-fetch-site") == b"cross-site":
+            raw_headers = scope.get("headers", [])
+            headers = dict(raw_headers)
+            origins = [
+                value for name, value in raw_headers if name.lower() == b"origin"
+            ]
+            referrers = [
+                value for name, value in raw_headers if name.lower() == b"referer"
+            ]
+            if origins:
+                same = len(origins) == 1 and self._matches_origin(origins[0], scope)
+            elif headers.get(b"sec-fetch-site") in {b"cross-site", b"same-site"}:
+                # SameSite cookies include sibling subdomains. Without Origin,
+                # Fetch Metadata must not treat those siblings as trusted.
+                same = False
+            elif referrers:
+                same = len(referrers) == 1 and self._matches_origin(
+                    referrers[0], scope, referrer=True
+                )
+            else:
+                # CLI/API clients do not send browser-origin headers.
+                same = True
+            if not same:
                 await UploadGuardMiddleware._reject(
                     scope, receive, send, "Cross-origin requests are not allowed", 403
                 )

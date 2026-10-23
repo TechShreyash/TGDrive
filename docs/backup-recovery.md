@@ -41,7 +41,7 @@ channel until the owner enables it under **Tools & settings → Storage & Backup
    for the same bot is still the same identity.
 5. Both channels must remain private, with no public usernames. Turn off
    **Restrict Saving Content** on these dedicated channels if it prevents document
-   copies. Do not use expiring documents, unrelated posts or protected content as
+   copies. Turn message auto-delete **Off** in both channels. Do not use expiring documents, unrelated posts or protected content as
    TGDrive storage.
 6. Do not manually delete/edit document messages still referenced by the catalog
    or a retained restore point, change TGDrive pins, or use the channels for
@@ -53,6 +53,12 @@ happens in Telegram. Telegram's bot APIs cannot create these owner accounts for
 TGDrive. The web setup checks channel privacy, channel IDs, bot identities and
 permissions. It **cannot prove which human account owns a channel or bot**; the
 separate-account acknowledgment is the owner's responsibility.
+
+In Telegram's channel administrator screen, enable **Post Messages**, **Edit
+Messages** and **Delete Messages** for the backup bot in both channels. Editing
+permission supports the recovery pin; unrelated administrator permissions are
+not required. Keep the primary storage bots' permissions from
+[standard Telegram setup](setup.md#2-prepare-telegram).
 
 ### Enable and confirm the first copy
 
@@ -235,11 +241,12 @@ again to capture a fresh snapshot with the current key. TGDrive refuses to label
 an archive with a key that does not match its captured generation.
 
 After independent backup is configured, a private `replica-bootstrap.json` in
-`DATA_DIR` retains owner recovery credentials and a password hash. It lets the
-owner recovery screen start when MongoDB is unavailable; it does not create a
-SQLite replacement or recover database access itself. Repair the configured
-MongoDB connection, or configure a reachable recovery destination before
-activation can finish. Preserve this private file, the channel journal and
+`DATA_DIR` retains owner recovery credentials and a password hash for subsequent
+recovery. It does not create a replacement database or make login work while
+MongoDB is unreachable. Restore MongoDB connectivity/access, or configure a
+reachable recovery destination, then restart. Startup can fail until database
+access is restored. Owner web recovery can help with a missing/corrupt catalog
+when its database is reachable. Preserve this private file, the channel journal and
 activation state with the data volume. A brand-new container with no saved drive
 still waits for explicit initialization; never run `init` to repair a lost drive.
 
@@ -329,7 +336,9 @@ recreate a Telegram file or part that has been deleted from the channel.
 
 1. Stop the old app if it is still running.
 2. Recreate the deployment with the same `MONGODB_URI` and `MONGODB_DATABASE`.
-   Preserve the original deployment secrets and temporary upload volume when available.
+   Preserve the original deployment secrets and both persistent volumes when
+   available. The supplied Compose file also needs its required original
+   Telegram fields; follow the complete [reinstall commands](operations.md#reopen-after-losing-the-local-installation).
 3. Start TGDrive normally, **without `init`**. Sign in using the existing owner login.
 4. Check Connections, the file list, a split-file download and any unfinished uploads.
 
@@ -344,9 +353,17 @@ MongoDB settings, secrets and mounted volumes.
    its saved key and note its date: later changes will not be in this snapshot.
 2. Prepare a **new, empty MongoDB database** with transaction support, as required
    by [Setup](setup.md). Stop TGDrive before restoring.
-3. In private `.env` or the maintenance container environment, set the destination
+3. In private `.env` for source setup, or a separate `.env.restore` for the
+   maintenance container, set the destination
    `MONGODB_URI`, `MONGODB_DATABASE`, and the archive's original `MONGODB_BACKUP_KEY`.
-   Do not initialize the destination first.
+   Restrict this file to your user (`chmod 600 .env.restore`). Do not initialize
+   the destination first. A Docker maintenance file needs only these three values:
+
+~~~dotenv
+MONGODB_URI=<destination-private-uri>
+MONGODB_DATABASE=<new-empty-database-name>
+MONGODB_BACKUP_KEY=<original-64-character-hexadecimal-key>
+~~~
 4. Run one of these commands from the matching TGDrive release:
 
 Source installation:
@@ -355,23 +372,38 @@ Source installation:
 uv run --frozen python -m tgdrive restore-mongodb --file /absolute/path/backup.tgdb
 ~~~
 
-Docker Compose installation, with the backup mounted read-only:
+Docker installation: build a maintenance image from the matching source release.
+Use a dedicated container with the backup mounted read-only, leaving the stopped
+deployment and its volumes intact. These commands run in Linux/WSL from the
+project folder; replace the absolute backup path with your own:
 
 ~~~bash
-docker compose run --rm --no-deps \
-  -v /absolute/path/backup.tgdb:/restore/backup.tgdb:ro \
-  app python -m tgdrive restore-mongodb --file /restore/backup.tgdb
+docker build -t tgdrive:restore .
+docker run --rm --user "$(id -u):$(id -g)" \
+  --env-file .env.restore \
+  --mount type=bind,src=/absolute/path/backup.tgdb,dst=/restore/backup.tgdb,readonly \
+  tgdrive:restore python -m tgdrive restore-mongodb --file /restore/backup.tgdb
 ~~~
 
-The container's service user must be able to read the mounted file. With Coolify,
-run this maintenance command using the deployed image and a stopped app's
-configuration/network, with the archive mounted read-only; the app terminal of a
-running production instance is not an isolated restore environment. Restore needs
-only the destination MongoDB access and matching backup key, not working Telegram
-credentials, because those saved settings are recovered from the archive.
+The temporary container runs as your Linux user so it can read your privately
+owned archive without making it world-readable. The destination database must
+be reachable from this container; `localhost` in a MongoDB URI refers to the
+container itself. Permit the restore machine's IP in Atlas Network Access.
+For Coolify, stop the production app and run this maintenance container on a
+machine with Docker and the matching source checkout; the terminal of a running
+production app is not an isolated restore environment.
+
+Restore needs only the destination MongoDB access and matching backup key, not
+working Telegram credentials, because saved settings are recovered from the
+archive. Using the app's full Compose service for maintenance would additionally
+require its Telegram interpolation values; the dedicated command avoids that.
 
 5. After successful restore, start one TGDrive instance against the recovered
-   database. Sign in again: restored browser sessions are explicitly revoked.
+   database. Update the app's deployment URI/name to that destination, preserve
+   the original storage channel and keys, and recreate/redeploy; do not run init.
+   Remove stale example/credential overrides or supply the originals as described
+   in [reopening a drive](operations.md#reopen-after-losing-the-local-installation).
+   Sign in again: restored browser sessions are explicitly revoked.
 6. Check folders, representative downloads, split files, Connections, and sharing
    permissions. **Review restored share links**: restoring an older snapshot also
    restores its sharing state, which can predate a later revocation.

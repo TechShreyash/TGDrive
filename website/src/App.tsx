@@ -154,6 +154,7 @@ export default function App() {
   }, [location.view, location.settingsSection]);
   const [authenticated, setAuthenticated] = useState<boolean | null>(null);
   const [admissionPaused, setAdmissionPaused] = useState(false);
+  const [telegramWarning, setTelegramWarning] = useState("");
   const [config, setConfig] = useState<{
     max_file_size: number;
     demo_data?: boolean;
@@ -435,6 +436,7 @@ export default function App() {
   useEffect(() => {
     if (authenticated !== true || isPublic) {
       setAdmissionPaused(false);
+      setTelegramWarning("");
       return;
     }
     let disposed = false;
@@ -445,6 +447,14 @@ export default function App() {
         if (!disposed) {
           setAdmissionPaused(
             Boolean(status.admission_paused || status.restart_required),
+          );
+          setTelegramWarning(
+            status.telegram_issues?.[0]?.detail ||
+              (status.telegram_ready === false &&
+              !status.demo &&
+              !status.recovery_only
+                ? "No usable Telegram account is connected. Open Connections and Refresh to check bot tokens, Premium sessions and channel permissions. Existing files and saved upload progress are preserved."
+                : ""),
           );
         }
       } catch {
@@ -1515,6 +1525,24 @@ export default function App() {
                   File changes and new uploads are paused. You can still browse,
                   preview and download.
                 </p>
+              </div>
+              {view !== "connections" && (
+                <button
+                  type="button"
+                  className="text-button"
+                  onClick={() => navigate("/", "connections")}
+                >
+                  Open Connections
+                </button>
+              )}
+            </div>
+          )}
+          {!isPublic && telegramWarning && (
+            <div className="restart-required-banner" role="status">
+              <ShieldAlert size={20} />
+              <div>
+                <strong>A Telegram connection needs attention</strong>
+                <p>{telegramWarning}</p>
               </div>
               {view !== "connections" && (
                 <button

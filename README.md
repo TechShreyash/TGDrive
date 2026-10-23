@@ -39,8 +39,17 @@ It preserves an existing `.env` and asks explicitly before initializing a new
 drive. [The setup guide](docs/setup.md) covers Telegram credentials, MongoDB,
 source installations, and server hosting.
 
-For **Coolify**, select `/compose.yaml` from the `dev` branch and follow the
-[hosted setup](docs/setup.md#coolify). Keep credentials as private runtime values.
+For **on-demand laptop use**, the default address is
+[http://127.0.0.1:8000](http://127.0.0.1:8000), accessible from this computer.
+Run `docker compose stop` when finished and `docker compose up -d` next time.
+The app stays stopped after a reboot. Keep its `.env` and persistent volumes.
+Public sharing needs a reachable server; a stopped or sleeping laptop cannot
+serve links, finish transfers or run backups. Internet is required while using it.
+
+For **server hosting**, we recommend [Coolify](docs/setup.md#coolify): select
+`/compose.yaml` from `dev`, configure an HTTPS domain and keep credentials as
+private runtime values. [Docker Compose with your own HTTPS proxy](docs/setup.md#docker-compose-on-a-server)
+is also supported.
 
 ## How files move
 
@@ -98,14 +107,20 @@ or access to Telegram. Keep important originals outside the provider.
 
 
 - Save the MongoDB access details and the recovery key separately.
+- Keep the Telegram storage channel private, with auto-delete off and every
+  storage bot an administrator with **Post Messages** and **Delete Messages**.
+  Make changes through TGDrive; do not edit/delete its channel messages.
 - Wait for **Completed** before discarding an upload's original or staged bytes.
 - Reinstalls reopen the same MongoDB database; do not initialize it again.
 - Encrypted database backups restore records and settings, not deleted Telegram
   files or missing unfinished upload contents.
+- After an interruption, restart the same deployment and review Transfers,
+  Connections and Storage & Backups. [Recovery guidance](docs/operations.md#after-a-shutdown-crash-or-network-loss)
+  explains when a retry, original file or external backup is needed.
 - Share links grant access to anyone holding them. Revoke links you no longer need.
 - Permanent deletion removes records from TGDrive's database while keeping the
-  original Telegram messages, because bots cannot delete channel messages older
-  than 48 hours. See [Trash and permanent deletion](docs/usage.md#trash-and-permanent-deletion).
+  original Telegram messages. See [Trash and permanent deletion](docs/usage.md#trash-and-permanent-deletion)
+  for the separate steps needed to remove stored copies.
 
 [Operations and recovery](docs/operations.md) ·
 [Security boundaries](docs/reference.md#security-and-privacy)

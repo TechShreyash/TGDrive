@@ -9,7 +9,8 @@ and MongoDB remembers their names, folders and sharing settings.
 
 | I want to… | Read |
 | --- | --- |
-| Install TGDrive for the first time | [Setup](setup.md) |
+| Run TGDrive on my laptop only when needed | [Private Docker setup](setup.md) |
+| Host TGDrive for remote access and sharing | [Recommended: Coolify](setup.md#coolify), or [server Compose](setup.md#docker-compose-on-a-server) |
 | Upload, organize, preview or share files | [Using TGDrive](usage.md) |
 | Read PDFs, ebooks or comics without downloading every byte first | [Reading books and comics](reading.md) |
 | Understand generated image, video and PDF covers | [Thumbnail generation](thumbnails.md) |
@@ -36,6 +37,10 @@ and MongoDB remembers their names, folders and sharing settings.
   the same MongoDB drive. Telegram database backups offer a separate recovery route.
 - **Wait for “Completed” before removing local files.** Unfinished uploads can
   still need their originals and temporary files on your machine.
+
+Local access uses this computer's loopback address. Other people cannot open its
+share links, and nothing runs while the app is stopped. Keep the private Telegram
+channel app-managed: no manual message edits/deletions or automatic cleanup.
 
 ## Current release status
 

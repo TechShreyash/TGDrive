@@ -86,6 +86,8 @@ def test_existing_mongodb_bootstrap_reopens_with_only_database_configuration(
     monkeypatch.setenv("MONGODB_URI", "mongodb://synthetic.invalid")
     monkeypatch.setenv("DATA_DIR", str(tmp_path))
     monkeypatch.setenv("ADMIN_PASSWORD", "")
+    for key in ("SESSION_SECRET", "MONGODB_BACKUP_KEY", "ADMIN_PASSWORD_HASH"):
+        monkeypatch.setenv(key, "")
     monkeypatch.setattr(mongo, "configure", lambda *_args: fake)
     monkeypatch.setattr("tgdrive.managed_settings.read_document", lambda _: None)
     settings = Settings(_env_file=None)
@@ -110,6 +112,8 @@ def test_new_container_can_generate_keys_before_explicit_initialization(
         "STORAGE_CHANNEL": "-1001234567890",
         "ADMIN_PASSWORD": "new synthetic owner password",
         "ADMIN_PASSWORD_HASH": "",
+        "SESSION_SECRET": "",
+        "MONGODB_BACKUP_KEY": "",
     }.items():
         monkeypatch.setenv(key, value)
     fake = SimpleNamespace(
@@ -125,6 +129,100 @@ def test_new_container_can_generate_keys_before_explicit_initialization(
     assert first.session_secret == second.session_secret
     assert first.mongodb_backup_key == second.mongodb_backup_key
     assert first.admin_password_hash is None
+
+
+def recovery_configuration(tmp_path, monkeypatch, **overrides):
+    values = {
+        "API_ID": 12345,
+        "API_HASH": "a" * 32,
+        "BOT_TOKENS": "123456:" + "x" * 30,
+        "STORAGE_CHANNEL": -1001234567890,
+        "ADMIN_PASSWORD_HASH": PasswordHasher().hash("original owner password"),
+        "SESSION_SECRET": "s" * 48,
+    }
+    environment = {
+        "MONGODB_URI": "mongodb://synthetic.invalid",
+        "DATA_DIR": str(tmp_path),
+        "ADMIN_PASSWORD": "",
+        "ADMIN_PASSWORD_HASH": "",
+        "SESSION_SECRET": "",
+        "MONGODB_BACKUP_KEY": "",
+        **overrides,
+    }
+    for key, value in environment.items():
+        monkeypatch.setenv(key, str(value))
+    monkeypatch.setattr("tgdrive.replica_bootstrap.load_bootstrap", lambda _: values)
+    return values
+
+
+def test_explicit_rotation_is_not_hidden_by_local_recovery_copy(tmp_path, monkeypatch):
+    bootstrap = recovery_configuration(
+        tmp_path,
+        monkeypatch,
+        ADMIN_PASSWORD="replacement owner password",
+        SESSION_SECRET="replacement-signing-secret-" * 3,
+        STORAGE_CHANNEL=-1009876543210,
+    )
+    backend = SimpleNamespace(
+        db=SimpleNamespace(
+            settings=SimpleNamespace(find_one=lambda _: {"document": bootstrap})
+        )
+    )
+    monkeypatch.setattr("tgdrive.mongo.configure", lambda *_args: backend)
+    monkeypatch.setattr("tgdrive.managed_settings.read_document", lambda _: None)
+    settings = Settings(_env_file=None)
+    assert settings.storage_channel == -1009876543210
+    assert (
+        settings.session_secret.get_secret_value() == "replacement-signing-secret-" * 3
+    )
+    assert settings.admin_password.get_secret_value() == "replacement owner password"
+    assert settings.admin_password_hash is None
+
+
+def test_database_outage_reuses_saved_keys_for_recovery_shell(tmp_path, monkeypatch):
+    bootstrap = recovery_configuration(
+        tmp_path, monkeypatch, TGDRIVE_AUTO_SECRETS="true"
+    )
+    keys = installation_secrets(tmp_path, {}, existing_drive=False)
+    bootstrap["SESSION_SECRET"] = keys["SESSION_SECRET"]
+
+    def unavailable(_query):
+        raise ConnectionError("synthetic database outage")
+
+    backend = SimpleNamespace(
+        db=SimpleNamespace(settings=SimpleNamespace(find_one=unavailable))
+    )
+    monkeypatch.setattr("tgdrive.mongo.configure", lambda *_args: backend)
+    monkeypatch.setattr(
+        "tgdrive.managed_settings.read_document",
+        lambda _: pytest.fail("Do not query unavailable MongoDB a second time"),
+    )
+    settings = Settings(_env_file=None)
+    assert settings.session_secret.get_secret_value() == keys["SESSION_SECRET"]
+    assert settings.mongodb_backup_key.get_secret_value() == keys["MONGODB_BACKUP_KEY"]
+    assert (
+        settings.admin_password_hash.get_secret_value()
+        == bootstrap["ADMIN_PASSWORD_HASH"]
+    )
+
+
+def test_database_outage_does_not_generate_replacement_recovery_keys(
+    tmp_path, monkeypatch
+):
+    recovery_configuration(tmp_path, monkeypatch, TGDRIVE_AUTO_SECRETS="true")
+
+    def unavailable(_query):
+        raise ConnectionError("synthetic database outage")
+
+    monkeypatch.setattr(
+        "tgdrive.mongo.configure",
+        lambda *_args: SimpleNamespace(
+            db=SimpleNamespace(settings=SimpleNamespace(find_one=unavailable))
+        ),
+    )
+    with pytest.raises(ValueError, match=r"original.*MONGODB_BACKUP_KEY"):
+        Settings(_env_file=None)
+    assert not (tmp_path / "deployment-secrets.json").exists()
 
 
 def test_proxy_discovery_trusts_only_resolved_private_addresses(monkeypatch):
@@ -234,7 +332,12 @@ def test_hosted_and_local_compose_resolve_without_real_credentials(tmp_path):
     if not docker:
         pytest.skip("Docker Compose is needed for deployment configuration validation")
     root = Path(__file__).resolve().parents[1]
-    for name in ("compose.yaml", "compose.override.yaml", "compose.coolify.yaml"):
+    for name in (
+        "compose.yaml",
+        "compose.override.yaml",
+        "compose.server.yaml",
+        "compose.coolify.yaml",
+    ):
         shutil.copyfile(root / name, tmp_path / name)
     fixture = {
         "MONGODB_URI": "mongodb://synthetic.invalid",
@@ -253,6 +356,8 @@ def test_hosted_and_local_compose_resolve_without_real_credentials(tmp_path):
     environment.pop("COMPOSE_FILE", None)
     environment.pop("BIND_ADDRESS", None)
     environment.pop("PORT", None)
+    environment.pop("TGDRIVE_RESTART_POLICY", None)
+    environment.pop("COOKIE_SECURE", None)
     policy_defaults = {
         key.upper(): str(value).lower() if isinstance(value, bool) else str(value)
         for key, value in PerformancePreferences().model_dump().items()
@@ -283,16 +388,24 @@ def test_hosted_and_local_compose_resolve_without_real_credentials(tmp_path):
     hosted = config("compose.yaml")
     assert not hosted.get("ports")
     assert hosted["environment"]["TGDRIVE_PROXY_HOSTS"] == "coolify-proxy"
-    assert "SESSION_SECRET" not in hosted["environment"]
-    assert "ADMIN_PASSWORD_HASH" not in hosted["environment"]
+    assert hosted["environment"]["SESSION_SECRET"] == fixture["SESSION_SECRET"]
+    assert hosted["environment"]["COOKIE_SECURE"] == "true"
+    assert hosted["restart"] == "unless-stopped"
     local = config()
     assert local["ports"][0]["host_ip"] == "127.0.0.1"
     assert str(local["ports"][0]["published"]) == "8000"
     assert local["environment"]["SESSION_SECRET"] == fixture["SESSION_SECRET"]
     assert local["environment"]["TGDRIVE_PROXY_HOSTS"] == ""
+    assert local["environment"]["COOKIE_SECURE"] == "false"
+    assert local["restart"] == "no"
+    server = config("compose.yaml", "compose.server.yaml")
+    assert server["ports"][0]["host_ip"] == "127.0.0.1"
+    assert server["environment"]["COOKIE_SECURE"] == "true"
+    assert server["environment"]["TGDRIVE_PROXY_HOSTS"] == ""
+    assert server["restart"] == "unless-stopped"
     legacy = config("compose.coolify.yaml")
     assert not legacy.get("ports")
-    for deployment in (hosted, local, legacy):
+    for deployment in (hosted, local, server, legacy):
         for key, value in policy_defaults.items():
             assert deployment["environment"][key] == value
 

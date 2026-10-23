@@ -7,7 +7,7 @@ import pytest
 from starlette.requests import ClientDisconnect, Request
 
 from tgdrive.client_pool import ClientPool
-from tgdrive.streaming import stream_telegram_file
+from tgdrive.streaming import TelegramFileNotFound, stream_telegram_file
 
 
 class FakeStreamClient:
@@ -532,3 +532,30 @@ async def test_large_pdf_download_overrides_preview_size_cap(download, status):
         assert int(response.headers["content-length"]) == size
     assert (await pool.health()).active_leases == 0
     await pool.stop()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("missing", [True, False])
+async def test_missing_or_changed_storage_message_fails_before_stream_headers(missing):
+    class DamagedClient(FakeStreamClient):
+        async def get_messages(self, channel, *, message_ids):
+            if missing:
+                return None
+            return await super().get_messages(channel, message_ids=message_ids)
+
+    pool = ClientPool([DamagedClient(b"changed payload")])
+    await pool.start()
+    try:
+        with pytest.raises(TelegramFileNotFound) as error:
+            await stream_telegram_file(
+                pool=pool,
+                channel_id=-100,
+                message_id=7,
+                file_name="original.bin",
+                expected_size=3,
+                request=make_request(),
+            )
+        assert "missing or changed" in error.value.public_detail
+        assert (await pool.health()).active_leases == 0
+    finally:
+        await pool.stop()

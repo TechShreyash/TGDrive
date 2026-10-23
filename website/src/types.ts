@@ -94,6 +94,7 @@ export interface DriveProtection {
 export interface ServerStatus {
   recovery?: DriveProtection | null;
   telegram_ready?: boolean;
+  telegram_issues?: { code: string; detail: string }[];
   admission_paused?: boolean;
   restart_required?: boolean;
   backup?: unknown;
@@ -252,6 +253,7 @@ export interface ManagementSettings {
   api_id: number;
   api_hash_configured: boolean;
   storage_channel: number;
+  storage_channel_error?: string | null;
   clients: ManagedClient[];
   active_clients: Omit<ManagedClient, "enabled" | "configured">[];
   stats: ManagementStats;

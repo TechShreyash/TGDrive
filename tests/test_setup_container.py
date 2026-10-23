@@ -26,6 +26,9 @@ class Native:
             post_messages=True, edit_messages=True, delete_messages=True
         )
         self.broadcast = True
+        self.username = None
+        self.usernames = []
+        self.ttl_period = None
 
     async def get_input_entity(self, _channel):
         return types.InputPeerChannel(channel_id=1234567890, access_hash=123)
@@ -34,10 +37,16 @@ class Native:
         return SimpleNamespace(
             chats=[
                 SimpleNamespace(
-                    id=1234567890, broadcast=self.broadcast, admin_rights=self.rights
+                    id=1234567890,
+                    broadcast=self.broadcast,
+                    admin_rights=self.rights,
+                    username=self.username,
+                    usernames=self.usernames,
                 )
             ],
-            full_chat=SimpleNamespace(pinned_msg_id=self.client.pinned),
+            full_chat=SimpleNamespace(
+                pinned_msg_id=self.client.pinned, ttl_period=self.ttl_period
+            ),
         )
 
 
@@ -330,5 +339,59 @@ async def test_mongodb_channel_preflight_does_not_require_pin_rights(
     try:
         assert await helper.check_channel(configured, pool) == (None, None)
         assert client.requests == []
+    finally:
+        await pool.stop()
+
+
+@pytest.mark.parametrize(
+    ("damage", "code"),
+    [
+        ("username", "CHANNEL_PUBLIC"),
+        ("active_username", "CHANNEL_PUBLIC"),
+        ("auto_delete", "CHANNEL_AUTO_DELETE"),
+    ],
+)
+async def test_unsafe_channel_state_is_rejected_before_initializing(
+    tmp_path, monkeypatch, damage, code
+):
+    _, client = isolated_pool(monkeypatch)
+    if damage == "username":
+        client.native.username = "public_channel"
+    elif damage == "active_username":
+        client.native.usernames = [SimpleNamespace(active=True)]
+    else:
+        client.native.ttl_period = 86400
+    configured = settings(tmp_path)
+    with pytest.raises(helper.SetupError) as error:
+        await helper.prepare_installation(configured, "prepare", mode="new")
+    assert error.value.code == code
+    assert client.requests == []
+    assert not (configured.resolved_data_dir / "drive.sqlite3").exists()
+
+
+async def test_all_storage_bots_need_channel_administrator_permissions(tmp_path):
+    first, second = FakeBackupClient(), FakeBackupClient()
+    first.native, second.native = Native(first), Native(second)
+    second.name = "second-bot"
+    second.native.rights.delete_messages = False
+    pool = ClientPool([first, second])
+    await pool.start()
+    try:
+        with pytest.raises(helper.SetupError) as error:
+            await helper.check_channel(settings(tmp_path), pool)
+        assert error.value.code == "CHANNEL_RIGHTS"
+        assert first.requests == second.requests == []
+    finally:
+        await pool.stop()
+
+
+async def test_inactive_secondary_channel_username_does_not_make_it_public(
+    tmp_path, monkeypatch
+):
+    pool, client = isolated_pool(monkeypatch)
+    client.native.usernames = [SimpleNamespace(active=False)]
+    await pool.start()
+    try:
+        assert await helper.check_channel(settings(tmp_path), pool) == (None, None)
     finally:
         await pool.stop()

@@ -50,8 +50,9 @@ local validation. A public beta branch does not imply a hosted deployment.
 
 ## Known correctness and recovery gaps
 
-- **Optional client recovery:** a failed additional account in an otherwise
-  running pool may need a restart after repair.
+- **Credential replacement:** revoked accounts are excluded while healthy accounts
+  continue eligible work. Same-account token/session repair still needs a restart;
+  verified channel-permission repair can re-enable a live client through Refresh.
 - **Bot-mode imports:** do not use the web queue's full durable job model.
 - **History cleanup:** operation/receipt history needs reviewed compaction that
   preserves unresolved effects and retry identities.

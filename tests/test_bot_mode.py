@@ -162,7 +162,10 @@ async def test_bot_mode_lifecycle_is_idempotent(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
-async def test_bot_import_guard_before_copy_and_after_copy_preserves_metadata(tmp_path):
+@pytest.mark.parametrize("asynchronous", [False, True])
+async def test_bot_import_guard_before_copy_and_after_copy_preserves_metadata(
+    tmp_path, asynchronous
+):
     from tgdrive.managed_settings import SettingsProblem
 
     store = DriveStore.create(tmp_path / "drive.sqlite3")
@@ -176,6 +179,9 @@ async def test_bot_import_guard_before_copy_and_after_copy_preserves_metadata(tm
         if checks == 2:
             raise SettingsProblem("Connection restart required")
 
+    async def async_guard():
+        guard()
+
     verified = []
 
     async def verify_delete():
@@ -185,7 +191,7 @@ async def test_bot_import_guard_before_copy_and_after_copy_preserves_metadata(tm
         client=client,
         settings=settings(tmp_path),
         store=store,
-        before_write=guard,
+        before_write=async_guard if asynchronous else guard,
         before_delete=verify_delete,
     )
     try:

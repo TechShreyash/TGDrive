@@ -19,9 +19,22 @@ from typing import Final
 
 from argon2 import PasswordHasher
 from argon2.exceptions import VerificationError
+from pymongo.errors import PyMongoError
 
 SESSION_COOKIE: Final = "tgdrive_session"
 _TOKEN_VERSION: Final = 1
+
+
+def credential_session_key(key: bytes, credential: str) -> bytes:
+    """Invalidate browser sessions when the configured owner credential changes.
+
+    Derive from the configured value, rather than a freshly salted login hash,
+    so ordinary restarts preserve sessions. Share-link keys stay independent.
+    """
+
+    return hmac.new(
+        key, b"tgdrive/owner-session/v1\0" + credential.encode(), hashlib.sha256
+    ).digest()
 
 
 class InvalidSession(ValueError):
@@ -50,19 +63,25 @@ class SessionManager:
         self._db = None
         # Range authorization runs in worker threads; share one connection safely.
         self._db_lock = threading.RLock()
-        from tgdrive.mongo import for_directory
+        from tgdrive.mongo import DatabaseUnavailable, for_directory
 
         backend = for_directory(database_path.parent) if database_path else None
         self._mongo_backend = backend
         self._mongo = backend.db.sessions if backend else None
-        self._mongo_sessions = (
-            {
-                row["_id"]: row["expires"]
-                for row in self._mongo.find({"expires": {"$gt": int(time.time())}})
-            }
-            if self._mongo is not None
-            else {}
-        )
+        try:
+            self._mongo_sessions = (
+                {
+                    row["_id"]: row["expires"]
+                    for row in self._mongo.find({"expires": {"$gt": int(time.time())}})
+                }
+                if self._mongo is not None
+                else {}
+            )
+        except PyMongoError:
+            raise DatabaseUnavailable(
+                "MongoDB is unavailable. Restore database access, then restart "
+                "TGDrive. Owner sign-in requires the configured database."
+            ) from None
         self._finalizer = None
         if database_path is not None and self._mongo is None:
             database_path.parent.mkdir(parents=True, exist_ok=True)
@@ -144,7 +163,10 @@ class SessionManager:
             current_time = int(time.time() if now is None else now)
             if payload.get("v") != _TOKEN_VERSION:
                 raise InvalidSession("unsupported session version")
-            if not isinstance(payload.get("exp"), int) or payload["exp"] < current_time:
+            if (
+                not isinstance(payload.get("exp"), int)
+                or payload["exp"] <= current_time
+            ):
                 raise InvalidSession("session expired")
             if (
                 not isinstance(payload.get("iat"), int)

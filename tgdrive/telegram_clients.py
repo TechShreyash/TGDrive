@@ -35,6 +35,7 @@ from telethon.sessions import StringSession
 from tgdrive.client_identity import IdentityCache, account_identity
 from tgdrive.client_pool import ClientPool
 from tgdrive.config import Settings
+from tgdrive.connection_errors import TelegramConnectionError
 from tgdrive.file_window import FileWindow
 from tgdrive.media_scheduler import MediaScheduler
 
@@ -454,8 +455,12 @@ class Client:
         try:
             if not await self.native.is_user_authorized():
                 if not self._token:
-                    raise RuntimeError(
-                        "User session is not authorized. Run tgdrive login locally."
+                    raise TelegramConnectionError(
+                        "This Premium session is no longer authorized. Open "
+                        "Connections and sign in to the same account again, then "
+                        "restart TGDrive and retry.",
+                        "TELEGRAM_CREDENTIALS_REVOKED",
+                        client_name=self.name,
                     )
                 await self.native.sign_in(bot_token=self._token)
             me = await self.native.get_me()
@@ -998,6 +1003,27 @@ class Client:
         if identity is not None and (type(identity) is not int or identity <= 0):
             raise RuntimeError("Telegram returned an invalid pinned message identity")
         return identity
+
+    async def storage_channel_problem(
+        self, channel: int, *, require_pin: bool
+    ) -> tuple[str, str] | None:
+        """Read current retention, privacy and bot rights without changing messages."""
+        from tgdrive.channel_state import (
+            storage_bot_rights_problem,
+            storage_channel_problem,
+        )
+
+        peer = await self.native.get_input_entity(channel)
+        result = await self.native(
+            functions.channels.GetFullChannelRequest(utils.get_input_channel(peer))
+        )
+        chat = next(
+            (item for item in result.chats if utils.get_peer_id(item) == channel),
+            None,
+        )
+        return storage_channel_problem(
+            chat, result.full_chat
+        ) or storage_bot_rights_problem(chat, require_pin=require_pin)
 
     async def pin_message(
         self, channel: int, message_id: int, *, silent: bool = True

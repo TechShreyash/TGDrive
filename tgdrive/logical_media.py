@@ -98,14 +98,17 @@ class PartLease:
                     await self._fetch()
                     break
                 except (OSError, RPCError, ValueError) as error:
+                    problem = await self.pool.report_failure(self.client, error)
                     if isinstance(error, FloodWaitError):
                         await self.pool.defer_client(
                             self.client.name,
                             time.time() + max(1, error.seconds),
                         )
-                    elif self.pool.kind_of(self.client) != "user":
+                    elif problem is None and self.pool.kind_of(self.client) != "user":
                         raise
                     if attempt == 2:
+                        if problem is not None:
+                            raise problem from None
                         raise
                     await self.close()
                     self.lease = None

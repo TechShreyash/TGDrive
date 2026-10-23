@@ -545,3 +545,25 @@ async def test_pinned_message_reads_only_current_pin_without_messages_or_history
     native.pins[BACKUP] = True
     with pytest.raises(ReplicaTransportError):
         await transport.pinned_message(BACKUP)
+
+
+@pytest.mark.asyncio
+async def test_channel_auto_delete_prevents_backup_copy_before_publishing():
+    transport, native = await started()
+    original = native.__class__.__call__
+
+    async def with_auto_delete(self, request):
+        result = await original(self, request)
+        if isinstance(request, functions.channels.GetFullChannelRequest):
+            result.full_chat.ttl_period = 86400
+        return result
+
+    from unittest.mock import patch
+
+    with (
+        patch.object(native.__class__, "__call__", with_auto_delete),
+        pytest.raises(ReplicaTransportError) as error,
+    ):
+        await transport.copy(MAIN, 77, BACKUP, random_id=123, expected_size=123)
+    assert error.value.code == "REPLICA_AUTO_DELETE"
+    assert not native.receipts

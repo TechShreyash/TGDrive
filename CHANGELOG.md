@@ -6,11 +6,19 @@ This release rebuilds TGDrive as a self-hosted, single-owner drive. Run one
 service instance and one Uvicorn worker. No public deployment is implied by
 this candidate.
 
+### Telegram connection recovery
+
+- Quarantine revoked tokens/sessions and lost channel access, retry eligible
+  reads and undispatched upload parts through healthy accounts, and wake waiters.
+- Preserve staged bytes and sender/request identities after dispatch; report
+  specific repair actions instead of silently waiting on a removed account.
+- Show connection warnings and allow verified credential replacement for the
+  same account while work is pending. Refresh can restore verified channel access.
+
 ### Permanent deletion
 
 - Remove file/folder references and shares from the database while retaining
-  original Telegram messages, for every file age. Bots cannot delete channel
-  messages older than 48 hours even with administrator permissions.
+  original Telegram messages, for every file age.
 - Complete retried legacy deletion intents without further Telegram deletion;
   retain durable jobs, lineage checks and independent-backup protection.
 - Explain retained Telegram copies in the confirmation dialog and document the
@@ -26,6 +34,15 @@ this candidate.
 - Keep new containers accessible for explicit initialization and explain
   database ownership conflicts without resetting existing state.
 - Retain `/compose.coolify.yaml` for existing applications.
+- Default laptop Compose to localhost HTTP and on-demand startup; provide an
+  HTTPS server override and beginner guides for Coolify, backups and recovery.
+- Forward optional deployment controls and reject unsafe/duplicate credentials.
+- Recheck private-channel retention and bot permissions before protected writes,
+  display detected channel problems in Connections, and preserve interrupted work.
+- Honor explicit credential rotations over local recovery defaults, revoke old
+  owner sessions after rotation, and bound password verification resource costs.
+- Update certifi and the pinned uv builder to address the compromised emSign G3
+  trust chain, and distrust that root in the runtime's system certificate store.
 
 ### Reliability and Performance Controls
 

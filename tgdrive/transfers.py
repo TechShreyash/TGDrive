@@ -129,6 +129,7 @@ class TransferManager:
         registry: TransferRegistry,
         ensure_backup: Callable[[int], Awaitable[int]] | None = None,
         ensure_lineage: Callable[[], Awaitable[None]] | None = None,
+        ensure_channel: Callable[[], Awaitable[None]] | None = None,
         check_upload_allowed: Callable[[], None] | None = None,
     ) -> None:
         self.settings = settings
@@ -138,6 +139,7 @@ class TransferManager:
         self.registry = registry
         self._ensure_backup = ensure_backup
         self._ensure_lineage = ensure_lineage
+        self._ensure_channel = ensure_channel
         self._check_upload_allowed = check_upload_allowed
         self.cache_dir = settings.resolved_cache_dir
         self.cache_dir.mkdir(parents=True, exist_ok=True)
@@ -515,15 +517,29 @@ class TransferManager:
         # still constrain every new upload after a process restart.
         await restore_telegram_cooldowns(self.pool, self.registry.list())
         intents = self.store.pending_deletions()
-        if intents or any(not row.terminal for row in self.registry.list()):
+        restart_jobs = [
+            row
+            for row in self.registry.list()
+            if row.status is TransferStatus.ERROR
+            and row.context.get("restart_retryable") is True
+            and row.context.get("kind") in {"upload", "remote", "delete"}
+            and not row.context.get("cancel_requested")
+        ]
+        if (
+            intents
+            or restart_jobs
+            or any(not row.terminal for row in self.registry.list())
+        ):
             await self._verify_lineage()
+        for record in restart_jobs:
+            self.registry.retry(record.id)
         for intent in intents:
             try:
                 self.registry.get(intent["id"])
             except KeyError:
                 self.start_deletion(intent["path"])
         for record in self.registry.list():
-            if not record.terminal and record.task is None:
+            if not record.terminal and (record.task is None or record.task.done()):
                 self._resume(record)
 
     def cancel_job(self, job_id: str) -> TransferRecord:
@@ -727,6 +743,8 @@ class TransferManager:
                 await self._protect_committed_upload(record, size)
                 cleanup = True
                 return
+            if self._ensure_channel is not None:
+                await self._ensure_channel()
             if self._check_upload_allowed is not None:
                 self._check_upload_allowed()
             else:
@@ -965,7 +983,7 @@ class TransferManager:
                         "An upload into this folder still needs Telegram cleanup"
                     )
             # Permanent deletion forgets the catalog subtree, not its Telegram
-            # documents. Bots cannot delete channel messages older than 48 hours.
+            # documents. This policy applies consistently to every file age.
             # This also completes legacy intents with unconfirmed remote messages.
             await self._verify_lineage(record)
             await asyncio.to_thread(self.store.finish_deletion, intent["id"])

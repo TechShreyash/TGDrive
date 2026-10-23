@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import copy
+import errno
 import json
 import logging
 import math
@@ -21,8 +22,10 @@ from enum import StrEnum
 from pathlib import Path
 from typing import Any
 
+from aiohttp import ClientConnectionError, ClientPayloadError
 from pymongo import UpdateOne
 from pymongo.errors import PyMongoError
+from telethon.errors import RpcCallFailError, ServerError, TimedOutError
 
 from tgdrive.mongo import DatabaseUnavailable
 
@@ -32,6 +35,44 @@ _SHUTDOWN_DRAIN_SECONDS = 5.0
 _PROGRESS_JOURNAL_SECONDS = 0.5
 _PROGRESS_STALE_SECONDS = 15.0
 _BYTE_PHASES = frozenset({"saving", "downloading", "uploading"})
+
+
+def _retry_after_restart(error: Exception) -> bool:
+    """Only known temporary transport failures may restart without owner input."""
+    from tgdrive.backup import BackupError, RecoveryConflict
+    from tgdrive.remote import RemoteHTTPError, RemoteResolutionError, RemoteTimeout
+
+    if isinstance(error, RecoveryConflict):
+        return False
+    if isinstance(error, BackupError) and isinstance(error.__cause__, Exception):
+        # Checkpoint publication wraps provider errors in a safe domain exception.
+        error = error.__cause__
+    if isinstance(
+        error,
+        (
+            ConnectionError,
+            TimeoutError,
+            ClientConnectionError,
+            ClientPayloadError,
+            ServerError,
+            RpcCallFailError,
+            TimedOutError,
+            RemoteResolutionError,
+            RemoteTimeout,
+        ),
+    ):
+        return True
+    if isinstance(error, RemoteHTTPError):
+        return error.status in {408, 429} or 500 <= error.status <= 599
+    return isinstance(error, OSError) and error.errno in {
+        errno.ENETDOWN,
+        errno.ENETUNREACH,
+        errno.ENETRESET,
+        errno.ECONNABORTED,
+        errno.ECONNRESET,
+        errno.ETIMEDOUT,
+        errno.EHOSTUNREACH,
+    }
 
 
 class TransferStatus(StrEnum):
@@ -608,6 +649,7 @@ class TransferRegistry:
             raise ValueError("Only failed or interrupted transfers can be retried")
         record.status = TransferStatus.QUEUED
         record.error = None
+        record.context.pop("restart_retryable", None)
         record._progress_samples.clear()
         record.cancel_event.clear()
         self.persist(record)
@@ -803,10 +845,20 @@ class TransferRegistry:
                     record.error = str(exc)[:500] or type(exc).__name__
                     self.persist(record)
                 else:
+                    retryable = _retry_after_restart(exc)
+                    if retryable:
+                        record.context["restart_retryable"] = True
+                    else:
+                        record.context.pop("restart_retryable", None)
                     self.update(
                         record.id,
                         status=TransferStatus.ERROR,
-                        error=str(exc) or type(exc).__name__,
+                        error=(
+                            "The connection was interrupted. Retry this transfer, "
+                            "or restart TGDrive after restoring the connection."
+                            if retryable
+                            else str(exc) or type(exc).__name__
+                        ),
                     )
 
         task = asyncio.create_task(runner(), name=f"transfer:{transfer_id}")

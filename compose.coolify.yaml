@@ -5,7 +5,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-    restart: unless-stopped
+    restart: ${TGDRIVE_RESTART_POLICY:-unless-stopped}
     init: true
     expose:
       - "8000"
@@ -40,6 +40,7 @@ services:
       REMOTE_TOTAL_TIMEOUT: ${REMOTE_TOTAL_TIMEOUT:-21600}
       REMOTE_MAX_REDIRECTS: ${REMOTE_MAX_REDIRECTS:-5}
       MAX_CONCURRENT_TRANSFERS: ${MAX_CONCURRENT_TRANSFERS:-2}
+      MAX_FILE_SIZE: ${MAX_FILE_SIZE:-}
       TELEGRAM_UPLOADS_PER_BOT: ${TELEGRAM_UPLOADS_PER_BOT:-1}
       TRANSFER_TTL_SECONDS: ${TRANSFER_TTL_SECONDS:-3600}
       STAGING_BUDGET_BYTES: ${STAGING_BUDGET_BYTES:-17179869184}
@@ -73,6 +74,11 @@ services:
     cap_drop:
       - ALL
     pids_limit: 256
+    logging:
+      driver: local
+      options:
+        max-size: "10m"
+        max-file: "3"
 
 volumes:
   tgdrive-data:

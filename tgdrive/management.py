@@ -16,8 +16,10 @@ from pydantic import Field, SecretStr, ValidationError
 from telethon import TelegramClient, functions, utils
 from telethon.sessions import StringSession
 
+from tgdrive.channel_state import storage_channel_problem
 from tgdrive.client_identity import IdentityCache, account_identity
 from tgdrive.config import Settings
+from tgdrive.connection_errors import connection_problem
 from tgdrive.managed_settings import (
     MAX_CLIENTS,
     ManagedClient,
@@ -115,6 +117,9 @@ async def verify_connection(
                 raise SettingsProblem(
                     "The account cannot access the configured storage channel"
                 )
+            problem = storage_channel_problem(chat, getattr(result, "full_chat", None))
+            if problem is not None:
+                raise SettingsProblem(problem[1], code=problem[0])
             rights = getattr(chat, "admin_rights", None)
             required = (
                 (
@@ -149,8 +154,11 @@ async def verify_connection(
     except SettingsProblem:
         raise
     except Exception as error:
+        access_problem = connection_problem(error, row.kind)
         delay = getattr(error, "seconds", None)
-        if isinstance(delay, int) and delay > 0:
+        if access_problem is not None:
+            detail = str(access_problem)
+        elif isinstance(delay, int) and delay > 0:
             detail = (
                 "Telegram temporarily limited verification. Wait before trying again."
             )
@@ -342,9 +350,15 @@ class ConnectionManager:
                         row.kind == "user" and getattr(status, "started", False)
                     ),
                     "active_leases": getattr(status, "active_leases", 0),
-                    "error": "Connection unavailable"
-                    if getattr(status, "last_error_type", None)
-                    else None,
+                    "error": getattr(status, "error", None)
+                    or (
+                        "Connection unavailable. Refresh to check credentials and "
+                        "storage-channel access; repair the connection and restart "
+                        "TGDrive if needed."
+                        if getattr(status, "last_error_type", None)
+                        else None
+                    ),
+                    "error_code": getattr(status, "error_code", None),
                 }
             )
         return result
@@ -412,7 +426,7 @@ class ConnectionManager:
                     try:
                         async with asyncio.timeout(30):
                             if self.verifier is verify_connection:
-                                await self.verifier(
+                                verified_name = await self.verifier(
                                     api_id,
                                     api_hash.get_secret_value(),
                                     row,
@@ -423,12 +437,19 @@ class ConnectionManager:
                                     ),
                                 )
                             else:
-                                await self.verifier(
+                                verified_name = await self.verifier(
                                     api_id,
                                     api_hash.get_secret_value(),
                                     row,
                                     self.settings.storage_channel,
                                 )
+                        pool = getattr(self.runtime, "pool", None)
+                        restore = getattr(pool, "restore_channel_access", None)
+                        if (
+                            callable(restore)
+                            and revision == self.settings.managed_revision
+                        ):
+                            await restore(verified_name)
                         state.update(
                             connection_check="passed",
                             connection_check_error=None,
@@ -543,6 +564,7 @@ class ConnectionManager:
                     "premium": live.get("premium", False),
                     "active_leases": live.get("active_leases", 0),
                     "error": live.get("error"),
+                    "error_code": live.get("error_code"),
                     **(
                         self._checks.get(row.id, {})
                         if row.enabled and revision == self._checks_revision
@@ -563,6 +585,9 @@ class ConnectionManager:
             "storage_channel": self.settings.storage_channel,
             "clients": clients,
             "active_clients": active,
+            "storage_channel_error": getattr(
+                self.runtime, "storage_channel_error", None
+            ),
             "stats": self._stats(),
             "recovery": backup.protection_status(store)
             if store is not None
@@ -648,6 +673,40 @@ class ConnectionManager:
             ).free
         return result
 
+    async def _credential_repair(
+        self, document: ManagedDocument, existing: list[ManagedClient], api_id, api_hash
+    ) -> dict[str, str] | None:
+        """Allow credential-only repairs without discarding pending sender journals."""
+        if (
+            document.api_id != api_id
+            or document.api_hash != api_hash
+            or [row.id for row in document.clients] != [row.id for row in existing]
+        ):
+            return None
+        statuses = ()
+        pool = getattr(self.runtime, "pool", None)
+        if callable(getattr(pool, "status", None)):
+            statuses = await pool.status()
+        live_names = {
+            row.id: status.name
+            for row, status in zip(self.active, statuses, strict=False)
+        }
+        changed = {}
+        for row, prior in zip(document.clients, existing, strict=True):
+            if row.kind != prior.kind or row.enabled != prior.enabled:
+                return None
+            if row.credential == prior.credential:
+                continue
+            name = (
+                "storage-bot-" + prior.credential.get_secret_value().split(":", 1)[0]
+                if prior.kind == "bot"
+                else prior.runtime_name or live_names.get(prior.id)
+            )
+            if not name or not name.startswith(("storage-bot-", "premium-user-")):
+                return None
+            changed[row.id] = name
+        return changed or None
+
     async def save(self, change: SettingsChange) -> dict[str, Any]:
         async with self.lock:
             await self.close()
@@ -725,12 +784,23 @@ class ConnectionManager:
                     "These connections cannot satisfy the current configuration. "
                     "Check the configured storage credentials."
                 ) from None
-            self._ensure_idle()
-            # Verify the entire candidate; never mutate running clients or sessions.
+            repair = None
+            try:
+                self._ensure_idle()
+            except SettingsProblem:
+                repair = await self._credential_repair(
+                    document, existing, api_id, api_hash
+                )
+                if repair is None:
+                    raise
+            # Verify replacements before saving; retain unchanged connections
+            # during a same-account repair. Running clients are not replaced here.
             gate = asyncio.Semaphore(2)
 
             async def verify(row):
                 if not row.enabled:
+                    return row.runtime_name
+                if repair is not None and row.id not in repair:
                     return row.runtime_name
                 async with gate:
                     if self.verifier is verify_connection:
@@ -772,18 +842,29 @@ class ConnectionManager:
                     status=503,
                 ) from None
             active_names = [
-                name for row, name in zip(rows, names, strict=True) if row.enabled
+                name
+                for row, name in zip(rows, names, strict=True)
+                if row.enabled and name is not None
             ]
             if len(set(active_names)) != len(active_names):
                 raise SettingsProblem("The same Telegram account cannot be added twice")
             for row, name in zip(rows, names, strict=True):
+                if repair is not None and row.id in repair and name != repair[row.id]:
+                    raise SettingsProblem(
+                        "Pending transfers require the same Telegram account. "
+                        "Replace the token or session for that account; changing "
+                        "its identity requires finishing pending transfers first.",
+                        code="SETTINGS_BUSY",
+                        status=409,
+                    )
                 row.runtime_name = name
             # Build every fallible response field before the commit. In
             # particular, cancellation while collecting pool health must not
             # make an authenticated login revoke an already persisted session.
             active = await self._active_snapshot(rows)
             response = self._snapshot(document.revision, document.api_id, rows, active)
-            self._ensure_idle()
+            if repair is None:
+                self._ensure_idle()
             await asyncio.to_thread(
                 save_document, self.settings.resolved_data_dir, document, revision
             )

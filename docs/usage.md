@@ -435,13 +435,10 @@ folder before restoring or deleting it.
 
 ### Why permanent deletion keeps the Telegram files
 
-Telegram bots cannot delete channel messages older than 48 hours, even with
-administrator deletion permission. Telegram's
-[TDLib implementation enforces this two-day limit](https://github.com/tdlib/td/blob/master/td/telegram/MessagesManager.cpp#L7718).
-TGDrive therefore uses the same database-only removal for every permanent
-deletion, regardless of file age. It does not attempt Telegram deletion first or
-require a Telegram user session. This avoids age-dependent failures and misleading
-success when only some parts of a folder or multipart file could be deleted.
+TGDrive's permanent-delete operation uses database-only removal for every file
+age. It does not attempt to erase the original Telegram messages or require a
+Telegram user session. Completion confirms that the selected database records
+and their TGDrive access were removed; it does not confirm remote erasure.
 
 Permanent deletion removes TGDrive's references and access through TGDrive; it
 does not erase Telegram's copies, copies held by recipients, local caches or
@@ -499,7 +496,19 @@ Refresh runs in the background. A failed check keeps the saved name and shows
 an error; temporary failures retry with Telegram's wait times. Disabled accounts
 are skipped. Keep at least one working storage bot.
 
-Finish or cancel unfinished transfers before changing connections.
+If Telegram revokes a token/session or removes channel access, TGDrive excludes
+that connection and shows a warning with the repair action. Downloads can use
+another healthy account; upload parts switch only before message dispatch.
+Already dispatched parts retain their sender and staged bytes for safe retry.
+Restore channel permissions and Refresh, or replace a revoked credential for the
+same account and restart. See [connection recovery](operations.md#revoked-tokens-removed-sessions-and-lost-channel-access).
+
+Finish or cancel unfinished transfers before changing the account list, enabled
+states or Telegram API credentials. A replacement bot token or Premium session
+for the **same Telegram account** can repair a broken credential while transfers
+remain pending; keep all other connection settings unchanged. TGDrive checks the
+replacement identity and preserves pending work. A different account needs the
+normal idle workflow.
 Saved changes require a restart; the UI pauses new uploads until they apply.
 For Docker, restart from the installation folder:
 

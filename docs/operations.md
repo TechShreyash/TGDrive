@@ -24,18 +24,92 @@ operations, queued work, and account cooldowns. Queue waits are estimates from
 recent activity, not promised start or completion times. The
 [performance guide](performance.md) explains each layer and its limits.
 
+Local commands above use the laptop override and keep the service stopped after
+a reboot. For a server configured with `compose.server.yaml`, add
+`-f compose.yaml -f compose.server.yaml` to every Compose command. In Coolify,
+use the application's Stop, Restart, Logs and Redeploy controls.
+
+Docker's restart policy handles process exits; an `unhealthy` health check alone
+does not restart a running container. Inspect logs and the owner pages before
+restarting. Readiness checks do not verify every Telegram file or the public
+domain. See [Docker's restart policy behavior](https://docs.docker.com/engine/containers/start-containers-automatically/).
+
+## After a shutdown, crash or network loss
+
+Start the **same** deployment with `docker compose up -d`, or restart it with
+`docker compose restart app` if it is still running. Wait for startup, sign in,
+then check **Transfers**, **Connections** and **Storage & Backups**. Reopen a video
+or retry its download if the old browser request was interrupted.
+
+| What was happening | What survives and what to do |
+| --- | --- |
+| A completed file was idle | Its catalog remains in MongoDB and its documents remain in Telegram. Restarting does not require re-uploading it. |
+| The browser was sending a file | Keep the original. Resume the existing transfer and reselect that same file if asked. The server verifies acknowledged bytes; it cannot read files from a closed browser. |
+| Telegram uploading had begun | Durable jobs and staged bytes allow recovery from confirmed work. Leave both volumes intact; inspect the existing job before submitting another upload. |
+| A URL import was running | Find its server job in Transfers and use Retry if needed. The remote download may restart; an expired signed URL needs a fresh source. |
+| Telegram was unreachable | Restore connectivity. Startup reconnection and eligible retryable uploads can retry; Telegram cooldowns still apply after restarting. Use the displayed retry time or Retry action. |
+| MongoDB was unreachable or ownership expired | Restore database access, stop competing instances, then restart this app. Unsafe writes stop when ownership cannot be confirmed; restart does not repair an unavailable database. |
+| A backup or independent channel copy was in progress | Confirm its status after restart. The last confirmed restore point remains the recovery boundary; partially copied work is not a confirmed backup. |
+| The disk filled up | Free unrelated disk space, or use TGDrive's disposable cache controls. Retry the existing transfer; do not delete its staged bytes or journals. |
+
+Browser upload receipts expire after inactivity, normally 24 hours; their
+retention is configurable. A laptop asleep for longer can need a fresh upload.
+A restart also cannot recreate a deleted local payload, a deleted Telegram
+document, a lost database without a usable backup, revoked credentials, or a
+missing recovery key. Preserve the displayed error and remaining data before
+attempting recovery.
+
+After an unclean stop, another process's ownership lease can briefly remain.
+Stop the old app, wait about a minute, then restart once. Do not delete the
+database's internal ownership records or disable the single-instance protection.
+
+If MongoDB is completely unreachable or its permissions prevent access, TGDrive
+may fail startup and owner login will be unavailable. Restore database access
+first, then restart. Saved local recovery configuration does not provide an
+offline login or replace the database. A reachable database with a missing or
+corrupt catalog can instead permit the owner recovery interface.
+
+## If someone changed the Telegram channel
+
+Keep every storage bot an administrator, keep the channel private, and disable
+message auto-delete. **Connections → Refresh** checks the saved accounts and
+required channel state. Fix revoked tokens, removed membership or missing
+permissions in Telegram, then refresh and restart. Also check the independent
+backup status if that feature is enabled.
+
+Before starting/resuming guarded Telegram writes, TGDrive checks the private
+channel state and required permissions of usable storage bots. Successful checks
+are reused for up to 30 seconds to limit Telegram requests; this is not an
+instantaneous lock on Telegram settings. A detected problem blocks that work
+and appears in Connections. Correct the channel setting, then retry the existing
+operation or restart; failed checks are not cached.
+
+If a file's document was deleted or replaced, access can report that the stored
+file is missing or changed in Telegram. Detection happens when the relevant
+document is checked or accessed, rather than as a continuous full-channel audit.
+Existing valid cached bytes can temporarily mask damage. Editing a caption does
+not reliably update TGDrive metadata; make all file changes in TGDrive.
+
+Restore from a confirmed independent channel copy, or re-upload the original
+into TGDrive as a new file. Follow [channel recovery](backup-recovery.md) before
+changing database/channel bindings. A MongoDB backup restores the catalog, not
+the missing file bytes. Restarting cannot undo Telegram message deletion, and
+TGDrive does not silently attach a different document to repair it.
+
 ## What is saved where
 
 | Place | What it holds |
 | --- | --- |
 | **Telegram channel** | Uploaded files, large-file parts and encrypted database backups |
 | **MongoDB** | Names, folders, file-part records, shares, app settings, transfer history and recovery state |
-| **Local temporary storage** | Bytes from unfinished uploads and disposable caches |
+| **Persistent Docker data/cache volumes** | Generated secrets, Telegram sessions, helper/recovery state, unfinished upload bytes and disposable media cache |
 | **Private .env** | Database access and machine-specific configuration |
 
 Deleting the app folder does **not** delete completed files from Telegram or
-their records from MongoDB. Deleting temporary storage can break unfinished
-uploads.
+their records from MongoDB. Removing Docker volumes can lose local secrets and
+unfinished uploads. `docker compose stop` preserves containers and volumes;
+`docker compose down -v` removes volumes. Keep the same Compose project name so
+a later start reuses the correct volumes.
 
 ### Save these somewhere separate
 
@@ -43,26 +117,49 @@ uploads.
 - Your web password.
 - The file from **Storage & Backups → Save recovery key**.
 - Access to the Telegram account/channel holding your files and backups.
+- Private deployment configuration and backups of both persistent volumes if
+  unfinished uploads or local recovery state must survive losing the machine.
+
+Only encrypted database snapshots use the recovery key. It is not a spare copy
+of file contents. Keep at least one confirmed archive and the matching key,
+and rehearse recovery into a separate empty database before depending on them.
 
 ## Reopen after losing the local installation
 
 Use this if the app folder or machine is gone, but MongoDB still exists.
 
 1. Stop any old running TGDrive instance.
-2. Install TGDrive again.
-3. Create a private `.env` with the **same** database access:
+2. Install TGDrive again using the same release where possible. In its project
+   folder, create a private configuration file:
 
-~~~dotenv
-MONGODB_URI=<your-existing-private-uri>
-MONGODB_DATABASE=tgdrive
+~~~bash
+cp .env.example .env
+chmod 600 .env
 ~~~
 
-4. Start TGDrive without running `init`.
-5. Sign in with your existing web password.
+3. Edit `.env` privately. Replace `MONGODB_URI` and `MONGODB_DATABASE` with the
+   **existing** database access/name. Supply the original `API_ID`, `API_HASH`,
+   `BOT_TOKENS` and `STORAGE_CHANNEL`, which Compose requires even when saved
+   MongoDB settings are available. Remove the sample `ADMIN_PASSWORD` placeholder:
+   set `ADMIN_PASSWORD=` and leave `ADMIN_PASSWORD_HASH`, `SESSION_SECRET` and
+   `MONGODB_BACKUP_KEY` blank/omitted to reuse the database's original bootstrap
+   credentials. If an older drive lacks those saved values, supply its original
+   credentials/keys from your recovery kit. Do not generate replacements.
+4. Start TGDrive **without `init`**:
+
+~~~bash
+docker compose config --quiet
+docker compose up -d --build
+~~~
+
+5. Open the local address and sign in with your existing web password. Check
+   Connections, the file list, a representative download and unfinished transfers.
 
 The app loads its saved settings and file list from MongoDB.
 Set `COOKIE_SECURE=false` for local HTTP, or `true` when using HTTPS.
-For Docker, build the image if needed, then run `docker compose up -d`.
+For hosted HTTPS, recreate it through [Coolify](setup.md#coolify) or use the
+[server Compose commands](setup.md#docker-compose-on-a-server) instead of the
+local commands above. Keep its persistent volumes if they survived the move.
 
 Missing local bytes from unfinished uploads still need their original files.
 
@@ -86,11 +183,50 @@ are required. Ordinary reinstalls reopen the existing MongoDB drive instead.
 Manage accounts in **Connections**, then restart to apply saved changes.
 See [web instructions](usage.md#settings-and-connections).
 
-- Finish or cancel unfinished/error transfers before editing.
+- Finish or cancel unfinished/error transfers before changing account identities,
+  enabled membership or Telegram API credentials. To repair an expired/revoked
+  credential while work is pending, replace only the token/session for the **same
+  account**; keep the account list, enabled states and API credentials unchanged.
+  TGDrive verifies the replacement identity before saving.
 - Keep at least one enabled bot with channel permissions.
 - Use the same channel for the existing drive.
 - A different drive/channel needs its own database; changing the channel ID
   does not move files.
+
+### Revoked tokens, removed sessions and lost channel access
+
+TGDrive detects account failures when Telegram rejects an operation or you use
+**Connections → Refresh**. A revoked/expired token or session, disabled Telegram
+account, or missing channel permissions excludes that connection from new work.
+The owner sees a connection warning and a specific repair instruction; other
+healthy connections continue serving eligible work. Credentials and raw provider
+request text are not included in these errors.
+
+Downloads and streaming can retry through another account with access to the
+same channel. An upload part can switch accounts only before message dispatch.
+After dispatch, its sender, request ID and staged bytes are retained so a lost
+acknowledgement cannot cause TGDrive to create a duplicate on another account.
+A missing/revoked original sender produces a repair error rather than an endless
+wait. Previously completed files remain mapped to their Telegram documents.
+
+- **Revoked bot token:** manage that bot in Connections and replace its token
+  with a valid token for the same bot, then restart and retry the transfer.
+- **Removed/expired Premium session:** authorize the same Telegram account again
+  and replace its session in Connections, then restart and retry. A private local
+  session can be generated with `uv run --frozen python -m tgdrive login`.
+- **Lost channel access:** restore membership and required administrator
+  permissions, then Refresh. A successful check re-enables a still-connected
+  runtime client blocked only by channel permissions; retry the failed operation.
+  Revoked credentials still require a replacement and restart.
+- **Temporary network interruption or Telegram wait:** existing reconnect and
+  bounded retry/cooldown handling applies. Waiting uploads show their connection
+  state; working accounts remain available where the saved sender permits it.
+
+If the original Telegram account can never be restored, an ambiguously dispatched
+part cannot safely be reassigned automatically. Keep the staged file and journal
+for recovery; a restart cannot recreate revoked credentials or grant permissions.
+An independent backup bot has its own credentials and channel permissions; check
+its [backup status and recovery instructions](backup-recovery.md) separately.
 
 ## HTTPS and private configuration
 
@@ -101,6 +237,31 @@ For access beyond your own machine:
 - Restrict direct access to the app port.
 - Trust only the actual proxy in forwarded-header configuration.
 - Keep credentials, recovery keys and share links out of public logs and Git.
+- Use a long unique owner password and protect Telegram and MongoDB accounts
+  with their available account security controls. TGDrive itself has one owner
+  login; it does not provide multi-user roles or a second login factor.
+- Keep `ALLOW_PRIVATE_REMOTE_URLS=false` unless you deliberately need URL imports
+  to reach your internal network. Shared visitors cannot initiate owner imports.
+
+After setting up HTTPS, check that the owner can sign in and upload, an incognito
+browser cannot read a private file, a scoped test share works, and revoking that
+share blocks a new request. Ensure the direct app port is unreachable from the
+public internet. Avoid proxy/CDN caching of authenticated responses or share URLs;
+preserve TGDrive's authorization and cache headers.
+
+To change the owner password, stop the app, update its private environment
+credential and recreate/redeploy it. Use a valid `ADMIN_PASSWORD_HASH` with
+`ADMIN_PASSWORD` empty, or remove a stale hash when switching to the plaintext
+fallback. After the new effective credential is loaded, old owner sessions fail;
+ordinary restarts with the same credential keep them valid. Verify the old
+password/session fails and the new password works. Changing the credential does
+not revoke existing share links; revoke those in **Shared Links** separately.
+
+After suspected secret exposure, rotate the compromised credential at its
+provider, update TGDrive, rotate `SESSION_SECRET` as needed, and test again.
+Keep the original backup key for old archives: replacing it does not re-encrypt
+existing backups. A database/volume rollback may restore older credentials or
+shares, so inspect access after a restore.
 
 See [security reference](reference.md#security-and-privacy) for exact boundaries.
 Logs redact common secrets, but review them before sharing.
@@ -111,6 +272,14 @@ Logs redact common secrets, but review them before sharing.
 2. Keep a recent confirmed database backup and its key.
 3. Update the source and rebuild the image or frontend.
 4. Start one instance; check database status, connections and a representative file.
+
+For a Git checkout, record the current revision privately with `git rev-parse HEAD`,
+read release notes, and use `git pull --ff-only` from the same project folder.
+If Git reports local changes or a conflict, preserve them and resolve the update;
+do not reset the checkout to force it. Rebuild/recreate with
+`docker compose up -d --build` (include server `-f` arguments when applicable).
+Coolify users deploy the chosen revision while keeping existing variables and mounts.
+Keep a confirmed pre-upgrade database archive and matching recovery key off-host.
 
 Do not run an older app against a database format it cannot read.
 For a data rollback, restore a compatible backup into a separate empty database.
@@ -129,6 +298,7 @@ they are not the documented MongoDB storage path.
 | What you see | What to do |
 | --- | --- |
 | MongoDB cannot connect | Check the URI/password, Atlas Network Access, cluster availability and database-user permissions |
+| Container is running but first-time website is unavailable | A new drive waits for explicit initialization. Verify the intended empty database, run the documented `init` once, then restart. Existing drives must reuse their original database |
 | “Another installation owns the database” | Stop the old app; after a crash, let its ownership lease expire |
 | Drive catalog missing | Verify the database name; do not initialize a replacement for an existing drive |
 | Bot disconnected or check failed | Open **Connections → Refresh**; check the token and channel permissions |
@@ -145,6 +315,10 @@ they are not the documented MongoDB storage path.
 | A revoked link still appears in an open player | Revoke blocks future authorized data; the browser may still play bytes it already received |
 | URL upload asks for a local file | Refresh and find the original server job in Transfers; retry it, or submit the URL again if that job no longer exists |
 | File download also fails | Check connections and whether the Telegram document still exists |
+| “Stored file is missing or changed in Telegram” | Preserve the catalog; follow [channel damage recovery](#if-someone-changed-the-telegram-channel). Restart cannot restore deleted messages |
+| Browser requests fail with cross-origin 403 behind HTTPS | Preserve Host and forwarded scheme at the proxy; trust only that proxy's actual source IP. Do not disable the origin check |
+| Password hash fails validation after editing deployment variables | Use the CLI-generated Argon2id hash; keep `$` literal with single quotes in `.env` or Coolify's Literal control. Clear the unused plaintext/hash override |
+| “Missing deployment keys” or invalid deployment-secrets permissions | Preserve the volume/file and supply the original keys or repair its private 0600 permissions; do not delete it to force new keys |
 | Database is full | Review catalog/index/history growth or increase the database plan |
 
 If MongoDB loses connectivity or TGDrive loses ownership, it stops accepting

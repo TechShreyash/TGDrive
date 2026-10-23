@@ -269,6 +269,13 @@ class ReplicaTransport:
                     "channel username in Telegram, then retry.",
                     "REPLICA_PUBLIC_CHANNEL",
                 )
+            if getattr(result.full_chat, "ttl_period", None):
+                raise ReplicaTransportError(
+                    "Turn off Telegram auto-delete in both TGDrive channels "
+                    "before continuing. Auto-delete would remove stored files "
+                    "and their backups.",
+                    "REPLICA_AUTO_DELETE",
+                )
             if (
                 getattr(chat, "restricted", False)
                 or getattr(chat, "noforwards", False)

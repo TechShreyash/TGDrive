@@ -223,6 +223,7 @@ class Settings(BaseSettings):
             from tgdrive.replica_bootstrap import load_bootstrap
 
             recovery_bootstrap = load_bootstrap(directory)
+            database_unavailable = False
             if uri:
                 from tgdrive.mongo import configure
 
@@ -236,55 +237,58 @@ class Settings(BaseSettings):
                 except Exception:
                     if recovery_bootstrap is None:
                         raise
-                    return {
-                        key: value
-                        for key, value in recovery_bootstrap.items()
-                        if base.get(key) in (None, "")
-                        and not (
-                            key == "ADMIN_PASSWORD_HASH" and base.get("ADMIN_PASSWORD")
-                        )
-                    }
-                bootstrap = (
-                    {
-                        key: value
-                        for key, value in row["document"].items()
-                        if key not in base
-                    }
-                    if row
-                    else {}
-                )
-                if recovery_bootstrap is not None:
-                    bootstrap = {**recovery_bootstrap, **bootstrap}
-                    if base.get("ADMIN_PASSWORD"):
-                        bootstrap.pop("ADMIN_PASSWORD_HASH", None)
+                    database_unavailable = True
+                    row = None
+                # Recovery copies fill missing values; they must never conceal an
+                # explicit credential rotation or channel/database mismatch.
+                saved = {
+                    **(recovery_bootstrap or {}),
+                    **(row["document"] if row else {}),
+                }
+                bootstrap = {
+                    key: value
+                    for key, value in saved.items()
+                    if base.get(key) in (None, "")
+                    and not (
+                        key == "ADMIN_PASSWORD_HASH" and base.get("ADMIN_PASSWORD")
+                    )
+                }
             if os.environ.get("TGDRIVE_AUTO_SECRETS") == "true":
                 from tgdrive.deployment import SECRET_FIELDS, installation_secrets
 
                 known = {}
                 for key in SECRET_FIELDS:
-                    value = base.get(key, bootstrap.get(key))
-                    if value is not None:
+                    value = base.get(key) or bootstrap.get(key)
+                    if value:
                         known[key] = (
                             value.get_secret_value()
                             if isinstance(value, SecretStr)
                             else str(value)
                         )
                 existing = bool(
-                    backend is not None
-                    and not all(known.get(key) for key in SECRET_FIELDS)
-                    and backend.db.catalog.find_one({"_id": "catalog"})
+                    recovery_bootstrap is not None
+                    or (
+                        backend is not None
+                        and not database_unavailable
+                        and not all(known.get(key) for key in SECRET_FIELDS)
+                        and backend.db.catalog.find_one({"_id": "catalog"})
+                    )
                 )
                 bootstrap = {
                     **bootstrap,
                     **installation_secrets(directory, known, existing_drive=existing),
                 }
+            if database_unavailable:
+                return bootstrap
             try:
                 document = read_document(directory)
             except Exception:
                 if recovery_bootstrap is None:
                     raise
                 return {
-                    key: value for key, value in bootstrap.items() if key not in base
+                    key: value
+                    for key, value in bootstrap.items()
+                    if base.get(key) in (None, "")
                 }
             if document is None:
                 return bootstrap
@@ -321,12 +325,12 @@ class Settings(BaseSettings):
             file_secret_settings,
         )
 
-    @field_validator("database_backup_msg_id", mode="before")
+    @field_validator("database_backup_msg_id", "max_file_size", mode="before")
     @classmethod
     def optional_backup_id(cls, value):
         return None if value in ("", None) else value
 
-    @field_validator("admin_password_hash", mode="before")
+    @field_validator("admin_password_hash", "mongodb_backup_key", mode="before")
     @classmethod
     def optional_password_hash(cls, value):
         raw = value.get_secret_value() if isinstance(value, SecretStr) else value
@@ -391,6 +395,16 @@ class Settings(BaseSettings):
                 if parameters.memory_cost < 19456 or parameters.time_cost < 2:
                     raise ValueError(
                         "Owner password hash is below the supported security floor"
+                    )
+                if (
+                    parameters.memory_cost > 262144
+                    or parameters.time_cost > 10
+                    or parameters.parallelism > 16
+                ):
+                    raise ValueError(
+                        "ADMIN_PASSWORD_HASH exceeds supported login costs "
+                        "(256 MiB memory, 10 iterations, 16 lanes); generate a new "
+                        "hash with the password-hash command"
                     )
             except InvalidHashError as exc:
                 raise ValueError(

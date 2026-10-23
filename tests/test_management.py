@@ -154,6 +154,70 @@ async def test_premium_private_import_preserves_existing_client_ids(managed):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("same_account", [True, False])
+async def test_pending_upload_allows_only_same_account_credential_repair(
+    managed, same_account
+):
+    manager, runtime, settings, _ = managed
+    row = (await manager.snapshot())["clients"][0]
+    record = runtime.transfers.registry.create("failed")
+    record.status = TransferStatus.ERROR
+    record.context.update(sender="storage-bot-123456", random_id=123, send_started=True)
+    token = "123456:" + "z" * 30 if same_account else SECOND_TOKEN
+    change = SettingsChange.model_validate(
+        {
+            "expected_revision": 0,
+            "clients": [
+                {
+                    "id": row["id"],
+                    "label": row["label"],
+                    "kind": "bot",
+                    "credential": token,
+                }
+            ],
+        }
+    )
+    if same_account:
+        result = await manager.save(change)
+        assert result["restart_required"]
+        assert token not in json.dumps(result)
+        saved = read_document(settings.resolved_data_dir).clients[0]
+        assert saved.runtime_name == record.context["sender"]
+        assert saved.credential.get_secret_value() == token
+    else:
+        with pytest.raises(SettingsProblem, match="same Telegram account"):
+            await manager.save(change)
+        assert not settings_path(settings.resolved_data_dir).exists()
+    assert record.context["random_id"] == 123
+    assert record.context["send_started"]
+
+
+@pytest.mark.asyncio
+async def test_refresh_restores_verified_live_channel_access(managed):
+    from telethon.errors import ChannelPrivateError
+    from test_client_pool import FakeClient
+
+    from tgdrive.client_pool import ClientPool
+
+    manager, runtime, _, _ = managed
+    client = FakeClient("storage-bot-123456")
+    runtime.pool = ClientPool([client])
+    await runtime.pool.start()
+    try:
+        await runtime.pool.report_failure(client, ChannelPrivateError(request=None))
+        before = await manager.snapshot()
+        assert before["clients"][0]["error_code"] == "TELEGRAM_CHANNEL_ACCESS"
+        await manager.refresh_connections()
+        await asyncio.gather(*manager._check_tasks)
+        after = await manager.snapshot()
+        assert after["clients"][0]["healthy"]
+        assert after["clients"][0]["error"] is None
+    finally:
+        await manager.close()
+        await runtime.pool.stop()
+
+
+@pytest.mark.asyncio
 async def test_busy_rechecked_after_network_verification(managed):
     manager, runtime, settings, _ = managed
     entered = asyncio.Event()
@@ -925,6 +989,7 @@ async def test_refresh_checks_all_enabled_saved_clients_bounded_and_isolates_fai
     manager.active = rows
     runtime.pool = SimpleNamespace(status=AsyncMock(return_value=()))
     release = asyncio.Event()
+    both_entered = asyncio.Event()
     entered = 0
     peak = 0
     calls = []
@@ -934,6 +999,8 @@ async def test_refresh_checks_all_enabled_saved_clients_bounded_and_isolates_fai
         calls.append(row.id)
         entered += 1
         peak = max(peak, entered)
+        if entered == 2:
+            both_entered.set()
         try:
             await release.wait()
             if row.id == "bot-1":
@@ -949,6 +1016,7 @@ async def test_refresh_checks_all_enabled_saved_clients_bounded_and_isolates_fai
         for row in first["clients"]
     )
     await manager.refresh_connections()
+    await asyncio.wait_for(both_entered.wait(), 2)
     assert peak == 2
     release.set()
     await asyncio.gather(*manager._check_tasks)

@@ -566,14 +566,19 @@ async def test_restart_restores_flood_cooldown_from_terminal_error_job(tmp_path)
     )
     try:
         await recovered.recover()
-        assert recovered.registry.get(failed.id).task is None
+        resumed = recovered.registry.get(failed.id)
+        assert resumed.task is not None
+        assert resumed.context["multipart_plan"]["parts"][0]["retry_at"] > time.time()
+        before = len(ledger.calls)
         fresh = manager.cache_dir / "new.upload"
         fresh.write_bytes(b"x")
         job = recovered.enqueue_upload(fresh, "/", "new.bin", 1)
         await asyncio.wait_for(job.task, 2)
         assert job.status == TransferStatus.COMPLETED
         assert ledger.calls[-1][0] == "bot-two"
+        assert all(call[0] != "bot-one" for call in ledger.calls[before:])
         assert time.time() < failed.context["multipart_plan"]["parts"][0]["retry_at"]
+        assert not resumed.task.done()
     finally:
         await dispose(recovered)
 

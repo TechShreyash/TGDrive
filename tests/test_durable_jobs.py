@@ -383,3 +383,144 @@ def test_registry_finalizer_closes_abandoned_connection(tmp_path):
     assert restored.get(record.id).id == record.id
     restored.close()
     restored.close()
+
+
+async def test_restart_retries_lost_network_response_without_duplicate_upload(tmp_path):
+    telegram = Telegram()
+    pool = ClientPool([telegram])
+    await pool.start()
+    manager = manager_for(tmp_path, pool)
+    source = tmp_path / "receipt.part"
+    source.write_bytes(b"immutable payload")
+    telegram.lose_response = True
+    job = manager.enqueue_upload(source, "/", "one.bin", source.stat().st_size)
+    await job.task
+    assert job.status is TransferStatus.ERROR
+    assert job.context["restart_retryable"] is True
+    assert "restart TGDrive" in job.error
+    random_id = job.context["random_id"]
+    await manager.close()
+    manager.registry.close()
+    manager.store.close()
+    recovered = manager_for(
+        tmp_path, pool, store=DriveStore.load(tmp_path / "drive.sqlite3")
+    )
+    try:
+        await recovered.recover()
+        resumed = recovered.registry.get(job.id)
+        await resumed.task
+        assert resumed.status is TransferStatus.COMPLETED
+        assert telegram.calls == [random_id, random_id]
+        assert len(telegram.messages) == 1
+        assert len(recovered.store.list_directory("/")) == 1
+        assert not source.exists()
+    finally:
+        await recovered.close()
+        recovered.registry.close()
+        recovered.store.close()
+        await pool.stop()
+
+
+async def test_restart_does_not_retry_nontransient_transfer_failure(tmp_path):
+    telegram = Telegram()
+    telegram.send_staged = AsyncMock(side_effect=PermissionError("channel access lost"))
+    pool = ClientPool([telegram])
+    await pool.start()
+    manager = manager_for(tmp_path, pool)
+    source = tmp_path / "receipt.part"
+    source.write_bytes(b"bytes")
+    job = manager.enqueue_upload(source, "/", "one.bin", 5)
+    await job.task
+    assert job.status is TransferStatus.ERROR
+    assert not job.context.get("restart_retryable")
+    await manager.close()
+    manager.registry.close()
+    manager.store.close()
+    recovered = manager_for(
+        tmp_path, pool, store=DriveStore.load(tmp_path / "drive.sqlite3")
+    )
+    try:
+        await recovered.recover()
+        resumed = recovered.registry.get(job.id)
+        assert resumed.status is TransferStatus.ERROR
+        assert resumed.task is None
+        assert telegram.send_staged.await_count == 1
+        assert source.exists()
+    finally:
+        await recovered.close()
+        recovered.registry.close()
+        recovered.store.close()
+        await pool.stop()
+
+
+async def test_recovery_retries_a_finished_task_without_process_restart(tmp_path):
+    telegram = Telegram()
+    telegram.lose_response = True
+    pool = ClientPool([telegram])
+    await pool.start()
+    manager = manager_for(tmp_path, pool)
+    source = tmp_path / "receipt.part"
+    source.write_bytes(b"retained payload")
+    try:
+        job = manager.enqueue_upload(source, "/", "one.bin", source.stat().st_size)
+        failed_task = job.task
+        await failed_task
+        assert job.status is TransferStatus.ERROR
+        assert job.context["restart_retryable"] is True
+        await manager.recover()
+        assert job.task is not failed_task
+        await job.task
+        assert job.status is TransferStatus.COMPLETED
+        assert len(telegram.messages) == 1
+        assert len(manager.store.list_directory("/")) == 1
+    finally:
+        await manager.close()
+        manager.registry.close()
+        manager.store.close()
+        await pool.stop()
+
+
+@pytest.mark.parametrize("legacy", [False, True])
+async def test_live_channel_check_blocks_upload_before_any_telegram_send(
+    tmp_path, legacy
+):
+    from tgdrive.managed_settings import SettingsProblem
+
+    telegram = Telegram()
+    pool = ClientPool([telegram])
+    await pool.start()
+    manager = manager_for(tmp_path, pool)
+    manager._check_upload_allowed = lambda: None
+    manager._ensure_channel = AsyncMock(
+        side_effect=SettingsProblem("Turn storage channel auto-delete off.")
+    )
+    source = tmp_path / "receipt.part"
+    source.write_bytes(b"retained payload")
+    try:
+        if legacy:
+            job = manager.registry.create("interrupted", total=source.stat().st_size)
+            job.context.update(
+                kind="upload",
+                local_path=str(source),
+                destination="/",
+                name="one.bin",
+                size=source.stat().st_size,
+                send_started=True,
+                sender=telegram.name,
+            )
+            manager._resume(job)
+        else:
+            job = manager.enqueue_upload(source, "/", "one.bin", source.stat().st_size)
+        await job.task
+        assert job.status is TransferStatus.ERROR
+        assert "auto-delete" in job.error
+        assert telegram.calls == []
+        assert telegram.messages == {}
+        assert manager.store.list_directory("/") == {}
+        assert source.exists()
+        manager._ensure_channel.assert_awaited_once()
+    finally:
+        await manager.close()
+        manager.registry.close()
+        manager.store.close()
+        await pool.stop()

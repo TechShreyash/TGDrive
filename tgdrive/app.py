@@ -32,6 +32,7 @@ from tgdrive.client_pool import (
     current_upload_limit,
 )
 from tgdrive.config import Settings, get_settings
+from tgdrive.connection_errors import TelegramConnectionError
 from tgdrive.errors import (
     DriveError,
     DuplicateNameError,
@@ -81,6 +82,7 @@ from tgdrive.security import (
     InvalidSession,
     LoginLimiter,
     SessionManager,
+    credential_session_key,
     verify_password,
 )
 from tgdrive.store import DriveStore
@@ -225,8 +227,13 @@ def create_app(
     app_runtime = runtime or Runtime(settings)
     if activation_unavailable:
         app_runtime._activation_unavailable = True
+    owner_credential = (
+        settings.admin_password_hash.get_secret_value()
+        if settings.admin_password_hash
+        else settings.admin_password.get_secret_value()
+    )
     sessions = SessionManager(
-        settings.session_key,
+        credential_session_key(settings.session_key, owner_credential),
         settings.session_ttl_seconds,
         settings.resolved_data_dir / "auth.sqlite3",
     )
@@ -236,6 +243,9 @@ def create_app(
         else PasswordHasher().hash(settings.admin_password.get_secret_value())
     )
     limiter = LoginLimiter()
+    # Argon2 is deliberately expensive. Bound its memory/CPU use and keep it off
+    # the HTTP event loop so a login does not stall streams and health checks.
+    login_lock = asyncio.Lock()
 
     @asynccontextmanager
     async def lifespan(_app: FastAPI):
@@ -344,6 +354,12 @@ def create_app(
             )
         return _json_error(str(exc), code)
 
+    @app.exception_handler(TelegramConnectionError)
+    async def telegram_connection_error(
+        _request: Request, exc: TelegramConnectionError
+    ) -> JSONResponse:
+        return JSONResponse({"detail": str(exc), "code": exc.code}, status_code=503)
+
     @app.exception_handler(ClientPoolNotRunning)
     @app.exception_handler(NoClientAvailable)
     async def telegram_unavailable(_request: Request, _exc: Exception) -> JSONResponse:
@@ -358,7 +374,9 @@ def create_app(
                 headers={"Retry-After": str(getattr(_exc, "retry_after", 1))},
             )
         return _json_error(
-            "Telegram is unavailable. Check its connection and accounts, then retry.",
+            "No usable Telegram account is connected. Open Connections and Refresh "
+            "to check bot tokens, Premium sessions and storage-channel permissions. "
+            "Restore the connection, then retry.",
             503,
         )
 
@@ -477,7 +495,18 @@ def create_app(
                 },
             )
         expected = password_hash
-        if not verify_password(payload.password, expected):
+        if login_lock.locked():
+            return JSONResponse(
+                status_code=429,
+                headers={"Retry-After": "1"},
+                content={
+                    "status": "Login busy; retry shortly",
+                    "detail": "Login busy; retry shortly",
+                },
+            )
+        async with login_lock:
+            valid = await asyncio.to_thread(verify_password, payload.password, expected)
+        if not valid:
             limiter.failure(client_key)
             return _json_error("Invalid password", 401)
         limiter.success(client_key)
@@ -853,7 +882,7 @@ def create_app(
             authorized_file(request, path, auth)
             return result
         except TelegramFileNotFound as exc:
-            raise HTTPException(404, "Stored file not found") from exc
+            raise HTTPException(404, exc.public_detail) from exc
 
     @app.get("/api/v1/books")
     async def book_preview(
@@ -1007,7 +1036,7 @@ def create_app(
             authorized_file(request, _path, auth)
             return result
         except TelegramFileNotFound as exc:
-            raise HTTPException(404, "Stored file not found") from exc
+            raise HTTPException(404, exc.public_detail) from exc
 
     @app.api_route("/file", methods=["GET", "HEAD"])
     async def download_file(
@@ -1122,9 +1151,7 @@ def create_app(
         except TelegramVariantNotFound as exc:
             raise HTTPException(404, "This media quality is unavailable") from exc
         except TelegramFileNotFound as exc:
-            raise HTTPException(
-                status_code=404, detail="Stored file not found"
-            ) from exc
+            raise HTTPException(status_code=404, detail=exc.public_detail) from exc
 
     @app.get("/api/v1/file-status")
     async def file_status(

@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
+# Native tools run with fixed argument lists and no shell; see render().
 import os
-import subprocess
+import subprocess  # nosec B404
 import sys
 from pathlib import Path
 
@@ -106,7 +107,8 @@ def render(path: Path, suffix: str) -> bytes:
     else:
         return b""
     try:
-        result = subprocess.run(  # noqa: S603 - fixed tool/flags, staged local path
+        # Fixed tool/flags and a resolved staged path; no shell interprets input.
+        result = subprocess.run(  # noqa: S603  # nosec B603
             command,
             stdout=subprocess.PIPE,
             stderr=subprocess.DEVNULL,
@@ -115,7 +117,8 @@ def render(path: Path, suffix: str) -> bytes:
         )
         if not result.stdout and "-ss" in command:
             command[command.index("-ss") + 1] = "0"
-            result = subprocess.run(  # noqa: S603 - fixed tool/flags, staged local path
+            # Retry the same fixed command at the start of the staged media.
+            result = subprocess.run(  # noqa: S603  # nosec B603
                 command,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.DEVNULL,

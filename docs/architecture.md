@@ -110,6 +110,11 @@ Local unfinished file bytes are still needed after a restart.
   running work is not preempted. The media wait queue has a global upper bound.
 - Bot sessions use stable account IDs. Reordering tokens does not change sender identity.
 - Each dispatched part keeps its recorded sender and request ID during retry.
+- Runtime credential/channel failures quarantine only the affected account and
+  wake lease waiters. Reads retry eligible accounts; undispatched upload parts
+  can change sender, while dispatched parts retain their durable identities and
+  report actionable repair errors. Verified channel repair can re-enable a live
+  client; credential replacement applies after restart.
 
 ### Names and Refresh
 
@@ -203,8 +208,8 @@ Names and sizes alone never prove that a reselected file has matching bytes.
 
 Permanent deletion records a durable intent, then atomically removes that catalog
 subtree and its shares from the database. It also drops message references from
-the completed intent. It never deletes the original Telegram messages: bots
-cannot delete channel messages older than 48 hours. The same behavior applies to
+the completed intent. This is a catalog-only deletion policy; it never deletes
+the original Telegram messages. The same behavior applies to
 all file ages and to retries of legacy intents with partial remote confirmations.
 Job retries, lineage checks, upload reconciliation and the independent-backup
 barrier remain in place. Different selected items complete independently.

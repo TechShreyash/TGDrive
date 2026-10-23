@@ -12,6 +12,11 @@ from dataclasses import dataclass
 from enum import StrEnum
 from typing import TYPE_CHECKING, Any, Literal, Protocol, TypeAlias
 
+from tgdrive.connection_errors import (
+    TelegramConnectionError,
+    connection_problem,
+    removed_sender,
+)
 from tgdrive.media_scheduler import (
     MediaPriority,
     MediaPriorityScope,
@@ -113,6 +118,8 @@ class ClientStatus:
     username: str | None = None
     identity_refreshing: bool = False
     identity_retry_at: float | None = None
+    error: str | None = None
+    error_code: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -488,6 +495,22 @@ class ClientPool:
                         else:
                             candidates = preferred or candidates
                     if not candidates:
+                        matching = [
+                            slot
+                            for slot in self._slots
+                            if (client_name is None or slot.name == client_name)
+                            and (slot.kind == kind or (allow_users and not premium))
+                        ]
+                        if client_name is not None and not matching:
+                            raise removed_sender(client_name)
+                        for unavailable in matching:
+                            problem = connection_problem(
+                                unavailable.error,
+                                unavailable.kind,
+                                client_name=unavailable.name,
+                            )
+                            if problem is not None:
+                                raise problem
                         if premium and not any(
                             slot.kind == kind for slot in self._slots
                         ):
@@ -634,6 +657,11 @@ class ClientPool:
         started = time.monotonic()
         try:
             yield client
+        except Exception as error:
+            problem = await self.report_failure(client, error)
+            if problem is not None:
+                raise problem from None
+            raise
         finally:
             async with self._leases:
                 if slot.active <= 0:
@@ -885,6 +913,38 @@ class ClientPool:
             slot = self._find_slot(client)
             slot.healthy = False
             slot.error = error
+            self._leases.notify_all()
+
+    async def report_failure(
+        self, client: TelegramClientLifecycle, error: BaseException
+    ) -> TelegramConnectionError | None:
+        """Quarantine revoked credentials or channel access, leaving waits alone."""
+        slot = self._find_slot(client)
+        if (
+            isinstance(error, TelegramConnectionError)
+            and error.client_name is not None
+            and error.client_name != slot.name
+        ):
+            return None  # A nested lease failed on another account.
+        problem = connection_problem(error, slot.kind, client_name=slot.name)
+        if problem is not None:
+            await self.mark_unhealthy(client, problem)
+        return problem
+
+    async def restore_channel_access(self, name: str) -> None:
+        """Re-enable a live account only after Connections verified its access."""
+        async with self._leases:
+            for slot in self._slots:
+                if (
+                    slot.name == name
+                    and slot.started
+                    and self._connected_state(slot.client) is not False
+                    and isinstance(slot.error, TelegramConnectionError)
+                    and slot.error.code == "TELEGRAM_CHANNEL_ACCESS"
+                ):
+                    slot.healthy = True
+                    slot.error = None
+            self._leases.notify_all()
 
     async def mark_healthy(self, client: TelegramClientLifecycle) -> None:
         async with self._leases:
@@ -893,6 +953,7 @@ class ClientPool:
                 raise ClientPoolError("cannot mark a stopped client healthy")
             slot.healthy = True
             slot.error = None
+            self._leases.notify_all()
 
     async def status(self) -> tuple[ClientStatus, ...]:
         """Return a stable snapshot without exposing credential values."""
@@ -915,6 +976,14 @@ class ClientPool:
                         getattr(slot.client, "identity_refreshing", False)
                     ),
                     identity_retry_at=getattr(slot.client, "identity_retry_at", None),
+                    error=str(problem)
+                    if (
+                        problem := connection_problem(
+                            slot.error, slot.kind, client_name=slot.name
+                        )
+                    )
+                    else None,
+                    error_code=problem.code if problem else None,
                 )
                 for slot in self._slots
             )

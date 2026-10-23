@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import fcntl
 import logging
+import time
 from pathlib import Path
 
 from tgdrive.backup import RecoveryConflict, TelegramBackupService
@@ -58,6 +59,9 @@ class Runtime:
         self._owner_lock = None
         self._mongo_acquired = False
         self._reconnector = None
+        self._channel_check_lock = asyncio.Lock()
+        self._channel_verified_until = 0.0
+        self.storage_channel_error: str | None = None
 
     async def start(self) -> None:
         if self.ready:
@@ -128,6 +132,7 @@ class Runtime:
                     raise SettingsProblem(
                         "Channel recovery has paused Telegram changes.", status=409
                     )
+                await self._verify_storage_channel()
                 if original_lineage is not None:
                     await original_lineage(store)
 
@@ -176,6 +181,7 @@ class Runtime:
                 try:
                     # Clean local copies can still be older than a remote pin.
                     # Verify before resuming any Telegram side effects.
+                    await self._verify_storage_channel()
                     await self.backup.backup(self.store)
                     lineage_ready = True
                 except RecoveryConflict:
@@ -190,6 +196,7 @@ class Runtime:
                     )
 
             async def ensure_backup(required_revision: int) -> int:
+                await self._verify_storage_channel()
                 return await self.backup.ensure_revision(self.store, required_revision)
 
             async def ensure_lineage() -> None:
@@ -203,6 +210,7 @@ class Runtime:
                 registry=self.registry,
                 ensure_backup=ensure_backup,
                 ensure_lineage=ensure_lineage,
+                ensure_channel=self._verify_storage_channel,
                 check_upload_allowed=self._check_upload_allowed,
             )
             self.transfers._ensure_replica = self.replica.before_mutation
@@ -225,7 +233,7 @@ class Runtime:
                     settings=self.settings,
                     store=self.store,
                     folder_settings=get_bot_settings(self.settings, self),
-                    before_write=self._check_upload_allowed,
+                    before_write=self._check_bot_upload_allowed,
                     before_delete=lambda: self.backup.verify_lineage(self.store),
                 )
                 await self.bot_mode.start()
@@ -254,10 +262,15 @@ class Runtime:
         if manager is not None:
             manager.check_upload_allowed()
 
+    async def _check_bot_upload_allowed(self) -> None:
+        self._check_upload_allowed()
+        await self._verify_storage_channel()
+
     async def _reconnect(self) -> None:
         while self.ready:
             try:
                 await self.pool.start()
+                await self._verify_storage_channel()
                 await self.backup.backup(self.store)
                 if self.transfers is not None:
                     await self.transfers.recover()
@@ -273,7 +286,7 @@ class Runtime:
                             settings=self.settings,
                             store=self.store,
                             folder_settings=get_bot_settings(self.settings, self),
-                            before_write=self._check_upload_allowed,
+                            before_write=self._check_bot_upload_allowed,
                             before_delete=lambda: self.backup.verify_lineage(
                                 self.store
                             ),
@@ -282,6 +295,49 @@ class Runtime:
                 return
             except Exception:
                 await asyncio.sleep(30)
+
+    async def _verify_storage_channel(self) -> None:
+        """Recheck Telegram-side changes before resuming durable mutations."""
+        if time.monotonic() < self._channel_verified_until:
+            return
+        # Pool adapters may implement only the lifecycle protocol (e.g. an
+        # externally supplied transport); production Telethon adapters probe.
+        status = getattr(self.pool, "status", None)
+        if not callable(status):
+            return
+        async with self._channel_check_lock:
+            if time.monotonic() < self._channel_verified_until:
+                return
+            from tgdrive.managed_settings import SettingsProblem
+
+            for row in await status():
+                if row.kind != "bot" or not row.healthy:
+                    continue
+                async with self.pool.lease(client_name=row.name) as client:
+                    probe = getattr(client, "storage_channel_problem", None)
+                    if not callable(probe):
+                        continue
+                    try:
+                        async with asyncio.timeout(30):
+                            problem = await probe(
+                                self.settings.storage_channel,
+                                require_pin=not self.settings.mongodb_uri,
+                            )
+                    except Exception:
+                        self.storage_channel_error = (
+                            "Telegram storage channel could not be verified. "
+                            "Check the network, channel membership "
+                            "and bot permissions, "
+                            "then retry or restart TGDrive."
+                        )
+                        raise ConnectionError(self.storage_channel_error) from None
+                    if problem is not None:
+                        self.storage_channel_error = problem[1]
+                        raise SettingsProblem(problem[1], code=problem[0], status=409)
+            self.storage_channel_error = None
+            # Bound Telegram requests for concurrent uploads. Failed checks are
+            # never cached, so fixing channel settings takes effect on retry.
+            self._channel_verified_until = time.monotonic() + 30
 
     async def _close_media_resources(self) -> list[BaseException]:
         manager = getattr(self, "preloads", None)

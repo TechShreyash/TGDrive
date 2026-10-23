@@ -15,6 +15,7 @@ from pydantic import ValidationError
 from telethon import functions, utils
 
 from tgdrive.backup import BackupError, TelegramBackupService
+from tgdrive.channel_state import storage_bot_rights_problem, storage_channel_problem
 from tgdrive.config import Settings
 from tgdrive.store import DriveStore
 from tgdrive.tasks import TransferRegistry
@@ -72,25 +73,11 @@ async def check_channel(settings: Settings, pool) -> tuple[int | None, object]:
             chat = next(
                 (chat for chat in info.chats if chat.id == peer.channel_id), None
             )
-            rights = getattr(chat, "admin_rights", None)
-            if not getattr(chat, "broadcast", False):
-                raise SetupError(
-                    "CHANNEL_TYPE",
-                    "Use a dedicated Telegram channel, rather than a group.",
-                )
-            if not rights or not all(
-                getattr(rights, name, False)
-                for name in (
-                    ("post_messages", "delete_messages")
-                    if settings.mongodb_uri
-                    else ("post_messages", "edit_messages", "delete_messages")
-                )
-            ):
-                raise SetupError(
-                    "CHANNEL_RIGHTS",
-                    "Every storage bot needs the required channel administrator "
-                    "permissions to post/delete messages.",
-                )
+            problem = storage_channel_problem(
+                chat, info.full_chat
+            ) or storage_bot_rights_problem(chat, require_pin=not settings.mongodb_uri)
+            if problem is not None:
+                raise SetupError(*problem)
             if index == 0 and not settings.mongodb_uri:
                 pinned = getattr(info.full_chat, "pinned_msg_id", None)
                 if pinned is not None:

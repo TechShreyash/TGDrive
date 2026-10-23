@@ -57,7 +57,11 @@ class TelegramVariantNotFound(ValueError):
 
 
 class TelegramFileNotFound(FileNotFoundError):
-    pass
+    public_detail = (
+        "The stored file is missing or changed in Telegram. Restore it from a "
+        "configured channel backup, or upload the original file again. "
+        "Do not edit or delete messages in TGDrive's storage channel."
+    )
 
 
 class _LeasedStreamingResponse(StreamingResponse):
@@ -365,6 +369,11 @@ async def stream_telegram_file(
                 raise TelegramFileNotFound(
                     f"Telegram message {message_id} has no media"
                 )
+            actual_size = getattr(media, "file_size", None)
+            if type(actual_size) is int and actual_size != expected_size:
+                raise TelegramFileNotFound(
+                    "Stored Telegram media size differs from the catalog"
+                )
             return message, media
 
         for attempt in range(3):
@@ -372,13 +381,16 @@ async def stream_telegram_file(
                 message, media = await fetch_media()
                 break
             except (OSError, RPCError, ValueError) as error:
+                problem = await pool.report_failure(client, error)
                 if isinstance(error, FloodWaitError):
                     await pool.defer_client(
                         client.name, time.time() + max(1, error.seconds)
                     )
-                elif pool.kind_of(client) != "user":
+                elif problem is None and pool.kind_of(client) != "user":
                     raise
                 if attempt == 2:
+                    if problem is not None:
+                        raise problem from None
                     raise
                 # Switch before headers, preserving optional-user fallback.
                 await release()

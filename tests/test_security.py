@@ -19,6 +19,8 @@ def test_session_round_trip_and_expiry() -> None:
     assert payload["iat"] == 1_000
 
     with pytest.raises(InvalidSession, match="expired"):
+        manager.verify(token, now=1_300)
+    with pytest.raises(InvalidSession, match="expired"):
         manager.verify(token, now=1_301)
 
 

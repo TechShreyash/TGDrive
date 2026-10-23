@@ -130,3 +130,20 @@ def test_duplicate_telegram_credentials_are_rejected_without_echo(field, value):
     with pytest.raises(ValidationError, match="must not repeat") as caught:
         Settings(_env_file=None, **settings_values(**{field: value}))
     assert value not in str(caught.value)
+
+
+@pytest.mark.parametrize(
+    "cost", ["m=262145,t=3,p=4", "m=65536,t=11,p=4", "m=65536,t=3,p=17"]
+)
+def test_owner_hash_cannot_request_excessive_login_resources(cost):
+    from argon2 import PasswordHasher
+
+    encoded = PasswordHasher().hash("synthetic owner password")
+    encoded = encoded.replace("m=65536,t=3,p=4", cost)
+    with pytest.raises(ValidationError, match="exceeds supported login costs"):
+        Settings(_env_file=None, **settings_values(ADMIN_PASSWORD_HASH=encoded))
+
+
+def test_blank_optional_backup_key_is_absent():
+    settings = Settings(_env_file=None, **settings_values(MONGODB_BACKUP_KEY=""))
+    assert settings.mongodb_backup_key is None

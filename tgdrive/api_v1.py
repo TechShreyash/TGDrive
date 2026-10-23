@@ -132,6 +132,19 @@ def register_routes(
             }
         pool = getattr(runtime, "pool", None)
         health = await pool.health() if pool else None
+        statuses = (
+            await pool.status() if callable(getattr(pool, "status", None)) else ()
+        )
+        telegram_issues = [
+            {
+                "code": getattr(item, "error_code", None) or "TELEGRAM_DISCONNECTED",
+                "detail": getattr(item, "error", None)
+                or "A Telegram account is disconnected. Open Connections and "
+                "Refresh to check credentials, channel permissions and network access.",
+            }
+            for item in statuses
+            if not item.healthy
+        ]
         backup = getattr(runtime, "backup", None)
         history = []
         if backup and hasattr(backup, "history"):
@@ -145,6 +158,7 @@ def register_routes(
             "restart_required": restart_required,
             "admission_paused": restart_required,
             "telegram_ready": bool(health and health.ready),
+            "telegram_issues": telegram_issues,
             "demo": bool(getattr(runtime, "synthetic", False)),
             "max_file_size": await current_upload_limit(settings, pool),
             "staging_budget_bytes": settings.staging_budget_bytes,

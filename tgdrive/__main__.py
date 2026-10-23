@@ -148,35 +148,13 @@ def main() -> None:
         return
     settings = Settings()
     if args.command == "init":
-        from tgdrive.mongo import for_settings, save_bootstrap
+        from tgdrive.mongo import for_settings
 
         backend = for_settings(settings)
         if backend is not None:
-            from tgdrive.managed_settings import (
-                ManagedDocument,
-                initial_clients,
-                save_document,
-            )
-            from tgdrive.mongo_store import MongoStore
+            from tgdrive.setup import prepare_installation
 
-            backend.acquire()
-            try:
-                store = MongoStore.create(backend)
-                store.bind_storage_channel(settings.storage_channel)
-                save_bootstrap(settings, backend)
-                save_document(
-                    settings.resolved_data_dir,
-                    ManagedDocument(
-                        revision=1,
-                        api_id=settings.api_id,
-                        api_hash=settings.api_hash,
-                        clients=initial_clients(settings),
-                    ),
-                    0,
-                )
-                store.close()
-            finally:
-                backend.release()
+            asyncio.run(prepare_installation(settings, "prepare", mode="new"))
             print("Created a new MongoDB drive. Existing state was not overwritten.")
         else:
             settings.resolved_data_dir.mkdir(parents=True, exist_ok=True, mode=0o700)

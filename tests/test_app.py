@@ -159,6 +159,35 @@ def test_login_cookie_and_directory_access_control(app_client: tuple[Any, ...]) 
     assert directory.json()["data"]["contents"] == {}
 
 
+def test_revoked_client_returns_actionable_503_and_owner_status(app_client):
+    from telethon.errors import SessionRevokedError
+    from test_client_pool import FakeClient
+
+    from tgdrive.client_pool import ClientPool
+
+    client, _, runtime, _ = app_client
+    runtime.pool = ClientPool([FakeClient("bot")])
+
+    @client.app.get("/__test__/revoked")
+    async def revoked():
+        await runtime.pool.start()
+        try:
+            async with runtime.pool.lease():
+                raise SessionRevokedError(request="secret-request")
+        finally:
+            await runtime.pool.stop()
+
+    response = client.get("/__test__/revoked")
+    assert response.status_code == 503
+    assert response.json()["code"] == "TELEGRAM_CREDENTIALS_REVOKED"
+    assert "Connections" in response.json()["detail"]
+    assert "secret-request" not in response.text
+    login(client)
+    status = client.get("/api/v1/status").json()
+    assert status["telegram_ready"] is False
+    assert status["telegram_issues"][0]["code"] == "TELEGRAM_CREDENTIALS_REVOKED"
+
+
 def test_folder_lifecycle_search_trash_and_permanent_delete(
     app_client: tuple[Any, ...],
 ) -> None:
@@ -515,6 +544,243 @@ def test_owner_logout_revokes_copied_session_cookie(app_client):
     client.cookies.set("tgdrive_session", token)
     assert client.get("/api/v1/session").json()["authenticated"] is False
     assert client.get("/api/v1/jobs").status_code == 401
+
+
+def test_local_http_owner_session_and_origin_protection(tmp_path):
+    settings = make_settings(tmp_path).model_copy(update={"cookie_secure": False})
+    store = DriveStore.create(tmp_path / "drive.json")
+    app = create_app(settings, runtime=FakeRuntime(store))
+    with TestClient(app, base_url="http://localhost:8000") as client:
+        response = client.post(
+            "/api/checkPassword",
+            json={"pass": "correct horse battery staple"},
+            headers={"Origin": "http://localhost:8000"},
+        )
+        assert response.status_code == 200
+        cookie = response.headers["set-cookie"].lower()
+        assert "secure" not in cookie
+        assert "httponly" in cookie and "samesite=strict" in cookie
+        assert "strict-transport-security" not in response.headers
+        assert client.get("/api/v1/session").json()["authenticated"] is True
+
+        for origin in ("http://localhost:8001", "http://127.0.0.1:8000"):
+            denied = client.post(
+                "/api/createNewFolder",
+                json={"path": "/", "name": "Unwanted"},
+                headers={
+                    "Origin": origin,
+                    "X-Forwarded-Host": origin.removeprefix("http://"),
+                    "X-Forwarded-Proto": "https",
+                },
+            )
+            assert denied.status_code == 403
+        assert store.list_directory("/") == {}
+        assert client.post("/api/logout").status_code == 200
+        assert client.get("/api/v1/session").json()["authenticated"] is False
+
+
+def test_cross_origin_login_and_logout_do_not_change_owner_session(app_client):
+    client, _, _, _ = app_client
+    response = client.post(
+        "/api/checkPassword",
+        json={"pass": "correct horse battery staple"},
+        headers={"Origin": "https://evil.example"},
+    )
+    assert response.status_code == 403
+    assert "set-cookie" not in response.headers
+    assert client.get("/api/v1/session").json()["authenticated"] is False
+    login(client)
+    response = client.post("/api/logout", headers={"Origin": "https://evil.example"})
+    assert response.status_code == 403
+    assert client.get("/api/v1/session").json()["authenticated"] is True
+
+
+def test_mongodb_outage_refuses_app_auth_without_leaking_provider_error(
+    tmp_path, monkeypatch
+):
+    from unittest.mock import Mock
+
+    from pymongo.errors import ConnectionFailure
+
+    from tgdrive.mongo import DatabaseUnavailable
+
+    settings = make_settings(tmp_path)
+    store = DriveStore.create(tmp_path / "drive.json")
+    sessions = SimpleNamespace(
+        find=Mock(side_effect=ConnectionFailure("synthetic-private-database-token"))
+    )
+    backend = SimpleNamespace(db=SimpleNamespace(sessions=sessions), write=Mock())
+    monkeypatch.setattr("tgdrive.mongo.for_directory", lambda _directory: backend)
+    try:
+        with pytest.raises(
+            DatabaseUnavailable, match="Restore database access, then restart TGDrive"
+        ) as captured:
+            create_app(settings, runtime=FakeRuntime(store))
+        assert "synthetic-private-database-token" not in str(captured.value)
+        assert not (settings.resolved_data_dir / "auth.sqlite3").exists()
+        backend.write.assert_not_called()
+    finally:
+        store.close()
+
+
+def test_owner_credential_rotation_preserves_existing_share_links(tmp_path):
+    from pydantic import SecretStr
+
+    settings = make_settings(tmp_path)
+    store = DriveStore.create(tmp_path / "drive.json")
+    item = store.add_file("/", "shared.pdf", 7, 100)
+    path = "/" + item["id"]
+    with TestClient(
+        create_app(settings, runtime=FakeRuntime(store)),
+        base_url="https://testserver",
+    ) as client:
+        login(client)
+        token = client.post("/api/v1/shares", json={"path": path}).json()["auth"]
+
+    rotated = settings.model_copy(
+        update={"admin_password": SecretStr("a replacement owner password")}
+    )
+    with TestClient(
+        create_app(rotated, runtime=FakeRuntime(store)),
+        base_url="https://testserver",
+    ) as client:
+        shared = client.get("/api/v1/preview", params={"path": path, "auth": token})
+        assert shared.status_code == 200
+        assert client.get("/api/v1/preview", params={"path": path}).status_code == 403
+
+
+@pytest.mark.parametrize("hashed", [False, True])
+def test_restarts_preserve_sessions_but_password_changes_revoke_them(tmp_path, hashed):
+    from argon2 import PasswordHasher
+    from pydantic import SecretStr
+
+    settings = make_settings(tmp_path)
+    if hashed:
+        settings = settings.model_copy(
+            update={
+                "admin_password_hash": SecretStr(
+                    PasswordHasher().hash("correct horse battery staple")
+                )
+            }
+        )
+    store = DriveStore.create(tmp_path / "drive.json")
+
+    def app(config):
+        return create_app(config, runtime=FakeRuntime(store))
+
+    with TestClient(app(settings), base_url="https://testserver") as client:
+        login(client)
+        token = client.cookies.get("tgdrive_session")
+    with TestClient(app(settings), base_url="https://testserver") as client:
+        client.cookies.set("tgdrive_session", token)
+        assert client.get("/api/v1/session").json()["authenticated"] is True
+
+    replacement = "a replacement owner password"
+    changes = {"admin_password": SecretStr(replacement)}
+    if hashed:
+        changes["admin_password_hash"] = SecretStr(PasswordHasher().hash(replacement))
+    rotated = settings.model_copy(update=changes)
+    with TestClient(app(rotated), base_url="https://testserver") as client:
+        client.cookies.set("tgdrive_session", token)
+        assert client.get("/api/v1/session").json()["authenticated"] is False
+        assert client.get("/api/v1/jobs").status_code == 401
+        assert (
+            client.post("/api/checkPassword", json={"pass": replacement}).status_code
+            == 200
+        )
+
+
+def test_hashed_password_preserves_intentional_whitespace(tmp_path):
+    from argon2 import PasswordHasher
+    from pydantic import SecretStr
+
+    password = "  correct horse battery staple  "
+    settings = make_settings(tmp_path).model_copy(
+        update={"admin_password_hash": SecretStr(PasswordHasher().hash(password))}
+    )
+    store = DriveStore.create(tmp_path / "drive.json")
+    app = create_app(settings, runtime=FakeRuntime(store))
+    with TestClient(app, base_url="https://testserver") as client:
+        assert (
+            client.post(
+                "/api/checkPassword", json={"pass": password.strip()}
+            ).status_code
+            == 401
+        )
+        assert (
+            client.post("/api/checkPassword", json={"pass": password}).status_code
+            == 200
+        )
+
+
+def test_password_hashing_does_not_stall_health_or_spawn_unbounded_work(
+    app_client, monkeypatch
+):
+    from concurrent.futures import ThreadPoolExecutor
+    from threading import Event
+
+    client, _, _, _ = app_client
+    checking = Event()
+    release = Event()
+
+    def slow_password_check(_candidate, _expected):
+        checking.set()
+        assert release.wait(5)
+        return True
+
+    monkeypatch.setattr(app_module, "verify_password", slow_password_check)
+    with ThreadPoolExecutor(max_workers=1) as workers:
+        first = workers.submit(client.post, "/api/checkPassword", json={"pass": "test"})
+        try:
+            assert checking.wait(5)
+            assert client.get("/health/live").status_code == 200
+            busy = client.post("/api/checkPassword", json={"pass": "test"})
+            assert busy.status_code == 429
+            assert busy.headers["retry-after"] == "1"
+        finally:
+            release.set()
+        assert first.result(timeout=5).status_code == 200
+
+
+@pytest.mark.parametrize(
+    "headers",
+    [
+        {"Sec-Fetch-Site": "same-site"},
+        {"Sec-Fetch-Site": "cross-site"},
+        {"Referer": "https://sub.testserver/settings"},
+        {"Referer": "https://evil.example/settings"},
+        {"Origin": "https://testserver:0"},
+        [("Origin", "https://evil.example"), ("Origin", "https://testserver")],
+    ],
+)
+def test_browser_mutations_reject_missing_or_ambiguous_origin(app_client, headers):
+    client, store, _, _ = app_client
+    login(client)
+    denied = client.post(
+        "/api/createNewFolder",
+        json={"path": "/", "name": "Unwanted"},
+        headers=headers,
+    )
+    assert denied.status_code == 403
+    assert store.list_directory("/") == {}
+
+
+def test_legacy_same_origin_referrer_and_headerless_api_clients_are_allowed(app_client):
+    client, _, _, _ = app_client
+    login(client)
+    for index, headers in enumerate(
+        (
+            {"Referer": "https://testserver/settings?tab=files"},
+            {},
+            {"Sec-Fetch-Site": "same-origin"},
+        )
+    ):
+        response = client.post(
+            "/api/createNewFolder",
+            json={"path": "/", "name": f"Allowed {index}"},
+            headers=headers,
+        )
+        assert response.status_code == 200
 
 
 def test_v1_chunk_receipt_requires_owner_and_durable_offsets(app_client):

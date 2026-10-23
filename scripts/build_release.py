@@ -22,6 +22,7 @@ ROOT_FILES = (
     "README.md",
     "compose.yaml",
     "compose.override.yaml",
+    "compose.server.yaml",
     "compose.coolify.yaml",
     "config.py",
     "docker_start.sh",

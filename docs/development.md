@@ -244,7 +244,7 @@ Use the pinned files as the exact dependency source:
 | --- | --- |
 | App Python | 3.14.8 default; declared support 3.11–3.14 |
 | Setup host | Python 3.10+; Docker supplies the app runtime |
-| uv | 0.13.1 |
+| uv | 0.13.4 |
 | Node | 24.22.0 LTS; frontend only |
 | Telegram | Telethon 1.45.0 + cryptg 0.6.0 |
 | Backend | FastAPI 0.143.5 + Uvicorn 0.54.0 |

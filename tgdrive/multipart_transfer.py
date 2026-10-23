@@ -13,6 +13,7 @@ from typing import Any
 from telethon.errors import FloodWaitError
 
 from tgdrive.client_pool import ClientPoolNotRunning, NoClientAvailable
+from tgdrive.connection_errors import TelegramConnectionError
 from tgdrive.file_parts import MAX_FILE_PARTS, validate_parts, validate_sha256
 from tgdrive.file_window import FileWindow
 from tgdrive.tasks import TransferStatus
@@ -190,6 +191,8 @@ async def upload_multipart(manager, record, local_path, destination, file_name, 
     try:
         if size <= 0:
             raise TransferEmptyFile("Empty files cannot be uploaded to Telegram")
+        if manager._ensure_channel is not None:
+            await manager._ensure_channel()
         if manager._check_upload_allowed is not None and not context.get(
             "multipart_plan"
         ):
@@ -318,6 +321,7 @@ async def upload_multipart(manager, record, local_path, destination, file_name, 
                             request_id=record.id,
                         ) as client,
                     ):
+                        manager.registry.update(record.id, error=None)
                         if part.get("sender") is None:
                             part["sender"] = client.name
                             if part["index"] == 0:
@@ -494,12 +498,37 @@ async def upload_multipart(manager, record, local_path, destination, file_name, 
                         await manager.pool.defer_channel(deadline)
                     await manager.pool.defer_client(part["sender"], deadline)
                     report(waiting_phase="retry_wait")
+                except TelegramConnectionError:
+                    active_parts.discard(part["index"])
+                    in_flight.pop(part["index"], None)
+                    if (
+                        plan["kind"] == "bot"
+                        and not part.get("send_started")
+                        and not part.get("message_id")
+                    ):
+                        # No message dispatch occurred: another account can safely
+                        # upload these same bytes without creating a duplicate.
+                        part["sender"] = None
+                        part.pop("retry_at", None)
+                        if part["index"] == 0:
+                            context.pop("sender", None)
+                        persist()
+                        capacity = await manager.pool.media_capacity(allow_users=True)
+                        if capacity:
+                            continue
+                    raise
                 except (ClientPoolNotRunning, NoClientAvailable):
                     active_parts.discard(part["index"])
                     in_flight.pop(part["index"], None)
                     if record.cancel_event.is_set() and not part.get("send_started"):
                         return
                     report(waiting_phase="waiting_for_telegram")
+                    manager.registry.update(
+                        record.id,
+                        error="Waiting for Telegram; retrying automatically. "
+                        "Open Connections and Refresh to check the account and "
+                        "storage-channel access.",
+                    )
                     await asyncio.sleep(1)
 
         cursor = 0

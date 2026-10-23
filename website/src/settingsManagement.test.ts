@@ -3,6 +3,7 @@ import {
   clientConnectionLabel,
   clientDisplayName,
   createConnectionDraft,
+  isCredentialRepair,
   prepareConnectionUpdate,
 } from "./settingsManagement";
 import type { ManagementSettings } from "./types";
@@ -44,6 +45,22 @@ const snapshot = (): ManagementSettings => ({
     staging_reserved_bytes: 10,
     free_disk_bytes: 2000,
   },
+});
+
+it("permits credential repair without treating account removal as repair", () => {
+  const settings = snapshot();
+  const draft = createConnectionDraft(settings);
+  expect(isCredentialRepair(draft, settings)).toBe(false);
+  draft.clients[0].credential = "123456:replacement";
+  expect(isCredentialRepair(draft, settings)).toBe(true);
+  draft.clients[0].removed = true;
+  expect(isCredentialRepair(draft, settings)).toBe(false);
+  draft.clients[0].removed = false;
+  draft.clients[0].enabled = false;
+  expect(isCredentialRepair(draft, settings)).toBe(false);
+  draft.clients[0].enabled = true;
+  draft.apiId = "99999";
+  expect(isCredentialRepair(draft, settings)).toBe(false);
 });
 
 describe("write-only connection settings", () => {

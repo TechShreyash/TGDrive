@@ -35,8 +35,11 @@ Detailed tables and examples are expandable.
 3. Telegram connections edited in the web app override the original Telegram
    credential fields and apply after a restart.
 
-Host environment values override `.env`. An edited Docker environment needs
-container recreation, rather than only a process restart.
+Host environment values override `.env`. Blank optional bootstrap credentials
+can reuse saved MongoDB settings; explicit deployment values take precedence
+over a local recovery fallback. An edited Docker environment needs container
+recreation, rather than only a process restart. Saved dashboard performance
+preferences have their own precedence, described below.
 
 Settings are case-insensitive. Unknown names are ignored, so check for typos.
 Never publish real values or use the example placeholders as credentials.
@@ -62,7 +65,10 @@ Optional does not always mean that a blank value is accepted:
 - DATABASE_BACKUP_MSG_ID= means no historical reference.
 - STRING_SESSIONS=, MAIN_BOT_TOKEN=, and TELEGRAM_ADMIN_IDS= disable their
   optional features.
-- An empty MAX_FILE_SIZE is invalid; omit or comment it to use the bounded default logical-file limit.
+- MAX_FILE_SIZE= means the bounded default logical-file limit.
+- With standard Compose auto-secrets enabled, blank SESSION_SECRET and
+  MONGODB_BACKUP_KEY reuse original saved keys, or generate them for a new drive.
+  With manual source setup, configure valid explicit keys.
 
 Invalid settings fail before serving the application. Secret wrappers and
 hidden validation inputs reduce accidental disclosure in exception text; they
@@ -79,9 +85,9 @@ do not make a configuration file safe to publish.
 | --- | --- | --- |
 | `API_ID` | Required unless supplied by managed settings | Positive integer Telegram application ID; the web editor bounds it to 1–2147483647. |
 | `API_HASH` | Required unless managed, secret | Exactly 32 hexadecimal characters; surrounding whitespace is removed. |
-| `BOT_TOKENS` | Required unless managed, secret | At least one comma-separated storage bot token. Tokens must match the expected numeric-ID and secret format; Telegram verifies actual validity on connection. |
-| `STORAGE_CHANNEL` | Required | Negative integer private channel ID. Confirmed catalogs bind to this channel; changing it is not relocation and can trigger RECOVERY_REQUIRED. Use the correct membership/permissions from [Telegram setup](setup.md#additional-bots-and-premium-accounts). |
-| `STRING_SESSIONS` | Empty by default, secret | Comma-separated Telethon StringSession credentials for optional Premium users. Sessions must already be authorized and identify Premium user accounts. |
+| `BOT_TOKENS` | Required unless managed, secret | At least one comma-separated storage bot token with no duplicates. Tokens must match the expected numeric-ID and secret format; Telegram verifies actual validity on connection. |
+| `STORAGE_CHANNEL` | Required | Negative integer private channel ID. Confirmed catalogs bind to this channel; changing it is not relocation and can trigger RECOVERY_REQUIRED. Use the membership/permissions from [Telegram setup](setup.md#2-prepare-telegram). |
+| `STRING_SESSIONS` | Empty by default, secret | Comma-separated Telethon StringSession credentials for optional Premium users; duplicates are rejected. Sessions must already be authorized and identify Premium user accounts. |
 | `MAIN_BOT_TOKEN` | Omitted/empty by default, secret | Optional bot-mode token. A nonempty value requires TELEGRAM_ADMIN_IDS. |
 | `PUBLIC_URL` | Omitted/empty by default | Optional HTTP(S) website origin for the bot's `/set_folder` link. Otherwise the website address is remembered when saving its bot upload folder. |
 | `TELEGRAM_ADMIN_IDS` | Empty by default | Comma-separated positive numeric Telegram user IDs allowed to use bot mode. |
@@ -166,7 +172,7 @@ See [performance policy and tuning](performance.md) before raising these values.
 
 | Variable | Required/default | Validation and behavior |
 | --- | --- | --- |
-| `ADMIN_PASSWORD_HASH` | None by default, secret | Recommended owner credential. Must be a valid Argon2id hash with memory cost at least 19,456 KiB and time cost at least 2. Generate it with the owner CLI. |
+| `ADMIN_PASSWORD_HASH` | None by default, secret | Recommended owner credential. Valid Argon2id; memory cost 19,456–262,144 KiB, time cost 2–10, at most 16 lanes. Generate it with the owner CLI. |
 | `ADMIN_PASSWORD` | Empty by default, secret | Plaintext fallback when no hash is configured. At least 12 characters after trimming. If a hash is present, clear the example plaintext value. A malformed nonempty plaintext value still fails validation. |
 | `SESSION_SECRET` | Required, secret | Independent random signing secret of at least 32 characters after trimming. Do not reuse an account or password credential. |
 | `SESSION_TTL_SECONDS` | 86400 | Integer 300-2592000 inclusive: browser session lifetime, in seconds. |
@@ -181,11 +187,12 @@ Blank or whitespace-only plaintext values are canonicalized to empty and
 require a valid hash. Nonempty plaintext values must meet the minimum after
 trimming. The generated Argon2id hash setup is recommended.
 
-The owner password is not a Telegram password. Browser sessions are signed
-with SESSION_SECRET and tracked in MongoDB's sessions collection. Changing the signing
-secret invalidates existing cookies. Changing the password alone is not a
-universal session-revocation procedure; see [security](reference.md#security-and-privacy) for rotation
-and access recovery.
+The owner password is not a Telegram password. Browser session signatures derive
+from SESSION_SECRET and the effective configured owner credential, and sessions
+are tracked in MongoDB's sessions collection. Loading a changed password/hash or
+signing secret invalidates existing owner cookies; an unchanged configuration
+preserves sessions across restarts. Share links are separate credentials. See
+[rotation and access recovery](operations.md#https-and-private-configuration).
 
 Generate a hash using either installation's password-hash command. It prompts
 twice, enforces a 12-character minimum, and does not require valid Telegram
@@ -204,15 +211,17 @@ settings. Encrypted MongoDB restore needs only database access and the recovery 
 | `MONGODB_DATABASE` | tgdrive | 1–63 ASCII letters/digits, underscores or hyphens; dedicated to one drive. |
 | `MONGODB_BACKUP_KEY` | None | Secret 64-hex-character AES-256 key. Keep a separate recovery copy. |
 | `MONGODB_BACKUP_SECONDS` | 3600 | Integer 60–604800 seconds between successful automatic safety copies. |
-| `DATA_DIR` | data | Writable helper/lock directory; no MongoDB catalog/journals are stored here. |
-| `CACHE_DIR` | cache | Local receipts, staging, encrypted temporary backups and caches. Keep unfinished bytes. |
+| `DATA_DIR` | data | Persistent generated keys, Telegram sessions, helper locks, recovery/activation state and media cache. MongoDB holds the live catalog and durable job/receipt records. |
+| `CACHE_DIR` | cache | Persistent unfinished upload payloads and encrypted temporary database backup files. Keep unfinished bytes. |
 | `INITIALIZE_EMPTY_DRIVE` | false | Legacy setting; no automatic startup initialization. |
 | `DATABASE_BACKUP_TIME` | 60 | Legacy SQLite checkpoint interval; unused by MongoDB mode. |
 | `DATABASE_BACKUP_MSG_ID` | None | Legacy recovery reference; unused by MongoDB startup/snapshots. |
 | `LOG_LEVEL` | INFO | DEBUG, INFO, WARNING, ERROR or CRITICAL. |
 
-DATA_DIR and CACHE_DIR must be writable distinct sibling paths, not a filesystem
+DATA_DIR and CACHE_DIR must be writable distinct paths, not a filesystem
 root or account home, equal or nested. Compose sets /app/data and /app/cache.
+The container runs as UID/GID 10001:10001; custom bind mounts must allow that
+account to write. Do not replace missing writable volumes with disposable mounts.
 
 The standard Compose deployment enables `TGDRIVE_AUTO_SECRETS=true`. Missing
 `SESSION_SECRET` and `MONGODB_BACKUP_KEY` values are generated once for a new
@@ -324,7 +333,14 @@ are in [transfers](architecture.md#transfer-pipeline) and [security](reference.m
 | `PORT` | Compose's host port defaults to 8000; the supplied container command always listens on internal port 8000. A source launch uses its explicit --port argument. |
 | `FORWARDED_ALLOW_IPS` | Optional explicit Uvicorn proxy trust override. The container launcher defaults to loopback plus the private IPs resolved from `TGDRIVE_PROXY_HOSTS`; the hosted Compose file sets that hostname to `coolify-proxy`. Unset or `auto` enables discovery. |
 | `TGDRIVE_PROXY_HOSTS` | Deployment-owned, comma-separated internal proxy hostnames. Only their resolved private IPs are trusted. A DNS failure retains loopback trust and logs an actionable warning; it never enables wildcard trust. |
+| `TGDRIVE_AUTO_SECRETS` | Standard Compose sets true. Generates missing session/backup keys once for a new drive in persistent DATA_DIR; source setups default to explicit keys. Existing drives must reuse their original keys. |
+| `TGDRIVE_RESTART_POLICY` | Compose interpolation only. Laptop override defaults to no, hosted/server mode to unless-stopped. Choose deliberately; restart policies do not restart a running container merely because it is unhealthy. |
 | --workers | Must remain 1. This is a launch argument, not an environment feature for scaling the drive. |
+
+`BIND_ADDRESS` only affects the local override. The server override always binds
+its published port to 127.0.0.1; Coolify's base Compose publishes no host port.
+`COOKIE_SECURE=true`, the internal data/cache paths, explicit initialization and
+the single-worker launcher are enforced by the hosted Compose definitions.
 
 A .env entry read only by Pydantic does not automatically export variables to
 Uvicorn in a source launch. Pass --forwarded-allow-ips explicitly there, or set
@@ -502,7 +518,10 @@ separate and no extra Telegram work is triggered by reading settings.
   admission_paused, application_mode:restart, api_id, api_hash_configured,
   storage_channel, clients, active_clients, stats and recovery.
 - Saved clients have opaque id, label, kind:bot/user, enabled, configured, connected,
-  healthy, premium, active_leases and a sanitized error.
+  healthy, premium, active_leases, a sanitized error and optional error_code.
+  Account failures use TELEGRAM_CREDENTIALS_REVOKED, TELEGRAM_CHANNEL_ACCESS or
+  TELEGRAM_ACCOUNT_REMOVED. Operation failures return HTTP 503 with detail/code.
+  Owner status includes telegram_issues for the connection warning.
 - Read-only display_name, username, identity_refreshing and identity_retry_at describe
   optional cached Telegram names and startup name retrieval.
 - The saved label remains a local fallback.
@@ -535,8 +554,14 @@ not the keep-secret protocol.
 - Duplicate Telegram identities and structurally invalid candidate configurations are
   rejected.
 
-- Saving requires no retained unfinished/error jobs, active receipt reservations or
-  unavailable database ownership.
+- Changes to API credentials, account identities or enabled membership require
+  no retained unfinished/error jobs, active receipt reservations or unavailable
+  database ownership.
+- A credential repair can replace tokens/sessions for the same existing Telegram
+  accounts while work is pending. Keep API credentials, client IDs/order, kinds
+  and enabled states unchanged. Every changed credential must verify as its
+  original Telegram identity before saving; a different identity returns
+  SETTINGS_BUSY. Saved repairs still require a restart and retain pending journals.
 - The current catalog must be committed.
 - A narrow repair case permits an error state when its confirmed/protected/current
   revisions match exactly and no recovery conflict/work is pending; that does not turn
@@ -735,8 +760,8 @@ Skipped move conflicts remain explicit successful results.
 Permanent deletion validates the whole selection before scheduling, then uses
 independently durable catalog-removal intents. Each job removes its database
 subtree and shares atomically, retaining original Telegram messages for every
-file age. Completed intents no longer retain message references. Telegram bots'
-48-hour deletion limit is the reason for this policy; see
+file age. Completed intents no longer retain message references. This is TGDrive's
+catalog-only deletion policy; see
 [permanent deletion](usage.md#why-permanent-deletion-keeps-the-telegram-files).
 Retain/poll each accepted job and refresh actual state after an interrupted
 response; selected items do not complete atomically as one batch. Legacy failed
@@ -1243,10 +1268,11 @@ are not encrypted by TGDrive. Protect disks and backups appropriately.
 
 Use a generated Argon2id hash and independent signing secret. Cookies are
 HttpOnly, SameSite=Strict and Secure under HTTPS, with a signed nonce and
-server-side token-hash tracking. Logout revokes its record. Password changes
-alone do not revoke all cookies; after a credential incident, stop, rotate the
-hash and SESSION_SECRET, restart and verify old sessions fail. Full old-volume
-restore can roll authentication back.
+server-side token-hash tracking. Logout revokes its record. A changed effective
+owner credential or SESSION_SECRET invalidates old owner cookies after restart;
+verify rotation using [the operations procedure](operations.md#https-and-private-configuration).
+This does not revoke share links. Restoring an older database or volume can roll
+credentials or shares back; review access after recovery.
 
 Mutations check browser Origin/Fetch Metadata; private routes authenticate
 before body processing. JSON is capped at 64 KiB and receipt PATCH at 8 MiB.

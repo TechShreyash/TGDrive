@@ -12,6 +12,8 @@ class RequestModel(BaseModel):
 
 
 class LoginRequest(RequestModel):
+    # Passwords hashed by the owner CLI may intentionally include whitespace.
+    model_config = ConfigDict(str_strip_whitespace=False)
     password: str = Field(alias="pass", min_length=1, max_length=512)
 
 

@@ -861,8 +861,11 @@ async def stream_pooled_media(
                     )
                     if attempt == 2:
                         raise
-                except (OSError, RPCError):
+                except (OSError, RPCError) as error:
+                    problem = await pool.report_failure(account, error)
                     if attempt == 2:
+                        if problem is not None:
+                            raise problem from None
                         raise
                     # A temporary failure should not monopolize the next window.
                     bindings.pop(id(account), None)

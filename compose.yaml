@@ -7,12 +7,15 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-    restart: unless-stopped
+    restart: ${TGDRIVE_RESTART_POLICY:-unless-stopped}
     init: true
     expose:
       - "8000"
     environment:
       MONGODB_URI: ${MONGODB_URI:?Set MONGODB_URI}
+      MONGODB_DATABASE: ${MONGODB_DATABASE:-tgdrive}
+      MONGODB_BACKUP_KEY: ${MONGODB_BACKUP_KEY:-}
+      MONGODB_BACKUP_SECONDS: ${MONGODB_BACKUP_SECONDS:-3600}
       API_ID: ${API_ID:?Set API_ID}
       API_HASH: ${API_HASH:?Set API_HASH}
       BOT_TOKENS: ${BOT_TOKENS:?Set BOT_TOKENS}
@@ -22,11 +25,28 @@ services:
       TELEGRAM_ADMIN_IDS: ${TELEGRAM_ADMIN_IDS:-}
       # Required for a new drive; existing drives can reuse their saved hash.
       ADMIN_PASSWORD: ${ADMIN_PASSWORD:-}
+      ADMIN_PASSWORD_HASH: ${ADMIN_PASSWORD_HASH:-}
+      SESSION_SECRET: ${SESSION_SECRET:-}
+      STRING_SESSIONS: ${STRING_SESSIONS:-}
       DATA_DIR: /app/data
       CACHE_DIR: /app/cache
       COOKIE_SECURE: "true"
       TGDRIVE_AUTO_SECRETS: "true"
       TGDRIVE_PROXY_HOSTS: coolify-proxy
+      FORWARDED_ALLOW_IPS: ${FORWARDED_ALLOW_IPS:-auto}
+      INITIALIZE_EMPTY_DRIVE: "false"
+      SESSION_TTL_SECONDS: ${SESSION_TTL_SECONDS:-86400}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      SLEEP_THRESHOLD: ${SLEEP_THRESHOLD:-60}
+      ALLOW_PRIVATE_REMOTE_URLS: ${ALLOW_PRIVATE_REMOTE_URLS:-false}
+      REMOTE_CONNECT_TIMEOUT: ${REMOTE_CONNECT_TIMEOUT:-20}
+      REMOTE_READ_TIMEOUT: ${REMOTE_READ_TIMEOUT:-120}
+      REMOTE_TOTAL_TIMEOUT: ${REMOTE_TOTAL_TIMEOUT:-21600}
+      REMOTE_MAX_REDIRECTS: ${REMOTE_MAX_REDIRECTS:-5}
+      MAX_CONCURRENT_TRANSFERS: ${MAX_CONCURRENT_TRANSFERS:-2}
+      MAX_FILE_SIZE: ${MAX_FILE_SIZE:-}
+      TRANSFER_TTL_SECONDS: ${TRANSFER_TTL_SECONDS:-3600}
+      UPLOAD_SESSION_TTL_SECONDS: ${UPLOAD_SESSION_TTL_SECONDS:-86400}
       # Optional startup policy; saved dashboard preferences take precedence.
       TELEGRAM_UPLOADS_PER_BOT: ${TELEGRAM_UPLOADS_PER_BOT:-1}
       TIMEZONE: ${TIMEZONE:-Asia/Kolkata}
@@ -57,6 +77,11 @@ services:
     cap_drop:
       - ALL
     pids_limit: 256
+    logging:
+      driver: local
+      options:
+        max-size: "10m"
+        max-file: "3"
 
 volumes:
   tgdrive-data:

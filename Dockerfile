@@ -11,7 +11,7 @@ RUN npm run build
 
 FROM python:3.14.8-slim-trixie@sha256:a2b82f3c48559aa0a8446d9af49826b6e2b2016f4cd2afabfe6013ec53729170 AS builder
 
-COPY --from=ghcr.io/astral-sh/uv:0.13.1@sha256:4a1f3666816dafadd20ceb71eac9a7d56d7ef30279f7d64048519ab901ada336 /uv /uvx /usr/local/bin/
+COPY --from=ghcr.io/astral-sh/uv:0.13.4@sha256:9f130421e930bfbdc563c00740466603f8723158e90297d07957c2294640262b /uv /uvx /usr/local/bin/
 
 ENV UV_LINK_MODE=copy \
     UV_PYTHON_DOWNLOADS=never
@@ -40,8 +40,12 @@ LABEL org.opencontainers.image.title="TGDrive" \
 
 WORKDIR /app
 
+# Distrust the compromised emSign G3 chain in Python/MongoDB system TLS too.
+# https://github.com/astral-sh/uv/security/advisories/GHSA-hq85-5cpj-mr62
 RUN apt-get update \
     && apt-get install -y --no-install-recommends libarchive13t64 ffmpeg poppler-utils \
+    && sed -i 's|^mozilla/emSign_ECC_Root_CA_-_G3.crt$|!mozilla/emSign_ECC_Root_CA_-_G3.crt|' /etc/ca-certificates.conf \
+    && update-ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
 RUN groupadd --gid 10001 tgdrive \

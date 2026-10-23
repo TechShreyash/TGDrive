@@ -257,7 +257,7 @@ class MongoProtection:
 
     async def snapshot_now(self, store):
         async with self._lock:
-            self.check_upload_allowed(store)
+            await self.verify_lineage(store)
             backend = self.backend
             key = backup_key(self.settings)
             pending = await asyncio.to_thread(

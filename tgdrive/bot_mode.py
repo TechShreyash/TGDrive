@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import inspect
 import logging
 from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime
@@ -44,7 +45,7 @@ class BotMode:
         client: Client,
         settings: Settings,
         store: DriveStore,
-        before_write: Callable[[], None] | None = None,
+        before_write: Callable[[], Awaitable[None] | None] | None = None,
         before_delete: Callable[[], Awaitable[None]] | None = None,
         folder_settings: BotSettings | None = None,
     ) -> None:
@@ -178,7 +179,9 @@ class BotMode:
         status: Message | None = None
         try:
             if self.before_write is not None:
-                self.before_write()
+                check = self.before_write()
+                if inspect.isawaitable(check):
+                    await check
             path, folder_name = await self.folder_settings.destination()
             status = await message.reply_text(
                 f"Saving your file to: {folder_name}…",
@@ -193,7 +196,9 @@ class BotMode:
                 raise RuntimeError("copied message contains no media")
             filename = self._media_name(media, copied)
             if self.before_write is not None:
-                self.before_write()
+                check = self.before_write()
+                if inspect.isawaitable(check):
+                    await check
             item = await asyncio.to_thread(
                 self.store.add_file,
                 path,

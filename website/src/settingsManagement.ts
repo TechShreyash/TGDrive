@@ -19,6 +19,32 @@ export interface ConnectionDraft {
   apiHash: string;
   clients: ClientDraft[];
 }
+export function isCredentialRepair(
+  draft: ConnectionDraft | null,
+  settings: ManagementSettings | null,
+): boolean {
+  if (
+    !draft ||
+    !settings ||
+    draft.apiId.trim() !== String(settings.api_id) ||
+    draft.apiHash.trim() ||
+    draft.clients.length !== settings.clients.length
+  )
+    return false;
+  return (
+    draft.clients.some((row) => row.credential.trim()) &&
+    draft.clients.every((row, index) => {
+      const prior = settings.clients[index];
+      return (
+        row.id === prior.id &&
+        !row.removed &&
+        row.kind === prior.kind &&
+        row.enabled === prior.enabled
+      );
+    })
+  );
+}
+
 export function createConnectionDraft(
   settings: ManagementSettings,
 ): ConnectionDraft {

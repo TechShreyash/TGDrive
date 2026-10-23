@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import errno
 import time
 
 import pytest
@@ -237,3 +238,36 @@ def test_multipart_progress_distinguishes_sent_bytes_from_channel_publication():
     assert "private-client" not in str(snapshot)
     record.context["multipart_plan"]["parts"][0]["confirmed"] = True
     assert record.as_dict()["telegram_parts"] == {"total": 3, "stored": 1}
+
+
+@pytest.mark.parametrize(
+    ("error", "retryable"),
+    [
+        (TimeoutError("provider timeout"), True),
+        (ConnectionError("connection lost"), True),
+        (OSError(errno.ENETUNREACH, "network unreachable"), True),
+        (OSError(errno.ENOSPC, "disk full"), False),
+        (PermissionError("no permission"), False),
+        (ValueError("invalid configuration"), False),
+    ],
+)
+async def test_only_temporary_connection_errors_are_marked_for_restart(
+    tmp_path, error, retryable
+):
+    registry = TransferRegistry(database_path=tmp_path / "jobs.sqlite3")
+    record = registry.create("uploading")
+    record.context["kind"] = "upload"
+
+    async def fail(_record):
+        raise error
+
+    try:
+        await registry.spawn(record.id, fail)
+        assert record.status is TransferStatus.ERROR
+        assert bool(record.context.get("restart_retryable")) is retryable
+        if retryable:
+            assert "restart TGDrive" in record.error
+        registry.retry(record.id)
+        assert "restart_retryable" not in record.context
+    finally:
+        registry.close()

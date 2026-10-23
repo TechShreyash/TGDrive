@@ -2487,6 +2487,26 @@ def test_actual_unavailable_wmv_codec_stays_in_custom_player_with_original_downl
     )
 
 
+def test_revoked_account_warning_links_to_connections_and_clears(server, desktop):
+    _, page = desktop
+    detail = (
+        "This storage bot can no longer sign in. Open Connections and replace "
+        "its revoked token, then restart TGDrive and retry."
+    )
+    issue = {"code": "TELEGRAM_CREDENTIALS_REVOKED", "detail": detail}
+    state = {"telegram_ready": False, "telegram_issues": [issue]}
+    page.route("**/api/v1/status", lambda route: route.fulfill(json=state))
+    login(page, server.url)
+    warning = page.get_by_role("status").filter(has_text=detail)
+    expect(warning).to_be_visible()
+    warning.get_by_role("button", name="Open Connections", exact=True).click()
+    expect(
+        page.get_by_role("heading", name="Storage Clients", exact=True)
+    ).to_be_visible()
+    state.update(telegram_ready=True, telegram_issues=[])
+    expect(page.get_by_text(detail, exact=True)).not_to_be_visible(timeout=10000)
+
+
 def assert_single_appearance(page: Any) -> None:
     assert page.locator("html").get_attribute("data-theme") in {"light", "dark"}
     if not page.locator('input[type="password"]').is_visible():

@@ -8,6 +8,7 @@ import pytest
 
 import tgdrive.telegram_clients as clients
 from tgdrive.config import Settings
+from tgdrive.connection_errors import TelegramConnectionError
 
 
 def settings(tmp_path: Path, **overrides: Any) -> Settings:
@@ -174,8 +175,11 @@ async def test_user_session_must_already_be_authorized(tmp_path: Path) -> None:
         name="unused", settings=settings(tmp_path), session_string="session-A"
     )
     client.native.authorized = False
-    with pytest.raises(RuntimeError, match="not authorized"):
+    with pytest.raises(
+        TelegramConnectionError, match="no longer authorized"
+    ) as captured:
         await client.start()
+    assert captured.value.code == "TELEGRAM_CREDENTIALS_REVOKED"
     assert not client.native.sign_ins
     assert not client.is_connected
 
