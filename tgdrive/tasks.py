@@ -75,6 +75,46 @@ def _retry_after_restart(error: Exception) -> bool:
     }
 
 
+def _failure_diagnostic(error: Exception) -> tuple[str, str]:
+    """Stable categories/actions without formatting private exception messages."""
+    from tgdrive.backup import BackupError, RecoveryConflict
+    from tgdrive.connection_errors import connection_problem
+    from tgdrive.remote import RemoteHTTPError, RemoteTooLarge, UnsafeRemoteURL
+
+    if isinstance(error, RecoveryConflict):
+        return (
+            "RECOVERY_REQUIRED",
+            "check Storage & Backups and follow recovery guidance",
+        )
+    if isinstance(error, (DatabaseUnavailable, PyMongoError)):
+        return "DATABASE_UNAVAILABLE", "restore MongoDB access and retry the transfer"
+    if isinstance(error, OSError) and error.errno in {errno.ENOSPC, errno.EDQUOT}:
+        return "STAGING_FULL", "free unrelated disk space; preserve unfinished uploads"
+    problem = connection_problem(error, "bot")
+    if problem is not None and problem.code in {
+        "TELEGRAM_CREDENTIALS_REVOKED",
+        "TELEGRAM_CHANNEL_ACCESS",
+        "TELEGRAM_ACCOUNT_REMOVED",
+    }:
+        return problem.code, "repair the account or channel in Connections and retry"
+    if isinstance(error, RemoteHTTPError):
+        code = (
+            f"REMOTE_HTTP_{error.status}"
+            if type(error.status) is int and 100 <= error.status <= 599
+            else "REMOTE_HTTP_ERROR"
+        )
+        return code, "check source availability and access before retrying"
+    if isinstance(error, UnsafeRemoteURL):
+        return "REMOTE_URL_BLOCKED", "check the source URL and outbound network policy"
+    if isinstance(error, RemoteTooLarge):
+        return "REMOTE_FILE_TOO_LARGE", "check the configured upload limit"
+    if isinstance(error, BackupError):
+        return "CHECKPOINT_FAILED", "check Storage & Backups before retrying"
+    if _retry_after_restart(error):
+        return "TRANSPORT_INTERRUPTED", "restore the connection and retry the transfer"
+    return "TRANSFER_FAILED", "inspect the transfer error in Transfers"
+
+
 class TransferStatus(StrEnum):
     QUEUED = "queued"
     RUNNING = "running"
@@ -208,6 +248,7 @@ class TransferRegistry:
         self._db_lock = threading.RLock()
         self._durable: dict[str, dict[str, Any]] = {}
         self._last_progress_commit: dict[str, float] = {}
+        self._logged: dict[str, tuple[TransferStatus, str, bool, float]] = {}
         self._history: dict[str, dict[str, Any]] = {}
         self._finalizer: weakref.finalize | None = None
         if mongo is not None:
@@ -297,6 +338,7 @@ class TransferRegistry:
             record.cancel_event.set()
         self._records[item["id"]] = record
         self._durable[item["id"]] = copy.deepcopy(item)
+        self._logged[record.id] = self._log_snapshot(record)
 
     def persist(self, record: TransferRecord) -> None:
         # Lifecycle/context commits are immediate; byte counters are advisory.
@@ -310,6 +352,7 @@ class TransferRegistry:
             record.finished_at = None
         self._last_progress_commit[record.id] = time.monotonic()
         if self._db is None and self._mongo is None:
+            self._log_record(record)
             return
         item = {
             key: getattr(record, key)
@@ -379,6 +422,102 @@ class TransferRegistry:
                 ) from None
             raise RuntimeError("Transfer state could not be persisted") from exc
         self._durable[record.id] = copy.deepcopy(item)
+        self._log_record(record)
+
+    @staticmethod
+    def _log_snapshot(
+        record: TransferRecord,
+    ) -> tuple[TransferStatus, str, bool, float]:
+        deadlines = [
+            record.context.get(key)
+            for key in (
+                "retry_at",
+                "channel_retry_at",
+                "backup_retry_at",
+                "lineage_retry_at",
+            )
+        ]
+        plan = record.context.get("multipart_plan")
+        if isinstance(plan, dict) and isinstance(plan.get("parts"), list):
+            deadlines.extend(
+                part.get("retry_at") for part in plan["parts"] if isinstance(part, dict)
+            )
+        retry_at = max(
+            (
+                value
+                for value in deadlines
+                if type(value) in (int, float) and math.isfinite(value)
+            ),
+            default=0.0,
+        )
+        return record.status, record.phase, record.started_at is not None, retry_at
+
+    def _log_record(self, record: TransferRecord) -> None:
+        """Log committed lifecycle changes, never byte callbacks or poll snapshots."""
+        current = self._log_snapshot(record)
+        previous = self._logged.get(record.id)
+        self._logged[record.id] = current
+        if previous is None:
+            logger.debug("Transfer queued id=%s bytes=%s", record.id, record.total)
+            return
+        kind = record.context.get("kind")
+        kind = (
+            kind if kind in {"upload", "remote", "delete", "receiving"} else "transfer"
+        )
+        now = time.time()
+        if current[2] and not previous[2]:
+            logger.info(
+                "Transfer started id=%s kind=%s phase=%s bytes=%s queue_seconds=%.3f",
+                record.id,
+                kind,
+                record.phase,
+                record.total,
+                max(0.0, (record.started_at or now) - record.created_at),
+            )
+        if record.status != previous[0] and record.status in {
+            TransferStatus.COMPLETED,
+            TransferStatus.CANCELLED,
+        }:
+            logger.info(
+                "Transfer finished id=%s kind=%s status=%s bytes=%s/%s "
+                "elapsed_seconds=%.3f",
+                record.id,
+                kind,
+                record.status.value,
+                record.current,
+                record.total,
+                max(0.0, (record.finished_at or now) - record.created_at),
+            )
+        if current[3] > max(now, previous[3]):
+            reason = (
+                "recovery_checkpoint"
+                if record.context.get("backup_retry_at") == current[3]
+                else "catalog_verification"
+                if record.context.get("lineage_retry_at") == current[3]
+                else "telegram_cooldown"
+            )
+            logger.warning(
+                "Transfer retry scheduled id=%s reason=%s retry_after_seconds=%s; "
+                "retry is automatic",
+                record.id,
+                reason,
+                math.ceil(current[3] - now),
+            )
+        if record.phase == "waiting_for_telegram" and previous[1] != record.phase:
+            logger.warning(
+                "Transfer waiting id=%s reason=no_telegram_client; "
+                "check Connections; retry is automatic",
+                record.id,
+            )
+        if current[:2] != previous[:2]:
+            logger.debug(
+                "Transfer state id=%s status=%s phase=%s bytes=%s/%s",
+                record.id,
+                record.status.value,
+                record.phase,
+                record.current,
+                record.total,
+            )
 
     @staticmethod
     def _retained(record: TransferRecord) -> bool:
@@ -480,6 +619,7 @@ class TransferRegistry:
         self._records.pop(transfer_id, None)
         self._durable.pop(transfer_id, None)
         self._last_progress_commit.pop(transfer_id, None)
+        self._logged.pop(transfer_id, None)
 
     @staticmethod
     def _history_matches(row, statuses, before, query=""):
@@ -655,6 +795,7 @@ class TransferRegistry:
         record._progress_samples.clear()
         record.cancel_event.clear()
         self.persist(record)
+        logger.info("Transfer retry requested id=%s", record.id)
         return record
 
     def create(
@@ -849,14 +990,25 @@ class TransferRegistry:
                     )
                 raise
             except Exception as exc:
-                logger.exception("Transfer %s failed", record.id)
+                retryable = _retry_after_restart(exc)
+                code, action = _failure_diagnostic(exc)
+                logger.error(
+                    "Transfer failed id=%s phase=%s error_type=%s retryable=%s "
+                    "code=%s; %s",
+                    record.id,
+                    record.phase,
+                    type(exc).__name__,
+                    retryable,
+                    code,
+                    action,
+                )
+                logger.debug("Transfer failure detail id=%s", record.id, exc_info=True)
                 if record.cancel_event.is_set() and record.context.get("send_started"):
                     record.status = TransferStatus.QUEUED
                     record.phase = "cleanup_pending"
                     record.error = str(exc)[:500] or type(exc).__name__
                     self.persist(record)
                 else:
-                    retryable = _retry_after_restart(exc)
                     if retryable:
                         record.context["restart_retryable"] = True
                     else:

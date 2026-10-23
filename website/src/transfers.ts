@@ -7,6 +7,8 @@ import {
 } from "./api";
 import type { Job, UploadSnapshot, TransferLocation } from "./types";
 import { sampleProgress, type ProgressSample } from "./progress";
+import { BatchProgressTracker } from "./batchProgress";
+import { summarizeBatches } from "./transferBatches";
 import { sendUploadChunk, type UploadChunkTransport } from "./uploadTransport";
 import {
   DeviceUploadConcurrency,
@@ -68,6 +70,8 @@ export const BROWSER_RECEIVE_INITIAL_CONCURRENCY =
   INITIAL_DEVICE_UPLOAD_CONCURRENCY;
 const MAX_HISTORY_BATCHES = 30;
 const MAX_HISTORY_ROWS = 2000;
+// Receipt verification/handoff is control work, independent of payload slots.
+const RECEIPT_COMPLETION_CONCURRENCY = 2;
 export interface UploadEntry {
   file: File;
   destination: string;
@@ -326,9 +330,14 @@ export class TransferManager {
     error: "",
   };
   private listeners = new Set<() => void>();
+  private batchProgress = new BatchProgressTracker();
   private enabled = false;
   private admissionPaused = false;
   private receiving = new Set<string>();
+  private processing = new Set<string>();
+  private lastReceivingBatch: string | undefined;
+  private completing = 0;
+  private completionQueue: (() => void)[] = [];
   private deviceConcurrency = new DeviceUploadConcurrency();
   private concurrencyTimer: ReturnType<typeof setInterval> | undefined;
   private timer: ReturnType<typeof setTimeout> | undefined;
@@ -401,6 +410,7 @@ export class TransferManager {
     };
   };
   snapshot = () => this.items;
+  batchProgressSnapshot = () => this.batchProgress.snapshot();
   deletionSnapshot = () => this.deletionProgress;
   private updateDeletionProgress(error = "") {
     this.deletionProgress = {
@@ -467,6 +477,10 @@ export class TransferManager {
     this.refreshJobs();
   }
   private publish(persist = true) {
+    const now = Date.now();
+    if (this.enabled && !this.admissionPaused)
+      this.batchProgress.observe(summarizeBatches(this.items, now), now);
+    else this.batchProgress.clear();
     if (!persist) {
       this.items = [...this.items];
       for (const listener of this.listeners) listener();
@@ -519,6 +533,7 @@ export class TransferManager {
     if (this.enabled === enabled) return;
     this.enabled = enabled;
     if (!enabled) {
+      this.batchProgress.clear();
       clearTimeout(this.timer);
       clearTimeout(this.stagingTimer);
       clearInterval(this.concurrencyTimer);
@@ -533,6 +548,7 @@ export class TransferManager {
   setAdmissionPaused(paused: boolean) {
     if (this.admissionPaused === paused) return;
     this.admissionPaused = paused;
+    if (paused) this.batchProgress.clear();
     this.deviceConcurrency.pauseMeasurements(Date.now());
     this.updateConcurrencyTimer();
     if (!paused) void this.startNext();
@@ -893,17 +909,29 @@ export class TransferManager {
         );
         return;
       }
+      this.startCompletions();
       while (this.receiving.size < this.deviceConcurrency.limit) {
-        const item = this.items.find(
+        const eligible = this.items.filter(
           (item) =>
             item.state === "queued" &&
             item.file &&
-            !this.receiving.has(item.key) &&
+            !this.processing.has(item.key) &&
             Date.now() >= (this.stagingRetries.get(item.key) || 0),
         );
+        if (!eligible.length) break;
+        // Give each selection/folder a turn. A newly added folder can use the
+        // next free device slot without waiting behind an older folder's tail.
+        const batches = [...new Set(eligible.map(transferBatchId))];
+        const previous = batches.indexOf(this.lastReceivingBatch || "");
+        const nextBatch = batches[(previous + 1) % batches.length];
+        const item = eligible.find(
+          (candidate) => transferBatchId(candidate) === nextBatch,
+        );
         if (!item) break;
+        this.lastReceivingBatch = transferBatchId(item);
         this.stagingRetries.delete(item.key);
         this.receiving.add(item.key);
+        this.processing.add(item.key);
         void this.receiveNext(item);
       }
       const retryTimes = this.items
@@ -939,7 +967,7 @@ export class TransferManager {
         (item) =>
           item.state === "queued" &&
           item.file &&
-          !this.receiving.has(item.key) &&
+          !this.processing.has(item.key) &&
           now >= (this.stagingRetries.get(item.key) || 0),
       );
     this.deviceConcurrency.sample(now, hasBacklog);
@@ -1031,6 +1059,7 @@ export class TransferManager {
         this.update(item.key, {
           state: "queued",
           phase: "Waiting for server space",
+          stage: "retry_wait",
           error: undefined,
           ...(item.uploadId ? {} : { startedAt: undefined }),
         });
@@ -1046,6 +1075,7 @@ export class TransferManager {
     } finally {
       item.controller = undefined;
       this.receiving.delete(item.key);
+      this.processing.delete(item.key);
       this.startNext();
     }
   }
@@ -1059,45 +1089,57 @@ export class TransferManager {
       phase: "Preparing device upload",
       sentCurrent: undefined,
     });
+    let snapshot: UploadSnapshot | undefined;
     if (!item.uploadId) {
-      const created = await api.createUpload(
-        item.name,
-        item.destination,
-        item.size,
-      );
-      this.update(item.key, { uploadId: created.id });
+      snapshot = await api.createUpload(item.name, item.destination, item.size);
+      // Cancellation can remove the row before creation returns. Retain the id
+      // on this operation as well so its late receipt can still be cleaned up.
+      item.uploadId = snapshot.id;
+      this.update(item.key, { uploadId: snapshot.id });
     }
-    if (item.state === "cancelling" || controller.signal.aborted) {
+    if (["cancelling", "cancelled"].includes(item.state)) {
       if (item.uploadId) await api.cancelUpload(item.uploadId);
       return;
     }
+    if (controller.signal.aborted)
+      throw new DOMException("Upload paused", "AbortError");
     const id = item.uploadId!;
-    const head = await fetch("/api/v1/uploads/" + encodeURIComponent(id), {
-      method: "HEAD",
-      credentials: "same-origin",
-      signal: controller.signal,
-    }).catch((error) => {
-      if (error instanceof TypeError) throw new ApiError(errorMessage(error));
-      throw error;
-    });
-    if (!head.ok) {
-      if (head.status === 401)
-        window.dispatchEvent(new Event("tgdrive:auth-required"));
-      throw new ApiError(
-        head.status === 404 || head.status === 410
-          ? "This upload has expired. Cancel it and start a new upload."
-          : "Could not check the upload position. Try Again.",
-        head.status,
-        "",
-        Math.max(0, Number(head.headers.get("Retry-After")) || 0),
-      );
+    // Creation already returns the authoritative, empty receipt. Rechecking it
+    // with HEAD and GET adds two round trips to every small file unnecessarily.
+    let offset = snapshot ? snapshot.offset : 0;
+    let length = snapshot ? snapshot.total_size : 0;
+    if (!snapshot) {
+      const head = await fetch("/api/v1/uploads/" + encodeURIComponent(id), {
+        method: "HEAD",
+        credentials: "same-origin",
+        signal: controller.signal,
+      }).catch((error) => {
+        if (error instanceof TypeError) throw new ApiError(errorMessage(error));
+        throw error;
+      });
+      if (!head.ok) {
+        if (head.status === 401)
+          window.dispatchEvent(new Event("tgdrive:auth-required"));
+        throw new ApiError(
+          head.status === 404 || head.status === 410
+            ? "This upload has expired. Cancel it and start a new upload."
+            : "Could not check the upload position. Try Again.",
+          head.status,
+          "",
+          Math.max(0, Number(head.headers.get("Retry-After")) || 0),
+        );
+      }
+      const offsetHeader = head.headers.get("Upload-Offset");
+      const lengthHeader = head.headers.get("Upload-Length");
+      offset =
+        offsetHeader === null || offsetHeader === ""
+          ? NaN
+          : Number(offsetHeader);
+      length =
+        lengthHeader === null || lengthHeader === ""
+          ? NaN
+          : Number(lengthHeader);
     }
-    const offsetHeader = head.headers.get("Upload-Offset");
-    const lengthHeader = head.headers.get("Upload-Length");
-    let offset =
-      offsetHeader === null || offsetHeader === "" ? NaN : Number(offsetHeader);
-    const length =
-      lengthHeader === null || lengthHeader === "" ? NaN : Number(lengthHeader);
     if (
       !Number.isSafeInteger(offset) ||
       offset < 0 ||
@@ -1106,8 +1148,10 @@ export class TransferManager {
       length !== file.size
     )
       throw new Error("The server returned an invalid upload position.");
-    const snapshot = await api.upload(id);
-    if (controller.signal.aborted || item.jobId) return;
+    snapshot ??= await api.upload(id);
+    if (item.jobId) return;
+    if (controller.signal.aborted)
+      throw new DOMException("Upload paused", "AbortError");
     if (offset) {
       this.update(item.key, {
         state: "verifying",
@@ -1204,12 +1248,70 @@ export class TransferManager {
       offset = nextOffset;
       this.update(item.key, { current: offset, sentCurrent: offset });
     }
-    if (controller.signal.aborted) return;
+    if (controller.signal.aborted)
+      throw new DOMException("Upload paused", "AbortError");
     this.update(item.key, {
       phase: "Receipt complete. Preparing Telegram upload",
       stage: "confirming",
     });
-    const result = await api.completeUpload(id);
+    // All payload bytes are acknowledged. Let another file send while receipt
+    // verification and durable Telegram admission finish in their bounded lane.
+    this.receiving.delete(item.key);
+    this.startNext();
+    await this.completeReceipt(item, controller);
+  }
+  private startCompletions() {
+    if (Date.now() < this.admissionRetryAt) return;
+    while (
+      this.completing < RECEIPT_COMPLETION_CONCURRENCY &&
+      this.completionQueue.length
+    )
+      this.completionQueue.shift()!();
+  }
+  private completeReceipt(item: Transfer, controller: AbortController) {
+    return new Promise<void>((resolve, reject) => {
+      let waiting = true;
+      const abort = () => {
+        if (!waiting) return;
+        waiting = false;
+        this.completionQueue = this.completionQueue.filter(
+          (entry) => entry !== start,
+        );
+        reject(new DOMException("Upload paused", "AbortError"));
+      };
+      const start = () => {
+        if (!waiting) return;
+        waiting = false;
+        controller.signal.removeEventListener("abort", abort);
+        this.completing += 1;
+        // Do not abandon an admitted completion request on browser cancellation:
+        // the server may already own the job, so reconcile its response instead.
+        void this.finishReceipt(item)
+          .then(resolve, reject)
+          .finally(() => {
+            this.completing -= 1;
+            this.startCompletions();
+          });
+      };
+      if (controller.signal.aborted) {
+        abort();
+        return;
+      }
+      controller.signal.addEventListener("abort", abort, { once: true });
+      this.completionQueue.push(start);
+      this.startCompletions();
+    });
+  }
+  private async finishReceipt(item: Transfer) {
+    const result = await api.completeUpload(item.uploadId!).catch((error) => {
+      // Publish pressure before the completion lane can admit its next request.
+      if (error instanceof ApiError && error.status === 429)
+        this.admissionRetryAt = Math.max(
+          this.admissionRetryAt,
+          Date.now() + Math.max(5000, error.retryAfter * 1000),
+        );
+      throw error;
+    });
     // Polling or cancellation can finish while the receipt response is in flight.
     // Attach ownership without replacing that newer server/cancellation state.
     if (
@@ -1223,7 +1325,7 @@ export class TransferManager {
         state: "uploading",
         phase: "Queued for Telegram",
         current: 0,
-        total: file.size,
+        total: item.size,
         file: undefined,
       });
     this.refreshJobs();

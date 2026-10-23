@@ -57,6 +57,17 @@ def configure_logging(level: str = "INFO", log_file: Path | None = None) -> None
     # its own handler, outside the root redaction filter, so disable that unsafe
     # raw-query log at the source.
     logging.getLogger("uvicorn.access").disabled = True
+    # Telethon's routine update/difference messages can dominate a busy drive's
+    # logs. Keep provider warnings/errors visible; DEBUG deliberately restores
+    # its connection/update diagnostics for a short troubleshooting session.
+    diagnostic_level = (
+        logging.NOTSET
+        if root.level == logging.DEBUG
+        else max(root.level, logging.WARNING)
+    )
+    logging.getLogger("telethon").setLevel(diagnostic_level)
+    logging.getLogger("httpx").setLevel(diagnostic_level)
+    logging.getLogger("httpcore").setLevel(diagnostic_level)
     formatter = RedactingFormatter(
         "%(asctime)s %(levelname)s %(name)s: %(message)s",
         datefmt="%Y-%m-%dT%H:%M:%S%z",

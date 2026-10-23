@@ -95,6 +95,19 @@ def test_device_receipts_finish_while_telegram_waits_and_survive_tab_close(
             for record in server.control()["records"].values()
         )
         assert _device_close_blocked(page), "Unsent device data must guard tab close"
+        batch = page.locator('.transfer-batch[data-stage="device"]')
+        expect(batch).to_have_count(1)
+        expect(batch.locator(".transfer-batch-status")).to_contain_text(
+            "Uploading from device"
+        )
+        expect(batch).not_to_contain_text("Telegram")
+        batch.get_by_role("button", name="Show Files", exact=True).click()
+        received = batch.locator('.transfer-child[data-status="uploading"]')
+        expect(received).to_have_count(1)
+        expect(received.locator(".transfer-phase")).to_have_text("Received")
+        expect(received.get_by_role("progressbar")).to_have_count(0)
+        expect(received.locator(".transfer-metrics")).to_have_count(0)
+        batch.get_by_role("button", name="Hide Files", exact=True).click()
     finally:
         # Playwright releases any pending routes when this handler is removed.
         page.unroute("**/api/v1/uploads/*", hold_later_receipts)
@@ -106,9 +119,15 @@ def test_device_receipts_finish_while_telegram_waits_and_survive_tab_close(
         for record in server.control()["records"].values()
     ), "Receiving later files must not require earlier Telegram jobs to finish"
     safe = page.locator(".transfer-device-status, .transfer-notice").filter(
-        has_text="Device upload complete. You can close this tab"
+        has_text="You can close this tab"
     )
     expect(safe.first).to_be_visible()
+    batch = page.locator('.transfer-batch[data-stage="telegram"]')
+    expect(batch).to_have_count(1)
+    expect(batch.locator(".transfer-batch-status")).to_contain_text(
+        "Uploading to Telegram"
+    )
+    expect(batch).not_to_contain_text("Uploading from device")
     assert not _device_close_blocked(page)
     saved = page.evaluate(
         "JSON.parse(localStorage.getItem('tgdrive.uploads.v2') || '[]')"
@@ -197,7 +216,7 @@ def test_slow_listing_refresh_coalesces_upload_bursts_without_unmounting_rows(
     started = _wait_started(page, server, len(names))
     expect(
         page.locator(".transfer-device-status, .transfer-notice")
-        .filter(has_text="Device upload complete")
+        .filter(has_text="You can close this tab")
         .first
     ).to_be_visible()
     hide = page.get_by_role("button", name="Hide Transfer Details", exact=True)
@@ -273,3 +292,81 @@ def test_slow_listing_refresh_coalesces_upload_bursts_without_unmounting_rows(
         hold = False
         for route, response, payload in held:
             route.fulfill(response=response, json=payload)
+
+
+def test_new_folder_gets_device_slots_while_older_folder_and_telegram_are_pending(
+    server: Server, desktop: tuple[Any, Any], tmp_path: Path
+) -> None:
+    _, page = desktop
+    login(page, server.url)
+    receipt_names: dict[str, str] = {}
+    held: list[Any] = []
+
+    def remember_receipt(route: Any) -> None:
+        if route.request.method != "POST":
+            route.continue_()
+            return
+        response = route.fetch()
+        assert response.ok, response.text()
+        receipt_names[response.json()["id"]] = route.request.post_data_json["name"]
+        route.fulfill(response=response)
+
+    def hold_old_payloads(route: Any) -> None:
+        receipt_id = route.request.url.rsplit("/", 1)[-1]
+        if route.request.method == "PATCH" and receipt_names[receipt_id].startswith(
+            "older-"
+        ):
+            held.append(route)
+        else:
+            route.continue_()
+
+    page.route("**/api/v1/uploads", remember_receipt)
+    page.route("**/api/v1/uploads/*", hold_old_payloads)
+    try:
+        older = tmp_path / "Older folder"
+        newer = tmp_path / "New folder"
+        older.mkdir()
+        newer.mkdir()
+        for index in range(8):
+            (older / f"older-{index}.txt").write_bytes(b"x" * 65536)
+        for index in range(2):
+            (newer / f"newer-{index}.txt").write_bytes(b"y" * 65536)
+        dialog = select_folder(page, older)
+        dialog.get_by_role("button", name="Upload", exact=True).click()
+        expect(dialog).not_to_be_visible()
+        deadline = time.monotonic() + 10
+        while len(held) < 2 and time.monotonic() < deadline:
+            page.wait_for_timeout(50)
+        assert len(held) == 2
+
+        dialog = select_folder(page, newer)
+        dialog.get_by_role("button", name="Upload", exact=True).click()
+        expect(dialog).not_to_be_visible()
+        # Existing requests continue; released slots must be shared with the new batch.
+        initial = held[:]
+        held.clear()
+        for route in initial:
+            route.continue_()
+        deadline = time.monotonic() + 10
+        started = []
+        while time.monotonic() < deadline:
+            started = server.control()["started"]
+            if sum(item["name"].startswith("newer-") for item in started) == 2:
+                break
+            page.wait_for_timeout(50)
+        assert sum(item["name"].startswith("newer-") for item in started) == 2
+        assert sum(item["name"].startswith("older-") for item in started) < 8
+        assert all(
+            record["status"] != "completed"
+            for record in server.control()["records"].values()
+        ), "The new folder must not wait for older Telegram jobs"
+        new_batch = page.locator(".transfer-batch").filter(
+            has=page.locator(".transfer-batch-name", has_text="New folder")
+        )
+        expect(new_batch).to_have_attribute("data-stage", "telegram")
+        expect(new_batch).to_contain_text("Keep this tab open for other uploads")
+        assert _device_close_blocked(page)
+        page.screenshot(path=ARTIFACTS / "pipeline-new-folder-fair-slots.png")
+    finally:
+        page.unroute("**/api/v1/uploads/*", hold_old_payloads)
+        page.unroute("**/api/v1/uploads", remember_receipt)

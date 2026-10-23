@@ -60,6 +60,19 @@ Give each subject one canonical explanation and cross-link it instead of copying
 the same details across guides. Update or remove obsolete text, examples and
 links when behavior changes. Check affected links and documented commands.
 
+## Keep testing proportional to the change
+
+Do not run unnecessary repeated tests after every user message. A clarification,
+status question or documentation-only edit does not require another full run.
+Use focused checks for the behavior being changed, including visual checks for
+UI changes, and reuse passing results while the tested code remains unchanged.
+
+Run complete testing when the user explicitly requests it, when preparing a
+commit that needs fresh validation, or when the scope, risk or an unresolved
+failure makes it necessary. Expand or repeat checks only to cover new changes,
+investigate a failure or resolve a specific concern. Report what was actually
+tested and any remaining limitations.
+
 ## Write useful commit titles and descriptions
 
 When committing, use a concise, specific title describing the resulting change

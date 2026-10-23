@@ -29,21 +29,23 @@ describe("visible transfer timing", () => {
     const html = render();
     expect(html).toContain("128 KB/s");
     expect(html).toContain("About 4s remaining");
-    expect(html).toContain('title="Estimated time remaining for this stage"');
+    expect(html).toContain(
+      'title="Estimated upload time for this stage. Verification and publishing may take longer."',
+    );
     expect(html).not.toContain("Telegram");
     expect(html).not.toContain("Calculating");
     expect(render({ stage: "downloading" })).toContain("128 KB/s");
   });
-  it("keeps unknown timing visible without fabricating speed or completion", () => {
+  it("leaves unknown timing quiet and reports meaningful waits without fabricated speed", () => {
     const initial = render({ speedBytesPerSecond: null });
-    expect(initial).toContain("Calculating speed");
-    expect(initial).toContain("Estimating time");
+    expect(initial).not.toContain("Calculating speed");
+    expect(initial).not.toContain("Estimating time");
     const stalled = render({}, 18000);
     expect(stalled).toContain("No recent progress");
-    expect(stalled).toContain("Time estimate unavailable");
+    expect(stalled).not.toContain("Time estimate unavailable");
     expect(stalled).not.toContain("128 KB/s");
     expect(stalled).not.toContain("About");
-    expect(render({ total: 0 })).toContain("Time remaining unknown");
+    expect(render({ total: 0 })).not.toContain("Time remaining unknown");
     expect(render({ stage: "retry_wait" })).toContain("Waiting for Telegram");
     expect(render({ stage: "finalizing" })).toContain("Finishing this stage");
   });

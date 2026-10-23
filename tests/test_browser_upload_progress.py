@@ -83,7 +83,9 @@ def test_device_upload_reports_bytes_before_first_chunk_receipt(
     )
     expect(row.locator(".transfer-eta")).to_contain_text("remaining")
     expect(row.locator(".transfer-eta")).to_have_attribute(
-        "title", "Estimated time remaining for this stage"
+        "title",
+        "Estimated upload time for this stage. "
+        "Verification and publishing may take longer.",
     )
     page.screenshot(
         path=ARTIFACTS / "device-upload-observed-progress.png", full_page=True
@@ -227,12 +229,131 @@ def test_server_transfer_speed_and_eta_are_visible_and_expire_together(
         assert geometry["speed"]["top"] >= geometry["phase"]["bottom"]
     page.screenshot(path=ARTIFACTS / f"transfer-speed-eta-{width}.png", full_page=True)
     for state, expected in [
-        ("calculating", "Calculating speed"),
+        ("calculating", None),
         ("stale", "No recent progress"),
         ("waiting", "Waiting for Telegram"),
     ]:
         mode[0] = state
         page.reload()
-        expect(row.locator(".transfer-metrics")).to_contain_text(expected)
+        if expected is None:
+            expect(row.locator(".transfer-metrics")).to_have_text("")
+        else:
+            expect(row.locator(".transfer-metrics")).to_contain_text(expected)
         expect(row.locator(".transfer-metrics")).not_to_contain_text("128 KB/s")
         expect(row.locator(".transfer-metrics")).not_to_contain_text("About 4s")
+
+
+def test_folder_eta_survives_small_file_handoffs_and_publishing(
+    server: Server, desktop: tuple[Any, Any]
+) -> None:
+    _, page = desktop
+    size = 128 * 1024
+    mode = ["flow"]
+    polls = [0]
+    saved = [
+        {
+            "key": f"eta-file-{index}",
+            "jobId": f"eta-job-{index}",
+            "name": f"small-{index}.bin",
+            "size": size,
+            "lastModified": 0,
+            "destination": "/",
+            "relativePath": f"Small files/small-{index}.bin",
+            "batchId": "eta-folder",
+            "batchName": "Small files",
+            "batchCreatedAt": time.time() * 1000,
+            "state": "uploading",
+            "phase": "Queued for Telegram",
+            "current": 0,
+            "total": size,
+            "initiatedHere": True,
+        }
+        for index in range(8)
+    ]
+    page.add_init_script(
+        "localStorage.setItem('tgdrive.uploads.v2', "
+        + json.dumps(json.dumps(saved))
+        + ");"
+    )
+
+    def jobs(route: Any) -> None:
+        at = time.time()
+        step = min(polls[0], 3)
+        polls[0] += 1
+        records = []
+        for index in range(8):
+            completed = index < step
+            publishing = index == step
+            sending = index == step + 1
+            status = (
+                "completed"
+                if completed
+                else "running"
+                if publishing or sending
+                else "queued"
+            )
+            phase = (
+                "completed"
+                if completed
+                else "finalizing"
+                if publishing
+                else "uploading"
+                if sending
+                else "queued"
+            )
+            if sending and mode[0] == "waiting":
+                phase = "retry_wait"
+            records.append(
+                {
+                    "id": f"eta-job-{index}",
+                    "name": f"small-{index}.bin",
+                    "kind": "upload",
+                    "status": status,
+                    "phase": phase,
+                    "current": size
+                    if completed or publishing
+                    else size // 4
+                    if sending
+                    else 0,
+                    "total": size,
+                    "created_at": at - 30,
+                    "started_at": at - 10 if status != "queued" else None,
+                    "finished_at": at if completed else None,
+                    "progress_updated_at": at,
+                    # Small files can complete between polls without a per-file speed.
+                    "speed_bytes_per_second": None,
+                    "eta_seconds": None,
+                }
+            )
+        route.fulfill(json={"jobs": records})
+
+    page.route("**/api/v1/jobs", jobs)
+    login(page, server.url)
+    batch = page.locator('[data-batch-id="eta-folder"]')
+    expect(batch).to_have_attribute("data-stage", "telegram")
+    metrics = batch.locator(".transfer-batch-throughput")
+    expect(metrics).to_contain_text(re.compile(r"About .+ remaining"))
+    assert polls[0] >= 2, "A restored snapshot alone must not invent throughput"
+    expect(batch).not_to_contain_text("Time estimate unavailable")
+    expect(batch).not_to_contain_text("Uploading from device")
+
+    page.get_by_role("link", name="Transfers", exact=False).click()
+    expect(metrics).to_contain_text(re.compile(r"About .+ remaining"))
+    assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
+    page.screenshot(path=ARTIFACTS / "folder-rolling-eta-desktop.png", full_page=True)
+    for width in (390, 320):
+        page.set_viewport_size({"width": width, "height": 844})
+        expect(metrics).to_contain_text(re.compile(r"About .+ remaining"))
+        assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
+        assert batch.locator(".transfer-device-status").evaluate("""el =>
+          el.getBoundingClientRect().height <=
+            parseFloat(getComputedStyle(el).lineHeight) * 1.1
+        """), "The short close-tab notice should stay together"
+        page.screenshot(
+            path=ARTIFACTS / f"folder-rolling-eta-mobile-{width}.png", full_page=True
+        )
+
+    mode[0] = "waiting"
+    batch.get_by_role("button", name="Show Files", exact=True).click()
+    expect(batch).to_contain_text("Waiting for Telegram; retry scheduled")
+    expect(metrics).not_to_contain_text("remaining")

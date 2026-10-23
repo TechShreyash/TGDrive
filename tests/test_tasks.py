@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import errno
+import logging
 import time
 
 import pytest
@@ -11,6 +12,91 @@ from tgdrive.tasks import (
     TransferRegistry,
     TransferStatus,
 )
+
+
+def test_lifecycle_logs_skip_progress_and_unchanged_waits(caplog) -> None:
+    caplog.set_level(logging.INFO, logger="tgdrive.tasks")
+    registry = TransferRegistry()
+    record = registry.create("queued", total=100)
+    record.context.update(kind="upload", name="private-name", url="private-url")
+    registry.update(record.id, status=TransferStatus.RUNNING, phase="uploading")
+    for current in range(100):
+        registry.update(record.id, current=current)
+        registry.persist(record)
+    registry.update(record.id, phase="waiting_for_telegram")
+    for _ in range(10):
+        registry.update(record.id, phase="waiting_for_telegram")
+    record.context["retry_at"] = time.time() + 60
+    for _ in range(10):
+        registry.persist(record)
+    registry.update(record.id, phase="retry_wait")
+    registry.update(
+        record.id, status=TransferStatus.COMPLETED, phase="completed", current=100
+    )
+    registry.persist(record)
+
+    messages = [row.getMessage() for row in caplog.records]
+    assert len(messages) == 4
+    assert sum("Transfer started" in message for message in messages) == 1
+    assert sum("Transfer finished" in message for message in messages) == 1
+    assert sum("Transfer waiting" in message for message in messages) == 1
+    assert sum("Transfer retry scheduled" in message for message in messages) == 1
+    assert "telegram_cooldown" in caplog.text
+    assert "private-name" not in caplog.text and "private-url" not in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_failure_log_has_cause_type_and_action_without_private_detail(caplog):
+    caplog.set_level(logging.INFO, logger="tgdrive.tasks")
+    registry = TransferRegistry()
+    record = registry.create("uploading")
+
+    async def fail(_record):
+        raise TimeoutError("private-source-url password=secret")
+
+    await registry.spawn(record.id, fail)
+
+    assert "error_type=TimeoutError retryable=True" in caplog.text
+    assert "code=TRANSPORT_INTERRUPTED" in caplog.text
+    assert "restore the connection and retry" in caplog.text
+    assert "private-source-url" not in caplog.text
+    assert "secret" not in caplog.text
+    assert "Traceback" not in caplog.text
+
+
+def test_failure_diagnostics_classify_repairs_without_private_messages():
+    from tgdrive.connection_errors import TelegramConnectionError
+    from tgdrive.mongo import DatabaseUnavailable
+    from tgdrive.remote import RemoteHTTPError
+    from tgdrive.tasks import _failure_diagnostic
+
+    for error, expected in (
+        (DatabaseUnavailable("private database URI"), "DATABASE_UNAVAILABLE"),
+        (OSError(errno.ENOSPC, "private path"), "STAGING_FULL"),
+        (RemoteHTTPError(403, "https://private-source"), "REMOTE_HTTP_403"),
+        (
+            TelegramConnectionError("private account", "TELEGRAM_CHANNEL_ACCESS"),
+            "TELEGRAM_CHANNEL_ACCESS",
+        ),
+    ):
+        code, action = _failure_diagnostic(error)
+        assert code == expected
+        assert "private" not in action
+
+
+def test_reloaded_transfer_does_not_repeat_existing_lifecycle(caplog, tmp_path):
+    caplog.set_level(logging.INFO, logger="tgdrive.tasks")
+    database_path = tmp_path / "jobs.sqlite3"
+    registry = TransferRegistry(database_path=database_path)
+    record = registry.create("uploading", total=10)
+    registry.update(record.id, status=TransferStatus.RUNNING)
+    registry.close()
+    caplog.clear()
+
+    resumed = TransferRegistry(database_path=database_path)
+    resumed.persist(resumed.get(record.id))
+    assert not caplog.records
+    resumed.close()
 
 
 def test_registry_updates_and_prunes_terminal_records() -> None:

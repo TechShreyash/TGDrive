@@ -51,7 +51,7 @@ describe("truthful batch work", () => {
     );
     expect(
       summary([item({ state: "verifying", current: 50, total: 50 })]).progress,
-    ).toBe(0.99);
+    ).toBe(0.5);
     expect(
       summary([item({ state: "awaiting_file", current: 1000 })]).progress,
     ).toBe(0.99);
@@ -279,7 +279,6 @@ describe("stage rates and batch ETA", () => {
       { state: "error" as const },
       { state: "awaiting_file" as const },
       { state: "cancelling" as const },
-      { state: "cancelled" as const },
       { stage: "retry_wait" },
       { stage: "waiting_for_telegram" },
       { stage: "finalizing" },
@@ -287,6 +286,98 @@ describe("stage rates and batch ETA", () => {
       { jobId: undefined },
     ])
       expect(summary([running, { ...queued, ...change }]).eta).toBeUndefined();
+    expect(summary([running, { ...queued, state: "cancelled" }]).eta).toBe(6);
+    expect(
+      summary([running, { ...queued, state: "cancelled", size: 0, total: 0 }])
+        .eta,
+    ).toBe(6);
+  });
+
+  it("allows byte-complete publishing siblings without estimating their publication wait", () => {
+    const running = item({
+      state: "uploading",
+      jobId: "job",
+      stage: "uploading",
+      current: 40,
+      ...rate,
+    });
+    for (const stage of ["finalizing", "backup_pending"]) {
+      const publishing = item({
+        key: "publishing",
+        jobId: "publishing",
+        state: "uploading",
+        stage,
+        current: 100,
+      });
+      expect(summary([running, publishing]).eta).toBe(6);
+      expect(summary([publishing]).eta).toBeUndefined();
+    }
+  });
+
+  it("uses fresh batch observations only as a fallback for the displayed stage", () => {
+    const running = item({
+      state: "uploading",
+      jobId: "job",
+      stage: "uploading",
+      current: 40,
+    });
+    const meter = new Map([
+      [
+        "batch",
+        {
+          stage: "telegram",
+          bytes: 40,
+          at: 9000,
+          advancedAt: 9000,
+          rate: 20,
+        },
+      ],
+    ]);
+    expect(summarizeBatches([running], 10000, meter)[0]).toMatchObject({
+      telegramRate: 20,
+      displayEta: 3,
+    });
+    expect(
+      summarizeBatches([{ ...running, ...rate }], 10000, meter)[0],
+    ).toMatchObject({
+      telegramRate: 10,
+      displayEta: 6,
+    });
+    expect(
+      summarizeBatches([running], 24000, meter)[0].displayEta,
+    ).toBeUndefined();
+    meter.get("batch")!.stage = "device";
+    expect(
+      summarizeBatches([running], 10000, meter)[0].displayEta,
+    ).toBeUndefined();
+  });
+
+  it("does not let a Telegram failure hide healthy pending device ETA", () => {
+    const device = item({
+      state: "receiving",
+      current: 50,
+      meter: {
+        stage: "receiving",
+        bytes: 50,
+        at: 9000,
+        advancedAt: 9000,
+        rate: 10,
+      },
+    });
+    const failed = item({
+      key: "server-error",
+      jobId: "accepted",
+      state: "error",
+      error: "Telegram failed",
+    });
+    expect(summary([device, failed]).displayEta).toBe(5);
+    expect(
+      summary([{ ...device, state: "queued", stage: "retry_wait" }, failed])
+        .displayEta,
+    ).toBeUndefined();
+    expect(
+      summary([{ ...device, state: "awaiting_file" }, failed]).displayEta,
+    ).toBeUndefined();
   });
 });
 
@@ -464,7 +555,7 @@ it("keeps queued-only batches free of elapsed time and ETA", () => {
   expect(summary([queued, working], 10000).elapsed).toBe(1);
 });
 
-it("counts live Telegram bytes as they arrive without adding device-receipt work", () => {
+it("keeps Telegram accounting separate while device progress owns the visible bar", () => {
   const sending = item({
     key: "sending",
     state: "uploading",
@@ -478,22 +569,56 @@ it("counts live Telegram bytes as they arrive without adding device-receipt work
     uploadedBytes: 40,
     completedBytes: 0,
     totalBytes: 200,
-    progress: 0.2,
+    displayBytes: 200,
+    progress: 0.99,
+    device: { pending: true, received: 1, count: 2 },
   });
   expect(summary([{ ...sending, current: 60 }, receiving])).toMatchObject({
     uploadedBytes: 60,
-    progress: 0.3,
+    progress: 0.99,
   });
   expect(
     summary([{ ...sending, state: "completed" }, receiving]),
   ).toMatchObject({
     uploadedBytes: 100,
     completedBytes: 100,
-    progress: 0.5,
+    progress: 0.99,
   });
   expect(
     summary([{ ...sending, current: 100, stage: "queued" }, receiving]),
-  ).toMatchObject({ uploadedBytes: 0, progress: 0 });
+  ).toMatchObject({ uploadedBytes: 0, progress: 0.99 });
+  expect(
+    summary([
+      sending,
+      {
+        ...receiving,
+        jobId: "second",
+        state: "uploading",
+        stage: "queued",
+        current: 0,
+      },
+    ]),
+  ).toMatchObject({
+    device: { pending: false, received: 2 },
+    uploadedBytes: 40,
+    displayBytes: 40,
+    progress: 0.2,
+  });
+});
+
+it("puts pending device batches before Telegram work even when they are older", () => {
+  const device = item({ batchId: "device", batchCreatedAt: 1000 });
+  const telegram = item({
+    key: "telegram",
+    batchId: "telegram",
+    batchCreatedAt: 9000,
+    jobId: "job",
+    state: "uploading",
+    stage: "uploading",
+  });
+  expect(
+    summarizeBatches([telegram, device], 10000).map((batch) => batch.id),
+  ).toEqual(["device", "telegram"]);
 });
 
 it("does not count finalizing bytes twice or invent cancelled upload completion", () => {

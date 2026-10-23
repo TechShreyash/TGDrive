@@ -25,6 +25,31 @@ An always-on server can keep file access, sharing and
 off. Keep the app and its dependencies running; closing the browser does not stop
 accepted server jobs.
 
+### Read useful logs
+
+Keep `LOG_LEVEL=INFO` for normal operation. Logs show startup/shutdown, accepted
+device uploads and transfer starts/completion/cancellation. Match the same `id`
+across events (`job_id` links receipt acceptance to its server job) to follow one
+file without logging its name, destination or source
+URL. Byte callbacks, successful polling and routine Telegram update messages do
+not produce normal-operation entries.
+
+| Event or field | What it tells you |
+| --- | --- |
+| `Device upload accepted` | Verified server bytes were handed to a durable job; the browser is no longer needed for that file. |
+| `receipt_age_seconds` | Time since this receipt was created, including browser pauses and server handoff. Older receipts can report `unknown`. |
+| `verify_seconds`, `handoff_seconds` | Verification time and total completion-request time, including waiting for its receipt lock and committing the job. These overlap. |
+| `Transfer started`, `Transfer finished` | Bytes, time before first processing and total job lifetime, including waits. |
+| `Transfer retry scheduled` or `Transfer waiting` | The cooldown or unavailable Telegram client, automatic retry policy and suggested action. Unchanged waits are not repeated. |
+| `Transfer failed` | Job ID, phase, exception type, stable failure category and suggested repair. Inspect the user-facing error in Transfers. |
+
+Provider warnings/errors remain visible. For a reproduced problem, temporarily
+set `LOG_LEVEL=DEBUG` in private configuration and recreate/redeploy the app.
+DEBUG adds phase transitions, exception tracebacks and provider diagnostics;
+return to INFO afterwards. Raw HTTP access logs stay disabled because query
+strings can contain share credentials. Logs go to the container/process output,
+with conservative credential redaction; review diagnostic logs before sharing.
+
 <details>
 <summary>Restart policy</summary>
 

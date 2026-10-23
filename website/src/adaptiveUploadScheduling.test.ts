@@ -96,6 +96,11 @@ async function runningUploads(count = 10, resumeFirstFile = false) {
     "/",
     FILE_SIZE,
   );
+  if (resumeFirstFile)
+    Object.assign(manager.snapshot()[0], {
+      uploadId: "file-0.bin",
+      current: 4,
+    });
   manager.setEnabled(true);
   await vi.advanceTimersByTimeAsync(0);
   const flush = () => vi.advanceTimersByTimeAsync(0);

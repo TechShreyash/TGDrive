@@ -181,6 +181,12 @@ improve the device uplink or bypass a proxy. Compare device progress with HTTP
 received traffic and server load; a server-local benchmark excludes the viewer's
 route. See [transfer durability](architecture.md#transfer-pipeline).
 
+New receipts avoid redundant offset/snapshot requests. Browser payload slots are
+released after the final acknowledged chunk; up to two server completion requests
+run separately, so receipt verification does not hold the next file's device slot.
+Eligible batches rotate through those slots. Slow disk, database commits, staging
+pressure and the uplink can still limit intake.
+
 ## Upload pipeline and smaller splits
 
 | Control | Default / allowed values |

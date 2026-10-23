@@ -1,7 +1,8 @@
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import TransferPanel from "./TransferPanel";
+import TransferPanel, { BatchTransfer } from "./TransferPanel";
+import { summarizeBatches } from "./transferBatches";
 import type { Transfer } from "./transfers";
 
 const local = (change: Partial<Transfer> = {}): Transfer => ({
@@ -51,7 +52,7 @@ describe("visible device receipt feedback", () => {
       relativePath: "Pictures/Second.jpg",
     });
     const html = render([first, second]);
-    expect(html).toContain("1 of 2 files received by server");
+    expect(html).toContain("Uploading from device · 1 of 2 received");
     expect(html).toContain("Keep this tab open");
     expect(html).not.toContain("You can close this tab");
     expect(html).not.toContain("transfer-child");
@@ -61,15 +62,15 @@ describe("visible device receipt feedback", () => {
     const accepted = local({ jobId: "accepted", state: "uploading" });
     const pending = local({ key: "second", name: "Second.jpg" });
     expect(render([accepted, pending])).not.toContain("You can close this tab");
-    expect(render([accepted, pending])).toContain("remaining device uploads");
+    expect(render([accepted, pending])).toContain(
+      "Keep this tab open for other uploads",
+    );
     expect(
       render([
         accepted,
         { ...pending, jobId: "second-job", state: "uploading" },
       ]),
-    ).toContain(
-      "You can close this tab; Telegram uploads continue on the server.",
-    );
+    ).toContain("You can close this tab");
   });
 
   it("does not show a device receipt for server-discovered or URL transfers", () => {
@@ -104,9 +105,95 @@ describe("visible device receipt feedback", () => {
     expect(accepted).toContain(
       'class="transfer-collapsed-status" role="status">You can close this tab',
     );
-    expect(accepted).toContain(
-      'title="Device upload complete. You can close this tab; Telegram uploads continue on the server."',
-    );
+    expect(accepted).toContain('title="You can close this tab"');
     expect(accepted).not.toContain('class="transfer-notice"');
+  });
+
+  it("shows only device bytes, rates and received child states before handoff", () => {
+    const first = local({
+      batchId: "folder",
+      relativePath: "Pictures/Photo.jpg",
+      jobId: "accepted",
+      state: "uploading",
+      stage: "uploading",
+      phase: "Uploading to Telegram",
+      current: 25,
+      speedBytesPerSecond: 10,
+      progressUpdatedAt: 9,
+      serverObservedAt: 9000,
+    });
+    const second = local({
+      batchId: "folder",
+      key: "second",
+      relativePath: "Pictures/Second.jpg",
+      state: "receiving",
+      phase: "Uploading from your device",
+      current: 20,
+      sentCurrent: 40,
+      meter: {
+        stage: "receipt",
+        bytes: 40,
+        at: 9000,
+        advancedAt: 9000,
+        rate: 20,
+      },
+    });
+    const batch = summarizeBatches([first, second], 10000)[0];
+    const html = renderToStaticMarkup(
+      createElement(BatchTransfer, {
+        batch,
+        deviceUploadsPending: true,
+        expanded: true,
+        onToggleExpanded: () => {},
+        now: 10000,
+        run: () => {},
+        onChooseFile: () => {},
+        onChooseBatch: () => {},
+        folderPickerSupported: true,
+      }),
+    );
+    expect(html).toContain('data-stage="device"');
+    expect(html).toContain("140 / 200 B");
+    expect(html).toContain("70%");
+    expect(html).toContain("20 B/s");
+    expect(html).toContain('class="transfer-phase">Received');
+    expect(html).not.toContain("Telegram");
+    expect(html).not.toContain("10 B/s");
+    expect(html).not.toContain("25 / 100 B");
+    expect(html).not.toContain("Done");
+
+    const accepted = render([
+      first,
+      {
+        ...second,
+        jobId: "second-job",
+        state: "uploading",
+        stage: "queued",
+        current: 0,
+      },
+    ]);
+    expect(accepted).toContain('data-stage="telegram"');
+    expect(accepted).toContain("Uploading to Telegram");
+    expect(accepted).toContain("25 / 200 B");
+    expect(accepted).not.toContain("Uploading from device");
+  });
+
+  it("counts unfinished files in Running while keeping the folder's total", () => {
+    const html = render([
+      local({
+        batchId: "folder",
+        relativePath: "Pictures/Photo.jpg",
+        state: "completed",
+        jobId: "first",
+      }),
+      local({
+        key: "second",
+        batchId: "folder",
+        relativePath: "Pictures/Second.jpg",
+        state: "receiving",
+      }),
+    ]);
+    expect(html).toMatch(/Running<span>1<\/span>/);
+    expect(html).toContain("2 files");
   });
 });

@@ -3,11 +3,48 @@ import type { Transfer } from "./transfers";
 function isDeviceTransfer(item: Transfer): boolean {
   return (
     item.kind !== "remote" &&
+    item.kind !== "url" &&
     item.kind !== "delete" &&
     !item.historyOnly &&
     item.initiatedHere !== false &&
     !/^(server:|history:)/.test(item.batchId || "")
   );
+}
+
+/** Device progress includes handed-off files, independent of their Telegram stage. */
+export function deviceUploadProgress(items: Transfer[]) {
+  const files = items.filter(
+    (item) => isDeviceTransfer(item) && item.state !== "cancelled",
+  );
+  const pending = files.filter(needsDeviceUpload);
+  const sizes = files.map((item) => item.size);
+  const known = sizes.every((size) => Number.isFinite(size) && size >= 0);
+  const total = known ? sizes.reduce((sum, size) => sum + size, 0) : undefined;
+  const current = files.reduce((sum, item) => {
+    if (!Number.isFinite(item.size) || item.size < 0) return sum;
+    if (!needsDeviceUpload(item)) return sum + item.size;
+    const observed =
+      item.state === "receiving" && Number.isFinite(item.sentCurrent)
+        ? Math.max(item.current, item.sentCurrent!)
+        : item.current;
+    return (
+      sum +
+      (Number.isFinite(observed)
+        ? Math.max(0, Math.min(observed, item.size))
+        : 0)
+    );
+  }, 0);
+  return {
+    count: files.length,
+    received: files.length - pending.length,
+    pending: pending.length > 0,
+    current,
+    total,
+    fraction:
+      total && total > 0
+        ? Math.min(pending.length ? 0.99 : 1, current / total)
+        : undefined,
+  };
 }
 
 /** A job ID confirms that the server owns the file and its remaining work. */
@@ -36,21 +73,13 @@ export function deviceUploadMessage(
 
   const pending = deviceItems.filter(needsDeviceUpload).length;
   if (pending) {
-    const received = deviceItems.length - pending;
-    return (
-      received +
-      " of " +
-      deviceItems.length +
-      (deviceItems.length === 1 ? " file received" : " files received") +
-      " by server · Keep this tab open until device uploads finish."
-    );
+    return "Keep this tab open";
   }
 
-  if (otherDeviceUploadsPending)
-    return "Files received by server. Keep this tab open for the remaining device uploads.";
+  if (otherDeviceUploadsPending) return "Keep this tab open for other uploads";
 
   if (deviceItems.some((item) => item.state === "error"))
-    return "Files received by server. You can close this tab; retry failed Telegram uploads from Transfers.";
+    return "You can close this tab";
 
-  return "Device upload complete. You can close this tab; Telegram uploads continue on the server.";
+  return "You can close this tab";
 }

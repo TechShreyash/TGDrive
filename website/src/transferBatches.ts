@@ -1,5 +1,7 @@
 import type { Transfer } from "./transfers";
-import { transferDetails, transferProgress } from "./progress";
+import { currentRate, transferDetails, transferProgress } from "./progress";
+import { deviceUploadProgress, needsDeviceUpload } from "./deviceUploadStatus";
+import type { BatchProgressMeters } from "./batchProgress";
 
 export interface TransferBatch {
   id: string;
@@ -13,6 +15,11 @@ export interface TransferBatch {
   active: number;
   queued: number;
   pending: boolean;
+  unfinished: number;
+  device: ReturnType<typeof deviceUploadProgress>;
+  displayBytes: number;
+  displayRate?: number;
+  displayEta?: number;
   totalBytes?: number;
   completedBytes: number;
   uploadedBytes: number;
@@ -95,7 +102,12 @@ function progress(
     return;
   return Math.min(0.99, uploadedBytes / total);
 }
-function summarize(id: string, source: Transfer[], now: number): TransferBatch {
+function summarize(
+  id: string,
+  source: Transfer[],
+  now: number,
+  meters?: BatchProgressMeters,
+): TransferBatch {
   const items = [...source].sort((a, b) => priority(a) - priority(b));
   const sizes = items.map(sizeOf);
   const allSizes = sizes.every(positive);
@@ -131,11 +143,47 @@ function summarize(id: string, source: Transfer[], now: number): TransferBatch {
   const active =
     items.length - completed - cancelled - failed - awaiting - queued;
   const remaining = items.filter((item) => !finished(item));
+  const device = deviceUploadProgress(items);
+  const deviceRemaining =
+    device.total !== undefined ? Math.max(0, device.total - device.current) : 0;
+  const deviceUnblocked = items
+    .filter(needsDeviceUpload)
+    .every(
+      (item) =>
+        !item.error &&
+        !["error", "awaiting_file", "cancelling"].includes(item.state) &&
+        !["retry_wait", "waiting_for_telegram"].includes(item.stage || ""),
+    );
+  const pendingTelegramBytes = remaining.some(
+    (item) =>
+      item.jobId &&
+      item.state === "uploading" &&
+      !item.error &&
+      ["uploading", "queued"].includes(item.stage || "") &&
+      positive(sizeOf(item)) &&
+      (isQueued(item) || item.current < sizeOf(item)!),
+  );
+  const meter = meters?.get(id);
+  const observedRate = currentRate(meter, now);
+  if (
+    device.pending &&
+    deviceUnblocked &&
+    positive(deviceRemaining) &&
+    meter?.stage === "device" &&
+    !positive(deviceRate)
+  )
+    deviceRate = observedRate ?? 0;
+  else if (
+    !device.pending &&
+    pendingTelegramBytes &&
+    meter?.stage === "telegram" &&
+    !positive(telegramRate)
+  )
+    telegramRate = observedRate ?? 0;
   let eta: number | undefined;
   if (
-    allSizes &&
+    remaining.every((item) => positive(sizeOf(item))) &&
     positive(telegramRate) &&
-    !cancelled &&
     remaining.length &&
     remaining.every(
       (item) =>
@@ -144,7 +192,9 @@ function summarize(id: string, source: Transfer[], now: number): TransferBatch {
         !item.error &&
         !isUrl(item) &&
         item.kind !== "delete" &&
-        ["uploading", "queued"].includes(item.stage || ""),
+        (["uploading", "queued"].includes(item.stage || "") ||
+          (["finalizing", "backup_pending"].includes(item.stage || "") &&
+            bounded(item.current, sizeOf(item)!) >= sizeOf(item)!)),
     )
   ) {
     const bytes = remaining.reduce((sum, item) => {
@@ -154,6 +204,11 @@ function summarize(id: string, source: Transfer[], now: number): TransferBatch {
     const estimate = bytes / telegramRate;
     if (positive(estimate)) eta = estimate;
   }
+  const deviceEstimate =
+    positive(deviceRate) && positive(deviceRemaining) && deviceUnblocked
+      ? deviceRemaining / deviceRate
+      : undefined;
+  const deviceEta = positive(deviceEstimate) ? deviceEstimate : undefined;
   return {
     id,
     name:
@@ -169,10 +224,25 @@ function summarize(id: string, source: Transfer[], now: number): TransferBatch {
     active,
     queued,
     pending: items.some((item) => !finished(item)),
+    unfinished: items.filter(
+      (item) => !finished(item) && item.state !== "error",
+    ).length,
+    device,
+    displayBytes: device.pending ? device.current : uploadedBytes,
+    displayRate: device.pending
+      ? positive(deviceRate)
+        ? deviceRate
+        : undefined
+      : positive(telegramRate)
+        ? telegramRate
+        : undefined,
+    displayEta: device.pending ? deviceEta : eta,
     totalBytes,
     completedBytes,
     uploadedBytes,
-    progress: progress(items, totalBytes, uploadedBytes),
+    progress: device.pending
+      ? device.fraction
+      : progress(items, totalBytes, uploadedBytes),
     elapsed: elapsed(items, now),
     deviceRate: positive(deviceRate) ? deviceRate : undefined,
     telegramRate: positive(telegramRate) ? telegramRate : undefined,
@@ -184,6 +254,7 @@ function summarize(id: string, source: Transfer[], now: number): TransferBatch {
 export function summarizeBatches(
   items: Transfer[],
   now: number,
+  meters?: BatchProgressMeters,
 ): TransferBatch[] {
   const groups = new Map<string, Transfer[]>();
   for (const item of items) {
@@ -193,13 +264,21 @@ export function summarizeBatches(
     groups.set(id, group);
   }
   const order = (batch: TransferBatch) =>
-    batch.failed || batch.awaiting ? 0 : batch.pending ? 1 : 2;
+    batch.device.pending
+      ? batch.failed || batch.awaiting
+        ? 0
+        : 1
+      : batch.failed || batch.awaiting
+        ? 2
+        : batch.pending
+          ? 3
+          : 4;
   const created = (batch: TransferBatch) => {
     const starts = timestamps(batch.items);
     return starts.length ? Math.min(...starts) : 0;
   };
   return [...groups]
-    .map(([id, group]) => summarize(id, group, now))
+    .map(([id, group]) => summarize(id, group, now, meters))
     .sort(
       (a, b) =>
         order(a) - order(b) ||

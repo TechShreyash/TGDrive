@@ -99,13 +99,21 @@ describe("device upload scheduling", () => {
         "/",
         10,
       );
+      if (stage === "head")
+        for (const [index, item] of manager
+          .snapshot()
+          .slice(0, BROWSER_RECEIVE_INITIAL_CONCURRENCY)
+          .entries())
+          item.uploadId = "resumed-" + index;
+      const initialCreations =
+        stage === "head" ? 0 : BROWSER_RECEIVE_INITIAL_CONCURRENCY;
       try {
         manager.setEnabled(true);
         await vi.advanceTimersByTimeAsync(0);
         expect(rejected).toBe(BROWSER_RECEIVE_INITIAL_CONCURRENCY);
-        expect(created).toBe(BROWSER_RECEIVE_INITIAL_CONCURRENCY);
+        expect(created).toBe(initialCreations);
         await vi.advanceTimersByTimeAsync(29999);
-        expect(created).toBe(BROWSER_RECEIVE_INITIAL_CONCURRENCY);
+        expect(created).toBe(initialCreations);
         await vi.advanceTimersByTimeAsync(1);
         expect(manager.snapshot().every((item) => Boolean(item.jobId))).toBe(
           true,
@@ -144,6 +152,7 @@ describe("device upload scheduling", () => {
     );
     const manager = managerForTest();
     manager.add([new File(["data"], "cancel.bin")], "/", 10);
+    manager.snapshot()[0].uploadId = "cancelled-receipt";
     manager.setEnabled(true);
     await snapshotStarted.promise;
     const key = manager.snapshot()[0].key;

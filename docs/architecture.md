@@ -169,6 +169,26 @@ creates a durable job without waiting for its batch. Device receives start at tw
 files and adapt between one and four; staging, disk headroom and the 1,000
 unfinished-receipt bound gate admission.
 
+Device slots rotate between eligible batches. A new receipt reuses the creation
+response; existing receipts fetch their confirmed offset and checksums before
+resuming. After the last chunk is acknowledged, the device slot admits another
+file while a separate lane runs at most two completion requests. This overlaps
+payload reception with verification and durable job handoff without unbounded
+completion requests. Files retain their local source and tab-close protection
+until the server confirms a job identity.
+
+Batch display follows that ownership boundary: device bytes/counts first, then
+Telegram bytes/counts after all remaining files are server-owned. Telegram jobs
+run throughout; the display switch does not delay dispatch.
+
+Batch ETA uses fresh per-file rates, falling back to a rolling measurement of the
+batch's current-stage byte counter. File handoffs do not discard that measurement;
+it expires after 15 seconds without byte progress. A stage switch, changed batch
+membership/total or regressing counter resets its baseline. Restored snapshots
+alone supply no observed rate. A byte-complete file publishing alongside other
+uploads does not suppress their estimate. Blocking retries/errors and unmeasured
+final confirmation/publication are excluded from byte-based ETA claims.
+
 ### From a browser to one drive file
 
 1. Receive fixed-size chunks into local staging.

@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import gc
 import hashlib
+import logging
 import sqlite3
 import threading
 import weakref
@@ -83,6 +84,47 @@ async def test_complete_is_idempotent_after_worker_removed_staging(tmp_path):
     second = await uploads.complete(item["id"])
     assert first.id == second.id
     assert manager.enqueued == 1
+
+
+async def test_receipt_logs_acceptance_once_without_chunk_or_private_data(
+    tmp_path, caplog
+):
+    caplog.set_level(logging.INFO, logger="tgdrive.uploads")
+    uploads, manager = make(tmp_path)
+    item = uploads.create("private-name.bin", "/", 3)
+    await uploads.append(item["id"], 0, b"one")
+    assert not caplog.records
+    await uploads.complete(item["id"])
+    await uploads.complete(item["id"])
+
+    assert len(caplog.records) == 1
+    assert (
+        f"Device upload accepted id={item['id']} job_id={item['id']} bytes=3"
+        in caplog.text
+    )
+    assert "verify_seconds=" in caplog.text and "handoff_seconds=" in caplog.text
+    assert "private-name" not in caplog.text
+    assert "one" not in caplog.text
+    uploads.close()
+    manager.registry.close()
+
+
+async def test_corrupted_receipt_logs_failed_verification_without_acceptance(
+    tmp_path, caplog
+):
+    caplog.set_level(logging.INFO, logger="tgdrive.uploads")
+    uploads, manager = make(tmp_path)
+    item = uploads.create("private-name.bin", "/", 3)
+    await uploads.append(item["id"], 0, b"one")
+    uploads.path(item["id"]).write_bytes(b"two")
+    with pytest.raises(UploadError, match="checksum"):
+        await uploads.complete(item["id"])
+    assert "Device upload verification failed" in caplog.text
+    assert "cancel this receipt and upload the original file again" in caplog.text
+    assert "Device upload accepted" not in caplog.text
+    assert "private-name" not in caplog.text
+    uploads.close()
+    manager.registry.close()
 
 
 async def test_complete_rejects_corrupted_and_missing_staging(tmp_path):

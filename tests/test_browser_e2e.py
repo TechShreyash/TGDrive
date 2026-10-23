@@ -2237,17 +2237,19 @@ def test_large_upload_batch_stays_compact_bounded_and_filterable(
     expect(toggle).to_have_attribute("aria-expanded", "false")
     expect(batch.locator(".transfer-item")).to_have_count(0)
     batch_name = batch.locator(".transfer-batch-name").inner_text()
-    expect(
-        batch.get_by_role(
-            "progressbar", name="Overall progress for " + batch_name, exact=True
-        )
-    ).to_be_visible()
+    progress = batch.locator(".transfer-batch-summary > progress")
+    expect(progress).to_be_visible()
+    assert progress.get_attribute("aria-label") in {
+        "Device upload progress for " + batch_name,
+        "Telegram upload progress for " + batch_name,
+    }
     expect(batch.locator(".transfer-batch-status")).to_contain_text("100")
     page.screenshot(path=ARTIFACTS / "upload-batch-collapsed.png", full_page=False)
-    server.wait_started(5)
-    assert len(server.control()["started"]) >= 5, (
+    server.wait_started(100)
+    assert len(server.control()["started"]) == 100, (
         "Device receipts must continue independently of busy Telegram jobs"
     )
+    expect(batch).to_have_attribute("data-stage", "telegram")
     toggle.click()
     expect(toggle).to_have_attribute("aria-expanded", "true")
     expect(batch.locator(".transfer-item")).to_have_count(20)

@@ -390,7 +390,12 @@ describe("resumable HTTP upload protocol", () => {
     }
   });
   it("sends each chunk at its acknowledged offset, then tracks the independent Telegram job", async () => {
-    const calls: { method: string; offset: string | null; size: number }[] = [];
+    const calls: {
+      url: string;
+      method: string;
+      offset: string | null;
+      size: number;
+    }[] = [];
     let offset = 0;
     let complete = false;
     vi.stubGlobal(
@@ -399,6 +404,7 @@ describe("resumable HTTP upload protocol", () => {
         const method = options.method || "GET";
         const headers = new Headers(options.headers);
         calls.push({
+          url: input,
           method,
           offset: headers.get("Upload-Offset"),
           size: options.body instanceof Blob ? options.body.size : 0,
@@ -451,6 +457,13 @@ describe("resumable HTTP upload protocol", () => {
       ]);
       expect(manager.snapshot()[0].jobId).toBe("job");
       expect(manager.snapshot()[0].phase).toBe("Queued for Telegram");
+      expect(calls.some((call) => call.method === "HEAD")).toBe(false);
+      expect(
+        calls.some(
+          (call) =>
+            call.method === "GET" && call.url === "/api/v1/uploads/upload",
+        ),
+      ).toBe(false);
     } finally {
       manager.setEnabled(false);
     }
@@ -808,6 +821,384 @@ describe("whole-batch recovery and bounded admission", () => {
 });
 
 describe("independent browser receiving and Telegram backlog", () => {
+  it("drains receipt handoffs after failures without stranding later files", async () => {
+    const handoffs: string[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: string, options: RequestInit = {}) => {
+        if (input === "/api/v1/jobs") return Response.json({ jobs: [] });
+        if (input === "/api/v1/uploads") {
+          const body = JSON.parse(String(options.body));
+          return Response.json({
+            id: body.name,
+            offset: 0,
+            total_size: 4,
+            chunk_size: 4,
+          });
+        }
+        if (input.endsWith("/complete")) {
+          const id = input.split("/")[4];
+          handoffs.push(id);
+          return id === "file-0" || id === "file-1"
+            ? Response.json(
+                { detail: "Receipt verification unavailable" },
+                { status: 503 },
+              )
+            : Response.json({ id });
+        }
+        throw new Error("Unexpected request: " + input);
+      }),
+    );
+    const manager = new TransferManager(
+      async () =>
+        new Response(null, {
+          status: 204,
+          headers: { "Upload-Offset": "4" },
+        }),
+    );
+    try {
+      manager.add(
+        Array.from({ length: 6 }, (_, i) => new File(["data"], "file-" + i)),
+        "/",
+        10,
+      );
+      manager.setEnabled(true);
+      await vi.waitFor(() => expect(handoffs).toHaveLength(6));
+      expect(
+        manager.snapshot().filter((item) => item.state === "error"),
+      ).toHaveLength(2);
+      expect(
+        manager
+          .snapshot()
+          .slice(2)
+          .every((item) => item.jobId && !item.controller),
+      ).toBe(true);
+      expect(
+        manager
+          .snapshot()
+          .slice(0, 2)
+          .every((item) => item.file && !item.jobId && !item.controller),
+      ).toBe(true);
+    } finally {
+      manager.setEnabled(false);
+    }
+  });
+  it("pauses a late-created receipt on logout and safely resumes it after login", async () => {
+    let created!: (response: Response) => void;
+    let creations = 0;
+    let cancellations = 0;
+    let checks = 0;
+    const snapshot = {
+      id: "receipt",
+      offset: 0,
+      total_size: 4,
+      chunk_size: 4,
+    };
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: string, options: RequestInit = {}) => {
+        if (input === "/api/v1/jobs") return Response.json({ jobs: [] });
+        if (input === "/api/v1/uploads") {
+          creations += 1;
+          return new Promise<Response>((resolve) => {
+            created = resolve;
+          });
+        }
+        if (input.endsWith("/cancel")) {
+          cancellations += 1;
+          return Response.json({});
+        }
+        if (input.endsWith("/complete"))
+          return Response.json({ id: "receipt" });
+        if (options.method === "HEAD") {
+          checks += 1;
+          return new Response(null, {
+            headers: { "Upload-Offset": "0", "Upload-Length": "4" },
+          });
+        }
+        return Response.json(snapshot);
+      }),
+    );
+    const send = vi.fn(
+      async () =>
+        new Response(null, {
+          status: 204,
+          headers: { "Upload-Offset": "4" },
+        }),
+    );
+    const manager = new TransferManager(send);
+    const file = new File(["data"], "file");
+    try {
+      manager.setEnabled(true);
+      manager.add([file], "/", 10);
+      await vi.waitFor(() => expect(created).toBeDefined());
+      manager.setEnabled(false);
+      created(Response.json(snapshot));
+      await vi.waitFor(() =>
+        expect(manager.snapshot()[0].state).toBe("awaiting_file"),
+      );
+      expect(cancellations).toBe(0);
+      expect(send).not.toHaveBeenCalled();
+      manager.setEnabled(true);
+      await manager.resume(manager.snapshot()[0].key, file);
+      await vi.waitFor(() =>
+        expect(manager.snapshot()[0].jobId).toBe("receipt"),
+      );
+      expect(creations).toBe(1);
+      expect(checks).toBe(1);
+      expect(send).toHaveBeenCalledOnce();
+    } finally {
+      manager.setEnabled(false);
+    }
+  });
+  it("cancels a late-created receipt even when its row was cleared before creation returned", async () => {
+    let created!: (response: Response) => void;
+    let cancellations = 0;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: string) => {
+        if (input === "/api/v1/jobs") return Response.json({ jobs: [] });
+        if (input === "/api/v1/uploads")
+          return new Promise<Response>((resolve) => {
+            created = resolve;
+          });
+        if (input.endsWith("/cancel")) {
+          cancellations += 1;
+          return Response.json({});
+        }
+        throw new Error("Unexpected request: " + input);
+      }),
+    );
+    const send = vi.fn();
+    const manager = new TransferManager(send);
+    try {
+      manager.setEnabled(true);
+      manager.add([new File(["data"], "file")], "/", 10);
+      await vi.waitFor(() => expect(created).toBeDefined());
+      await manager.cancel(manager.snapshot()[0].key);
+      manager.clearFinished();
+      expect(manager.snapshot()).toHaveLength(0);
+      created(
+        Response.json({ id: "late", offset: 0, total_size: 4, chunk_size: 4 }),
+      );
+      await vi.waitFor(() => expect(cancellations).toBe(1));
+      expect(send).not.toHaveBeenCalled();
+      expect(manager.snapshot()).toHaveLength(0);
+    } finally {
+      manager.setEnabled(false);
+    }
+  });
+  it("applies Retry-After to queued receipt handoffs without stopping active payloads", async () => {
+    vi.useFakeTimers();
+    const handoffs: string[] = [];
+    const patched: string[] = [];
+    const finishers: ((response: Response) => void)[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: string, options: RequestInit = {}) => {
+        if (input === "/api/v1/jobs") return Response.json({ jobs: [] });
+        if (input === "/api/v1/uploads") {
+          const body = JSON.parse(String(options.body));
+          return Response.json({
+            id: body.name,
+            offset: 0,
+            total_size: 4,
+            chunk_size: 4,
+          });
+        }
+        const id = input.split("/")[4];
+        if (input.endsWith("/complete")) {
+          handoffs.push(id);
+          if (handoffs.length === 1)
+            return Response.json(
+              { detail: "Admission busy" },
+              { status: 429, headers: { "Retry-After": "10" } },
+            );
+          return new Promise<Response>((resolve) => finishers.push(resolve));
+        }
+        if (options.method === "HEAD")
+          return new Response(null, {
+            headers: { "Upload-Offset": "0", "Upload-Length": "4" },
+          });
+        return Response.json({
+          id,
+          offset: 0,
+          total_size: 4,
+          chunk_size: 4,
+        });
+      }),
+    );
+    const manager = new TransferManager(async (url) => {
+      patched.push(url.split("/")[4]);
+      return new Response(null, {
+        status: 204,
+        headers: { "Upload-Offset": "4" },
+      });
+    });
+    try {
+      manager.add(
+        Array.from({ length: 5 }, (_, i) => new File(["data"], "file-" + i)),
+        "/",
+        10,
+      );
+      manager.setEnabled(true);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(handoffs).toHaveLength(2);
+      expect(patched.length).toBeGreaterThan(handoffs.length);
+      await vi.advanceTimersByTimeAsync(9999);
+      expect(handoffs).toHaveLength(2);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(handoffs).toHaveLength(3);
+    } finally {
+      manager.setEnabled(false);
+      for (const finish of finishers) finish(Response.json({ id: "accepted" }));
+      await vi.advanceTimersByTimeAsync(0);
+      vi.useRealTimers();
+    }
+  });
+  it("keeps device bytes flowing through a bounded, slow receipt handoff", async () => {
+    const patched: string[] = [];
+    const finishers = new Map<string, (response: Response) => void>();
+    let completing = 0;
+    let maximumCompleting = 0;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: string, options: RequestInit = {}) => {
+        if (input === "/api/v1/jobs") return Response.json({ jobs: [] });
+        if (input === "/api/v1/uploads") {
+          const body = JSON.parse(String(options.body));
+          return Response.json({
+            id: body.name,
+            offset: 0,
+            total_size: body.total_size,
+            chunk_size: 4,
+            checksums: [],
+          });
+        }
+        const id = input.split("/")[4];
+        if (input.endsWith("/cancel")) return Response.json({});
+        if (input.endsWith("/complete")) {
+          completing += 1;
+          maximumCompleting = Math.max(maximumCompleting, completing);
+          return new Promise<Response>((resolve) => {
+            finishers.set(id, (response) => {
+              completing -= 1;
+              resolve(response);
+            });
+          });
+        }
+        throw new Error("Unexpected receipt check: " + input);
+      }),
+    );
+    const manager = new TransferManager(async (url) => {
+      patched.push(url.split("/")[4]);
+      return new Response(null, {
+        status: 204,
+        headers: { "Upload-Offset": "4" },
+      });
+    });
+    try {
+      manager.add(
+        Array.from({ length: 7 }, (_, i) => new File(["data"], "file-" + i)),
+        "/",
+        10,
+      );
+      manager.setEnabled(true);
+      await vi.waitFor(() => expect(patched).toHaveLength(7));
+      expect(finishers.size).toBe(2);
+      expect(maximumCompleting).toBe(2);
+      expect(manager.snapshot().every((item) => item.current === 4)).toBe(true);
+      // Received bytes alone cannot declare the tab safe to close.
+      expect(manager.snapshot().every((item) => !item.jobId && item.file)).toBe(
+        true,
+      );
+      const cancelled = manager.snapshot()[4];
+      await manager.cancel(cancelled.key);
+      expect(cancelled.state).toBe("cancelled");
+      // Release each admitted handoff; queued cancellations must never enter it.
+      for (const id of [
+        "file-0",
+        "file-1",
+        "file-2",
+        "file-3",
+        "file-5",
+        "file-6",
+      ]) {
+        await vi.waitFor(() => expect(finishers.has(id)).toBe(true));
+        finishers.get(id)!(Response.json({ id }));
+      }
+      await vi.waitFor(() =>
+        expect(manager.snapshot().filter((item) => item.jobId)).toHaveLength(6),
+      );
+      expect(finishers.has("file-4")).toBe(false);
+      expect(maximumCompleting).toBe(2);
+    } finally {
+      manager.setEnabled(false);
+    }
+  });
+  it("gives a newly added folder the next device slot before an older folder's backlog", async () => {
+    const admitted: string[] = [];
+    const patches = new Map<string, (response: Response) => void>();
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: string, options: RequestInit = {}) => {
+        if (input === "/api/v1/jobs") return Response.json({ jobs: [] });
+        if (input === "/api/v1/uploads") {
+          const body = JSON.parse(String(options.body));
+          admitted.push(body.name);
+          return Response.json({
+            id: body.name,
+            offset: 0,
+            total_size: body.total_size,
+            chunk_size: 4,
+          });
+        }
+        if (input.endsWith("/complete"))
+          return Response.json({ id: input.split("/")[4] });
+        throw new Error("Unexpected receipt check: " + input);
+      }),
+    );
+    const manager = new TransferManager(
+      (url, options) =>
+        new Promise<Response>((resolve, reject) => {
+          patches.set(url.split("/")[4], resolve);
+          options.signal.addEventListener("abort", () =>
+            reject(new DOMException("Upload paused", "AbortError")),
+          );
+        }),
+    );
+    const entries = (prefix: string, count: number) =>
+      Array.from({ length: count }, (_, i) => ({
+        file: new File(["data"], prefix + i),
+        destination: "/" + prefix,
+        relativePath: prefix + "/" + i,
+      }));
+    const acknowledge = (id: string) =>
+      patches.get(id)!(
+        new Response(null, {
+          status: 204,
+          headers: { "Upload-Offset": "4" },
+        }),
+      );
+    try {
+      manager.addEntries(entries("old", 5), 10, true, { name: "Old" });
+      manager.setEnabled(true);
+      await vi.waitFor(() => expect(patches.size).toBe(2));
+      manager.addEntries(entries("new", 2), 10, true, { name: "New" });
+      acknowledge("old0");
+      await vi.waitFor(() => expect(admitted).toHaveLength(3));
+      expect(admitted).toEqual(["old0", "old1", "new0"]);
+      await vi.waitFor(() => expect(patches.has("new0")).toBe(true));
+      acknowledge("new0");
+      await vi.waitFor(() => expect(admitted).toHaveLength(4));
+      expect(admitted[3]).toBe("old2");
+      acknowledge("old1");
+      await vi.waitFor(() => expect(admitted).toHaveLength(5));
+      expect(admitted[4]).toBe("new1");
+    } finally {
+      manager.setEnabled(false);
+    }
+  });
   it("notifies the listing once per poll when files become available before backup finishes", async () => {
     const changed = vi.fn();
     window.addEventListener("tgdrive:files-changed", changed);
@@ -853,7 +1244,13 @@ describe("independent browser receiving and Telegram backlog", () => {
               { detail: "Not enough space" },
               { status: 507 },
             );
-          return Response.json({ id: body.name });
+          return Response.json({
+            id: body.name,
+            offset: 0,
+            total_size: body.total_size,
+            chunk_size: 4,
+            checksums: [],
+          });
         }
         const id = input.split("/")[4];
         if (options.method === "HEAD")
@@ -919,7 +1316,13 @@ describe("independent browser receiving and Telegram backlog", () => {
             { status: 503 },
           );
         if (input === "/api/v1/uploads")
-          return Response.json({ id: "receipt-" + ++receipts });
+          return Response.json({
+            id: "receipt-" + ++receipts,
+            offset: 0,
+            total_size: 4,
+            chunk_size: 4,
+            checksums: [],
+          });
         if (options.method === "HEAD")
           return new Response(null, {
             headers: { "Upload-Offset": "0", "Upload-Length": "4" },

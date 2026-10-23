@@ -6,6 +6,7 @@ import asyncio
 import errno
 import hashlib
 import json
+import logging
 import os
 import re
 import secrets
@@ -20,6 +21,8 @@ from typing import Any
 from tgdrive.errors import DriveError
 from tgdrive.security import safe_name
 from tgdrive.staging import StorageUnavailable, check_staging
+
+logger = logging.getLogger(__name__)
 
 CHUNK_SIZE = 8 * 1024 * 1024
 _ACTIVE = {"receiving", "queued", "cancelling"}
@@ -219,6 +222,7 @@ class ResumableUploads:
             "checksums": [],
             "chunk_size": CHUNK_SIZE,
             "state": "receiving",
+            "created_at": time.time(),
             "expires_at": time.time() + self.settings.upload_session_ttl_seconds,
         }
         path = self.root / (upload_id + ".part")
@@ -237,6 +241,7 @@ class ResumableUploads:
         except BaseException:
             path.unlink(missing_ok=True)
             raise
+        logger.debug("Device receipt opened id=%s bytes=%s", upload_id, total_size)
         return item
 
     async def append(
@@ -351,6 +356,7 @@ class ResumableUploads:
             raise UploadError("Upload checksum journal is incomplete")
 
     async def complete(self, upload_id: str) -> Any:
+        started = time.monotonic()
         async with self.locks.setdefault(upload_id, asyncio.Lock()):
             item = self.get(upload_id)
             if item["state"] in {"cancelled", "cancelling"}:
@@ -366,6 +372,7 @@ class ResumableUploads:
             if item["offset"] != item["total_size"]:
                 raise UploadError("Upload is incomplete")
             self._destination(item)
+            verification_started = time.monotonic()
             verification = asyncio.get_running_loop().run_in_executor(
                 None, self._verify, item, self.path(upload_id)
             )
@@ -379,6 +386,15 @@ class ResumableUploads:
                     # during verification must not strand a complete receipt, or
                     # release its lock while its disk worker is still reading.
                     cancelled = True
+                except UploadError:
+                    logger.warning(
+                        "Device upload verification failed id=%s bytes=%s; "
+                        "cancel this receipt and upload the original file again",
+                        upload_id,
+                        item["total_size"],
+                    )
+                    raise
+            verification_seconds = time.monotonic() - verification_started
             # A folder may move while disk verification yields. Resolve its UUID
             # immediately before enqueue, rather than reusing the old ancestry.
             destination = self._destination(item)
@@ -391,6 +407,21 @@ class ResumableUploads:
             )
             item["state"] = "queued"
             self._save(item)
+            logger.info(
+                "Device upload accepted id=%s job_id=%s bytes=%s "
+                "receipt_age_seconds=%s "
+                "verify_seconds=%.3f handoff_seconds=%.3f",
+                upload_id,
+                record.id,
+                item["total_size"],
+                (
+                    f"{max(0.0, time.time() - item['created_at']):.3f}"
+                    if type(item.get("created_at")) in (int, float)
+                    else "unknown"
+                ),
+                verification_seconds,
+                time.monotonic() - started,
+            )
             if cancelled:
                 raise asyncio.CancelledError
             return record

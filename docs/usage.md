@@ -68,7 +68,8 @@ an error so you can retry. Automatic background updates stay quiet.
 1. Open the destination folder in **My Files**.
 2. Choose **New → Upload files** or **New → Upload folder**.
 3. Select the files or folder. For a folder, confirm the short upload summary.
-4. Follow the batch in **Transfers** and wait for **Completed**.
+4. Follow the batch in **Transfers**. Keep the tab open until **You can close this
+   tab** appears; wait for **Completed** before deleting your originals.
 
 You can also drag files into the file area. Multiple files form an expandable
 batch; select its name/chevron for individual states, or **Show Folder** to open
@@ -98,9 +99,12 @@ See [performance tradeoffs](performance.md).
 Device uploads start with **two files**, adapting between **one and four** using
 measured total throughput. Failures/stalls reduce new concurrency; running files
 continue. Background pauses and server confirmation time are excluded.
-Each received file queues for Telegram immediately. If staging fills, remaining
-files wait/retry; smaller files may proceed when they fit. Keep the tab open
+Each file queues for Telegram once its receipt is verified and accepted; it does
+not wait for the rest of the batch. If staging fills, remaining files wait/retry;
+smaller files may proceed when they fit. Keep the tab open
 until server receipt is confirmed. Small batches may finish before adaptation.
+New batches share device-upload slots fairly with existing batches, so adding a
+folder does not wait for earlier Telegram work or an entire device batch.
 See [measurement rules](architecture.md#adaptive-device-upload-concurrency).
 
 </details>
@@ -126,10 +130,22 @@ and [backup coverage](backup-recovery.md).
 | Publishing to the channel | Finishing channel messages and saving the file record |
 | Completed | The file and its record are confirmed |
 
-Progress/speed describe the current stage. **A full device bar is not a completed
-upload.** Wait for **Device upload complete** to confirm durable server receipt;
-**Waiting for server confirmation** means bytes are not yet acknowledged.
-Recovery resumes from the last confirmed offset.
+Each batch shows **one stage at a time**: device progress until every remaining
+file has an accepted server job, then Telegram progress. Telegram work continues
+in the background during device upload. Expanded files already handed off show
+**Received** until the batch switches stages. Running/Queued counts include only
+unfinished files; the folder's file count includes its completed files.
+
+Time remaining estimates the bytes left in the displayed stage using recent
+transfer speed. Folder measurements continue across individual file handoffs,
+including small files that finish between updates. Estimates disappear when
+progress goes stale, work is blocked or only server confirmation/publication
+remains; those waits have no reliable byte-based duration.
+
+**A full device bar alone is not a completed upload.** Keep the tab open during
+server confirmation. **You can close this tab** confirms that the remaining work
+can continue on the server; another batch still sending device bytes keeps the
+close warning active. Recovery resumes from the last confirmed offset.
 
 <details>
 <summary>Upload progress screenshot — placeholder</summary>
@@ -139,7 +155,8 @@ Recovery resumes from the last confirmed offset.
 
 **Uploading to Telegram** includes unfinished parallel parts. **Parts in Channel**
 counts confirmed messages. My Files receives the item after every part is confirmed.
-Batches count Telegram bytes without double-counting device receipt.
+Batches count bytes for the displayed stage without adding device and Telegram
+bytes together.
 
 </details>
 
@@ -148,7 +165,7 @@ Batches count Telegram bytes without double-counting device receipt.
 | Upload state | Can I close the tab? |
 | --- | --- |
 | **Still sending from your device** | Keep it open, or reselect the originals later to resume. Leaving early triggers a browser warning. |
-| **Device upload complete** | Yes. Telegram uploading continues while TGDrive stays running. |
+| **You can close this tab** | Yes. Telegram uploading continues while TGDrive stays running. |
 | **Completed** | Yes. This upload no longer needs the local source. |
 
 To resume, use **Choose files / Choose folder / Choose file** in the existing
