@@ -201,8 +201,9 @@ def test_unavailable_disk_fails_before_creating_receipt(tmp_path, monkeypatch):
 
 
 @pytest.mark.parametrize("known", [True, False])
+@pytest.mark.parametrize("reserved", [True, False])
 async def test_url_import_checks_shared_space_before_reading_body(
-    tmp_path, monkeypatch, known
+    tmp_path, monkeypatch, known, reserved
 ):
     from test_remote import PUBLIC_DNS, FakeResolver, FakeResponse, FakeSession
     from test_transfers import make_manager
@@ -225,6 +226,11 @@ async def test_url_import_checks_shared_space_before_reading_body(
     record = manager.start_remote(
         url="https://files.example/a", destination="/", filename=None
     )
+    if reserved:
+        # A restarted import must recheck admission even if its old reservation
+        # has the same size as this source response.
+        record.context.update(staging_size=80 if known else 100, staging_written=40)
+        manager.registry.persist(record)
     await record.task
     assert record.status == TransferStatus.ERROR
     assert "free disk space" in record.error
@@ -255,3 +261,60 @@ async def test_owner_cannot_shrink_budget_below_reserved_receipts(tmp_path):
     assert error.value.status == 409
     assert (await service.snapshot())["revision"] == before["revision"]
     await state.preloads.close()
+
+
+@pytest.mark.parametrize("known", [True, False])
+async def test_url_reserves_once_and_reports_live_written_bytes(
+    tmp_path, monkeypatch, known
+):
+    from test_remote import PUBLIC_DNS, FakeResolver, FakeResponse, FakeSession
+    from test_transfers import make_manager
+
+    from tgdrive.remote import RemoteClient
+    from tgdrive.staging import check_staging
+    from tgdrive.tasks import TransferRegistry
+
+    manager, store, _, pool = await make_manager(tmp_path, max_size=100)
+    manager.registry = TransferRegistry(database_path=tmp_path / "jobs.sqlite3")
+    manager.settings.min_free_bytes = 0
+    response = FakeResponse(
+        200,
+        headers={"Content-Length": "64"} if known else {},
+        chunks=[b"x"] * 64,
+    )
+    manager.remote = RemoteClient(
+        max_bytes=100,
+        session=FakeSession([response]),
+        resolver=FakeResolver(PUBLIC_DNS),
+    )
+    admissions = []
+    written = []
+
+    def admit(*args, **kwargs):
+        admissions.append(args[2])
+        return check_staging(*args, **kwargs)
+
+    monkeypatch.setattr("tgdrive.transfers.check_staging", admit)
+    original_progress = manager.remote._report_progress
+
+    async def observe(callback, current, total):
+        await original_progress(callback, current, total)
+        written.append(current)
+        expected = 64 if known else 100
+        assert staging_usage(manager) == (expected, expected - current)
+        assert manager.registry._durable[record.id]["current"] == 0
+        assert manager.registry._durable[record.id]["context"]["staging_written"] == 0
+
+    monkeypatch.setattr(manager.remote, "_report_progress", observe)
+    record = manager.start_remote(
+        url="https://files.example/a", destination="/", filename=None
+    )
+    try:
+        await record.task
+        assert record.status == TransferStatus.COMPLETED, record.error
+        assert admissions == [64 if known else 100]
+        assert written == list(range(65))
+    finally:
+        await manager.close()
+        await pool.stop()
+        store.close()

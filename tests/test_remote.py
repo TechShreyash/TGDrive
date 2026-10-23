@@ -4,10 +4,13 @@ import asyncio
 import os
 import socket
 import tempfile
+import threading
 import unittest
 from collections import deque
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
+from unittest.mock import patch
 
 from aiohttp.abc import AbstractResolver
 
@@ -15,6 +18,7 @@ from tgdrive.remote import (
     RemoteCancelled,
     RemoteClient,
     RemoteDestinationExists,
+    RemoteError,
     RemoteTooLarge,
     TooManyRedirects,
     UnsafeRemoteURL,
@@ -268,6 +272,28 @@ class RemoteInspectionTests(unittest.IsolatedAsyncioTestCase):
 
 
 class RemoteDownloadTests(unittest.IsolatedAsyncioTestCase):
+    async def test_free_space_checks_run_off_loop_and_reject_before_writing(self):
+        response = FakeResponse(200, headers={"Content-Length": "3"}, chunks=[b"abc"])
+        client = RemoteClient(
+            min_free_bytes=10,
+            session=FakeSession([response]),
+            resolver=FakeResolver(PUBLIC_DNS),
+        )
+        loop_thread = threading.get_ident()
+
+        def disk_usage(_directory):
+            self.assertNotEqual(threading.get_ident(), loop_thread)
+            return SimpleNamespace(free=12)
+
+        with tempfile.TemporaryDirectory() as directory:
+            with (
+                patch("tgdrive.remote.shutil.disk_usage", side_effect=disk_usage),
+                self.assertRaisesRegex(RemoteError, "Temporary storage is full"),
+            ):
+                await client.download("https://files.example/a", directory)
+            self.assertEqual(list(Path(directory).iterdir()), [])
+        self.assertTrue(response.released)
+
     async def test_successful_single_stream_download_and_progress(self) -> None:
         redirect = FakeResponse(307, headers={"Location": "/final/report.txt"})
         body = FakeResponse(

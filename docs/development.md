@@ -120,6 +120,18 @@ offline tests alone do not sufficiently exercise the production database.
 | Transfer/recovery | Retry, cancellation, interruption and ownership-loss cases |
 | Release | Full checks below, then a clean extracted archive |
 
+For URL intake changes, the focused offline checks are:
+
+```bash
+uv run --frozen --all-groups python -m pytest -W error \
+  tests/test_remote.py tests/test_transfers.py \
+  tests/test_transfer_metrics.py tests/test_staging_admission.py -q
+```
+
+These cover fake HTTP responses, staging admission, advisory progress versus
+durable state, cancellation and handoff to fake Telegram. They do not measure
+live download speed or confirm a deployment.
+
 <details>
 <summary>Full lint, tests, security and build checks</summary>
 

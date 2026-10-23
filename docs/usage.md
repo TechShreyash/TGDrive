@@ -487,6 +487,8 @@ still applies; see [backup and recovery](backup-recovery.md).
 
 Choose **New → Upload from URL** and enter a public HTTP(S) file URL.
 TGDrive downloads it to the server, then sends it to Telegram.
+**Downloading from URL** measures the first stage; the later Telegram upload
+has its own speed and progress. See [URL import performance](performance.md#url-import-intake).
 
 After submission it continues with the tab closed while TGDrive runs.
 Use the existing **Retry** after errors; imports may restart from the beginning.

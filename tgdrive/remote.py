@@ -23,7 +23,7 @@ from aiohttp.abc import AbstractResolver
 from aiohttp.resolver import DefaultResolver
 
 DEFAULT_MAX_BYTES = 4 * 1024 * 1024 * 1024
-DEFAULT_CHUNK_SIZE = 256 * 1024
+DEFAULT_CHUNK_SIZE = 1024 * 1024
 _REDIRECT_STATUSES = frozenset({301, 302, 303, 307, 308})
 _CONTENT_RANGE_RE = re.compile(r"^bytes\s+\d+-\d+/(\d+|\*)$", re.IGNORECASE)
 _UNSAFE_FILENAME_CHARS = re.compile(r'[<>:"/\\|?*\x00-\x1f\x7f]')
@@ -455,13 +455,9 @@ class RemoteClient:
                     break
                 downloaded += len(chunk)
                 self._enforce_size(downloaded, max_bytes)
-                if self.min_free_bytes and shutil.disk_usage(
-                    output_dir
-                ).free < self.min_free_bytes + len(chunk):
-                    raise RemoteError(
-                        "Temporary storage is full. Free disk space and retry."
-                    )
-                await asyncio.to_thread(temp_file.write, chunk)
+                # The HTTP reader buffers ahead while this worker writes. Keep
+                # filesystem calls together and off the shared event loop.
+                await asyncio.to_thread(self._write_chunk, temp_file, chunk, output_dir)
                 await self._report_progress(progress, downloaded, declared_size)
 
             if declared_size is not None and downloaded != declared_size:
@@ -597,8 +593,16 @@ class RemoteClient:
                     timeout=timeout,
                     auto_decompress=False,
                     trust_env=False,
+                    read_bufsize=self.chunk_size,
                 )
             return self._session
+
+    def _write_chunk(self, output: Any, chunk: bytes, directory: Path) -> None:
+        if self.min_free_bytes and shutil.disk_usage(directory).free < (
+            self.min_free_bytes + len(chunk)
+        ):
+            raise RemoteError("Temporary storage is full. Free disk space and retry.")
+        output.write(chunk)
 
     async def _read_chunk(
         self,

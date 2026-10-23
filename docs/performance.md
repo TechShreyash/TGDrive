@@ -16,6 +16,7 @@ Telegram; a warm cache speeds repeat access.
 | Stage | Typical constraints |
 | --- | --- |
 | Device → server | Uplink, server ingress, staging disk, browser receive queue |
+| URL source → server | Source throughput, routing, server ingress and staging disk |
 | Server → Telegram | Account/file datacenter, latency, pipeline, cooldowns, egress |
 | Telegram → server | Routing, eligible accounts, origin admission, cold misses |
 | Server → viewer | Egress, proxy, viewer connection, concurrent consumers |
@@ -177,6 +178,32 @@ Queue position/wait are estimates from recent durations and eligible capacity.
 Without enough samples, no ETA is invented. Seeks, outages and cooldowns can
 change estimates; overloaded queues can reject work. Respect response status
 and retry guidance rather than opening unlimited requests.
+
+## URL import intake
+
+URL imports download to the server before uploading to Telegram. **Downloading
+from URL** shows the source-to-server rate; Telegram capacity affects the next
+stage. The browser can close after submission while the server keeps working.
+
+Intake uses one HTTP stream, a **1 MiB** receive-buffer setting and reads of up
+to **1 MiB**. HTTP flow control allows receiving ahead while a worker checks
+free disk space and writes each chunk. There is no intentional bandwidth cap
+or per-chunk database transaction. Storage admission reserves the whole file
+once per attempt, or the admitted maximum for unknown-length responses; live
+written-byte counters reduce its unwritten reservation without rescanning all
+receipts for every read. Retries recheck admission before reading again.
+
+Download progress stays in memory; reservation changes, phase/status changes and
+recovery identities still commit immediately. File and directory synchronization
+remain at final publication. These counters do not promise byte-range resume:
+an interrupted URL retrieval may restart from zero. See
+[transfer durability](architecture.md#transfer-pipeline).
+
+The source, network, disk and available CPU can still limit throughput. A
+comparison with a server-local downloader should use the same URL and comparable
+time windows; simultaneous downloads may compete for source/server bandwidth.
+These implementation choices do not establish a measured speedup or guarantee
+the same rate as another client.
 
 ## Device upload receipts
 

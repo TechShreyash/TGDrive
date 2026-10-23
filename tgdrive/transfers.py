@@ -387,19 +387,27 @@ class TransferManager:
                     phase="downloading",
                 )
 
+                admitted = False
+
                 async def progress(current: int, total: int | None) -> None:
+                    nonlocal admitted
                     observed = max(current, total or 0)
                     if observed > admission_limit:
                         raise RemoteTooLarge(admission_limit, observed)
                     size = total if total is not None else admission_limit
-                    check_staging(
-                        self.settings,
-                        self,
-                        size,
-                        exclude=record.id,
-                        written=current,
-                    )
                     reservation_changed = record.context.get("staging_size") != size
+                    if not admitted or reservation_changed:
+                        # Reserve the whole source (or the unknown-length cap)
+                        # before reading. Writes consume this existing claim;
+                        # rescanning every receipt/job per read cannot improve it.
+                        check_staging(
+                            self.settings,
+                            self,
+                            size,
+                            exclude=record.id,
+                            written=current,
+                        )
+                        admitted = True
                     record.context.update(staging_size=size, staging_written=current)
                     if reservation_changed:
                         self.registry.persist(record)
@@ -409,6 +417,7 @@ class TransferManager:
                         # Unknown source length stays indeterminate until the
                         # upload stage; growing the total per chunk resets ETA.
                         total=total or 0,
+                        checkpoint_progress=False,
                     )
 
                 result = await self.remote.download(

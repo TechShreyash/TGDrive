@@ -298,7 +298,7 @@ See [deviceUploadConcurrency.ts](../website/src/deviceUploadConcurrency.ts).
 | Receiving destination trashed | Retain acknowledged bytes; restore or cancel |
 | Destination gone before commit | Cancel/reconcile unpublished remote work |
 | Database persistence fails | Retain staged bytes and remote identities for retry |
-| URL retrieval interrupted | May fetch again from byte zero |
+| URL retrieval interrupted | May fetch again from byte zero; live byte progress is advisory, while reservations and lifecycle changes are journaled |
 | Bot-mode ingestion | Separate path without the browser queue's full durability contract |
 
 Permanent deletion journals intent, then atomically removes the subtree/shares

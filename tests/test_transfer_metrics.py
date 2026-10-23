@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import Mock
 
 import pytest
 
@@ -131,6 +132,49 @@ def test_legacy_terminal_job_without_known_start_does_not_invent_elapsed(
     reopened = TransferRegistry(database_path=tmp_path / "jobs.sqlite3")
     assert reopened.get(record.id).as_dict()["elapsed_seconds"] == 0
     reopened.close()
+
+
+@pytest.mark.parametrize("storage", ["sqlite", "mongo"])
+def test_url_byte_progress_avoids_commits_but_keeps_recovery_changes_durable(
+    clock, tmp_path, monkeypatch, storage
+):
+    if storage == "mongo":
+        collection = Mock()
+        collection.find.return_value = []
+        registry = TransferRegistry(mongo=collection, mongo_backend=Mock())
+    else:
+        registry = TransferRegistry(database_path=tmp_path / "jobs.sqlite3")
+    record = registry.create("downloading", total=100)
+    record.context.update(kind="remote", staging_size=100, staging_written=0)
+    registry.update(record.id, status=TransferStatus.RUNNING, current=0)
+    persist = Mock(wraps=registry.persist)
+    monkeypatch.setattr(registry, "persist", persist)
+
+    for current in range(1, 50):
+        clock.now += 1  # Beyond the normal SQLite progress checkpoint interval.
+        record.context["staging_written"] = current
+        registry.update(record.id, current=current, checkpoint_progress=False)
+    assert persist.call_count == 0
+    assert record.as_dict()["current"] == 49
+    assert record.as_dict()["speed_bytes_per_second"] == 1
+    assert registry._durable[record.id]["context"]["staging_written"] == 0
+
+    # Reservation and dispatch identities still commit immediately, even when
+    # advisory byte checkpoints are disabled by the URL pipeline.
+    record.context.update(staging_size=200, sender="bot", random_id=123)
+    registry.update(record.id, current=50, checkpoint_progress=False)
+    assert persist.call_count == 1
+    assert registry._durable[record.id]["context"]["random_id"] == 123
+    registry.update(
+        record.id,
+        status=TransferStatus.ERROR,
+        error="connection interrupted",
+        checkpoint_progress=False,
+    )
+    assert persist.call_count == 2
+    assert registry._durable[record.id]["current"] == 50
+    assert registry._durable[record.id]["context"]["staging_written"] == 49
+    registry.close()
 
 
 def test_unknown_length_reports_rate_without_inventing_an_eta(clock):

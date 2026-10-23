@@ -1082,6 +1082,7 @@ class TransferRegistry:
         current: int | None = None,
         total: int | None = None,
         error: str | None = None,
+        checkpoint_progress: bool = True,
     ) -> TransferRecord:
         record = self.get(transfer_id)
         # Terminal snapshots are immutable.  In particular, a late progress
@@ -1127,16 +1128,26 @@ class TransferRegistry:
                 and record._progress_samples[1][0] < monotonic - 5
             ):
                 record._progress_samples.popleft()
-        # Never throttle phase/status/error or recovery-context changes. Counter
-        # durability is independent of receipt offsets and send identities.
+        # Never throttle phase/status/error or recovery-context changes. Staging
+        # write counts are advisory, like current; they are not resumable receipt
+        # offsets or Telegram send identities. URL retrieval restarts from zero.
         durable = self._durable.get(record.id)
-        context_changed = durable is not None and durable["context"] != record.context
+        context_changed = durable is not None and {
+            key: value
+            for key, value in durable["context"].items()
+            if key != "staging_written"
+        } != {
+            key: value
+            for key, value in record.context.items()
+            if key != "staging_written"
+        }
         if (
             transition
             or error is not None
             or context_changed
             or (
-                self._mongo is None
+                checkpoint_progress
+                and self._mongo is None
                 and monotonic - self._last_progress_commit.get(record.id, 0)
                 >= _PROGRESS_JOURNAL_SECONDS
             )

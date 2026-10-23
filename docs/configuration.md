@@ -171,7 +171,8 @@ Before receiving chunks, TGDrive reserves the whole file and checks real free
 space, including other uploads' unwritten reservations. Unknown-length URL imports
 reserve the admitted maximum; provide Content-Length or lower the file limit
 if this prevents admission. Space is rechecked during receipt, but other disk
-users can still fill it. Disk-full failures retain the acknowledged resume offset.
+users can still fill it. Browser disk-full failures retain the acknowledged resume
+offset; URL retrieval may restart from zero. See [URL intake](performance.md#url-import-intake).
 These limits describe local staging, not Telegram storage capacity.
 
 ## A modest server and a larger server
