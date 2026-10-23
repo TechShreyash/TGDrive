@@ -150,6 +150,27 @@ def _is_admin(request: Request) -> bool:
 async def require_admin(request: Request) -> None:
     if not _is_admin(request):
         raise HTTPException(status_code=401, detail="Not authenticated")
+    # Use the matched route so proxy root paths cannot bypass demo restrictions.
+    path = request.scope["route"].path
+    if request.app.state.settings.demo_mode:
+        management_path = any(
+            path == root or path.startswith(root + "/")
+            for root in ("/api/v1/settings", "/api/v1/replica", "/api/v1/backup")
+        )
+        secret_export = path in {
+            "/api/v1/replica/key",
+            "/api/v1/backup/recovery-key",
+        }
+        if secret_export or (
+            management_path and request.method not in {"GET", "HEAD", "OPTIONS"}
+        ):
+            from tgdrive.managed_settings import SettingsProblem
+
+            raise SettingsProblem(
+                "Configuration and management are read-only in the public demo.",
+                code="DEMO_MODE_READ_ONLY",
+                status=403,
+            )
     runtime = _runtime(request)
     replica = getattr(runtime, "replica", None)
     if (
@@ -478,6 +499,7 @@ def create_app(
                 settings, getattr(_runtime(request), "pool", None)
             ),
             "timezone": settings.timezone,
+            "demo_mode": settings.demo_mode,
             "recovery_only": bool(getattr(_runtime(request), "recovery_only", False)),
         }
 

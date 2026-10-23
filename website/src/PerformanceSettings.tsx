@@ -33,15 +33,18 @@ import {
   type PerformancePreferences,
 } from "./performanceApi";
 import "./Performance.css";
+import DemoModeNotice from "./DemoModeNotice";
 
 export default function PerformanceSettings({
   onSaved,
   category = "cache",
   uploadPreferences,
+  demoMode = false,
 }: {
   onSaved?: (value: PerformancePreferences) => void;
   category?: "cache" | "transfers" | "regional";
   uploadPreferences?: ReactNode;
+  demoMode?: boolean;
 } = {}) {
   const [saved, setSaved] = useState<PerformancePreferences | null>(null);
   const [draft, setDraft] = useState<PerformanceDraft | null>(null);
@@ -91,7 +94,7 @@ export default function PerformanceSettings({
   }
   const save = async (event: FormEvent) => {
     event.preventDefault();
-    if (!saved || !draft) return;
+    if (demoMode || !saved || !draft) return;
     setBusy(true);
     setError("");
     setNotice("");
@@ -143,7 +146,7 @@ export default function PerformanceSettings({
           allowNegative={false}
           aria-label={definition.label}
           required
-          disabled={busy}
+          disabled={demoMode || busy}
           aria-describedby={"perf-help-" + definition.key}
           value={draft![definition.key]}
           onChange={(value) => {
@@ -160,6 +163,7 @@ export default function PerformanceSettings({
       className="settings-section performance-settings"
       aria-labelledby="performance-settings-heading"
     >
+      {demoMode && <DemoModeNotice />}
       <div className="performance-section-heading">
         <div>
           <h2 id="performance-settings-heading" className="sr-only">
@@ -245,7 +249,7 @@ export default function PerformanceSettings({
               checked={draft.auto_preload}
               onLabel="ON"
               offLabel="OFF"
-              disabled={busy}
+              disabled={demoMode || busy}
               onChange={(event) => {
                 setDraft({
                   ...draft,
@@ -298,7 +302,7 @@ export default function PerformanceSettings({
                 id="performance-timezone"
                 value={draft.timezone}
                 required
-                disabled={busy}
+                disabled={demoMode || busy}
                 aria-describedby="performance-timezone-help"
                 onChange={(event) => {
                   setDraft({ ...draft, timezone: event.target.value });
@@ -331,7 +335,7 @@ export default function PerformanceSettings({
               className="primary-button"
               type="submit"
               aria-label="Save Performance Settings"
-              disabled={busy || !changed || conflict}
+              disabled={demoMode || busy || !changed || conflict}
             >
               {busy ? <Spinner /> : null}
               {busy ? "Saving…" : "Save changes"}
@@ -340,7 +344,7 @@ export default function PerformanceSettings({
               type="button"
               className="secondary-button"
               variant="default"
-              disabled={busy}
+              disabled={demoMode || busy}
               onClick={() => {
                 if (conflict) {
                   void load();
@@ -362,7 +366,7 @@ export default function PerformanceSettings({
               type="button"
               className="text-button"
               variant="subtle"
-              disabled={busy || conflict || !saved.defaults}
+              disabled={demoMode || busy || conflict || !saved.defaults}
               onClick={() => {
                 if (!saved.defaults) return;
                 const defaults = performanceDraft(saved.defaults);

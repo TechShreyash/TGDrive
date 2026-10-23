@@ -32,6 +32,10 @@ reserving fixed space. Logging out closes this browser's access; server transfer
 See [Configuration & tuning](configuration.md) for safe defaults, restoring values
 and larger-server tuning.
 
+On a [public demo deployment](configuration.md#public-demo-mode), Configuration
+and Management show the current settings with changes disabled. File features
+remain available; everyone using the demo shares its files and changes.
+
 ## Upload files or folders
 
 1. Open the destination folder in **My Files**.

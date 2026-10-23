@@ -22,6 +22,9 @@ links from one responsive web interface.
 | **Sharing** | Multiple independent links per file/folder, with optional labels and separate expiry, copy, edit and revocation. Review access in Shared Links. |
 | **Recovery** | MongoDB stores the catalog and settings; encrypted database snapshots are saved separately to Telegram. An optional independent private channel copies completed payloads and enables explicit web recovery from a surviving channel. |
 
+For a public demo, [demo mode](docs/configuration.md#public-demo-mode) keeps file
+features available and locks configuration and management changes.
+
 ## Start with Docker
 
 You need Linux or WSL Ubuntu, Docker with Compose/Buildx, a MongoDB replica set

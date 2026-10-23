@@ -33,6 +33,7 @@ import {
 } from "./settingsManagement";
 import { transfers, uploadBackupState } from "./transfers";
 import PremiumConnection from "./PremiumConnection";
+import DemoModeNotice from "./DemoModeNotice";
 import "./SettingsManagement.css";
 
 function announceSaved(value: ManagementSettings) {
@@ -66,7 +67,9 @@ function ClientHealth({ client }: { client: ManagedClient }) {
     </span>
   );
 }
-export default function SettingsManagement() {
+export default function SettingsManagement({
+  demoMode = false,
+}: { demoMode?: boolean } = {}) {
   const [settings, setSettings] = useState<ManagementSettings | null>(null);
   const [draft, setDraft] = useState<ConnectionDraft | null>(null);
   const [target, setTarget] = useState<string | null>(null);
@@ -143,6 +146,7 @@ export default function SettingsManagement() {
     };
   }, [checksPending, settings, load]);
   const refreshConnections = async () => {
+    if (demoMode) return;
     const requestId = ++generation.current;
     setRefreshingConnections(true);
     try {
@@ -200,7 +204,7 @@ export default function SettingsManagement() {
     editBase.current = null;
   };
   const beginEdit = (id: string) => {
-    if (!settings) return;
+    if (demoMode || !settings) return;
     editBase.current = settings;
     setDraft(createConnectionDraft(settings));
     setTarget(id);
@@ -208,7 +212,7 @@ export default function SettingsManagement() {
     setFormError("");
   };
   const addClient = (kind: "bot" | "user") => {
-    if (!settings) return;
+    if (demoMode || !settings) return;
     const next = createConnectionDraft(settings);
     const key = crypto.randomUUID();
     next.clients.push({
@@ -256,7 +260,7 @@ export default function SettingsManagement() {
   );
   const save = async (event: FormEvent) => {
     event.preventDefault();
-    if (!draft || saving || !dirty) return;
+    if (demoMode || !draft || saving || !dirty) return;
     if (blocked && !credentialRepair) {
       setFormError(blockedReason);
       return;
@@ -323,6 +327,7 @@ export default function SettingsManagement() {
           <button
             className="primary-button"
             disabled={
+              demoMode ||
               saving ||
               (blocked && !credentialRepair) ||
               Boolean(settings && draft && settings.revision !== draft.revision)
@@ -351,7 +356,7 @@ export default function SettingsManagement() {
   );
   const editor = (row: ClientDraft) => (
     <form className="connection-editor" onSubmit={(event) => void save(event)}>
-      <fieldset disabled={saving}>
+      <fieldset disabled={demoMode || saving}>
         {row.removed ? (
           <div className="client-removal">
             <p>{row.label} will be removed after you save and restart.</p>
@@ -451,6 +456,7 @@ export default function SettingsManagement() {
     ).length ?? 0;
   return (
     <div className="connection-management page-body" aria-busy={saving}>
+      {demoMode && <DemoModeNotice />}
       {loading && (
         <div className="loading-state" role="status">
           <Spinner /> Loading connections…
@@ -534,6 +540,7 @@ export default function SettingsManagement() {
                   type="button"
                   className="text-button"
                   disabled={
+                    demoMode ||
                     refreshingConnections ||
                     checksBusy ||
                     Boolean(draft) ||
@@ -557,6 +564,7 @@ export default function SettingsManagement() {
                   type="button"
                   className="primary-button"
                   disabled={
+                    demoMode ||
                     Boolean(draft) ||
                     premiumOpen ||
                     settings.clients.length >= 50
@@ -569,6 +577,7 @@ export default function SettingsManagement() {
                   type="button"
                   className="secondary-button"
                   disabled={
+                    demoMode ||
                     Boolean(draft) ||
                     premiumOpen ||
                     blocked ||
@@ -644,6 +653,7 @@ export default function SettingsManagement() {
                       className="text-button"
                       aria-label={"Manage " + clientDisplayName(client)}
                       disabled={
+                        demoMode ||
                         saving ||
                         Boolean(draft && target !== client.id) ||
                         premiumOpen
@@ -672,7 +682,7 @@ export default function SettingsManagement() {
                 </li>
               )}
             </ul>
-            {premiumOpen && (
+            {!demoMode && premiumOpen && (
               <PremiumConnection
                 revision={settings.revision}
                 blockedReason={blocked ? blockedReason : ""}
@@ -743,7 +753,10 @@ export default function SettingsManagement() {
                 type="button"
                 className="text-button"
                 disabled={
-                  saving || Boolean(draft && target !== "api") || premiumOpen
+                  demoMode ||
+                  saving ||
+                  Boolean(draft && target !== "api") ||
+                  premiumOpen
                 }
                 onClick={() =>
                   target === "api" ? closeEditor() : beginEdit("api")
@@ -779,7 +792,7 @@ export default function SettingsManagement() {
                 className="connection-editor"
                 onSubmit={(event) => void save(event)}
               >
-                <fieldset disabled={saving}>
+                <fieldset disabled={demoMode || saving}>
                   <div className="management-fields">
                     <div>
                       <label htmlFor="telegram-api-id">API ID</label>
@@ -826,7 +839,10 @@ export default function SettingsManagement() {
                 type="button"
                 className="secondary-button"
                 disabled={
-                  Boolean(draft) || premiumOpen || settings.clients.length >= 50
+                  demoMode ||
+                  Boolean(draft) ||
+                  premiumOpen ||
+                  settings.clients.length >= 50
                 }
                 onClick={() => addClient("user")}
               >

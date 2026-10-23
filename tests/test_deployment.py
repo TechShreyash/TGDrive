@@ -365,6 +365,7 @@ def test_hosted_and_local_compose_resolve_without_real_credentials(tmp_path):
     # MAX_FILE_SIZE is an optional override; absent means use staging capacity.
     policy_defaults.pop("MAX_FILE_SIZE")
     policy_defaults["TELEGRAM_UPLOADS_PER_BOT"] = "1"
+    policy_defaults["DEMO_MODE"] = "false"
     for key in policy_defaults:
         environment.pop(key, None)
 
@@ -412,6 +413,7 @@ def test_hosted_and_local_compose_resolve_without_real_credentials(tmp_path):
     # Optional settings supplied by an operator must survive Compose rendering,
     # including zero and false, rather than being replaced by app fallbacks.
     overrides = {
+        "DEMO_MODE": "true",
         "CACHE_MEMORY_BYTES": "536870912",
         "CACHE_DISK_BYTES": "0",
         "AUTO_PRELOAD": "false",

@@ -274,6 +274,7 @@ not guaranteed. Dependency updates must include the affected integration checks.
 | Large files | `test_multipart_transfers.py`, `test_multipart_streaming.py`, `test_multipart_previews.py` |
 | Telegram pool/transport | `test_client_pool.py`, `test_telegram_clients.py`, `test_telethon_transport.py` |
 | HTTP/auth/security | `test_app.py`, `test_http_guard.py`, `test_security.py`, `test_remote.py` |
+| Public demo restrictions | `test_demo_mode.py`, `test_browser_demo_mode.py` |
 | Connections/Premium | `test_management.py`, `test_management_admission.py`, `test_premium_login.py` |
 | UI/browser | `website/src/*.test.ts`, `tests/test_browser_e2e.py` |
 | Legacy persistence | `test_store.py`, `test_backup.py`, `test_recovery.py` |

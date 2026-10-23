@@ -11,6 +11,7 @@ and MongoDB remembers their names, folders and sharing settings.
 | --- | --- |
 | Run TGDrive on my laptop only when needed | [Private Docker setup](setup.md) |
 | Host TGDrive for remote access and sharing | [Recommended: Coolify](setup.md#coolify), or [server Compose](setup.md#docker-compose-on-a-server) |
+| Offer a public demo with settings locked | [Public demo mode](configuration.md#public-demo-mode) |
 | Upload, organize, preview or share files | [Using TGDrive](usage.md) |
 | Understand adaptive uploads, device/server stages or when a tab can close | [Upload speed and queue](usage.md#upload-speed-and-queue), [tab closure](usage.md#can-i-close-the-tab) |
 | Read PDFs, ebooks or comics without downloading every byte first | [Reading books and comics](reading.md) |

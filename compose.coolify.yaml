@@ -28,6 +28,7 @@ services:
       DATA_DIR: /app/data
       CACHE_DIR: /app/cache
       COOKIE_SECURE: "true"
+      DEMO_MODE: ${DEMO_MODE:-false}
       INITIALIZE_EMPTY_DRIVE: "false"
       TGDRIVE_PROXY_HOSTS: coolify-proxy
       FORWARDED_ALLOW_IPS: ${FORWARDED_ALLOW_IPS:-auto}

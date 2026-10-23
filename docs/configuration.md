@@ -7,6 +7,34 @@ TGDrive reduces retained RAM when host/container headroom is low, and stops disk
 cache writes before the free-space floor is crossed. More CPU or RAM alone does
 not remove Telegram pacing, network-route or client-device limits.
 
+## Public demo mode
+
+Set `DEMO_MODE=true` in the demo deployment's environment, then recreate the
+Compose container or redeploy through Coolify. It defaults to `false`.
+Configure the demo's accounts, limits and backups before enabling it.
+
+Visitors can open every **Configuration** and **Management** page and inspect
+the current values and status, but cannot change settings, add/remove accounts,
+start Premium login, refresh Telegram connections, or run backup/recovery
+management actions. Recovery-key downloads are also disabled; credentials
+remain private. The server rejects these requests even when sent outside the UI.
+If deployment configuration cannot load, these pages offer **Try Again** before
+showing controls; file features remain accessible.
+
+Uploads, URL imports, browsing, organizing, previews, downloads, sharing and
+manual preloads keep their normal behavior and limits. Automatic backups and
+other configured background work continue while TGDrive runs. Demo mode does
+not bypass login: give visitors the demo deployment's password separately.
+
+Use a separate MongoDB database, Telegram storage channel and credentials for
+the public demo. Visitors share one drive and can change or permanently delete
+its files, so populate it only with disposable content. Demo mode does not
+isolate visitors, reset content or add quotas. Closing a visitor's browser follows
+the [usual transfer rules](usage.md#what-upload-progress-means).
+
+To change the deployment's settings again, set `DEMO_MODE=false` and
+recreate/redeploy. The flag is deployment-only and cannot be changed in the app.
+
 ## Change, discard or restore
 
 The sidebar separates **Monitor** (Performance, Preloads), **Configuration**

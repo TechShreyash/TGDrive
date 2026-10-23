@@ -164,8 +164,30 @@ export default function App() {
   const [config, setConfig] = useState<{
     max_file_size: number;
     demo_data?: boolean;
+    demo_mode?: boolean;
     recovery_only?: boolean;
   }>({ max_file_size: 0 });
+  const [configLoad, setConfigLoad] = useState<"loading" | "ready" | "error">(
+    "loading",
+  );
+  const [configError, setConfigError] = useState("");
+  const configGeneration = useRef(0);
+  const loadConfig = useCallback(async () => {
+    const generation = ++configGeneration.current;
+    setConfigLoad("loading");
+    setConfigError("");
+    try {
+      const value = await api.config();
+      if (generation !== configGeneration.current) return;
+      setConfig(value);
+      setTimezone(value.timezone || "Asia/Kolkata");
+      setConfigLoad("ready");
+    } catch (cause) {
+      if (generation !== configGeneration.current) return;
+      setConfigError(errorMessage(cause));
+      setConfigLoad("error");
+    }
+  }, []);
   const [directory, setDirectory] = useState<Directory>({ contents: {} });
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState("");
@@ -460,13 +482,12 @@ export default function App() {
     return () => window.removeEventListener("popstate", pop);
   }, []);
   useEffect(() => {
-    void api
-      .config()
-      .then((value) => {
-        setConfig(value);
-        setTimezone(value.timezone || "Asia/Kolkata");
-      })
-      .catch(() => {});
+    void loadConfig();
+    return () => {
+      ++configGeneration.current;
+    };
+  }, [isPublic, loadConfig]);
+  useEffect(() => {
     if (isPublic) {
       setAuthenticated(false);
       return;
@@ -1253,6 +1274,34 @@ export default function App() {
       {!mobile && <ThemeControl />}
     </div>
   );
+  const configGate = (
+    <div
+      className="deployment-config-state settings-section"
+      role={configLoad === "error" ? "alert" : "status"}
+      aria-busy={configLoad === "loading"}
+    >
+      {configLoad === "error" ? (
+        <>
+          <p>
+            Configuration and management are unavailable until TGDrive’s
+            configuration can be loaded. You can continue using file features.
+          </p>
+          <p className="settings-help">{configError}</p>
+          <button
+            type="button"
+            className="secondary-button"
+            onClick={() => void loadConfig()}
+          >
+            Try Again
+          </button>
+        </>
+      ) : (
+        <p>
+          <Spinner /> Loading configuration…
+        </p>
+      )}
+    </div>
+  );
   if (authenticated === null && !isPublic)
     return (
       <div className="startup" role="status">
@@ -1292,7 +1341,11 @@ export default function App() {
             Your local drive is unavailable. File changes are paused while you
             recover it.
           </p>
-          <ChannelBackup recoveryOnly />
+          {configLoad === "ready" ? (
+            <ChannelBackup recoveryOnly demoMode={config.demo_mode} />
+          ) : (
+            configGate
+          )}
         </main>
         {toast && <Toast toast={toast} close={() => setToast(null)} />}
       </div>
@@ -1729,16 +1782,21 @@ export default function App() {
             />
           ) : view === "performance" ? (
             <PerformancePanel />
+          ) : ["connections", "storage", "settings"].includes(view) &&
+            configLoad !== "ready" ? (
+            configGate
           ) : view === "connections" ? (
-            <SettingsManagement />
+            <SettingsManagement demoMode={config.demo_mode} />
           ) : view === "storage" ? (
             <StorageView
               config={config}
+              demoMode={config.demo_mode}
               onTransfers={() => navigate("/", "activity")}
               onTrash={() => navigate("/trash", "trash")}
             />
           ) : view === "settings" ? (
             <PerformanceSettings
+              demoMode={config.demo_mode}
               category={
                 location.settingsSection === "transfers"
                   ? "transfers"
@@ -1748,8 +1806,8 @@ export default function App() {
               }
               uploadPreferences={
                 <>
-                  <UploadSettings />
-                  <BotModeSettings />
+                  <UploadSettings demoMode={config.demo_mode} />
+                  <BotModeSettings demoMode={config.demo_mode} />
                 </>
               }
               onSaved={(value) => {

@@ -42,6 +42,11 @@ recreation, rather than only a process restart. Saved dashboard performance
 preferences have their own precedence, described below.
 
 Settings are case-insensitive. Unknown names are ignored, so check for typos.
+
+| Deployment flag | Default | Behavior |
+| --- | --- | --- |
+| `DEMO_MODE` | false | Lock Configuration and Management changes and recovery-key exports while keeping file features available. Requires container recreation/redeploy; cannot be edited through the dashboard. See [public demo mode](configuration.md#public-demo-mode). |
+
 Never publish real values or use the example placeholders as credentials.
 
 ### File syntax and secret handling
@@ -423,7 +428,7 @@ permanent third-party API compatibility.
 | Method and route | Access | Request | Success |
 | --- | --- | --- | --- |
 | `GET /` | Public shell | None | React HTML; build instructions if frontend source is not built. |
-| `GET /api/config` | Public | None | `{"status":"ok","max_file_size":17179869184}` with the default 16 GiB logical limit. |
+| `GET /api/config` | Public | None | Includes `status`, `max_file_size` (default 16 GiB logical limit), `timezone`, `recovery_only` and `demo_mode` (default false). |
 | `POST /api/checkPassword` | Public, throttled | `{"pass":"<owner-password>"}` | `200 {"status":"ok"}` plus session cookie. |
 | `POST /api/logout` | Cookie if present | `{}` | `200 {"status":"ok"}`; revokes supplied session and clears cookie. |
 | `GET /api/v1/session` | Public | None | `{"authenticated":true}` or false. |
@@ -440,6 +445,15 @@ Effective max_file_size is the configured logical-file/staging limit and does
 not require Premium. Status includes telegram_ready, demo, max_file_size,
 staging_budget_bytes, metadata_revision, backup, clients, restart_required and
 admission_paused.
+
+With `DEMO_MODE=true`, authenticated requests that mutate `/api/v1/settings`
+or its subroutes, `/api/v1/replica` or its subroutes, and `POST /api/v1/backup`
+return `403` with `code: "DEMO_MODE_READ_ONLY"`. This includes connection refresh
+and Premium login/cancellation. `GET /api/v1/backup/recovery-key` and
+`GET /api/v1/replica/key` return the same denial to prevent secret export.
+Status/settings reads and the secret-free replica report remain available under
+normal authentication. The status field `demo` identifies a synthetic test
+runtime; it is separate from the deployment's `demo_mode` flag.
 
 The compatibility-named recovery object includes state:protected|pending|error,
 backend:mongodb, metadata_revision, protected_revision, last_success_at,

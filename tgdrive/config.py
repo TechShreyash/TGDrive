@@ -109,6 +109,7 @@ class Settings(BaseSettings):
         default=86400, alias="SESSION_TTL_SECONDS", ge=300, le=2592000
     )
     cookie_secure: bool = Field(default=True, alias="COOKIE_SECURE")
+    demo_mode: bool = Field(default=False, alias="DEMO_MODE")
     initialize_empty_drive: bool = Field(default=False, alias="INITIALIZE_EMPTY_DRIVE")
     allow_private_remote_urls: bool = Field(
         default=False, alias="ALLOW_PRIVATE_REMOTE_URLS"
@@ -245,10 +246,12 @@ class Settings(BaseSettings):
                     **(recovery_bootstrap or {}),
                     **(row["document"] if row else {}),
                 }
+                # Demo access is deployment policy, never a restored preference.
                 bootstrap = {
                     key: value
                     for key, value in saved.items()
-                    if base.get(key) in (None, "")
+                    if key != "DEMO_MODE"
+                    and base.get(key) in (None, "")
                     and not (
                         key == "ADMIN_PASSWORD_HASH" and base.get("ADMIN_PASSWORD")
                     )

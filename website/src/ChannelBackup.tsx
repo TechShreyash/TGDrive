@@ -16,6 +16,7 @@ import {
 } from "./progress";
 import { formatBytes, formatTimestamp } from "./types";
 import "./ChannelBackup.css";
+import DemoModeNotice from "./DemoModeNotice";
 
 export type ReplicaPhase =
   | "disabled"
@@ -99,9 +100,11 @@ export function retryTime(value: number | string | null | undefined): string {
 
 export default function ChannelBackup({
   recoveryOnly = false,
+  demoMode = false,
   onRestartRequired,
 }: {
   recoveryOnly?: boolean;
+  demoMode?: boolean;
   onRestartRequired?: () => void;
 }) {
   const [state, setState] = useState<ReplicaState | null>(null);
@@ -229,6 +232,7 @@ export default function ChannelBackup({
     payload: unknown,
     done?: () => void,
   ) => {
+    if (demoMode) return;
     setBusy(label);
     setActionError("");
     try {
@@ -263,6 +267,7 @@ export default function ChannelBackup({
     );
   const configure = (event: FormEvent) => {
     event.preventDefault();
+    if (demoMode) return;
     setActionError("");
     try {
       const channelId = parseChannelId(channel);
@@ -293,6 +298,7 @@ export default function ChannelBackup({
   };
   const recover = (event: FormEvent, copy: boolean) => {
     event.preventDefault();
+    if (demoMode) return;
     setActionError("");
     try {
       const sourceChannel =
@@ -363,6 +369,7 @@ export default function ChannelBackup({
   };
   const activate = () => {
     if (
+      demoMode ||
       activationConfirmation.trim() !==
       String(state?.recovery_candidate?.channel)
     )
@@ -384,7 +391,8 @@ export default function ChannelBackup({
 
   const phase = state?.phase || "disabled";
   const active = ACTIVE.has(phase);
-  const blocked = Boolean(busy) || active || phase === "restart_required";
+  const blocked =
+    demoMode || Boolean(busy) || active || phase === "restart_required";
   const candidate = state?.recovery_candidate;
   const pending = !!state && state.revision > state.protected_revision;
   const showProgress =
@@ -401,6 +409,17 @@ export default function ChannelBackup({
     ? Math.max(0, state.total_bytes - state.done_bytes)
     : 0;
   const report = (state?.report || []).slice(-30).reverse();
+  const recoveryKeyAction = demoMode ? (
+    <button type="button" className="text-button" disabled>
+      <Download size={16} />
+      Save recovery key
+    </button>
+  ) : (
+    <a className="text-button" href="/api/v1/replica/key" download>
+      <Download size={16} />
+      Save recovery key
+    </a>
+  );
 
   return (
     <section
@@ -408,6 +427,7 @@ export default function ChannelBackup({
       aria-labelledby="channel-backup-title"
       ref={surface}
     >
+      {demoMode && recoveryOnly && <DemoModeNotice />}
       <div className="channel-backup-heading">
         <div>
           <h2 id="channel-backup-title" tabIndex={-1}>
@@ -570,7 +590,7 @@ export default function ChannelBackup({
                 <button
                   type="button"
                   className="secondary-button"
-                  disabled={!!busy}
+                  disabled={demoMode || !!busy}
                   onClick={() => action("resume")}
                 >
                   <Play size={16} />
@@ -589,7 +609,7 @@ export default function ChannelBackup({
                   <button
                     type="button"
                     className="secondary-button"
-                    disabled={!!busy || !state.enabled}
+                    disabled={demoMode || !!busy || !state.enabled}
                     onClick={() => action("sync")}
                   >
                     <RefreshCw size={16} />
@@ -600,7 +620,7 @@ export default function ChannelBackup({
                 <button
                   type="button"
                   className="secondary-button"
-                  disabled={!!busy}
+                  disabled={demoMode || !!busy}
                   onClick={() => action("pause")}
                 >
                   <Pause size={16} />
@@ -611,7 +631,7 @@ export default function ChannelBackup({
                 <button
                   type="button"
                   className="secondary-button"
-                  disabled={!!busy}
+                  disabled={demoMode || !!busy}
                   onClick={() => action("resume")}
                 >
                   <Play size={16} />
@@ -622,19 +642,14 @@ export default function ChannelBackup({
                 <button
                   type="button"
                   className="secondary-button"
-                  disabled={!!busy}
+                  disabled={demoMode || !!busy}
                   onClick={() => action("retry")}
                 >
                   <RefreshCw size={16} />
                   {busy === "retry" ? "Retrying…" : "Retry"}
                 </button>
               )}
-              {state.configured && (
-                <a className="text-button" href="/api/v1/replica/key" download>
-                  <Download size={16} />
-                  Save recovery key
-                </a>
-              )}
+              {state.configured && recoveryKeyAction}
             </div>
           )}
           {recoveryOnly &&
@@ -644,7 +659,7 @@ export default function ChannelBackup({
                   <button
                     type="button"
                     className="secondary-button"
-                    disabled={!!busy}
+                    disabled={demoMode || !!busy}
                     onClick={() => action("pause")}
                   >
                     <Pause size={16} />
@@ -654,7 +669,7 @@ export default function ChannelBackup({
                   <button
                     type="button"
                     className="secondary-button"
-                    disabled={!!busy}
+                    disabled={demoMode || !!busy}
                     onClick={() =>
                       action(phase === "error" ? "retry" : "resume")
                     }
@@ -667,10 +682,7 @@ export default function ChannelBackup({
             )}
           {recoveryOnly && candidate && (
             <div className="channel-backup-actions">
-              <a className="text-button" href="/api/v1/replica/key" download>
-                <Download size={16} />
-                Save recovery key
-              </a>
+              {recoveryKeyAction}
             </div>
           )}
           {!recoveryOnly && state.configured && (
@@ -706,7 +718,7 @@ export default function ChannelBackup({
                 onChange={(event) => setChannel(event.target.value)}
                 placeholder="-1001234567890"
                 required
-                disabled={!!busy}
+                disabled={demoMode || !!busy}
               />
             </label>
             <label>
@@ -719,7 +731,7 @@ export default function ChannelBackup({
                 spellCheck={false}
                 maxLength={512}
                 required
-                disabled={!!busy}
+                disabled={demoMode || !!busy}
               />
             </label>
           </div>
@@ -728,7 +740,7 @@ export default function ChannelBackup({
               type="checkbox"
               checked={independent}
               onChange={(event) => setIndependent(event.target.checked)}
-              disabled={!!busy}
+              disabled={demoMode || !!busy}
             />
             <span>
               I created the backup channel and bot with a different Telegram
@@ -750,7 +762,7 @@ export default function ChannelBackup({
             <button
               type="button"
               className="text-button"
-              disabled={!!busy}
+              disabled={demoMode || !!busy}
               onClick={() => {
                 setConfigureOpen(false);
                 setToken("");
@@ -802,7 +814,7 @@ export default function ChannelBackup({
                 <button
                   type="button"
                   className="secondary-button"
-                  disabled={!!busy}
+                  disabled={demoMode || !!busy}
                   onClick={() => action("disable")}
                 >
                   Confirm disable
@@ -810,7 +822,7 @@ export default function ChannelBackup({
                 <button
                   type="button"
                   className="text-button"
-                  disabled={!!busy}
+                  disabled={demoMode || !!busy}
                   onClick={() => setDisableConfirm(false)}
                 >
                   Keep enabled
@@ -850,7 +862,7 @@ export default function ChannelBackup({
                   onChange={(event) => setSource(event.target.value)}
                   placeholder="-1001234567890"
                   required
-                  disabled={!!busy}
+                  disabled={demoMode || !!busy}
                 />
               </label>
               <label>
@@ -863,7 +875,7 @@ export default function ChannelBackup({
                   spellCheck={false}
                   maxLength={512}
                   required
-                  disabled={!!busy}
+                  disabled={demoMode || !!busy}
                 />
               </label>
               <label>
@@ -875,7 +887,7 @@ export default function ChannelBackup({
                   onChange={(event) => setKey(event.target.value)}
                   spellCheck={false}
                   maxLength={64}
-                  disabled={!!busy}
+                  disabled={demoMode || !!busy}
                   aria-describedby="channel-recovery-key-help"
                 />
               </label>
@@ -889,7 +901,7 @@ export default function ChannelBackup({
                   autoComplete="off"
                   value={messageId}
                   onChange={(event) => setMessageId(event.target.value)}
-                  disabled={!!busy}
+                  disabled={demoMode || !!busy}
                   aria-describedby="checkpoint-id-help"
                 />
               </label>
@@ -906,7 +918,7 @@ export default function ChannelBackup({
             <button
               type="submit"
               className="secondary-button"
-              disabled={!!busy || !source.trim() || !sourceToken.trim()}
+              disabled={demoMode || !!busy || !source.trim() || !sourceToken.trim()}
             >
               {busy === "inspect" ? <Spinner /> : <RefreshCw size={16} />}
               {busy === "inspect" ? "Inspecting…" : "Inspect recovery copy"}
@@ -952,7 +964,7 @@ export default function ChannelBackup({
                       setCatalogOnly(event.target.checked);
                       setConfirmation("");
                     }}
-                    disabled={!!busy}
+                    disabled={demoMode || !!busy}
                   />
                   <span>
                     Restore the database only on this surviving channel
@@ -973,7 +985,7 @@ export default function ChannelBackup({
                         value={target}
                         onChange={(event) => setTarget(event.target.value)}
                         required
-                        disabled={!!busy}
+                        disabled={demoMode || !!busy}
                       />
                     </label>
                   )}{" "}
@@ -989,7 +1001,7 @@ export default function ChannelBackup({
                       spellCheck={false}
                       maxLength={512}
                       required
-                      disabled={!!busy}
+                      disabled={demoMode || !!busy}
                     />
                   </label>
                   <label>
@@ -1004,7 +1016,7 @@ export default function ChannelBackup({
                       value={confirmation}
                       onChange={(event) => setConfirmation(event.target.value)}
                       required
-                      disabled={!!busy}
+                      disabled={demoMode || !!busy}
                     />
                   </label>
                 </div>
@@ -1052,13 +1064,14 @@ export default function ChannelBackup({
                     onChange={(event) =>
                       setActivationConfirmation(event.target.value)
                     }
-                    disabled={!!busy}
+                    disabled={demoMode || !!busy}
                   />
                 </label>
                 <button
                   type="button"
                   className="primary-button"
                   disabled={
+                    demoMode ||
                     !!busy ||
                     activationConfirmation.trim() !== String(candidate.channel)
                   }

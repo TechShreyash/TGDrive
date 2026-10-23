@@ -6,7 +6,9 @@ import { ErrorNotice, Modal, Spinner } from "./components";
 import { itemPath, type DriveItem } from "./types";
 import "./BotModeSettings.css";
 
-export default function BotModeSettings() {
+export default function BotModeSettings({
+  demoMode = false,
+}: { demoMode?: boolean } = {}) {
   const [saved, setSaved] = useState<BotUploadSettings | null>(null);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
@@ -35,6 +37,7 @@ export default function BotModeSettings() {
       document.getElementById("bot-mode")?.scrollIntoView({ block: "start" });
   }, [saved]);
   const save = async (path: string | null) => {
+    if (demoMode) return;
     setBusy(true);
     setError("");
     setNotice("");
@@ -82,7 +85,7 @@ export default function BotModeSettings() {
             <div className="upload-settings-actions">
               <Button
                 className="secondary-button"
-                disabled={busy}
+                disabled={demoMode || busy}
                 onClick={() => {
                   setPicking(true);
                   setError("");
@@ -94,7 +97,7 @@ export default function BotModeSettings() {
               <Button
                 variant="subtle"
                 className="text-button"
-                disabled={busy}
+                disabled={demoMode || busy}
                 onClick={() => void save(null)}
               >
                 Use default folder

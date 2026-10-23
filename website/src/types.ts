@@ -75,6 +75,7 @@ export interface Share {
 }
 export interface PublicConfig {
   demo_data?: boolean;
+  demo_mode?: boolean;
   max_file_size: number;
   timezone?: string;
 }

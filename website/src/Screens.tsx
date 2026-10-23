@@ -1,5 +1,6 @@
 import BrandMark from "./BrandMark";
 import ChannelBackup from "./ChannelBackup";
+import DemoModeNotice from "./DemoModeNotice";
 import { Button, Paper } from "@mantine/core";
 import {
   useCallback,
@@ -113,10 +114,12 @@ export function Login({ onSuccess }: { onSuccess: () => void }) {
 export { default as SharesView } from "./SharesView";
 export function StorageView({
   config,
+  demoMode = false,
   onTransfers,
   onTrash,
 }: {
   config: { max_file_size: number };
+  demoMode?: boolean;
   onTransfers: () => void;
   onTrash: () => void;
 }) {
@@ -208,6 +211,7 @@ export function StorageView({
               ? "Backing up your latest changes"
               : "Backup Status Unavailable";
   const backUp = async () => {
+    if (demoMode) return;
     setBackingUp(true);
     setBackupError("");
     try {
@@ -226,6 +230,7 @@ export function StorageView({
     : "uv run --frozen python -m tgdrive recover";
   return (
     <div className="storage-page page-body">
+      {demoMode && <DemoModeNotice />}
       <section
         className="settings-section storage-protection"
         aria-labelledby="drive-backup-heading"
@@ -270,7 +275,7 @@ export function StorageView({
           </div>
           <button
             className="secondary-button"
-            disabled={backingUp || loading || !status}
+            disabled={demoMode || backingUp || loading || !status}
             onClick={() => void backUp()}
           >
             {backingUp ? <Spinner /> : <RefreshCw size={16} />}
@@ -310,15 +315,20 @@ export function StorageView({
         >
           Backup &amp; recovery guide
         </a>
-        {mongo && recovery?.backup_key_configured && (
-          <a
-            className="text-button"
-            href="/api/v1/backup/recovery-key"
-            download
-          >
-            Save Recovery Key
-          </a>
-        )}
+        {mongo && recovery?.backup_key_configured &&
+          (demoMode ? (
+            <button type="button" className="text-button" disabled>
+              Save Recovery Key
+            </button>
+          ) : (
+            <a
+              className="text-button"
+              href="/api/v1/backup/recovery-key"
+              download
+            >
+              Save Recovery Key
+            </a>
+          ))}
         {!mongo && !protectedDrive && !loading && (
           <p className="settings-help">
             Keep this installation until backup is confirmed. Check the
@@ -327,7 +337,7 @@ export function StorageView({
           </p>
         )}
       </section>
-      <ChannelBackup />
+      <ChannelBackup demoMode={demoMode} />
       <section
         className="settings-section"
         aria-labelledby="drive-usage-heading"
@@ -489,7 +499,9 @@ export function StorageView({
   );
 }
 
-export function UploadSettings() {
+export function UploadSettings({
+  demoMode = false,
+}: { demoMode?: boolean } = {}) {
   const [saved, setSaved] = useState<UploadPreferences | null>(null);
   const [value, setValue] = useState(1);
   const [busy, setBusy] = useState(false);
@@ -518,6 +530,7 @@ export function UploadSettings() {
   }, [load]);
   const save = async (event: FormEvent) => {
     event.preventDefault();
+    if (demoMode) return;
     setBusy(true);
     setError("");
     setNotice("");
@@ -560,7 +573,7 @@ export function UploadSettings() {
                   type="button"
                   className="icon-button"
                   aria-label="Fewer Uploads per Bot"
-                  disabled={busy || !Number.isInteger(value) || value <= 1}
+                  disabled={demoMode || busy || !Number.isInteger(value) || value <= 1}
                   onClick={() => {
                     setValue(value - 1);
                     setNotice("");
@@ -577,7 +590,7 @@ export function UploadSettings() {
                   required
                   aria-describedby="upload-limit-help"
                   value={value}
-                  disabled={busy}
+                  disabled={demoMode || busy}
                   onChange={(event) => {
                     setValue(event.target.valueAsNumber);
                     setNotice("");
@@ -587,7 +600,7 @@ export function UploadSettings() {
                   type="button"
                   className="icon-button"
                   aria-label="More Uploads per Bot"
-                  disabled={busy || !Number.isInteger(value) || value >= 4}
+                  disabled={demoMode || busy || !Number.isInteger(value) || value >= 4}
                   onClick={() => {
                     setValue(value + 1);
                     setNotice("");
@@ -615,6 +628,7 @@ export function UploadSettings() {
                 className="primary-button"
                 type="submit"
                 disabled={
+                  demoMode ||
                   busy ||
                   !Number.isInteger(value) ||
                   value < 1 ||
@@ -628,7 +642,7 @@ export function UploadSettings() {
                 type="button"
                 className="text-button"
                 variant="subtle"
-                disabled={busy}
+                disabled={demoMode || busy}
                 onClick={() => {
                   setValue(1);
                   setError("");
@@ -643,7 +657,7 @@ export function UploadSettings() {
                 type="button"
                 className="text-button"
                 variant="subtle"
-                disabled={busy || value === saved.uploads_per_bot}
+                disabled={demoMode || busy || value === saved.uploads_per_bot}
                 hidden={value === saved.uploads_per_bot}
                 onClick={() => {
                   setValue(saved.uploads_per_bot);
