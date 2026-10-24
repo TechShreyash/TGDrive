@@ -13,6 +13,17 @@
 
 Split files follow the same model: ordered part mappings are backed up, and independent copies include every constituent document. Unfinished uploads and device originals need separate protection.
 
+<details>
+<summary>Find Storage & Backups in the interface</summary>
+
+![Storage & Backups showing saved catalog and temporary storage status](assets/storage-backups.png)
+
+The [administration gallery](showcase.md#connections-and-backups) shows the
+website's entry points. These captures do not demonstrate a completed backup or
+recovery; follow the confirmation and recovery steps below.
+
+</details>
+
 ## Choose the right MongoDB recovery route
 
 | Situation | Route |

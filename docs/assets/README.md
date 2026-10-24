@@ -1,49 +1,80 @@
 # Screenshots and demo videos
 
-[Docs home](../README.md) · [Project README](../../README.md)
+[Docs home](../README.md) · [Visual walkthroughs](../showcase.md) · [Project README](../../README.md)
 
-The SVGs in this folder are labelled placeholders. Replace them with real captures
-when ready; no screenshot or video has been recorded for these slots.
+These are real captures of [TGDrive's public demo](../usage.md#try-the-public-demo),
+recorded on **24 October 2026** using original, disposable sample files. The
+README highlights the drive, video player and mobile layout; the
+[visual guide](../showcase.md) groups the full collection by workflow.
 
-## Screenshot slots
+## What is included
 
-| Placeholder | Capture to add |
+| PNG images | Coverage |
 | --- | --- |
-| `drive-overview.svg` | Desktop My Files with folders and sample files |
-| `upload-progress.svg` | Transfers showing device upload and server processing |
-| `media-preview.svg` | A video or book open in the viewer |
-| `mobile-drive.svg` | The file browser on a phone |
-| `demo-preview.svg` | Poster frame for the walkthrough below |
+| `drive-overview`, `drive-list`, `drive-dark`, `mobile-drive` | Grid/list browsing, appearance and compact layout |
+| `file-actions`, `search-and-sort`, `starred-files`, `trash-restore` | Organization, search and recovery from Trash |
+| `upload-folder`, `url-import`, `upload-progress`, `upload-completed`, `transfer-history` | Upload entry points, live device progress and finished tasks |
+| `media-preview`, `video-settings`, `image-preview`, `audio-preview`, `text-preview` | Player controls and file previews |
+| `pdf-reader`, `epub-reader`, `comic-reader` | Page/chapter navigation and reading preferences |
+| `share-link`, `shared-folder`, `shared-links` | Expiry choices, recipient view and link management |
+| `preloads`, `performance-overview`, `performance-resources` | Cache coverage, traffic and server resources |
+| `cache-settings`, `transfer-settings`, `regional-settings`, `thumbnail-rebuild` | Configuration and rebuild confirmation |
+| `connections`, `storage-backups` | Safe management entry points and backup status |
 
-1. Add a PNG/JPEG here, for example `drive-overview.png`.
-2. Change the matching `.svg` reference in the Markdown to your filename.
-3. Update the alt text and remove its “placeholder” wording.
+Most desktop images are 1536 × 695; the recipient view is 1536 × 639. Connections
+is cropped to its identifier-free 1260 × 230 top panel. The mobile image is
+390 × 843, captured with a 390 × 844 browser viewport, not a physical phone.
 
-Use a wide desktop capture (for example 1440 × 810) and a portrait phone capture.
-Keep text legible. Use disposable demo files; hide credentials, private filenames
-and share tokens. Search for `MEDIA:` comments to find the prepared slots.
+| Silent MP4 | Length | Recorded workflow |
+| --- | --- | --- |
+| [Organize files](organize-files.mp4) | About 3:26 | Views, search, sort, favorites, folder creation, rename and move |
+| [Upload and share](upload-and-share.mp4) | About 5:20 | Device upload, progress, history, Show in Folder, share label/expiry, copying and revocation confirmation |
+| [Previews and readers](readers-and-preview.mp4) | About 5:51 | Image/audio/text previews, PDF/EPUB/comic navigation and video playback/settings |
 
-## Demo video
+Videos use continuous Windows Graphics Capture of the live browser, encoded as
+H.264 MP4 at 30 fps and normal speed. A large cursor overlay follows logged click
+coordinates, with click highlights and captions in a separate 96-pixel bottom
+band. The upload video joins two chapters with a two-second title card and adds
+five-second end holds; captured actions are not accelerated. Browser audio is
+not captured. Browser suggestions are masked in the organization video, and the
+browser infobar is cropped from the sharing chapter. Raw captures and interaction
+logs remain in ignored local staging. These recordings illustrate workflows,
+not transfer benchmarks, device compatibility or recovery guarantees.
 
-Record a short walkthrough: browse files → upload a folder → preview a file →
-create and revoke a share. Keep setup instructions in the written guide.
+The folder-upload image shows the **New** menu. Directory selection could not be
+completed through the capture tool; the videos demonstrate ordinary file uploads.
+Follow the [folder-upload guide](../usage.md#upload-files-or-folders) for selection
+and confirmation. URL import, thumbnail rebuild, Telegram connections and backup
+captures show controls; they do not establish a completed import, rebuild,
+authentication or recovery. Server settings were not changed for these captures.
 
-Upload an MP4 in GitHub's Markdown editor, then replace the demo placeholder with
-the generated attachment URL on its own line. GitHub supports
-[video in repository Markdown](https://github.blog/changelog/2021-05-13-video-uploads-now-generally-available/);
-see its [attachment formats and limits](https://docs.github.com/en/get-started/writing-on-github/working-with-advanced-formatting/attaching-files).
+## Replace or extend a capture
 
-For a preview that also works outside GitHub, link a real poster image to the video:
+1. Use an isolated collection with disposable, original or redistributable files.
+   For these captures, the image, six-second video, audio, PDF, ebook and comic
+   contents were created specifically for the demonstration.
+2. Capture the feature in a useful, settled state. Keep the navigation and controls
+   legible; dismiss unrelated notifications. Use a portrait viewport for mobile
+   examples and restore the original viewport/appearance afterward.
+3. Exclude passwords, tokens, recovery keys, phone numbers, account names, channel
+   IDs and unrelated files. Capture sharing options before a URL is generated;
+   revoke disposable demonstration links afterward. Crop management screens to
+   safe controls rather than publishing identifiers.
+4. Save the final PNG or silent MP4 here with a descriptive name. Keep raw frames,
+   browser/session data and temporary files in ignored local staging. Preserve
+   the actual image format when converting captures.
+5. Update the relevant caption and link in the [visual guide](../showcase.md),
+   then the README or canonical user guide where it helps. Add the exact path to
+   `PUBLIC_DOCS` in [build_release.py](../../scripts/build_release.py); remove
+   obsolete assets and references together.
 
-```markdown
-[![Watch the TGDrive demo](docs/assets/demo-poster.png)](YOUR_VIDEO_URL)
-```
+The current PNGs and MP4s are stored in the repository and included in public
+source releases. Video posters link directly to the local MP4, so they also work
+in an extracted source archive. GitHub may open a file/download page instead of
+playing a repository-relative video inline; these are not uploaded GitHub video
+attachments. If a maintainer later uploads a video attachment through GitHub's
+Markdown editor, replace the link with that real attachment URL.
 
-The example path is relative to the root README; use `assets/demo-poster.png`
-from a guide in `docs/`. Do not add an iframe or a dummy video URL.
-
-## Source releases
-
-Add replacement images to `PUBLIC_DOCS` in
-[build_release.py](../../scripts/build_release.py), replacing the corresponding
-placeholder entries. This keeps exported source documentation complete.
+Capture inspection is part of preparing these media artifacts. No automated
+tests, builds, linters, performance benchmarks or recovery drills were run for
+this documentation change.

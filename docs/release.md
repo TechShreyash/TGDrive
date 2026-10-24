@@ -8,6 +8,10 @@ not replace it. Use Docker Compose for all deployments.
 
 [Install a release](#choose-the-deployment) · [Check a download](#verify-a-downloaded-source-archive) · [Prepare a release](#prepare-the-source-release)
 
+The public source includes the [visual walkthroughs](showcase.md) and their
+[media assets](assets/README.md). Keep those files in the release allowlist when
+replacing captures.
+
 ## Choose the deployment
 
 | Deployment | Runtime | Guide |

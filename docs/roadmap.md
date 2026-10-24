@@ -5,6 +5,9 @@
 TGDrive is a single-owner, self-hosted drive. This page separates available
 features from remaining validation and known limits.
 
+[See the available interface and workflows](showcase.md); the recordings are
+illustrative and do not certify the validation still listed below.
+
 ## What works now
 
 | Available | Learn more |

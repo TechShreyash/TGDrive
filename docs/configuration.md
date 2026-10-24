@@ -7,6 +7,10 @@ RAM/disk can reduce them. Change one setting, then repeat the same workload.
 
 [Cache](#cache-settings) · [Transfers](#transfer-limits) · [File size & disk space](#upload-size-and-available-disk-space) · [Tuning](#a-modest-server-and-a-larger-server) · [Public demo](#public-demo-mode)
 
+[See the configuration screens](showcase.md#configure-your-drive) for the cache,
+upload, URL import and timezone controls. Captures show the interface; follow the
+defaults and limits below when tuning your own installation.
+
 ## Public demo mode
 
 Set `DEMO_MODE=true` in the demo deployment's environment, then recreate the
@@ -155,8 +159,10 @@ Raise one limit only after measuring throughput and provider waits.
 ## Upload size and available disk space
 
 These are technical capacity settings, not paid feature tiers. Self-hosted and
-[managed hosting](setup.md#managed-tgdrive-hosting) have the same TGDrive features;
-managed plans do not add caps on file size or file count.
+[managed hosting](hosting.md#optional-managed-hosting) have the same TGDrive features.
+Hosting plans add no caps on file size or upload/download counts; configured
+limits, available disk and [server capacity](hosting.md#capacity-and-practical-limits)
+still apply.
 
 In **Transfer limits → Upload storage**, the owner can change:
 

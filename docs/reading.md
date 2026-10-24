@@ -27,10 +27,12 @@ controls instead of the prose column. Choose **Fit width** for readable panels o
 navigation. The archive/spine order stays unchanged.
 
 <details>
-<summary>Reader screenshot — placeholder</summary>
+<summary>See the PDF, EPUB and comic readers</summary>
 
-<!-- MEDIA: Replace assets/media-preview.svg with a screenshot of a PDF, EPUB or comic reader with its controls visible. -->
-![Placeholder for a screenshot of the book and comic reader](assets/media-preview.svg)
+![PDF reader with page navigation and zoom controls](assets/pdf-reader.png)
+
+[EPUB and comic screenshots](showcase.md#read-and-preview) ·
+[Watch the preview and reader walkthrough](assets/readers-and-preview.mp4)
 
 </details>
 

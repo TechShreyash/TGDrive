@@ -12,29 +12,37 @@
 Keep your media and files in one place. Upload whole folders,
 stream and read in your browser, and share a file or an entire folder with a link.
 
-TGDrive is a free, open-source cloud drive you run on your laptop or server.
-It stores your files in a private channel on Telegram.
+TGDrive is free, open-source software you can use, modify and deploy under the
+[MIT License](LICENSE). Run it on your laptop or server; it stores your files in
+a private channel on Telegram.
 
-[Live demo](https://tgdrive.nexgenbots.us/) · [Set up your drive](docs/setup.md) ·
-[See it in action](#see-it-in-action) · [User guide](docs/usage.md) · [Documentation](docs/README.md)
+[Try the public demo](#try-the-public-demo) · [Set up your drive](docs/setup.md) ·
+[See it in action](#see-it-in-action) · [Visual walkthroughs](docs/showcase.md) · [User guide](docs/usage.md) · [Documentation](docs/README.md)
 
-<!-- MEDIA: drive-overview. Replace this SVG with a real desktop screenshot. See docs/assets/README.md. -->
-![TGDrive desktop file browser — screenshot placeholder](docs/assets/drive-overview.svg)
+![TGDrive desktop file browser with sample folders and files](docs/assets/drive-overview.png)
 
-## Go big with your files
+## Features
 
-- **Bring your big files.** Upload once; TGDrive handles splitting behind the scenes and keeps one file for downloads and video seeking.
-- **Press play. Start reading.** Stream video and preview photos, PDFs, text, ebooks and comics right in your browser.
-- **Share on your terms.** Send a file or an entire folder with links you can expire or revoke.
-- **Import direct file links.** [Adaptive parallel retrieval and slow queued imports](docs/usage.md#import-from-a-url), with progress while source checks run.
-- **Pick up where you left off.** Resumable uploads, folder uploads, URL imports and bot uploads, plus search, stars and Trash.
-- **Give your files a safety net.** Encrypted database backups and optional copies in an independent channel.
+- **No total storage quota.** Store files in your own Telegram channel without a TGDrive quota on the total amount of data stored.
+- **Large file uploads.** TGDrive automatically splits large uploads for Telegram and presents each as one file for playback and downloading.
+- **Play videos and audio in your browser.** Stream supported media directly from your drive.
+- **View documents, photos, ebooks and comics.** Open images, PDFs and text, and read EPUB ebooks and CBZ/CBR comics in your browser.
+- **Resumable file and folder uploads.** Upload whole folders with their structure preserved, and resume interrupted device uploads by reselecting the originals.
+- **Import from URLs or Telegram.** Paste a direct file URL, or send and forward files to your configured Telegram bot, to add them to your drive.
+- **Organize and find files.** Create folders, search by name, star favorites, switch between list and grid views, and restore items from Trash.
+- **Share files and folders with a link.** Give others read-only access, choose an expiry and revoke access when needed.
+- **Backups and recovery.** Save encrypted backups of your file list, folders and settings, and optionally keep a second copy of completed files in an independent Telegram channel.
+
+Individual uploads default to **16 GiB per file**. You can raise the file limit
+and temporary upload budget when your server has enough free disk space.
+[File-size and storage settings →](docs/configuration.md#upload-size-and-available-disk-space)
 
 ## Try the public demo
 
-**[Open the live demo](https://tgdrive.nexgenbots.us/)** · Password: `password12345`
+**[Open the live demo](https://tgdrive.nexgenbots.us/)** · **Password:** `password12345`
 
-Browse, upload sample files, preview media, organize folders and test sharing.
+No installation is needed. Browse, upload sample files, preview media, organize
+folders and try sharing.
 Configuration and Management stay visible, with changes locked.
 Browse the protected **Demo Files** collection, then use **My Files** for your own
 test uploads and changes.
@@ -46,68 +54,60 @@ disposable, non-private content. [What to try →](docs/usage.md#try-the-public-
 
 | Watch and read | Your drive on mobile |
 | :---: | :---: |
-| <img src="docs/assets/media-preview.svg" alt="TGDrive media viewer — screenshot placeholder" width="520"> | <img src="docs/assets/mobile-drive.svg" alt="TGDrive on a phone — screenshot placeholder" width="240"> |
+| <img src="docs/assets/media-preview.png" alt="Video open in TGDrive's player" width="520"> | <img src="docs/assets/mobile-drive.png" alt="TGDrive file browser in a phone-sized browser viewport" width="240"> |
 
-<!-- MEDIA: media-preview and mobile-drive. Replace with real viewer and phone captures; update paths and alt text. -->
+[Browse every part of TGDrive →](docs/showcase.md) File organization, transfers,
+sharing, previews, readers, preloads, monitoring and settings, with practical steps.
 
 <details>
-<summary>Demo video · upload, watch and share</summary>
+<summary>Watch · upload and share</summary>
 
-<!-- MEDIA: demo-video. Replace this preview with a real uploaded video URL or a linked poster. See docs/assets/README.md#demo-video. -->
-![TGDrive walkthrough — demo video placeholder](docs/assets/demo-preview.svg)
+[![Watch the TGDrive upload and sharing walkthrough](docs/assets/drive-overview.png)](docs/assets/upload-and-share.mp4)
 
-*Demo video slot: browse your drive, upload a folder, preview a file and share it.*
+[Open the video](docs/assets/upload-and-share.mp4) · [All walkthroughs](docs/showcase.md)
+
+Silent walkthroughs recorded at normal speed, with a visible cursor overlay,
+click highlights and step captions. The mobile image uses an emulated viewport,
+not a physical phone. See [capture notes](docs/assets/README.md).
 
 </details>
 
 <details>
 <summary>Extra screenshots · uploads and transfers</summary>
 
-<!-- MEDIA: upload-progress. Replace with a real Transfers capture. -->
-![TGDrive uploads and transfers — screenshot placeholder](docs/assets/upload-progress.svg)
+![Expanded TGDrive upload panel showing device progress, speed and time remaining](docs/assets/upload-progress.png)
 
 </details>
 
 ## Make it yours
 
-Run TGDrive on your laptop when you need it, or host it on a server for access
-and sharing while you are away.
+Run TGDrive on your own computer or a server. Both give you the same free app
+and all its features.
 
 ### Why host on a server?
 
-- **Keep your drive online 24/7.** Access, stream and share while your laptop is off, as long as the server stays running.
-- **Let transfers finish while you are away.** URL imports, accepted uploads and manual preloads continue without an open browser.
-- **Upload through Telegram anytime.** Your configured bot stays available without keeping your computer on.
-- **Keep background work moving.** Scheduled database backups, optional backup-channel copies and queued file processing run on the server.
-- **Give transfers more headroom.** Better server connectivity and resources can improve upload/download speeds and support more concurrent visitors and transfers.
-
-[Explore server benefits and background work →](docs/setup.md#why-host-on-a-server)
-
-### Choose your hosting
-
-| Option | Starting price | What you get |
+| Feature | Localhost on your computer | Server with public HTTPS |
 | --- | --- | --- |
-| **Self-host** | Free TGDrive software | Run on your own computer or server; manage deployment yourself. |
-| **Server only** | **₹150/month** | Server hosting; deploy and manage TGDrive yourself. |
-| **Managed TGDrive** | **₹200/month** | Server hosting, TGDrive deployment and ongoing management included. |
+| Uploads, previews, readers and file management | All features included | All features included |
+| Access on the go | This computer by default; remote access needs setup | Phone, tablet or computer through an internet-connected browser |
+| Multiple people and shared links | Need an address reachable beyond localhost | Simultaneous access within server capacity |
+| Accepted transfers after closing the tab | Continue while your computer and TGDrive run | Continue while the server and TGDrive run |
+| Bot uploads, URL imports, preloads and backups | While your computer and TGDrive run | While the server and TGDrive run, independently of your laptop |
+| Available while your laptop sleeps or is off | No, if it hosts TGDrive | Yes, while the server is available |
+| Deployment and maintenance | You handle it | Handle it yourself or choose optional management |
 
-**To buy either option, contact [TechShreyash on Telegram](https://t.me/TechShreyash).**
-[BoltCloud](https://boltcloud.net/) is a pricing/server-options reference only;
-if it is unavailable, ask directly for current prices and availability.
+For help with setup and maintenance, we offer optional **managed TGDrive hosting
+from ₹100/month, including a server**, deployment, ongoing management and a
+personal HTTPS subdomain. You get full server and TGDrive access, using your own
+Telegram channel, bots and MongoDB account. TGDrive itself remains free.
 
-For deployment management on your own server, [Coolify](docs/setup.md#coolify)
-is recommended and free to self-host. [Compare hosting options →](docs/setup.md#hosting-beyond-your-machine)
+There are no additional hosting-plan caps on file size or upload/download counts.
+Higher plans buy capacity for more simultaneous requests and users, with more
+headroom for speed. Configured upload limits, disk space and bandwidth still apply.
 
-All TGDrive features are available when self-hosting and on every managed plan.
-There are no extra plan-based caps on file size or file count. Higher plans add
-server resources for more concurrent visitors, uploads and downloads.
-
-**Your drive stays yours, even when hosting expires.** Completed files remain in
-your Telegram channel. Keep your MongoDB catalog, Telegram access and recovery kit
-to reopen the same drive on your laptop or another server without re-uploading
-completed files. [Keep your drive when a plan ends →](docs/operations.md#when-a-hosting-plan-expires)
-
-[**Set up TGDrive →**](docs/setup.md) · [Explore the user guide](docs/usage.md)
+You can also buy just a server from us and manage TGDrive yourself.
+[Hosting details, discounted server plans and ownership →](docs/hosting.md) ·
+[Contact TechShreyash](https://t.me/TechShreyash)
 
 <details>
 <summary>Storage, backups and limits</summary>
@@ -132,18 +132,24 @@ of important originals. See [Backup & recovery](docs/backup-recovery.md).
 </details>
 
 <details>
-<summary>Configuration and contributing</summary>
+<summary>Configuration and operations</summary>
 
 [Configuration](docs/configuration.md) · [Operations](docs/operations.md) ·
 [Architecture](docs/architecture.md) · [Development](docs/development.md) ·
 [Roadmap](docs/roadmap.md)
 
-Bug reports should include the release, deployment mode and reproduction steps.
-Remove credentials and private links. Read [contributor guidance](AGENTS.md);
-maintainers can use [release verification](docs/release.md).
+Maintainers can use [release verification](docs/release.md).
 
-To fill the prepared image and video slots, see [Screenshots and demos](docs/assets/README.md).
+For screenshots, recordings and replacement instructions, see [Screenshots and demos](docs/assets/README.md).
 
 </details>
+
+## Contribute
+
+Contributions, feedback, bug reports and feature requests are always welcome.
+[Open an issue](https://github.com/TechShreyash/TGDrive/issues) or start with the
+[development guide](docs/development.md) and [contributor guidance](AGENTS.md).
+Include your release and reproduction steps in bug reports; remove credentials
+and private links.
 
 [MIT License](LICENSE)

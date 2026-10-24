@@ -2,6 +2,9 @@
 
 [Docs home](README.md) · Next: [Using TGDrive](usage.md)
 
+[See the interface before installing](showcase.md), including the file browser,
+previews, transfers and settings.
+
 **Use Docker Compose for every TGDrive deployment.** It builds the website and
 includes Python, dependencies and preview tools, with the same runtime on laptops
 and servers. No host Python or Node installation is needed for the main steps.
@@ -17,9 +20,8 @@ channel.
 | --- | --- |
 | **Laptop, only when needed** | Docker Compose on Windows, macOS or Linux; follow steps 1–5 below. |
 | **Your own server** | [Self-hosted Coolify](#coolify), a free tool for deployment management. |
-| **Buy a server and manage it yourself** | [Server-only hosting](#server-only-hosting); order directly from TechShreyash. |
 | **Server with your own HTTPS proxy** | [Server Compose](#docker-compose-on-a-server). |
-| **Hosted and managed for you** | [Managed TGDrive hosting](#managed-tgdrive-hosting), including the server, deployment and management. |
+| **Prefer help running it** | [Optional managed hosting](hosting.md#optional-managed-hosting), including the server, deployment and management. |
 
 Local Compose uses a private localhost address and runs only when you start
 it. TGDrive needs internet access to Telegram and MongoDB. A sleeping or stopped
@@ -299,74 +301,39 @@ to create an authorized Telethon StringSession.
 ### Why host on a server?
 
 An always-on server keeps TGDrive working **24/7 without leaving your laptop on**.
-Self-hosted and managed deployments have the same capabilities:
+Open the same drive from your phone, tablet or computer, share reachable links,
+and let trusted people use the drive together. Server-side transfers, bot uploads,
+backups and queued work can keep running while your own device is offline.
+Self-hosted and managed installations have the same TGDrive features.
 
-| Benefit | What keeps working |
-| --- | --- |
-| **Access and sharing** | Browse, stream video/audio, read, download and serve shared links from any device while the server is reachable. |
-| **Transfer speed and capacity** | Better server bandwidth, routing and resources can improve uploads/downloads and handle more simultaneous visitors or transfers. |
-| **Accepted device uploads** | Once **You can close this tab** appears, Telegram upload, file processing and publication continue server-side. |
-| **Remote uploads** | Submitted URL imports download directly to the server and upload to Telegram, without keeping your device connected. |
-| **Manual preloads and cache** | Prepare whole files for later playback/downloads; cached bytes can be reused by subsequent visitors. |
-| **Telegram bot uploads** | The configured bot can receive/save files while your personal computer is off. |
-| **Background protection** | Scheduled encrypted database backups and enabled independent-channel copying/synchronization continue. |
-| **Queued work and recovery** | Accepted jobs, documented retries, deletion/cleanup and initiated recovery copying can continue without the browser. |
-| **Monitoring** | Resource/traffic history keeps collecting while TGDrive runs; inspect it later from another device. |
-
-The server, TGDrive, MongoDB, Telegram and network must remain available; this is
-not an uptime guarantee. Device uploads still need the browser until acceptance.
-Manual whole-file preloads can outlive a tab; automatic playback read-ahead follows
-active viewers, and cached bytes can expire or be evicted. See
-[transfer states](usage.md#can-i-close-the-tab) and [cache policy](performance.md).
-
-Your device uplink, viewer connection, Telegram cooldowns and routing still affect
-speed. More concurrent visitors/uploads/downloads share server capacity; higher
-resources help when that capacity is the bottleneck.
+[Compare localhost and server access](hosting.md#local-computer-or-server),
+including the shared-owner access model and background work. Device uploads still
+need the browser until **You can close this tab** appears. The server, TGDrive,
+MongoDB, Telegram and network must remain available; see
+[transfer states](usage.md#can-i-close-the-tab) and [performance](performance.md).
 
 ### Server-only hosting
 
-Want a server while managing TGDrive yourself? **Server-only plans start at
-₹150/month (INR)**. You handle TGDrive deployment, configuration and ongoing
-management. **[Contact TechShreyash on Telegram](https://t.me/TechShreyash) to buy
-a server or confirm pricing and availability.**
-
-[BoltCloud](https://boltcloud.net/) is a reference for pricing and server options,
-not the purchase channel. If the site is unavailable, request those details on Telegram.
-
-Use [free self-hosted Coolify](#coolify) for deployment management, or
-[Docker Compose with your own proxy](#docker-compose-on-a-server). For the server,
-deployment and management together, choose [managed TGDrive hosting](#managed-tgdrive-hosting).
+If you prefer to manage deployment yourself, you can also
+[get just a server](hosting.md#server-plans-and-customization). Use
+[free self-hosted Coolify](#coolify) or [Docker Compose with your own proxy](#docker-compose-on-a-server).
 
 ### Managed TGDrive hosting
 
-Prefer someone else to run your drive? **Managed hosting by TechShreyash starts
-at ₹200/month (INR)**. The base plan includes **server hosting, TGDrive deployment
-and ongoing management**. [Contact TechShreyash](https://t.me/TechShreyash) for
-pricing details and a plan suited to your workload.
-
-Higher plans provide more server resources for heavier use. Multiple simultaneous
-visitors, uploads and downloads share those resources; under load, transfers can
-slow down and pages can take longer to respond. Choose more capacity as concurrent
-use grows. Actual speed also depends on network and Telegram conditions; see
-[performance factors](performance.md#follow-the-data-path).
-
-**Every TGDrive feature is available on every managed plan and when self-hosting.**
-Plans do not add file-size or file-count caps; payment covers hosting resources
-and management. Normal [upload/storage limits](configuration.md#upload-size-and-available-disk-space)
-and [catalog bounds](architecture.md#authoritative-data-and-identity) still apply
-to all deployments.
+[Optional managed hosting](hosting.md#optional-managed-hosting) is available if
+you want help with the server, deployment and ongoing maintenance. You retain
+full server and TGDrive access, use your own Telegram bots/channel and MongoDB,
+and receive a personal public HTTPS subdomain. Prepare the
+[required accounts and credentials](hosting.md#what-you-prepare); the hosting
+guide covers the offer, capacity and ownership.
 
 ### Keep your drive when a plan ends
 
-Server-only and managed plans pay for hosting resources and management, not
-ownership of your files. Expiry does not itself delete completed files from
-Telegram or lock TGDrive to that server. With the same catalog and Telegram
-access, you can reopen your drive on a laptop or another server without re-uploading.
-
-Keep your [recovery kit](backup-recovery.md#keep-the-mongodb-recovery-kit-outside-the-server)
-off-server. If MongoDB is hosted on the expiring server too, move it or save a
-confirmed backup and matching key before losing access. Follow
-[moving after hosting expires](operations.md#when-a-hosting-plan-expires).
+Hosting does not transfer ownership of your drive. Keep your
+[recovery kit](backup-recovery.md#keep-the-mongodb-recovery-kit-outside-the-server)
+outside the server and preserve access to MongoDB and Telegram. Follow
+[moving after hosting expires](operations.md#when-a-hosting-plan-expires) to
+reopen the drive elsewhere without re-uploading completed files.
 
 ### Coolify
 

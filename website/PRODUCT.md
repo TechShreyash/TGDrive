@@ -7,6 +7,7 @@ the file bytes and MongoDB holding the catalog.
 | Looking for | Go to |
 | --- | --- |
 | Features and everyday workflows | [User guide](../docs/usage.md) |
+| Localhost, server access and optional managed setup | [Hosting guide](../docs/hosting.md) |
 | Layout, themes, branding and interaction rules | [Interface design](DESIGN.md) |
 | Data flow and durability | [Architecture](../docs/architecture.md) |
 | Current limits and future work | [Status and roadmap](../docs/roadmap.md) |

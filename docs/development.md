@@ -7,6 +7,10 @@ tests and development servers **inside WSL Ubuntu**, using the Linux checkout.
 
 [Run locally](#install-the-development-environment) · [Sample UI](#preview-with-sample-content) · [Validation](#validation-commands) · [Release checks](#source-releases)
 
+The [showcase](showcase.md) documents live illustrative captures. Follow the
+[media guide](assets/README.md) when replacing them; captures do not replace the
+automated and live validation described below.
+
 ## Install the development environment
 
 ```bash

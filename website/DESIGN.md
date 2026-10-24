@@ -6,18 +6,19 @@
 
 TGDrive is a personal file manager backed by Telegram. Everyday file access,
 uploads, playback and owner maintenance take precedence over visual decoration.
-The [deployed original](https://tgdrive.nexgenbots.us/) is the approved visual
-reference. Preserve Inter, Lucide icons, neutral surfaces and restrained blue
+The deployed demo is the approved visual reference; use the
+[demo link and public password](../docs/usage.md#try-the-public-demo) to sign in.
+Preserve Inter, Lucide icons, neutral surfaces and restrained blue
 actions. The user rejected the navy/indigo experiment and excessive badges/prose.
 **Light and dark themes** supersede the earlier single-theme direction.
 
 <details>
 <summary>File-manager reference capture</summary>
 
-<!-- MEDIA: Replace with a populated Files screenshot showing the toolbar, sidebar and list. Keep private filenames out of the capture. -->
-![Placeholder for a populated TGDrive file-manager screenshot](../docs/assets/drive-overview.svg)
+![TGDrive file browser with its toolbar, sidebar and original demo files](../docs/assets/drive-overview.png)
 
-Replace this slot with the approved interface; follow the [media guide](../docs/assets/README.md).
+See [List and Dark Grid captures](../docs/showcase.md#browse-and-organize) for
+alternate views. Follow the [media guide](../docs/assets/README.md) when updating captures.
 
 </details>
 

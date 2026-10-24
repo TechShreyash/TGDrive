@@ -7,6 +7,9 @@
 
 ## Run and monitor
 
+[Preloads and Performance screenshots](showcase.md#preload-and-monitor) show
+where to inspect cache coverage, traffic and server resources in the website.
+
 Run these from the installation folder.
 
 | Action | Local Docker command |
@@ -136,6 +139,9 @@ Hosting expiry interrupts sharing and background work until the app is reachable
 again. Unfinished uploads still need staged server bytes or their originals;
 disposable caches/preloads can be rebuilt. Missing Telegram originals, a lost
 catalog or missing recovery keys cannot be repaired by changing hosts alone.
+
+See [Keep control of your drive](hosting.md#keep-control-of-your-drive) for managed
+hosting access and ownership.
 
 ## Reopen after losing the local installation
 

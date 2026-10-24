@@ -3,7 +3,8 @@
 [Docs home](README.md) · [Settings guide](configuration.md) · [Development](development.md)
 
 Look up an exact setting, limit or request contract. Tables and examples expand
-on demand. For everyday workflows, start with [Using TGDrive](usage.md).
+on demand. For everyday workflows, start with [Using TGDrive](usage.md) or the
+[visual walkthroughs](showcase.md).
 
 | Looking for… | Go to |
 | --- | --- |

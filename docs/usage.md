@@ -7,19 +7,28 @@ you choose.
 
 [Public demo](#try-the-public-demo) · [Upload](#upload-files-or-folders) · [Browse](#browse-and-organize) · [Preview](#open-preview-and-download) · [Preload](#preload-a-file-for-smoother-playback-and-downloads) · [Share](#share-and-revoke)
 
+Prefer a visual introduction? [Open the gallery and walkthrough videos](showcase.md).
+
 ## Use several devices
+
+When your hosted server is reachable over the internet, open TGDrive in a browser
+on your phone, tablet or computer to use the same drive on the go.
 
 You can sign in on several devices or browsers with the same owner password and
 use them at the same time. Each login has its own session; signing in again does
 not disconnect other devices, and **Log Out** signs out only that session.
-Tabs in the same browser profile share their session. Everyone using the owner
-credentials has full access to the same drive, settings and files. Use share
-links for people who should only read selected content.
+Tabs in the same browser profile share their session.
+
+Multiple trusted people can also use the drive at once with the same owner
+password. They share full access to its files and settings, with no separate
+personal accounts or per-person permissions. Use read-only share links for people
+who should only access selected files or folders.
 
 ## Try the public demo
 
-Open **[TGDrive's live demo](https://tgdrive.nexgenbots.us/)** and sign in with
-password **`password12345`**. No installation is needed.
+**[Open the live demo](https://tgdrive.nexgenbots.us/)** · **Password:** `password12345`
+
+Enter the public password on the sign-in page. No installation is needed.
 
 **Demo Files** contains the operator's sample collection. You can browse, preview
 and download it, but attempts to change the folder or its contents open a
@@ -151,10 +160,13 @@ can continue on the server; another batch still sending device bytes keeps the
 close warning active. Recovery resumes from the last confirmed offset.
 
 <details>
-<summary>Upload progress screenshot — placeholder</summary>
+<summary>See upload progress</summary>
 
-<!-- MEDIA: Replace assets/upload-progress.svg with a screenshot showing device receipt, Telegram transfer and a completed file. -->
-![Placeholder for a screenshot of upload progress](assets/upload-progress.svg)
+![Expanded upload panel showing device progress, speed, time remaining and Keep this tab open](assets/upload-progress.png)
+
+![Completed uploads in the transfer panel](assets/upload-completed.png)
+
+[Watch the upload and sharing walkthrough](assets/upload-and-share.mp4).
 
 **Uploading to Telegram** includes unfinished parallel parts. **Parts in Channel**
 counts confirmed messages. My Files receives the item after every part is confirmed.
@@ -328,8 +340,8 @@ Protected originals use `no-store`, so browser disk caching is not promised.
 | Other unsupported formats | Original download |
 
 PDFs, EPUB and comics request needed sections without automatically preloading
-the whole file. PDFs have a **64 MiB reading budget per opening**; complex files
-may reach it. See [book/comic controls](reading.md).
+the whole file. PDFs support sources up to **256 MiB**. See
+[book/comic controls and practical limits](reading.md).
 
 <details>
 <summary>Video, PDF and keyboard controls</summary>
@@ -567,6 +579,8 @@ loss, follow [backup and recovery](backup-recovery.md).
 
 <details>
 <summary>Optional Telegram bot interface</summary>
+
+<a name="optional-telegram-bot-interface"></a>
 
 Set `MAIN_BOT_TOKEN` and `TELEGRAM_ADMIN_IDS` to enable the optional bot interface.
 Only those administrators can use it, in a private chat with the bot.

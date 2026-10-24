@@ -11,6 +11,10 @@ Telegram; a warm cache speeds repeat access.
 | Diagnose slow transfers | [Read Performance](#read-the-performance-page), then [check the symptoms](#investigate-a-slowdown) |
 | Tune capacity | [Cache budgets](#cache-limits) and [upload controls](#upload-pipeline-and-smaller-splits) |
 
+[See Preloads and Performance](showcase.md#preload-and-monitor) for screenshots of
+cache coverage, network traffic and server resources. Values in the captures are
+examples from the recorded session, not throughput benchmarks.
+
 ## Follow the data path
 
 | Stage | Typical constraints |
@@ -30,7 +34,7 @@ A server with stronger connectivity/resources can improve upload/download speeds
 when it removes the current bottleneck. Device uploads still depend on your
 uplink; shared downloads use server egress and each viewer's connection.
 
-For [managed hosting](setup.md#managed-tgdrive-hosting), plans scale server resources
+For [managed hosting](hosting.md#optional-managed-hosting), plans scale server resources
 for concurrent visitors and transfers. All TGDrive features remain included;
 larger plans increase capacity without promising a fixed transfer speed.
 

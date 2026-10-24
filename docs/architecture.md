@@ -4,6 +4,9 @@
 
 Where files live, when work becomes durable, and how one drive stays consistent.
 
+For the user-facing screens around these flows, see the
+[visual walkthroughs](showcase.md).
+
 [Data and identity](#authoritative-data-and-identity) · [Transfers](#transfer-pipeline) · [Recovery](#database-safety-copies-and-security)
 
 ## The short version

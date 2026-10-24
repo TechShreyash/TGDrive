@@ -35,6 +35,15 @@ Review the warning about long runtimes and potentially substantial bandwidth,
 then confirm **Start background rebuild**. New uploads generate covers
 automatically; this action is for files already stored, including existing covers.
 
+<details>
+<summary>Find the thumbnail rebuild control</summary>
+
+![Thumbnail regeneration entry point in cache settings](assets/thumbnail-rebuild.png)
+
+This capture shows the control; it is not evidence that a full-library rebuild ran.
+
+</details>
+
 The Settings page shows files checked, regenerated/skipped/failed counts, the
 current filename, source bytes read and recent issues. It polls the server while
 open. You can leave the page, close the browser or return later; **Cancel rebuild**
