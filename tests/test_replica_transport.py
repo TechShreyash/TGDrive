@@ -9,8 +9,16 @@ from unittest.mock import AsyncMock, Mock
 
 import pytest
 from pydantic import SecretStr
-from telethon import functions, types, utils
-from telethon.errors import FloodWaitError, RandomIdDuplicateError
+from telethon import TelegramClient, functions, types, utils
+from telethon.errors import (
+    AccessTokenInvalidError,
+    FloodWaitError,
+    NetworkMigrateError,
+    PhoneMigrateError,
+    RandomIdDuplicateError,
+    UserMigrateError,
+)
+from telethon.sessions import StringSession
 
 from tgdrive.replica_transport import (
     CAPSULE_NAME,
@@ -212,6 +220,105 @@ async def test_native_client_preserves_typed_error_for_durable_coordinator_retry
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "migration", [UserMigrateError, NetworkMigrateError, PhoneMigrateError]
+)
+async def test_real_telethon_login_replays_auth_once_after_dc_switch(migration):
+    native = TelegramClient(
+        StringSession(),
+        12345,
+        "a" * 32,
+        receive_updates=False,
+        request_retries=0,
+        raise_last_call_error=True,
+        flood_sleep_threshold=0,
+    )
+    account = types.User(id=234567, access_hash=1, is_self=True, bot=True)
+    native.connect = AsyncMock()
+    native.disconnect = AsyncMock()
+    native.get_me = AsyncMock(side_effect=[None, None, account])
+    native._on_login = AsyncMock(return_value=account)
+    native._switch_dc = AsyncMock()
+    native._authorized = False
+    requests = []
+
+    async def respond(request):
+        request = getattr(request, "query", request)
+        assert isinstance(request, functions.auth.ImportBotAuthorizationRequest)
+        requests.append(request)
+        if len(requests) == 1:
+            raise migration(request=request, capture=4)
+        return types.auth.Authorization(user=account)
+
+    def send(request, *, ordered=False):
+        return respond(request)
+
+    native._sender = SimpleNamespace(send=Mock(side_effect=send))
+    transport = ReplicaTransport(
+        SimpleNamespace(bot_tokens=(PRIMARY,)), TOKEN, client=native
+    )
+    try:
+        await transport.start()
+        assert transport._started
+        assert native._request_retries == 0
+        assert len(requests) == 2
+        native._switch_dc.assert_awaited_once_with(4)
+        native._on_login.assert_awaited_once_with(account)
+    finally:
+        await transport.close()
+    native.disconnect.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "migration", [UserMigrateError, NetworkMigrateError, PhoneMigrateError]
+)
+async def test_repeated_login_migration_is_bounded_and_sanitized(migration):
+    native = Native()
+    native.sign_in.side_effect = [
+        migration(request=TOKEN, capture=4),
+        migration(request=TOKEN, capture=5),
+    ]
+    transport = ReplicaTransport(
+        SimpleNamespace(bot_tokens=(PRIMARY,)), TOKEN, client=native
+    )
+    with pytest.raises(ReplicaTransportError) as error:
+        await transport.start()
+    assert native.sign_in.await_count == 2
+    assert error.value.code == "REPLICA_DC_MIGRATION"
+    assert error.value.retryable
+    assert TOKEN not in str(error.value)
+    assert error.value.__cause__ is None
+    assert not transport._started
+    native.get_me.assert_not_awaited()
+    native.disconnect.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "failure,code",
+    [
+        (AccessTokenInvalidError(request=TOKEN), "REPLICA_CREDENTIALS"),
+        (FloodWaitError(request=TOKEN, capture=42), "REPLICA_FLOOD_WAIT"),
+        (TimeoutError(TOKEN), "REPLICA_UNAVAILABLE"),
+    ],
+)
+async def test_nonmigration_login_failures_are_not_retried(failure, code):
+    native = Native()
+    native.sign_in.side_effect = failure
+    transport = ReplicaTransport(
+        SimpleNamespace(bot_tokens=(PRIMARY,)), TOKEN, client=native
+    )
+    with pytest.raises(ReplicaTransportError) as error:
+        await transport.start()
+    native.sign_in.assert_awaited_once_with(bot_token=TOKEN)
+    native.disconnect.assert_awaited_once()
+    assert error.value.code == code
+    assert TOKEN not in str(error.value)
+    assert not transport._started
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("mode", ["short", "short-sent"])
 @pytest.mark.parametrize("failure", [None, "channel", "document"])
 async def test_typed_short_receipts_require_fresh_matching_destination(mode, failure):
@@ -341,6 +448,22 @@ async def test_floodwait_carries_wait_without_provider_message_or_credentials():
     assert error.value.retryable and error.value.retry_after == 42
     assert error.value.code == "REPLICA_FLOOD_WAIT"
     assert TOKEN not in str(error.value)
+
+
+@pytest.mark.asyncio
+async def test_unresolved_numeric_channel_reports_access_without_provider_detail():
+    transport, native = await started()
+    native.get_input_entity = AsyncMock(side_effect=ValueError(TOKEN))
+    try:
+        with pytest.raises(ReplicaTransportError) as error:
+            await transport.inspect(BACKUP)
+        assert error.value.code == "REPLICA_ACCESS"
+        assert str(BACKUP) in str(error.value)
+        assert TOKEN not in str(error.value)
+        assert error.value.__cause__ is None
+        assert not native.requests
+    finally:
+        await transport.close()
 
 
 @pytest.mark.asyncio

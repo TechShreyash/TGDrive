@@ -50,6 +50,14 @@ Prepare accounts and permissions in Telegram. TGDrive checks channel state and b
 
 The copy includes completed documents and an AES-256-GCM encrypted `tgdrive-replica.tgdb` capsule: catalogs, remapped part locations, recovery credentials and supported settings/connections. It is separate from a full MongoDB archive; **do not interchange their files or keys**. Document bytes are not separately encrypted by TGDrive.
 
+| Recovery data | Main channel | Independent backup channel |
+| --- | --- | --- |
+| Encrypted channel recovery capsule | Saved | Saved and pinned |
+| Full encrypted MongoDB archive, when using MongoDB | Current archive created or reused | Same confirmed archive copied and verified before **Backup confirmed** |
+| Portable catalog, when using SQLite | Normal pinned `drive.json` checkpoint | Included in the encrypted recovery capsule |
+
+Snapshots cover their confirmed revision. A failed setup does not establish a confirmed copy in the new backup channel. Save the recovery-key JSON outside the server and Telegram after confirmation.
+
 Old documents/capsules remain: this is not a deletion mirror. Older recovery points can restore removed records and revoked shares. Review sharing after recovery. Pausing backup can also hold permanent catalog removal until protection resumes or is explicitly disabled; ordinary browsing, uploads and metadata changes continue. See [deletion behavior](usage.md#why-permanent-deletion-keeps-the-telegram-files).
 
 ### Rebuild a lost backup from the surviving main channel
@@ -107,9 +115,11 @@ Retry/Resume the **existing operation** after repairing the underlying problem. 
 | Missing document, wrong size, invalid key/capsule | Keep sources; select the correct key/point or another original. Never mark success manually. |
 | Disk/database failure | Repair storage/access while retaining journal/catalog, then retry. |
 
+During bot sign-in, Telegram can redirect a fresh connection to another data center. TGDrive retries authorization once after that handoff, within the 30-second sign-in deadline. If setup still fails, choose **Verify and start backup** again; for an existing backup, Retry/Resume the same operation. Message publication retries remain controlled by the saved operation journal. An unresolved numeric channel ID reports which channel needs its ID or bot access corrected.
+
 **Activity and report → Download report** gives progress and actionable failures without tokens/keys. Names and IDs may still be private; review before sharing. Never share raw private state or keys.
 
-When available, synchronization also copies a confirmed full MongoDB archive. Its revision can differ from the channel capsule's revision; they are distinct restore points. Keep both keys. In the JSON, `key` and `mongodb_backup_key` match the recorded `restore_point`; `next_backup_key` and `next_mongodb_backup_key` describe the next generation. Preserve the whole export and older pairs. If pending work captured an older MongoDB key, restore that key or verify **Backup settings** again to capture a fresh snapshot.
+The full MongoDB archive's revision can differ from the channel capsule's revision; they are distinct restore points. Keep both keys. In the JSON, `key` and `mongodb_backup_key` match the recorded `restore_point`; `next_backup_key` and `next_mongodb_backup_key` describe the next generation. Preserve the whole export and older pairs. If pending work captured an older MongoDB key, restore that key or verify **Backup settings** again to capture a fresh snapshot.
 
 Private `DATA_DIR/replica-bootstrap.json` retains owner recovery credentials/password hash. It does **not** provide offline login: MongoDB must be reachable with valid permissions, or startup may fail. A missing/corrupt catalog with reachable MongoDB can permit owner web recovery.
 

@@ -21,6 +21,7 @@ from pathlib import Path
 from typing import Any
 
 from telethon import TelegramClient, functions, types, utils
+from telethon.errors import NetworkMigrateError, PhoneMigrateError, UserMigrateError
 from telethon.sessions import StringSession
 
 CAPSULE_NAME = "tgdrive-replica.tgdb"
@@ -49,6 +50,13 @@ class ReplicaTransportError(RuntimeError):
 
 def _provider_error(error: Exception) -> ReplicaTransportError:
     name = type(error).__name__
+    if name in {"PhoneMigrateError", "NetworkMigrateError", "UserMigrateError"}:
+        return ReplicaTransportError(
+            "Telegram could not finish connecting the backup bot to its data "
+            "center. Retry the backup operation.",
+            "REPLICA_DC_MIGRATION",
+            retryable=True,
+        )
     if name == "RandomIdDuplicateError":
         return ReplicaTransportError(
             "Telegram is still completing this message. Backup will retry the "
@@ -215,7 +223,16 @@ class ReplicaTransport:
         try:
             async with self._guard(30):
                 await self._client.connect()
-                await self._client.sign_in(bot_token=self._token)
+                for attempt in range(2):
+                    try:
+                        await self._client.sign_in(bot_token=self._token)
+                        break
+                    except (PhoneMigrateError, NetworkMigrateError, UserMigrateError):
+                        # With request_retries=0, Telethon switches DC but raises
+                        # before retrying authorization. Retry only sign-in;
+                        # durable message retries remain owned by the journal.
+                        if attempt:
+                            raise
                 account = await self._client.get_me()
                 if (
                     account is None
@@ -248,7 +265,15 @@ class ReplicaTransport:
         self._ready()
         channel = _channel(channel)
         async with self._guard(25):
-            peer = await self._client.get_input_entity(channel)
+            try:
+                peer = await self._client.get_input_entity(channel)
+            except ValueError:
+                raise ReplicaTransportError(
+                    f"The backup bot cannot access channel {channel}. Check the "
+                    "channel ID and add the bot as an administrator in both "
+                    "private channels, then retry.",
+                    "REPLICA_ACCESS",
+                ) from None
             result = await self._client(
                 functions.channels.GetFullChannelRequest(utils.get_input_channel(peer))
             )
