@@ -23,6 +23,8 @@ from telethon.sessions import StringSession
 from tgdrive.replica_transport import (
     CAPSULE_NAME,
     MAX_CAPSULE_BYTES,
+    MAX_VERIFY_BATCH,
+    ReplicaRequestPacer,
     ReplicaTransport,
     ReplicaTransportError,
     _provider_error,
@@ -97,6 +99,8 @@ class Native:
         return types.InputPeerChannel(utils.resolve_id(identity)[0], 1)
 
     async def get_messages(self, channel_id, *, ids):
+        if isinstance(ids, list):
+            return [self.messages.get((channel_id, identity)) for identity in ids]
         return self.messages.get((channel_id, ids))
 
     async def upload_file(self, source, **kwargs):
@@ -160,13 +164,171 @@ class Native:
         return read()
 
 
-async def started(native=None, *, primary=PRIMARY):
+class Clock:
+    def __init__(self):
+        self.value = 0.0
+        self.delays = []
+
+    def now(self):
+        return self.value
+
+    async def sleep(self, delay):
+        self.delays.append(delay)
+        self.value += delay
+        await asyncio.sleep(0)
+
+
+async def started(native=None, *, primary=PRIMARY, pacer=None):
     native = native or Native()
     transport = ReplicaTransport(
-        SimpleNamespace(bot_tokens=(primary,), api_id=1), TOKEN, client=native
+        SimpleNamespace(bot_tokens=(primary,), api_id=1),
+        TOKEN,
+        client=native,
+        pacer=pacer or ReplicaRequestPacer(interval=0, maximum_interval=0),
     )
     await transport.start()
     return transport, native
+
+
+@pytest.mark.asyncio
+async def test_pacer_serializes_callers_and_spaces_completion_from_next_start():
+    clock = Clock()
+    pacer = ReplicaRequestPacer(clock=clock.now, sleep=clock.sleep)
+    active = maximum_active = 0
+    starts = []
+
+    async def operation():
+        nonlocal active, maximum_active
+        async with pacer.slot():
+            active += 1
+            maximum_active = max(maximum_active, active)
+            starts.append(clock.value)
+            await asyncio.sleep(0)
+            clock.value += 0.5
+            active -= 1
+
+    await asyncio.gather(operation(), operation(), operation())
+    assert maximum_active == 1
+    assert starts == [0, 1.5, 3]
+    assert clock.delays == [1, 1]
+
+
+@pytest.mark.asyncio
+async def test_floodwait_slows_replacement_transport_and_retains_typed_operation():
+    clock = Clock()
+    pacer = ReplicaRequestPacer(clock=clock.now, sleep=clock.sleep)
+    transport, native = await started(pacer=pacer)
+    native.get_input_entity = AsyncMock(side_effect=FloodWaitError(TOKEN, capture=42))
+    with pytest.raises(ReplicaTransportError) as raised:
+        await transport.inspect(BACKUP)
+    assert raised.value.retry_after == 42
+    assert raised.value.operation == "resolve_peer"
+    assert TOKEN not in str(raised.value)
+    assert pacer.interval == 2
+    await transport.close()
+
+    clock.value += 42
+    replacement, _ = await started(pacer=pacer)
+    try:
+        assert clock.delays[-1] == 2
+        pacer.slow_down()
+        pacer.slow_down()
+        assert pacer.interval == 4
+        async with pacer.slot():
+            pass
+        pacer.reset()
+        async with pacer.slot():
+            pass
+        assert clock.delays[-1] == 4, "Reset cannot discard the already reserved gap"
+        assert pacer.interval == 1
+    finally:
+        await replacement.close()
+
+
+@pytest.mark.asyncio
+async def test_cancelled_pacer_wait_does_not_issue_a_request_or_hold_the_lock():
+    entered = asyncio.Event()
+    blocked = asyncio.Event()
+
+    async def sleep(_delay):
+        entered.set()
+        await blocked.wait()
+
+    pacer = ReplicaRequestPacer(clock=lambda: 0, sleep=sleep)
+    async with pacer.slot():
+        pass
+    called = False
+
+    async def operation():
+        nonlocal called
+        async with pacer.slot():
+            called = True
+
+    task = asyncio.create_task(operation())
+    await entered.wait()
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    assert not called
+    blocked.set()
+    await operation()
+    assert called
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("failure", [None, "missing", "size", "peer", "protected"])
+async def test_batched_verification_checks_every_document_without_payload_io(failure):
+    transport, native = await started()
+    native.messages[BACKUP, 901] = message(901, BACKUP, document(123))
+    native.messages[BACKUP, 902] = message(902, BACKUP, document(456))
+    if failure == "missing":
+        native.messages.pop((BACKUP, 902))
+    elif failure == "size":
+        native.messages[BACKUP, 902].document.size = 455
+    elif failure == "peer":
+        native.messages[BACKUP, 902].peer_id = types.PeerChannel(999)
+    elif failure == "protected":
+        native.messages[BACKUP, 902].noforwards = True
+    native.get_messages = AsyncMock(wraps=native.get_messages)
+    try:
+        if failure:
+            with pytest.raises(ReplicaTransportError):
+                await transport.verify_many(BACKUP, [(901, 123), (902, 456)])
+        else:
+            await transport.verify_many(BACKUP, [(901, 123), (902, 456)])
+        native.get_messages.assert_awaited_once_with(BACKUP, ids=[901, 902])
+        assert len(native.requests) == 1
+        assert isinstance(native.requests[0], functions.channels.GetFullChannelRequest)
+        assert native.uploads == native.downloads == []
+        with pytest.raises(ReplicaTransportError) as raised:
+            await transport.verify_many(BACKUP, [(901, 123)] * (MAX_VERIFY_BATCH + 1))
+        assert raised.value.code == "REPLICA_INPUT"
+    finally:
+        await transport.close()
+
+
+@pytest.mark.asyncio
+async def test_paced_copies_keep_fresh_channel_checks_and_reference_only_media():
+    clock = Clock()
+    pacer = ReplicaRequestPacer(clock=clock.now, sleep=clock.sleep)
+    transport, native = await started(pacer=pacer)
+    native.get_input_entity = AsyncMock(wraps=native.get_input_entity)
+    try:
+        copies = await asyncio.gather(
+            transport.copy(MAIN, 77, BACKUP, random_id=11, expected_size=123),
+            transport.copy(MAIN, 77, BACKUP, random_id=12, expected_size=123),
+        )
+        assert copies == [901, 902]
+        assert all(delay == 1 for delay in clock.delays)
+        assert native.get_input_entity.await_count == 2
+        assert native.uploads == native.downloads == []
+        native.chats[BACKUP].username = "now_public"
+        with pytest.raises(ReplicaTransportError) as raised:
+            await transport.copy(MAIN, 77, BACKUP, random_id=13, expected_size=123)
+        assert raised.value.code == "REPLICA_PUBLIC_CHANNEL"
+        assert len(native.receipts) == 2
+    finally:
+        await transport.close()
 
 
 @pytest.mark.asyncio

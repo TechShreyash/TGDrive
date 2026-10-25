@@ -327,6 +327,100 @@ async def test_missing_source_part_does_not_advertise_restore_point(tmp_path):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("missing_confirmed_part", [False, True])
+async def test_retry_batches_confirmed_parts_before_copying_remaining_files(
+    tmp_path, monkeypatch, missing_confirmed_part
+):
+    _, store, remote, replica, config = setup(tmp_path, empty=True)
+    for index in range(35):
+        identity = 77 + index
+        store.add_file("/", f"file-{index}.bin", identity, 1)
+        remote.messages[replica.settings.storage_channel, identity] = b"x"
+
+    async def stop_after_29():
+        if len(remote.receipts) == 29:
+            remote.copy_error = ReplicaTransportError(
+                "Wait for Telegram.",
+                "REPLICA_FLOOD_WAIT",
+                retry_after=20,
+                retryable=True,
+            )
+        else:
+            remote.after_copy = stop_after_29
+
+    remote.after_copy = stop_after_29
+    verify_one = Transport.verify
+
+    async def verify_many(self, channel, documents):
+        self.remote.calls.append(("verify_batch", channel, list(documents)))
+        for message, size in documents:
+            await verify_one(self, channel, message, size)
+
+    async def unexpected_single_verification(self, *_args):
+        raise AssertionError("The retry must use bounded batch verification")
+
+    monkeypatch.setattr(Transport, "verify_many", verify_many, raising=False)
+    monkeypatch.setattr(Transport, "verify", unexpected_single_verification)
+    try:
+        with pytest.raises(ReplicaTransportError):
+            await replica._sync(config)
+        assert replica.status()["done_parts"] == 29
+        assert not remote.pins
+        if missing_confirmed_part:
+            message = next(iter(remote.receipts.values()))
+            remote.messages.pop((BACKUP, message))
+        remote.copy_error = None
+        remote.calls.clear()
+        if missing_confirmed_part:
+            with pytest.raises(ReplicaTransportError):
+                await replica._sync(config)
+            assert not remote.pins
+            assert not [call for call in remote.calls if call[0] == "copy"]
+        else:
+            await replica._sync(config)
+            copies = [call for call in remote.calls if call[0] == "copy"]
+            assert len(copies) == 6
+            assert replica.status()["phase"] == "protected"
+            assert replica.status()["done_files"] == 35
+        batches = [call for call in remote.calls if call[0] == "verify_batch"]
+        assert len(batches) == 1
+        assert len(batches[0][2]) == 29
+    finally:
+        await dispose(replica, store)
+
+
+@pytest.mark.asyncio
+async def test_reverification_splits_large_catalog_into_bounded_batches(
+    tmp_path, monkeypatch
+):
+    from tgdrive.replica_transport import MAX_VERIFY_BATCH
+
+    _, store, remote, replica, config = setup(tmp_path, empty=True)
+    for index in range(MAX_VERIFY_BATCH + 3):
+        identity = 77 + index
+        store.add_file("/", f"file-{index}.bin", identity, 1)
+        remote.messages[replica.settings.storage_channel, identity] = b"x"
+    batches = []
+
+    async def verify_many(self, channel, documents):
+        batches.append(list(documents))
+        for message, size in documents:
+            await self.verify(channel, message, size)
+
+    monkeypatch.setattr(Transport, "verify_many", verify_many, raising=False)
+    try:
+        await replica._sync(config)
+        store.create_folder("/", "Next snapshot")
+        remote.calls.clear()
+        await replica._sync(config)
+        assert [len(batch) for batch in batches] == [MAX_VERIFY_BATCH, 3]
+        assert not [call for call in remote.calls if call[0] == "copy"]
+        assert replica.status()["phase"] == "protected"
+    finally:
+        await dispose(replica, store)
+
+
+@pytest.mark.asyncio
 async def test_catalog_change_during_copy_reports_pending_revision_and_catches_up(
     tmp_path,
 ):
@@ -397,6 +491,7 @@ async def test_flood_wait_error_and_retry_deadline_survive_service_restart(tmp_p
             retry_after=120,
             retryable=True,
         )
+        remote.copy_error.operation = "messages.sendMedia"
         replica.start()
         for _ in range(100):
             if replica.status().get("error"):
@@ -405,6 +500,9 @@ async def test_flood_wait_error_and_retry_deadline_survive_service_restart(tmp_p
         result = replica.status()
         assert result["phase"] == "waiting"
         assert result["error"]["retry_at"] > 0
+        assert "messages.sendMedia" in result["error"]["detail"]
+        assert "Retry in 120 seconds" in result["report"][-1]["message"]
+        assert "channel permissions do not need changing" in result["error"]["action"]
         deadline = result["error"]["retry_at"]
         await replica.close()
         replica = ChannelReplica(

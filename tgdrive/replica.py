@@ -5,11 +5,13 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import math
 import secrets
 import shutil
 import time
 from contextlib import suppress
 from datetime import UTC, datetime
+from functools import partial
 
 from pydantic import SecretStr
 
@@ -34,10 +36,13 @@ def now():
 
 class ChannelReplica:
     def __init__(self, settings, runtime, *, transport_factory=None):
-        from tgdrive.replica_transport import ReplicaTransport
+        from tgdrive.replica_transport import ReplicaRequestPacer, ReplicaTransport
 
         self.settings, self.runtime = settings, runtime
-        self.factory = transport_factory or ReplicaTransport
+        self._request_pacer = ReplicaRequestPacer()
+        self.factory = transport_factory or partial(
+            ReplicaTransport, pacer=self._request_pacer
+        )
         self.directory = settings.resolved_data_dir
         self.journal = ReplicaJournal(self.directory)
         saved_mongo_key = self.journal.get("mongodb_key")
@@ -256,6 +261,11 @@ class ChannelReplica:
                             or hasattr(error, "code")
                             else "Telegram backup operation could not be confirmed."
                         )
+                        operation = getattr(error, "operation", None)
+                        if operation:
+                            detail += f" Operation: {operation}."
+                        if retryable:
+                            detail += f" Retry in {math.ceil(delay)} seconds."
                         # Never echo arbitrary credential-bearing provider exceptions.
                         detail = detail[:400]
                         self.update(
@@ -264,7 +274,11 @@ class ChannelReplica:
                                 "code": getattr(error, "code", "REPLICA_FAILED"),
                                 "detail": detail,
                                 "action": (
-                                    "Check channel access, bot permissions and "
+                                    "Leave TGDrive running. Backup will retry after "
+                                    "the displayed deadline; channel permissions "
+                                    "do not need changing for this cooldown."
+                                    if getattr(error, "code", None) == "REPLICA_FLOOD_WAIT"
+                                    else "Check channel access, bot permissions and "
                                     "the source file. Retry after correcting "
                                     "the problem. "
                                     "The last confirmed restore point is retained."
@@ -283,6 +297,8 @@ class ChannelReplica:
         return collect_credentials(self.settings, self.runtime)
 
     async def _copy_catalog(self, transport, catalog, destination):
+        from tgdrive.replica_transport import MAX_VERIFY_BATCH
+
         source = catalog["storage_channel_id"]
         files = list(files_in(catalog))
         total_parts = sum(len(parts_in(f)) for f in files)
@@ -296,6 +312,40 @@ class ChannelReplica:
         )
         mapping = {}
         done_parts = done_bytes = 0
+        # A resumed job must still recheck every journaled document. Batch those
+        # reads so each cooldown does not trigger two requests per old part.
+        verified = {}
+        verify_many = getattr(transport, "verify_many", None)
+        if callable(verify_many):
+            batch = []
+
+            async def check_batch():
+                if not batch:
+                    return
+                self.update(current_file="Checking previously copied parts")
+                await verify_many(
+                    destination, [(message, size) for _identity, message, size in batch]
+                )
+                verified.update((identity, message) for identity, message, _size in batch)
+                batch.clear()
+
+            for node in files:
+                for part in parts_in(node):
+                    if self.journal.get("status", {}).get("phase") in {
+                        "paused",
+                        "disabled",
+                    }:
+                        return None
+                    identity = (
+                        f"{catalog['drive_id']}:{source}:{destination}:"
+                        f"{part['message_id']}:{part['size']}"
+                    )
+                    _random_id, message = self.journal.intent(identity, part["size"])
+                    if message is not None:
+                        batch.append((identity, message, part["size"]))
+                        if len(batch) == MAX_VERIFY_BATCH:
+                            await check_batch()
+            await check_batch()
         for count, node in enumerate(files):
             for part in parts_in(node):
                 if self.journal.get("status", {}).get("phase") in {
@@ -318,7 +368,7 @@ class ChannelReplica:
                         expected_size=part["size"],
                     )
                     self.journal.confirm(identity, message)
-                else:
+                elif verified.get(identity) != message:
                     await transport.verify(destination, message, part["size"])
                 mapping[str(part["message_id"])] = message
                 done_parts += 1
@@ -499,6 +549,7 @@ class ChannelReplica:
                         status=409,
                     )
                 self.update(phase="protected", error=None, checked_at=time.time())
+                self._request_pacer.reset()
                 self.journal.set("job", None)
                 return
             catalog = job["catalog"]
@@ -555,6 +606,7 @@ class ChannelReplica:
                 "Restore point confirmed in both channels "
                 f"at catalog revision {catalog['revision']}.",
             )
+            self._request_pacer.reset()
             self.journal.set("job", None)
         finally:
             await transport.close()

@@ -16,6 +16,7 @@ import math
 import os
 import re
 import secrets
+import time
 from contextlib import asynccontextmanager, suppress
 from pathlib import Path
 from typing import Any
@@ -26,8 +27,39 @@ from telethon.sessions import StringSession
 
 CAPSULE_NAME = "tgdrive-replica.tgdb"
 MAX_CAPSULE_BYTES = 64 * 1024 * 1024
+MAX_VERIFY_BATCH = 32
 _BLOCK = 512 * 1024
 _BOT = re.compile(r"[1-9][0-9]{4,14}:[A-Za-z0-9_-]{20,}")
+
+
+class ReplicaRequestPacer:
+    """Serialize replica calls and retain conservative pacing across retries."""
+
+    def __init__(self, *, interval=1.0, maximum_interval=4.0, clock=None, sleep=None):
+        self.interval = self.minimum_interval = interval
+        self.maximum_interval = maximum_interval
+        self._clock = clock or time.monotonic
+        self._sleep = sleep or asyncio.sleep
+        self._next_at = 0.0
+        self._lock = asyncio.Lock()
+
+    @asynccontextmanager
+    async def slot(self):
+        async with self._lock:
+            delay = self._next_at - self._clock()
+            if delay > 0:
+                await self._sleep(delay)
+            try:
+                yield
+            finally:
+                self._next_at = self._clock() + self.interval
+
+    def slow_down(self):
+        self.interval = min(self.maximum_interval, self.interval * 2)
+
+    def reset(self):
+        # Retain the next slot: confirming a checkpoint must not create a burst.
+        self.interval = self.minimum_interval
 
 
 class ReplicaTransportError(RuntimeError):
@@ -46,6 +78,7 @@ class ReplicaTransportError(RuntimeError):
         self.code = code
         self.retry_after = retry_after
         self.retryable = retryable
+        self.operation: str | None = None
 
 
 def _provider_error(error: Exception) -> ReplicaTransportError:
@@ -175,12 +208,38 @@ class ReplicaTransport:
     A native client may be injected for offline transport-contract tests.
     """
 
-    def __init__(self, settings, bot_token: str, *, client=None) -> None:
+    def __init__(self, settings, bot_token: str, *, client=None, pacer=None) -> None:
         self._settings = settings
         self._token = bot_token.strip() if isinstance(bot_token, str) else ""
         self._client = client
         self._started = False
         self._lock = asyncio.Lock()
+        self._pacer = pacer or ReplicaRequestPacer()
+        self._peers = {}
+
+    async def _request(self, operation, call, *args, **kwargs):
+        async with self._pacer.slot():
+            try:
+                return await call(*args, **kwargs)
+            except (PhoneMigrateError, NetworkMigrateError, UserMigrateError, ValueError):
+                # Login owns the bounded DC handoff; inspect owns unresolved peers.
+                raise
+            except ReplicaTransportError:
+                raise
+            except Exception as error:
+                mapped = _provider_error(error)
+                mapped.operation = operation
+                if mapped.code == "REPLICA_FLOOD_WAIT":
+                    self._pacer.slow_down()
+                raise mapped from None
+
+    async def _peer(self, channel):
+        # Cache only the input peer, never channel privacy, permissions or TTL.
+        if channel not in self._peers:
+            self._peers[channel] = await self._request(
+                "resolve_peer", self._client.get_input_entity, channel
+            )
+        return self._peers[channel]
 
     @asynccontextmanager
     async def _guard(self, seconds: int = 90):
@@ -225,7 +284,9 @@ class ReplicaTransport:
                 await self._client.connect()
                 for attempt in range(2):
                     try:
-                        await self._client.sign_in(bot_token=self._token)
+                        await self._request(
+                            "sign_in", self._client.sign_in, bot_token=self._token
+                        )
                         break
                     except (PhoneMigrateError, NetworkMigrateError, UserMigrateError):
                         # With request_retries=0, Telethon switches DC but raises
@@ -233,7 +294,7 @@ class ReplicaTransport:
                         # durable message retries remain owned by the journal.
                         if attempt:
                             raise
-                account = await self._client.get_me()
+                account = await self._request("get_me", self._client.get_me)
                 if (
                     account is None
                     or not getattr(account, "bot", False)
@@ -250,6 +311,7 @@ class ReplicaTransport:
 
     async def close(self) -> None:
         self._started = False
+        self._peers.clear()
         if self._client is not None:
             with suppress(Exception):
                 async with asyncio.timeout(10):
@@ -266,7 +328,7 @@ class ReplicaTransport:
         channel = _channel(channel)
         async with self._guard(25):
             try:
-                peer = await self._client.get_input_entity(channel)
+                peer = await self._peer(channel)
             except ValueError:
                 raise ReplicaTransportError(
                     f"The backup bot cannot access channel {channel}. Check the "
@@ -274,7 +336,9 @@ class ReplicaTransport:
                     "private channels, then retry.",
                     "REPLICA_ACCESS",
                 ) from None
-            result = await self._client(
+            result = await self._request(
+                "channels.getFullChannel",
+                self._client,
                 functions.channels.GetFullChannelRequest(utils.get_input_channel(peer))
             )
             chat = next(
@@ -340,15 +404,17 @@ class ReplicaTransport:
         channel = _channel(channel)
         async with self._lock, self._guard(25):
             await self.inspect(channel, writable=False)
-            peer = await self._client.get_input_entity(channel)
-            result = await self._client(
+            peer = await self._peer(channel)
+            result = await self._request(
+                "channels.getFullChannel",
+                self._client,
                 functions.channels.GetFullChannelRequest(utils.get_input_channel(peer))
             )
             identity = getattr(result.full_chat, "pinned_msg_id", None)
             return None if identity is None else _message(identity)
 
-    async def _get(self, channel: int, message_id: int):
-        message = await self._client.get_messages(channel, ids=message_id)
+    @staticmethod
+    def _document(channel: int, message_id: int, message):
         if message is None or getattr(message, "id", None) != message_id:
             raise ReplicaTransportError(
                 "A required channel message is missing. Restore channel access or "
@@ -375,6 +441,12 @@ class ReplicaTransport:
                 "REPLICA_PROTECTED",
             )
         return message, document
+
+    async def _get(self, channel: int, message_id: int):
+        message = await self._request(
+            "channels.getMessages", self._client.get_messages, channel, ids=message_id
+        )
+        return self._document(channel, message_id, message)
 
     async def _sent(self, channel: int, result: Any, random_id: int) -> int:
         if isinstance(result, types.UpdateShortSentMessage):
@@ -451,8 +523,10 @@ class ReplicaTransport:
                     "the current backup and review this file.",
                     "REPLICA_SIZE_MISMATCH",
                 )
-            peer = await self._client.get_input_entity(destination_channel)
-            result = await self._client(
+            peer = await self._peer(destination_channel)
+            result = await self._request(
+                "messages.sendMedia",
+                self._client,
                 functions.messages.SendMediaRequest(
                     peer=peer,
                     media=types.InputMediaDocument(
@@ -492,6 +566,49 @@ class ReplicaTransport:
                     "Preserve the current catalog and choose another recovery point.",
                     "REPLICA_SIZE_MISMATCH",
                 )
+
+    async def verify_many(self, channel: int, documents: list[tuple[int, int]]) -> None:
+        """Check a bounded group of journaled parts with one fresh channel read."""
+        self._ready()
+        channel = _channel(channel)
+        if not 1 <= len(documents) <= MAX_VERIFY_BATCH:
+            raise ReplicaTransportError("Invalid verification batch.", "REPLICA_INPUT")
+        expected = {}
+        for message_id, size in documents:
+            message_id = _message(message_id)
+            _integer(size, "document size", minimum=0, maximum=(1 << 63) - 1)
+            if message_id in expected and expected[message_id] != size:
+                raise ReplicaTransportError(
+                    "Conflicting sizes for a backup document.", "REPLICA_SIZE_MISMATCH"
+                )
+            expected[message_id] = size
+        async with self._lock, self._guard():
+            await self.inspect(channel, writable=False)
+            messages = await self._request(
+                "channels.getMessages",
+                self._client.get_messages,
+                channel,
+                ids=list(expected),
+            )
+            found = {}
+            for message in messages:
+                identity = getattr(message, "id", None)
+                if message is None:
+                    continue
+                if identity not in expected or identity in found:
+                    raise ReplicaTransportError(
+                        "Telegram returned an unexpected backup document.",
+                        "REPLICA_VERIFY_FAILED",
+                    )
+                found[identity] = message
+            for message_id, size in expected.items():
+                _, document = self._document(channel, message_id, found.get(message_id))
+                if document.size != size:
+                    raise ReplicaTransportError(
+                        "The channel document does not match its catalog size. "
+                        "Preserve the current catalog and choose another recovery point.",
+                        "REPLICA_SIZE_MISMATCH",
+                    )
 
     @staticmethod
     def _capsule(document, filename: str = CAPSULE_NAME) -> int:
@@ -576,12 +693,20 @@ class ReplicaTransport:
                     lambda: hashlib.file_digest(source, "sha256").hexdigest()
                 )
                 source.seek(0)
-                uploaded = await self._client.upload_file(
-                    source, file_name=filename, file_size=size, part_size_kb=512
+                uploaded = await self._request(
+                    "upload_recovery_bundle",
+                    self._client.upload_file,
+                    source,
+                    file_name=filename,
+                    file_size=size,
+                    part_size_kb=512,
                 )
-            result = await self._client(
+            peer = await self._peer(channel)
+            result = await self._request(
+                "messages.sendMedia",
+                self._client,
                 functions.messages.SendMediaRequest(
-                    peer=await self._client.get_input_entity(channel),
+                    peer=peer,
                     media=types.InputMediaUploadedDocument(
                         file=uploaded,
                         mime_type="application/octet-stream",
@@ -605,9 +730,11 @@ class ReplicaTransport:
                     "REPLICA_VERIFY_FAILED",
                 )
             if pin:
-                await self._client(
+                await self._request(
+                    "messages.updatePinnedMessage",
+                    self._client,
                     functions.messages.UpdatePinnedMessageRequest(
-                        peer=await self._client.get_input_entity(channel),
+                        peer=peer,
                         id=identity,
                         silent=True,
                     )
@@ -629,8 +756,10 @@ class ReplicaTransport:
         async with self._lock, self._guard(180):
             await self.inspect(channel, writable=False)
             if message_id is None:
-                peer = await self._client.get_input_entity(channel)
-                full = await self._client(
+                peer = await self._peer(channel)
+                full = await self._request(
+                    "channels.getFullChannel",
+                    self._client,
                     functions.channels.GetFullChannelRequest(
                         utils.get_input_channel(peer)
                     )

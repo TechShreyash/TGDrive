@@ -488,6 +488,17 @@ survives sessions. `RANDOM_ID_DUPLICATE` may mean the first send is in flight;
 retain the typed error and retry the same identity after a bounded wait. Verify
 typed update receipts and the destination document before journal confirmation.
 
+The offline transport/coordinator tests cover request pacing, fresh channel and
+document checks, bounded batch verification, ambiguous sends and durable waits:
+
+```bash
+uv run --frozen python -m pytest tests/test_replica_transport.py tests/test_replica.py -q
+```
+
+These tests use synthetic Telegram clients; they do not establish live Telegram
+rate limits or demonstrate production backup completion. Pacing and retry policy
+are documented in the [backup guide](backup-recovery.md#enable-and-confirm-the-first-copy).
+
 ```bash
 TGDRIVE_E2E=1 PYTHONPATH=.:tests uv run --frozen --group e2e python -m pytest tests/test_browser_channel_backup.py -q
 ```

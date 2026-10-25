@@ -49,12 +49,6 @@ Coolify may prevent deleting a variable declared by Compose. To switch to a
 plaintext password, clear the corresponding hash variable's **Value**, save it
 and redeploy. A populated hash always takes precedence over plaintext.
 
-**Temporary Coolify recovery state:** the `DEMO_ADMIN_PASSWORD` mapping is
-currently removed from `compose.yaml` so an old variable can be deleted and
-recreated without legacy escaping. Restore
-`DEMO_ADMIN_PASSWORD: ${DEMO_ADMIN_PASSWORD:-}` under `services.app.environment`
-before redeploying with a plaintext demo administrator password.
-
 <details>
 <summary>Recreate a variable with Coolify's “Old escaping” warning</summary>
 

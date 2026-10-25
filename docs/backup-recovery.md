@@ -57,6 +57,39 @@ Prepare accounts and permissions in Telegram. TGDrive checks channel state and b
 
 **100% bytes is not confirmation.** Destination documents and matching encrypted recovery metadata must verify in both channels. Later changes can remain pending.
 
+Copies run sequentially and reuse Telegram document references; original file
+bytes are not downloaded and reuploaded through TGDrive. Telegram can still
+require a cooldown. Leave TGDrive running until the displayed retry deadline;
+new activity entries include the wait duration and the failed operation when
+available. A cooldown alone does not call for changing bot permissions.
+
+<details>
+<summary>Copy pacing and verification on retry</summary>
+
+The independent backup transport leaves a one-second gap between explicit
+Telegram operations, including metadata reads, document sends and verification.
+Each FloodWait doubles the gap to two, then at most four seconds. The same pacer
+is shared across replacement transport connections, so automatic retries do not
+immediately return to the fastest rate. A confirmed backup checkpoint restores
+the one-second gap. These are fixed backup policies, separate from upload tuning;
+Telegram can require longer waits regardless of these gaps.
+
+Every retry still verifies already confirmed destination documents. They are
+checked in batches of at most 32 parts, using one fresh channel inspection and
+one grouped message read per batch, instead of repeating both reads per part.
+Missing, changed-size, protected or wrong-channel documents prevent confirmation.
+Only input peer references are cached within a connection; channel privacy,
+permissions and auto-delete checks remain fresh. New copies retain their
+destination-document checks and saved send identities.
+
+Provider retry deadlines and confirmed mappings are saved on the server and
+survive restart. Adaptive pacing starts at one second after restart; the saved
+Telegram deadline must still expire before background work resumes. Recovery
+bundles are uploaded separately and downloaded for checksum verification; their
+internal media-chunk transfers retain Telethon's normal transfer behavior.
+
+</details>
+
 ### What this copy retains
 
 The copy includes completed documents and an AES-256-GCM encrypted `tgdrive-replica.tgdb` capsule: catalogs, remapped part locations, recovery credentials and supported settings/connections. It is separate from a full MongoDB archive; **do not interchange their files or keys**. Document bytes are not separately encrypted by TGDrive.
