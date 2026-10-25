@@ -49,6 +49,36 @@ Coolify may prevent deleting a variable declared by Compose. To switch to a
 plaintext password, clear the corresponding hash variable's **Value**, save it
 and redeploy. A populated hash always takes precedence over plaintext.
 
+**Temporary Coolify recovery state:** the `DEMO_ADMIN_PASSWORD` mapping is
+currently removed from `compose.yaml` so an old variable can be deleted and
+recreated without legacy escaping. Restore
+`DEMO_ADMIN_PASSWORD: ${DEMO_ADMIN_PASSWORD:-}` under `services.app.environment`
+before redeploying with a plaintext demo administrator password.
+
+<details>
+<summary>Recreate a variable with Coolify's “Old escaping” warning</summary>
+
+Coolify 4.5.0 passes new variables exactly as entered but preserves legacy
+escaping for existing variables. That can make a password containing quotes
+differ from the value received by TGDrive. See the
+[Coolify release notes](https://github.com/coollabsio/coolify/releases/tag/v4.5.0).
+
+1. Pause automatic deployments before pushing the temporary Compose change.
+2. Remove the affected variable's mapping from the deployment branch's Compose
+   file, push it, then select **General → Reload Compose** in Coolify. For a
+   Git-backed application, change the file in Git; Coolify's editor is read-only.
+3. Delete and re-add the environment variable in Coolify. Confirm that the
+   **Old escaping** warning is gone.
+4. Restore the original Compose mapping, push it and **Reload Compose** again.
+5. Redeploy, then restore the previous automatic deployment setting.
+
+Do not deploy the intermediate Compose file. Removing its mapping prevents that
+file from passing the plaintext demo administrator password to the container;
+it does not disable demo mode. A configured `DEMO_ADMIN_PASSWORD_HASH` still
+takes precedence.
+
+</details>
+
 “Visitor” access describes permissions, not a separate account or an automatic
 content reset. Both login types use the configured session lifetime (24 hours
 by default). Logging out and using the other password switches access.

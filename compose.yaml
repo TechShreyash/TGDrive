@@ -32,7 +32,6 @@ services:
       CACHE_DIR: /app/cache
       COOKIE_SECURE: "true"
       DEMO_MODE: ${DEMO_MODE:-false}
-      DEMO_ADMIN_PASSWORD: ${DEMO_ADMIN_PASSWORD:-}
       DEMO_ADMIN_PASSWORD_HASH: ${DEMO_ADMIN_PASSWORD_HASH:-}
       TGDRIVE_AUTO_SECRETS: "true"
       TGDRIVE_PROXY_HOSTS: coolify-proxy
