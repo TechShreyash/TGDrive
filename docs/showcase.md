@@ -16,6 +16,25 @@ emulated 390 × 844 browser viewport, not a physical phone.
 | [Upload and share](assets/upload-and-share.mp4) | 5:20 | Upload progress, history, Show in Folder, share label/expiry, copying and revocation confirmation |
 | [Preview and read](assets/readers-and-preview.mp4) | 5:51 | Image/audio/text previews, PDF/EPUB/comic navigation and video playback/settings |
 
+<details>
+<summary>Find a feature in the videos</summary>
+
+Times are **minutes:seconds**. Open a video and use the player's timeline to
+jump to the step you need.
+
+| Video | Chapters |
+| --- | --- |
+| Organize your files | **0:09** List view · **0:16** Sorting · **0:31** Search · **0:57** Favorites · **1:31** Create a folder · **2:06** Rename · **2:40** Move |
+| Upload and share | **0:14** Upload menu · **0:27** Device file selection · **1:46** Upload starts · **2:00** Transfers · **2:14** Show in Folder · **3:21** Share options · **3:56** Link label · **4:08** Expiry · **4:16** Link management · **4:50** Copy link · **5:14** Revocation confirmation |
+| Preview and read | **0:07** Images · **0:25** Audio · **0:47** PDF · **1:25** EPUB · **2:18** Comics · **4:01** Video · **4:31** Player settings · **5:23** Text preview |
+
+The device file picker is outside the browser recording; local paths stay
+hidden. Link generation happens between the upload and management chapters.
+The management chapter shows copying and the revocation confirmation; the
+temporary demonstration link was revoked after recording.
+
+</details>
+
 ## Browse and organize
 
 Start in **My Files**. Open a folder, switch between **List** and **Grid**, and

@@ -31,6 +31,8 @@ is cropped to its identifier-free 1260 × 230 top panel. The mobile image is
 | [Upload and share](upload-and-share.mp4) | About 5:20 | Device upload, progress, history, Show in Folder, share label/expiry, copying and revocation confirmation |
 | [Previews and readers](readers-and-preview.mp4) | About 5:51 | Image/audio/text previews, PDF/EPUB/comic navigation and video playback/settings |
 
+[Find a feature by its video timestamp](../showcase.md#see-tgdrive-in-action).
+
 Videos use continuous Windows Graphics Capture of the live browser, encoded as
 H.264 MP4 at 30 fps and normal speed. A large cursor overlay follows logged click
 coordinates, with click highlights and captions in a separate 96-pixel bottom
@@ -40,6 +42,11 @@ not captured. Browser suggestions are masked in the organization video, and the
 browser infobar is cropped from the sharing chapter. Raw captures and interaction
 logs remain in ignored local staging. These recordings illustrate workflows,
 not transfer benchmarks, device compatibility or recovery guarantees.
+
+The device file picker is outside the browser capture. Link generation happens
+between the upload and management chapters; the recipient view is shown in a
+screenshot. The video stops at the revocation confirmation, and the temporary
+link was revoked after recording.
 
 The folder-upload image shows the **New** menu. Directory selection could not be
 completed through the capture tool; the videos demonstrate ordinary file uploads.
@@ -56,6 +63,10 @@ authentication or recovery. Server settings were not changed for these captures.
 2. Capture the feature in a useful, settled state. Keep the navigation and controls
    legible; dismiss unrelated notifications. Use a portrait viewport for mobile
    examples and restore the original viewport/appearance afterward.
+   Record continuously at normal speed, keep the cursor visible and pause long
+   enough to read each step. When capture omits the cursor, base any cursor overlay
+   on the actual recorded interactions. Inspect the export for missing or duplicate
+   pointers, unreadable captions and abrupt transitions before replacing it.
 3. Exclude passwords, tokens, recovery keys, phone numbers, account names, channel
    IDs and unrelated files. Capture sharing options before a URL is generated;
    revoke disposable demonstration links afterward. Crop management screens to
