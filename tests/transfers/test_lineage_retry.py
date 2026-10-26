@@ -46,7 +46,7 @@ async def test_provider_wait_retries_same_upload_and_exposes_deadline(tmp_path):
         ]
     )
     source = staged_file(tmp_path)
-    record = manager.enqueue_upload(source, "/", "one.bin", source.stat().st_size)
+    record = await manager.enqueue_upload(source, "/", "one.bin", source.stat().st_size)
     try:
         await wait_phase(record, "retry_wait")
         assert record.as_dict()["retry_at"] > time.time()
@@ -67,10 +67,10 @@ async def test_cancel_wakes_an_unsent_provider_wait_without_sending(tmp_path):
         side_effect=BackupError("Provider cooldown", retry_after=3600)
     )
     source = staged_file(tmp_path)
-    record = manager.enqueue_upload(source, "/", "one.bin", source.stat().st_size)
+    record = await manager.enqueue_upload(source, "/", "one.bin", source.stat().st_size)
     try:
         await wait_phase(record, "retry_wait")
-        manager.cancel_job(record.id)
+        (await manager.cancel_job(record.id))
         await asyncio.wait_for(record.task, 1)
         assert record.status == TransferStatus.CANCELLED
         assert not client.sent
@@ -85,7 +85,7 @@ async def test_confirmed_conflict_never_retries_or_sends(tmp_path):
         side_effect=RecoveryConflict("Explicit recovery required", retry_after=0.01)
     )
     source = staged_file(tmp_path)
-    record = manager.enqueue_upload(source, "/", "one.bin", source.stat().st_size)
+    record = await manager.enqueue_upload(source, "/", "one.bin", source.stat().st_size)
     try:
         await record.task
         assert record.status == TransferStatus.ERROR
@@ -106,7 +106,7 @@ async def test_append_admission_uses_local_guard_but_still_waits_for_checkpoint(
     checked = []
     manager._check_upload_allowed = lambda: checked.append(len(client.sent))
     source = staged_file(tmp_path)
-    record = manager.enqueue_upload(source, "/", "one.bin", source.stat().st_size)
+    record = await manager.enqueue_upload(source, "/", "one.bin", source.stat().st_size)
     try:
         assert checked == [0]  # Admission is guarded before background work begins.
         await asyncio.wait_for(record.task, 2)
@@ -128,7 +128,7 @@ async def test_restart_preserves_guard_deadline_and_sends_only_once(
         side_effect=BackupError("Provider cooldown", retry_after=0.3)
     )
     source = staged_file(tmp_path)
-    record = manager.enqueue_upload(source, "/", "one.bin", source.stat().st_size)
+    record = await manager.enqueue_upload(source, "/", "one.bin", source.stat().st_size)
     await wait_phase(record, "retry_wait")
     deadline = record.context["lineage_retry_at"]
     import tgdrive.transfers.tasks as tasks_module

@@ -74,6 +74,8 @@ for defaults and tuning.
 **Refresh** and **Check Again** show progress and stay disabled until their
 requests finish. A successful refresh shows a brief confirmation; failures show
 an error so you can retry. Automatic background updates stay quiet.
+If configuration refresh fails, open settings keep their unsaved drafts while
+management controls stay disabled. Retry the refresh to continue editing.
 
 ## Upload files or folders
 

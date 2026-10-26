@@ -159,7 +159,7 @@ async def test_window_upload_hashes_exact_bytes_and_checkpoints_before_send(tmp_
     client = client_for(native)
     calls = []
 
-    def checkpoint():
+    async def checkpoint():
         assert native.uploaded == [b"PAYLOAD"]
         assert native.requests == []
         calls.append("durable")
@@ -195,7 +195,7 @@ async def test_changed_window_or_failed_durable_checkpoint_cannot_publish(tmp_pa
         )
     assert native.requests == []
 
-    def failed_checkpoint():
+    async def failed_checkpoint():
         raise OSError("synthetic journal failure")
 
     with pytest.raises(OSError, match="journal"):

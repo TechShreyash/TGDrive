@@ -296,7 +296,7 @@ async def test_promoted_stream_keeps_its_prefix_when_switching_to_ranges(tmp_pat
         nonlocal ready
         if current >= 3:
             ready = True
-            client.scheduler.refresh()
+            await client.scheduler.refresh()
 
     result = await client.download(
         "https://files.example/movie.mov",

@@ -186,6 +186,10 @@ or TGDrive restarts.
 
 The UI reads effective session permissions with uncached configuration, waits
 for them before enabling management, and clears them when a session ends.
+Once loaded, configuration refreshes preserve mounted settings drafts even on
+failure; management stays disabled until the refresh succeeds. Authentication
+errors are tied to the request's login generation, so a delayed response from
+an older session cannot dismiss a newer login.
 Protected changes return a dedicated error that opens a read-only popup.
 Visitor steps and deployment limits live in [public demo mode](configuration.md#public-demo-mode).
 
@@ -209,8 +213,13 @@ synchronizes the new file and commits its receipt. Other admissions see that
 reservation while persistence is pending, preventing competing admissions from
 overbooking storage. Disconnects drain that worker; an uncertain
 database acknowledgement retains the file and reservation until reconciliation
-or expiry. Other job lifecycle commits and database/network latency can still
-delay requests.
+or expiry. Job lifecycle writes also run in workers, with acknowledgements awaited
+in journal order before dispatch continues. Job reads use memory while a write
+is pending and expose the last acknowledged lifecycle state; a new job is hidden
+until its first commit. Slow MongoDB can still delay admission and state transitions.
+Cancellation intent is saved before signalling workers; a rejected commit keeps
+the prior state authoritative. Staged receipt bytes remain until completion is
+acknowledged, including while its final job-state write is pending.
 
 Display follows a browser-wide device-first boundary: while any local upload
 still needs receipt, pending upload groups show device metrics or **Received**
@@ -238,6 +247,15 @@ final confirmation/publication are excluded from byte-based ETA claims.
 A lost response resumes at the acknowledged offset; reselected files must match
 saved checksums, not just names and sizes. Fully received files finish verification
 and enqueue after a completion-request disconnect; polling recovers their job ID.
+The job's first durable record includes its staged path, destination, name and
+upload identity. A restart between job creation and receipt handoff can therefore
+resume the existing job while the staged bytes survive.
+
+Browser recovery metadata is saved per transfer, and finished-job dismissals per
+job, so another tab cannot replace the whole recovery list. Malformed entries
+produce a warning without hiding valid transfers. This metadata does not contain
+the original device files; clearing browser storage or losing staged bytes can
+still require selecting the originals again.
 
 | Signal | Guarantee |
 | --- | --- |
@@ -349,8 +367,10 @@ see [the workflow](usage.md#transfer-history).
 <details>
 <summary>Compaction, browser ownership and destination lookup</summary>
 
-Resolved upload/import jobs become compact MongoDB summaries; terminal live jobs
-can expire. Archives enter full backups, omit private recovery context and cannot
+Resolved upload/import jobs become eligible for compaction after
+`TRANSFER_TTL_SECONDS`; new admissions or explicit cleanup archive eligible live
+records. Job polling does not perform journal writes. Archives enter full
+backups, omit private recovery context and cannot
 be retried as live jobs. Folder uploads carry one explicit identity through
 receipt, job and archive; ordinary files and URL imports retain separate task
 identities. Task status and search matching are determined before pagination,

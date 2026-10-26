@@ -37,11 +37,11 @@ class Manager:
         self.registry = TransferRegistry(mongo=backend.db.jobs, mongo_backend=backend)
         self.enqueued = 0
 
-    def enqueue_upload(
+    async def enqueue_upload(
         self, source, destination, name, size, *, transfer_id, folder_upload=None
     ):
         self.enqueued += 1
-        job = self.registry.create("queued", transfer_id=transfer_id, total=size)
+        job = await self.registry.create("queued", transfer_id=transfer_id, total=size)
         job.context.update(
             kind="upload",
             local_path=str(source),
@@ -51,7 +51,7 @@ class Manager:
         )
         if folder_upload is not None:
             job.context["folder_upload"] = copy.deepcopy(folder_upload)
-        self.registry.persist(job)
+        (await self.registry.persist(job))
         return job
 
 
@@ -97,7 +97,7 @@ async def test_complete_is_idempotent_after_worker_removed_staging(tmp_path):
     item = uploads.create("one.bin", "/", 3)
     await uploads.append(item["id"], 0, b"one")
     first = await uploads.complete(item["id"])
-    manager.registry.update(first.id, status=TransferStatus.COMPLETED)
+    (await manager.registry.update(first.id, status=TransferStatus.COMPLETED))
     uploads.path(item["id"]).unlink()
     uploads.release(item["id"])
     second = await uploads.complete(item["id"])
@@ -116,7 +116,7 @@ async def test_terminal_receipt_cache_uses_persisted_expiry_after_restart(
     else:
         await uploads.append(item["id"], 0, b"one")
         job = await uploads.complete(item["id"])
-        manager.registry.update(job.id, status=TransferStatus.COMPLETED)
+        (await manager.registry.update(job.id, status=TransferStatus.COMPLETED))
         uploads.path(item["id"]).unlink()
         uploads.release(item["id"])
     saved = mongo_backend.db.receipts.find_one({"_id": item["id"]})
@@ -141,14 +141,14 @@ async def test_terminal_receipt_cache_uses_persisted_expiry_after_restart(
 
 
 @pytest.mark.parametrize("status", [TransferStatus.QUEUED, TransferStatus.ERROR])
-def test_receipt_cache_expiry_retains_unfinished_job(
+async def test_receipt_cache_expiry_retains_unfinished_job(
     tmp_path, mongo_backend, monkeypatch, status
 ):
     uploads, manager = make(tmp_path)
     item = uploads.create("retry.bin", "/", 3)
-    job = manager.registry.create("uploading", transfer_id=item["id"], total=3)
+    job = await manager.registry.create("uploading", transfer_id=item["id"], total=3)
     job.context.update(kind="upload", send_started=True)
-    manager.registry.update(job.id, status=status)
+    (await manager.registry.update(job.id, status=status))
     item["state"] = "finished"
     uploads._save(item)
     deadline = mongo_backend.db.receipts.find_one({"_id": item["id"]})[
@@ -402,7 +402,7 @@ async def test_budget_free_space_expiration_and_postrestart_release(
     await uploads.append(item["id"], 0, b"one")
     record = await uploads.complete(item["id"])
     # Worker finished before receipts were constructed after a restart.
-    manager.registry.update(record.id, status=TransferStatus.COMPLETED)
+    (await manager.registry.update(record.id, status=TransferStatus.COMPLETED))
     restarted, _ = make(tmp_path, manager=manager, staging_budget_bytes=3)
     assert restarted.get(item["id"])["state"] == "finished"
     assert not restarted.path(item["id"]).exists()
@@ -456,7 +456,7 @@ async def test_restart_reconciles_job_committed_before_receipt_queue_commit(
         await uploads.complete(item["id"])
     assert uploads.get(item["id"])["state"] == "receiving"
     record = manager.registry.get(item["id"])
-    manager.registry.update(record.id, status=TransferStatus.COMPLETED)
+    (await manager.registry.update(record.id, status=TransferStatus.COMPLETED))
     restarted, _ = make(tmp_path, manager=manager, staging_budget_bytes=3)
     assert restarted.get(item["id"])["state"] == "finished"
     assert restarted.create("replacement.bin", "/", 3)["offset"] == 0
@@ -634,8 +634,8 @@ async def test_cloud_creation_reconciles_jobs_on_loop_and_saves_on_worker(
         tmp_path, monkeypatch, staging_budget_bytes=3
     )
     item = uploads.create("finished.bin", "/", 3)
-    job = manager.registry.create("queued", transfer_id=item["id"], total=3)
-    manager.registry.update(job.id, status=TransferStatus.COMPLETED)
+    job = await manager.registry.create("queued", transfer_id=item["id"], total=3)
+    (await manager.registry.update(job.id, status=TransferStatus.COMPLETED))
     loop_thread = threading.get_ident()
     write, get = backend.write, manager.registry.get
 

@@ -103,7 +103,7 @@ class PerformanceSettings:
             remote.min_free_bytes = value.min_free_bytes
             scheduler = getattr(remote, "scheduler", None)
             if scheduler is not None:
-                scheduler.configure(value.remote_download_concurrency)
+                await scheduler.configure(value.remote_download_concurrency)
         pool = getattr(self.runtime, "pool", None)
         if pool is None or not hasattr(pool, "__dict__"):
             return

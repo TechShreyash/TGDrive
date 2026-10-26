@@ -76,7 +76,7 @@ async def test_single_run_yields_to_active_work_and_can_be_cancelled(
 ):
     manager, store, runtime = rebuild
     store.add_file("/", "photo.jpg", 2, 10)
-    active = runtime.registry.create("uploading")
+    active = await runtime.registry.create("uploading")
     active.status = TransferStatus.RUNNING
     calls = []
 

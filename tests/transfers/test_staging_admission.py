@@ -46,16 +46,16 @@ async def test_upload_reservations_prevent_overbooking_and_release_after_cancel(
     assert uploads.create("c", "/", 80)["offset"] == 0
 
 
-def test_browser_admission_includes_url_reservations_and_retained_bytes(
+async def test_browser_admission_includes_url_reservations_and_retained_bytes(
     tmp_path, monkeypatch
 ):
     uploads, manager = make(
         tmp_path, upload_limit=1000, staging_budget_bytes=1000, min_free_bytes=10
     )
     manager.uploads = uploads
-    job = manager.registry.create("downloading", total=100)
+    job = await manager.registry.create("downloading", total=100)
     job.context.update(staging_size=100, staging_written=40)
-    manager.registry.update(job.id, status=TransferStatus.RUNNING)
+    (await manager.registry.update(job.id, status=TransferStatus.RUNNING))
     monkeypatch.setattr(
         "tgdrive.transfers.staging.shutil.disk_usage",
         lambda path: SimpleNamespace(free=150),
@@ -68,7 +68,7 @@ def test_browser_admission_includes_url_reservations_and_retained_bytes(
     path = tmp_path / "retained"
     path.write_bytes(b"x" * 40)
     job.context["local_path"] = str(path)
-    manager.registry.update(job.id, status=TransferStatus.ERROR)
+    (await manager.registry.update(job.id, status=TransferStatus.ERROR))
     assert staging_usage(manager) == (40, 0)
 
 
@@ -236,14 +236,14 @@ async def test_url_import_checks_shared_space_before_reading_body(
         "tgdrive.transfers.staging.shutil.disk_usage",
         lambda path: SimpleNamespace(free=50),
     )
-    record = manager.start_remote(
+    record = await manager.start_remote(
         url="https://files.example/a", destination="/", filename=None
     )
     if reserved:
         # A restarted import must recheck admission even if its old reservation
         # has the same size as this source response.
         record.context.update(staging_size=80 if known else 100, staging_written=40)
-        manager.registry.persist(record)
+        (await manager.registry.persist(record))
     import asyncio
 
     waiting = asyncio.Event()
@@ -342,7 +342,7 @@ async def test_url_reserves_once_and_reports_live_written_bytes(
         assert manager.registry._durable[record.id]["context"]["staging_written"] == 0
 
     monkeypatch.setattr(manager.remote, "_report_progress", observe)
-    record = manager.start_remote(
+    record = await manager.start_remote(
         url="https://files.example/a", destination="/", filename=None
     )
     try:
@@ -400,13 +400,13 @@ async def test_waiting_url_reserves_a_window_instead_of_the_whole_file(
     records = []
     try:
         records.append(
-            manager.start_remote(
+            await manager.start_remote(
                 url="https://files.example/first", destination="/", filename=None
             )
         )
         await asyncio.wait_for(first_read.wait(), 3)
         records.append(
-            manager.start_remote(
+            await manager.start_remote(
                 url="https://files.example/second", destination="/", filename=None
             )
         )

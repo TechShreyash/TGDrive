@@ -229,7 +229,7 @@ async def test_pipeline_publishes_retry_status_releases_staging_and_uploads_once
         observed.append(delay)
 
     monkeypatch.setattr(client, "_wait_for_retry", waiting)
-    record = manager.start_remote(
+    record = await manager.start_remote(
         url="https://files.example/book.epub", destination="/", filename="book.epub"
     )
     try:

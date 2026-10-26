@@ -781,8 +781,7 @@ class ChannelReplica:
             raise SettingsProblem("Supply a new main bot distinct from the backup bot.")
         registry = getattr(self.runtime, "registry", None)
         if registry and any(
-            str(getattr(r.status, "value", r.status)) in {"queued", "running"}
-            for r in registry.list()
+            r.committed.status in {"queued", "running"} for r in registry.list()
         ):
             raise SettingsProblem(
                 "Cancel or finish all transfers before recovery. Their existing "

@@ -277,6 +277,12 @@ commit off the HTTP event loop, with staging reserved before it yields. See the
 [transfer pipeline](architecture.md#transfer-pipeline) for admission and retry
 boundaries.
 
+Job-state commits are awaited worker operations. A slow commit holds back its
+state transition without blocking reads of the last acknowledged job state.
+Bulk move, Trash and restore also share batch working copies rather than copying
+the full catalog for each item; name, ancestry and share checks still depend on
+catalog size.
+
 ## Upload pipeline and smaller splits
 
 | Control | Default / allowed values |

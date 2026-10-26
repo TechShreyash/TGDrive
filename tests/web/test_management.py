@@ -165,7 +165,7 @@ async def test_pending_upload_allows_only_same_account_credential_repair(
 ):
     manager, runtime, settings, _ = managed
     row = (await manager.snapshot())["clients"][0]
-    record = runtime.transfers.registry.create("failed")
+    record = await runtime.transfers.registry.create("failed")
     record.status = TransferStatus.ERROR
     record.context.update(sender="storage-bot-123456", random_id=123, send_started=True)
     token = "123456:" + "z" * 30 if same_account else SECOND_TOKEN
@@ -239,7 +239,7 @@ async def test_busy_rechecked_after_network_verification(managed):
         manager.save(SettingsChange(expected_revision=0, api_id=123))
     )
     await entered.wait()
-    runtime.transfers.registry.create("uploading")
+    await runtime.transfers.registry.create("uploading")
     resume.set()
     with pytest.raises(SettingsProblem) as captured:
         await task
@@ -250,7 +250,7 @@ async def test_busy_rechecked_after_network_verification(managed):
 @pytest.mark.asyncio
 async def test_failed_ambiguous_job_also_blocks_removing_its_sender(managed):
     manager, runtime, _, _ = managed
-    job = runtime.transfers.registry.create("uploading")
+    job = await runtime.transfers.registry.create("uploading")
     job.status = TransferStatus.ERROR
     job.context.update(sender="storage-bot-123456", send_started=True)
     with pytest.raises(SettingsProblem) as captured:
@@ -768,9 +768,9 @@ async def test_removing_premium_preserves_bot_multipart_logical_limit(managed):
     assert read_document(settings.resolved_data_dir) is not None
 
 
-def test_login_api_rejects_busy_before_phone_code_request(managed):
+async def test_login_api_rejects_busy_before_phone_code_request(managed):
     manager, runtime, _, _ = managed
-    runtime.transfers.registry.create("uploading")
+    await runtime.transfers.registry.create("uploading")
     with pytest.raises(SettingsProblem) as captured:
         manager.login_api()
     assert captured.value.code == "SETTINGS_BUSY"
@@ -782,7 +782,7 @@ async def test_stale_completed_receipt_does_not_block_connection_changes(managed
     uploads = ResumableUploads(settings, runtime.transfers)
     try:
         receipt = uploads.create("finished.bin", "/", 3)
-        record = runtime.transfers.registry.create(
+        record = await runtime.transfers.registry.create(
             "uploading", transfer_id=receipt["id"]
         )
         record.status = TransferStatus.COMPLETED

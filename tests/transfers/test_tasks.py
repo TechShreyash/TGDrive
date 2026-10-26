@@ -15,26 +15,28 @@ from tgdrive.transfers.tasks import (
 )
 
 
-def test_lifecycle_logs_skip_progress_and_unchanged_waits(caplog) -> None:
+async def test_lifecycle_logs_skip_progress_and_unchanged_waits(caplog) -> None:
     caplog.set_level(logging.INFO, logger="tgdrive.transfers.tasks")
     registry = TransferRegistry()
-    record = registry.create("queued", total=100)
+    record = await registry.create("queued", total=100)
     record.context.update(kind="upload", name="private-name", url="private-url")
-    registry.update(record.id, status=TransferStatus.RUNNING, phase="uploading")
+    (await registry.update(record.id, status=TransferStatus.RUNNING, phase="uploading"))
     for current in range(100):
-        registry.update(record.id, current=current)
-        registry.persist(record)
-    registry.update(record.id, phase="waiting_for_telegram")
+        (await registry.update(record.id, current=current))
+        (await registry.persist(record))
+    (await registry.update(record.id, phase="waiting_for_telegram"))
     for _ in range(10):
-        registry.update(record.id, phase="waiting_for_telegram")
+        (await registry.update(record.id, phase="waiting_for_telegram"))
     record.context["retry_at"] = time.time() + 60
     for _ in range(10):
-        registry.persist(record)
-    registry.update(record.id, phase="retry_wait")
-    registry.update(
-        record.id, status=TransferStatus.COMPLETED, phase="completed", current=100
+        (await registry.persist(record))
+    (await registry.update(record.id, phase="retry_wait"))
+    (
+        await registry.update(
+            record.id, status=TransferStatus.COMPLETED, phase="completed", current=100
+        )
     )
-    registry.persist(record)
+    (await registry.persist(record))
 
     messages = [row.getMessage() for row in caplog.records]
     assert len(messages) == 4
@@ -50,7 +52,7 @@ def test_lifecycle_logs_skip_progress_and_unchanged_waits(caplog) -> None:
 async def test_failure_log_has_cause_type_and_action_without_private_detail(caplog):
     caplog.set_level(logging.INFO, logger="tgdrive.transfers.tasks")
     registry = TransferRegistry()
-    record = registry.create("uploading")
+    record = await registry.create("uploading")
 
     async def fail(_record):
         raise TimeoutError("private-source-url password=secret")
@@ -85,64 +87,70 @@ def test_failure_diagnostics_classify_repairs_without_private_messages():
         assert "private" not in action
 
 
-def test_reloaded_transfer_does_not_repeat_existing_lifecycle(caplog, tmp_path):
+async def test_reloaded_transfer_does_not_repeat_existing_lifecycle(caplog, tmp_path):
     caplog.set_level(logging.INFO, logger="tgdrive.transfers.tasks")
     backend = FakeMongoBackend()
     registry = TransferRegistry(mongo=backend.db.jobs, mongo_backend=backend)
-    record = registry.create("uploading", total=10)
-    registry.update(record.id, status=TransferStatus.RUNNING)
+    record = await registry.create("uploading", total=10)
+    (await registry.update(record.id, status=TransferStatus.RUNNING))
     registry.close()
     caplog.clear()
 
     resumed = TransferRegistry(mongo=backend.db.jobs, mongo_backend=backend)
-    resumed.persist(resumed.get(record.id))
+    (await resumed.persist(resumed.get(record.id)))
     assert not caplog.records
     resumed.close()
 
 
-def test_registry_updates_and_prunes_terminal_records() -> None:
+async def test_registry_updates_and_prunes_terminal_records() -> None:
     registry = TransferRegistry(ttl_seconds=60)
-    record = registry.create("saving", total=10)
-    registry.update(
-        record.id,
-        status=TransferStatus.COMPLETED,
-        current=10,
-        total=10,
+    record = await registry.create("saving", total=10)
+    (
+        await registry.update(
+            record.id,
+            status=TransferStatus.COMPLETED,
+            current=10,
+            total=10,
+        )
     )
     record.updated_at = 1.0
 
-    registry.prune(now=62.0)
+    (await registry.prune(now=62.0))
     with pytest.raises(TransferNotFound):
         registry.get(record.id)
 
 
-def test_registry_cancellation_sets_event() -> None:
+async def test_registry_cancellation_sets_event() -> None:
     registry = TransferRegistry()
-    record = registry.create("downloading")
+    record = await registry.create("downloading")
 
-    registry.cancel(record.id)
+    (await registry.cancel(record.id))
     assert record.cancel_event.is_set()
     assert record.status is TransferStatus.CANCELLED
     assert record.phase == "cancelling"
     assert record.error == "Transfer cancelled"
 
 
-def test_late_progress_cannot_mutate_cancelled_snapshot() -> None:
+async def test_late_progress_cannot_mutate_cancelled_snapshot() -> None:
     registry = TransferRegistry()
-    record = registry.create("uploading", total=100)
-    registry.update(
-        record.id,
-        status=TransferStatus.RUNNING,
-        current=40,
+    record = await registry.create("uploading", total=100)
+    (
+        await registry.update(
+            record.id,
+            status=TransferStatus.RUNNING,
+            current=40,
+        )
     )
 
-    registry.cancel(record.id)
+    (await registry.cancel(record.id))
     cancelled_snapshot = record.as_dict()
-    registry.update(
-        record.id,
-        status=TransferStatus.COMPLETED,
-        phase="completed",
-        current=100,
+    (
+        await registry.update(
+            record.id,
+            status=TransferStatus.COMPLETED,
+            phase="completed",
+            current=100,
+        )
     )
 
     assert record.as_dict() == cancelled_snapshot
@@ -154,7 +162,7 @@ def test_late_progress_cannot_mutate_cancelled_snapshot() -> None:
 @pytest.mark.asyncio
 async def test_spawn_observes_errors() -> None:
     registry = TransferRegistry()
-    record = registry.create("uploading")
+    record = await registry.create("uploading")
 
     async def fail(_record: object) -> None:
         raise RuntimeError("network failed")
@@ -169,7 +177,7 @@ async def test_spawn_observes_errors() -> None:
 @pytest.mark.asyncio
 async def test_shutdown_cancels_and_drains_tasks() -> None:
     registry = TransferRegistry(ttl_seconds=60)
-    record = registry.create("uploading")
+    record = await registry.create("uploading")
     started = asyncio.Event()
 
     async def wait_forever(_record: object) -> None:
@@ -178,8 +186,8 @@ async def test_shutdown_cancels_and_drains_tasks() -> None:
 
     registry.spawn(record.id, wait_forever)
     await started.wait()
-    expired = registry.create("completed")
-    registry.update(expired.id, status=TransferStatus.COMPLETED)
+    expired = await registry.create("completed")
+    (await registry.update(expired.id, status=TransferStatus.COMPLETED))
     expired.updated_at = time.monotonic() - 61
     await registry.shutdown()
 
@@ -190,7 +198,7 @@ async def test_shutdown_cancels_and_drains_tasks() -> None:
 @pytest.mark.asyncio
 async def test_uncooperative_cancel_is_forced_after_grace_period() -> None:
     registry = TransferRegistry(cancel_grace_seconds=0.01)
-    record = registry.create("uploading")
+    record = await registry.create("uploading")
     started = asyncio.Event()
 
     async def ignore_event(_record: object) -> None:
@@ -199,7 +207,7 @@ async def test_uncooperative_cancel_is_forced_after_grace_period() -> None:
 
     task = registry.spawn(record.id, ignore_event)
     await started.wait()
-    registry.cancel(record.id)
+    (await registry.cancel(record.id))
 
     with pytest.raises(asyncio.CancelledError):
         await task
@@ -211,32 +219,34 @@ async def test_uncooperative_cancel_is_forced_after_grace_period() -> None:
 @pytest.mark.asyncio
 async def test_cancelling_one_transfer_does_not_affect_another() -> None:
     registry = TransferRegistry(cancel_grace_seconds=0.01)
-    first = registry.create("uploading")
-    second = registry.create("uploading")
+    first = await registry.create("uploading")
+    second = await registry.create("uploading")
     first_started = asyncio.Event()
     second_started = asyncio.Event()
     second_release = asyncio.Event()
 
     async def hold_first(record: object) -> None:
-        registry.update(first.id, status=TransferStatus.RUNNING)
+        (await registry.update(first.id, status=TransferStatus.RUNNING))
         first_started.set()
         await asyncio.Event().wait()
 
     async def finish_second(record: object) -> None:
-        registry.update(second.id, status=TransferStatus.RUNNING)
+        (await registry.update(second.id, status=TransferStatus.RUNNING))
         second_started.set()
         await second_release.wait()
-        registry.update(
-            second.id,
-            status=TransferStatus.COMPLETED,
-            phase="completed",
+        (
+            await registry.update(
+                second.id,
+                status=TransferStatus.COMPLETED,
+                phase="completed",
+            )
         )
 
     first_task = registry.spawn(first.id, hold_first)
     second_task = registry.spawn(second.id, finish_second)
     await asyncio.gather(first_started.wait(), second_started.wait())
 
-    registry.cancel(first.id)
+    (await registry.cancel(first.id))
 
     assert first.status is TransferStatus.CANCELLING
     assert not second.cancel_event.is_set()
@@ -253,7 +263,7 @@ async def test_cancelling_one_transfer_does_not_affect_another() -> None:
 @pytest.mark.asyncio
 async def test_cancelled_running_task_cannot_be_pruned_or_evicted() -> None:
     registry = TransferRegistry(max_entries=1)
-    record = registry.create("uploading")
+    record = await registry.create("uploading")
     started = asyncio.Event()
 
     async def hold(_record: object) -> None:
@@ -262,17 +272,17 @@ async def test_cancelled_running_task_cannot_be_pruned_or_evicted() -> None:
 
     registry.spawn(record.id, hold)
     await started.wait()
-    registry.cancel(record.id)
+    (await registry.cancel(record.id))
     record.updated_at = 1
-    registry.prune(now=10000)
+    (await registry.prune(now=10000))
 
     assert registry.get(record.id) is record
     with pytest.raises(RuntimeError, match="too many active"):
-        registry.create("uploading")
+        (await registry.create("uploading"))
 
     await registry.shutdown()
     with pytest.raises(RuntimeError, match="shutting down"):
-        registry.create("uploading")
+        (await registry.create("uploading"))
 
 
 @pytest.mark.asyncio
@@ -283,7 +293,7 @@ async def test_shutdown_retries_cancellation_of_stalled_finalizer(
 
     monkeypatch.setattr(tasks_module, "_SHUTDOWN_DRAIN_SECONDS", 0.01)
     registry = TransferRegistry()
-    record = registry.create("uploading")
+    record = await registry.create("uploading")
     started = asyncio.Event()
 
     async def stall_cleanup(_record: object) -> None:
@@ -343,7 +353,7 @@ async def test_only_temporary_connection_errors_are_marked_for_restart(
 ):
     backend = FakeMongoBackend()
     registry = TransferRegistry(mongo=backend.db.jobs, mongo_backend=backend)
-    record = registry.create("uploading")
+    record = await registry.create("uploading")
     record.context["kind"] = "upload"
 
     async def fail(_record):
@@ -355,7 +365,7 @@ async def test_only_temporary_connection_errors_are_marked_for_restart(
         assert bool(record.context.get("restart_retryable")) is retryable
         if retryable:
             assert "restart TGDrive" in record.error
-        registry.retry(record.id)
+        (await registry.retry(record.id))
         assert "restart_retryable" not in record.context
     finally:
         registry.close()

@@ -60,46 +60,56 @@ def file_checksum(path):
 
 
 def write_snapshot(backend, path: Path, key: bytes):
-    """Stream an encrypted consistent snapshot; never stage plaintext secrets."""
+    """Return the encrypted snapshot's revision, record counts and checksum."""
     nonce = os.urandom(12)
     encryptor = Cipher(algorithms.AES(key), modes.GCM(nonce)).encryptor()
     encryptor.authenticate_additional_data(MAGIC)
     compressor = zlib.compressobj(level=6)
     total = 0
     counts = {}
-    with path.open("xb") as target:
-        path.chmod(0o600)
-        target.write(MAGIC + nonce)
+    revision = None
+    target = path.open("xb")
+    try:
+        with target:
+            path.chmod(0o600)
+            target.write(MAGIC + nonce)
 
-        def write(value):
-            nonlocal total
-            data = (json_util.dumps(value, separators=(",", ":")) + "\n").encode()
-            total += len(data)
-            if total > MAX_EXPANDED:
-                raise BackupError("MongoDB backup exceeds the 1 GiB expanded limit")
-            target.write(encryptor.update(compressor.compress(data)))
+            def write(value):
+                nonlocal total
+                data = (json_util.dumps(value, separators=(",", ":")) + "\n").encode()
+                total += len(data)
+                if total > MAX_EXPANDED:
+                    raise BackupError("MongoDB backup exceeds the 1 GiB expanded limit")
+                target.write(encryptor.update(compressor.compress(data)))
 
-        with backend.client.start_session(snapshot=True) as session:
-            write(
-                {
-                    "format": "tgdrive-mongodb",
-                    "version": 1,
-                    "created_at": datetime.now(UTC),
-                }
-            )
-            for name in COLLECTIONS:
-                count = 0
-                for document in backend.db[name].find({}, session=session):
-                    write({"collection": name, "document": document})
-                    count += 1
-                counts[name] = count
-        write({"complete": True, "counts": counts})
-        target.write(encryptor.update(compressor.flush()))
-        target.write(encryptor.finalize())
-        target.write(encryptor.tag)
-        target.flush()
-        os.fsync(target.fileno())
-    return counts
+            with backend.client.start_session(snapshot=True) as session:
+                write(
+                    {
+                        "format": "tgdrive-mongodb",
+                        "version": 1,
+                        "created_at": datetime.now(UTC),
+                    }
+                )
+                for name in COLLECTIONS:
+                    count = 0
+                    for document in backend.db[name].find({}, session=session):
+                        write({"collection": name, "document": document})
+                        if name == "catalog" and document["_id"] == "catalog":
+                            revision = document["revision"]
+                        count += 1
+                    counts[name] = count
+            if counts["catalog"] != 1 or type(revision) is not int or revision < 1:
+                raise BackupError("MongoDB backup catalog revision is invalid")
+            write({"complete": True, "counts": counts})
+            target.write(encryptor.update(compressor.flush()))
+            target.write(encryptor.finalize())
+            target.write(encryptor.tag)
+            target.flush()
+            os.fsync(target.fileno())
+        return revision, counts, file_checksum(path)
+    except BaseException:
+        path.unlink(missing_ok=True)
+        raise
 
 
 def decode_snapshot(path: Path, key: bytes):
@@ -340,15 +350,31 @@ class MongoProtection:
                 directory = self.settings.resolved_cache_dir / "mongo-backups"
                 directory.mkdir(mode=0o700, parents=True, exist_ok=True)
                 path = directory / (identity + ".tgdb")
-                counts = await asyncio.to_thread(write_snapshot, backend, path, key)
+                export = asyncio.create_task(
+                    asyncio.to_thread(write_snapshot, backend, path, key)
+                )
+                try:
+                    revision, counts, digest = await asyncio.shield(export)
+                except asyncio.CancelledError:
+                    # The unadmitted file still belongs to its worker until it drains.
+                    while not export.done():
+                        try:
+                            await asyncio.shield(export)
+                        except asyncio.CancelledError:
+                            continue
+                        except Exception:
+                            break
+                    if not export.cancelled() and export.exception() is None:
+                        path.unlink(missing_ok=True)
+                    raise
                 row = {
                     "_id": identity,
                     "id": identity,
                     "status": "pending",
                     "created_at": datetime.now(UTC).isoformat(),
-                    "revision": store.revision,
+                    "revision": revision,
                     "local_path": str(path),
-                    "sha256": await asyncio.to_thread(file_checksum, path),
+                    "sha256": digest,
                     "random_id": secrets.randbits(63),
                     "sender": None,
                     "message_id": None,

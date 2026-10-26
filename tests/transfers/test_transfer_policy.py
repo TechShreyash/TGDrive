@@ -19,7 +19,7 @@ async def test_smaller_operator_split_preserves_all_bytes(tmp_path):
     manager.settings.upload_limit = 16 * 1024**2
     payload = b"a" * (2 * 1024**2) + b"end"
     source = staged(manager, payload)
-    record = manager.enqueue_upload(source, "/", "split.bin", len(payload))
+    record = await manager.enqueue_upload(source, "/", "split.bin", len(payload))
     try:
         await asyncio.wait_for(record.task, 5)
         assert record.status is TransferStatus.COMPLETED
@@ -41,7 +41,7 @@ async def test_url_source_remains_remote_after_staging_and_resume_uses_staged_fi
         mongo=mongo_backend.db.jobs, mongo_backend=mongo_backend
     )
     client.wait_during_upload = True
-    job = manager.start_remote(
+    job = await manager.start_remote(
         url="https://example.com/file.bin", destination="/", filename=None
     )
     try:
@@ -58,7 +58,7 @@ async def test_url_source_remains_remote_after_staging_and_resume_uses_staged_fi
         assert manager.registry.history_snapshot(job)["kind"] == "remote"
         manager._upload_path = AsyncMock()
         manager._remote_pipeline = AsyncMock()
-        manager._resume(job)
+        (await manager._resume(job))
         await job.task
         manager._upload_path.assert_awaited_once()
         manager._remote_pipeline.assert_not_awaited()

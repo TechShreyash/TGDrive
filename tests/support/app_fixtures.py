@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import inspect
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -39,9 +40,11 @@ class FakeTransfers:
         self.remote_requests: list[tuple[str, str, str | None]] = []
         self.remote_modes: list[bool] = []
 
-    def start_deletion(self, path: str):
+    async def start_deletion(self, path: str):
         intent = self.store.begin_deletion(path, channel_id=-1001234567890)
-        record = self.registry.create("deleting", total=len(intent["message_ids"]))
+        record = await self.registry.create(
+            "deleting", total=len(intent["message_ids"])
+        )
 
         async def complete(item):
             self.store.finish_deletion(intent["id"])
@@ -59,10 +62,12 @@ class FakeTransfers:
         **_kwargs: Any,
     ):
         assert destination == "/"
-        record = self.registry.create("uploading", total=3)
+        record = await self.registry.create("uploading", total=3)
         on_created = _kwargs.get("on_created")
         if on_created:
-            on_created(record)
+            created = on_created(record)
+            if inspect.isawaitable(created):
+                await created
         await upload.close()
         return record
 
@@ -74,7 +79,7 @@ class FakeTransfers:
             url=url,
         )
 
-    def start_remote(
+    async def start_remote(
         self,
         *,
         url: str,
@@ -84,7 +89,7 @@ class FakeTransfers:
     ):
         self.remote_requests.append((url, destination, filename))
         self.remote_modes.append(single_threaded)
-        return self.registry.create("checking_source")
+        return await self.registry.create("checking_source")
 
 
 class FakeRuntime:

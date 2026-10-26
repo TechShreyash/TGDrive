@@ -86,7 +86,7 @@ async def test_pipeline_retries_only_failed_part_and_preserves_window_hash_and_d
     native.fail_part = 1
     adapter = client(native)
     progress = AsyncMock()
-    boundary = Mock()
+    boundary = AsyncMock()
     assert (
         await adapter.send_staged(
             123,
@@ -110,7 +110,7 @@ async def test_pipeline_retries_only_failed_part_and_preserves_window_hash_and_d
         request.media.file.md5_checksum
         == hashlib.md5(payload, usedforsecurity=False).hexdigest()
     )
-    boundary.assert_called_once()
+    boundary.assert_awaited_once()
     assert progress.await_args.args == (len(payload), len(payload))
 
 
@@ -194,7 +194,7 @@ async def test_pipeline_refuses_publication_after_integrity_failure(tmp_path):
     path.write_bytes(b"actual bytes")
     native = Native()
     adapter = client(native)
-    boundary = Mock()
+    boundary = AsyncMock()
     with pytest.raises(ValueError, match="changed"):
         await adapter.send_staged(
             123,

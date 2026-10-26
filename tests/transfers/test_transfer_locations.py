@@ -59,12 +59,14 @@ def test_exact_locations_follow_moves_and_renames_without_matching_names(tmp_pat
         store.close()
 
 
-def test_owner_location_api_and_history_enrichment(tmp_path, monkeypatch):
+async def test_owner_location_api_and_history_enrichment(tmp_path, monkeypatch):
     settings = make_settings(tmp_path)
     store = DriveStore.create(tmp_path / "drive.sqlite3")
     runtime = FakeRuntime(store)
     runtime.mongo = register_test_backend(monkeypatch, settings)
-    row = runtime.transfers.registry.create("queued", transfer_id="committed-upload")
+    row = await runtime.transfers.registry.create(
+        "queued", transfer_id="committed-upload"
+    )
     row.context.update(name="original.txt", kind="upload", destination="/")
     saved = store.add_file("/", "original.txt", 101, 2, operation_id=row.id)
     app = create_app(settings, runtime=runtime)

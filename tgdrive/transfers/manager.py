@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import asyncio
+import inspect
 import logging
 import math
+import secrets
 import shutil
 import time
 from collections.abc import Awaitable, Callable, Iterable
@@ -35,7 +37,12 @@ from tgdrive.transfers.remote import (
     RemoteTooLarge,
 )
 from tgdrive.transfers.staging import StorageUnavailable, check_staging
-from tgdrive.transfers.tasks import TransferRecord, TransferRegistry, TransferStatus
+from tgdrive.transfers.tasks import (
+    TransferRecord,
+    TransferRegistry,
+    TransferStatus,
+    _journalled,
+)
 
 logger = logging.getLogger(__name__)
 _CHUNK_SIZE = 1024 * 1024
@@ -150,8 +157,11 @@ class TransferManager:
         self.cache_dir = settings.resolved_cache_dir
         self.cache_dir.mkdir(parents=True, exist_ok=True)
         self._semaphore = asyncio.Semaphore(settings.max_concurrent_transfers)
+        self._pending_staging: dict[str, int] = {}
 
-    def _resolve_upload_destination(self, record: TransferRecord, path: str) -> str:
+    async def _resolve_upload_destination(
+        self, record: TransferRecord, path: str
+    ) -> str:
         binding = self.store.upload_destination(
             path,
             directory_id=record.context.get("destination_id"),
@@ -163,16 +173,18 @@ class TransferManager:
             record.context.update(
                 destination_id=binding["id"], destination=binding["path"]
             )
-            self.registry.persist(record)
+            await self.registry.persist(record)
         return binding["path"]
 
-    def _check_destination_or_cancel(self, record: TransferRecord, path: str) -> str:
+    async def _check_destination_or_cancel(
+        self, record: TransferRecord, path: str
+    ) -> str:
         try:
-            return self._resolve_upload_destination(record, path)
+            return await self._resolve_upload_destination(record, path)
         except (NotFoundError, NotDirectoryError, TrashedItemError, ValidationError):
             record.context["cancel_requested"] = True
             record.cancel_event.set()
-            self.registry.persist(record)
+            await self.registry.persist(record)
             return path
 
     def _destination_path(self, record: TransferRecord) -> str:
@@ -191,7 +203,7 @@ class TransferManager:
         destination: str,
         *,
         is_disconnected: Callable[[], Awaitable[bool]] | None = None,
-        on_created: Callable[[TransferRecord], None] | None = None,
+        on_created: Callable[[TransferRecord], Awaitable[None] | None] | None = None,
     ) -> TransferRecord:
         """Save an incoming multipart stream, then supervise Telegram upload."""
 
@@ -222,13 +234,10 @@ class TransferManager:
         except BaseException:
             await upload.close()
             raise
-        record = self.registry.create(
-            "saving", total=declared_size if isinstance(declared_size, int) else 0
-        )
-        self.registry.update(record.id, status=TransferStatus.RUNNING)
+        transfer_id = secrets.token_urlsafe(18)
         upload_dir = self.cache_dir / "uploads"
-        local_path = upload_dir / f"{record.id}.upload"
-        record.context.update(
+        local_path = upload_dir / f"{transfer_id}.upload"
+        context = dict(
             kind="receiving",
             staging_size=declared_size or admission_limit,
             staging_written=0,
@@ -236,11 +245,32 @@ class TransferManager:
             destination=destination,
             destination_id=binding["id"],
         )
-        self.registry.persist(record)
+        self._pending_staging[transfer_id] = declared_size or admission_limit
+        try:
+            record = await self.registry.create(
+                "saving",
+                total=declared_size if isinstance(declared_size, int) else 0,
+                transfer_id=transfer_id,
+                context=context,
+            )
+        except BaseException:
+            try:
+                record = self.registry.get(transfer_id)
+            except KeyError:
+                pass
+            else:
+                await self.registry.cancel(record.id)
+            await upload.close()
+            raise
+        finally:
+            self._pending_staging.pop(transfer_id, None)
         written = 0
         try:
+            await self.registry.update(record.id, status=TransferStatus.RUNNING)
             if on_created is not None:
-                on_created(record)
+                created = on_created(record)
+                if inspect.isawaitable(created):
+                    await created
             if record.cancel_event.is_set():
                 raise TransferCancelled("Transfer cancelled")
             file_name = safe_name(upload.filename)
@@ -266,7 +296,7 @@ class TransferManager:
                     )
                     await output.write(chunk)
                     record.context["staging_written"] = written
-                    self.registry.update(
+                    await self.registry.update(
                         record.id,
                         current=written,
                         total=max(record.total, written),
@@ -289,7 +319,7 @@ class TransferManager:
                 name=file_name,
                 size=written,
             )
-            self.registry.persist(record)
+            await self.registry.persist(record)
             self.registry.spawn(
                 record.id,
                 lambda transfer: self._upload_path(
@@ -306,17 +336,17 @@ class TransferManager:
             # with a BaseException, so the generic handler below cannot clean
             # this up.  Keep the registry and cache consistent before
             # preserving cancellation semantics for Starlette.
-            self.registry.cancel(record.id)
+            await self.registry.cancel(record.id)
             with suppress(FileNotFoundError, NotADirectoryError):
                 local_path.unlink()
             raise
         except TransferCancelled:
-            self.registry.cancel(record.id)
+            await self.registry.cancel(record.id)
             with suppress(FileNotFoundError, NotADirectoryError):
                 local_path.unlink()
             raise
         except Exception as exc:
-            self.registry.update(
+            await self.registry.update(
                 record.id,
                 status=TransferStatus.ERROR,
                 error=str(exc) or type(exc).__name__,
@@ -334,7 +364,8 @@ class TransferManager:
             raise RemoteTooLarge(limit, info.size)
         return info
 
-    def start_remote(
+    @_journalled
+    async def start_remote(
         self,
         *,
         url: str,
@@ -346,17 +377,18 @@ class TransferManager:
             self._check_upload_allowed()
         binding = self.store.upload_destination(destination)
         destination = binding["path"]
-        record = self.registry.create("checking_source")
-        record.context.update(
-            kind="remote",
-            source_kind="remote",
-            url=url,
-            destination=destination,
-            destination_id=binding["id"],
-            name=filename,
-            single_threaded=single_threaded,
+        record = await self.registry.create(
+            "checking_source",
+            context=dict(
+                kind="remote",
+                source_kind="remote",
+                url=url,
+                destination=destination,
+                destination_id=binding["id"],
+                name=filename,
+                single_threaded=single_threaded,
+            ),
         )
-        self.registry.persist(record)
         self.registry.spawn(
             record.id,
             lambda transfer: self._remote_pipeline(
@@ -378,7 +410,7 @@ class TransferManager:
     ) -> None:
         download_dir = self.cache_dir / "remote" / record.id
         try:
-            destination = self._check_destination_or_cancel(record, destination)
+            destination = await self._check_destination_or_cancel(record, destination)
             if record.cancel_event.is_set():
                 raise TransferCancelled("Transfer destination is unavailable")
             from tgdrive.transfers.remote_scheduler import WARM_STAGING_WINDOW
@@ -388,7 +420,7 @@ class TransferManager:
                 self._check_upload_allowed()
             retry_not_before = record.context.get("source_retry_at", 0)
             record.context["source_attempt"] = 1
-            self.registry.update(
+            await self.registry.update(
                 record.id,
                 status=TransferStatus.RUNNING,
                 phase="source_retry_wait"
@@ -399,15 +431,17 @@ class TransferManager:
             source_size = None
             mode = "full"
 
-            def mode_changed(value):
+            async def mode_changed(value):
                 nonlocal mode
                 mode = value
                 record.context["download_mode"] = value
                 if value == "queued" and record.phase == "source_retry_wait":
                     record.context.pop("source_retry_at", None)
-                    self.registry.update(record.id, phase="checking_source", error=None)
+                    await self.registry.update(
+                        record.id, phase="checking_source", error=None
+                    )
 
-            def retry_scheduled(attempt: int, delay: float, error: Exception):
+            async def retry_scheduled(attempt: int, delay: float, error: Exception):
                 nonlocal admitted, source_size
                 admitted, source_size = False, None
                 # The remote client has drained writers and removed its partial
@@ -419,7 +453,7 @@ class TransferManager:
                     source_retry_at=time.time() + delay,
                 )
                 record.context.pop("download_mode", None)
-                self.registry.update(
+                await self.registry.update(
                     record.id,
                     phase="source_retry_wait",
                     current=0,
@@ -428,7 +462,7 @@ class TransferManager:
                 )
                 scheduler = getattr(self.remote, "scheduler", None)
                 if scheduler is not None:
-                    scheduler.refresh()
+                    await scheduler.refresh()
                 logger.info(
                     "Source retry scheduled id=%s attempt=%s/%s "
                     "error_type=%s retry_after_seconds=%.3f",
@@ -499,8 +533,8 @@ class TransferManager:
                 record.context.update(staging_size=size, download_mode=mode)
                 scheduler = getattr(self.remote, "scheduler", None)
                 if scheduler is not None and refresh_needed:
-                    scheduler.refresh()
-                self.registry.update(
+                    await scheduler.refresh()
+                await self.registry.update(
                     record.id,
                     current=current,
                     phase="downloading",
@@ -532,7 +566,7 @@ class TransferManager:
                 result.size,
             )
         except (RemoteCancelled, TransferCancelled):
-            self.registry.update(
+            await self.registry.update(
                 record.id,
                 status=TransferStatus.CANCELLED,
                 error="Transfer cancelled",
@@ -541,7 +575,8 @@ class TransferManager:
             if record.status in {TransferStatus.COMPLETED, TransferStatus.CANCELLED}:
                 shutil.rmtree(download_dir, ignore_errors=True)
 
-    def enqueue_upload(
+    @_journalled
+    async def enqueue_upload(
         self,
         local_path: Path,
         destination: str,
@@ -555,10 +590,7 @@ class TransferManager:
             self._check_upload_allowed()
         binding = self.store.upload_destination(destination)
         destination = binding["path"]
-        record = self.registry.create("queued", total=size, transfer_id=transfer_id)
-        if record.task is not None or record.terminal:
-            return record
-        record.context.update(
+        context = dict(
             kind="upload",
             local_path=str(local_path),
             destination=destination,
@@ -567,8 +599,12 @@ class TransferManager:
             size=size,
         )
         if folder_upload is not None:
-            record.context["folder_upload"] = dict(folder_upload)
-        self.registry.persist(record)
+            context["folder_upload"] = dict(folder_upload)
+        record = await self.registry.create(
+            "queued", total=size, transfer_id=transfer_id, context=context
+        )
+        if record.task is not None or record.terminal:
+            return record
         self.registry.spawn(
             record.id,
             lambda item: self._upload_path(
@@ -585,7 +621,7 @@ class TransferManager:
                 context = record.context
                 remaining = context.get("lineage_retry_at", 0) - time.time()
                 if remaining > 0:
-                    self.registry.update(record.id, phase="retry_wait")
+                    await self.registry.update(record.id, phase="retry_wait")
                     if not context.get("send_started"):
                         try:
                             await asyncio.wait_for(
@@ -611,10 +647,10 @@ class TransferManager:
                 ):
                     raise
                 record.context["lineage_retry_at"] = time.time() + delay
-                self.registry.update(record.id, phase="retry_wait")
+                await self.registry.update(record.id, phase="retry_wait")
                 continue
             if record is not None and record.context.pop("lineage_retry_at", None):
-                self.registry.persist(record)
+                await self.registry.persist(record)
             return
 
     async def recover(self) -> None:
@@ -637,17 +673,18 @@ class TransferManager:
         ):
             await self._verify_lineage()
         for record in restart_jobs:
-            self.registry.retry(record.id)
+            await self.registry.retry(record.id)
         for intent in intents:
             try:
                 self.registry.get(intent["id"])
             except KeyError:
-                self.start_deletion(intent["path"])
+                await self.start_deletion(intent["path"])
         for record in self.registry.list():
             if not record.terminal and (record.task is None or record.task.done()):
-                self._resume(record)
+                await self._resume(record)
 
-    def cancel_job(self, job_id: str) -> TransferRecord:
+    @_journalled
+    async def cancel_job(self, job_id: str) -> TransferRecord:
         record = self.registry.get(job_id)
         if record.status not in {
             TransferStatus.COMPLETED,
@@ -657,36 +694,41 @@ class TransferManager:
                 "This file is already catalogued. Allow finalization to finish, "
                 "or retry this transfer instead of cancelling it."
             )
-        record = self.registry.cancel(job_id)
+        record = await self.registry.cancel(job_id)
         if (
             record.context.get("send_started")
             and (record.task is None or record.task.done())
             and not record.terminal
         ):
-            self._resume(record)
+            await self._resume(record)
         if record.status is TransferStatus.CANCELLED and not record.context.get(
             "send_started"
         ):
             staged = record.context.get("local_path")
             if staged:
-                target = Path(staged).resolve()
-                if target.is_relative_to(self.cache_dir):
-                    target.unlink(missing_ok=True)
+
+                def discard():
+                    target = Path(staged).resolve()
+                    if target.is_relative_to(self.cache_dir):
+                        target.unlink(missing_ok=True)
+
+                await asyncio.to_thread(discard)
             if hasattr(self, "uploads"):
-                self.uploads.release(record.id)
+                await asyncio.to_thread(self.uploads.release, record.id)
         return record
 
-    def retry_job(self, job_id: str) -> TransferRecord:
+    @_journalled
+    async def retry_job(self, job_id: str) -> TransferRecord:
         record = self.registry.get(job_id)
         if not record.terminal and record.task is not None and not record.task.done():
             return record
-        record = self.registry.retry(job_id)
+        record = await self.registry.retry(job_id)
         if record.context.get("cancel_requested"):
             record.cancel_event.set()
-        self._resume(record)
+        await self._resume(record)
         return record
 
-    def _resume(self, record: TransferRecord) -> None:
+    async def _resume(self, record: TransferRecord) -> None:
         context = record.context
         if self._metadata_committed(record):
             self.registry.spawn(
@@ -727,7 +769,7 @@ class TransferManager:
                 ),
             )
         else:
-            self.registry.update(
+            await self.registry.update(
                 record.id,
                 status=TransferStatus.ERROR,
                 error="Interrupted browser receipt. Reselect the file to resume.",
@@ -755,8 +797,8 @@ class TransferManager:
         if record.cancel_handle is not None:
             record.cancel_handle.cancel()
             record.cancel_handle = None
-        self.registry.persist(record)
-        self.registry.update(
+        await self.registry.persist(record)
+        await self.registry.update(
             record.id,
             status=TransferStatus.RUNNING,
             phase=(
@@ -783,7 +825,7 @@ class TransferManager:
                 ):
                     raise
                 context["backup_retry_at"] = time.time() + delay
-                self.registry.persist(record)
+                await self.registry.persist(record)
                 continue
             if type(protected) is not int or protected < required:
                 raise TransferError(
@@ -791,9 +833,9 @@ class TransferManager:
                 )
             context["protected_revision"] = protected
             context.pop("backup_retry_at", None)
-            self.registry.persist(record)
+            await self.registry.persist(record)
             break
-        self.registry.update(
+        await self.registry.update(
             record.id,
             status=TransferStatus.COMPLETED,
             phase="completed",
@@ -814,7 +856,7 @@ class TransferManager:
             await asyncio.to_thread(local_path.unlink, missing_ok=True)
             uploads = getattr(self, "uploads", None)
             if uploads is not None:
-                uploads.release(record.id)
+                await asyncio.to_thread(uploads.release, record.id)
             return
         context = record.context
         if "multipart_plan" not in context and (
@@ -828,17 +870,19 @@ class TransferManager:
 
         await upload_multipart(self, record, local_path, destination, file_name, size)
 
-    def start_deletion(self, path: str) -> TransferRecord:
-        intent = self.store.begin_deletion(
-            path, channel_id=self.settings.storage_channel
+    @_journalled
+    async def start_deletion(self, path: str) -> TransferRecord:
+        intent = await asyncio.to_thread(
+            self.store.begin_deletion, path, channel_id=self.settings.storage_channel
         )
-        record = self.registry.create(
-            "deleting", total=len(intent["message_ids"]), transfer_id=intent["id"]
+        record = await self.registry.create(
+            "deleting",
+            total=len(intent["message_ids"]),
+            transfer_id=intent["id"],
+            context=dict(
+                kind="delete", deletion_id=intent["id"], name=path.rsplit("/", 1)[-1]
+            ),
         )
-        record.context.update(
-            kind="delete", deletion_id=intent["id"], name=path.rsplit("/", 1)[-1]
-        )
-        self.registry.persist(record)
         if not record.terminal and (record.task is None or record.task.done()):
             self.registry.spawn(record.id, lambda item: self._delete_intent(item))
         return record
@@ -853,7 +897,7 @@ class TransferManager:
             None,
         )
         if intent is None:
-            self.registry.update(
+            await self.registry.update(
                 record.id, status=TransferStatus.COMPLETED, phase="completed"
             )
             return
@@ -861,9 +905,9 @@ class TransferManager:
             await self._verify_lineage(record)
             protect = getattr(self, "_ensure_replica", None)
             if protect is not None:
-                self.registry.update(record.id, phase="checking_backup")
+                await self.registry.update(record.id, phase="checking_backup")
                 await protect()
-            self.registry.update(
+            await self.registry.update(
                 record.id, status=TransferStatus.RUNNING, phase="deleting"
             )
             prefix = intent["path"].rstrip("/")
@@ -878,9 +922,9 @@ class TransferManager:
                     or other.status is TransferStatus.CANCELLED
                 ):
                     continue
-                self.cancel_job(other.id)
+                await self.cancel_job(other.id)
                 if other.task is not None:
-                    self.registry.update(record.id, phase="waiting_for_uploads")
+                    await self.registry.update(record.id, phase="waiting_for_uploads")
                     await asyncio.wait_for(asyncio.shield(other.task), timeout=60)
                 if other.status is not TransferStatus.CANCELLED:
                     raise TransferError(
@@ -889,9 +933,9 @@ class TransferManager:
             # Permanent deletion forgets the catalog subtree, not its Telegram
             # documents. This policy applies consistently to every file age.
             await self._verify_lineage(record)
-            self.registry.update(record.id, phase="deleting")
+            await self.registry.update(record.id, phase="deleting")
             await asyncio.to_thread(self.store.finish_deletion, intent["id"])
-            self.registry.update(
+            await self.registry.update(
                 record.id,
                 status=TransferStatus.COMPLETED,
                 phase="completed",

@@ -33,9 +33,10 @@ def staging_usage(manager, *, receipts=None, exclude=None):
             if item["state"] == "receiving":
                 remaining += max(0, item["total_size"] - item["offset"])
     registry = getattr(manager, "registry", None)
-    for job in registry.list() if registry is not None else ():
+    for job in registry.staging_records() if registry is not None else ():
         if job.id in seen or job.id == exclude:
             continue
+        seen.add(job.id)
         context = job.context
         raw_path = context.get("local_path")
         written = 0
@@ -48,6 +49,10 @@ def staging_usage(manager, *, receipts=None, exclude=None):
         if active:
             received = max(written, context.get("staging_written", 0))
             remaining += max(0, size - received)
+    for identity, size in getattr(manager, "_pending_staging", {}).items():
+        if identity not in seen and identity != exclude:
+            reserved += size
+            remaining += size
     return reserved, remaining
 
 

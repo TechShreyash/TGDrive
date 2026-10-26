@@ -181,7 +181,7 @@ async def test_restored_guest_job_checks_final_commit_after_owner_moves_parent(
     jobs = FakeMongoBackend()
     registry = TransferRegistry(mongo=jobs.db.jobs, mongo_backend=jobs, demo_mode=True)
     with write_policy(True):
-        record = registry.create("uploading", total=3)
+        record = await registry.create("uploading", total=3)
     registry.close()
     registry = TransferRegistry(
         mongo=jobs.db.jobs, mongo_backend=jobs, demo_mode=demo_mode
@@ -194,7 +194,7 @@ async def test_restored_guest_job_checks_final_commit_after_owner_moves_parent(
         await resume.wait()
         destination = catalog.resolve_id(parent["id"])
         await asyncio.to_thread(catalog.add_file, destination, "late.txt", 333, 3)
-        registry.update(item.id, status=TransferStatus.COMPLETED)
+        await registry.update(item.id, status=TransferStatus.COMPLETED)
 
     try:
         task = registry.spawn(record.id, commit)
@@ -453,7 +453,9 @@ def test_full_jobs_into_demo_cannot_be_retried_or_cancelled_by_visitor(
     visitor, operation
 ):
     client, _, runtime, child, *_ = visitor
-    record = runtime.transfers.registry.create("uploading", total=3)
+    record = client.portal.call(
+        lambda: runtime.transfers.registry.create("uploading", total=3)
+    )
     record.context.update(
         kind="remote", destination=path(child), destination_id=child["id"]
     )

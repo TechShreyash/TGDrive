@@ -175,12 +175,14 @@ async def upload_multipart(manager, record, local_path, destination, file_name, 
         name=file_name,
         size=size,
     )
-    manager.registry.persist(record)
+    await manager.registry.persist(record)
 
-    def persist():
+    async def persist():
         if record.context is not context:
             raise TransferError("The upload journal changed; retry the transfer")
-        manager.registry.persist(record)
+        await manager.registry.persist(record)
+        if record.context is not context:
+            raise TransferError("The upload journal changed; retry the transfer")
 
     cleanup = False
     try:
@@ -194,7 +196,7 @@ async def upload_multipart(manager, record, local_path, destination, file_name, 
             manager._check_upload_allowed()
         else:
             await manager._verify_lineage(record)
-        destination = manager._check_destination_or_cancel(record, destination)
+        destination = await manager._check_destination_or_cancel(record, destination)
         if "multipart_plan" not in context:
             if record.cancel_event.is_set():
                 raise TransferCancelled("Transfer cancelled")
@@ -210,7 +212,7 @@ async def upload_multipart(manager, record, local_path, destination, file_name, 
             part_size = min(maximum, part_size)
             if (size + part_size - 1) // part_size > MAX_FILE_PARTS:
                 raise TransferError("File exceeds the maximum number of Telegram parts")
-            manager.registry.update(
+            await manager.registry.update(
                 record.id, phase="verifying", status=TransferStatus.RUNNING
             )
             async with manager._semaphore:
@@ -228,7 +230,7 @@ async def upload_multipart(manager, record, local_path, destination, file_name, 
                 kind="bot",
                 parts=parts,
             )
-            persist()
+            await persist()
         plan = context["multipart_plan"]
         _validate_plan(plan, size, context.get("sha256"))
         parts = plan["parts"]
@@ -240,7 +242,7 @@ async def upload_multipart(manager, record, local_path, destination, file_name, 
             await manager.pool.defer_channel(context["channel_retry_at"])
         in_flight = {}
         active_parts = set()
-        manager.registry.update(
+        await manager.registry.update(
             record.id,
             phase="queued",
             status=TransferStatus.QUEUED,
@@ -248,7 +250,7 @@ async def upload_multipart(manager, record, local_path, destination, file_name, 
             total=size,
         )
 
-        def report(waiting_phase=None):
+        async def report(waiting_phase=None):
             if record.context is not context:
                 raise TransferError("The upload journal changed; retry the transfer")
             current = sum(p["size"] for p in parts if p.get("confirmed"))
@@ -270,7 +272,7 @@ async def upload_multipart(manager, record, local_path, destination, file_name, 
                     context["retry_at"] = deadline
             else:
                 context.pop("retry_at", None)
-            manager.registry.update(
+            await manager.registry.update(
                 record.id,
                 phase=phase,
                 status=(
@@ -281,6 +283,8 @@ async def upload_multipart(manager, record, local_path, destination, file_name, 
                 current=min(size, current),
                 total=size,
             )
+            if record.context is not context:
+                raise TransferError("The upload journal changed; retry the transfer")
 
         async def upload_part(part):
             cancelling = record.cancel_event.is_set() or context.get("cancel_requested")
@@ -291,7 +295,7 @@ async def upload_multipart(manager, record, local_path, destination, file_name, 
                     return
                 remaining = part.get("retry_at", 0) - time.time()
                 if remaining > 0:
-                    report(waiting_phase="retry_wait")
+                    await report(waiting_phase="retry_wait")
                     await asyncio.sleep(remaining)
                 try:
                     async with (
@@ -303,19 +307,19 @@ async def upload_multipart(manager, record, local_path, destination, file_name, 
                             request_id=record.id,
                         ) as client,
                     ):
-                        manager.registry.update(record.id, error=None)
+                        await manager.registry.update(record.id, error=None)
                         if part.get("sender") is None:
                             part["sender"] = client.name
                             if part["index"] == 0:
                                 context["sender"] = client.name
                                 context["random_id"] = part["random_id"]
-                            persist()
+                            await persist()
                         if record.cancel_event.is_set() and not part.get(
                             "send_started"
                         ):
                             return
                         active_parts.add(part["index"])
-                        report()
+                        await report()
                         if part.get("message_id"):
                             message = await client.get_messages(
                                 manager.settings.storage_channel,
@@ -332,12 +336,12 @@ async def upload_multipart(manager, record, local_path, destination, file_name, 
                                 part["deleted"] = True
                                 active_parts.discard(part["index"])
                                 in_flight.pop(part["index"], None)
-                                persist()
+                                await persist()
                                 return
                         else:
 
-                            def before_dispatch():
-                                manager._check_destination_or_cancel(
+                            async def before_dispatch():
+                                await manager._check_destination_or_cancel(
                                     record, destination
                                 )
                                 if record.cancel_event.is_set() and not part.get(
@@ -346,7 +350,7 @@ async def upload_multipart(manager, record, local_path, destination, file_name, 
                                     raise TransferCancelled("Transfer cancelled")
                                 part["send_started"] = True
                                 context["send_started"] = True
-                                persist()
+                                await persist()
 
                             async def progress(current, total):
                                 if record.cancel_event.is_set() and not part.get(
@@ -354,7 +358,7 @@ async def upload_multipart(manager, record, local_path, destination, file_name, 
                                 ):
                                     raise TransferCancelled("Transfer cancelled")
                                 in_flight[part["index"]] = min(current, part["size"])
-                                report()
+                                await report()
 
                             name = (
                                 file_name
@@ -413,7 +417,7 @@ async def upload_multipart(manager, record, local_path, destination, file_name, 
                         part["message_id"] = message.id
                         if part["index"] == 0:
                             context["remote_message_id"] = message.id
-                        persist()
+                        await persist()
                         if record.cancel_event.is_set() or context.get(
                             "cancel_requested"
                         ):
@@ -430,8 +434,8 @@ async def upload_multipart(manager, record, local_path, destination, file_name, 
                         part.pop("retry_at", None)
                         in_flight.pop(part["index"], None)
                         active_parts.discard(part["index"])
-                        persist()
-                        report()
+                        await persist()
+                        await report()
                         return
                 except TransferCancelled:
                     active_parts.discard(part["index"])
@@ -446,11 +450,11 @@ async def upload_multipart(manager, record, local_path, destination, file_name, 
                     part["retry_at"] = deadline
                     if getattr(exc, "tgdrive_channel_flood", False):
                         context["channel_retry_at"] = deadline
-                    persist()
+                    await persist()
                     if getattr(exc, "tgdrive_channel_flood", False):
                         await manager.pool.defer_channel(deadline)
                     await manager.pool.defer_client(part["sender"], deadline)
-                    report(waiting_phase="retry_wait")
+                    await report(waiting_phase="retry_wait")
                 except TelegramConnectionError:
                     active_parts.discard(part["index"])
                     in_flight.pop(part["index"], None)
@@ -461,7 +465,7 @@ async def upload_multipart(manager, record, local_path, destination, file_name, 
                         part.pop("retry_at", None)
                         if part["index"] == 0:
                             context.pop("sender", None)
-                        persist()
+                        await persist()
                         capacity = await manager.pool.media_capacity(allow_users=True)
                         if capacity:
                             continue
@@ -471,8 +475,8 @@ async def upload_multipart(manager, record, local_path, destination, file_name, 
                     in_flight.pop(part["index"], None)
                     if record.cancel_event.is_set() and not part.get("send_started"):
                         return
-                    report(waiting_phase="waiting_for_telegram")
-                    manager.registry.update(
+                    await report(waiting_phase="waiting_for_telegram")
+                    await manager.registry.update(
                         record.id,
                         error="Waiting for Telegram; retrying automatically. "
                         "Open Connections and Refresh to check the account and "
@@ -514,7 +518,7 @@ async def upload_multipart(manager, record, local_path, destination, file_name, 
                 task.cancel()
             await asyncio.gather(*all_workers, return_exceptions=True)
             raise
-        destination = manager._check_destination_or_cancel(record, destination)
+        destination = await manager._check_destination_or_cancel(record, destination)
         if record.cancel_event.is_set() or context.get("cancel_requested"):
             await _cleanup_parts(manager, record, parts)
             cleanup = True
@@ -551,7 +555,7 @@ async def upload_multipart(manager, record, local_path, destination, file_name, 
         context["remote_message_id"] = manifest[0]["message_id"]
         context["metadata_committed"] = True
         context["catalog_revision"] = manager.store.revision
-        persist()
+        await persist()
         await manager._protect_committed_upload(record, size)
         cleanup = True
     except asyncio.CancelledError:
@@ -569,14 +573,14 @@ async def upload_multipart(manager, record, local_path, destination, file_name, 
         record.status = TransferStatus.CANCELLED
         record.phase = "cancelled"
         record.error = "Transfer cancelled"
-        persist()
+        await persist()
         cleanup = True
     finally:
         if cleanup:
             await asyncio.to_thread(local_path.unlink, missing_ok=True)
             uploads = getattr(manager, "uploads", None)
             if uploads is not None:
-                uploads.release(record.id)
+                await asyncio.to_thread(uploads.release, record.id)
 
 
 async def _cleanup_parts(manager, record, parts):
@@ -594,7 +598,7 @@ async def _cleanup_parts(manager, record, parts):
                 - time.time()
             )
             if remaining > 0:
-                manager.registry.update(record.id, phase="retry_wait")
+                await manager.registry.update(record.id, phase="retry_wait")
                 await asyncio.sleep(remaining)
             try:
                 async with manager.pool.lease(
@@ -631,15 +635,15 @@ async def _cleanup_parts(manager, record, parts):
                             )
                     part["deleted"] = True
                     part.pop("retry_at", None)
-                    manager.registry.persist(record)
+                    await manager.registry.persist(record)
             except FloodWaitError as exc:
                 # Deletion FloodWait conservatively pauses channel writes.
                 deadline = time.time() + exc.seconds + 0.25
                 part["retry_at"] = deadline
                 record.context["channel_retry_at"] = deadline
-                manager.registry.persist(record)
+                await manager.registry.persist(record)
                 await manager.pool.defer_channel(deadline)
                 await manager.pool.defer_client(part["sender"], deadline)
             except (ClientPoolNotRunning, NoClientAvailable):
-                manager.registry.update(record.id, phase="waiting_for_telegram")
+                await manager.registry.update(record.id, phase="waiting_for_telegram")
                 await asyncio.sleep(1)

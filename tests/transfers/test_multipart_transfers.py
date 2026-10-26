@@ -90,7 +90,7 @@ class Account:
             assert len(content) == size
             assert hashlib.sha256(content).hexdigest() == expected_sha256
             await progress(size, size)
-            before_dispatch()
+            (await before_dispatch())
             if state.rpc_delay:
                 await asyncio.sleep(state.rpc_delay)
             key = (self.name, random_id)
@@ -190,7 +190,7 @@ async def test_bot_only_parts_commit_once_then_checkpoint(tmp_path):
 
     manager, ledger = await manager_for(tmp_path, callback=protect)
     source = staged(manager, b"abcdefghij")
-    record = manager.enqueue_upload(source, "/", "ten.bin", 10)
+    record = await manager.enqueue_upload(source, "/", "ten.bin", 10)
     try:
         await asyncio.wait_for(entered.wait(), 2)
         item = stored(manager)
@@ -222,7 +222,7 @@ async def test_lost_response_replays_same_sender_random_id_skips_confirmed_parts
     manager, ledger = await manager_for(tmp_path)
     ledger.lose_once = True
     source = staged(manager, b"abcdefghij")
-    record = manager.enqueue_upload(source, "/", "ten.bin", 10)
+    record = await manager.enqueue_upload(source, "/", "ten.bin", 10)
     try:
         await record.task
         assert record.status == TransferStatus.ERROR
@@ -230,7 +230,7 @@ async def test_lost_response_replays_same_sender_random_id_skips_confirmed_parts
         identities = [(p["sender"], p["random_id"]) for p in plan["parts"]]
         assert not manager.store.list_directory("/")
         before_count = len(ledger.messages)
-        record = manager.retry_job(record.id)
+        record = await manager.retry_job(record.id)
         await record.task
         assert record.status == TransferStatus.COMPLETED
         for before, part in zip(identities, plan["parts"], strict=True):
@@ -249,7 +249,7 @@ async def test_process_restart_reconciles_ambiguous_part_and_reuses_plan(tmp_pat
     manager, ledger = await manager_for(tmp_path)
     ledger.hold = True
     source = staged(manager, b"abcdefghij")
-    record = manager.enqueue_upload(source, "/", "ten.bin", 10)
+    record = await manager.enqueue_upload(source, "/", "ten.bin", 10)
     await asyncio.wait_for(ledger.dispatched.wait(), 2)
     original = [
         (p["random_id"], p["sha256"]) for p in record.context["multipart_plan"]["parts"]
@@ -289,10 +289,10 @@ async def test_cancel_reconciles_and_deletes_every_own_part_before_unlink(tmp_pa
     manager, ledger = await manager_for(tmp_path)
     ledger.hold = True
     source = staged(manager, b"abcdefghijkl")
-    record = manager.enqueue_upload(source, "/", "twelve.bin", 12)
+    record = await manager.enqueue_upload(source, "/", "twelve.bin", 12)
     try:
         await asyncio.wait_for(ledger.dispatched.wait(), 2)
-        manager.cancel_job(record.id)
+        (await manager.cancel_job(record.id))
         assert source.exists()
         ledger.release.set()
         await record.task
@@ -315,10 +315,10 @@ async def test_cancel_cleanup_failure_retains_bytes_and_retries_cleanup(tmp_path
     ledger.hold = True
     ledger.fail_cleanup = True
     source = staged(manager, b"abcdefghij")
-    record = manager.enqueue_upload(source, "/", "ten.bin", 10)
+    record = await manager.enqueue_upload(source, "/", "ten.bin", 10)
     try:
         await asyncio.wait_for(ledger.dispatched.wait(), 2)
-        manager.cancel_job(record.id)
+        (await manager.cancel_job(record.id))
         ledger.release.set()
         await record.task
         assert record.status != TransferStatus.CANCELLED
@@ -326,7 +326,7 @@ async def test_cancel_cleanup_failure_retains_bytes_and_retries_cleanup(tmp_path
         assert manager.store.list_directory("/") == {}
         sent = len(ledger.requests)
         ledger.fail_cleanup = False
-        record = manager.retry_job(record.id)
+        record = await manager.retry_job(record.id)
         await record.task
         assert record.status == TransferStatus.CANCELLED
         assert not source.exists() and not ledger.messages
@@ -345,7 +345,7 @@ async def test_premium_never_raises_new_part_size(tmp_path, healthy, split_mib):
         user = next(slot.client for slot in manager.pool._slots if slot.kind == "user")
         await manager.pool.mark_unhealthy(user)
     source = staged(manager, b"abcdef")
-    record = manager.enqueue_upload(source, "/", "six.bin", 6)
+    record = await manager.enqueue_upload(source, "/", "six.bin", 6)
     try:
         await record.task
         assert record.status == TransferStatus.COMPLETED
@@ -361,7 +361,7 @@ async def test_smaller_split_applies_to_premium_and_preserves_original(tmp_path)
     manager.settings.bot_upload_limit = 4 * 1024**2
     manager.settings.upload_split_mib = 1
     payload = b"a" * (3 * 1024**2 + 7)
-    record = manager.enqueue_upload(
+    record = await manager.enqueue_upload(
         staged(manager, payload), "/", "data.bin", len(payload)
     )
     try:
@@ -385,12 +385,12 @@ async def test_obsolete_premium_sized_plan_is_rejected_without_sending(tmp_path)
     source = staged(manager, payload)
     checksum, parts = fingerprint(source, len(payload), len(payload))
     parts[0]["sender"] = "premium"
-    record = manager.registry.create("queued", total=len(payload))
+    record = await manager.registry.create("queued", total=len(payload))
     record.context.update(
         sha256=checksum,
         multipart_plan=dict(version=1, kind="user", parts=parts),
     )
-    manager.registry.persist(record)
+    (await manager.registry.persist(record))
     try:
         with pytest.raises(TransferError, match="multipart journal is invalid"):
             await manager._upload_path(record, source, "/", "old.bin", len(payload))
@@ -405,7 +405,7 @@ async def test_obsolete_premium_sized_plan_is_rejected_without_sending(tmp_path)
 async def test_upload_part_flood_wait_persists_fixed_sender_and_retries(tmp_path):
     manager, ledger = await manager_for(tmp_path, flood=True)
     source = staged(manager, b"abcdefghij")
-    record = manager.enqueue_upload(source, "/", "ten.bin", 10)
+    record = await manager.enqueue_upload(source, "/", "ten.bin", 10)
     try:
         await record.task
         assert record.status == TransferStatus.COMPLETED
@@ -431,10 +431,10 @@ async def test_cancel_refuses_to_delete_replaced_remote_document(tmp_path):
     manager, ledger = await manager_for(tmp_path)
     ledger.hold = True
     source = staged(manager, b"abcdefghij")
-    record = manager.enqueue_upload(source, "/", "ten.bin", 10)
+    record = await manager.enqueue_upload(source, "/", "ten.bin", 10)
     try:
         await asyncio.wait_for(ledger.dispatched.wait(), 2)
-        manager.cancel_job(record.id)
+        (await manager.cancel_job(record.id))
         ledger.release.set()
         # Replace only during cleanup, after the accepted identity was journalled.
         original = manager._verify_lineage
@@ -461,7 +461,7 @@ async def test_cancel_refuses_to_delete_replaced_remote_document(tmp_path):
 async def test_refetch_rejects_changed_native_document_identity(tmp_path):
     manager, ledger = await manager_for(tmp_path)
     source = staged(manager, b"abcdefghij")
-    record = manager.enqueue_upload(source, "/", "ten.bin", 10)
+    record = await manager.enqueue_upload(source, "/", "ten.bin", 10)
     # Fail catalog publication after all piece identities have been persisted.
     original = manager.store.add_file
     manager.store.add_file = lambda *a, **kw: (_ for _ in ()).throw(
@@ -473,9 +473,9 @@ async def test_refetch_rejects_changed_native_document_identity(tmp_path):
         part = record.context["multipart_plan"]["parts"][0]
         part["confirmed"] = False
         ledger.messages[part["message_id"]].native.document.id += 1
-        manager.registry.persist(record)
+        (await manager.registry.persist(record))
         manager.store.add_file = original
-        retried = manager.retry_job(record.id)
+        retried = await manager.retry_job(record.id)
         await retried.task
         assert retried.status == TransferStatus.ERROR
         assert "identity changed" in retried.error
@@ -490,10 +490,10 @@ async def test_cleanup_flood_wait_is_durable_and_does_not_rotate_sender(tmp_path
     ledger.hold = True
     ledger.flood_cleanup = True
     source = staged(manager, b"abcdefghij")
-    record = manager.enqueue_upload(source, "/", "ten.bin", 10)
+    record = await manager.enqueue_upload(source, "/", "ten.bin", 10)
     try:
         await asyncio.wait_for(ledger.dispatched.wait(), 2)
-        manager.cancel_job(record.id)
+        (await manager.cancel_job(record.id))
         ledger.release.set()
         await record.task
         assert record.status == TransferStatus.CANCELLED
@@ -509,7 +509,7 @@ async def test_one_flooding_part_does_not_hide_other_active_part_progress(tmp_pa
     manager, ledger = await manager_for(tmp_path, flood=True)
     ledger.hold = True
     source = staged(manager, b"abcdefghij")
-    record = manager.enqueue_upload(source, "/", "ten.bin", 10)
+    record = await manager.enqueue_upload(source, "/", "ten.bin", 10)
     try:
         await asyncio.wait_for(ledger.dispatched.wait(), 2)
         assert ledger.flooded.is_set()
@@ -528,9 +528,12 @@ async def test_fully_waiting_logical_upload_exposes_provider_retry_deadline(tmp_
     second = next(slot.client for slot in manager.pool._slots if slot.name == "bot-two")
     await manager.pool.mark_unhealthy(second)
     source = staged(manager, b"abcdefghij")
-    record = manager.enqueue_upload(source, "/", "ten.bin", 10)
+    record = await manager.enqueue_upload(source, "/", "ten.bin", 10)
     try:
         await asyncio.wait_for(ledger.flooded.wait(), 2)
+        async with asyncio.timeout(2):
+            while record.phase != "retry_wait":  # noqa: ASYNC110 - observe committed state
+                await asyncio.sleep(0.001)
         assert record.phase == "retry_wait"
         assert record.as_dict()["retry_at"] > time.time()
         await record.task
@@ -548,7 +551,7 @@ async def test_cancel_recovery_skips_deleted_unconfirmed_parts(
     manager, ledger = await manager_for(tmp_path)
     ledger.hold = True
     source = staged(manager, b"abcdefghij")
-    record = manager.enqueue_upload(source, "/", "ten.bin", 10)
+    record = await manager.enqueue_upload(source, "/", "ten.bin", 10)
     calls = 0
     failed = False
     originals = []
@@ -571,7 +574,7 @@ async def test_cancel_recovery_skips_deleted_unconfirmed_parts(
         await asyncio.wait_for(ledger.dispatched.wait(), 2)
         # Let both worker dispatches reach the remote-effect boundary.
         await asyncio.wait_for(ledger.both_dispatched.wait(), 2)
-        manager.cancel_job(record.id)
+        (await manager.cancel_job(record.id))
         ledger.release.set()
         await record.task
         assert record.status == TransferStatus.QUEUED
@@ -582,11 +585,11 @@ async def test_cancel_recovery_skips_deleted_unconfirmed_parts(
         assert not deleted[0]["confirmed"]
         if lost_acknowledgement:
             deleted[0].pop("deleted")
-            manager.registry.persist(record)
+            (await manager.registry.persist(record))
         requests = len(ledger.requests)
         for client, original in originals:
             monkeypatch.setattr(client, "delete_messages", original)
-        retried = manager.retry_job(record.id)
+        retried = await manager.retry_job(record.id)
         await retried.task
         assert retried.status == TransferStatus.CANCELLED
         assert not ledger.messages
@@ -603,7 +606,7 @@ async def test_restart_restores_flood_cooldown_from_terminal_error_job(tmp_path)
     ledger.flood_seconds = 30
     ledger.lose_once = True
     source = staged(manager, b"abcdefghij")
-    failed = manager.enqueue_upload(source, "/", "ten.bin", 10)
+    failed = await manager.enqueue_upload(source, "/", "ten.bin", 10)
     await failed.task
     assert failed.status == TransferStatus.ERROR
     assert failed.context["multipart_plan"]["parts"][0]["retry_at"] > time.time()
@@ -628,7 +631,7 @@ async def test_restart_restores_flood_cooldown_from_terminal_error_job(tmp_path)
         before = len(ledger.calls)
         fresh = manager.cache_dir / "new.upload"
         fresh.write_bytes(b"x")
-        job = recovered.enqueue_upload(fresh, "/", "new.bin", 1)
+        job = await recovered.enqueue_upload(fresh, "/", "new.bin", 1)
         await asyncio.wait_for(job.task, 2)
         assert job.status == TransferStatus.COMPLETED
         assert ledger.calls[-1][0] == "bot-two"
@@ -641,10 +644,10 @@ async def test_restart_restores_flood_cooldown_from_terminal_error_job(tmp_path)
 
 async def test_recover_hydrates_channel_cooldown_before_any_lineage_await(tmp_path):
     manager, _ = await manager_for(tmp_path)
-    row = manager.registry.create("failed")
+    row = await manager.registry.create("failed")
     row.status = TransferStatus.ERROR
     row.context.update(kind="upload", channel_retry_at=time.time() + 30)
-    manager.registry.persist(row)
+    (await manager.registry.persist(row))
     entered = asyncio.Event()
     release = asyncio.Event()
 
@@ -653,7 +656,7 @@ async def test_recover_hydrates_channel_cooldown_before_any_lineage_await(tmp_pa
         await release.wait()
 
     # This pending row makes recover await lineage after loading all cooldowns.
-    manager.registry.create("queued")
+    (await manager.registry.create("queued"))
     manager._ensure_lineage = guard
     recovering = asyncio.create_task(manager.recover())
     try:
@@ -691,12 +694,12 @@ async def test_hash_thread_is_drained_and_stage_cleanup_distinguishes_shutdown(
             finished.set()
 
     monkeypatch.setattr(multipart_transfer, "fingerprint", slow_hash)
-    record = manager.enqueue_upload(source, "/", "ten.bin", 10)
+    record = await manager.enqueue_upload(source, "/", "ten.bin", 10)
     shutdown = None
     try:
         await asyncio.wait_for(entered.wait(), 2)
         if user_cancel:
-            manager.cancel_job(record.id)
+            (await manager.cancel_job(record.id))
             record.task.cancel()
         else:
             shutdown = asyncio.create_task(manager.registry.shutdown())
@@ -728,12 +731,12 @@ async def test_queued_small_file_gets_media_turn_before_large_file_finishes(tmp_
     manager, ledger = await manager_for(tmp_path)
     ledger.rpc_delay = 0.005
     large = staged(manager, b"x" * 40)
-    big = manager.enqueue_upload(large, "/", "large.bin", 40)
+    big = await manager.enqueue_upload(large, "/", "large.bin", 40)
     try:
         await asyncio.wait_for(ledger.both_dispatched.wait(), 2)
         small = manager.cache_dir / "small.upload"
         small.write_bytes(b"z")
-        tiny = manager.enqueue_upload(small, "/", "small.bin", 1)
+        tiny = await manager.enqueue_upload(small, "/", "small.bin", 1)
         await asyncio.gather(big.task, tiny.task)
         assert big.status == tiny.status == TransferStatus.COMPLETED
         small_turn = next(
@@ -756,7 +759,7 @@ async def test_three_bots_upload_ready_files_without_global_two_upload_cap(tmp_p
         for index in range(4):
             source = manager.cache_dir / ("ready-" + str(index))
             source.write_bytes(b"ab")
-            records.append(manager.enqueue_upload(source, "/", source.name, 2))
+            records.append(await manager.enqueue_upload(source, "/", source.name, 2))
         async with asyncio.timeout(3):
             await ledger.three_dispatched.wait()
         await asyncio.sleep(0.05)  # Let the fourth fingerprint finish and queue.
@@ -786,7 +789,7 @@ async def test_one_large_file_uses_every_eligible_client_slot(tmp_path, mixed_cl
     source = staged(
         manager, b"abcdefghij"
     )  # Three bot-compatible parts, > Premium limit.
-    record = manager.enqueue_upload(source, "/", "large.bin", 10)
+    record = await manager.enqueue_upload(source, "/", "large.bin", 10)
     try:
         await asyncio.wait_for(ledger.three_dispatched.wait(), 2)
         assert len(ledger.calls) == 3
@@ -794,7 +797,7 @@ async def test_one_large_file_uses_every_eligible_client_slot(tmp_path, mixed_cl
         assert all(count == 1 for count in ledger.max_active.values())
         assert not manager.store.list_directory("/")
         if mixed_clients:
-            manager.cancel_job(record.id)
+            (await manager.cancel_job(record.id))
         ledger.release.set()
         await asyncio.wait_for(record.task, 2)
         if mixed_clients:
@@ -820,7 +823,9 @@ async def test_multipart_workers_follow_live_per_bot_limit(tmp_path):
     manager.pool = ClientPool([Account("a", ledger)])
     await manager.pool.start()
     ledger.hold = True
-    record = manager.enqueue_upload(staged(manager, b"x" * 12), "/", "large.bin", 12)
+    record = await manager.enqueue_upload(
+        staged(manager, b"x" * 12), "/", "large.bin", 12
+    )
     try:
         await asyncio.wait_for(ledger.dispatched.wait(), 2)
         assert len(ledger.calls) == 1

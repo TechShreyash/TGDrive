@@ -366,12 +366,12 @@ def register_routes(
     @app.get("/api/v1/uploads/{upload_id}", dependencies=admin)
     async def inspect_upload(upload_id: str, request: Request) -> dict[str, Any]:
         with write_policy(False):
-            return uploads(request).get(upload_id)
+            return await ResumableUploads._owned_worker(uploads(request).get, upload_id)
 
     @app.head("/api/v1/uploads/{upload_id}", dependencies=admin)
     async def upload_offset(upload_id: str, request: Request) -> Response:
         with write_policy(False):
-            item = uploads(request).get(upload_id)
+            item = await ResumableUploads._owned_worker(uploads(request).get, upload_id)
         return Response(
             headers={
                 "Upload-Offset": str(item["offset"]),
@@ -419,6 +419,7 @@ def register_routes(
         return await uploads(request).cancel(upload_id)
 
     def job_snapshot(record: Any, request: Request) -> dict[str, Any]:
+        record = record.committed
         return record.as_dict() | {
             "name": record.context.get("name", "Transfer"),
             "kind": record.context.get(
@@ -487,7 +488,7 @@ def register_routes(
         payload: ClearTransferHistoryRequest, request: Request, response: Response
     ) -> dict[str, Any]:
         response.headers["Cache-Control"] = "no-store"
-        cleared = get_manager(request).registry.clear_history(
+        cleared = await get_manager(request).registry.clear_history(
             exclude_folders=payload.exclude_folders
         )
         return {"cleared": cleared}
@@ -536,7 +537,7 @@ def register_routes(
     async def cancel_job(job_id: str, request: Request) -> dict[str, Any]:
         check_transfer(get_store(request), get_manager(request).registry.get(job_id))
         try:
-            return job_snapshot(get_manager(request).cancel_job(job_id), request)
+            return job_snapshot(await get_manager(request).cancel_job(job_id), request)
         except ValueError as exc:
             if getattr(exc, "code", None) == "BACKUP_PENDING":
                 raise
@@ -548,9 +549,9 @@ def register_routes(
         record = manager.registry.get(job_id)
         check_transfer(get_store(request), record)
         record.context["demo_read_only"] = restricted_writes.get()
-        manager.registry.persist(record)
+        await manager.registry.persist(record)
         try:
-            return job_snapshot(get_manager(request).retry_job(job_id), request)
+            return job_snapshot(await get_manager(request).retry_job(job_id), request)
         except ValueError as exc:
             raise HTTPException(409, str(exc)) from exc
 
@@ -762,18 +763,18 @@ def register_routes(
                     },
                     status_code=409,
                 )
-            results = []
-            for path in selection(payload.paths):
-                result = store.move(
-                    path, payload.destination, conflict=payload.conflict
-                )
-                results.append(
-                    {
-                        "path": path,
-                        "status": "moved" if result else "skipped",
-                        "item": result,
-                    }
-                )
+            selected = selection(payload.paths)
+            moved = store.move_many(
+                selected, payload.destination, conflict=payload.conflict
+            )
+            results = [
+                {
+                    "path": path,
+                    "status": "moved" if result else "skipped",
+                    "item": result,
+                }
+                for path, result in zip(selected, moved, strict=True)
+            ]
         return {"results": results}
 
     @app.post("/api/v1/nodes/bulk", dependencies=admin)
@@ -787,7 +788,7 @@ def register_routes(
             for path in selected:
                 store.validate_deletion(path)
             for path in selected:
-                record = get_manager(request).start_deletion(path)
+                record = await get_manager(request).start_deletion(path)
                 results.append({"path": path, "id": record.id, "status": "deleting"})
         else:
 
@@ -809,16 +810,18 @@ def register_routes(
                                     },
                                     status_code=409,
                                 )
-                    for path in selected:
-                        store.set_trashed(path, payload.action == "trash")
-                        results.append(
+                    store.set_trashed_many(selected, payload.action == "trash")
+                    results.extend(
+                        [
                             {
                                 "path": path,
                                 "status": "trashed"
                                 if payload.action == "trash"
                                 else "restored",
                             }
-                        )
+                            for path in selected
+                        ]
+                    )
                 return None
 
             response = await asyncio.to_thread(apply_metadata)

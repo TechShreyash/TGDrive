@@ -200,12 +200,12 @@ async def test_upload_reassigns_only_before_message_dispatch(tmp_path):
         source, len(payload), manager.settings.bot_upload_limit
     )
     parts[0]["sender"] = user.name
-    record = manager.registry.create("queued", total=len(payload))
+    record = await manager.registry.create("queued", total=len(payload))
     record.context.update(
         sha256=checksum,
         multipart_plan=dict(version=1, kind="bot", parts=parts),
     )
-    manager.registry.persist(record)
+    (await manager.registry.persist(record))
     try:
         await asyncio.wait_for(
             manager._upload_path(record, source, "/", "data.bin", len(payload)), 2
@@ -239,7 +239,7 @@ async def test_post_dispatch_revocation_preserves_bytes_and_operation_identity(
     manager.pool = ClientPool([RevokedAfterSend("bot-one", ledger)])
     await manager.pool.start()
     source = staged(manager, b"abc")
-    record = manager.enqueue_upload(source, "/", "data.bin", 3)
+    record = await manager.enqueue_upload(source, "/", "data.bin", 3)
     try:
         await asyncio.wait_for(record.task, 2)
         assert record.status == TransferStatus.ERROR
@@ -251,7 +251,7 @@ async def test_post_dispatch_revocation_preserves_bytes_and_operation_identity(
         await manager.pool.stop()
         manager.pool = ClientPool([Account("replacement-bot", ledger)])
         await manager.pool.start()
-        manager.retry_job(record.id)
+        (await manager.retry_job(record.id))
         await asyncio.wait_for(record.task, 2)
         assert record.status == TransferStatus.ERROR
         assert "no longer configured" in record.error
@@ -259,7 +259,7 @@ async def test_post_dispatch_revocation_preserves_bytes_and_operation_identity(
         await manager.pool.stop()
         manager.pool = ClientPool([Account("bot-one", ledger)])
         await manager.pool.start()
-        manager.retry_job(record.id)
+        (await manager.retry_job(record.id))
         await asyncio.wait_for(record.task, 2)
         assert record.status == TransferStatus.COMPLETED
         assert (part["sender"], part["random_id"]) == original

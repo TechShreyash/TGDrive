@@ -69,7 +69,7 @@ class Telegram:
         if expected_sha256 is not None:
             assert hashlib.sha256(content).hexdigest() == expected_sha256
         if before_dispatch is not None:
-            before_dispatch()
+            (await before_dispatch())
         self.calls.append(random_id)
         if random_id not in self.random_ids:
             message_id = 101 + len(self.random_ids)
@@ -127,7 +127,7 @@ async def test_lost_send_response_retries_same_sender_and_random_id(tmp_path):
     source = tmp_path / "receipt.part"
     source.write_bytes(b"immutable payload")
     telegram.lose_response = True
-    job = manager.enqueue_upload(source, "/", "one.bin", source.stat().st_size)
+    job = await manager.enqueue_upload(source, "/", "one.bin", source.stat().st_size)
     await job.task
     assert job.status == TransferStatus.ERROR
     assert source.exists()
@@ -139,7 +139,7 @@ async def test_lost_send_response_retries_same_sender_and_random_id(tmp_path):
         store=DriveStore.load(tmp_path / "drive.sqlite3"),
         registry=registry_for(tmp_path / "jobs.sqlite3"),
     )
-    retry = recovered.retry_job(job.id)
+    retry = await recovered.retry_job(job.id)
     await retry.task
     assert retry.status == TransferStatus.COMPLETED
     assert retry.context["sender"] == sender
@@ -165,7 +165,7 @@ async def test_retry_after_metadata_commit_does_not_duplicate_visible_file(
         raise RuntimeError("process stopped after metadata committed")
 
     monkeypatch.setattr(manager.store, "add_file", commit_then_lose_response)
-    job = manager.enqueue_upload(source, "/", "one.bin", 5)
+    job = await manager.enqueue_upload(source, "/", "one.bin", 5)
     await job.task
     assert job.status == TransferStatus.ERROR
     assert len(manager.store.list_directory("/")) == 1
@@ -175,7 +175,7 @@ async def test_retry_after_metadata_commit_does_not_duplicate_visible_file(
         store=DriveStore.load(tmp_path / "drive.sqlite3"),
         registry=registry_for(tmp_path / "jobs.sqlite3"),
     )
-    retry = recovered.retry_job(job.id)
+    retry = await recovered.retry_job(job.id)
     await retry.task
     assert retry.status == TransferStatus.COMPLETED
     assert len(recovered.store.list_directory("/")) == 1
@@ -192,7 +192,7 @@ async def test_shutdown_preserves_ambiguous_send_for_restart_reconciliation(tmp_
     manager = manager_for(tmp_path, pool)
     source = tmp_path / "receipt.part"
     source.write_bytes(b"bytes")
-    job = manager.enqueue_upload(source, "/", "one.bin", 5)
+    job = await manager.enqueue_upload(source, "/", "one.bin", 5)
     await telegram.started.wait()
     await manager.registry.shutdown()
     assert job.status == TransferStatus.QUEUED
@@ -225,9 +225,9 @@ async def test_cancelled_ambiguous_send_stays_recoverable_until_remote_cleanup(
     manager = manager_for(tmp_path, pool, registry=registry)
     source = tmp_path / "receipt.part"
     source.write_bytes(b"bytes")
-    job = manager.enqueue_upload(source, "/", "one.bin", 5)
+    job = await manager.enqueue_upload(source, "/", "one.bin", 5)
     await telegram.started.wait()
-    registry.cancel(job.id)
+    (await registry.cancel(job.id))
     with pytest.raises(asyncio.CancelledError):
         await job.task
     assert job.status == TransferStatus.QUEUED
@@ -274,7 +274,7 @@ async def test_failed_delete_retries_as_catalog_removal_after_restart(
         raise RuntimeError("database write failed")
 
     monkeypatch.setattr(manager.store, "finish_deletion", database_unavailable)
-    job = manager.start_deletion(path)
+    job = await manager.start_deletion(path)
     await job.task
     assert job.status is TransferStatus.ERROR
     assert manager.store.message_ids(path, include_trashed=True) == list(range(1, 106))
@@ -289,7 +289,7 @@ async def test_failed_delete_retries_as_catalog_removal_after_restart(
         store=DriveStore.load(tmp_path / "drive.sqlite3"),
         registry=registry_for(tmp_path / "jobs.sqlite3"),
     )
-    retried = recovered.retry_job(job.id)
+    retried = await recovered.retry_job(job.id)
     await retried.task
     assert retried.status == TransferStatus.COMPLETED
     assert telegram.deleted == [] and len(telegram.messages) == 105
@@ -310,7 +310,7 @@ async def test_permanent_delete_needs_no_telegram_client_and_revokes_shares(tmp_
     token = manager.store.create_share(path)
     manager.store.set_trashed(path, True)
     try:
-        job = manager.start_deletion(path)
+        job = await manager.start_deletion(path)
         await job.task
         assert job.status is TransferStatus.COMPLETED
         assert manager.store.list_trash() == {}
@@ -324,42 +324,42 @@ async def test_permanent_delete_needs_no_telegram_client_and_revokes_shares(tmp_
         manager.store.close()
 
 
-def test_capacity_eviction_and_ttl_pruning_are_persistent(tmp_path):
+async def test_capacity_eviction_and_ttl_pruning_are_persistent(tmp_path):
     path = tmp_path / "jobs.sqlite3"
     registry = registry_for(path, max_entries=1, ttl_seconds=1)
-    first = registry.create("upload")
-    registry.update(first.id, status=TransferStatus.COMPLETED)
-    second = registry.create("upload")
+    first = await registry.create("upload")
+    (await registry.update(first.id, status=TransferStatus.COMPLETED))
+    second = await registry.create("upload")
     recovered = registry_for(path)
     assert [record.id for record in recovered.list()] == [second.id]
     with pytest.raises(TransferNotFound):
         recovered.get(first.id)
-    registry.update(second.id, status=TransferStatus.COMPLETED)
-    registry.prune(now=second.updated_at + 2)
+    (await registry.update(second.id, status=TransferStatus.COMPLETED))
+    (await registry.prune(now=second.updated_at + 2))
     assert registry_for(path).list() == []
 
 
-def test_unresolved_jobs_and_staging_survive_ttl_and_capacity_pressure(tmp_path):
+async def test_unresolved_jobs_and_staging_survive_ttl_and_capacity_pressure(tmp_path):
     source = tmp_path / "receipt.part"
     source.write_bytes(b"needed for reconciliation")
     path = tmp_path / "jobs.sqlite3"
     registry = registry_for(path, max_entries=1)
-    record = registry.create("upload")
+    record = await registry.create("upload")
     record.context.update(kind="upload", local_path=str(source), send_started=True)
-    registry.update(record.id, status=TransferStatus.ERROR)
-    registry.prune(now=record.updated_at + 1_000_000)
+    (await registry.update(record.id, status=TransferStatus.ERROR))
+    (await registry.prune(now=record.updated_at + 1_000_000))
     assert registry.get(record.id).id == record.id
     with pytest.raises(RuntimeError, match="too many"):
-        registry.create("other")
+        (await registry.create("other"))
     assert registry_for(path).get(record.id).context["send_started"]
 
 
-def test_persistence_failure_rolls_back_reported_job_state(
+async def test_persistence_failure_rolls_back_reported_job_state(
     tmp_path, mongo_backend, monkeypatch
 ):
     path = tmp_path / "jobs"
     registry = registry_for(path)
-    record = registry.create("upload")
+    record = await registry.create("upload")
     original = mongo_backend.db.jobs.replace_one
 
     def unavailable(*_args, **_kwargs):
@@ -367,27 +367,27 @@ def test_persistence_failure_rolls_back_reported_job_state(
 
     monkeypatch.setattr(mongo_backend.db.jobs, "replace_one", unavailable)
     with pytest.raises(DatabaseUnavailable, match="could not be saved to MongoDB"):
-        registry.update(record.id, status=TransferStatus.COMPLETED, current=100)
+        (await registry.update(record.id, status=TransferStatus.COMPLETED, current=100))
     assert record.status == TransferStatus.QUEUED and record.current == 0
     monkeypatch.setattr(mongo_backend.db.jobs, "replace_one", original)
     assert registry_for(path).get(record.id).status == TransferStatus.QUEUED
 
 
-def test_permanent_delete_cannot_be_cancelled(tmp_path):
+async def test_permanent_delete_cannot_be_cancelled(tmp_path):
     registry = registry_for(tmp_path / "jobs.sqlite3")
-    record = registry.create("deleting")
+    record = await registry.create("deleting")
     record.context.update(kind="delete", deletion_id="intent")
-    registry.persist(record)
+    (await registry.persist(record))
     with pytest.raises(ValueError, match="cannot be cancelled"):
-        registry.cancel(record.id)
+        (await registry.cancel(record.id))
 
 
-def test_corrupt_persisted_job_identity_fails_loading_without_reset(
+async def test_corrupt_persisted_job_identity_fails_loading_without_reset(
     tmp_path, mongo_backend
 ):
     path = tmp_path / "jobs"
     registry = registry_for(path)
-    record = registry.create("queued")
+    record = await registry.create("queued")
     stored = mongo_backend.db.jobs.find_one({"_id": record.id})
     stored["data"]["id"] = "different-id"
     mongo_backend.db.jobs.replace_one({"_id": record.id}, stored)
@@ -396,12 +396,12 @@ def test_corrupt_persisted_job_identity_fails_loading_without_reset(
     assert mongo_backend.db.jobs.count_documents({}) == 1
 
 
-def test_abandoned_registry_leaves_shared_mongo_connection_and_records_available(
+async def test_abandoned_registry_leaves_shared_mongo_connection_and_records_available(
     tmp_path,
 ):
     path = tmp_path / "jobs"
     registry = registry_for(path)
-    record = registry.create("queued")
+    record = await registry.create("queued")
     reference = weakref.ref(registry)
     del registry
     gc.collect()
@@ -420,7 +420,7 @@ async def test_restart_retries_lost_network_response_without_duplicate_upload(tm
     source = tmp_path / "receipt.part"
     source.write_bytes(b"immutable payload")
     telegram.lose_response = True
-    job = manager.enqueue_upload(source, "/", "one.bin", source.stat().st_size)
+    job = await manager.enqueue_upload(source, "/", "one.bin", source.stat().st_size)
     await job.task
     assert job.status is TransferStatus.ERROR
     assert job.context["restart_retryable"] is True
@@ -456,7 +456,7 @@ async def test_restart_does_not_retry_nontransient_transfer_failure(tmp_path):
     manager = manager_for(tmp_path, pool)
     source = tmp_path / "receipt.part"
     source.write_bytes(b"bytes")
-    job = manager.enqueue_upload(source, "/", "one.bin", 5)
+    job = await manager.enqueue_upload(source, "/", "one.bin", 5)
     await job.task
     assert job.status is TransferStatus.ERROR
     assert not job.context.get("restart_retryable")
@@ -489,7 +489,9 @@ async def test_recovery_retries_a_finished_task_without_process_restart(tmp_path
     source = tmp_path / "receipt.part"
     source.write_bytes(b"retained payload")
     try:
-        job = manager.enqueue_upload(source, "/", "one.bin", source.stat().st_size)
+        job = await manager.enqueue_upload(
+            source, "/", "one.bin", source.stat().st_size
+        )
         failed_task = job.task
         await failed_task
         assert job.status is TransferStatus.ERROR
@@ -531,7 +533,9 @@ async def test_live_channel_check_blocks_upload_before_any_telegram_send(
                 source, source.stat().st_size, source.stat().st_size
             )
             parts[0].update(random_id=123, sender=telegram.name, send_started=True)
-            job = manager.registry.create("interrupted", total=source.stat().st_size)
+            job = await manager.registry.create(
+                "interrupted", total=source.stat().st_size
+            )
             job.context.update(
                 kind="upload",
                 local_path=str(source),
@@ -545,9 +549,11 @@ async def test_live_channel_check_blocks_upload_before_any_telegram_send(
                 sha256=checksum,
                 multipart_plan=dict(version=1, kind="bot", parts=parts),
             )
-            manager._resume(job)
+            (await manager._resume(job))
         else:
-            job = manager.enqueue_upload(source, "/", "one.bin", source.stat().st_size)
+            job = await manager.enqueue_upload(
+                source, "/", "one.bin", source.stat().st_size
+            )
         await job.task
         assert job.status is TransferStatus.ERROR
         assert "auto-delete" in job.error
@@ -573,7 +579,7 @@ async def test_dispatched_upload_without_part_journal_preserves_staging(
     manager = manager_for(tmp_path, pool)
     source = tmp_path / "receipt.part"
     source.write_bytes(b"retained payload")
-    job = manager.registry.create("interrupted", total=source.stat().st_size)
+    job = await manager.registry.create("interrupted", total=source.stat().st_size)
     job.context.update(
         kind="upload",
         local_path=str(source),
@@ -583,9 +589,9 @@ async def test_dispatched_upload_without_part_journal_preserves_staging(
         size=source.stat().st_size,
         **{effect: True if effect == "send_started" else 101},
     )
-    manager.registry.persist(job)
+    (await manager.registry.persist(job))
     try:
-        manager._resume(job)
+        (await manager._resume(job))
         await job.task
         assert job.status is TransferStatus.ERROR
         assert "missing its part journal" in job.error

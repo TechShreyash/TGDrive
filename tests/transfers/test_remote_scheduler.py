@@ -37,12 +37,12 @@ async def test_storage_eligibility_and_live_settings_control_promotions():
         first = await stack.enter_async_context(scheduler.admit(wait))
         held = await stack.enter_async_context(scheduler.admit(wait, lambda: ready))
         eligible = await stack.enter_async_context(scheduler.admit(wait))
-        scheduler.configure(2)
+        await scheduler.configure(2)
         assert first.full_speed and eligible.full_speed and not held.full_speed
         ready = True
-        scheduler.configure(3)
+        await scheduler.configure(3)
         assert held.full_speed
-        scheduler.configure(1)
+        await scheduler.configure(1)
         fourth = await stack.enter_async_context(scheduler.admit(wait))
         assert not fourth.full_speed  # Existing full-speed work drains normally.
         assert sum(ticket.full_speed for ticket in scheduler._tickets) == 3
@@ -93,6 +93,6 @@ async def test_waiting_reads_are_paced_and_promotion_wakes_them(monkeypatch):
         await asyncio.sleep(0)
         assert not waiting.done()
         ticket.can_promote = lambda: True
-        scheduler.refresh()
+        await scheduler.refresh()
         await asyncio.wait_for(waiting, 1)
         assert ticket.full_speed

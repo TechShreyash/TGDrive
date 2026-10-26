@@ -31,25 +31,25 @@ def test_cancel_before_start_prevents_late_transfer() -> None:
         starts.claim("cancel-before-start", ("remote", "/", "https://example.com"))
 
 
-def test_bound_record_is_visible_during_save_and_after_completion() -> None:
+async def test_bound_record_is_visible_during_save_and_after_completion() -> None:
     starts = TransferStarts()
     registry = TransferRegistry()
-    record = registry.create("saving", total=12)
+    record = await registry.create("saving", total=12)
     entry, _ = starts.claim("b" * 24, ("local", "/", "file.txt", "12"))
     assert not starts.bind(entry, record)
     assert starts.get("b" * 24).snapshot()["id"] == record.id
-    registry.update(record.id, status=TransferStatus.COMPLETED, phase="completed")
+    await registry.update(record.id, status=TransferStatus.COMPLETED, phase="completed")
     starts.cancel("b" * 24)
     assert not entry.cancelled
     assert entry.snapshot()["status"] == "completed"
     assert starts.claim("b" * 24, entry.fingerprint)[1] is False
 
 
-def test_cancel_intent_reaches_record_bound_later() -> None:
+async def test_cancel_intent_reaches_record_bound_later() -> None:
     starts = TransferStarts()
     entry, _ = starts.claim("c" * 24, ("local", "/", "file.txt", "12"))
     starts.cancel("c" * 24)
-    record = TransferRegistry().create("saving")
+    record = await TransferRegistry().create("saving")
     assert starts.bind(entry, record)
 
 
@@ -66,10 +66,10 @@ def test_unknown_start_is_not_found() -> None:
         TransferStarts().get("missing-request-id")
 
 
-def test_request_capacity_is_bounded_without_evicting_active_work() -> None:
+async def test_request_capacity_is_bounded_without_evicting_active_work() -> None:
     starts = TransferStarts(max_entries=1)
     entry, _ = starts.claim("e" * 24, ("local",))
-    starts.bind(entry, TransferRegistry().create("saving"))
+    starts.bind(entry, await TransferRegistry().create("saving"))
     with pytest.raises(RuntimeError, match="Too many transfer requests"):
         starts.cancel("f" * 24)
     assert starts.get("e" * 24) is entry

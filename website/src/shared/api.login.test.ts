@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { api, ApiError } from "./api";
+import { api, ApiError, sessionExpiryHandler } from "./api";
 
 function busy(retryAfter = "1") {
     return Response.json(
@@ -125,5 +125,84 @@ describe("owner login retries", () => {
         });
         await vi.advanceTimersByTimeAsync(10000);
         expect(fetcher).toHaveBeenCalledTimes(1);
+    });
+});
+
+describe("session expiry response ordering", () => {
+    afterEach(() => vi.unstubAllGlobals());
+
+    it("ignores an old request's 401 after logout and a successful new login, but expires current requests", async () => {
+        const expired = vi.fn();
+        const events = new EventTarget();
+        events.addEventListener("tgdrive:auth-required", expired);
+        vi.stubGlobal("window", events);
+        let finish!: (response: Response) => void;
+        vi.stubGlobal(
+            "fetch",
+            vi.fn((url: string) =>
+                url === "/api/v1/jobs"
+                    ? new Promise<Response>((resolve) => {
+                          finish = resolve;
+                      })
+                    : Promise.resolve(Response.json({ status: "ok" })),
+            ),
+        );
+        const pending = api.jobs().catch((error) => error);
+        const oldPreview = sessionExpiryHandler();
+        await api.logout();
+        await api.login("owner");
+        finish(
+            Response.json({ detail: "Old session expired" }, { status: 401 }),
+        );
+        expect(await pending).toMatchObject({ status: 401 });
+        oldPreview(401);
+        expect(expired).not.toHaveBeenCalled();
+
+        const duplicate = sessionExpiryHandler();
+        const current = api.jobs().catch((error) => error);
+        finish(
+            Response.json(
+                { detail: "Current session expired" },
+                { status: 401 },
+            ),
+        );
+        expect(await current).toMatchObject({ status: 401 });
+        duplicate(401);
+        expect(expired).toHaveBeenCalledOnce();
+        sessionExpiryHandler()(401);
+        expect(expired).toHaveBeenCalledTimes(2);
+    });
+
+    it("keeps current expiry guards valid when a login is rejected", async () => {
+        const events = new EventTarget();
+        const expired = vi.fn();
+        events.addEventListener("tgdrive:auth-required", expired);
+        vi.stubGlobal("window", events);
+        const current = sessionExpiryHandler();
+        vi.stubGlobal(
+            "fetch",
+            vi.fn(async () =>
+                Response.json({ detail: "Invalid password" }, { status: 401 }),
+            ),
+        );
+        await expect(api.login("incorrect")).rejects.toMatchObject({
+            status: 401,
+        });
+        expect(expired).not.toHaveBeenCalled();
+        current(401);
+        expect(expired).toHaveBeenCalledOnce();
+    });
+
+    it("expires a current session even if its 401 response body is unreadable", async () => {
+        const events = new EventTarget();
+        const expired = vi.fn();
+        events.addEventListener("tgdrive:auth-required", expired);
+        vi.stubGlobal("window", events);
+        vi.stubGlobal(
+            "fetch",
+            vi.fn(async () => new Response("Unauthorized", { status: 401 })),
+        );
+        await expect(api.jobs()).rejects.toMatchObject({ status: 401 });
+        expect(expired).toHaveBeenCalledOnce();
     });
 });

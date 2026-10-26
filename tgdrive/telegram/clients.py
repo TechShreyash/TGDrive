@@ -759,7 +759,7 @@ class Client:
         offset: int = 0,
         size: int | None = None,
         expected_sha256: str | None = None,
-        before_dispatch: Callable[[], None] | None = None,
+        before_dispatch: Callable[[], Awaitable[None]] | None = None,
         preview_name: str | None = None,
     ) -> TelegramMessage:
         length = (
@@ -805,7 +805,7 @@ class Client:
         if gate is not None:
             await gate(channel)
         if before_dispatch is not None:
-            before_dispatch()
+            await before_dispatch()
         # Gate was consumed above so the durable boundary is immediately before RPC.
         try:
             result = await self.native(

@@ -14,7 +14,7 @@ import {
     RefreshCw,
     X,
 } from "lucide-react";
-import { request, errorMessage } from "../../shared/api";
+import { request, errorMessage, sessionExpiryHandler } from "../../shared/api";
 import {
     itemPath,
     fileUrl,
@@ -114,6 +114,7 @@ export async function loadPreview(
     auth: string,
     signal: AbortSignal,
 ): Promise<PreviewDescriptor> {
+    const expireSession = sessionExpiryHandler();
     const params = new URLSearchParams({ path });
     if (auth) params.set("auth", auth);
     const response = await fetch("/api/v1/preview?" + params, {
@@ -121,6 +122,7 @@ export async function loadPreview(
         signal: AbortSignal.any([signal, AbortSignal.timeout(30000)]),
         headers: { Accept: "application/json" },
     });
+    expireSession(response.status);
     let content: string;
     try {
         content = new TextDecoder().decode(
@@ -142,8 +144,6 @@ export async function loadPreview(
         );
     }
     if (!response.ok) {
-        if (response.status === 401)
-            window.dispatchEvent(new Event("tgdrive:auth-required"));
         throw new Error(
             typeof data?.detail === "string"
                 ? data.detail

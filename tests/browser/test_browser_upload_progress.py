@@ -11,6 +11,7 @@ import pytest
 
 from tests.browser.test_browser_e2e import (
     ARTIFACTS,
+    UPLOAD_RECOVERY_RECORDS,
     Server,
     expect,
     login,
@@ -73,7 +74,7 @@ def test_device_upload_reports_bytes_before_first_chunk_receipt(
     expect(row.locator(".transfer-phase")).to_have_text("Uploading from your device")
     records = page.evaluate("window.uploadObservations")
     assert len(records) >= 2, records
-    saved = page.evaluate("JSON.parse(localStorage.getItem('tgdrive.uploads.v2'))")
+    saved = page.evaluate(UPLOAD_RECOVERY_RECORDS)
     assert saved[0]["current"] == 0, "In-flight bytes must not become a resume offset"
     assert "sentCurrent" not in saved[0]
     value = float(row.get_by_role("progressbar").get_attribute("value"))

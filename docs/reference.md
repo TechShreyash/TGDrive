@@ -284,7 +284,7 @@ empty database or the untouched catalog created by automatic first setup.
 | `UPLOAD_SESSION_TTL_SECONDS` | 86400 | Integer at least 60; incomplete receipt idle lifetime in seconds, refreshed after each committed chunk. There is no declared upper bound in configuration. |
 | `MAX_CONCURRENT_TRANSFERS` | 2 | Integer 1–32; bounds local fingerprinting and receive work. Receipt handlers have a separate bound from this value. It does not cap Telegram uploads across bots. |
 | `TELEGRAM_UPLOADS_PER_BOT` | 1 | Integer 1–4; initial per-bot Telegram media limit. **Configuration → Transfer limits** saves an override in MongoDB and applies it immediately. Premium clients remain limited to one media upload each. |
-| `TRANSFER_TTL_SECONDS` | 3600 | Integer 60-86400 inclusive; live terminal-job/context retention. Compact server-transfer history is kept separately from this cleanup; files are unaffected. |
+| `TRANSFER_TTL_SECONDS` | 3600 | Integer 60-86400 inclusive; terminal jobs become eligible for cleanup on admission or explicit pruning. Compact server-transfer history is kept separately; files are unaffected. |
 
 New documents use at most **2000 MiB (2,097,152,000 bytes)** for every account,
 including Premium. `UPLOAD_SPLIT_MIB=0` uses that cap. Larger logical files use
@@ -1154,7 +1154,8 @@ cannot be reconstructed.
 
 The floating panel's **Clear finished** only dismisses browser display rows.
 Dismissals survive reloads in the same browser; open tabs merge saved dismissals
-before polling/writing so a stale tab does not resurrect cleared rows. Server
+before polling/writing, with independent per-job records so simultaneous clears
+cannot replace another tab's dismissals. Server
 history and original files remain available. Browser-only queued work is
 not a durable server history record until a job exists.
 The floating panel displays this browser's uploads and URL imports; global history

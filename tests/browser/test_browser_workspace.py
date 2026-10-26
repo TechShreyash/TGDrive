@@ -161,7 +161,10 @@ def test_cache_settings_deep_link_opens_cache_category(server, desktop):
     ).to_have_attribute("aria-current", "page")
 
 
-def test_save_only_current_category_preserves_unrelated_invalid_draft(server, desktop):
+@pytest.mark.parametrize("refresh_failure", [False, True])
+def test_save_only_current_category_preserves_unrelated_invalid_draft(
+    server, desktop, refresh_failure
+):
     _, page = desktop
     patches = []
 
@@ -175,9 +178,26 @@ def test_save_only_current_category_preserves_unrelated_invalid_draft(server, de
     page.get_by_label("Memory cache (MiB)", exact=True).fill("")
     page.get_by_role("link", name="Timezone", exact=True).click()
     page.get_by_label("Timezone", exact=True).fill("UTC")
+    if refresh_failure:
+        page.route(
+            "**/api/config",
+            lambda route: route.fulfill(
+                status=503, json={"detail": "Temporary configuration outage"}
+            ),
+        )
     page.get_by_role("button", name="Save Performance Settings", exact=True).click()
     expect(page.locator(".toast")).to_have_text("Performance settings saved.")
     assert patches == [{"timezone": "UTC"}]
+    if refresh_failure:
+        state = page.locator(".deployment-config-state")
+        expect(state).to_have_attribute("role", "alert")
+        expect(page.get_by_label("Timezone", exact=True)).to_be_disabled()
+        expect(page.locator(".workspace > fieldset")).to_have_attribute("inert", "")
+        page.screenshot(path=ARTIFACTS / "config-refresh-preserved-draft.png")
+        page.unroute("**/api/config")
+        state.get_by_role("button", name="Try Again", exact=True).click()
+        expect(state).to_have_count(0)
+        expect(page.get_by_label("Timezone", exact=True)).to_have_value("UTC")
     page.get_by_role("link", name="Cache settings", exact=True).click()
     expect(page.get_by_label("Memory cache (MiB)", exact=True)).to_have_value("")
     page.get_by_role("button", name="Save Performance Settings", exact=True).click()

@@ -118,13 +118,15 @@ def test_no_cancellation_route_bypasses_checkpoint_guard(owner, route):
     client, _, runtime, _ = owner
     login(client)
     manager = runtime.transfers
-    record = manager.registry.create("backup_pending", total=10)
+    record = client.portal.call(
+        lambda: manager.registry.create("backup_pending", total=10)
+    )
     request_id = "checkpoint-cancel-request"
     starts = client.app.state.transfer_starts
     entry, _ = starts.claim(request_id, ("test",))
     starts.bind(entry, record)
 
-    def protected(_job_id):
+    async def protected(_job_id):
         raise BackupPending("File stored; recovery checkpoint is pending")
 
     manager.cancel_job = protected
@@ -157,7 +159,7 @@ async def test_receipt_cancellation_checks_manager_before_mutating_job_or_receip
         record = await uploads.complete(receipt["id"])
         before = uploads.get_unchecked(receipt["id"]).copy()
 
-        def protected(_job_id):
+        async def protected(_job_id):
             raise BackupPending("File stored; recovery checkpoint is pending")
 
         manager.cancel_job = protected

@@ -43,6 +43,11 @@ const managerForTest = (sendChunk?: UploadChunkTransport) => {
 beforeEach(() => {
     const values = new Map<string, string>();
     vi.stubGlobal("localStorage", {
+        get length() {
+            return values.size;
+        },
+        key: (index: number) => [...values.keys()][index] ?? null,
+        removeItem: (key: string) => values.delete(key),
         getItem: (key: string) => values.get(key) || null,
         setItem: (key: string, value: string) => values.set(key, value),
     });

@@ -4,6 +4,7 @@ import {
     errorMessage,
     notifyDemoFilesReadOnly,
     request,
+    sessionExpiryHandler,
 } from "../../shared/api";
 import type {
     Job,
@@ -71,6 +72,53 @@ export interface Transfer {
     location?: TransferLocation;
 }
 const STORAGE_KEY = "tgdrive.uploads.v2";
+const STORAGE_PREFIX = STORAGE_KEY + ":";
+const DISMISSED_KEY = "tgdrive.dismissed-jobs.v1";
+const DISMISSED_PREFIX = DISMISSED_KEY + ":";
+function readRecoveryRecords() {
+    // The current v2 array is a read-only seed until its rows are updated or cleared.
+    let seed: Transfer[] = [];
+    let invalid = false;
+    try {
+        const value: unknown = JSON.parse(
+            localStorage.getItem(STORAGE_KEY) || "[]",
+        );
+        if (!Array.isArray(value)) throw new Error("Invalid recovery array");
+        seed = value.filter((row) => row && typeof row.key === "string");
+        invalid = seed.length !== value.length;
+    } catch {
+        invalid = true;
+    }
+    const rows = new Map<string, Transfer>();
+    const add = (key: string, value: Transfer | null) => {
+        if (value === null) rows.delete(key);
+        else if (!value || typeof value !== "object") invalid = true;
+        else if (value.kind !== "delete" && value.initiatedHere === true) {
+            if (
+                value.key === key &&
+                typeof value.name === "string" &&
+                typeof value.destination === "string" &&
+                Number.isFinite(value.size)
+            )
+                rows.set(key, value);
+            else invalid = true;
+        }
+    };
+    for (const row of seed) add(row.key, row);
+    for (let index = 0; index < localStorage.length; index++) {
+        const key = localStorage.key(index);
+        if (!key?.startsWith(STORAGE_PREFIX)) continue;
+        try {
+            add(
+                key.slice(STORAGE_PREFIX.length),
+                JSON.parse(localStorage.getItem(key)!),
+            );
+        } catch {
+            invalid = true;
+        }
+    }
+    return { rows: [...rows.values()], seed, invalid };
+}
 export const MAX_BROWSER_QUEUE = 2000;
 // Device receipts have their own slots; Telegram work never holds one.
 export const BROWSER_RECEIVE_CONCURRENCY = MAX_DEVICE_UPLOAD_CONCURRENCY;
@@ -409,6 +457,7 @@ export class TransferManager {
     private deviceRetryAttempts = new Map<string, number>();
     private admissionRetryAt = 0;
     private dismissed = new Set<string>();
+    private persistedDismissed = new Set<string>();
     private historyRevision = 0;
     private remoteStarts = new Map<
         string,
@@ -420,73 +469,63 @@ export class TransferManager {
         }
     >();
     private remoteSubmitting = new Set<string>();
+    private persisted = new Map<string, string>();
     constructor(
         private readonly sendChunk: UploadChunkTransport = sendUploadChunk,
     ) {
         try {
-            this.dismissed = new Set(
-                JSON.parse(
-                    localStorage.getItem("tgdrive.dismissed-jobs.v1") || "[]",
-                ),
-            );
-        } catch {}
-        try {
-            const saved: Transfer[] = JSON.parse(
-                localStorage.getItem(STORAGE_KEY) || "[]",
-            );
-            this.items = saved
-                .filter(
-                    (item) =>
-                        item.kind !== "delete" &&
-                        // Rediscover server-owned rows from the live registry. Keeping
-                        // their browser copies can resurrect jobs after a drive/fixture reset.
-                        item.initiatedHere === true &&
-                        typeof item.key === "string" &&
-                        typeof item.name === "string" &&
-                        typeof item.destination === "string" &&
-                        Number.isFinite(item.size),
-                )
-                .map((item) => ({
-                    ...safeTransferMetadata([item])[0],
-                    initiatedHere: true,
-                    batchId: transferTaskId(item),
-                    batchName:
-                        item.folderUpload?.name || item.batchName || item.name,
-                    batchCreatedAt:
-                        (item.folderUpload
-                            ? item.folderUpload.created_at * 1000
-                            : 0) ||
-                        item.batchCreatedAt ||
-                        item.createdAt ||
-                        Date.now(),
-                    state:
-                        item.jobId ||
-                        (item.kind === "remote" && item.remoteRequestId)
-                            ? item.state
-                            : terminal.has(item.state)
-                              ? item.state
-                              : item.kind === "remote"
-                                ? "error"
-                                : "awaiting_file",
-                    phase:
-                        item.kind === "remote" &&
-                        item.remoteRequestId &&
-                        !item.jobId &&
-                        !terminal.has(item.state)
-                            ? "Checking import status…"
-                            : item.jobId
-                              ? item.phase
-                              : terminal.has(item.state)
-                                ? item.phase
-                                : item.kind === "remote"
-                                  ? "URL transfer is missing its server job. Start a new URL upload."
-                                  : "Choose the original file to resume",
-                }));
+            const saved = readRecoveryRecords();
+            if (saved.invalid)
+                this.recoveryWarning =
+                    "Some transfer recovery information could not be loaded. Valid saved transfers are still available.";
+            this.items = saved.rows.map((item) => ({
+                ...safeTransferMetadata([item])[0],
+                initiatedHere: true,
+                batchId: transferTaskId(item),
+                batchName:
+                    item.folderUpload?.name || item.batchName || item.name,
+                batchCreatedAt:
+                    (item.folderUpload
+                        ? item.folderUpload.created_at * 1000
+                        : 0) ||
+                    item.batchCreatedAt ||
+                    item.createdAt ||
+                    Date.now(),
+                state:
+                    item.jobId ||
+                    (item.kind === "remote" && item.remoteRequestId)
+                        ? item.state
+                        : terminal.has(item.state)
+                          ? item.state
+                          : item.kind === "remote"
+                            ? "error"
+                            : "awaiting_file",
+                phase:
+                    item.kind === "remote" &&
+                    item.remoteRequestId &&
+                    !item.jobId &&
+                    !terminal.has(item.state)
+                        ? "Checking import status…"
+                        : item.jobId
+                          ? item.phase
+                          : terminal.has(item.state)
+                            ? item.phase
+                            : item.kind === "remote"
+                              ? "URL transfer is missing its server job. Start a new URL upload."
+                              : "Choose the original file to resume",
+            }));
         } catch {
             this.recoveryWarning =
                 "Your browser could not load transfer recovery information. Keep this tab open until device transfers finish.";
         }
         this.mergeDismissed();
+        this.persistedDismissed = new Set(this.dismissed);
+        this.persisted = new Map(
+            safeTransferMetadata(this.items).map((row) => [
+                row.key,
+                JSON.stringify(row),
+            ]),
+        );
     }
     subscribe = (listener: () => void) => {
         this.listeners.add(listener);
@@ -567,12 +606,24 @@ export class TransferManager {
     }
     private mergeDismissed() {
         try {
-            const saved: unknown = JSON.parse(
-                localStorage.getItem("tgdrive.dismissed-jobs.v1") || "[]",
-            );
+            let saved: unknown;
+            try {
+                saved = JSON.parse(localStorage.getItem(DISMISSED_KEY) || "[]");
+            } catch {
+                /* Independent dismissal records remain readable. */
+            }
             if (Array.isArray(saved))
                 for (const id of saved)
                     if (typeof id === "string") this.dismissed.add(id);
+            const records: [string, number][] = [];
+            for (let index = 0; index < localStorage.length; index++) {
+                const key = localStorage.key(index);
+                if (key?.startsWith(DISMISSED_PREFIX))
+                    records.push([key, Number(localStorage.getItem(key)) || 0]);
+            }
+            records.sort((a, b) => a[1] - b[1] || a[0].localeCompare(b[0]));
+            for (const [key] of records)
+                this.dismissed.add(key.slice(DISMISSED_PREFIX.length));
             this.dismissed = new Set([...this.dismissed].slice(-1000));
         } catch {
             /* Keep in-memory dismissals when browser storage is unavailable. */
@@ -593,9 +644,6 @@ export class TransferManager {
         );
     }
     private publish(persist = true) {
-        // Another TGDrive tab can clear finished rows while this controller is
-        // still polling. Merge before writing so it cannot erase those dismissals.
-        this.mergeDismissed();
         const now = Date.now();
         if (this.enabled && !this.admissionPaused)
             this.batchProgress.observe(summarizeBatches(this.items, now), now);
@@ -605,6 +653,8 @@ export class TransferManager {
             for (const listener of this.listeners) listener();
             return;
         }
+        // Another tab may have cleared finished rows since the previous poll.
+        this.mergeDismissed();
         const retained = retainTransferBatches(this.items);
         const retainedKeys = new Set(retained.map((item) => item.key));
         for (const item of this.items)
@@ -612,20 +662,87 @@ export class TransferManager {
                 this.dismissed.add(item.jobId);
         this.items = [...retained];
         try {
-            localStorage.setItem(
-                STORAGE_KEY,
-                JSON.stringify(safeTransferMetadata(this.items)),
-            );
-            localStorage.setItem(
-                "tgdrive.dismissed-jobs.v1",
-                JSON.stringify([...this.dismissed].slice(-1000)),
-            );
-            this.recoveryWarning = "";
+            const invalid = this.persistRecovery();
+            this.persistDismissed();
+            this.recoveryWarning = invalid
+                ? "Some transfer recovery information could not be loaded. Valid saved transfers are still available."
+                : "";
         } catch {
             this.recoveryWarning =
                 "Your browser could not save transfer recovery information. Keep this tab open until device transfers finish.";
         }
         for (const listener of this.listeners) listener();
+    }
+    private persistRecovery() {
+        const { seed, invalid } = readRecoveryRecords();
+        const seedKeys = new Set(seed.map((row) => row.key));
+        const remove = (key: string) => {
+            // A seed tombstone prevents a still-open tab restoring a cleared row.
+            if (seedKeys.has(key))
+                localStorage.setItem(STORAGE_PREFIX + key, "null");
+            else localStorage.removeItem(STORAGE_PREFIX + key);
+        };
+        for (const row of seed)
+            if (!row.initiatedHere || row.kind === "delete") remove(row.key);
+        const current = new Map<string, string>();
+        const removed = new Set<string>();
+        for (const row of safeTransferMetadata(this.items)) {
+            if (!row.initiatedHere || row.kind === "delete") continue;
+            const stored = localStorage.getItem(STORAGE_PREFIX + row.key);
+            if (
+                stored === "null" ||
+                (this.persisted.has(row.key) &&
+                    stored === null &&
+                    !seedKeys.has(row.key))
+            ) {
+                removed.add(row.key);
+                continue;
+            }
+            const serialized = JSON.stringify(row);
+            if (serialized !== this.persisted.get(row.key))
+                localStorage.setItem(STORAGE_PREFIX + row.key, serialized);
+            current.set(row.key, serialized);
+        }
+        for (const key of this.persisted.keys())
+            if (!current.has(key) && !removed.has(key)) remove(key);
+        this.items = this.items.filter((row) => !removed.has(row.key));
+        this.persisted = current;
+        const saved = readRecoveryRecords().rows;
+        const retained = new Set(
+            retainTransferBatches(saved).map((row) => row.key),
+        );
+        for (const row of saved) if (!retained.has(row.key)) remove(row.key);
+        if (
+            seed.length &&
+            seed.every(
+                (row) =>
+                    localStorage.getItem(STORAGE_PREFIX + row.key) !== null,
+            )
+        ) {
+            localStorage.removeItem(STORAGE_KEY);
+            for (const row of seed)
+                if (localStorage.getItem(STORAGE_PREFIX + row.key) === "null")
+                    localStorage.removeItem(STORAGE_PREFIX + row.key);
+        }
+        return invalid;
+    }
+    private persistDismissed() {
+        for (const id of this.dismissed)
+            if (
+                !this.persistedDismissed.has(id) &&
+                localStorage.getItem(DISMISSED_PREFIX + id) === null
+            )
+                localStorage.setItem(DISMISSED_PREFIX + id, String(Date.now()));
+        const records: [string, number][] = [];
+        for (let index = 0; index < localStorage.length; index++) {
+            const key = localStorage.key(index);
+            if (key?.startsWith(DISMISSED_PREFIX))
+                records.push([key, Number(localStorage.getItem(key)) || 0]);
+        }
+        records.sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]));
+        for (const [key] of records.slice(1000)) localStorage.removeItem(key);
+        if (records.length >= 1000) localStorage.removeItem(DISMISSED_KEY);
+        this.persistedDismissed = new Set(this.dismissed);
     }
     private update(key: string, values: Partial<Transfer>) {
         const item = this.items.find((item) => item.key === key);
@@ -1460,6 +1577,7 @@ export class TransferManager {
         let offset = snapshot ? snapshot.offset : 0;
         let length = snapshot ? snapshot.total_size : 0;
         if (!snapshot) {
+            const expireSession = sessionExpiryHandler();
             const head = await fetch(
                 "/api/v1/uploads/" + encodeURIComponent(id),
                 {
@@ -1485,8 +1603,7 @@ export class TransferManager {
                 throw error;
             });
             if (!head.ok) {
-                if (head.status === 401)
-                    window.dispatchEvent(new Event("tgdrive:auth-required"));
+                expireSession(head.status);
                 throw new ApiError(
                     head.status === 404 || head.status === 410
                         ? "This upload has expired. Cancel it and start a new upload."
@@ -1567,6 +1684,7 @@ export class TransferManager {
             if (controller.signal.aborted)
                 throw new DOMException("Upload paused", "AbortError");
             const end = Math.min(offset + chunkSize, file.size);
+            const expireSession = sessionExpiryHandler();
             const response = await this.sendDeviceChunk(
                 item.key + ":" + offset,
                 end,
@@ -1599,8 +1717,7 @@ export class TransferManager {
                 },
             );
             if (!response.ok) {
-                if (response.status === 401)
-                    window.dispatchEvent(new Event("tgdrive:auth-required"));
+                expireSession(response.status);
                 let detail = "";
                 let code = "";
                 try {

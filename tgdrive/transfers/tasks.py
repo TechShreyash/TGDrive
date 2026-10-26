@@ -13,8 +13,9 @@ import time
 import unicodedata
 from collections import deque
 from collections.abc import Awaitable, Callable
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from enum import StrEnum
+from functools import wraps
 from pathlib import Path
 from typing import Any
 
@@ -30,6 +31,28 @@ _SHUTDOWN_DRAIN_SECONDS = 5.0
 _PROGRESS_JOURNAL_SECONDS = 0.5
 _PROGRESS_STALE_SECONDS = 15.0
 _BYTE_PHASES = frozenset({"saving", "downloading", "uploading"})
+
+
+def _journalled(operation):
+    """A disconnected caller must drain its commit before releasing the journal."""
+
+    @wraps(operation)
+    async def owned(*args, **kwargs):
+        task = asyncio.create_task(operation(*args, **kwargs))
+        cancelled = False
+        while True:
+            try:
+                result = await asyncio.shield(task)
+                break
+            except asyncio.CancelledError:
+                if task.cancelled():
+                    raise
+                cancelled = True
+        if cancelled:
+            raise asyncio.CancelledError
+        return result
+
+    return owned
 
 
 def _retry_after_restart(error: Exception) -> bool:
@@ -161,16 +184,24 @@ class TransferRecord:
     cancel_handle: asyncio.TimerHandle | None = field(default=None, repr=False)
 
     context: dict[str, Any] = field(default_factory=dict)
+    _accepted: bool = field(default=True, repr=False)
+    _committed: TransferRecord | None = field(default=None, repr=False)
+
+    @property
+    def committed(self) -> TransferRecord:
+        return self._committed or self
 
     @property
     def terminal(self) -> bool:
-        return self.status in _TERMINAL
+        return self.committed.status in _TERMINAL
 
     @property
     def history_hidden(self) -> bool:
-        return self.terminal and bool(self.context.get("history_cleared"))
+        return self.terminal and bool(self.committed.context.get("history_cleared"))
 
     def as_dict(self) -> dict[str, Any]:
+        if self._committed is not None:
+            return self._committed.as_dict()
         now = time.time()
         elapsed = (
             max(0.0, (self.finished_at or now) - self.started_at)
@@ -279,6 +310,8 @@ class TransferRegistry:
         self.demo_mode = demo_mode
         self._records: dict[str, TransferRecord] = {}
         self._tasks: set[asyncio.Task[None]] = set()
+        self._finalizers: set[asyncio.Task[None]] = set()
+        self._journal_lock = asyncio.Lock()
         self._shutting_down = False
         self._mongo = mongo
         self._mongo_backend = mongo_backend
@@ -339,7 +372,29 @@ class TransferRegistry:
         self._durable[item["id"]] = copy.deepcopy(item)
         self._logged[record.id] = self._log_snapshot(record)
 
-    def persist(self, record: TransferRecord) -> None:
+    async def _write(self, operation, *args, **kwargs):
+        if self._mongo_backend is not None:
+            return await asyncio.to_thread(
+                self._mongo_backend.write, self._mongo, operation, *args, **kwargs
+            )
+        return await asyncio.to_thread(getattr(self._mongo, operation), *args, **kwargs)
+
+    @_journalled
+    async def persist(self, record: TransferRecord) -> None:
+        context = record.context
+        async with self._journal_lock:
+            if record.context is not context:
+                raise DatabaseUnavailable(
+                    "Transfer state changed after a failed commit"
+                )
+            await self._persist(record)
+
+    @_journalled
+    async def prune(self, *, now: float | None = None) -> None:
+        async with self._journal_lock:
+            await self._prune(now=now)
+
+    async def _persist(self, record: TransferRecord) -> None:
         # Lifecycle/context commits are immediate; byte counters are advisory.
         if record.status is TransferStatus.RUNNING and record.started_at is None:
             record.started_at = time.time()
@@ -352,6 +407,7 @@ class TransferRegistry:
             record.context.pop("history_cleared", None)
         self._last_progress_commit[record.id] = time.monotonic()
         if self._mongo is None:
+            record._accepted = True
             self._log_record(record)
             return
         item = {
@@ -370,33 +426,30 @@ class TransferRegistry:
                 "progress_updated_at",
             )
         } | {"context": copy.deepcopy(record.context)}
+        previous = self._durable.get(record.id)
+        if previous is not None:
+            record._committed = TransferRecord(
+                **copy.deepcopy(previous),
+                task=record.task,
+                cancel_event=record.cancel_event,
+            )
         try:
-            if self._mongo_backend is not None:
-                self._mongo_backend.write(
-                    self._mongo,
-                    "replace_one",
-                    {"_id": record.id},
-                    {"_id": record.id, "data": item},
-                    upsert=True,
-                )
-            else:
-                self._mongo.replace_one(
-                    {"_id": record.id},
-                    {"_id": record.id, "data": item},
-                    upsert=True,
-                )
+            await self._write(
+                "replace_one",
+                {"_id": record.id},
+                {"_id": record.id, "data": item},
+                upsert=True,
+            )
         except (
             PyMongoError,
             DatabaseUnavailable,
             ValueError,
             TypeError,
         ):
-            previous = self._durable.get(record.id)
             if previous is not None:
                 for key, value in previous.items():
                     if key == "context":
-                        record.context.clear()
-                        record.context.update(copy.deepcopy(value))
+                        record.context = copy.deepcopy(value)
                     else:
                         setattr(
                             record,
@@ -410,7 +463,10 @@ class TransferRegistry:
             raise DatabaseUnavailable(
                 "Transfer state could not be saved to MongoDB"
             ) from None
+        finally:
+            record._committed = None
         self._durable[record.id] = copy.deepcopy(item)
+        record._accepted = True
         self._log_record(record)
 
     @staticmethod
@@ -510,6 +566,7 @@ class TransferRegistry:
 
     @staticmethod
     def _retained(record: TransferRecord) -> bool:
+        record = record.committed
         context = record.context
         deadlines = [context.get("retry_at"), context.get("channel_retry_at")]
         plan = context.get("multipart_plan")
@@ -538,6 +595,7 @@ class TransferRegistry:
         record: TransferRecord, *, retained: bool = True
     ) -> dict[str, Any]:
         """Public summary without source URLs, credentials or payload context."""
+        record = record.committed
         summary = record.as_dict() | {
             "name": record.context.get("name", "Transfer"),
             "kind": record.context.get(
@@ -552,7 +610,7 @@ class TransferRegistry:
             )
         return summary
 
-    def _remove(self, transfer_id: str) -> None:
+    async def _remove(self, transfer_id: str) -> None:
         record = self._records[transfer_id]
         summary = (
             self.history_snapshot(record, retained=False)
@@ -576,16 +634,9 @@ class TransferRegistry:
                         "summary": summary,
                     },
                 )
-                if self._mongo_backend is not None:
-                    self._mongo_backend.write(self._mongo, "replace_one", *args)
-                else:
-                    self._mongo.replace_one(*args)
-            elif self._mongo_backend is not None:
-                self._mongo_backend.write(
-                    self._mongo, "delete_one", {"_id": transfer_id}
-                )
+                await self._write("replace_one", *args)
             else:
-                self._mongo.delete_one({"_id": transfer_id})
+                await self._write("delete_one", {"_id": transfer_id})
         if self._mongo is None and summary is not None:
             self._history[transfer_id] = summary
             # Nonpersistent test runtimes stay bounded; MongoDB archives are paged.
@@ -873,119 +924,142 @@ class TransferRegistry:
             exclude_folders=tuple(exclude_folders),
         )
 
-    def clear_history(self, *, exclude_folders=()) -> int:
+    @_journalled
+    async def clear_history(self, *, exclude_folders=()) -> int:
         """Forget finished display history without discarding recovery contexts."""
-        active_folders = set(exclude_folders)
-        for record in self._records.values():
-            folder = record.context.get("folder_upload")
-            if not record.terminal and isinstance(folder, dict):
-                active_folders.add(folder["id"])
+        async with self._journal_lock:
+            active_folders = set(exclude_folders)
+            for record in self._records.values():
+                folder = record.context.get("folder_upload")
+                if not record.terminal and isinstance(folder, dict):
+                    active_folders.add(folder["id"])
 
-        if self._mongo is not None:
-            query: dict[str, Any] = {
-                "archived": True,
-                "status": {"$in": [status.value for status in _TERMINAL]},
-                "summary.folder_upload.id": {"$nin": sorted(active_folders)},
-            }
-            if self._mongo_backend is not None:
-                result = self._mongo_backend.write(self._mongo, "delete_many", query)
+            if self._mongo is not None:
+                query: dict[str, Any] = {
+                    "archived": True,
+                    "status": {"$in": [status.value for status in _TERMINAL]},
+                    "summary.folder_upload.id": {"$nin": sorted(active_folders)},
+                }
+                result = await self._write("delete_many", query)
+                cleared = result.deleted_count
             else:
-                result = self._mongo.delete_many(query)
-            cleared = result.deleted_count
-        else:
-            removed = [
-                identity
-                for identity, row in self._history.items()
-                if row.get("folder_upload", {}).get("id") not in active_folders
-            ]
-            for identity in removed:
-                del self._history[identity]
-            cleared = len(removed)
+                removed = [
+                    identity
+                    for identity, row in self._history.items()
+                    if row.get("folder_upload", {}).get("id") not in active_folders
+                ]
+                for identity in removed:
+                    del self._history[identity]
+                cleared = len(removed)
 
-        for record in self._records.values():
-            folder = record.context.get("folder_upload", {})
-            if (
-                record.terminal
-                and not record.history_hidden
-                and record.context.get("kind") != "delete"
-                and folder.get("id") not in active_folders
-            ):
-                # Retained errors may still own staged bytes, send identities or
-                # backup barriers. Hide their history, keeping recovery intact.
-                record.context["history_cleared"] = True
-                self.persist(record)
-                cleared += 1
-        return cleared
+            for record in self._records.values():
+                folder = record.context.get("folder_upload", {})
+                if (
+                    record.terminal
+                    and not record.history_hidden
+                    and record.context.get("kind") != "delete"
+                    and folder.get("id") not in active_folders
+                ):
+                    # Retained errors may still own staged bytes, send identities or
+                    # backup barriers. Hide their history, keeping recovery intact.
+                    record.context["history_cleared"] = True
+                    await self._persist(record)
+                    cleared += 1
+            return cleared
 
     def close(self) -> None:
-        if self._tasks:
+        if self._tasks or self._finalizers:
             raise RuntimeError("Drain transfer tasks before closing the journal")
 
     def list(self) -> list[TransferRecord]:
         return sorted(
-            self._records.values(), key=lambda item: item.created_at, reverse=True
+            (record for record in self._records.values() if record._accepted),
+            key=lambda item: item.created_at,
+            reverse=True,
         )
 
-    def retry(self, transfer_id: str) -> TransferRecord:
-        record = self.get(transfer_id)
-        if record.status not in {TransferStatus.ERROR, TransferStatus.QUEUED}:
-            raise ValueError("Only failed or interrupted transfers can be retried")
-        record.status = TransferStatus.QUEUED
-        record.error = None
-        record.context.pop("restart_retryable", None)
-        record._progress_samples.clear()
-        record.cancel_event.clear()
-        self.persist(record)
-        logger.info("Transfer retry requested id=%s", record.id)
-        return record
+    def staging_records(self) -> list[TransferRecord]:
+        """Include unacknowledged reservations when admitting another upload."""
+        return list(self._records.values())
 
-    def create(
-        self, phase: str, *, total: int = 0, transfer_id: str | None = None
+    @_journalled
+    async def retry(self, transfer_id: str) -> TransferRecord:
+        async with self._journal_lock:
+            record = self.get(transfer_id)
+            if record.status not in {TransferStatus.ERROR, TransferStatus.QUEUED}:
+                raise ValueError("Only failed or interrupted transfers can be retried")
+            record.status = TransferStatus.QUEUED
+            record.error = None
+            record.context.pop("restart_retryable", None)
+            record._progress_samples.clear()
+            record.cancel_event.clear()
+            await self._persist(record)
+            logger.info("Transfer retry requested id=%s", record.id)
+            return record
+
+    @_journalled
+    async def create(
+        self,
+        phase: str,
+        *,
+        total: int = 0,
+        transfer_id: str | None = None,
+        context: dict[str, Any] | None = None,
     ) -> TransferRecord:
-        self.prune()
-        if transfer_id is not None and transfer_id in self._records:
-            return self._records[transfer_id]
-        if self._shutting_down:
-            raise RuntimeError("Transfer registry is shutting down")
-        if len(self._records) >= self._max_entries:
-            terminal = sorted(
-                (
-                    r
-                    for r in self._records.values()
-                    if r.terminal
-                    and not self._retained(r)
-                    and (r.task is None or r.task.done())
-                ),
-                key=lambda record: record.updated_at,
+        async with self._journal_lock:
+            await self._prune()
+            if transfer_id is not None and transfer_id in self._records:
+                return self._records[transfer_id]
+            if self._shutting_down:
+                raise RuntimeError("Transfer registry is shutting down")
+            if len(self._records) >= self._max_entries:
+                terminal = sorted(
+                    (
+                        r
+                        for r in self._records.values()
+                        if r.terminal
+                        and not self._retained(r)
+                        and (r.task is None or r.task.done())
+                    ),
+                    key=lambda record: record.updated_at,
+                )
+                if terminal:
+                    await self._remove(terminal[0].id)
+                else:
+                    raise RuntimeError("too many active transfers")
+            transfer_id = transfer_id or secrets.token_urlsafe(18)
+            if transfer_id in self._records:
+                return self._records[transfer_id]
+            record = TransferRecord(
+                id=transfer_id,
+                phase=phase,
+                total=max(0, total),
+                context=copy.deepcopy(context) if context is not None else {},
+                _accepted=False,
             )
-            if terminal:
-                self._remove(terminal[0].id)
-            else:
-                raise RuntimeError("too many active transfers")
-        transfer_id = transfer_id or secrets.token_urlsafe(18)
-        if transfer_id in self._records:
-            return self._records[transfer_id]
-        record = TransferRecord(id=transfer_id, phase=phase, total=max(0, total))
-        from tgdrive.storage.demo_files import restricted_writes
+            from tgdrive.storage.demo_files import restricted_writes
 
-        if self.demo_mode and restricted_writes.get():
-            record.context["demo_read_only"] = True
-        self._records[transfer_id] = record
-        try:
-            self.persist(record)
-        except BaseException:
-            self._records.pop(transfer_id, None)
-            raise
-        return record
+            if self.demo_mode and restricted_writes.get():
+                record.context["demo_read_only"] = True
+            self._records[transfer_id] = record
+            try:
+                await self._persist(record)
+            except BaseException:
+                self._records.pop(transfer_id, None)
+                raise
+            return record
 
     def get(self, transfer_id: str) -> TransferRecord:
-        self.prune()
         try:
-            return self._records[transfer_id]
+            record = self._records[transfer_id]
         except KeyError as exc:
             raise TransferNotFound(transfer_id) from exc
+        if not record._accepted:
+            raise TransferNotFound(transfer_id)
+        return record
 
-    def update(
+    @_journalled
+    async def update(
         self,
         transfer_id: str,
         *,
@@ -996,107 +1070,128 @@ class TransferRegistry:
         error: str | None = None,
         checkpoint_progress: bool = True,
     ) -> TransferRecord:
-        record = self.get(transfer_id)
-        # Terminal snapshots are immutable.  In particular, a late progress
-        # callback from a transport that is winding down after cancellation
-        # must not change the phase/bytes the API has already reported.
-        if record.terminal:
-            return record
-        previous_phase = record.phase
-        previous_status = record.status
-        previous_current = record.current
-        previous_total = record.total
-        if status is not None:
-            record.status = status
-        if phase is not None:
-            record.phase = phase
-        if current is not None:
-            record.current = max(0, current)
-        if total is not None:
-            record.total = max(0, total)
-        if error is not None:
-            record.error = error[:500]
-        now = time.time()
-        monotonic = time.monotonic()
-        record.updated_at = now
-        transition = record.phase != previous_phase or record.status != previous_status
-        if (
-            transition
-            or record.current < previous_current
-            or record.total != previous_total
-            or record.phase not in _BYTE_PHASES
-            or record.status is not TransferStatus.RUNNING
-        ):
-            record._progress_samples.clear()
-        if (
-            record.phase in _BYTE_PHASES
-            and record.status is TransferStatus.RUNNING
-            and current is not None
-        ):
-            record.progress_updated_at = now
-            record._progress_samples.append((monotonic, record.current))
-            while (
-                len(record._progress_samples) > 2
-                and record._progress_samples[1][0] < monotonic - 5
-            ):
-                record._progress_samples.popleft()
-        # Never throttle phase/status/error or recovery-context changes. Staging
-        # write counts are advisory, like current; they are not resumable receipt
-        # offsets or Telegram send identities. URL retrieval restarts from zero.
-        durable = self._durable.get(record.id)
-        context_changed = durable is not None and {
-            key: value
-            for key, value in durable["context"].items()
-            if key != "staging_written"
-        } != {
-            key: value
-            for key, value in record.context.items()
-            if key != "staging_written"
-        }
-        if (
-            transition
-            or error is not None
-            or context_changed
-            or (
-                checkpoint_progress
-                and self._mongo is None
-                and monotonic - self._last_progress_commit.get(record.id, 0)
-                >= _PROGRESS_JOURNAL_SECONDS
+        async with self._journal_lock:
+            record = self.get(transfer_id)
+            # Terminal snapshots are immutable.  In particular, a late progress
+            # callback from a transport that is winding down after cancellation
+            # must not change the phase/bytes the API has already reported.
+            if record.terminal:
+                return record
+            previous_phase = record.phase
+            previous_status = record.status
+            previous_current = record.current
+            previous_total = record.total
+            if status is not None:
+                record.status = status
+            if phase is not None:
+                record.phase = phase
+            if current is not None:
+                record.current = max(0, current)
+            if total is not None:
+                record.total = max(0, total)
+            if error is not None:
+                record.error = error[:500]
+            now = time.time()
+            monotonic = time.monotonic()
+            record.updated_at = now
+            transition = (
+                record.phase != previous_phase or record.status != previous_status
             )
-        ):
-            self.persist(record)
-        return record
+            if (
+                transition
+                or record.current < previous_current
+                or record.total != previous_total
+                or record.phase not in _BYTE_PHASES
+                or record.status is not TransferStatus.RUNNING
+            ):
+                record._progress_samples.clear()
+            if (
+                record.phase in _BYTE_PHASES
+                and record.status is TransferStatus.RUNNING
+                and current is not None
+            ):
+                record.progress_updated_at = now
+                record._progress_samples.append((monotonic, record.current))
+                while (
+                    len(record._progress_samples) > 2
+                    and record._progress_samples[1][0] < monotonic - 5
+                ):
+                    record._progress_samples.popleft()
+            # Never throttle phase/status/error or recovery-context changes. Staging
+            # write counts are advisory, like current; they are not resumable receipt
+            # offsets or Telegram send identities. URL retrieval restarts from zero.
+            durable = self._durable.get(record.id)
+            context_changed = durable is not None and {
+                key: value
+                for key, value in durable["context"].items()
+                if key != "staging_written"
+            } != {
+                key: value
+                for key, value in record.context.items()
+                if key != "staging_written"
+            }
+            if (
+                transition
+                or error is not None
+                or context_changed
+                or (
+                    checkpoint_progress
+                    and self._mongo is None
+                    and monotonic - self._last_progress_commit.get(record.id, 0)
+                    >= _PROGRESS_JOURNAL_SECONDS
+                )
+            ):
+                await self._persist(record)
+            return record
 
-    def cancel(self, transfer_id: str) -> TransferRecord:
-        record = self.get(transfer_id)
-        if record.context.get("kind") == "delete" and not record.terminal:
-            raise ValueError("Permanent deletion cannot be cancelled after it starts")
-        if not record.terminal or (
-            record.status == TransferStatus.ERROR and self._retained(record)
-        ):
-            record.cancel_event.set()
-            record.context["cancel_requested"] = True
-            running = record.task is not None and not record.task.done()
-            ambiguous = bool(record.context.get("send_started"))
-            if ambiguous:
-                record.status = (
-                    TransferStatus.CANCELLING if running else TransferStatus.QUEUED
+    @_journalled
+    async def cancel(self, transfer_id: str) -> TransferRecord:
+        async with self._journal_lock:
+            record = self.get(transfer_id)
+            if record.context.get("kind") == "delete" and not record.terminal:
+                raise ValueError(
+                    "Permanent deletion cannot be cancelled after it starts"
                 )
-                record.phase = "cleanup_pending"
-                record.error = "Cancellation requested; Telegram cleanup is pending"
-            else:
-                record.status = (
-                    TransferStatus.CANCELLING if running else TransferStatus.CANCELLED
+            if not record.terminal or (
+                record.status == TransferStatus.ERROR and self._retained(record)
+            ):
+                candidate = replace(
+                    record,
+                    context=dict(record.context, cancel_requested=True),
+                    cancel_event=asyncio.Event(),
+                    _progress_samples=record._progress_samples.copy(),
                 )
-                record.phase = "cancelling"
-                record.error = "Transfer cancelled"
-            record.updated_at = time.time()
-            self.persist(record)
-            if running:
-                record.cancel_handle = asyncio.get_running_loop().call_later(
-                    self._cancel_grace, self._force_cancel, record
-                )
-        return record
+                running = record.task is not None and not record.task.done()
+                ambiguous = bool(record.context.get("send_started"))
+                if ambiguous:
+                    candidate.status = (
+                        TransferStatus.CANCELLING if running else TransferStatus.QUEUED
+                    )
+                    candidate.phase = "cleanup_pending"
+                    candidate.error = (
+                        "Cancellation requested; Telegram cleanup is pending"
+                    )
+                else:
+                    candidate.status = (
+                        TransferStatus.CANCELLING
+                        if running
+                        else TransferStatus.CANCELLED
+                    )
+                    candidate.phase = "cancelling"
+                    candidate.error = "Transfer cancelled"
+                candidate.updated_at = time.time()
+                await self._persist(candidate)
+                for key in ("status", "phase", "error", "updated_at", "finished_at"):
+                    setattr(record, key, getattr(candidate, key))
+                record.context["cancel_requested"] = True
+                record.cancel_event.set()
+                if record.terminal:
+                    record._progress_samples.clear()
+                if running:
+                    record.cancel_handle = asyncio.get_running_loop().call_later(
+                        self._cancel_grace, self._force_cancel, record
+                    )
+            return record
 
     def spawn(
         self,
@@ -1109,7 +1204,11 @@ class TransferRegistry:
         if record.terminal:
             raise ValueError("Terminal transfers cannot be started again without retry")
 
+        started = False
+
         async def runner() -> None:
+            nonlocal started
+            started = True
             try:
                 from tgdrive.storage.demo_files import write_policy
 
@@ -1125,7 +1224,7 @@ class TransferRegistry:
                 ):
                     record.status = TransferStatus.QUEUED
                     record.phase = "interrupted"
-                    self.persist(record)
+                    await self.persist(record)
                 elif record.context.get("send_started"):
                     record.status = TransferStatus.QUEUED
                     record.phase = (
@@ -1133,9 +1232,9 @@ class TransferRegistry:
                         if record.cancel_event.is_set()
                         else "interrupted"
                     )
-                    self.persist(record)
+                    await self.persist(record)
                 elif not record.terminal:
-                    self.update(
+                    await self.update(
                         record.id,
                         status=TransferStatus.CANCELLED,
                         error="Transfer cancelled",
@@ -1159,13 +1258,13 @@ class TransferRegistry:
                     record.status = TransferStatus.QUEUED
                     record.phase = "cleanup_pending"
                     record.error = str(exc)[:500] or type(exc).__name__
-                    self.persist(record)
+                    await self.persist(record)
                 else:
                     if retryable:
                         record.context["restart_retryable"] = True
                     else:
                         record.context.pop("restart_retryable", None)
-                    self.update(
+                    await self.update(
                         record.id,
                         status=TransferStatus.ERROR,
                         error=(
@@ -1175,11 +1274,15 @@ class TransferRegistry:
                             else str(exc) or type(exc).__name__
                         ),
                     )
+            finally:
+                await self._settle_cancelled(record)
 
         task = asyncio.create_task(runner(), name=f"transfer:{transfer_id}")
         record.task = task
         self._tasks.add(task)
-        task.add_done_callback(lambda done: self._task_done(record, done))
+        task.add_done_callback(
+            lambda done: self._task_done(record, done, started=started)
+        )
         return task
 
     def _force_cancel(self, record: TransferRecord) -> None:
@@ -1195,19 +1298,17 @@ class TransferRegistry:
         self,
         record: TransferRecord,
         task: asyncio.Task[None],
+        *,
+        started: bool,
     ) -> None:
         self._tasks.discard(task)
         if record.cancel_handle is not None:
             record.cancel_handle.cancel()
             record.cancel_handle = None
-        if record.cancel_event.is_set() and not record.terminal:
-            if record.context.get("send_started"):
-                record.status = TransferStatus.QUEUED
-                record.phase = "cleanup_pending"
-            else:
-                record.status = TransferStatus.CANCELLED
-                record.phase = "cancelled"
-            self.persist(record)
+        if not started and record.cancel_event.is_set() and not record.terminal:
+            finalizer = asyncio.create_task(self._settle_cancelled(record))
+            self._finalizers.add(finalizer)
+            finalizer.add_done_callback(self._finalizer_done)
         if not task.cancelled():
             error = task.exception()
             if error is not None:
@@ -1217,7 +1318,27 @@ class TransferRegistry:
                     exc_info=(type(error), error, error.__traceback__),
                 )
 
-    def prune(self, *, now: float | None = None) -> None:
+    @_journalled
+    async def _settle_cancelled(self, record: TransferRecord) -> None:
+        async with self._journal_lock:
+            if record.cancel_event.is_set() and not record.terminal:
+                if record.context.get("send_started"):
+                    record.status = TransferStatus.QUEUED
+                    record.phase = "cleanup_pending"
+                else:
+                    record.status = TransferStatus.CANCELLED
+                    record.phase = "cancelled"
+                await self._persist(record)
+
+    def _finalizer_done(self, task: asyncio.Task[None]) -> None:
+        self._finalizers.discard(task)
+        if not task.cancelled() and (error := task.exception()) is not None:
+            logger.error(
+                "Transfer cancellation journal failed",
+                exc_info=(type(error), error, error.__traceback__),
+            )
+
+    async def _prune(self, *, now: float | None = None) -> None:
         current = time.time() if now is None else now
         expired = [
             transfer_id
@@ -1228,22 +1349,22 @@ class TransferRegistry:
             and record.updated_at <= current - self._ttl
         ]
         for transfer_id in expired:
-            self._remove(transfer_id)
+            await self._remove(transfer_id)
 
     async def shutdown(self) -> None:
-        # cancel() calls get(), which may prune expired terminal records.
-        # Iterate a snapshot so that pruning cannot resize this dictionary.
         self._shutting_down = True
         if self._mongo is None:
             for record in list(self._records.values()):
                 if not record.terminal:
-                    self.cancel(record.id)
+                    await self.cancel(record.id)
         pending = set(self._tasks)
         for _ in range(2):
             for task in pending:
                 task.cancel()
             if not pending:
-                return
+                break
             _, pending = await asyncio.wait(pending, timeout=_SHUTDOWN_DRAIN_SECONDS)
         if pending:
             logger.error("Shutdown left %s stalled transfer task(s)", len(pending))
+        while self._finalizers:
+            await asyncio.gather(*tuple(self._finalizers), return_exceptions=True)

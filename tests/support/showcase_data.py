@@ -87,7 +87,7 @@ async def seed(runtime, settings):
             TransferStatus.CANCELLED,
         ][index % 4]
         size = (index % 8 + 1) * 12 * 1024**2
-        job = registry.create("completed", total=size)
+        job = await registry.create("completed", total=size)
         job.created_at = now - 900 - index * 420
         job.context.update(
             kind="upload",
@@ -119,20 +119,22 @@ async def seed(runtime, settings):
                 destination, name, identity, size, operation_id=job.id
             )
         job.finished_at = job.created_at + 65
-        registry.update(
-            job.id,
-            total=size,
-            status=state,
-            phase=state.value,
-            current=size if state == TransferStatus.COMPLETED else size // 3,
-            error="Demo: Telegram connection interrupted. Retry is available."
-            if state == TransferStatus.ERROR
-            else None,
+        (
+            await registry.update(
+                job.id,
+                total=size,
+                status=state,
+                phase=state.value,
+                current=size if state == TransferStatus.COMPLETED else size // 3,
+                error="Demo: Telegram connection interrupted. Retry is available."
+                if state == TransferStatus.ERROR
+                else None,
+            )
         )
     demo_jobs = []
     pending = deque()
     for index, phase in enumerate(["uploading", "downloading", "queued", "queued"]):
-        job = registry.create(phase, total=(index + 1) * 256 * 1024**2)
+        job = await registry.create(phase, total=(index + 1) * 256 * 1024**2)
         job.context.update(
             kind="upload",
             source_kind="remote" if phase == "downloading" else "upload",
@@ -143,13 +145,15 @@ async def seed(runtime, settings):
         demo_jobs.append(job.id)
         if phase == "queued":
             pending.append(job.id)
-        registry.update(
-            job.id,
-            status=TransferStatus.QUEUED
-            if phase == "queued"
-            else TransferStatus.RUNNING,
-            current=0 if phase == "queued" else job.total // (index + 3),
-            phase=phase,
+        (
+            await registry.update(
+                job.id,
+                status=TransferStatus.QUEUED
+                if phase == "queued"
+                else TransferStatus.RUNNING,
+                current=0 if phase == "queued" else job.total // (index + 3),
+                phase=phase,
+            )
         )
     runtime.showcase = True
 
@@ -158,12 +162,12 @@ async def seed(runtime, settings):
         while True:
             await asyncio.sleep(2)
             tick += 1
-            advance_transfers(registry, demo_jobs, pending, tick)
+            (await advance_transfers(registry, demo_jobs, pending, tick))
 
     runtime.showcase_task = asyncio.create_task(animate_transfers())
 
 
-def advance_transfers(registry, identities, pending, tick):
+async def advance_transfers(registry, identities, pending, tick):
     """Cycle the four illustrative rows without accumulating fake history.
 
     Each completed stage advances or gives its slot to the oldest queued sample.
@@ -182,31 +186,35 @@ def advance_transfers(registry, identities, pending, tick):
         ):
             continue
         if job.phase == "finalizing":
-            registry.update(
-                job.id, status=TransferStatus.QUEUED, phase="queued", current=0
+            (
+                await registry.update(
+                    job.id, status=TransferStatus.QUEUED, phase="queued", current=0
+                )
             )
             pending.append(job.id)
             continue
         step = int((1.7 + 0.6 * math.sin(tick / 4 + index)) * 2 * 1024**2)
         current = min(job.total, job.current + step)
         if current == job.total and job.phase == "downloading":
-            registry.update(job.id, phase="uploading", current=0)
+            (await registry.update(job.id, phase="uploading", current=0))
         elif current == job.total:
-            registry.update(job.id, phase="finalizing", current=current)
+            (await registry.update(job.id, phase="finalizing", current=current))
         else:
-            registry.update(job.id, current=current)
+            (await registry.update(job.id, current=current))
     slots = 2 - sum(job.status == TransferStatus.RUNNING for job in jobs.values())
     while pending and slots > 0:
         job = jobs.get(pending.popleft())
         if job is None or job.status != TransferStatus.QUEUED:
             continue
-        registry.update(
-            job.id,
-            status=TransferStatus.RUNNING,
-            phase="downloading"
-            if job.context.get("source_kind") == "remote"
-            else "uploading",
-            current=0,
+        (
+            await registry.update(
+                job.id,
+                status=TransferStatus.RUNNING,
+                phase="downloading"
+                if job.context.get("source_kind") == "remote"
+                else "uploading",
+                current=0,
+            )
         )
         slots -= 1
 

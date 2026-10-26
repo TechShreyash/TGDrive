@@ -173,14 +173,14 @@ class FixtureTransfers:
         destination: str,
         *,
         is_disconnected: Callable[[], Awaitable[bool]] | None = None,
-        on_created: Callable[[TransferRecord], None] | None = None,
+        on_created: Callable[[TransferRecord], Awaitable[None]] | None = None,
     ) -> TransferRecord:
         self.store.get_directory(destination)
-        record = self.registry.create("saving", total=upload.size or 0)
+        record = await self.registry.create("saving", total=upload.size or 0)
         record.status = TransferStatus.RUNNING
         try:
             if on_created:
-                on_created(record)
+                await on_created(record)
             if record.cancel_event.is_set():
                 raise TransferCancelled("Transfer cancelled")
             content = await upload.read()
@@ -193,7 +193,7 @@ class FixtureTransfers:
         finally:
             await upload.close()
 
-    def enqueue_upload(
+    async def enqueue_upload(
         self,
         local_path: Path,
         destination: str,
@@ -203,7 +203,9 @@ class FixtureTransfers:
         transfer_id: str | None = None,
         folder_upload: dict[str, Any] | None = None,
     ) -> TransferRecord:
-        record = self.registry.create("queued", total=size, transfer_id=transfer_id)
+        record = await self.registry.create(
+            "queued", total=size, transfer_id=transfer_id
+        )
         if record.task is not None or record.terminal:
             return record
         record.context.update(kind="upload", name=file_name, destination=destination)
@@ -212,12 +214,12 @@ class FixtureTransfers:
         self._start(record, file_name, destination, local_path.read_bytes())
         return record
 
-    def cancel_job(self, job_id: str) -> TransferRecord:
-        return self.registry.cancel(job_id)
+    async def cancel_job(self, job_id: str) -> TransferRecord:
+        return await self.registry.cancel(job_id)
 
-    def start_deletion(self, path: str) -> TransferRecord:
+    async def start_deletion(self, path: str) -> TransferRecord:
         intent = self.store.begin_deletion(path)
-        record = self.registry.create(
+        record = await self.registry.create(
             "deleting", total=len(intent["message_ids"]), transfer_id=intent["id"]
         )
         record.context.update(
@@ -233,17 +235,19 @@ class FixtureTransfers:
                 self.fail_deletions.remove(item.id)
                 raise RuntimeError("Synthetic catalog deletion failed")
             self.store.finish_deletion(intent["id"])
-            self.registry.update(
-                item.id, status=TransferStatus.COMPLETED, phase="completed"
+            (
+                await self.registry.update(
+                    item.id, status=TransferStatus.COMPLETED, phase="completed"
+                )
             )
 
         self.registry.spawn(record.id, delete)
         return record
 
-    def retry_job(self, job_id: str) -> TransferRecord:
+    async def retry_job(self, job_id: str) -> TransferRecord:
         record = self.registry.get(job_id)
         if record.context.get("showcase"):
-            self.registry.retry(job_id)
+            (await self.registry.retry(job_id))
             self._start(
                 record,
                 record.context["name"],
@@ -262,8 +266,8 @@ class FixtureTransfers:
             return record
         if record.context.get("kind") != "delete":
             raise ValueError("Only fixture deletion retries are supported")
-        self.registry.retry(job_id)
-        return self.start_deletion(record.context["path"])
+        (await self.registry.retry(job_id))
+        return await self.start_deletion(record.context["path"])
 
     async def inspect_remote(self, url: str) -> RemoteFileInfo:
         await asyncio.sleep(0.05)
@@ -275,11 +279,11 @@ class FixtureTransfers:
             etag=None,
         )
 
-    def start_remote(
+    async def start_remote(
         self, *, url: str, destination: str, filename: str | None
     ) -> TransferRecord:
         self.store.get_directory(destination)
-        record = self.registry.create("downloading", total=12)
+        record = await self.registry.create("downloading", total=12)
         name = filename or unquote(urlsplit(url).path.rsplit("/", 1)[-1])
         self._start(record, name, destination, b"remote-bytes")
         return record
@@ -301,12 +305,14 @@ class FixtureTransfers:
         for numerator in (0, 1, 2, 3):
             if record.cancel_event.is_set():
                 return
-            self.registry.update(
-                record.id,
-                status=TransferStatus.RUNNING,
-                phase="uploading",
-                current=total * numerator // 4,
-                total=total,
+            (
+                await self.registry.update(
+                    record.id,
+                    status=TransferStatus.RUNNING,
+                    phase="uploading",
+                    current=total * numerator // 4,
+                    total=total,
+                )
             )
             await asyncio.sleep(0.15)
         released = asyncio.create_task(self.release[record.id].wait())
@@ -321,7 +327,11 @@ class FixtureTransfers:
             await asyncio.gather(released, cancelled, return_exceptions=True)
         if record.cancel_event.is_set():
             return
-        self.registry.update(record.id, phase="finalizing", current=total, total=total)
+        (
+            await self.registry.update(
+                record.id, phase="finalizing", current=total, total=total
+            )
+        )
         await asyncio.sleep(0.15)
         if record.cancel_event.is_set():
             return
@@ -330,12 +340,14 @@ class FixtureTransfers:
         self.store.add_file(
             destination, name, message_id, total, operation_id=record.id
         )
-        self.registry.update(
-            record.id,
-            status=TransferStatus.COMPLETED,
-            phase="completed",
-            current=total,
-            total=total,
+        (
+            await self.registry.update(
+                record.id,
+                status=TransferStatus.COMPLETED,
+                phase="completed",
+                current=total,
+                total=total,
+            )
         )
 
     async def delete_telegram_messages(self, message_ids: list[int]) -> None:

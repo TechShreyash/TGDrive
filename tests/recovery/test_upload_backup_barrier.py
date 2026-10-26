@@ -59,7 +59,7 @@ class MediaClient:
         if expected_sha256 is not None:
             assert hashlib.sha256(content).hexdigest() == expected_sha256
         if before_dispatch is not None:
-            before_dispatch()
+            await before_dispatch()
         self.sent.append(random_id)
         message = SimpleNamespace(
             id=101 + len(self.messages),
@@ -120,7 +120,7 @@ async def test_checkpoint_wait_releases_upload_slot_and_protects_committed_media
     manager = manager_for(tmp_path, pool, protect)
     first = staged_file(tmp_path, "first.part")
     second = staged_file(tmp_path, "second.part")
-    one = manager.enqueue_upload(first, "/", "one.bin", first.stat().st_size)
+    one = await manager.enqueue_upload(first, "/", "one.bin", first.stat().st_size)
     try:
         await asyncio.wait_for(entered.wait(), 2)
         assert one.phase == "backup_pending"
@@ -130,11 +130,13 @@ async def test_checkpoint_wait_releases_upload_slot_and_protects_committed_media
         assert first.exists()
         assert (await pool.health()).active_leases == 0
         with pytest.raises(BackupPending) as exc:
-            manager.cancel_job(one.id)
+            await manager.cancel_job(one.id)
         assert exc.value.code == "BACKUP_PENDING"
         assert not one.cancel_event.is_set()
 
-        two = manager.enqueue_upload(second, "/", "two.bin", second.stat().st_size)
+        two = await manager.enqueue_upload(
+            second, "/", "two.bin", second.stat().st_size
+        )
         await asyncio.wait_for(both_entered.wait(), 2)
         assert len(client.sent) == 2
         assert two.phase == "backup_pending"
@@ -162,7 +164,7 @@ async def test_backup_error_restarts_without_staged_bytes_or_second_media_send(
     failed = AsyncMock(side_effect=BackupError("checkpoint unavailable"))
     manager = manager_for(tmp_path, pool, failed)
     source = staged_file(tmp_path)
-    record = manager.enqueue_upload(source, "/", "one.bin", source.stat().st_size)
+    record = await manager.enqueue_upload(source, "/", "one.bin", source.stat().st_size)
     await record.task
     assert record.status == TransferStatus.ERROR
     assert record.phase == "backup_pending"
@@ -183,8 +185,8 @@ async def test_backup_error_restarts_without_staged_bytes_or_second_media_send(
     )
     try:
         with pytest.raises(BackupPending):
-            recovered.cancel_job(record.id)
-        retry = recovered.retry_job(record.id)
+            await recovered.cancel_job(record.id)
+        retry = await recovered.retry_job(record.id)
         await retry.task
         assert retry.status == TransferStatus.COMPLETED
         callback.assert_awaited_once_with(required)
@@ -214,13 +216,13 @@ async def test_store_commit_journal_gap_is_detected_before_cancel_or_resend(
         raise RuntimeError("process lost response after catalog commit")
 
     monkeypatch.setattr(manager.store, "add_file", commit_then_crash)
-    record = manager.enqueue_upload(source, "/", "one.bin", source.stat().st_size)
+    record = await manager.enqueue_upload(source, "/", "one.bin", source.stat().st_size)
     await record.task
     assert record.status == TransferStatus.ERROR
     assert not record.context.get("metadata_committed")
     assert manager.store.has_file_operation(record.id)
     with pytest.raises(BackupPending):
-        manager.cancel_job(record.id)
+        await manager.cancel_job(record.id)
     callback.assert_not_awaited()
     required = manager.store.revision
     manager.registry.close()
@@ -235,7 +237,7 @@ async def test_store_commit_journal_gap_is_detected_before_cancel_or_resend(
         registry=registry_for(tmp_path),
     )
     try:
-        retry = recovered.retry_job(record.id)
+        retry = await recovered.retry_job(record.id)
         await retry.task
         assert retry.status == TransferStatus.COMPLETED
         confirmed.assert_awaited_once_with(required)
@@ -270,7 +272,7 @@ async def test_checkpoint_flood_wait_retries_only_backup_and_persists_deadline(
 
     manager = manager_for(tmp_path, pool, protect)
     source = staged_file(tmp_path)
-    record = manager.enqueue_upload(source, "/", "one.bin", source.stat().st_size)
+    record = await manager.enqueue_upload(source, "/", "one.bin", source.stat().st_size)
     try:
         await asyncio.wait_for(entered.wait(), 2)
         assert record.phase == "backup_pending"
@@ -301,7 +303,7 @@ async def test_insufficient_checkpoint_keeps_staging_and_retryable_phase(
     await pool.start()
     manager = manager_for(tmp_path, pool, AsyncMock(return_value=protected))
     source = staged_file(tmp_path)
-    record = manager.enqueue_upload(source, "/", "one.bin", source.stat().st_size)
+    record = await manager.enqueue_upload(source, "/", "one.bin", source.stat().st_size)
     try:
         await record.task
         assert record.status == TransferStatus.ERROR
@@ -310,7 +312,7 @@ async def test_insufficient_checkpoint_keeps_staging_and_retryable_phase(
         assert source.exists()
         assert len(client.sent) == 1
         assert client.deleted == []
-        retried = manager.retry_job(record.id)
+        retried = await manager.retry_job(record.id)
         await retried.task
         assert retried.status == TransferStatus.ERROR
         assert retried.phase == "backup_pending"
@@ -338,7 +340,7 @@ async def test_shutdown_during_checkpoint_recovers_protection_without_media_rese
 
     manager = manager_for(tmp_path, pool, interrupted_checkpoint)
     source = staged_file(tmp_path)
-    record = manager.enqueue_upload(source, "/", "one.bin", source.stat().st_size)
+    record = await manager.enqueue_upload(source, "/", "one.bin", source.stat().st_size)
     await asyncio.wait_for(entered.wait(), 2)
     required = record.context["catalog_revision"]
     await manager.registry.shutdown()

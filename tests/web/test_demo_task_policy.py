@@ -19,7 +19,7 @@ async def test_durable_demo_job_restores_policy_using_current_deployment(enabled
     )
     try:
         with write_policy(True):
-            record = registry.create("queued")
+            record = await registry.create("queued")
         identity = record.id
         saved = backend.db.jobs.find_one({"_id": identity})["data"]
         assert saved["context"]["demo_read_only"] is True
@@ -46,7 +46,7 @@ async def test_durable_demo_job_restores_policy_using_current_deployment(enabled
 
 async def test_trusted_job_does_not_inherit_an_unrelated_visitor_policy():
     registry = TransferRegistry(demo_mode=True)
-    record = registry.create("queued")
+    record = await registry.create("queued")
     observed = []
 
     async def work(_record):
@@ -59,8 +59,8 @@ async def test_trusted_job_does_not_inherit_an_unrelated_visitor_policy():
     assert "demo_read_only" not in record.context
 
 
-def test_disabled_demo_mode_does_not_mark_new_jobs():
+async def test_disabled_demo_mode_does_not_mark_new_jobs():
     registry = TransferRegistry(demo_mode=False)
     with write_policy(True):
-        record = registry.create("queued")
+        record = await registry.create("queued")
     assert "demo_read_only" not in record.context

@@ -32,6 +32,18 @@ ROOT = Path(__file__).resolve().parents[2]
 PASSWORD = "offline browser test password"
 CONTROL = {"x-fixture-control": "tgdrive-offline-browser-fixture"}
 ARTIFACTS = Path(os.environ.get("TGDRIVE_E2E_ARTIFACTS", ROOT / "cache/browser-e2e"))
+UPLOAD_RECOVERY_RECORDS = """(() => {
+    const prefix = 'tgdrive.uploads.v2:';
+    const rows = new Map(JSON.parse(localStorage.getItem('tgdrive.uploads.v2') || '[]')
+        .map(row => [row.key, row]));
+    for (const key of Object.keys(localStorage)) {
+        if (!key.startsWith(prefix)) continue;
+        const row = JSON.parse(localStorage.getItem(key));
+        if (row === null) rows.delete(key.slice(prefix.length));
+        else rows.set(key.slice(prefix.length), row);
+    }
+    return [...rows.values()];
+})()"""
 
 
 class Server:
@@ -2168,9 +2180,7 @@ def test_directory_picker_preserves_nested_paths_and_waits_for_atomic_tree(
         item["name"] in {"empty.txt", "empty-directory"} for item in root_items
     )
     assert fixture_nodes(page, server, "/" + original["id"]) == []
-    saved = page.evaluate(
-        "JSON.parse(localStorage.getItem('tgdrive.uploads.v2') || '[]')"
-    )
+    saved = page.evaluate(UPLOAD_RECOVERY_RECORDS)
     assert len(saved) == len(payloads)
     assert {item.get("relativePath") for item in saved} == {
         directory.name + "/" + relative for relative in payloads
@@ -2325,9 +2335,7 @@ def test_large_folder_upload_stays_compact_bounded_and_filterable(
     deadline = time.monotonic() + 15
     saved = []
     while time.monotonic() < deadline:
-        saved = page.evaluate(
-            "JSON.parse(localStorage.getItem('tgdrive.uploads.v2') || '[]')"
-        )
+        saved = page.evaluate(UPLOAD_RECOVERY_RECORDS)
         if len(saved) == 100 and all(item["state"] == "cancelled" for item in saved):
             break
         page.wait_for_timeout(100)
@@ -2785,9 +2793,7 @@ def test_queued_uploads_have_no_elapsed_speed_or_eta(
     assert "remaining" not in panel.inner_text()
     assert "/s" not in panel.inner_text()
     assert server.control()["started"] == []
-    saved = page.evaluate(
-        "JSON.parse(localStorage.getItem('tgdrive.uploads.v2') || '[]')"
-    )
+    saved = page.evaluate(UPLOAD_RECOVERY_RECORDS)
     assert len(saved) == 2
     assert all(
         item["state"] == "queued" and not item.get("startedAt") for item in saved

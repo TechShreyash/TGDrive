@@ -3,6 +3,7 @@ import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { displayText, loadPreview, nativePreviewKind } from "./Preview";
 import { fileUrl } from "../../shared/types";
+import { api } from "../../shared/api";
 const viewerLoaders = vi.hoisted(
     () => [] as Parameters<(typeof import("react"))["lazy"]>[0][],
 );
@@ -24,6 +25,38 @@ vi.mock("./books/BookPreview", () => {
 });
 afterEach(() => vi.unstubAllGlobals());
 describe("bounded safe previews", () => {
+    it("does not let a delayed preview 401 dismiss a newer login", async () => {
+        const events = new EventTarget();
+        const expired = vi.fn();
+        events.addEventListener("tgdrive:auth-required", expired);
+        vi.stubGlobal("window", events);
+        let finish!: (response: Response) => void;
+        vi.stubGlobal(
+            "fetch",
+            vi.fn((url: string) =>
+                url.startsWith("/api/v1/preview?")
+                    ? new Promise<Response>((resolve) => {
+                          finish = resolve;
+                      })
+                    : Promise.resolve(Response.json({ status: "ok" })),
+            ),
+        );
+        const pending = loadPreview(
+            "/id",
+            "",
+            new AbortController().signal,
+        ).catch((error) => error);
+        await api.login("owner");
+        finish(
+            Response.json(
+                { detail: "Old preview session expired" },
+                { status: 401 },
+            ),
+        );
+        expect(await pending).toBeInstanceOf(Error);
+        expect(expired).not.toHaveBeenCalled();
+    });
+
     it("keeps recovery controls available when a document viewer chunk rejects", async () => {
         expect(viewerLoaders).toHaveLength(2);
         for (const load of viewerLoaders) {

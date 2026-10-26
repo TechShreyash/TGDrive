@@ -397,7 +397,7 @@ class RemoteClient:
         max_bytes: int | None = None,
         single_threaded: bool = False,
         can_promote: Callable[[], bool] | None = None,
-        mode_changed: Callable[[str], None] | None = None,
+        mode_changed: Callable[[str], Awaitable[None] | None] | None = None,
         retry: RetryCallback | None = None,
         retry_not_before: float = 0,
     ) -> DownloadResult:

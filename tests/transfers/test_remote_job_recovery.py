@@ -60,7 +60,7 @@ async def test_url_retry_replaces_only_own_unpublished_stage_after_publication_c
 
     monkeypatch.setattr(client, "_publish_temp", crash_after_publication)
     target = folder(manager.store, "Target")
-    record = manager.start_remote(
+    record = await manager.start_remote(
         url="https://files.example/source.bin", destination=target, filename=None
     )
     await record.task
@@ -80,7 +80,7 @@ async def test_url_retry_replaces_only_own_unpublished_stage_after_publication_c
         if mode == "restart_recover":
             record.status = TransferStatus.QUEUED
             record.phase = "interrupted"
-        manager.registry.persist(record)
+        (await manager.registry.persist(record))
         settings = manager.settings
         await dispose(manager)
         pool = ClientPool([Account("bot-one", ledger), Account("bot-two", ledger)])
@@ -100,7 +100,7 @@ async def test_url_retry_replaces_only_own_unpublished_stage_after_publication_c
             await manager.recover()
             retried = manager.registry.get(record.id)
         else:
-            retried = manager.retry_job(record.id)
+            retried = await manager.retry_job(record.id)
         await retried.task
         assert retried.status == TransferStatus.COMPLETED
         assert retried.context["destination"] == expected_destination
@@ -149,7 +149,7 @@ async def test_url_destination_move_while_retrieval_waits_preserves_folder_ident
         session=FakeSession([response]),
         resolver=FakeResolver(PUBLIC_DNS),
     )
-    record = manager.start_remote(
+    record = await manager.start_remote(
         url="https://files.example/source.bin", destination=target, filename=None
     )
     try:

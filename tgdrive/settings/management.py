@@ -244,7 +244,7 @@ class ConnectionManager:
             getattr(runtime, "transfers", None), "registry", None
         )
         if registry is not None and any(
-            str(record.status) not in {"completed", "cancelled"}
+            str(record.committed.status) not in {"completed", "cancelled"}
             for record in registry.list()
         ):
             raise SettingsProblem(
@@ -589,7 +589,11 @@ class ConnectionManager:
         registry = getattr(self.runtime, "registry", None) or getattr(
             getattr(self.runtime, "transfers", None), "registry", None
         )
-        records = registry.list() if registry is not None else ()
+        records = (
+            [record.committed for record in registry.list()]
+            if registry is not None
+            else ()
+        )
         counts = Counter(str(item.status) for item in records)
         result.update(
             active_jobs=counts["running"] + counts["cancelling"],

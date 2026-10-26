@@ -23,6 +23,11 @@ function deferred<T>() {
 beforeEach(() => {
     const data = new Map<string, string>();
     vi.stubGlobal("localStorage", {
+        get length() {
+            return data.size;
+        },
+        key: (index: number) => [...data.keys()][index] ?? null,
+        removeItem: (key: string) => data.delete(key),
         getItem: (key: string) => data.get(key) || null,
         setItem: (key: string, value: string) => data.set(key, value),
     });
@@ -50,9 +55,9 @@ it("publishes an immediate source-check row while the start request is pending",
             remoteRequestId: requestId,
         }),
     ]);
-    expect(localStorage.getItem("tgdrive.uploads.v2")).not.toContain(
-        "token=private",
-    );
+    expect(
+        localStorage.getItem("tgdrive.uploads.v2:" + manager.snapshot()[0].key),
+    ).not.toContain("token=private");
     response.resolve({ status: "ok", id: job.id });
     await vi.waitFor(() => expect(manager.snapshot()[0].jobId).toBe(job.id));
 });

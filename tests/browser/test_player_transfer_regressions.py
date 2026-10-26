@@ -8,6 +8,7 @@ import pytest
 
 from tests.browser.test_browser_e2e import (
     ARTIFACTS,
+    UPLOAD_RECOVERY_RECORDS,
     Server,
     expect,
     login,
@@ -252,7 +253,7 @@ def test_url_receipt_remains_a_server_job_after_refresh(
     expect(
         page.get_by_text("Choose the original file to resume", exact=True)
     ).to_have_count(0)
-    saved = page.evaluate("JSON.parse(localStorage.getItem('tgdrive.uploads.v2'))")
+    saved = page.evaluate(UPLOAD_RECOVERY_RECORDS)
     receipt = next(item for item in saved if item["jobId"] == "url-server-job")
     assert receipt["kind"] == "remote"
     assert receipt["state"] == "uploading"

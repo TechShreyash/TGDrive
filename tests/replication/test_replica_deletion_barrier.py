@@ -54,7 +54,7 @@ async def test_catalog_delete_waits_for_backup_and_retains_original_messages(
 
     store.finish_deletion = checked_finish
     try:
-        job = manager.start_deletion(path)
+        job = await manager.start_deletion(path)
         await job.task
         assert job.status is TransferStatus.COMPLETED
         assert telegram.deleted == [] and 77 in telegram.messages
@@ -84,14 +84,14 @@ async def test_paused_backup_prevents_permanent_delete_and_retry_preserves_inten
     store.set_trashed(path, True)
     replica.update(phase="paused")
     try:
-        job = manager.start_deletion(path)
+        job = await manager.start_deletion(path)
         await job.task
         assert job.status is TransferStatus.ERROR
         assert telegram.deleted == [] and 77 in telegram.messages
         assert store.pending_deletions()[0]["pending_message_ids"] == [77]
         assert not remote.pins
         replica.update(phase="idle")
-        retry = manager.retry_job(job.id)
+        retry = await manager.retry_job(job.id)
         await retry.task
         assert retry.status is TransferStatus.COMPLETED
         assert telegram.deleted == [] and 77 in telegram.messages
@@ -116,7 +116,7 @@ async def test_unavailable_backup_blocks_delete_without_erasing_main_or_its_refs
         side_effect=SettingsProblem("Independent copy is not confirmed.", status=503)
     )
     try:
-        job = manager.start_deletion(path)
+        job = await manager.start_deletion(path)
         await job.task
         assert job.status is TransferStatus.ERROR
         manager._ensure_replica.assert_awaited_once()
@@ -140,7 +140,9 @@ async def test_background_backup_does_not_block_normal_upload_completion(tmp_pat
     source = tmp_path / "payload.part"
     source.write_bytes(b"normal foreground upload")
     try:
-        job = manager.enqueue_upload(source, "/", "new.bin", source.stat().st_size)
+        job = await manager.enqueue_upload(
+            source, "/", "new.bin", source.stat().st_size
+        )
         await job.task
         assert job.status is TransferStatus.COMPLETED
         manager._ensure_replica.assert_not_called()

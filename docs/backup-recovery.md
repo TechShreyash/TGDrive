@@ -204,6 +204,13 @@ Automatic snapshots normally run hourly (`MONGODB_BACKUP_SECONDS`). Failures lea
 
 Snapshots are compressed app records, limited to 1 GiB expanded; unrelated MongoDB collections are excluded. AES-256-GCM authenticates the archive. TGDrive downloads the uploaded ciphertext and checks SHA-256 before confirming; restore checks authentication, format and completeness before writing.
 
+The recorded revision comes from the catalog inside the exported snapshot.
+Changes committed afterwards belong to a later archive. Failed exports are
+removed; cancellation waits for the export worker before removing an archive
+that has not entered the pending-backup journal. An uncertain journal commit
+retains the ciphertext for reconciliation. Hard stops can still leave local
+files behind; this cleanup does not sweep older untracked archives.
+
 Restore validation holds the archive, expanded content and parsed records in
 memory. Peak memory can substantially exceed the archive's file size; leave
 headroom when restoring a large catalog and rehearse it on the intended host.

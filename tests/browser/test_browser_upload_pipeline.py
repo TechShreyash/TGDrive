@@ -11,6 +11,7 @@ import pytest
 
 from tests.browser.test_browser_e2e import (
     ARTIFACTS,
+    UPLOAD_RECOVERY_RECORDS,
     Server,
     expect,
     fixture_nodes,
@@ -154,9 +155,7 @@ def test_device_receipts_finish_while_telegram_waits_and_survive_tab_close(
                 rows.locator(".transfer-item-name").filter(has_text=name)
             ).to_have_count(1)
     assert not _device_close_blocked(page)
-    saved = page.evaluate(
-        "JSON.parse(localStorage.getItem('tgdrive.uploads.v2') || '[]')"
-    )
+    saved = page.evaluate(UPLOAD_RECOVERY_RECORDS)
     assert len(saved) == len(names)
     assert all(item.get("jobId") for item in saved)
     if selection == "folder":
@@ -282,10 +281,12 @@ def test_slow_listing_refresh_coalesces_upload_bursts_without_unmounting_rows(
         assert len(held) == 1
         for item in started:
             server.finish(item["id"])
-        page.wait_for_function("""() => {
-          const items=JSON.parse(localStorage.getItem('tgdrive.uploads.v2')||'[]');
-          return items.length===6 && items.every(item=>item.state==='completed');
-        }""")
+        page.wait_for_function(
+            "() => { const items="
+            + UPLOAD_RECOVERY_RECORDS
+            + "; return items.length===6 && "
+            "items.every(item=>item.state==='completed'); }"
+        )
         page.evaluate("""async () => {
           for(let index=0;index<30;index++)
             window.dispatchEvent(new Event('tgdrive:files-changed'));

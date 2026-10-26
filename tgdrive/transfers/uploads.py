@@ -21,6 +21,7 @@ from tgdrive.core.errors import DriveError
 from tgdrive.core.security import safe_name
 from tgdrive.storage.store import ROOT_ID, _normalize_path
 from tgdrive.transfers.staging import StorageUnavailable, check_staging
+from tgdrive.transfers.tasks import _journalled
 from tgdrive.web.schemas import FolderUploadMetadata
 
 logger = logging.getLogger(__name__)
@@ -119,7 +120,7 @@ class ResumableUploads:
 
     def _existing_job(self, upload_id: str) -> Any | None:
         try:
-            return self.manager.registry.get(upload_id)
+            return self.manager.registry.get(upload_id).committed
         except KeyError:
             return None
 
@@ -388,10 +389,10 @@ class ResumableUploads:
         self, upload_id: str, offset: int, body: bytes | bytearray
     ) -> dict[str, Any]:
         async with self.slots, self.locks.setdefault(upload_id, asyncio.Lock()):
-            item = self.get(upload_id)
+            item = await self._owned_worker(self.get, upload_id)
             if item["state"] != "receiving":
                 raise UploadError("This upload no longer accepts chunks")
-            self._destination(item)
+            await self._owned_worker(self._destination, item)
             if type(offset) is not int or offset != item["offset"]:
                 raise UploadError(
                     "Upload offset changed. Read the current offset and resume.",
@@ -491,23 +492,24 @@ class ResumableUploads:
         if expected_offset != item["total_size"]:
             raise UploadError("Upload checksum journal is incomplete")
 
+    @_journalled
     async def complete(self, upload_id: str) -> Any:
         started = time.monotonic()
         async with self.locks.setdefault(upload_id, asyncio.Lock()):
-            item = self.get(upload_id)
+            item = await self._owned_worker(self.get, upload_id)
             if item["state"] in {"cancelled", "cancelling"}:
                 raise UploadError("Upload was cancelled")
             existing = self._existing_job(upload_id)
             if existing is not None:
                 if item["state"] == "receiving":
                     item["state"] = "queued"
-                    self._save(item)
+                    await self._owned_worker(self._save, item)
                 return existing
             if item["state"] == "finished":
                 raise UploadError("Completed upload history expired", 410)
             if item["offset"] != item["total_size"]:
                 raise UploadError("Upload is incomplete")
-            self._destination(item)
+            await self._owned_worker(self._destination, item)
             verification_started = time.monotonic()
             verification = asyncio.get_running_loop().run_in_executor(
                 None, self._verify, item, self.path(upload_id)
@@ -533,8 +535,8 @@ class ResumableUploads:
             verification_seconds = time.monotonic() - verification_started
             # A folder may move while disk verification yields. Resolve its UUID
             # immediately before enqueue, rather than reusing the old ancestry.
-            destination = self._destination(item)
-            record = self.manager.enqueue_upload(
+            destination = await self._owned_worker(self._destination, item)
+            record = await self.manager.enqueue_upload(
                 self.path(upload_id),
                 destination,
                 item["name"],
@@ -547,7 +549,7 @@ class ResumableUploads:
                 ),
             )
             item["state"] = "queued"
-            self._save(item)
+            await self._owned_worker(self._save, item)
             logger.info(
                 "Device upload accepted id=%s job_id=%s bytes=%s "
                 "receipt_age_seconds=%s "
@@ -578,18 +580,18 @@ class ResumableUploads:
             if item["state"] in {"finished", "cancelled"}:
                 return item
             if item["state"] == "receiving" and self._existing_job(upload_id) is None:
-                self._cancel_receiving(item)
+                await self._owned_worker(self._cancel_receiving, item)
             else:
                 cancel = getattr(
                     self.manager, "cancel_job", self.manager.registry.cancel
                 )
                 # The manager checks committed metadata before mutating the
                 # receipt or job; a protected file must never enter cleanup.
-                record = cancel(upload_id)
+                record = await cancel(upload_id)
                 item["state"] = (
                     "cancelled" if str(record.status) == "cancelled" else "cancelling"
                 )
-                self._save(item)
+                await self._owned_worker(self._save, item)
             return item
 
     def release(self, upload_id: str) -> None:

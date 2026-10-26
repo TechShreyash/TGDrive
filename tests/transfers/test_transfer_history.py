@@ -32,7 +32,7 @@ def registry_for(path, **kwargs):
     return TransferRegistry(mongo=backend.db.jobs, mongo_backend=backend, **kwargs)
 
 
-def add(
+async def add(
     registry,
     name,
     status,
@@ -42,7 +42,7 @@ def add(
     kind="upload",
     folder_upload=None,
 ):
-    record = registry.create("uploading", total=100, transfer_id=identity)
+    record = await registry.create("uploading", total=100, transfer_id=identity)
     record.context.update(
         name=name,
         destination="/",
@@ -53,10 +53,12 @@ def add(
     if folder_upload is not None:
         record.context["folder_upload"] = copy.deepcopy(folder_upload)
     record.created_at = created
-    registry.update(
-        record.id,
-        status=status,
-        current=100 if status is TransferStatus.COMPLETED else 20,
+    (
+        await registry.update(
+            record.id,
+            status=status,
+            current=100 if status is TransferStatus.COMPLETED else 20,
+        )
     )
     return record
 
@@ -65,8 +67,8 @@ def add(
 async def test_history_survives_prune_and_reopen_without_private_context(tmp_path):
     path = tmp_path / "jobs.sqlite3"
     registry = registry_for(path, ttl_seconds=60)
-    record = add(registry, "kept.bin", TransferStatus.COMPLETED)
-    registry.prune(now=time.time() + 61)
+    record = await add(registry, "kept.bin", TransferStatus.COMPLETED)
+    (await registry.prune(now=time.time() + 61))
     with pytest.raises(TransferNotFound):
         registry.get(record.id)
     assert registry.list() == []
@@ -87,21 +89,25 @@ async def test_history_survives_prune_and_reopen_without_private_context(tmp_pat
 async def test_name_search_filters_before_cursor_pagination_across_archives(tmp_path):
     registry = registry_for(tmp_path / "search.sqlite3", ttl_seconds=1)
     for index in range(75):
-        add(
-            registry,
-            f"other-{index}.bin",
-            TransferStatus.COMPLETED,
-            created=2000 + index,
+        (
+            await add(
+                registry,
+                f"other-{index}.bin",
+                TransferStatus.COMPLETED,
+                created=2000 + index,
+            )
         )
     for index in range(3):
-        add(
-            registry,
-            f"Résumé [.*] {index}.txt",
-            TransferStatus.COMPLETED,
-            created=1000 + index,
-            identity=f"match-{index}",
+        (
+            await add(
+                registry,
+                f"Résumé [.*] {index}.txt",
+                TransferStatus.COMPLETED,
+                created=1000 + index,
+                identity=f"match-{index}",
+            )
         )
-    registry.prune(now=time.time() + 2)
+    (await registry.prune(now=time.time() + 2))
     first = await registry.history(status="finished", query="RÉSUMÉ [.*]", limit=2)
     assert [row["id"] for row in first["jobs"]] == ["match-2", "match-1"]
     assert first["has_more"]
@@ -123,18 +129,20 @@ async def test_history_cursor_filters_and_deletions_are_independent_of_live_evic
 ):
     registry = registry_for(tmp_path / "jobs.sqlite3", ttl_seconds=1)
     for index in range(5):
-        add(
-            registry,
-            str(index),
-            TransferStatus.COMPLETED,
-            created=1000 + index,
-            identity="history-" + str(index),
+        (
+            await add(
+                registry,
+                str(index),
+                TransferStatus.COMPLETED,
+                created=1000 + index,
+                identity="history-" + str(index),
+            )
         )
-    add(registry, "not-a-transfer", TransferStatus.COMPLETED, kind="delete")
-    registry.prune(now=time.time() + 2)
-    queued = add(registry, "queued", TransferStatus.QUEUED, created=1006)
-    add(registry, "running", TransferStatus.RUNNING, created=1007)
-    add(registry, "failed", TransferStatus.ERROR, created=1008)
+    (await add(registry, "not-a-transfer", TransferStatus.COMPLETED, kind="delete"))
+    (await registry.prune(now=time.time() + 2))
+    queued = await add(registry, "queued", TransferStatus.QUEUED, created=1006)
+    (await add(registry, "running", TransferStatus.RUNNING, created=1007))
+    (await add(registry, "failed", TransferStatus.ERROR, created=1008))
     first = await registry.history(limit=3)
     assert [job["name"] for job in first["jobs"]] == ["failed", "running", "queued"]
     assert first["has_more"]
@@ -151,17 +159,19 @@ async def test_history_cursor_filters_and_deletions_are_independent_of_live_evic
     assert (await registry.history(status="queued"))["jobs"][0]["id"] == queued.id
     assert len((await registry.history(status="completed"))["jobs"]) == 5
     assert (await registry.history(status="running"))["jobs"][0]["name"] == "running"
-    registry.retry((await registry.history(status="error"))["jobs"][0]["id"])
+    (await registry.retry((await registry.history(status="error"))["jobs"][0]["id"]))
     assert (await registry.history(status="error"))["jobs"] == []
     registry.close()
 
 
-def test_history_http_owner_boundary_and_validation(tmp_path):
+async def test_history_http_owner_boundary_and_validation(tmp_path):
     settings = make_settings(tmp_path)
     store = DriveStore.create(tmp_path / "catalog.sqlite3")
     runtime = FakeRuntime(store)
     runtime.mongo = for_directory(tmp_path)
-    record = add(runtime.transfers.registry, "owner-only.bin", TransferStatus.COMPLETED)
+    record = await add(
+        runtime.transfers.registry, "owner-only.bin", TransferStatus.COMPLETED
+    )
     try:
         with TestClient(
             create_app(settings, runtime=runtime), base_url="https://testserver"
@@ -201,12 +211,12 @@ async def test_finished_history_pages_mix_terminal_outcomes_without_active_jobs(
         ttl_seconds=1,
     )
     try:
-        add(registry, "success", TransferStatus.COMPLETED, created=1000)
-        add(registry, "cancelled", TransferStatus.CANCELLED, created=1001)
-        registry.prune(now=time.time() + 2)
-        add(registry, "failed", TransferStatus.ERROR, created=1002)
-        add(registry, "running", TransferStatus.RUNNING, created=1003)
-        add(registry, "queued", TransferStatus.QUEUED, created=1004)
+        (await add(registry, "success", TransferStatus.COMPLETED, created=1000))
+        (await add(registry, "cancelled", TransferStatus.CANCELLED, created=1001))
+        (await registry.prune(now=time.time() + 2))
+        (await add(registry, "failed", TransferStatus.ERROR, created=1002))
+        (await add(registry, "running", TransferStatus.RUNNING, created=1003))
+        (await add(registry, "queued", TransferStatus.QUEUED, created=1004))
         first = await registry.history(status="finished", limit=2)
         assert [job["name"] for job in first["jobs"]] == ["failed", "cancelled"]
         assert first["has_more"]
@@ -217,7 +227,7 @@ async def test_finished_history_pages_mix_terminal_outcomes_without_active_jobs(
         )
         assert [job["name"] for job in second["jobs"]] == ["success"]
         assert not second["has_more"]
-        registry.retry(first["jobs"][0]["id"])
+        (await registry.retry(first["jobs"][0]["id"]))
         assert [
             job["name"] for job in (await registry.history(status="finished"))["jobs"]
         ] == ["cancelled", "success"]
@@ -245,13 +255,15 @@ async def test_history_search_reads_can_overlap_archive_writes_without_connectio
     workers = [asyncio.create_task(reader()) for _ in range(8)]
     try:
         for index in range(100):
-            add(
-                registry,
-                f"Résumé {index}",
-                TransferStatus.COMPLETED,
-                created=1000 + index,
+            (
+                await add(
+                    registry,
+                    f"Résumé {index}",
+                    TransferStatus.COMPLETED,
+                    created=1000 + index,
+                )
             )
-            registry.prune(now=time.time() + 2)
+            (await registry.prune(now=time.time() + 2))
             await asyncio.sleep(0)
         done.set()
         await asyncio.gather(*workers)
@@ -358,26 +370,35 @@ async def test_clear_history_preserves_active_folders_and_recovery(task_registry
         TransferStatus.ERROR,
         TransferStatus.CANCELLED,
     ):
-        add(registry, "archived-" + status, status, kind="legacy")
-    add(registry, "active-child", TransferStatus.COMPLETED, folder_upload=active_folder)
-    add(
-        registry,
-        "browser-child",
-        TransferStatus.COMPLETED,
-        folder_upload=browser_folder,
+        (await add(registry, "archived-" + status, status, kind="legacy"))
+    (
+        await add(
+            registry,
+            "active-child",
+            TransferStatus.COMPLETED,
+            folder_upload=active_folder,
+        )
     )
-    running = add(
+    (
+        await add(
+            registry,
+            "browser-child",
+            TransferStatus.COMPLETED,
+            folder_upload=browser_folder,
+        )
+    )
+    running = await add(
         registry, "running", TransferStatus.RUNNING, folder_upload=active_folder
     )
-    registry.prune(now=time.time() + 2)
+    (await registry.prune(now=time.time() + 2))
     for status in (TransferStatus.COMPLETED, TransferStatus.CANCELLED):
-        add(registry, "live-" + status, status)
-    failed = add(registry, "retryable", TransferStatus.ERROR)
-    queued = add(registry, "queued", TransferStatus.QUEUED)
-    deletion = add(registry, "deletion", TransferStatus.COMPLETED, kind="delete")
+        (await add(registry, "live-" + status, status))
+    failed = await add(registry, "retryable", TransferStatus.ERROR)
+    queued = await add(registry, "queued", TransferStatus.QUEUED)
+    deletion = await add(registry, "deletion", TransferStatus.COMPLETED, kind="delete")
 
-    assert registry.clear_history(exclude_folders=[browser_folder["id"]]) == 6
-    assert registry.clear_history(exclude_folders=[browser_folder["id"]]) == 0
+    assert (await registry.clear_history(exclude_folders=[browser_folder["id"]])) == 6
+    assert (await registry.clear_history(exclude_folders=[browser_folder["id"]])) == 0
     names = {row["name"] for row in (await registry.history())["jobs"]}
     assert names == {"active-child", "browser-child", "running", "queued"}
     assert registry.get(failed.id).context["source_url"].endswith("token=secret")
@@ -387,10 +408,10 @@ async def test_clear_history_preserves_active_folders_and_recovery(task_registry
     assert not registry.get(deletion.id).history_hidden
     assert (await registry.task_history(status="finished"))["total_tasks"] == 1
 
-    registry.retry(failed.id)
+    (await registry.retry(failed.id))
     assert not registry.get(failed.id).history_hidden
     assert failed.id in {row["id"] for row in (await registry.history())["jobs"]}
-    registry.prune(now=time.time() + 2)
+    (await registry.prune(now=time.time() + 2))
     assert not any(
         row["name"].startswith(("archived-", "live-"))
         for row in (await registry.history())["jobs"]
@@ -400,15 +421,15 @@ async def test_clear_history_preserves_active_folders_and_recovery(task_registry
 async def test_cleared_history_stays_cleared_after_restart_and_pruning(tmp_path):
     path = tmp_path / "clear-history.sqlite3"
     registry = registry_for(path, ttl_seconds=1)
-    completed = add(registry, "completed", TransferStatus.COMPLETED)
-    failed = add(registry, "failed", TransferStatus.ERROR)
-    assert registry.clear_history() == 2
+    completed = await add(registry, "completed", TransferStatus.COMPLETED)
+    failed = await add(registry, "failed", TransferStatus.ERROR)
+    assert (await registry.clear_history()) == 2
     registry.close()
     reopened = registry_for(path, ttl_seconds=1)
     try:
         assert reopened.get(failed.id).history_hidden
         assert (await reopened.history())["jobs"] == []
-        reopened.prune(now=time.time() + 2)
+        (await reopened.prune(now=time.time() + 2))
         assert (await reopened.task_history())["total_tasks"] == 0
         with pytest.raises(TransferNotFound):
             reopened.get(completed.id)
@@ -416,13 +437,15 @@ async def test_cleared_history_stays_cleared_after_restart_and_pruning(tmp_path)
         reopened.close()
 
 
-def test_clear_history_api_requires_login_and_keeps_live_jobs(tmp_path):
+async def test_clear_history_api_requires_login_and_keeps_live_jobs(tmp_path):
     settings = make_settings(tmp_path)
     store = DriveStore.create(tmp_path / "clear-api.sqlite3")
     runtime = FakeRuntime(store)
     runtime.mongo = for_directory(tmp_path)
-    finished = add(runtime.transfers.registry, "finished", TransferStatus.COMPLETED)
-    queued = add(runtime.transfers.registry, "queued", TransferStatus.QUEUED)
+    finished = await add(
+        runtime.transfers.registry, "finished", TransferStatus.COMPLETED
+    )
+    queued = await add(runtime.transfers.registry, "queued", TransferStatus.QUEUED)
     try:
         with TestClient(
             create_app(settings, runtime=runtime), base_url="https://testserver"
@@ -450,24 +473,28 @@ async def test_numbered_pages_count_folders_once_and_keep_every_member(task_regi
     registry = task_registry
     folder = folder_metadata()
     children = [
-        add(
-            registry,
-            f"image-{index}.jpg",
-            TransferStatus.COMPLETED,
-            identity=f"image-{index}",
-            created=1000 + index,
-            folder_upload=folder,
+        (
+            await add(
+                registry,
+                f"image-{index}.jpg",
+                TransferStatus.COMPLETED,
+                identity=f"image-{index}",
+                created=1000 + index,
+                folder_upload=folder,
+            )
         ).id
         for index in range(72)
     ]
-    registry.prune(now=time.time() + 2)
+    (await registry.prune(now=time.time() + 2))
     for index in range(21):
-        add(
-            registry,
-            f"separate-{index}.bin",
-            TransferStatus.COMPLETED,
-            created=2000 + index,
-            kind="remote" if index % 2 else "upload",
+        (
+            await add(
+                registry,
+                f"separate-{index}.bin",
+                TransferStatus.COMPLETED,
+                created=2000 + index,
+                kind="remote" if index % 2 else "upload",
+            )
         )
     first = await registry.task_history(status="finished", page=1, limit=20)
     assert first["total_tasks"] == 22
@@ -490,21 +517,23 @@ async def test_task_status_and_search_apply_before_pagination_across_live_archiv
     registry = task_registry
     folder = folder_metadata(name="Résumé [.*] album")
     for index in range(3):
-        add(
-            registry,
-            f"photo-{index}.jpg",
-            TransferStatus.COMPLETED,
-            folder_upload=folder,
+        (
+            await add(
+                registry,
+                f"photo-{index}.jpg",
+                TransferStatus.COMPLETED,
+                folder_upload=folder,
+            )
         )
-    registry.prune(now=time.time() + 2)
-    running = add(
+    (await registry.prune(now=time.time() + 2))
+    running = await add(
         registry,
         "special-child.jpg",
         TransferStatus.RUNNING,
         created=1100,
         folder_upload=folder,
     )
-    add(registry, "standalone.bin", TransferStatus.COMPLETED, created=1200)
+    (await add(registry, "standalone.bin", TransferStatus.COMPLETED, created=1200))
     finished = await registry.task_history(status="finished", limit=1)
     assert finished["total_tasks"] == 1
     assert [row["name"] for row in finished["jobs"]] == ["standalone.bin"]
@@ -512,7 +541,7 @@ async def test_task_status_and_search_apply_before_pagination_across_live_archiv
         matching = await registry.task_history(status="running", query=term, limit=1)
         assert matching["total_tasks"] == 1
         assert len(matching["jobs"]) == 4
-    registry.update(running.id, status=TransferStatus.COMPLETED)
+    (await registry.update(running.id, status=TransferStatus.COMPLETED))
     assert (await registry.task_history(status="running"))["jobs"] == []
     assert (await registry.task_history(status="finished"))["total_tasks"] == 2
 
@@ -522,8 +551,15 @@ async def test_folder_task_metadata_survives_mongo_history_reopen(tmp_path):
     registry = registry_for(path, ttl_seconds=1)
     folder = folder_metadata()
     for index in range(3):
-        add(registry, f"child-{index}", TransferStatus.COMPLETED, folder_upload=folder)
-    registry.prune(now=time.time() + 2)
+        (
+            await add(
+                registry,
+                f"child-{index}",
+                TransferStatus.COMPLETED,
+                folder_upload=folder,
+            )
+        )
+    (await registry.prune(now=time.time() + 2))
     registry.close()
     reopened = registry_for(path)
     try:
@@ -536,7 +572,9 @@ async def test_folder_task_metadata_survives_mongo_history_reopen(tmp_path):
         reopened.close()
 
 
-def test_task_history_http_bounds_owner_boundary_and_current_folder_metadata(tmp_path):
+async def test_task_history_http_bounds_owner_boundary_and_current_folder_metadata(
+    tmp_path,
+):
     settings = make_settings(tmp_path)
     store = DriveStore.create(tmp_path / "task-catalog.sqlite3")
     runtime = FakeRuntime(store)
@@ -544,7 +582,11 @@ def test_task_history_http_bounds_owner_boundary_and_current_folder_metadata(tmp
     registry = runtime.transfers.registry
     folder = folder_metadata()
     children = [
-        add(registry, str(index), TransferStatus.COMPLETED, folder_upload=folder).id
+        (
+            await add(
+                registry, str(index), TransferStatus.COMPLETED, folder_upload=folder
+            )
+        ).id
         for index in range(3)
     ]
     route = "/api/v1/transfers/history/tasks"

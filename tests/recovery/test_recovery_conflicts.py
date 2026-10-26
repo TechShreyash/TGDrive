@@ -83,7 +83,7 @@ async def test_catalog_deletion_rechecks_lineage_before_removing_refs(
             raise RecoveryConflict("A newer remote catalog appeared")
 
     manager = manager_for(tmp_path, pool, store, guard)
-    record = manager.start_deletion(path)
+    record = await manager.start_deletion(path)
     await record.task
     assert record.status is TransferStatus.ERROR
     assert client.deleted == []
@@ -111,7 +111,7 @@ async def test_cancel_cleanup_does_not_delete_media_after_late_conflict(
             raise RecoveryConflict("A newer remote catalog appeared")
 
     manager = manager_for(tmp_path, pool, store, guard)
-    record = manager.registry.create("uploading", total=6)
+    record = await manager.registry.create("uploading", total=6)
     source = tmp_path / "retained.part"
     source.write_bytes(b"source")
     original = client.send_staged

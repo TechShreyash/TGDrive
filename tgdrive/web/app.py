@@ -773,7 +773,7 @@ def create_app(
                 status_code=409,
                 detail="Item must be in trash before permanent deletion",
             )
-        record = manager.start_deletion(payload.path)
+        record = await manager.start_deletion(payload.path)
         return JSONResponse({"status": "ok", "id": record.id}, status_code=202)
 
     async def create_share(
@@ -838,9 +838,9 @@ def create_app(
                     {"status": "ok", "id": snapshot["id"], "data": snapshot}
                 )
 
-        def bind_created(record: TransferRecord) -> None:
+        async def bind_created(record: TransferRecord) -> None:
             if entry is not None and starts.bind(entry, record):
-                manager.registry.cancel(record.id)
+                await manager.registry.cancel(record.id)
 
         try:
             record = await manager.receive_browser_upload(
@@ -911,7 +911,7 @@ def create_app(
             manager = _transfers(request)
             # Source DNS, headers and size admission belong to the cancellable
             # server job. Return its identity without waiting on an external host.
-            record = manager.start_remote(
+            record = await manager.start_remote(
                 url=str(payload.url),
                 destination=payload.path,
                 filename=payload.filename,
@@ -958,13 +958,13 @@ def create_app(
             # Refuse a committed upload before setting any cancellation intent.
             if existing is not None and existing.record is not None:
                 check_transfer(_store(request), existing.record)
-                cancel(existing.record.id)
+                await cancel(existing.record.id)
             entry = starts.cancel(payload.client_request_id)
             snapshot = entry.snapshot()
         else:
             assert payload.id is not None
             check_transfer(_store(request), manager.registry.get(payload.id))
-            snapshot = cancel(payload.id).as_dict()
+            snapshot = (await cancel(payload.id)).as_dict()
         return {"status": "ok", "id": snapshot["id"], "data": snapshot}
 
     def authorized_file(

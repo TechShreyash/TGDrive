@@ -191,6 +191,7 @@ export default function App() {
         "loading",
     );
     const [configError, setConfigError] = useState("");
+    const [configReady, setConfigReady] = useState(false);
     const configGeneration = useRef(0);
     const loadConfig = useCallback(async () => {
         const generation = ++configGeneration.current;
@@ -203,6 +204,7 @@ export default function App() {
             setConfig(value);
             setTimezone(value.timezone || "Asia/Kolkata");
             setConfigLoad("ready");
+            setConfigReady(true);
         } catch (cause) {
             if (generation !== configGeneration.current) return;
             setConfigError(errorMessage(cause));
@@ -460,6 +462,7 @@ export default function App() {
         setFolderSelection(null);
         setDemoFilesReadOnly(false);
         setConfigLoad("loading");
+        setConfigReady(false);
         void loadConfig();
     }, [loadConfig]);
     const listingRefreshAction = useManualRefresh(notify);
@@ -529,6 +532,7 @@ export default function App() {
     }, []);
     useEffect(() => {
         setConfigLoad("loading");
+        setConfigReady(false);
         void loadConfig();
         return () => {
             ++configGeneration.current;
@@ -1486,6 +1490,7 @@ export default function App() {
                 <Login
                     onSuccess={() => {
                         setConfigLoad("loading");
+                        setConfigReady(false);
                         void loadConfig();
                         setAuthenticated(true);
                         reload();
@@ -2024,53 +2029,77 @@ export default function App() {
                         />
                     ) : view === "performance" ? (
                         <PerformancePanel onNotice={notify} />
-                    ) : ["connections", "storage", "settings"].includes(view) &&
-                      configLoad !== "ready" ? (
-                        configGate
-                    ) : view === "connections" ? (
-                        <SettingsManagement
-                            demoMode={demoReadOnly}
-                            onNotice={notify}
-                        />
-                    ) : view === "storage" ? (
-                        <StorageView
-                            config={config}
-                            demoMode={demoReadOnly}
-                            onNotice={notify}
-                            onTransfers={() => navigate("/", "activity")}
-                            onTrash={() => navigate("/trash", "trash")}
-                            onRestoreStateChange={databaseRestoreChanged}
-                        />
-                    ) : view === "settings" ? (
-                        <PerformanceSettings
-                            demoMode={demoReadOnly}
-                            onNotice={notify}
-                            category={
-                                location.settingsSection === "transfers"
-                                    ? "transfers"
-                                    : location.settingsSection === "regional"
-                                      ? "regional"
-                                      : "cache"
-                            }
-                            uploadPreferences={
-                                <>
-                                    <UploadSettings
-                                        demoMode={demoReadOnly}
-                                        onNotice={notify}
-                                    />
-                                    <BotModeSettings
-                                        demoMode={demoReadOnly}
-                                        onNotice={notify}
-                                    />
-                                </>
-                            }
-                            onSaved={(value) => {
-                                setTimezone(value.timezone);
-                                void loadConfig();
-                                notify("Performance settings saved.");
-                                reload();
-                            }}
-                        />
+                    ) : ["connections", "storage", "settings"].includes(
+                          view,
+                      ) ? (
+                        !configReady ? (
+                            configGate
+                        ) : (
+                            <>
+                                {configLoad !== "ready" && configGate}
+                                <fieldset
+                                    style={{ display: "contents" }}
+                                    disabled={configLoad !== "ready"}
+                                    inert={configLoad !== "ready"}
+                                >
+                                    {view === "connections" ? (
+                                        <SettingsManagement
+                                            demoMode={demoReadOnly}
+                                            onNotice={notify}
+                                        />
+                                    ) : view === "storage" ? (
+                                        <StorageView
+                                            config={config}
+                                            demoMode={demoReadOnly}
+                                            onNotice={notify}
+                                            onTransfers={() =>
+                                                navigate("/", "activity")
+                                            }
+                                            onTrash={() =>
+                                                navigate("/trash", "trash")
+                                            }
+                                            onRestoreStateChange={
+                                                databaseRestoreChanged
+                                            }
+                                        />
+                                    ) : view === "settings" ? (
+                                        <PerformanceSettings
+                                            demoMode={demoReadOnly}
+                                            onNotice={notify}
+                                            category={
+                                                location.settingsSection ===
+                                                "transfers"
+                                                    ? "transfers"
+                                                    : location.settingsSection ===
+                                                        "regional"
+                                                      ? "regional"
+                                                      : "cache"
+                                            }
+                                            uploadPreferences={
+                                                <>
+                                                    <UploadSettings
+                                                        demoMode={demoReadOnly}
+                                                        onNotice={notify}
+                                                    />
+                                                    <BotModeSettings
+                                                        demoMode={demoReadOnly}
+                                                        onNotice={notify}
+                                                    />
+                                                </>
+                                            }
+                                            onSaved={(value) => {
+                                                setTimezone(value.timezone);
+                                                void loadConfig();
+                                                notify(
+                                                    "Performance settings saved.",
+                                                );
+                                                reload();
+                                            }}
+                                        />
+                                    ) : null}
+                                </fieldset>
+                            </>
+                        )
                     ) : (
                         <TransferHistory
                             onNotice={notify}

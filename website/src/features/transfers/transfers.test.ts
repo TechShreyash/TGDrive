@@ -48,6 +48,11 @@ async function hash(data: string) {
 beforeEach(() => {
     const data = new Map<string, string>();
     vi.stubGlobal("localStorage", {
+        get length() {
+            return data.size;
+        },
+        key: (index: number) => [...data.keys()][index] ?? null,
+        removeItem: (key: string) => data.delete(key),
         getItem: (key: string) => data.get(key) || null,
         setItem: (key: string, value: string) => data.set(key, value),
     });
@@ -558,6 +563,8 @@ describe("resumable HTTP upload protocol", () => {
             manager.setEnabled(true);
             manager.add([new File(["abcdefgh"], "source.txt")], "/", 10);
             await vi.waitFor(() => expect(report).toBeDefined());
+            const writes = vi.spyOn(localStorage, "setItem");
+            const scans = vi.spyOn(localStorage, "key");
             report!(3);
             expect(manager.snapshot()[0]).toMatchObject({
                 current: 0,
@@ -566,9 +573,15 @@ describe("resumable HTTP upload protocol", () => {
             });
             report!(6);
             expect(manager.snapshot()[0].sentCurrent).toBe(6);
+            expect(writes).not.toHaveBeenCalled();
+            expect(scans).not.toHaveBeenCalled();
+            writes.mockRestore();
+            scans.mockRestore();
             const saved = JSON.parse(
-                localStorage.getItem("tgdrive.uploads.v2")!,
-            )[0];
+                localStorage.getItem(
+                    "tgdrive.uploads.v2:" + manager.snapshot()[0].key,
+                )!,
+            );
             expect(saved.current).toBe(0);
             expect(saved.sentCurrent).toBeUndefined();
             receipt!(new Response(null, { status: 409 }));
@@ -880,7 +893,7 @@ it("shows the server's actionable chunk error without persisting its details", a
             ),
         );
         expect(manager.snapshot()[0].state).toBe("queued");
-        expect(localStorage.getItem("tgdrive.uploads.v2")).not.toContain(
+        expect(JSON.stringify(managerForTest().snapshot())).not.toContain(
             "Free disk space",
         );
     } finally {
@@ -1865,6 +1878,7 @@ describe("independent browser receiving and Telegram backlog", () => {
 
 it("warns when browser storage cannot retain recovery metadata while allowing uploads", () => {
     vi.stubGlobal("localStorage", {
+        length: 0,
         getItem: () => null,
         setItem: () => {
             throw new DOMException("full", "QuotaExceededError");
@@ -2090,7 +2104,7 @@ describe("deletion operation tracking", () => {
             expect(manager.snapshot().map((item) => item.jobId)).toEqual([
                 "upload-1",
             ]);
-            expect(localStorage.getItem("tgdrive.uploads.v2")).not.toContain(
+            expect(JSON.stringify(managerForTest().snapshot())).not.toContain(
                 "delete-",
             );
         } finally {
@@ -2293,7 +2307,211 @@ it("keeps near-complete byte counters precise without implying completion", () =
     expect(remainingBytesHint(gb, 4.25 * gb)).toBe("");
 });
 
-describe("finished popup dismissal across reloads and open tabs", () => {
+describe("recovery records across reloads and open tabs", () => {
+    it("restores valid receipts beside a malformed record and keeps a recovery warning", () => {
+        const first = managerForTest();
+        first.add([new File(["x"], "valid.txt")], "/", 10);
+        localStorage.setItem("tgdrive.uploads.v2:broken", "{invalid");
+        const restored = managerForTest();
+        expect(restored.snapshot().map((row) => row.name)).toEqual([
+            "valid.txt",
+        ]);
+        expect(restored.recoveryWarning).toContain(
+            "Some transfer recovery information",
+        );
+        restored.add([new File(["x"], "new.txt")], "/", 10);
+        expect(restored.recoveryWarning).toContain("Valid saved transfers");
+        expect(
+            managerForTest()
+                .snapshot()
+                .map((row) => row.name),
+        ).toEqual(["valid.txt", "new.txt"]);
+    });
+
+    it("retains distinct dismissals even when two tabs write at the same time", async () => {
+        const first = managerForTest();
+        const second = managerForTest();
+        first.addJob("first-finished", "first.txt", "/");
+        second.addJob("second-finished", "second.txt", "/");
+        first.snapshot()[0].state = "completed";
+        second.snapshot()[0].state = "completed";
+        const write = localStorage.setItem;
+        let interleaved = false;
+        const spy = vi
+            .spyOn(localStorage, "setItem")
+            .mockImplementation((key, value) => {
+                if (
+                    !interleaved &&
+                    key === "tgdrive.dismissed-jobs.v1:first-finished"
+                ) {
+                    interleaved = true;
+                    second.clearFinished();
+                }
+                write(key, value);
+            });
+        first.clearFinished();
+        spy.mockRestore();
+        expect(interleaved).toBe(true);
+        expect(
+            localStorage.getItem("tgdrive.dismissed-jobs.v1:first-finished"),
+        ).not.toBeNull();
+        expect(
+            localStorage.getItem("tgdrive.dismissed-jobs.v1:second-finished"),
+        ).not.toBeNull();
+        localStorage.setItem("tgdrive.dismissed-jobs.v1", "{invalid");
+        vi.stubGlobal(
+            "fetch",
+            vi.fn(async () =>
+                Response.json({
+                    jobs: [
+                        {
+                            id: "first-finished",
+                            status: "completed",
+                            phase: "Complete",
+                            current: 1,
+                            total: 1,
+                        },
+                        {
+                            id: "second-finished",
+                            status: "completed",
+                            phase: "Complete",
+                            current: 1,
+                            total: 1,
+                        },
+                    ],
+                }),
+            ),
+        );
+        const restored = managerForTest();
+        try {
+            restored.setEnabled(true);
+            await vi.waitFor(() => expect(fetch).toHaveBeenCalledOnce());
+            expect(restored.snapshot()).toEqual([]);
+        } finally {
+            restored.setEnabled(false);
+        }
+    });
+
+    it("keeps another tab's acknowledged receipt through idle and stale snapshot writes", async () => {
+        vi.stubGlobal(
+            "fetch",
+            vi.fn(async () => Response.json({ jobs: [] })),
+        );
+        const first = managerForTest();
+        const emptyTab = managerForTest();
+        first.add([new File(["abcdefgh"], "source.txt")], "/", 10);
+        const item = first.snapshot()[0];
+        Object.assign(item, {
+            uploadId: "receipt-id",
+            current: 4,
+            state: "receiving",
+        });
+        first.addJob("publish-first", "server-first", "/");
+        const staleTab = managerForTest();
+        Object.assign(item, { current: 6 });
+        first.addJob("publish-second", "server-second", "/");
+        try {
+            emptyTab.setEnabled(true);
+            staleTab.setEnabled(true);
+            await vi.waitFor(() => expect(fetch).toHaveBeenCalledTimes(2));
+            emptyTab.setEnabled(false);
+            staleTab.setEnabled(false);
+            // Other rows can be added without replacing the acknowledged receipt.
+            emptyTab.add([new File(["x"], "second.txt")], "/", 10);
+            staleTab.addJob("stale-publish", "server-third", "/");
+            const restored = managerForTest().snapshot();
+            expect(restored.find((row) => row.key === item.key)).toMatchObject({
+                uploadId: "receipt-id",
+                current: 6,
+                state: "awaiting_file",
+            });
+            expect(restored.some((row) => row.name === "second.txt")).toBe(
+                true,
+            );
+        } finally {
+            emptyTab.setEnabled(false);
+            staleTab.setEnabled(false);
+        }
+    });
+
+    it("does not resurrect a cleared local receipt from a stale tab", () => {
+        const first = managerForTest();
+        first.add([new File(["x"], "cancelled.txt")], "/", 10);
+        first.snapshot()[0].state = "cancelled";
+        first.setAdmissionPaused(true);
+        const stale = managerForTest();
+        first.clearFinished();
+        stale.snapshot()[0].phase = "Late cancelled response";
+        stale.add([new File(["x"], "next.txt")], "/", 10);
+        expect(
+            managerForTest()
+                .snapshot()
+                .map((row) => row.name),
+        ).toEqual(["next.txt"]);
+    });
+
+    it("keeps current v2 array receipts recoverable while new records are stored separately", () => {
+        const row = {
+            key: "current-v2",
+            initiatedHere: true,
+            name: "source.txt",
+            size: 8,
+            lastModified: 1,
+            destination: "/",
+            state: "receiving",
+            phase: "Receiving",
+            current: 4,
+            total: 8,
+            uploadId: "current-receipt",
+        };
+        localStorage.setItem("tgdrive.uploads.v2", JSON.stringify([row]));
+        const restored = managerForTest();
+        restored.add([new File(["x"], "new.txt")], "/", 10);
+        const stale = managerForTest();
+        expect(
+            managerForTest()
+                .snapshot()
+                .find((item) => item.key === row.key),
+        ).toMatchObject({
+            uploadId: row.uploadId,
+            current: 4,
+            state: "awaiting_file",
+        });
+        restored.snapshot().find((item) => item.key === row.key)!.state =
+            "cancelled";
+        restored.clearFinished();
+        expect(
+            managerForTest()
+                .snapshot()
+                .map((item) => item.name),
+        ).toEqual(["new.txt"]);
+        expect(localStorage.getItem("tgdrive.uploads.v2")).toBeNull();
+        stale.snapshot().find((item) => item.key === row.key)!.phase =
+            "Late response";
+        stale.addJob("unrelated", "another.txt", "/");
+        expect(
+            managerForTest()
+                .snapshot()
+                .some((item) => item.key === row.key),
+        ).toBe(false);
+    });
+
+    it("bounds persisted dismissal records without rewriting older IDs", () => {
+        for (let index = 0; index <= 1000; index++)
+            localStorage.setItem(
+                "tgdrive.dismissed-jobs.v1:" + index,
+                String(index + 1),
+            );
+        managerForTest().add([new File(["x"], "new.txt")], "/", 10);
+        const keys = Array.from({ length: localStorage.length }, (_, index) =>
+            localStorage.key(index)!,
+        );
+        expect(
+            keys.filter((key) => key.startsWith("tgdrive.dismissed-jobs.v1:")),
+        ).toHaveLength(1000);
+        expect(localStorage.getItem("tgdrive.dismissed-jobs.v1:0")).toBeNull();
+    });
+
     it("does not let a stale controller overwrite another tab's dismissals", () => {
         const first = managerForTest();
         first.addJob("completed-job", "finished.jpg", "/");
@@ -2313,8 +2531,8 @@ describe("finished popup dismissal across reloads and open tabs", () => {
             second.snapshot().some((item) => item.jobId === "completed-job"),
         ).toBe(false);
         expect(
-            JSON.parse(localStorage.getItem("tgdrive.dismissed-jobs.v1")!),
-        ).toContain("completed-job");
+            localStorage.getItem("tgdrive.dismissed-jobs.v1:completed-job"),
+        ).not.toBeNull();
         expect(
             managerForTest()
                 .snapshot()

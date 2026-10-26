@@ -1941,6 +1941,10 @@ class DriveStore:
                 path,
             )
 
+    def set_trashed_many(self, paths: list[str], trashed: bool) -> list[dict[str, Any]]:
+        with self.metadata_batch():
+            return [self.set_trashed(path, trashed) for path in paths]
+
     def set_trashed(self, path: str, trashed: bool) -> dict[str, Any]:
         if type(trashed) is not bool:
             raise ValidationError("trashed must be a boolean")
@@ -2158,6 +2162,12 @@ class DriveStore:
             db.execute("DELETE FROM nodes WHERE id=?", (node["id"],))
             self._bump(db)
             return []
+
+    def move_many(
+        self, paths: list[str], destination: str, *, conflict: str = "keep_both"
+    ) -> list[dict[str, Any] | None]:
+        with self.metadata_batch():
+            return [self.move(path, destination, conflict=conflict) for path in paths]
 
     def move(
         self, path: str, destination: str, *, conflict: str = "keep_both"

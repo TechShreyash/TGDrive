@@ -78,7 +78,7 @@ class FakeTelegramClient:
         if self.wait_after_progress:
             await self.release_after_progress.wait()
         if before_dispatch is not None:
-            before_dispatch()
+            (await before_dispatch())
         return SimpleNamespace(
             id=99,
             document=SimpleNamespace(file_size=len(content), file_name=file_name),
@@ -182,7 +182,7 @@ async def test_upload_cancellation_does_not_create_metadata(tmp_path: Path) -> N
 
     record = await manager.receive_browser_upload(upload, "/")
     await client.started_upload.wait()
-    manager.registry.cancel(record.id)
+    (await manager.registry.cancel(record.id))
     assert record.status is TransferStatus.CANCELLING
     client.release_upload.set()
     assert record.task is not None
@@ -322,7 +322,7 @@ async def test_remote_pipeline_downloads_then_uploads(tmp_path: Path) -> None:
 
     info = await manager.inspect_remote("https://example.com/remote.bin")
     assert info.filename == "remote.bin"
-    record = manager.start_remote(
+    record = await manager.start_remote(
         url="https://example.com/remote.bin",
         destination="/",
         filename="chosen.bin",
@@ -395,9 +395,9 @@ async def test_creation_callback_can_cancel_before_saving(tmp_path: Path) -> Non
     upload = UploadFile(BytesIO(b"hello"), size=5, filename="hello.txt")
     created: list[str] = []
 
-    def cancel_immediately(record: object) -> None:
+    async def cancel_immediately(record: object) -> None:
         created.append(record.id)
-        manager.registry.cancel(record.id)
+        (await manager.registry.cancel(record.id))
 
     with pytest.raises(TransferCancelled):
         await manager.receive_browser_upload(upload, "/", on_created=cancel_immediately)

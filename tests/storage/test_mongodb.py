@@ -315,7 +315,9 @@ def test_ownership_excludes_second_process_and_fences_expired_writer(store, back
         other.client.close()
 
 
-def test_jobs_sessions_names_and_connection_settings_use_mongodb(backend, tmp_path):
+async def test_jobs_sessions_names_and_connection_settings_use_mongodb(
+    backend, tmp_path
+):
     from pydantic import SecretStr
 
     from tgdrive.settings.managed_settings import (
@@ -326,12 +328,12 @@ def test_jobs_sessions_names_and_connection_settings_use_mongodb(backend, tmp_pa
     )
 
     registry = TransferRegistry(mongo=backend.db.jobs)
-    job = registry.create("queued", total=9)
+    job = await registry.create("queued", total=9)
     job.context.update(kind="upload", name="file.txt", retry_at=123.0)
-    registry.persist(job)
+    await registry.persist(job)
     reopened = TransferRegistry(mongo=backend.db.jobs)
     assert reopened.get(job.id).context == job.context
-    reopened.update(job.id, status=TransferStatus.COMPLETED)
+    await reopened.update(job.id, status=TransferStatus.COMPLETED)
     assert TransferRegistry(mongo=backend.db.jobs).get(job.id).terminal
     sessions = SessionManager(b"x" * 32, 3600, mongo_backend=backend)
     token = sessions.create()
@@ -373,8 +375,10 @@ def test_encrypted_complete_snapshot_roundtrip_and_tamper_rejection(
     backend.db.settings.insert_one({"_id": "private", "token": "fixture-private-token"})
     backup = tmp_path / "snapshot.tgdb"
     key = secrets.token_bytes(32)
-    counts = write_snapshot(backend, backup, key)
+    revision, counts, digest = write_snapshot(backend, backup, key)
+    assert revision == store.revision
     assert counts["settings"] == 1
+    assert digest == hashlib.sha256(backup.read_bytes()).hexdigest()
     assert b"fixture-private-token" not in backup.read_bytes()
     decoded = decode_snapshot(backup, key)
     assert decoded["settings"][0]["token"] == "fixture-private-token"
@@ -505,12 +509,12 @@ def test_primary_database_commits_do_not_wait_for_telegram_backups(
     assert backend.db.backups.count_documents({}) == 0
 
 
-def test_transfer_journal_cannot_write_after_owner_takeover(backend):
+async def test_transfer_journal_cannot_write_after_owner_takeover(backend):
     registry = TransferRegistry(mongo=backend.db.jobs, mongo_backend=backend)
-    record = registry.create("queued", total=10)
+    record = await registry.create("queued", total=10)
     backend.db.runtime.update_one({"_id": "owner"}, {"$set": {"token": "new-owner"}})
     with pytest.raises(DatabaseUnavailable):
-        registry.update(record.id, status=TransferStatus.COMPLETED)
+        await registry.update(record.id, status=TransferStatus.COMPLETED)
     assert record.status is TransferStatus.QUEUED
     assert backend.db.jobs.find_one({"_id": record.id})["data"]["status"] == "queued"
 
@@ -523,7 +527,7 @@ async def test_transfer_history_archive_survives_pruning_and_reopen(backend):
     registry = TransferRegistry(
         mongo=backend.db.jobs, mongo_backend=backend, ttl_seconds=1
     )
-    record = registry.create("uploading", total=100)
+    record = await registry.create("uploading", total=100)
     record.context.update(
         name="history.bin",
         kind="upload",
@@ -531,8 +535,8 @@ async def test_transfer_history_archive_survives_pruning_and_reopen(backend):
         source_url="https://private/?token=secret",
         local_path="/private/staging",
     )
-    registry.update(record.id, status=TransferStatus.COMPLETED, current=100)
-    registry.prune(now=time.time() + 2)
+    await registry.update(record.id, status=TransferStatus.COMPLETED, current=100)
+    await registry.prune(now=time.time() + 2)
     assert registry.list() == []
     row = backend.db.jobs.find_one({"_id": record.id})
     assert row["archived"] is True
@@ -565,11 +569,11 @@ async def test_archived_search_casefold_and_cursor_are_literal(backend):
         "unrelated.bin",
     ]
     for index, name in enumerate(names):
-        record = registry.create("uploading", total=10)
+        record = await registry.create("uploading", total=10)
         record.context.update(name=name, kind="upload", destination="/")
         record.created_at = 1000 + index
-        registry.update(record.id, status=TransferStatus.COMPLETED, current=10)
-    registry.prune(now=time.time() + 2)
+        await registry.update(record.id, status=TransferStatus.COMPLETED, current=10)
+    await registry.prune(now=time.time() + 2)
     first = await registry.history(query="STRASSE [.*]", limit=2)
     assert [row["name"] for row in first["jobs"]] == names[1:3][::-1]
     assert first["has_more"]

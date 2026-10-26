@@ -140,7 +140,7 @@ async def test_queued_restart_follows_uuid_after_destination_move(tmp_path):
     target = folder(manager.store, "Target")
     source = staged(manager, b"abcdefghij")
     manager._semaphore = asyncio.Semaphore(0)
-    record = manager.enqueue_upload(source, target, "ten.bin", 10)
+    record = await manager.enqueue_upload(source, target, "ten.bin", 10)
     await asyncio.sleep(0)
     await manager.close()
     manager.store.move(target, folder(manager.store, "Other"))
@@ -180,7 +180,7 @@ async def test_move_during_remote_send_commits_in_same_current_shared_folder(tmp
     target = folder(manager.store, "Target")
     shared = folder(manager.store, "Shared")
     token = manager.store.create_share(shared)
-    record = manager.enqueue_upload(
+    record = await manager.enqueue_upload(
         staged(manager, b"abcdefghij"), target, "ten.bin", 10
     )
     try:
@@ -206,7 +206,7 @@ async def test_trashed_destination_during_send_reconciles_and_cleans_own_parts(
     ledger.hold = True
     target = folder(manager.store, "Target")
     source = staged(manager, b"abcdefghij")
-    record = manager.enqueue_upload(source, target, "ten.bin", 10)
+    record = await manager.enqueue_upload(source, target, "ten.bin", 10)
     try:
         await asyncio.wait_for(ledger.dispatched.wait(), 2)
         manager.store.set_trashed(target, True)
@@ -224,7 +224,7 @@ async def test_delete_worker_matches_moved_destination_uuid_before_cleanup(tmp_p
     manager, ledger = await manager_for(tmp_path)
     ledger.hold = True
     target = folder(manager.store, "Target")
-    record = manager.enqueue_upload(
+    record = await manager.enqueue_upload(
         staged(manager, b"abcdefghij"), target, "ten.bin", 10
     )
     try:
@@ -233,7 +233,7 @@ async def test_delete_worker_matches_moved_destination_uuid_before_cleanup(tmp_p
         current = manager.store.resolve_id(record.context["destination_id"])
         assert record.context["destination"] == target
         manager.store.set_trashed(current, True)
-        deletion = manager.start_deletion(current)
+        deletion = await manager.start_deletion(current)
         await asyncio.wait_for(record.cancel_event.wait(), 2)
         ledger.release.set()
         await asyncio.wait_for(deletion.task, 2)
@@ -270,7 +270,7 @@ async def test_catalog_outage_does_not_turn_destination_validation_into_cancella
     ledger.hold = True
     target = folder(manager.store, "Target")
     source = staged(manager, b"abcdefgh")
-    record = manager.enqueue_upload(source, target, "eight.bin", 8)
+    record = await manager.enqueue_upload(source, target, "eight.bin", 8)
     original = manager.store.upload_destination
 
     def unavailable(*_args, **_kwargs):
@@ -286,7 +286,7 @@ async def test_catalog_outage_does_not_turn_destination_validation_into_cancella
         assert source.exists() and ledger.messages
         sent = len(ledger.requests)
         monkeypatch.setattr(manager.store, "upload_destination", original)
-        retried = manager.retry_job(record.id)
+        retried = await manager.retry_job(record.id)
         await retried.task
         assert retried.status == TransferStatus.COMPLETED
         assert len(ledger.requests) == sent

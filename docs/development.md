@@ -67,6 +67,26 @@ fixture or its `/__test__` endpoints.
 Recorded evidence describes a tested snapshot, not the state of a later checkout.
 
 <details>
+<summary>Audit fixes: durability, concurrency and browser state — 2026-10-26</summary>
+
+The offline run passed **1,930 cases and 36 subtests** in **83.18 seconds**, with
+78 opt-in skips. Two failures came from one missed `await` in a test fixture;
+after correction, its complete 12-case module passed. The complete Vitest suite
+ran through the Python bridge. Ten additional journal-boundary cases passed,
+including blocked commits, crash recovery, cancellation and staging limits.
+
+The MongoDB parity group passed **98 cases**, using a disposable local replica
+set for live database cases. Four Chromium cases verified preserved drafts after
+configuration failure and initial permission gating. The production build and
+TypeScript checks passed on Node **24.22.0**, with existing viewer bundle warnings.
+Ruff lint/format passed on **264 Python files**; edited frontend formatting passed.
+
+These checks use isolated or synthetic data. They do not validate a deployment,
+live Telegram sends, hard-kill recovery or every device/network condition.
+
+</details>
+
+<details>
 <summary>Repository cleanup, viewers and settings — 2026-10-26</summary>
 
 Checks used Node **24.22.0** and Python **3.14.8**. The complete offline run passed

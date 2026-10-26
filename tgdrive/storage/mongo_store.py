@@ -762,28 +762,35 @@ class MongoStore(DriveStore):
                 del self._state["shares"][key]
 
     def set_trashed(self, path, trashed):
+        with self._transaction(write=True):
+            return self._set_trashed(path, trashed)
+
+    def set_trashed_many(self, paths, trashed):
+        with self._transaction(write=True):
+            return [self._set_trashed(path, trashed) for path in paths]
+
+    def _set_trashed(self, path, trashed):
         if type(trashed) is not bool:
             raise ValidationError("trashed must be a boolean")
-        with self._transaction(write=True):
-            node, path, chain = self._resolve(path)
-            if node["id"] == ROOT_ID:
-                raise RootMutationError("The root folder cannot be trashed")
-            self._mutable(chain, descendants=True)
-            if not trashed:
-                self._visible(chain[:-1])
-            if node["trashed"] != trashed:
-                name = (
-                    node["name"]
-                    if trashed
-                    else self._available(
-                        node["parent_id"], node["name"], node["kind"], node["id"]
-                    )
+        node, path, chain = self._resolve(path)
+        if node["id"] == ROOT_ID:
+            raise RootMutationError("The root folder cannot be trashed")
+        self._mutable(chain, descendants=True)
+        if not trashed:
+            self._visible(chain[:-1])
+        if node["trashed"] != trashed:
+            name = (
+                node["name"]
+                if trashed
+                else self._available(
+                    node["parent_id"], node["name"], node["kind"], node["id"]
                 )
-                node.update(trashed=trashed, name=name, name_key=_name_key(name))
-                if trashed:
-                    self._revoke(self._subtree(node["id"]))
-                self._bump()
-            return self._record(node, path)
+            )
+            node.update(trashed=trashed, name=name, name_key=_name_key(name))
+            if trashed:
+                self._revoke(self._subtree(node["id"]))
+            self._bump()
+        return self._record(node, path)
 
     def list_trash(self, query=""):
         with self._transaction():
@@ -933,35 +940,42 @@ class MongoStore(DriveStore):
             return []
 
     def move(self, path, destination, *, conflict="keep_both"):
+        with self._transaction(write=True):
+            return self._move(path, destination, conflict=conflict)
+
+    def move_many(self, paths, destination, *, conflict="keep_both"):
+        with self._transaction(write=True):
+            return [self._move(path, destination, conflict=conflict) for path in paths]
+
+    def _move(self, path, destination, *, conflict="keep_both"):
         if conflict not in {"keep_both", "skip"}:
             raise ValidationError("Invalid conflict policy")
-        with self._transaction(write=True):
-            node, path, chain = self._resolve(path)
-            parent, destination, parent_chain = self._resolve(destination)
-            if node["id"] == ROOT_ID:
-                raise RootMutationError("The root folder cannot be moved")
-            if parent["kind"] != "folder":
-                raise NotDirectoryError("Destination must be a folder")
-            self._visible(chain)
-            self._visible(parent_chain)
-            self._mutable(chain, descendants=True)
-            self._mutable(parent_chain)
-            if node["id"] in {row["id"] for row in parent_chain}:
-                raise InvalidPathError("A folder cannot move into its subtree")
-            if node["parent_id"] == parent["id"]:
-                return self._record(node, path)
-            for key in self._subtree(node["id"]):
-                depth = len(self._path(key).split("/")) - len(path.split("/"))
-                if len(parent_chain) + depth > MAX_TREE_DEPTH:
-                    raise ValidationError("Move would exceed maximum tree depth")
-            name = node["name"]
-            if not self._unique(parent["id"], name):
-                if conflict == "skip":
-                    return None
-                name = self._available(parent["id"], name, node["kind"])
-            node.update(parent_id=parent["id"], name=name, name_key=_name_key(name))
-            self._bump()
-            return self._record(node, _join_path(destination, node["id"]))
+        node, path, chain = self._resolve(path)
+        parent, destination, parent_chain = self._resolve(destination)
+        if node["id"] == ROOT_ID:
+            raise RootMutationError("The root folder cannot be moved")
+        if parent["kind"] != "folder":
+            raise NotDirectoryError("Destination must be a folder")
+        self._visible(chain)
+        self._visible(parent_chain)
+        self._mutable(chain, descendants=True)
+        self._mutable(parent_chain)
+        if node["id"] in {row["id"] for row in parent_chain}:
+            raise InvalidPathError("A folder cannot move into its subtree")
+        if node["parent_id"] == parent["id"]:
+            return self._record(node, path)
+        for key in self._subtree(node["id"]):
+            depth = len(self._path(key).split("/")) - len(path.split("/"))
+            if len(parent_chain) + depth > MAX_TREE_DEPTH:
+                raise ValidationError("Move would exceed maximum tree depth")
+        name = node["name"]
+        if not self._unique(parent["id"], name):
+            if conflict == "skip":
+                return None
+            name = self._available(parent["id"], name, node["kind"])
+        node.update(parent_id=parent["id"], name=name, name_key=_name_key(name))
+        self._bump()
+        return self._record(node, _join_path(destination, node["id"]))
 
     def create_share(
         self,

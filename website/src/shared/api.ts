@@ -31,11 +31,22 @@ export function notifyDemoFilesReadOnly(code: unknown) {
     if (code === "DEMO_FILES_READ_ONLY")
         window.dispatchEvent(new Event("tgdrive:demo-files-read-only"));
 }
+let sessionGeneration = 0;
+/** Capture before sending: an old response must not expire a newer login. */
+export function sessionExpiryHandler() {
+    const generation = sessionGeneration;
+    return (status: number) => {
+        if (status !== 401 || generation !== sessionGeneration) return;
+        sessionGeneration++;
+        window.dispatchEvent(new Event("tgdrive:auth-required"));
+    };
+}
 export async function request<T>(
     url: string,
     body?: unknown,
     options: RequestInit & { timeoutMs?: number } = {},
 ): Promise<T> {
+    const expireSession = sessionExpiryHandler();
     const { timeoutMs = 60000, ...fetchOptions } = options;
     const headers = new Headers(fetchOptions.headers);
     headers.set("Accept", "application/json");
@@ -57,6 +68,7 @@ export async function request<T>(
                   ])
                 : AbortSignal.timeout(timeoutMs),
         });
+        if (url !== "/api/checkPassword") expireSession(response.status);
         text = await response.text();
     } catch (error) {
         if (error instanceof DOMException && error.name === "AbortError")
@@ -95,8 +107,6 @@ export async function request<T>(
                   : typeof data.status === "string"
                     ? data.status
                     : "The request could not be completed.";
-        if (response.status === 401 && url !== "/api/checkPassword")
-            window.dispatchEvent(new Event("tgdrive:auth-required"));
         if (data.code === "SETTINGS_RESTART_REQUIRED")
             window.dispatchEvent(new Event("tgdrive:restart-required"));
         notifyDemoFilesReadOnly(data.code);
@@ -177,7 +187,11 @@ export const api = {
     login: async (password: string) => {
         for (let attempt = 1; ; attempt++) {
             try {
-                return await request("/api/checkPassword", { pass: password });
+                const result = await request("/api/checkPassword", {
+                    pass: password,
+                });
+                sessionGeneration++;
+                return result;
             } catch (error) {
                 if (
                     !(error instanceof ApiError) ||
@@ -193,7 +207,11 @@ export const api = {
             }
         }
     },
-    logout: () => request("/api/logout", {}),
+    logout: async () => {
+        const result = await request("/api/logout", {});
+        sessionGeneration++;
+        return result;
+    },
     directory: (path: string, auth = "", signal?: AbortSignal) =>
         request<{ data: Directory; auth_home_path?: string }>(
             "/api/getDirectory",
