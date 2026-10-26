@@ -89,7 +89,7 @@ class Settings(BaseSettings):
 
     api_id: int = Field(alias="API_ID", gt=0)
     api_hash: SecretStr = Field(alias="API_HASH")
-    bot_tokens_csv: SecretStr = Field(alias="BOT_TOKENS")
+    bot_tokens_csv: SecretStr = Field(default=SecretStr(""), alias="BOT_TOKENS")
     storage_channel: int = Field(alias="STORAGE_CHANNEL", lt=0)
     admin_password: SecretStr = Field(default=SecretStr(""), alias="ADMIN_PASSWORD")
     demo_admin_password: SecretStr | None = Field(
@@ -230,7 +230,13 @@ class Settings(BaseSettings):
             from tgdrive.settings.managed_settings import read_document
 
             explicit = init_settings()
-            credential_fields = {"API_ID", "API_HASH", "BOT_TOKENS", "STRING_SESSIONS"}
+            credential_fields = {
+                "API_ID",
+                "API_HASH",
+                "BOT_TOKENS",
+                "MAIN_BOT_TOKEN",
+                "STRING_SESSIONS",
+            }
             # Explicit injected configurations remain isolated (tests/embedding).
             if credential_fields.intersection(explicit):
                 return {}
@@ -444,8 +450,22 @@ class Settings(BaseSettings):
                 raise ValueError(
                     "Demo administrator password must differ from the regular password"
                 )
+        token = self.main_bot_token_value
+        if token:
+            if not _BOT_TOKEN_RE.fullmatch(token):
+                raise ValueError("MAIN_BOT_TOKEN is not a valid Telegram bot token")
+            if not self.telegram_admin_ids:
+                raise ValueError(
+                    "TELEGRAM_ADMIN_IDS is required when MAIN_BOT_TOKEN is set"
+                )
+            # Seed new installations without reviving a saved, removed connection.
+            if not self.bot_tokens and not self.managed_revision:
+                self.bot_tokens_csv = SecretStr(token)
         if not self.bot_tokens:
-            raise ValueError("BOT_TOKENS must contain at least one bot token")
+            raise ValueError(
+                "At least one storage bot is required; "
+                "set MAIN_BOT_TOKEN for a new deployment"
+            )
         if len(set(self.bot_tokens)) != len(self.bot_tokens):
             raise ValueError("BOT_TOKENS must not repeat a storage bot")
         if len(set(self.string_sessions)) != len(self.string_sessions):
@@ -455,14 +475,6 @@ class Settings(BaseSettings):
         ]
         if invalid_tokens:
             raise ValueError("BOT_TOKENS contains an invalid Telegram bot token")
-        if self.main_bot_token is not None:
-            token = self.main_bot_token.get_secret_value().strip()
-            if token and not _BOT_TOKEN_RE.fullmatch(token):
-                raise ValueError("MAIN_BOT_TOKEN is not a valid Telegram bot token")
-            if token and not self.telegram_admin_ids:
-                raise ValueError(
-                    "TELEGRAM_ADMIN_IDS is required when MAIN_BOT_TOKEN is set"
-                )
         return self
 
     @property

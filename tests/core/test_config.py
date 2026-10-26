@@ -31,6 +31,86 @@ def test_settings_parse_csv_and_derive_non_premium_limit() -> None:
     assert len(settings.session_key) == 32
 
 
+@pytest.mark.parametrize("legacy_value", [None, "", " , "])
+def test_main_bot_seeds_storage_credentials_for_a_new_deployment(
+    monkeypatch, legacy_value
+):
+    monkeypatch.delenv("BOT_TOKENS", raising=False)
+    token = "654321:" + "y" * 30
+    values = settings_values(MAIN_BOT_TOKEN=token, TELEGRAM_ADMIN_IDS="123")
+    if legacy_value is None:
+        values.pop("BOT_TOKENS")
+    else:
+        values["BOT_TOKENS"] = legacy_value
+    settings = Settings(_env_file=None, **values)
+
+    assert settings.bot_tokens == (token,)
+    assert settings.bot_tokens_csv.get_secret_value() == token
+    assert settings.model_dump(by_alias=True)["BOT_TOKENS"].get_secret_value() == token
+    assert token not in repr(settings)
+
+
+def test_main_bot_does_not_replace_a_legacy_storage_bot_list():
+    tokens = ("123456:" + "x" * 30, "654321:" + "y" * 30)
+    settings = Settings(
+        _env_file=None,
+        **settings_values(
+            BOT_TOKENS=",".join(tokens),
+            MAIN_BOT_TOKEN="777777:" + "z" * 30,
+            TELEGRAM_ADMIN_IDS="123",
+        ),
+    )
+    assert settings.bot_tokens == tokens
+
+
+def test_main_bot_does_not_hide_invalid_legacy_storage_credentials():
+    with pytest.raises(ValidationError, match="BOT_TOKENS contains an invalid"):
+        Settings(
+            _env_file=None,
+            **settings_values(
+                BOT_TOKENS="invalid",
+                MAIN_BOT_TOKEN="654321:" + "y" * 30,
+                TELEGRAM_ADMIN_IDS="123",
+            ),
+        )
+
+
+def test_main_bot_does_not_reseed_a_managed_empty_storage_list():
+    with pytest.raises(ValidationError, match="At least one storage bot"):
+        Settings(
+            _env_file=None,
+            **settings_values(
+                BOT_TOKENS="",
+                MAIN_BOT_TOKEN="654321:" + "y" * 30,
+                TELEGRAM_ADMIN_IDS="123",
+                managed_revision=1,
+            ),
+        )
+
+
+def test_new_deployment_requires_an_initial_storage_bot():
+    with pytest.raises(ValidationError, match="set MAIN_BOT_TOKEN"):
+        Settings(_env_file=None, **settings_values(BOT_TOKENS="", MAIN_BOT_TOKEN=""))
+
+
+def test_explicit_main_bot_configuration_keeps_injected_settings_isolated(monkeypatch):
+    import tgdrive.storage.mongo as mongo
+
+    values = settings_values(TELEGRAM_ADMIN_IDS="123")
+    values.pop("BOT_TOKENS")
+    monkeypatch.delenv("BOT_TOKENS", raising=False)
+    for name, value in values.items():
+        monkeypatch.setenv(name, str(value))
+
+    def unexpected_database_lookup(*_args, **_kwargs):
+        raise AssertionError("Injected credentials must not load managed connections")
+
+    monkeypatch.setattr(mongo, "configure", unexpected_database_lookup)
+    token = "654321:" + "y" * 30
+    settings = Settings(_env_file=None, MAIN_BOT_TOKEN=token)
+    assert settings.bot_tokens == (token,)
+
+
 def test_premium_sessions_do_not_raise_new_document_or_logical_limits() -> None:
     settings = Settings(
         _env_file=None,
@@ -59,6 +139,7 @@ def test_premium_sessions_do_not_raise_new_document_or_logical_limits() -> None:
         ("SESSION_SECRET", "short"),
         ("API_HASH", "z" * 32),
         ("BOT_TOKENS", "not-a-token"),
+        ("MAIN_BOT_TOKEN", "not-a-token"),
         ("TELEGRAM_ADMIN_IDS", "123,nope"),
     ],
 )
@@ -71,7 +152,7 @@ def test_bot_mode_requires_admin_ids() -> None:
     with pytest.raises(ValidationError, match="TELEGRAM_ADMIN_IDS"):
         Settings(
             _env_file=None,
-            **settings_values(MAIN_BOT_TOKEN="654321:" + "y" * 30),
+            **settings_values(BOT_TOKENS="", MAIN_BOT_TOKEN="654321:" + "y" * 30),
         )
 
 

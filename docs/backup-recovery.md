@@ -1,13 +1,31 @@
 # Backup & recovery
 
-[Docs home](README.md) · [Choose a recovery route](#choose-the-right-mongodb-recovery-route) · [Set up backups](#set-up-an-independent-backup-channel) · [Operations](operations.md)
+[Docs home](README.md) · [Operations](operations.md)
 
-New users should first read the [storage and data-safety essentials](new-user-guide.md).
+**Must read before using TGDrive: [New-user guide and FAQs](new-user-guide.md).**
 A second channel can help if one copy is lost, but both copies still use
 Telegram. Recovery is manual and needs a surviving copy with its matching keys.
 
 > [!IMPORTANT]
 > Save matching keys outside the server, wait for a **confirmed restore point**, and test recovery before relying on it. **Never replace an existing drive with an empty database as a repair.**
+
+**Contents**
+
+- [Choose the right MongoDB recovery route](#choose-the-right-mongodb-recovery-route)
+- [Set up an independent backup channel](#set-up-an-independent-backup-channel)
+  - [Prepare the Telegram accounts and channels](#prepare-the-telegram-accounts-and-channels)
+  - [Enable and confirm the first copy](#enable-and-confirm-the-first-copy)
+  - [What this copy retains](#what-this-copy-retains)
+  - [Rebuild a lost backup from the surviving main channel](#rebuild-a-lost-backup-from-the-surviving-main-channel)
+  - [Recover a lost main channel from a surviving channel](#recover-a-lost-main-channel-from-a-surviving-channel)
+  - [Recover only the database when the surviving channel is healthy](#recover-only-the-database-when-the-surviving-channel-is-healthy)
+  - [Interruptions and reports](#interruptions-and-reports)
+- [Keep the MongoDB recovery kit outside the server](#keep-the-mongodb-recovery-kit-outside-the-server)
+- [Make and check a MongoDB backup](#make-and-check-a-mongodb-backup)
+- [What the encrypted MongoDB archive contains](#what-the-encrypted-mongodb-archive-contains)
+  - [Reopen the existing MongoDB drive](#reopen-the-existing-mongodb-drive)
+  - [Restore a lost database from Telegram](#restore-a-lost-database-from-telegram)
+- [Verify your recovery kit periodically](#verify-your-recovery-kit-periodically)
 
 | Protection | Recovers | Limits |
 | --- | --- | --- |

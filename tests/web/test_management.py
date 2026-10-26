@@ -332,6 +332,53 @@ def test_restart_loads_managed_overrides_before_invalid_environment(
     assert settings.managed_client_labels == ("Saved bot",)
 
 
+@pytest.mark.parametrize("saved_main_state", [None, "disabled", "removed", "rotated"])
+def test_main_token_seeds_only_before_connections_are_managed(
+    tmp_path, monkeypatch, saved_main_state
+):
+    monkeypatch.chdir(tmp_path)
+    data = tmp_path / "private"
+    register_test_backend(monkeypatch, data)
+    expected_token = TOKEN
+    if saved_main_state is not None:
+        saved = document()
+        expected_token = SECOND_TOKEN
+        if saved_main_state == "disabled":
+            saved.clients.append(
+                ManagedClient(
+                    id="main-bot",
+                    label="Main bot",
+                    kind="bot",
+                    enabled=False,
+                    credential=SecretStr(TOKEN),
+                )
+            )
+        elif saved_main_state == "rotated":
+            expected_token = "123456:" + "z" * 30
+            saved.clients[0].id = "main-bot"
+            saved.clients[0].credential = SecretStr(expected_token)
+        save_document(data, saved, 0)
+    monkeypatch.delenv("BOT_TOKENS", raising=False)
+    for name, value in {
+        "MONGODB_URI": "mongodb://synthetic.invalid",
+        "DATA_DIR": str(data),
+        "API_ID": "12345",
+        "API_HASH": "a" * 32,
+        "MAIN_BOT_TOKEN": TOKEN,
+        "TELEGRAM_ADMIN_IDS": "123",
+        "STORAGE_CHANNEL": "-1001234567890",
+        "ADMIN_PASSWORD": "correct horse battery staple",
+        "SESSION_SECRET": "s" * 48,
+    }.items():
+        monkeypatch.setenv(name, value)
+
+    applied = Settings(_env_file=None)
+    assert applied.bot_tokens == (expected_token,)
+    assert applied.bot_tokens_csv.get_secret_value() == expected_token
+    assert applied.main_bot_token_value == TOKEN
+    assert applied.managed_revision == (0 if saved_main_state is None else 1)
+
+
 @pytest.mark.parametrize("damage", ["document", "unavailable"])
 def test_invalid_or_unavailable_mongo_settings_never_fall_back_to_environment(
     tmp_path, monkeypatch, damage

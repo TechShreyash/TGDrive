@@ -281,7 +281,8 @@ jobs:
                   settings = Settings(
                       _env_file=None, API_ID=12345, API_HASH="a" * 32,
                       MONGODB_URI="mongodb://synthetic.invalid/tgdrive",
-                      BOT_TOKENS="123456:" + "x" * 30,
+                      MAIN_BOT_TOKEN="123456:" + "x" * 30,
+                      TELEGRAM_ADMIN_IDS="12345",
                       STORAGE_CHANNEL=-1001234567890,
                       ADMIN_PASSWORD="synthetic-container-password",
                       SESSION_SECRET="s" * 48,

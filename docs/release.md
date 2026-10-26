@@ -6,8 +6,6 @@ TGDrive **2.0.0** targets a fresh MongoDB database and dedicated private Telegra
 channel. MongoDB is required on laptops and servers; local recovery journals do
 not replace it. Use Docker Compose for all deployments.
 
-[Install a release](#choose-the-deployment) · [Check a download](#verify-a-downloaded-source-archive) · [Prepare a release](#prepare-the-source-release)
-
 The public source includes the [visual walkthroughs](showcase.md) and their
 [media assets](assets/README.md). Keep those files in the release allowlist when
 replacing captures.
@@ -15,6 +13,13 @@ replacing captures.
 For development source before a v2 release is published, use
 [Get the source](setup.md#get-the-source). The procedures below describe preparing
 a release and checking its published archive.
+
+**Contents**
+
+- [Choose the deployment](#choose-the-deployment)
+- [Prepare the source release](#prepare-the-source-release)
+- [Verify a downloaded source archive](#verify-a-downloaded-source-archive)
+- [Fresh-install smoke checks](#fresh-install-smoke-checks)
 
 ## Choose the deployment
 

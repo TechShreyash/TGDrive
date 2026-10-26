@@ -2,19 +2,197 @@
 
 [Docs home](README.md) · [Setup](setup.md) · [Performance diagnostics](performance.md)
 
-Start with the defaults. Budgets are ceilings, not allocations; available
-RAM/disk can reduce them. Change one setting, then repeat the same workload.
+Use **Configuration** to change cache, transfer and timezone settings. Saved
+changes persist across restarts and apply to new work immediately. Start with
+the defaults, change one setting at a time and compare the same workload.
 
-[Cache](#cache-settings) · [Transfers](#transfer-limits) · [File size & disk space](#upload-size-and-available-disk-space) · [Tuning](#a-modest-server-and-a-larger-server) · [Public demo](#public-demo-mode)
+Memory and disk budgets are ceilings, not space allocated in advance. Work
+still needs actual free resources.
 
-[See the configuration screens](showcase.md#configure-your-drive) for the cache,
-upload, URL import and timezone controls. Captures show the interface; follow the
-defaults and limits below when tuning your own installation.
+[See the configuration screens](showcase.md#configure-your-drive) for a visual
+tour. Use the defaults and limits below when configuring your installation.
 
-MongoDB is required for every deployment. Invalid database configuration or failed
-access stops startup; no local database is substituted. A pristine database is
-initialized automatically. See [setup](setup.md#4-start-locally) for deployment
-and [startup behavior](architecture.md#lifecycle) for recovery boundaries.
+**Contents**
+
+- [Change, discard or restore](#change-discard-or-restore)
+- [Cache settings](#cache-settings)
+- [Transfer limits](#transfer-limits)
+  - [Parallel uploads](#parallel-uploads)
+  - [Upload splitting](#upload-splitting)
+  - [URL downloads](#url-downloads)
+  - [Upload size and available disk space](#upload-size-and-available-disk-space)
+  - [Advanced Telegram limits](#advanced-telegram-limits)
+- [Timezone](#timezone)
+- [A modest server and a larger server](#a-modest-server-and-a-larger-server)
+- [Deployment-only settings](#deployment-only-settings)
+- [Public demo mode](#public-demo-mode)
+  - [Keep sample files available](#keep-sample-files-available)
+  - [Return to a private deployment](#return-to-a-private-deployment)
+
+## Change, discard or restore
+
+Open **Configuration → Cache settings**, **Transfer limits** or **Timezone**.
+
+| Action | Effect |
+| --- | --- |
+| **Save changes** | Saves this page; unsaved values on other pages remain drafts. |
+| **Discard changes** | Reloads this page's saved values. |
+| **Restore defaults** | Loads built-in values for this page; review and save to apply. |
+
+**Parallel uploads** has its own save controls, described
+[below](#parallel-uploads).
+
+Saved dashboard values override startup environment values. Restoring defaults
+does not remove environment variables or reset files, accounts, credentials or
+recovery keys. If another session changes settings first, reload before saving.
+Invalid values are rejected. If applying a change fails, TGDrive attempts to
+restore the previous values and reports whether a restart is needed.
+
+## Cache settings
+
+Open **Configuration → Cache settings**.
+
+| Setting | Default | Meaning |
+| --- | --- | --- |
+| Memory cache | 256 MiB | Recently read file bytes kept in memory; available RAM can lower the effective budget. 0 disables retention. |
+| Disk cache | 10 GiB | Temporary file copies for repeat access. 0 disables disk retention. |
+| Cache free-space floor | 1 GiB | Stop cache writes before free disk falls below this level. Saving with disk caching enabled requires at least 64 MiB. |
+| Disk cache retention | 24 hours | Time since last reuse; capacity pressure can remove cached data sooner. |
+| Concurrent preloads | 2 | Files prepared in the background at once; consider 1 on a small server. |
+| Preload during playback | On | Prepare bounded upcoming original audio/video bytes. Downloads do not start extra warming. |
+
+Clearing or expiring cache leaves Telegram originals and MongoDB records intact.
+Active streams and unfinished uploads have separate budgets but share the host's
+resources. Turning off playback preloading still allows requested-range
+read-ahead and manual **Preload file**.
+See [preloading](usage.md#preload-a-file-for-smoother-playback-and-downloads).
+
+**Regenerate all thumbnails** refreshes existing file covers in the background
+after confirmation. New uploads generate them automatically.
+See [rebuild progress, bandwidth and limits](thumbnails.md#rebuild-existing-thumbnails).
+
+## Transfer limits
+
+Open **Configuration → Transfer limits**. Its controls appear in the order below.
+
+### Parallel uploads
+
+| Setting | Default | Meaning |
+| --- | --- | --- |
+| Simultaneous uploads per bot | 1 | Concurrent Telegram document uploads per healthy bot; choose 1–4. A large file can use multiple document-upload slots. |
+
+Start with one upload per bot; add eligible bots before increasing the value.
+Existing transfers finish when the limit is lowered. Premium accounts keep one
+upload slot each.
+
+This section has separate **Save Changes**, **Discard upload changes** and
+**Restore upload defaults** actions. Restoring its default loads 1; choose
+**Save Changes** to apply it. The page's other save controls do not save this value.
+
+### Upload splitting
+
+| Setting | Default | Meaning |
+| --- | --- | --- |
+| File split size | 2000 MiB | Maximum preferred size of each Telegram document, including for Premium accounts. Choose 1–2000 MiB; 0 also uses 2000 MiB. |
+
+This controls how TGDrive stores a file in Telegram, rather than the largest
+file you can upload. Existing transfers keep their original split plan.
+For the whole-file limit, use [Upload storage](#upload-size-and-available-disk-space).
+
+### URL downloads
+
+| Setting | Default | Meaning |
+| --- | --- | --- |
+| Full-speed URL downloads | 2 | URL imports downloading at full speed together; choose 1–8. |
+
+This controls the source-to-server stage. Telegram uploading uses its own slots.
+Waiting sources may receive data slowly while connection and storage limits
+permit; expired links can still fail. See [URL intake](performance.md#url-import-intake)
+for queue behavior and retries.
+
+For a startup override, set `REMOTE_DOWNLOAD_CONCURRENCY` in the private `.env`
+or hosting environment, then recreate/redeploy. A saved dashboard value takes
+precedence; see [deployment settings](#deployment-only-settings).
+
+### Upload size and available disk space
+
+Open **Transfer limits → Upload storage**.
+
+| Setting | Default | Meaning |
+| --- | --- | --- |
+| Maximum file size | 16 GiB | Largest new file accepted. Telegram document splitting is separate. |
+| Temporary upload budget | 16 GiB | Space all unfinished uploads may use together; it must cover the per-file maximum. |
+| Upload free-space reserve | 1 GiB | Space uploads must leave free on their storage volume after other uploads' reservations are accounted for. Minimum configurable reserve: 64 MiB. |
+
+To upload a **32 GiB file**, raise both the file maximum and temporary budget to
+at least 32 GiB. A 64 GiB budget can reserve two such files if actual disk space
+permits. Both controls support up to **2048 GiB (2 TiB)**. Existing uploads retain
+their reservations; reducing the budget below those reservations is rejected.
+
+Browser uploads and full-speed URL imports reserve the whole file and check
+actual free space, including other uploads' unwritten reservations.
+A full-speed unknown-length URL import reserves its admitted maximum. If that
+prevents admission, use a source that reports its file size or lower the file limit.
+Waiting URL sources reserve smaller windows; see
+[URL storage policy](performance.md#url-import-intake).
+
+Space is rechecked during receipt, but other disk users can still fill it.
+Browser disk-full failures retain the confirmed resume position; URL retrieval
+may restart from zero. These settings control temporary server disk use;
+they do not set your total Telegram storage capacity.
+
+### Advanced Telegram limits
+
+<details>
+<summary>Request and media-operation controls</summary>
+
+| Setting | Default | Meaning |
+| --- | --- | --- |
+| Upload pipeline | 4 | Parallel Telegram upload-part requests within one document |
+| Requests per account | 8 | Shared upload, download and metadata requests |
+| Requests per second | 48 | App pacing ceiling, not a Telegram allowance |
+| Media operations per account | 3 | Telegram uploads/downloads; cached delivery does not use these slots |
+| Maximum queued operations | 256 | Waiting Telegram work before excess requests must retry |
+
+The server rejects invalid values and enforces
+[exact bounds](reference.md#performance-and-cache-settings).
+More slots share the same bandwidth; Telegram cooldowns still apply.
+Raise one limit only after measuring throughput and provider waits.
+
+</details>
+
+## Timezone
+
+Open **Configuration → Timezone**. The default is **Asia/Kolkata (IST)**.
+Use a valid timezone name such as `Europe/London` or `UTC`, then choose
+**Save changes**. This controls displayed dates and share expiry across the
+installation; stored timestamps remain UTC.
+
+## A modest server and a larger server
+
+Start with the defaults. On a small/shared server, consider one preload and one
+upload per bot. More RAM or disk does not automatically increase the configured
+cache budgets, and larger queues do not add processing capacity.
+
+Use the [load and capacity guide](performance-tuning.md) to read website stats,
+diagnose queues and choose cache, server or bot capacity for your workload.
+Change one limit at a time and compare the same workload before keeping it.
+
+## Deployment-only settings
+
+Use the private `.env` or hosting environment for initial setup and values
+without app controls, including MongoDB access, owner credentials, session
+policy, proxy trust and demo mode. See [Setup](setup.md) and the
+[variable reference](reference.md#configuration) for exact names and bounds.
+
+After editing Docker environment values, recreate the container or redeploy.
+Restarting the existing container alone does not load the edited values.
+Saved dashboard preferences still take precedence over startup defaults.
+
+MongoDB is required for every deployment. Invalid configuration or failed
+database access stops startup; no local database is substituted. A pristine
+database is initialized automatically.
+See [startup and recovery boundaries](architecture.md#lifecycle).
 
 ## Public demo mode
 
@@ -29,7 +207,7 @@ Use the same login form with either of these passwords:
 | Existing `ADMIN_PASSWORD` or `ADMIN_PASSWORD_HASH` | Visitor access: settings/management stay read-only; files outside Demo Files remain editable. |
 | Separate `DEMO_ADMIN_PASSWORD` or `DEMO_ADMIN_PASSWORD_HASH` | Administrator access to settings, backups and sample files, except database archive restoration. Keep this password private. |
 
-The full-access password is optional and only works while `DEMO_MODE=true`.
+The administrator password is optional and only works while `DEMO_MODE=true`.
 If omitted, every web login remains restricted. Use a different password of at
 least 12 characters, or supply an existing compatible Argon2id hash. See
 [password storage and reset](operations.md#forgotten-login-password). Hashes take
@@ -88,8 +266,9 @@ The protected identity survives a full-access user's rename or move. Keep it in
 the root with its default name so visitors can find it. Only a full-access user
 can remove its samples; demo mode does not supply or regenerate sample content.
 If the reserved folder is missing, the next demo startup recreates an empty one.
-If a different file or folder already has the name **Demo Files**, disable demo
-mode, rename that item and enable demo mode again; existing content is preserved.
+If another file or folder already uses the name **Demo Files**,
+[return to a private deployment safely](#return-to-a-private-deployment), rename
+that item, then enable demo mode again. Existing content is preserved.
 
 Use a separate MongoDB database, Telegram storage channel and credentials for
 the public demo. Visitors share one drive and can change or permanently delete
@@ -97,146 +276,18 @@ files outside the protected sample folder, so use disposable content there.
 Demo mode does not isolate visitors, reset content or add quotas. Closing a visitor's browser follows
 the [usual transfer rules](usage.md#what-upload-progress-means).
 
-To administer the demo, use its private administrator password. Before returning
-to a normal single-password deployment, replace any published visitor password
-with a private owner password, then set `DEMO_MODE=false` and recreate/redeploy.
-The usual owner password grants full access once demo mode is off. Demo variables
-cannot be changed in the app. See [password storage and reset](operations.md#forgotten-login-password).
+### Return to a private deployment
+
+1. Restrict public access and replace any published visitor credential with a
+   private owner password or hash. Follow the
+   [password-change instructions](operations.md#forgotten-login-password).
+2. Set `DEMO_MODE=false` and recreate/redeploy. Sign in with the private owner
+   password.
+
+The usual owner password grants full access once demo mode is off. The separate
+`DEMO_ADMIN_*` password does not become the normal owner credential. Demo variables
+cannot be changed in the app.
 
 Keep the public address and visitor sign-in instructions in the
 [public demo guide](usage.md#try-the-public-demo). Keep the full-access password
 private.
-
-## Change, discard or restore
-
-Open **Configuration → Cache settings / Transfer limits / Timezone**.
-
-| Action | Effect |
-| --- | --- |
-| **Save changes** | Applies this category; other categories remain drafts. |
-| **Discard changes** | Reloads this category's saved values. |
-| **Restore defaults** | Loads built-in values into the form; save to apply. |
-| **Parallel uploads** actions | Save, discard or restore concurrency separately. |
-
-Saved dashboard values override startup environment values. Restoring defaults
-does not remove environment variables or reset files, accounts, credentials or
-recovery keys. A stale save requires reloading; invalid values are rejected.
-An apply failure attempts rollback and reports if a restart is still needed.
-
-For Compose deployments, `REMOTE_DOWNLOAD_CONCURRENCY` sets the startup limit
-for simultaneous URL downloads (default **2**, range **1–8**). Set it in `.env`
-locally or in the hosting environment, then recreate/redeploy the container.
-A saved dashboard value still takes precedence.
-
-## Cache settings
-
-| Setting | Default | Meaning |
-| --- | --- | --- |
-| Memory cache | 256 MiB | Shared retained media; effective RAM budget may be smaller. 0 disables retention. |
-| Disk cache | 10 GiB | Disposable downloaded bytes; 0 disables it. |
-| Cache free-space floor | 1 GiB | Stop writes before disk drops below this floor. Dashboard minimum with caching enabled: 64 MiB. |
-| Disk retention | 24 hours | Time since last reuse; capacity pressure can evict sooner. |
-| Concurrent preloads | 2 | Manual/automatic jobs; consider 1 on a constrained server. |
-| Preload during playback | On | Warm bounded upcoming original audio/video. Downloads do not start extra warming. |
-
-**Regenerate all thumbnails** refreshes existing file covers in the background
-after confirmation. New uploads generate them automatically. See
-[progress, bandwidth and rebuild limits](thumbnails.md#rebuild-existing-thumbnails).
-
-Clearing/expiring cache keeps Telegram originals and MongoDB metadata.
-Active-stream RAM and upload staging have separate budgets but share host resources.
-Disabling playback warming retains requested-range read-ahead and manual
-**Preload file**. See [preloading](usage.md#preload-a-file-for-smoother-playback-and-downloads).
-
-## Transfer limits
-
-| Setting | Default | Meaning |
-| --- | --- | --- |
-| Simultaneous uploads per bot | 1 | Whole uploads per healthy bot; add eligible bots before raising this. |
-| File split size | 2000 MiB | Default/maximum for every account. Choose 1–2000 MiB; 0 uses 2000 MiB. |
-
-<details>
-<summary>Advanced Telegram limits</summary>
-
-| Setting | Default | Meaning |
-| --- | --- | --- |
-| Upload pipeline | 4 | Outstanding part requests within one document |
-| Requests per account | 8 | Shared upload/download/metadata requests |
-| Requests per second | 48 | App pacing ceiling, not a Telegram allowance |
-| Media operations per account | 3 | Origin uploads/downloads; cached reads do not use these slots |
-| Maximum queued operations | 256 | Waiting origin work before excess work must retry |
-
-The server rejects invalid values and enforces [bounds](reference.md#configuration).
-More slots share the same bandwidth; Telegram cooldowns always win.
-Raise one limit only after measuring throughput and provider waits.
-
-</details>
-
-## Upload size and available disk space
-
-These are technical capacity settings, not paid feature tiers. Self-hosted and
-[managed hosting](hosting.md#optional-managed-hosting) have the same TGDrive features.
-Hosting plans add no caps on file size or upload/download counts; configured
-limits, available disk and [server capacity](hosting.md#capacity-and-practical-limits)
-still apply.
-
-In **Transfer limits → Upload storage**, the owner can change:
-
-| Setting | Default | Meaning |
-| --- | --- | --- |
-| Maximum file size | 16 GiB | Largest new file; Telegram document splitting is separate. |
-| Temporary upload budget | 16 GiB | Combined reservation for all unfinished uploads. Must be at least the per-file maximum. |
-| Upload free-space reserve | 1 GiB | Space left free on the actual upload volume after unfinished uploads are accounted for. Minimum configurable reserve is 64 MiB. |
-
-**Uploading a 32 GiB file?** Raise **both** file maximum and temporary budget to
-at least 32 GiB. A 64 GiB budget can reserve two such files if real space permits.
-Both controls support up to 2048 GiB. Existing admissions retain their size;
-shrinking below active reservations is rejected.
-
-Browser uploads and full-speed URL imports reserve the whole file and check real
-free space, including other uploads' unwritten reservations. Full-speed unknown-length
-URL imports reserve the admitted maximum; provide Content-Length or lower the file
-limit if this prevents admission. Waiting URL sources reserve smaller windows.
-**Transfer limits → URL downloads** controls simultaneous full-speed imports
-(default **2**, range **1–8**); see [URL intake](performance.md#url-import-intake)
-for slow queued connections, storage waits and link-expiry limits. Space is rechecked during receipt, but other disk
-users can still fill it. Browser disk-full failures retain the acknowledged resume
-offset; URL retrieval may restart from zero.
-These limits describe local staging, not Telegram storage capacity.
-
-## A modest server and a larger server
-
-Test an upload, cold playback, a seek and repeat playback before tuning.
-On small/shared servers, consider one preload and one upload per bot.
-Check actual container limits and other disk users, not just host specifications.
-
-| Observation | Investigate before increasing limits |
-| --- | --- |
-| Container RAM approaches its limit | Lower RAM cache/concurrency and inspect active stream/process usage. |
-| CPU stays near capacity | Media decoding/preview work and concurrent operations; more requests may worsen it. |
-| Telegram work waits or accounts cool down | Account eligibility, provider waits and shared request limits. |
-| Cold playback is slow but repeat access is fast | Telegram route/latency and cache reuse, not browser cache alone. |
-| URL upload receives data but viewers are slow | Separate server ingress from outbound/viewer traffic. |
-| Disk free space falls | Upload staging, cache, logs and platform images; raising cache worsens it. |
-
-<details>
-<summary>Optional larger-server experiment</summary>
-
-On an 8 vCPU / 16 GiB RAM / 300 GiB disk server with ample actual headroom,
-try 2 GiB RAM cache, then 4 GiB; 100–150 GiB disk cache; and a 20–30 GiB
-free-space floor. Leave Telegram request limits unchanged initially.
-Measure each change on your own host; these values are examples, not defaults
-or speed guarantees.
-
-</details>
-
-Use **Monitor → Performance** and [performance diagnostics](performance.md)
-to compare resources, provider waits, cold reads and cache reuse.
-
-## Timezone and deployment-only settings
-
-Timezone defaults to **Asia/Kolkata (IST)**. Use an IANA zone or UTC;
-stored timestamps remain UTC. Dashboard upload-storage changes affect new
-admissions immediately. Deployment-only environment changes need restart/redeploy.
-See [Setup](setup.md) for credentials/storage and the
-[variable reference](reference.md#configuration) for exact names and bounds.

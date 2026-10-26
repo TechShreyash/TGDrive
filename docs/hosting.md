@@ -2,14 +2,22 @@
 
 [Docs home](README.md) · [Setup](setup.md) · [Using TGDrive](usage.md)
 
-Read the [new-user guide and FAQ](new-user-guide.md) before storing important
-files. Its privacy, channel and backup responsibilities also apply to managed hosting.
+**Must read before using TGDrive: [New-user guide and FAQs](new-user-guide.md).**
+Its privacy, channel and backup responsibilities also apply to managed hosting.
 
 **TGDrive is completely free and open source.** Anyone can use, modify and deploy
 it under the [MIT License](../LICENSE). All features are available whether you
 run it on your own computer, choose your own server or ask us to manage hosting.
 
-[Compare local and server use](#local-computer-or-server) · [Optional managed hosting](#optional-managed-hosting) · [Prepare your accounts](#what-you-prepare) · [Capacity and limits](#capacity-and-practical-limits)
+**Contents**
+
+- [Local computer or server](#local-computer-or-server)
+- [Optional managed hosting](#optional-managed-hosting)
+- [What you prepare](#what-you-prepare)
+- [Server plans and customization](#server-plans-and-customization)
+- [Capacity and practical limits](#capacity-and-practical-limits)
+- [Keep control of your drive](#keep-control-of-your-drive)
+- [Help improve TGDrive](#help-improve-tgdrive)
 
 ## Local computer or server
 
@@ -86,12 +94,13 @@ credentials privately to us for managed setup.
 | MongoDB Atlas | A cluster, dedicated database, database user with read/write access and connection URI. Allow the TGDrive server's IP in Network Access. [MongoDB steps](setup.md#1-prepare-mongodb) |
 | Telegram application | Your API ID and API hash from Telegram's application page. [Telegram steps](setup.md#2-prepare-telegram) |
 | Private Telegram channel | A dedicated private broadcast channel, its numeric ID, message auto-delete off, and no unrelated message management |
-| Storage bot | A bot you create through BotFather and its token; add each storage bot as a channel administrator with **Post Messages** and **Delete Messages** |
+| Main bot | A bot you create through BotFather and its token; add it as a channel administrator with **Post Messages** and **Delete Messages**. It initially provides storage and the private-chat upload interface. |
+| Allowed Telegram users | Your numeric Telegram user ID, plus any other users allowed to send files to your main bot. [Find your ID](setup.md#find-your-telegram-user-id) |
 | Owner sign-in | A private TGDrive web password, kept separately from the public demo password |
 
-For optional Telegram chat uploads, also configure the main bot and administrator
-Telegram user IDs. Premium account sign-in and a separate backup channel are
-optional, not prerequisites for ordinary storage or large split files. Use the
+Add extra storage bots later through **Management → Connections**. Premium
+account sign-in and a separate backup channel are optional, not prerequisites
+for ordinary storage or large split files. Use the
 normal authorization flow if you choose Premium; basic managed deployment uses
 the credentials above, not your main Telegram account's login code/password.
 [Bot uploads](usage.md#optional-telegram-bot-interface) ·
@@ -109,9 +118,6 @@ the server, and confirm a database backup before relying on recovery. Follow the
 [recovery kit guide](backup-recovery.md#keep-the-mongodb-recovery-kit-outside-the-server).
 
 ## Server plans and customization
-
-<details>
-<summary>Optional server-only plans and temporary discounted prices</summary>
 
 These are **temporary launch-discount prices** for a server you manage yourself,
 in INR per month. Contact us for current availability and pricing.
@@ -133,9 +139,11 @@ Managed capacity upgrades are quoted separately from this server-only table.
 For self-managed deployment, follow [Setup](setup.md); the
 [self-hosted Coolify option](setup.md#coolify) can help manage deployment.
 
-</details>
-
 ## Capacity and practical limits
+
+Before choosing a larger server, use the
+[load and capacity guide](performance-tuning.md) to match CPU, RAM, disk, network
+or Telegram clients to the bottleneck shown by your workload.
 
 The same limits and scheduling rules apply on localhost and servers. The hosting
 offer adds no paid file-size or transfer-count restriction; it does not remove

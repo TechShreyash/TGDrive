@@ -1,7 +1,7 @@
 <h1><img src="../website/public/static/brand/tgdrive-icon.svg" alt="" width="36" height="36"> TGDrive documentation</h1>
 
-**New here? Read the [new-user guide and FAQ](new-user-guide.md) first** to understand
-how storage works, its limits and how to protect your files.
+**Must read before using TGDrive: [New-user guide and FAQs](new-user-guide.md).**
+Learn the basics and find answers to common questions about using TGDrive.
 Then [try the public demo](usage.md#try-the-public-demo) or follow [Setup](setup.md).
 These guides describe TGDrive 2.0.0 with MongoDB. The setup guide explains the
 available development-source and release options.
@@ -11,7 +11,7 @@ visual tour of the file browser, transfers, previews, sharing and administration
 
 | I want to… | Read |
 | --- | --- |
-| Understand storage, privacy, account risks and everyday do/don't rules | [New-user guide and expandable FAQ](new-user-guide.md) |
+| Learn the basics and find answers to common questions | [New-user guide and FAQs](new-user-guide.md) (**must read**) |
 | Try TGDrive before hosting it | [Live demo and password](usage.md#try-the-public-demo) |
 | Compare local use, access on the go and background processing | [Local computer or server?](hosting.md#local-computer-or-server) |
 | Run locally on Windows, macOS or Linux | [Docker installation](setup.md#before-you-start) · [TGDrive setup](setup.md#4-start-locally) |
@@ -21,7 +21,8 @@ visual tour of the file browser, transfers, previews, sharing and administration
 | Offer a public demo with settings locked | [Public demo mode](configuration.md#public-demo-mode) |
 | Upload, browse, preview or share | [User guide](usage.md) |
 | Read ebooks/comics or understand covers | [Readers](reading.md) · [Thumbnails and rebuilds](thumbnails.md) |
-| Change settings or improve speed | [Configuration](configuration.md) · [Performance](performance.md) |
+| Change settings or look up cache and transfer policies | [Configuration](configuration.md) · [Performance policies](performance.md) |
+| Diagnose load, queues or cache needs before upgrading | [Load and capacity guide](performance-tuning.md) |
 | Restart, upgrade or fix a problem | [Operations](operations.md) |
 | Protect files or recover a drive | [Backup & recovery](backup-recovery.md) |
 

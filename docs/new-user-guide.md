@@ -1,11 +1,25 @@
-# New-user guide: read before storing your files
+# New-user guide and FAQs
 
 [Docs home](README.md) · [Setup](setup.md) · [How to use TGDrive](usage.md) · [Backup & recovery](backup-recovery.md)
 
-Start here before storing important files, whether you run TGDrive yourself or
-use managed hosting. This guide explains where your data lives, what can keep
-the drive from working and what you need for recovery. Installation steps live
-in [Setup](setup.md).
+**Must read for everyone using or running TGDrive, including managed hosting.**
+
+Learn how the drive works, prepare for your first upload and find
+answers about everyday use, storage, privacy and recovery. For installation
+steps, follow [Setup](setup.md).
+
+**Contents**
+
+- [What TGDrive is](#what-tgdrive-is)
+- [The essentials everyone must know](#the-essentials-everyone-must-know)
+- [Before your first important upload](#before-your-first-important-upload)
+- [Do and don't](#do-and-dont)
+- [Frequently asked questions](#frequently-asked-questions)
+  - [Basics and storage limits](#basics-and-storage-limits)
+  - [Privacy and backups](#privacy-and-backups)
+  - [Uploading and using files](#uploading-and-using-files)
+  - [Access, maintenance and recovery](#access-maintenance-and-recovery)
+  - [Resources, deletion and support](#resources-deletion-and-support)
 
 ## What TGDrive is
 

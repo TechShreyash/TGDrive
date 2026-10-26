@@ -144,7 +144,7 @@ def _checked_settings(
                 row.credential.get_secret_value() for row in rows if row.kind == "user"
             ),
             "SESSION_SECRET": credentials["session_secret"],
-            "MAIN_BOT_TOKEN": None,
+            "MAIN_BOT_TOKEN": None,  # nosec B105 # None clears the credential.
             "managed_revision": document.revision if document is not None else 0,
             "managed_client_ids": tuple(row.id for row in rows),
             "managed_client_labels": tuple(row.label for row in rows),

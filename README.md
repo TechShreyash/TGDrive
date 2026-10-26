@@ -16,34 +16,30 @@ channel, organize folders, stream videos and read documents in your browser.
 Upload large files without splitting them yourself, and share files or folders
 through links you can set to expire or revoke.
 
-**[Try the demo](#try-the-public-demo)** · **[Set up your drive](docs/setup.md)** · **[Explore screenshots and videos](docs/showcase.md)**
+**[Try the demo](#try-the-public-demo)** · **[Set up TGDrive](docs/setup.md)** · **[Explore screenshots and videos](docs/showcase.md)**
 
-New here? Start with the [storage, privacy and backup essentials](docs/new-user-guide.md).
+> [!IMPORTANT]
+> **Must read before using TGDrive: [New-user guide and FAQs](docs/new-user-guide.md).**
+> Essential for everyone using or running TGDrive, including managed hosting:
+> storage limits, upload status, privacy and backups.
 
 [![TGDrive desktop file browser with sample folders and files](docs/assets/drive-overview.png)](docs/showcase.md)
 
 ## Features
 
 - **No fixed total storage limit.** TGDrive does not cap the total space your files use in Telegram.
-- **Upload large files without manual splitting.** TGDrive handles the Telegram parts and presents them as one file for playback and downloading.
-- **Play videos and audio in your browser.** Stream supported media directly from your drive.
-- **View documents, photos, ebooks and comics.** Open images, PDFs and text, and read EPUB ebooks and CBZ/CBR comics in your browser.
-- **Resumable file and folder uploads.** Upload whole folders with their structure preserved, and resume interrupted device uploads by reselecting the originals.
+- **Upload files larger than 2 GB without manual splitting.** TGDrive splits the upload into smaller parts and presents it as one file for playback and downloading.
+- **Resumable file and folder uploads.** Preserve folder structure and resume interrupted device uploads by reselecting the originals. Once TGDrive confirms it has received all files, Telegram uploading can finish with the tab closed while the app runs.
 - **Import from URLs or Telegram.** Paste a direct file URL, or send and forward files to your configured Telegram bot, to add them to your drive.
 - **Organize and find files.** Create folders, search by name, star favorites, switch between list and grid views, and restore items from Trash.
+- **Play videos and audio in your browser.** Stream supported media, with subtitles, audio-track selection and chapters when available.
+- **View documents, photos, ebooks and comics.** Open images, PDFs and text, and read EPUB ebooks and CBZ/CBR comics in your browser.
 - **Share files and folders with a link.** Give others read-only access, choose an expiry and revoke access when needed.
+- **Prepare files for smoother access.** Preload before watching or sharing. While file data stays cached, repeat visits and shared-link viewers can reuse it without downloading it from Telegram again.
+- **Follow transfers and server activity.** Track progress, search transfer history, and monitor server resources, traffic, Telegram activity and cache use.
 - **Backups and recovery.** Save encrypted backups of your file list, folders and settings, and optionally copy completed files to a separate Telegram channel.
 
-Individual uploads default to **16 GiB per file**. You can raise the file limit
-and temporary upload budget when your server has enough free disk space.
-[File-size and storage settings →](docs/configuration.md#upload-size-and-available-disk-space)
-
-For device uploads, keep the tab open until **You can close this tab** appears,
-and keep the originals until **Completed**.
-[Upload status meanings →](docs/usage.md#can-i-close-the-tab)
-
-**Keep another copy of important files outside Telegram.** Account or channel
-restrictions can still make stored files unavailable.
+[Explore features and workflows in the user guide →](docs/usage.md)
 
 ## Try the public demo
 
@@ -119,7 +115,7 @@ and ownership details, or [contact TechShreyash](https://t.me/TechShreyash).
 
 | What you want to do | Where to go |
 | --- | --- |
-| Understand storage, privacy and what to protect | [New-user guide and FAQ](docs/new-user-guide.md) |
+| Learn the basics and find answers to common questions | [New-user guide and FAQs](docs/new-user-guide.md) (**must read**) |
 | Upload, organize, preview and share | [User guide](docs/usage.md) |
 | Back up your drive or recover after a failure | [Backup & recovery](docs/backup-recovery.md) |
 | Change settings, maintain the app or fix a problem | [Configuration](docs/configuration.md) · [Operations](docs/operations.md) |

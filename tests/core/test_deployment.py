@@ -104,13 +104,15 @@ def test_new_container_can_generate_keys_before_explicit_initialization(
 ):
     from tgdrive.storage import mongo
 
+    monkeypatch.delenv("BOT_TOKENS", raising=False)
     for key, value in {
         "TGDRIVE_AUTO_SECRETS": "true",
         "MONGODB_URI": "mongodb://synthetic.invalid",
         "DATA_DIR": str(tmp_path),
         "API_ID": "12345",
         "API_HASH": "a" * 32,
-        "BOT_TOKENS": "123456:" + "x" * 30,
+        "MAIN_BOT_TOKEN": "123456:" + "x" * 30,
+        "TELEGRAM_ADMIN_IDS": "12345",
         "STORAGE_CHANNEL": "-1001234567890",
         "ADMIN_PASSWORD": "new synthetic owner password",
         "ADMIN_PASSWORD_HASH": "",
@@ -133,6 +135,8 @@ def test_new_container_can_generate_keys_before_explicit_initialization(
     assert first.session_secret == second.session_secret
     assert first.mongodb_backup_key == second.mongodb_backup_key
     assert first.admin_password_hash is None
+    assert first.bot_tokens == (first.main_bot_token_value,)
+    assert first.telegram_admin_ids == (12345,)
 
 
 def test_existing_drive_marker_prevents_key_generation_for_an_empty_database(
@@ -331,7 +335,8 @@ def test_hosted_and_local_compose_resolve_without_real_credentials(tmp_path):
         "MONGODB_URI": "mongodb://synthetic.invalid",
         "API_ID": "12345",
         "API_HASH": "a" * 32,
-        "BOT_TOKENS": "123456:" + "x" * 30,
+        "MAIN_BOT_TOKEN": "123456:" + "x" * 30,
+        "TELEGRAM_ADMIN_IDS": "12345",
         "STORAGE_CHANNEL": "-1001234567890",
         "ADMIN_PASSWORD": "synthetic owner password",
         "SESSION_SECRET": "s" * 48,
@@ -341,6 +346,7 @@ def test_hosted_and_local_compose_resolve_without_real_credentials(tmp_path):
         "".join(f"{key}={value}\n" for key, value in fixture.items())
     )
     environment = {**os.environ, **fixture}
+    environment.pop("BOT_TOKENS", None)
     environment.pop("COMPOSE_FILE", None)
     environment.pop("BIND_ADDRESS", None)
     environment.pop("PORT", None)
@@ -383,6 +389,9 @@ def test_hosted_and_local_compose_resolve_without_real_credentials(tmp_path):
     assert server["environment"]["TGDRIVE_PROXY_HOSTS"] == ""
     assert server["restart"] == "unless-stopped"
     for deployment in (hosted, local, server):
+        assert deployment["environment"]["MAIN_BOT_TOKEN"] == fixture["MAIN_BOT_TOKEN"]
+        assert deployment["environment"]["TELEGRAM_ADMIN_IDS"] == "12345"
+        assert "BOT_TOKENS" not in deployment["environment"]
         assert "CACHE_MEMORY_BYTES" not in deployment["environment"]
         assert "AUTO_PRELOAD" not in deployment["environment"]
         assert deployment["environment"]["DATA_DIR"] == "/app/data"
@@ -405,6 +414,20 @@ def test_hosted_and_local_compose_resolve_without_real_credentials(tmp_path):
         rendered = config(*files)["environment"]
         assert {key: rendered[key] for key in overrides} == overrides
 
+    # Old .env files remain usable without enabling the bot interface.
+    legacy = dict(fixture)
+    legacy["BOT_TOKENS"] = legacy.pop("MAIN_BOT_TOKEN")
+    legacy.pop("TELEGRAM_ADMIN_IDS")
+    (tmp_path / ".env").write_text(
+        "".join(f"{key}={value}\n" for key, value in legacy.items())
+    )
+    environment.pop("MAIN_BOT_TOKEN", None)
+    environment.pop("TELEGRAM_ADMIN_IDS", None)
+    rendered = config("compose.yaml")["environment"]
+    assert rendered["BOT_TOKENS"] == legacy["BOT_TOKENS"]
+    assert rendered["MAIN_BOT_TOKEN"] == ""
+    assert rendered["TELEGRAM_ADMIN_IDS"] == ""
+
 
 def test_environment_template_contains_only_required_bootstrap_values():
     root = Path(__file__).resolve().parents[2]
@@ -417,7 +440,8 @@ def test_environment_template_contains_only_required_bootstrap_values():
         "MONGODB_URI",
         "API_ID",
         "API_HASH",
-        "BOT_TOKENS",
+        "MAIN_BOT_TOKEN",
+        "TELEGRAM_ADMIN_IDS",
         "STORAGE_CHANNEL",
         "ADMIN_PASSWORD",
     }

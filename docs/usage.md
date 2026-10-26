@@ -2,15 +2,37 @@
 
 [Docs home](README.md) · [Setup](setup.md) · [Help with problems](operations.md#troubleshooting)
 
-**First time using TGDrive? Read the [new-user guide and FAQ](new-user-guide.md)**
-for essential limits, channel rules, privacy and backup responsibilities.
+**Must read before using TGDrive: [New-user guide and FAQs](new-user-guide.md).**
+It covers essential limits, channel rules, privacy and backup responsibilities.
 
 Upload in **My Files**, follow progress in **Transfers**, and share only what
 you choose.
 
-[Public demo](#try-the-public-demo) · [Upload](#upload-files-or-folders) · [Browse](#browse-and-organize) · [Preview](#open-preview-and-download) · [Preload](#preload-a-file-for-smoother-playback-and-downloads) · [Share](#share-and-revoke)
-
 Prefer a visual introduction? [Open the gallery and walkthrough videos](showcase.md).
+
+**Contents**
+
+- [Use several devices](#use-several-devices)
+- [Try the public demo](#try-the-public-demo)
+- [Find your way around](#find-your-way-around)
+- [Upload files or folders](#upload-files-or-folders)
+  - [Upload speed and queue](#upload-speed-and-queue)
+  - [Files above 2 GB](#files-above-2-gb)
+  - [What upload progress means](#what-upload-progress-means)
+  - [Can I close the tab?](#can-i-close-the-tab)
+- [Transfer history](#transfer-history)
+- [Browse and organize](#browse-and-organize)
+  - [Starred files and folders](#starred-files-and-folders)
+  - [Search](#search)
+- [Open, preview, and download](#open-preview-and-download)
+- [Preload a file for smoother playback and downloads](#preload-a-file-for-smoother-playback-and-downloads)
+  - [Parallel and resumed downloads](#parallel-and-resumed-downloads)
+- [Share and revoke](#share-and-revoke)
+- [Trash and permanent deletion](#trash-and-permanent-deletion)
+- [Import from a URL](#import-from-a-url)
+- [Settings and connections](#settings-and-connections)
+  - [Storage and backup](#storage-and-backup)
+  - [Upload through your Telegram bot](#optional-telegram-bot-interface)
 
 ## Use several devices
 
@@ -566,6 +588,11 @@ Use **Management → Connections** for accounts/API credentials and
 | **Add storage bot** | Connect another administrator bot in the same channel |
 | **Connect Premium account** | Sign in with a phone number, Telegram code and optional two-step password |
 
+For an additional storage bot, create it in BotFather and give it administrator
+access to the same private channel with **Post Messages** and **Delete Messages**,
+then choose **Add storage bot**. Manage storage accounts here rather than adding
+tokens to your deployment configuration.
+
 Refresh runs in the background, skips disabled accounts and retries temporary
 failures with Telegram waits. Its confirmation means the checks were requested;
 watch each connection's result for verification. Keep at least one working
@@ -596,12 +623,15 @@ Reconnect the same MongoDB after losing the local installation. For database
 loss, follow [backup and recovery](backup-recovery.md).
 
 <details>
-<summary>Optional Telegram bot interface</summary>
+<summary>Upload through your Telegram bot</summary>
 
 <a name="optional-telegram-bot-interface"></a>
 
-Set `MAIN_BOT_TOKEN` and `TELEGRAM_ADMIN_IDS` to enable the optional bot interface.
-Only those administrators can use it, in a private chat with the bot.
+The standard new-drive setup configures `MAIN_BOT_TOKEN` and
+`TELEGRAM_ADMIN_IDS`. Open that bot in a **private chat**; only the listed Telegram
+users can use it. Existing installations using only `BOT_TOKENS` can keep working
+without this interface, or enable it by adding a main bot token and allowed user
+IDs to their deployment configuration and restarting TGDrive.
 
 1. Open **Configuration → Transfer limits → Bot uploads** on the website.
 2. Click **Change folder**, browse to a destination, then click **Use this folder**.

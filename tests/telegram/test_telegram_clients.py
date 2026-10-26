@@ -220,6 +220,35 @@ def test_optional_bot_mode_has_separate_update_session(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
+async def test_main_bot_bootstraps_storage_with_a_separate_bot_mode_session(
+    tmp_path: Path,
+) -> None:
+    value = settings(
+        tmp_path,
+        BOT_TOKENS="",
+        STRING_SESSIONS="",
+        MAIN_BOT_TOKEN="123456:" + "x" * 30,
+        TELEGRAM_ADMIN_IDS="1",
+    )
+    pool = clients.build_client_pool(value)
+    bot = clients.build_bot_mode_client(value)
+    assert bot is not None
+    try:
+        await pool.start()
+        await bot.start()
+        assert {row.name for row in await pool.status()} == {"storage-bot-123456"}
+        assert bot.name == "bot-mode-123456"
+        assert {item.options["receive_updates"] for item in NativeClient.instances} == {
+            False,
+            True,
+        }
+        assert len({item.session.filename for item in NativeClient.instances}) == 2
+    finally:
+        await bot.stop()
+        await pool.stop()
+
+
+@pytest.mark.asyncio
 async def test_optional_session_failure_does_not_disable_working_storage_bots(
     tmp_path: Path,
 ) -> None:

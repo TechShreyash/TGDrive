@@ -1,6 +1,6 @@
 # Streaming validation — 18 October 2026
 
-[Docs home](README.md) · [Findings](#findings) · [Measurements](#fresh-browser-controls) · [Coverage](#player-behavior-and-coverage) · [Current performance guide](performance.md)
+[Docs home](README.md) · [Current performance guide](performance.md)
 
 This dated report reproduces a 17 MB playback failure, separating browser cache,
 server cache and delivery protocol. Results and deployment status describe
@@ -9,6 +9,14 @@ server cache and delivery protocol. Results and deployment status describe
 > [!NOTE]
 > Live browser checks and synthetic server checks are identified separately below.
 > These results establish behavior on the tested paths, not performance on every network or device.
+
+**Contents**
+
+- [Findings](#findings)
+- [Fresh-browser controls](#fresh-browser-controls)
+- [Server-side integrity and backpressure](#server-side-integrity-and-backpressure)
+- [Player behavior and coverage](#player-behavior-and-coverage)
+- [Deployment and limits](#deployment-and-limits)
 
 ## Findings
 

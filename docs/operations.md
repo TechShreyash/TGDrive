@@ -1,9 +1,31 @@
 # Run, protect and recover TGDrive
 
-[Docs home](README.md) · [Run](#run-and-monitor) · [Recover](#after-a-shutdown-crash-or-network-loss) · [Troubleshoot](#troubleshooting) · [Backup guide](backup-recovery.md)
+[Docs home](README.md) · [Backup guide](backup-recovery.md)
 
 > [!IMPORTANT]
 > Keep **one app instance and one worker per drive**. Preserve the database, secrets and persistent volumes across restarts and updates.
+
+**Contents**
+
+- [Run and monitor](#run-and-monitor)
+  - [Read useful logs](#read-useful-logs)
+- [After a shutdown, crash or network loss](#after-a-shutdown-crash-or-network-loss)
+- [If someone changed the Telegram channel](#if-someone-changed-the-telegram-channel)
+- [What is saved where](#what-is-saved-where)
+- [When a hosting plan expires](#when-a-hosting-plan-expires)
+- [Reopen after losing the local installation](#reopen-after-losing-the-local-installation)
+- [Encrypted Telegram backups](#encrypted-telegram-backups)
+- [Emergency database restore](#emergency-database-restore)
+- [Connection changes](#connection-changes)
+  - [Revoked tokens, removed sessions and lost channel access](#revoked-tokens-removed-sessions-and-lost-channel-access)
+- [HTTPS and private configuration](#https-and-private-configuration)
+  - [Can TGDrive run over HTTP?](#can-tgdrive-run-over-http)
+- [Forgotten login password](#forgotten-login-password)
+- [Upgrade and rollback](#upgrade-and-rollback)
+- [Troubleshooting](#troubleshooting)
+- [Disposable media cache and preloads](#disposable-media-cache-and-preloads)
+  - [Tune a busy installation](#tune-a-busy-installation)
+- [HTTP delivery and proxy configuration](#http-delivery-and-proxy-configuration)
 
 ## Run and monitor
 
@@ -155,7 +177,10 @@ bytes still need their originals.
    [copy the configuration template](setup.md#3-configure-your-drive) using the
    command for your system. Use the existing values below.
 
-2. Set the **existing** `MONGODB_URI` and `MONGODB_DATABASE`. Compose also requires the original `API_ID`, `API_HASH`, `BOT_TOKENS` and `STORAGE_CHANNEL`.
+2. Set the **existing** `MONGODB_URI`, `MONGODB_DATABASE`, `API_ID`, `API_HASH` and
+   `STORAGE_CHANNEL`. Keep the original `MAIN_BOT_TOKEN` and `TELEGRAM_ADMIN_IDS`
+   if configured. Older `BOT_TOKENS` configurations remain supported; do not
+   replace an existing list just to reinstall. Saved Connections are reused.
 3. Remove the example password: set `ADMIN_PASSWORD=` and leave `ADMIN_PASSWORD_HASH`, `SESSION_SECRET` and `MONGODB_BACKUP_KEY` blank/omitted to reuse saved bootstrap credentials. If unavailable, supply the originals from your recovery kit; do not generate replacements.
 4. Set `COOKIE_SECURE=false` for local HTTP, `true` for HTTPS. Start normally:
 
@@ -180,6 +205,11 @@ Use [Backup & recovery](backup-recovery.md) to set up independent file copies, s
 
 Manage accounts in **Connections**, then restart. Keep an enabled bot with channel permissions. Changing channel ID does not move files; a different drive needs its own database.
 
+`MAIN_BOT_TOKEN` separately controls the Telegram chat interface. If a bot serves
+both storage and chat uploads and its token changes, update its saved token in
+**Connections** and `MAIN_BOT_TOKEN` in the deployment, then restart/redeploy.
+Changing the deployment variable alone does not replace saved storage credentials.
+
 Finish/cancel unfinished or failed transfers before changing account identities, enabled states or API credentials. While work is pending, credential repair must replace only the token/session for the **same account**, leaving those other settings unchanged. TGDrive verifies its identity.
 
 ### Revoked tokens, removed sessions and lost channel access
@@ -203,6 +233,30 @@ The independent backup bot has separate credentials and permissions; check its [
 ## HTTPS and private configuration
 
 For public access, use an HTTPS reverse proxy, `COOKIE_SECURE=true`, a private app port and trusted-proxy settings limited to your actual proxy. Preserve authorization/cache headers; avoid proxy/CDN caching of private responses or share URLs. Keep `ALLOW_PRIVATE_REMOTE_URLS=false` unless internal-network imports are intentional.
+
+### Can TGDrive run over HTTP?
+
+**Yes, on localhost.** The local Compose setup serves
+`http://127.0.0.1:8000` with `COOKIE_SECURE=false`. Browsers treat localhost and
+loopback addresses as [secure contexts](https://developer.mozilla.org/en-US/docs/Web/Security/Defenses/Secure_Contexts),
+so the required browser APIs remain available.
+
+**Use HTTPS when opening TGDrive from another device**, including over a LAN.
+The current frontend uses secure-context browser APIs for upload IDs, resume
+verification and media actions. An ordinary HTTP server IP or `sslip.io` address
+does not qualify; these features can fail even with `COOKIE_SECURE=false`.
+Plain HTTP also leaves passwords, sessions and file traffic unencrypted.
+The hosted Compose file sets secure cookies explicitly; a dashboard or `.env`
+value alone does not override that setting.
+
+[Coolify's generated `sslip.io` address](https://coolify.io/docs/core/networking/domains)
+uses HTTP. Automatic HTTPS certificate issuance for the shared domain can hit
+[Let's Encrypt certificate limits](https://letsencrypt.org/docs/rate-limits/).
+These limits affect **creating certificates**, rather than requests to your
+TGDrive pages or files. A valid certificate can serve HTTPS normally; use your own
+domain with a valid certificate for public TGDrive access.
+
+### Protect a public deployment
 
 Use a password-manager-generated password or unique passphrase of at least 15
 characters, and protect Telegram/MongoDB accounts. TGDrive accepts a 12-character
@@ -290,6 +344,9 @@ Use owner controls to inspect coverage, cancel preloads, evict files or clear di
 When stopped, `DATA_DIR/media-cache` can be removed and rebuilt on demand. **Never clear upload receipts, staged payloads or backup sources as cache.** Host access can expose cache contents; HTTP cache hits still require current authorization.
 
 ### Tune a busy installation
+
+Use the [load and capacity guide](performance-tuning.md) to investigate queues,
+cache reuse and server/bot capacity before increasing limits.
 
 Check headroom and queues first, stop unnecessary preloads, then change one limit at a time. Compare warm/cold and shared/unrelated-file reads. Supported web preferences apply live; environment changes require recreation, credentials require restart.
 

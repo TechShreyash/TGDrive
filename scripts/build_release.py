@@ -90,6 +90,7 @@ PUBLIC_DOCS = (
     "docs/roadmap.md",
     "docs/reference.md",
     "docs/performance.md",
+    "docs/performance-tuning.md",
     "docs/streaming-validation-2026-10-18.md",
     "docs/assets/README.md",
     "docs/assets/audio-preview.png",

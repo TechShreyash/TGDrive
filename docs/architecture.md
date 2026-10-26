@@ -7,7 +7,29 @@ Where files live, which work survives a restart, and how one drive stays consist
 For the user-facing screens around these flows, see the
 [visual walkthroughs](showcase.md).
 
-[Data and identity](#authoritative-data-and-identity) · [Transfers](#transfer-pipeline) · [Recovery](#database-safety-copies-and-security)
+**Contents**
+
+- [The short version](#the-short-version)
+- [Components](#components)
+- [Authoritative data and identity](#authoritative-data-and-identity)
+  - [How a write becomes visible](#how-a-write-becomes-visible)
+- [Lifecycle](#lifecycle)
+- [Account identity and selection](#account-identity-and-selection)
+  - [Names and Refresh](#names-and-refresh)
+- [Connection management](#connection-management)
+- [Demo access boundaries](#demo-access-boundaries)
+- [Transfer pipeline](#transfer-pipeline)
+  - [From a browser to one drive file](#from-a-browser-to-one-drive-file)
+  - [Adaptive device upload concurrency](#adaptive-device-upload-concurrency)
+  - [Bounds and retries](#bounds-and-retries)
+  - [Cancellation and destination changes](#cancellation-and-destination-changes)
+  - [Finished history](#finished-history)
+- [Telegram transport and file responses](#telegram-transport-and-file-responses)
+- [Media and performance](#media-and-performance)
+- [Database safety copies and security](#database-safety-copies-and-security)
+  - [Independent backup pacing and verification](#independent-backup-pacing-and-verification)
+  - [Shared-link identity and re-copying](#shared-link-identity-and-re-copying)
+- [Diagnostic history](#diagnostic-history)
 
 ## The short version
 

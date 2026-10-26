@@ -37,6 +37,18 @@ temporary demonstration link was revoked after recording.
 
 </details>
 
+**Contents**
+
+- [Browse and organize](#browse-and-organize)
+- [Upload and follow transfers](#upload-and-follow-transfers)
+- [Read and preview](#read-and-preview)
+- [Share selected content](#share-selected-content)
+- [Restore from Trash](#restore-from-trash)
+- [Preload and monitor](#preload-and-monitor)
+- [Configure your drive](#configure-your-drive)
+- [Connections and backups](#connections-and-backups)
+- [Workflows beyond these recordings](#workflows-beyond-these-recordings)
+
 ## Browse and organize
 
 Start in **My Files**. Open a folder, switch between **List** and **Grid**, and
@@ -281,7 +293,7 @@ keys outside the server. [Backup and recovery →](backup-recovery.md)
 
 | Feature | How to use it |
 | --- | --- |
-| Optional Telegram bot uploads | Configure the bot and administrator IDs, choose a destination in **Transfer limits → Bot uploads**, then send files privately to the bot. [Bot instructions](usage.md#optional-telegram-bot-interface) |
+| Telegram bot uploads | The standard setup configures your main bot and allowed users. Choose a destination in **Transfer limits → Bot uploads**, then send files privately to the bot. [Bot instructions](usage.md#optional-telegram-bot-interface) |
 | Multiple devices | Log in using the same owner password. Sessions are independent; logging out closes only that session. [Device access](usage.md#use-several-devices) |
 | Protected public samples | Browse **Demo Files**; create disposable uploads in **My Files**. Configuration and Management changes remain locked for visitors. [Demo guide](usage.md#try-the-public-demo) |
 | Background processing | Once server receipt is accepted, uploads can finish without the tab. URL imports and manual preloads also continue while TGDrive runs. [When to close the tab](usage.md#can-i-close-the-tab) |

@@ -87,6 +87,7 @@ def test_source_archive_excludes_local_state_and_private_documents(
         for public_asset in (
             "docs/backup-recovery.md",
             "docs/configuration.md",
+            "docs/performance-tuning.md",
             "docs/assets/README.md",
             "docs/assets/drive-overview.png",
             "docs/assets/upload-progress.png",

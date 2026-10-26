@@ -84,7 +84,15 @@ export async function loadBookImage(
             const mime =
                 response.headers.get("Content-Type")?.split(";")[0].trim() ||
                 "";
-            total = Number(response.headers.get("Content-Length")) || 0;
+            const encoding = response.headers
+                .get("Content-Encoding")
+                ?.trim()
+                .toLowerCase();
+            // Fetch decodes the body, but Content-Length counts encoded bytes.
+            total =
+                !encoding || encoding === "identity"
+                    ? Number(response.headers.get("Content-Length")) || 0
+                    : 0;
             if (!rasterTypes.has(mime) || total > MAX_BOOK_IMAGE) {
                 await response.body?.cancel();
                 throw new ImageResponseError(

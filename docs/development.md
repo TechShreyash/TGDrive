@@ -5,11 +5,31 @@
 Deployment uses [Docker Compose](setup.md). This page covers contributor builds,
 tests and development servers **inside WSL Ubuntu**, using the Linux checkout.
 
-[Run locally](#install-the-development-environment) · [Sample UI](#preview-with-sample-content) · [Validation](#validation-commands) · [Release checks](#source-releases)
-
 The [showcase](showcase.md) documents live illustrative captures. Follow the
 [media guide](assets/README.md) when replacing them; captures do not replace the
 automated and live validation described below.
+
+**Contents**
+
+- [Install the development environment](#install-the-development-environment)
+- [Run while editing](#run-while-editing)
+- [Preview with sample content](#preview-with-sample-content)
+- [Latest validation](#latest-validation)
+- [Validation commands](#validation-commands)
+  - [Live Telegram testing](#live-telegram-testing)
+- [CI and release evidence](#ci-and-release-evidence)
+  - [When GitHub checks run](#when-github-checks-run)
+  - [Recorded results](#recorded-results)
+- [Version baseline and dependency policy](#version-baseline-and-dependency-policy)
+- [Code conventions](#code-conventions)
+- [Repository map and test map](#repository-map-and-test-map)
+- [Frontend contracts](#frontend-contracts)
+  - [Shared-links interface](#shared-links-interface)
+  - [UI Audit Contracts](#ui-audit-contracts)
+- [Source releases](#source-releases)
+- [Documentation maintenance](#documentation-maintenance)
+- [Independent channel backup contracts](#independent-channel-backup-contracts)
+  - [Selective book pages and shared PDF resources](#selective-book-pages-and-shared-pdf-resources)
 
 ## Install the development environment
 
@@ -65,6 +85,17 @@ fixture or its `/__test__` endpoints.
 ## Latest validation
 
 Recorded evidence describes a tested snapshot, not the state of a later checkout.
+
+<details>
+<summary>Reader HTTP compression — 2026-10-26</summary>
+
+The focused `bookImage.test.ts` Vitest file passed **12 tests** on Node **24.22.0**.
+Coverage includes decoded gzip/Brotli responses, unknown progress totals,
+uncompressed truncation checks and cancellation above the 64 MiB image limit.
+These are mocked Fetch responses; no browser/proxy validation, full suite,
+typecheck or build was run for this correction. See [reader behavior](reading.md#bandwidth-and-compatibility).
+
+</details>
 
 <details>
 <summary>Audit fixes: durability, concurrency and browser state — 2026-10-26</summary>
@@ -405,6 +436,23 @@ Use these records to understand coverage. Validate the exact release commit and
 clean extraction; keep its checksum with the test record.
 
 <details>
+<summary>GitHub CI failure review — 2026-10-26</summary>
+
+The push runs for `7a4ecc7`, `2321915` and `acd9ca5` passed frontend behavior
+and Python 3.14 tests but failed Bandit: B105 treated the recovery setting
+`MAIN_BOT_TOKEN=None` as a hardcoded password. That value clears the optional
+credential. A line-specific suppression preserves the value and keeps B105
+enabled elsewhere. The exact CI Bandit command passed locally on Python 3.14.8
+with no issues after this correction; it emitted unused-suppression warnings
+for other keys in the same settings mapping. No GitHub rerun or push was made.
+
+Browser, container and source-release jobs were intentionally skipped on these
+pushes. The failed Bandit step also prevented the later Python dependency audit
+and frontend security smoke steps from running.
+
+</details>
+
+<details>
 <summary>Focused CI repair checks — 2026-10-26</summary>
 
 The local WSL checkout passed **253 affected Python tests** and the **three
@@ -705,6 +753,7 @@ Follow [AGENTS.md](../AGENTS.md): update important behavior with its implementat
 keep one canonical explanation, link focused public guides from Docs home and add
 them to `PUBLIC_DOCS` in `scripts/build_release.py`. Keep guides brief, put technical
 detail in collapsible sections, and record change history in meaningful Git commits.
+Update each guide's **Contents** links when adding, renaming or moving sections.
 
 ## Independent channel backup contracts
 

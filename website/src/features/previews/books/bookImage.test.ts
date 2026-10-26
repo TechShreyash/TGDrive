@@ -36,6 +36,76 @@ describe("original book page downloads", () => {
             retrying: false,
         });
     });
+    it.each(["gzip", "br", " GZip ", "gzip, br"])(
+        "accepts decoded %s responses without comparing the compressed length",
+        async (encoding) => {
+            const bytes = new Uint8Array([1, 2, 3]);
+            const response = image(bytes);
+            response.headers.set("Content-Encoding", encoding);
+            response.headers.set("Content-Length", "2");
+            const fetcher = vi.fn().mockResolvedValue(response);
+            vi.stubGlobal("fetch", fetcher);
+            const progress = vi.fn();
+            const result = await loadBookImage(
+                "/page",
+                new AbortController().signal,
+                progress,
+            );
+            expect(new Uint8Array(await result.arrayBuffer())).toEqual(bytes);
+            expect(progress).toHaveBeenLastCalledWith({
+                received: bytes.length,
+                total: 0,
+                attempt: 1,
+                retrying: false,
+            });
+            expect(fetcher).toHaveBeenCalledOnce();
+        },
+    );
+    it.each([undefined, "identity"])(
+        "still rejects an incomplete response with %s encoding",
+        async (encoding) => {
+            vi.useFakeTimers();
+            const fetcher = vi.fn().mockImplementation(() => {
+                const response = image(new Uint8Array([1, 2, 3]));
+                response.headers.set("Content-Length", "4");
+                if (encoding) response.headers.set("Content-Encoding", encoding);
+                return Promise.resolve(response);
+            });
+            vi.stubGlobal("fetch", fetcher);
+            const result = expect(
+                loadBookImage("/page", new AbortController().signal, vi.fn()),
+            ).rejects.toThrow("The page download was interrupted.");
+            await vi.advanceTimersByTimeAsync(6000);
+            await result;
+            expect(fetcher).toHaveBeenCalledTimes(3);
+        },
+    );
+    it("cancels compressed responses above the decoded image limit without retrying", async () => {
+        const cancel = vi.fn();
+        const chunk = new Uint8Array(1024 * 1024);
+        const response = new Response(
+            new ReadableStream({
+                pull(controller) {
+                    controller.enqueue(chunk);
+                },
+                cancel,
+            }),
+            {
+                headers: {
+                    "Content-Type": "image/png",
+                    "Content-Encoding": "gzip",
+                    "Content-Length": "1",
+                },
+            },
+        );
+        const fetcher = vi.fn().mockResolvedValue(response);
+        vi.stubGlobal("fetch", fetcher);
+        await expect(
+            loadBookImage("/page", new AbortController().signal, vi.fn()),
+        ).rejects.toThrow("64 MiB");
+        expect(cancel).toHaveBeenCalledOnce();
+        expect(fetcher).toHaveBeenCalledOnce();
+    });
     it("shows permanent server errors without retrying", async () => {
         const fetcher = vi.fn().mockResolvedValue(
             new Response(

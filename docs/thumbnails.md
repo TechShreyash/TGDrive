@@ -14,6 +14,13 @@ TGDrive creates covers from files staged during upload. The original stays uncha
 | DOCX/PPTX/XLSX, ODT/ODP/ODS | Embedded raster preview when the archive contains one. |
 | AVIF | Image if the installed decoder supports it. |
 
+**Contents**
+
+- [Bandwidth and storage](#bandwidth-and-storage)
+- [Rebuild existing thumbnails](#rebuild-existing-thumbnails)
+- [Existing files and fallback](#existing-files-and-fallback)
+- [Container dependencies](#container-dependencies)
+
 ## Bandwidth and storage
 
 Grid view loads nearby thumbnails as needed, checking the local generated cover

@@ -18,7 +18,8 @@ services:
             MONGODB_URI: ${MONGODB_URI:?Set MONGODB_URI}
             API_ID: ${API_ID:?Set API_ID}
             API_HASH: ${API_HASH:?Set API_HASH}
-            BOT_TOKENS: ${BOT_TOKENS:?Set BOT_TOKENS}
+            MAIN_BOT_TOKEN: ${MAIN_BOT_TOKEN:-}
+            TELEGRAM_ADMIN_IDS: ${TELEGRAM_ADMIN_IDS:-}
             STORAGE_CHANNEL: ${STORAGE_CHANNEL:?Set STORAGE_CHANNEL}
             ADMIN_PASSWORD: ${ADMIN_PASSWORD:-}
             # Container paths and hosting policy stay fixed across deployments.

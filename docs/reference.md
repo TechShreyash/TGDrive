@@ -6,14 +6,45 @@ Look up an exact setting, limit or request contract. Tables and examples expand
 on demand. For everyday workflows, start with [Using TGDrive](usage.md) or the
 [visual walkthroughs](showcase.md).
 
-| Looking for… | Go to |
-| --- | --- |
-| Credentials and defaults | [Configuration](#configuration) |
-| File-size and concurrency limits | [Capacity](#file-capacity-staging-and-work-limits) |
-| Cache, preloads and media admission | [Performance settings](#performance-and-cache-settings) |
-| Administration and recovery | [Owner administration](#owner-administration) |
-| Routes and request/response rules | [HTTP API](#http-api) |
-| Access, privacy and safe deployment | [Security](#security-and-privacy) |
+**Contents**
+
+- [Terms used here](#terms-used-here)
+- [Configuration](#configuration)
+- [Owner administration](#owner-administration)
+- [HTTP API](#http-api)
+- [Security and privacy](#security-and-privacy)
+
+<details>
+<summary>Configuration and API sections</summary>
+
+- [Configuration](#configuration)
+  - [File syntax and secret handling](#file-syntax-and-secret-handling)
+  - [Telegram accounts](#telegram-accounts)
+  - [Performance and cache settings](#performance-and-cache-settings)
+  - [Owner authentication](#owner-authentication)
+  - [Persistence and initialization](#persistence-and-initialization)
+  - [File capacity, staging, and work limits](#file-capacity-staging-and-work-limits)
+  - [Remote HTTP(S) uploads](#remote-https-uploads)
+  - [Deployment variables outside application Settings](#deployment-variables-outside-application-settings)
+- [HTTP API](#http-api)
+  - [Conventions and authentication](#conventions-and-authentication)
+  - [Session, configuration, health, and assets](#session-configuration-health-and-assets)
+  - [Independent channel backup and recovery](#independent-channel-backup-and-recovery)
+  - [Owner connection management](#owner-connection-management)
+  - [Listing and metadata](#listing-and-metadata)
+  - [Atomic folder preparation](#atomic-folder-preparation)
+  - [Move and bulk actions](#move-and-bulk-actions)
+  - [Performance, cache inventory and preparation](#performance-cache-inventory-and-preparation)
+  - [Resumable browser receipts](#resumable-browser-receipts)
+  - [Previews and media](#previews-and-media)
+  - [Jobs](#jobs)
+  - [Transfer history](#transfer-history)
+  - [Starred items](#starred-items)
+  - [Shares, downloads, and ranges](#shares-downloads-and-ranges)
+  - [URL imports and transfer routes](#url-imports-and-transfer-routes)
+  - [Errors and retry discipline](#errors-and-retry-discipline)
+
+</details>
 
 ## Terms used here
 
@@ -44,7 +75,7 @@ preferences have their own precedence, described below.
 
 Settings are case-insensitive. Unknown names are ignored, so check for typos.
 
-The supplied `.env.example` lists only the six values needed for a new drive.
+The supplied `.env.example` lists the required values for a new drive.
 Optional settings use application defaults; add an override to your private `.env`
 only when needed. Compose passes this file through `env_file`; its `environment`
 block contains bootstrap inputs and fixed container paths, cookie and proxy policy.
@@ -78,8 +109,10 @@ Optional does not always mean that a blank value is accepted:
 - Omit ADMIN_PASSWORD_HASH when unused; a blank value is treated as absent.
 - ADMIN_PASSWORD= requires a valid explicit hash or the original saved hash
   loaded from an existing MongoDB drive.
-- STRING_SESSIONS=, MAIN_BOT_TOKEN=, and TELEGRAM_ADMIN_IDS= disable their
-  optional features.
+- STRING_SESSIONS= disables optional Premium sessions. Legacy storage-only
+  setups can omit MAIN_BOT_TOKEN. Blank/omitted bot-interface credentials can
+  reuse values saved in MongoDB, so blanks do not disable a configured interface.
+  A main bot token requires TELEGRAM_ADMIN_IDS; storage still needs a working bot.
 - MAX_FILE_SIZE= means the bounded default logical-file limit.
 - With standard Compose auto-secrets enabled, blank SESSION_SECRET and
   MONGODB_BACKUP_KEY reuse original saved keys, or generate them for a new drive.
@@ -99,12 +132,20 @@ do not make a configuration file safe to publish.
 | --- | --- | --- |
 | `API_ID` | Required unless supplied by managed settings | Positive integer Telegram application ID; the web editor bounds it to 1–2147483647. |
 | `API_HASH` | Required unless managed, secret | Exactly 32 hexadecimal characters; surrounding whitespace is removed. |
-| `BOT_TOKENS` | Required unless managed, secret | At least one comma-separated storage bot token with no duplicates. Tokens must match the expected numeric-ID and secret format; Telegram verifies actual validity on connection. |
+| `MAIN_BOT_TOKEN` | Required by the new-drive setup, secret | One bot token for the Telegram chat interface; requires TELEGRAM_ADMIN_IDS. On initial setup, it also supplies the first storage bot when no legacy BOT_TOKENS list is provided. Tokens must match the expected numeric-ID and secret format; Telegram verifies actual validity on connection. |
+| `BOT_TOKENS` | Legacy bootstrap, secret | Existing comma-separated storage bot lists remain supported; duplicates are rejected. An explicit list is preserved rather than replaced by MAIN_BOT_TOKEN. For new deployments, use MAIN_BOT_TOKEN and add further storage bots through Connections. |
 | `STORAGE_CHANNEL` | Required | Negative integer private channel ID. Confirmed catalogs bind to this channel; changing it is not relocation and can trigger RECOVERY_REQUIRED. Use the membership/permissions from [Telegram setup](setup.md#2-prepare-telegram). |
 | `STRING_SESSIONS` | Empty by default, secret | Comma-separated Telethon StringSession credentials for optional Premium users; duplicates are rejected. Sessions must already be authorized and identify Premium user accounts. |
-| `MAIN_BOT_TOKEN` | Omitted/empty by default, secret | Optional bot-mode token. A nonempty value requires TELEGRAM_ADMIN_IDS. |
 | `PUBLIC_URL` | Omitted/empty by default | Optional HTTP(S) website origin for the bot's `/set_folder` link. Otherwise the website address is remembered when saving its bot upload folder. |
-| `TELEGRAM_ADMIN_IDS` | Empty by default | Comma-separated positive numeric Telegram user IDs allowed to use bot mode. |
+| `TELEGRAM_ADMIN_IDS` | Required with MAIN_BOT_TOKEN | Comma-separated positive numeric Telegram user IDs allowed to use the bot in private chat; usernames are not accepted. [Find your ID](setup.md#find-your-telegram-user-id). |
+
+After initialization, saved **Connections** are authoritative for storage
+accounts. Changing MAIN_BOT_TOKEN does not replace their saved credentials; it
+changes the chat interface's token. If one bot serves both roles and its token
+changes, update both places. Existing BOT_TOKENS deployments can continue without
+enabling the chat interface.
+For legacy Compose setup, keep BOT_TOKENS in the private `.env` file; a shell
+export alone is not passed to the container.
 
 Storage bots are the required baseline. The running pool can remain ready with
 a healthy storage bot when additional bots or Premium sessions fail.
@@ -177,7 +218,7 @@ warming thresholds. Settings do not guarantee bandwidth or free disk.
 | `DEMO_ADMIN_PASSWORD_HASH` | None by default, secret | Optional Argon2id alternative to `DEMO_ADMIN_PASSWORD`, with the same validation bounds as `ADMIN_PASSWORD_HASH`. Takes precedence over demo administrator plaintext. Not stored/restored in bootstrap preferences. |
 | `SESSION_SECRET` | Required, secret | Independent random signing secret of at least 32 characters after trimming. Do not reuse an account or password credential. |
 | `SESSION_TTL_SECONDS` | 86400 | Integer 300-2592000 inclusive: absolute browser session lifetime in seconds (24 hours by default). No separate idle timeout. |
-| `COOKIE_SECURE` | true | Secure cookies require HTTPS. Use false only for local plain HTTP on loopback. |
+| `COOKIE_SECURE` | true | Secure cookies require HTTPS. Local Compose sets false for loopback HTTP. Disabling it does not enable full remote HTTP support; see [HTTP requirements](operations.md#can-tgdrive-run-over-http). |
 
 At least one password representation is required. The hash takes precedence
 when both valid forms are configured. The plaintext fallback is hashed in
@@ -384,10 +425,6 @@ that prevent startup are explained in container logs. See
 
 The web app uses these owner-session and scoped-share endpoints.
 There are no API keys or multi-user accounts. Interactive OpenAPI pages are disabled.
-
-[Authentication](#conventions-and-authentication) · [Files and folders](#listing-and-metadata) ·
-[Uploads](#resumable-browser-receipts) · [Jobs](#jobs) · [Shares and downloads](#shares-downloads-and-ranges) ·
-[Cache and preloads](#performance-cache-inventory-and-preparation) · [Errors](#errors-and-retry-discipline)
 
 ### Conventions and authentication
 

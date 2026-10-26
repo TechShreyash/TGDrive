@@ -5,6 +5,13 @@
 Open a supported file from **My Files** or a shared folder. **Download** keeps the
 original available if previewing fails.
 
+**Contents**
+
+- [Choose a format](#choose-a-format)
+- [Bandwidth and compatibility](#bandwidth-and-compatibility)
+- [Reader limits](#reader-limits)
+- [Running the reader](#running-the-reader)
+
 ## Choose a format
 
 | Format | Controls | How it loads |
@@ -48,10 +55,12 @@ recompress them. Some colour pages or spreads are much larger than the average.
 Raster pages are limited to **16 million pixels** and **32,768 pixels per edge**.
 Oversized or unreadable image headers produce a preview error; download the
 unchanged original to open it in another reader.
-The reader shows received bytes after the server has prepared the selected
-resource, retries temporary image download failures up to three attempts
-(2/4-second waits, or a longer server retry hint up to 30 seconds),
-and reports permanent errors without repeatedly requesting them. Leaving the page
+The reader shows received image bytes after the server has prepared the selected
+resource. If a server or proxy compresses the response, progress shows received
+bytes without a total; the **64 MiB** image limit still applies after HTTP
+decompression. The reader retries temporary image download failures up to three
+attempts (2/4-second waits, or a longer server retry hint up to 30 seconds), and
+reports permanent errors without repeatedly requesting them. Leaving the page
 cancels that browser's download/retries. EPUB images start loading near the
 viewport; offscreen image blobs are released
 while placeholders preserve scroll space. Returning to an image revalidates its

@@ -6,15 +6,34 @@ Find the slow stage before changing limits. **Cold** reads fetch bytes from
 Telegram; **warm** reads reuse bytes cached on the TGDrive server. Cached files
 still need a working server and a connection to the viewer.
 
-| Goal | Start here |
-| --- | --- |
-| Prepare a video or shared file | [Preload the original](#prepare-a-file-before-sharing) |
-| Diagnose slow transfers | [Read Performance](#read-the-performance-page), then [check the symptoms](#investigate-a-slowdown) |
-| Tune capacity | [Cache budgets](#cache-limits) and [upload controls](#upload-pipeline-and-smaller-splits) |
+Use the [load and capacity guide](performance-tuning.md) to
+[read the website stats](performance-tuning.md#start-with-the-website-stats),
+[find the bottleneck](performance-tuning.md#find-the-bottleneck), choose
+[server upgrades](performance-tuning.md#what-a-server-upgrade-changes) or tune
+[bots and requests](performance-tuning.md#bots-and-request-concurrency).
+This page holds the detailed cache, scheduling and measurement policies.
 
 [See Preloads and Performance](showcase.md#preload-and-monitor) for screenshots of
 cache coverage, network traffic and server resources. Values in the captures are
 examples from the recorded session, not throughput benchmarks.
+
+**Contents**
+
+- [Follow the data path](#follow-the-data-path)
+- [Cache limits](#cache-limits)
+- [Automatic read-ahead](#automatic-read-ahead)
+- [Prepare a file before sharing](#prepare-a-file-before-sharing)
+- [Shared-download load and queues](#shared-download-load-and-queues)
+- [URL import intake](#url-import-intake)
+- [Device upload receipts](#device-upload-receipts)
+- [Upload pipeline and smaller splits](#upload-pipeline-and-smaller-splits)
+- [Video controls and startup](#video-controls-and-startup)
+  - [Browser playback buffer](#browser-playback-buffer)
+- [Operator checklist](#operator-checklist)
+  - [Read the Performance page](#read-the-performance-page)
+  - [Investigate a slowdown](#investigate-a-slowdown)
+  - [Browser transport with a full cache](#browser-transport-with-a-full-cache)
+  - [Distant video seeks](#distant-video-seeks)
 
 ## Follow the data path
 
@@ -41,10 +60,14 @@ larger plans increase capacity without promising a fixed transfer speed.
 
 ## Cache limits
 
+For how cached bytes serve repeat viewers and shared files, see
+[how cache helps](performance-tuning.md#how-cache-helps).
+
 Tune the running instance in **Configuration → Cache settings**. Saved MongoDB
 preferences override initial environment values. Save affects the visible category;
-**Discard changes** returns to its last saved values. Environment changes need a
-restart. See [exact settings](reference.md#performance-and-cache-settings).
+**Discard changes** returns to its last saved values. After changing Docker
+environment values, recreate/redeploy the container. See
+[exact settings](reference.md#performance-and-cache-settings).
 
 | Budget | Default |
 | --- | --- |
@@ -409,11 +432,9 @@ for variable bitrate/interleaved files, not a guarantee of decoded readiness.
 
 ## Operator checklist
 
-- [ ] Measure ingress/egress using multiple reliable endpoints.
-- [ ] Compare a cold authorized range with a repeat; warm results exclude origin work.
-- [ ] Watch effective budgets, disk headroom, queues, cooldowns, CPU and network.
-- [ ] Test startup/seeks and same-file/different-file viewers through the real HTTP path.
-- [ ] Change one limit and repeat the same workload.
+Follow the [website-stats investigation](performance-tuning.md#start-with-the-website-stats)
+to compare cold and cached reads, inspect the affected stage and change one
+setting at a time. Keep the workload comparable before judging an improvement.
 
 ### Read the Performance page
 
@@ -449,15 +470,10 @@ Hover or use the keyboard/touch sample scrubber. **Now** always means current.
 
 ### Investigate a slowdown
 
-| Observation | Check next |
-| --- | --- |
-| Cold slow, warm quick | Account capacity, cooldowns, queue and requested-range coverage |
-| Full bot slots and waiting demand | Foreground versus preloads; measured effect of capacity changes |
-| High CPU, low throughput | CPU quota; raw download versus video processing |
-| RAM near limit | Container usage, stream memory, effective cache budget |
-| Cache reaches disk reserve | Free space and cache/staging budgets |
-| Server fast, one browser slow | Protocol, viewer route, decoder and client buffer |
-| Completed import, zero current rate | Historical interval and lifetime receive total |
+Use the [bottleneck table](performance-tuning.md#find-the-bottleneck) to choose
+between reducing work, changing cache, adding Telegram capacity or upgrading
+the host. A completed import can have zero current rate; inspect its historical
+interval and lifetime receive total instead.
 
 Compare graphs over the same interval. Account/request details are current/recent
 state, not a month-long request log. Cache hits/misses count lookups, not saved

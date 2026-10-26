@@ -2,7 +2,7 @@
 
 [Docs home](README.md) · Next: [Using TGDrive](usage.md)
 
-**Read the [new-user guide and FAQ](new-user-guide.md) before storing files.**
+**Must read before using TGDrive: [New-user guide and FAQs](new-user-guide.md).**
 It explains the storage model, channel rules, limits and backup responsibilities;
 these installation steps do not replace it.
 
@@ -16,7 +16,27 @@ and servers. No host Python or Node installation is needed for the main steps.
 For a **new v2 drive**, use an empty MongoDB database and a new private Telegram
 channel. v1 data and older catalog formats are not imported or upgraded.
 
-[Prerequisites](#before-you-start) · [MongoDB](#1-prepare-mongodb) · [Telegram](#2-prepare-telegram) · [Configuration](#3-configure-your-drive) · [Start locally](#4-start-locally) · [Hosting](#hosting-beyond-your-machine)
+**Contents**
+
+- [Choose your installation](#choose-your-installation)
+- [Before you start](#before-you-start)
+  - [Get the source](#get-the-source)
+- [1. Prepare MongoDB](#1-prepare-mongodb)
+- [2. Prepare Telegram](#2-prepare-telegram)
+- [3. Configure your drive](#3-configure-your-drive)
+  - [Find your numeric Telegram user ID](#find-your-telegram-user-id)
+- [4. Start locally](#4-start-locally)
+- [5. Open your drive](#5-open-your-drive)
+- [Apply updates to an existing drive](#apply-updates-to-an-existing-drive)
+- [If setup stops](#if-setup-stops)
+- [Reinstall or move to another machine](#reinstall-or-move-to-another-machine)
+- [Additional bots and Premium accounts](#additional-bots-and-premium-accounts)
+- [Hosting beyond your machine](#hosting-beyond-your-machine)
+  - [Coolify](#coolify)
+  - [Docker Compose on a server](#docker-compose-on-a-server)
+  - [Other hosting](#other-hosting)
+- [Features and settings after setup](#features-and-settings-after-setup)
+- [Optional independent channel protection](#optional-independent-channel-protection)
 
 ## Choose your installation
 
@@ -98,13 +118,14 @@ MongoDB holds catalog/settings; file contents live in Telegram.
 
 ## 2. Prepare Telegram
 
-1. Open [BotFather](https://t.me/BotFather), create a bot and keep its **bot token**.
+1. Open [BotFather](https://t.me/BotFather), create your main bot and keep its
+   **bot token**. It will store files and accept uploads in a private chat.
 2. Open [Telegram's API page](https://my.telegram.org/apps), create an application
    and keep its **API ID** and **API hash**.
 3. Create a dedicated **private broadcast channel**, not a group or a public
    channel. Give it no public username and turn message auto-delete **Off**.
-4. Add **every storage bot** as an administrator. For the standard MongoDB drive,
-   enable **Post Messages** and **Delete Messages**.
+4. Add this bot as a channel administrator with **Post Messages** and
+   **Delete Messages** enabled.
 5. Send one identification message, then use **Copy Message Link**. For a link
    like `https://t.me/c/1234567890/1`, the channel ID is `-1001234567890`:
    prepend `-100` to the number after `/c/`. Use your own channel's ID.
@@ -137,15 +158,41 @@ chmod 600 .env
 ~~~
 
 Open `.env` in a text editor. Replace these placeholders; do not leave angle
-brackets or the example additional-bot text in your values:
+brackets in your values:
 
 | Setting | Value |
 | --- | --- |
 | `MONGODB_URI` | Your private Atlas/replica-set connection URI |
 | `API_ID` / `API_HASH` | From Telegram's API page |
-| `BOT_TOKENS` | Your storage bot token; start with just one |
+| `MAIN_BOT_TOKEN` | Your main bot's token from BotFather |
+| `TELEGRAM_ADMIN_IDS` | Your numeric Telegram user ID, not your `@username`; separate multiple allowed users with commas. [Find your ID](#find-your-telegram-user-id) |
 | `STORAGE_CHANNEL` | Your private channel's negative numeric ID |
 | `ADMIN_PASSWORD` | A unique web password; 15+ characters recommended, 12-character minimum |
+
+<a name="find-your-telegram-user-id"></a>
+
+<details>
+<summary>Find your numeric Telegram user ID</summary>
+
+Before starting TGDrive for the first time:
+
+1. Send `/start` in a private chat with your new bot. It does not need to reply.
+2. Open `https://api.telegram.org/bot<YOUR_BOT_TOKEN>/getUpdates` in your browser,
+   replacing `<YOUR_BOT_TOKEN>` with the token from BotFather.
+3. In `result`, find your `/start` message and copy **`message.from.id`** into
+   `TELEGRAM_ADMIN_IDS`. Use the sender's user ID, not the bot or channel ID.
+   For multiple allowed users, have each send a private message and separate
+   their IDs with commas.
+
+This uses [Telegram's own Bot API](https://core.telegram.org/bots/api#getupdates).
+Keep the token-bearing URL and response private. If `result` is empty, send a
+fresh message and refresh; use a new bot that is not already running elsewhere.
+
+</details>
+
+The main bot starts as your first storage connection. Only the Telegram users
+listed in `TELEGRAM_ADMIN_IDS` can send it files. Add further storage bots through
+[Connections](#additional-bots-and-premium-accounts) after setup.
 
 The defaults use database `tgdrive` and allow local HTTP cookies. Session and
 backup keys are generated once and preserved in persistent storage; leave
@@ -266,9 +313,14 @@ Use the same MongoDB database; **do not initialize it again**.
 
 ## Additional bots and Premium accounts
 
-Use **Management → Connections** after setup. Every account needs the same
-channel; saved connection changes require a restart.
-[Finish pending transfers before changing accounts](usage.md#settings-and-connections).
+Add extra storage bots through **Management → Connections → Add storage bot**,
+rather than editing the deployment's token list. First add each bot to the same
+private channel as an administrator with **Post Messages** and **Delete Messages**.
+More healthy bots can handle more Telegram work at once, subject to server and
+Telegram limits.
+
+[Finish pending transfers before changing accounts](usage.md#settings-and-connections),
+then save your connection changes and restart TGDrive.
 
 Premium is optional: all accounts use the same **2000 MiB** document cap and
 [automatic splitting](usage.md#files-above-2-gb). Available Premium clients are
@@ -290,60 +342,52 @@ change hosts, follow [move or reopen your drive](operations.md#when-a-hosting-pl
 ### Coolify
 
 Coolify is recommended for **managing deployment on a server you provide**.
-Its [self-hosted edition is free](https://coolify.io/docs/usage); you pay for your
-own server/infrastructure. A paid Coolify Cloud subscription is optional.
+Its self-hosted edition is free; you pay for your own server/infrastructure.
+[Install Coolify](https://coolify.io/docs/start-with-self-hosted) if needed.
 
 You need a Docker server, domain, reachable MongoDB replica set and Telegram
-setup above. [Install Coolify](https://coolify.io/docs/get-started/installation)
-if needed. Keep **one replica**; disable preview/parallel deployments against
-the production database/channel.
+setup above.
+
+Coolify's generated `sslip.io` URL uses HTTP. For TGDrive, use a domain with a
+valid HTTPS certificate: the browser app needs a secure context away from
+localhost. See [HTTP support and certificate limits](operations.md#can-tgdrive-run-over-http).
 
 Create a public Git application from `https://github.com/TechShreyash/TGDrive`.
 Select **`dev`** for the development source described in this guide; for a
-published v2 release, select its exact tag or commit instead. Choose **Docker
-Compose**, base directory `/`, file **`/compose.yaml`**. Set these runtime variables:
+published v2 release, select its exact tag or commit instead. Under **General →
+Build pipeline**, select **Compose** as the build strategy. Set **Base Directory**
+to `/` and **Docker Compose Location** to `/compose.yaml`, then save.
+In **Environment Variables**, enter:
 
 | Variable | Value |
 | --- | --- |
 | `MONGODB_URI` | Your private Atlas/replica-set connection URI |
 | `API_ID` | Telegram application ID |
 | `API_HASH` | Telegram application hash |
-| `BOT_TOKENS` | Your storage bot token |
+| `MAIN_BOT_TOKEN` | Your main bot's token from BotFather |
+| `TELEGRAM_ADMIN_IDS` | Your numeric Telegram user ID; separate multiple allowed users with commas. [Find your ID](#find-your-telegram-user-id) |
 | `STORAGE_CHANNEL` | The private channel's negative numeric ID |
 | `ADMIN_PASSWORD` | Owner password, at least 12 characters |
 
 Choose **Literal** for values containing `$`. Keep secrets **unavailable during
 build**, **available at runtime**, then save. [Environment guide](https://coolify.io/docs/applications/configuration/environment-variables).
 
-Optional settings use TGDrive defaults. Add a runtime variable only when an
-override is needed; the stack's `env_file` passes it to the application.
+1. Point your domain's DNS at the server.
+2. Under **Domains**, add an HTTPS domain for the **`app`** service, including
+   its internal port: `https://drive.example.com:8000`. Visitors use normal HTTPS.
+3. **Deploy** and wait for `app` to become healthy. If deployment fails, inspect
+   the deployment and application logs.
+4. Open your domain, sign in and save **Storage & Backups → Save recovery key**
+   somewhere separate from the server.
 
-1. Route `app` to internal port **8000** with HTTPS, for example
-   `https://drive.example.com:8000` in Coolify. Visitors use normal HTTPS;
-   no host port mapping is needed.
-2. Point your domain's DNS at the server. Shared `sslip.io` preview domains can
-   hit certificate rate limits. Keep `COOKIE_SECURE=true` and app/database ports private.
-3. Preserve **`/app/data` and `/app/cache`** on every redeploy: keys/journals
-   and unfinished uploads live there. [Storage guide](https://coolify.io/docs/core/persistent-storage/storage-mounts/overview).
-4. Deploy. TGDrive checks MongoDB and initializes a new, empty database
-   automatically before serving the website. If database configuration, access
-   or transaction support fails, correct it and redeploy; startup fails rather
-   than switching to local storage.
-5. Sign in and save **Storage & Backups → Save recovery key** separately.
-   Existing drives skip initialization and use their original owner password.
+The included Compose file creates persistent volumes at **`/app/data`** and
+**`/app/cache`**, and configures secure cookies and proxy access. Keep those volumes
+when redeploying: they hold keys, sessions and unfinished uploads as well as cache.
+TGDrive initializes an empty database automatically; an existing drive reopens
+with its saved settings and owner password.
 
-Compose creates the volumes; session/backup keys are generated once in `/app/data`
-and saved in MongoDB during initialization. Existing drives reuse saved keys/hash.
-Proxy trust defaults to `auto`, resolving `coolify-proxy` privately.
-Coolify selects `compose.yaml` explicitly; local `docker compose` additionally
-loads `compose.override.yaml` for localhost access.
-[Coolify Compose guide](https://coolify.io/docs/applications/builds/docker-compose).
-
-#### Keep a deployed v2 drive safe
-
-Keep the same database, channel, credentials and both mounts. Initialize only once.
-For machine loss, follow [recovery](operations.md#reopen-after-losing-the-local-installation).
-Only override `FORWARDED_ALLOW_IPS` when you know the actual proxy sources.
+[Coolify Compose guide](https://coolify.io/docs/applications/builds/docker-compose) ·
+[TGDrive configuration](configuration.md) · [Updates and recovery](operations.md)
 
 ### Docker Compose on a server
 
@@ -384,14 +428,14 @@ Use Docker/Compose with persistent storage and one worker per drive. Platforms
 that sleep, replace local disks or impose short request/upload limits can break
 long transfers unless configured appropriately.
 
-## Optional features and settings
+## Features and settings after setup
 
-Configure optional features after the first upload/download works:
+After the first upload/download works:
 
 | Feature | Configure |
 | --- | --- |
 | More bots / Premium | [Connections](usage.md#settings-and-connections) |
-| Telegram bot uploads | [Bot interface](usage.md#settings-and-connections): `MAIN_BOT_TOKEN`, `TELEGRAM_ADMIN_IDS`; optional `PUBLIC_URL` |
+| Telegram bot uploads | [Choose the upload folder and send files](usage.md#optional-telegram-bot-interface); the main bot and allowed users are configured during setup |
 | Shares | [Shared Links](usage.md#share-and-revoke); recipients need a reachable website |
 | Independent channel copy | [Setup below](#optional-independent-channel-protection) |
 | Cache, preloads, upload limits, timezone | [Configuration](configuration.md) |
