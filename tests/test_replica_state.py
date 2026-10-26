@@ -313,7 +313,7 @@ def test_process_death_cannot_pair_new_restore_point_with_old_keys(tmp_path):
         raise SystemExit("Crash injection did not execute")
         """
     )
-    stopped = subprocess.run(
+    stopped = subprocess.run(  # noqa: S603 - fixed Python and crash-injection script
         [sys.executable, "-c", script, str(tmp_path), json.dumps(new)],
         capture_output=True,
         text=True,

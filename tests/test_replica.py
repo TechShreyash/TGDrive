@@ -558,7 +558,8 @@ async def test_unchanged_backup_stays_idle_between_hourly_health_checks(tmp_path
 
 @pytest.mark.asyncio
 async def test_hourly_health_check_does_not_start_a_copy_job_or_republish(
-    tmp_path, monkeypatch,
+    tmp_path,
+    monkeypatch,
 ):
     _, store, remote, replica, config = setup(tmp_path)
     try:
@@ -586,7 +587,9 @@ async def test_hourly_health_check_does_not_start_a_copy_job_or_republish(
 
 
 @pytest.mark.asyncio
-async def test_new_catalog_revision_is_not_delayed_until_the_next_health_check(tmp_path):
+async def test_new_catalog_revision_is_not_delayed_until_the_next_health_check(
+    tmp_path,
+):
     _, store, remote, replica, config = setup(tmp_path)
     try:
         await replica._sync(config)
@@ -603,7 +606,8 @@ async def test_new_catalog_revision_is_not_delayed_until_the_next_health_check(t
 
 @pytest.mark.asyncio
 async def test_manual_sync_forces_health_check_but_resume_reuses_recent_confirmation(
-    tmp_path, monkeypatch,
+    tmp_path,
+    monkeypatch,
 ):
     _, store, remote, replica, config = setup(tmp_path)
     monkeypatch.setattr(replica, "start", lambda: None)
@@ -625,7 +629,8 @@ async def test_manual_sync_forces_health_check_but_resume_reuses_recent_confirma
 
 @pytest.mark.asyncio
 async def test_idle_health_wait_reports_context_and_retries_after_saved_deadline(
-    tmp_path, monkeypatch,
+    tmp_path,
+    monkeypatch,
 ):
     _, store, remote, replica, config = setup(tmp_path)
     original_start = Transport.start
@@ -633,7 +638,9 @@ async def test_idle_health_wait_reports_context_and_retries_after_saved_deadline
     async def limited_start(self):
         error = ReplicaTransportError(
             "Telegram requested a pause. Backup will resume after the wait.",
-            "REPLICA_FLOOD_WAIT", retry_after=120, retryable=True,
+            "REPLICA_FLOOD_WAIT",
+            retry_after=120,
+            retryable=True,
         )
         error.operation = "sign_in"
         raise error
@@ -673,14 +680,17 @@ async def test_idle_health_wait_reports_context_and_retries_after_saved_deadline
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("action", ["retry", "resume"])
-async def test_expired_health_wait_is_checked_on_manual_retry(tmp_path, monkeypatch, action):
+async def test_expired_health_wait_is_checked_on_manual_retry(
+    tmp_path, monkeypatch, action
+):
     _, store, remote, replica, config = setup(tmp_path)
     monkeypatch.setattr(replica, "start", lambda: None)
     try:
         await replica._sync(config)
         connections = len(remote.instances)
         replica.update(
-            phase="waiting", checked_at=time.time(),
+            phase="waiting",
+            checked_at=time.time(),
             error={"code": "REPLICA_FLOOD_WAIT", "retry_at": time.time() - 1},
         )
         await replica.action(action)
@@ -693,7 +703,9 @@ async def test_expired_health_wait_is_checked_on_manual_retry(tmp_path, monkeypa
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("failure", ["access", "pin", "document"])
-async def test_deletion_barrier_rechecks_recent_checkpoint_before_mutation(tmp_path, failure):
+async def test_deletion_barrier_rechecks_recent_checkpoint_before_mutation(
+    tmp_path, failure
+):
     from tgdrive.managed_settings import SettingsProblem
 
     _, store, remote, replica, config = setup(tmp_path)
@@ -717,7 +729,7 @@ async def test_deletion_barrier_rechecks_recent_checkpoint_before_mutation(tmp_p
 
 @pytest.mark.asyncio
 async def test_pause_during_health_check_stays_paused(tmp_path, monkeypatch):
-    _, store, remote, replica, config = setup(tmp_path)
+    _, store, _remote, replica, config = setup(tmp_path)
     try:
         await replica._sync(config)
         replica.update(checked_at=0)
@@ -740,7 +752,11 @@ async def test_pause_during_health_check_stays_paused(tmp_path, monkeypatch):
 @pytest.mark.parametrize("action", ["pause", "disable"])
 @pytest.mark.parametrize("code", ["REPLICA_FLOOD_WAIT", "REPLICA_UNAVAILABLE"])
 async def test_stop_during_failed_request_preserves_control_and_saved_wait(
-    tmp_path, monkeypatch, caller, action, code,
+    tmp_path,
+    monkeypatch,
+    caller,
+    action,
+    code,
 ):
     _, store, remote, replica, config = setup(tmp_path)
     entered, release, recorded = asyncio.Event(), asyncio.Event(), asyncio.Event()
@@ -751,7 +767,8 @@ async def test_stop_during_failed_request_preserves_control_and_saved_wait(
         entered.set()
         await release.wait()
         error = ReplicaTransportError(
-            "Provider requested a wait.", code,
+            "Provider requested a wait.",
+            code,
             retry_after=120 if code == "REPLICA_FLOOD_WAIT" else None,
             retryable=True,
         )
@@ -803,7 +820,8 @@ async def test_stop_during_failed_request_preserves_control_and_saved_wait(
 @pytest.mark.asyncio
 @pytest.mark.parametrize("action", ["pause", "disable"])
 async def test_deletion_barrier_rechecks_control_after_waiting_for_operation_lock(
-    tmp_path, action,
+    tmp_path,
+    action,
 ):
     from tgdrive.managed_settings import SettingsProblem
 
@@ -835,11 +853,12 @@ async def test_deletion_barrier_rechecks_control_after_waiting_for_operation_loc
 
 @pytest.mark.asyncio
 async def test_deletion_barrier_rechecks_pause_after_successful_remote_check(
-    tmp_path, monkeypatch,
+    tmp_path,
+    monkeypatch,
 ):
     from tgdrive.managed_settings import SettingsProblem
 
-    _, store, remote, replica, config = setup(tmp_path)
+    _, store, _remote, replica, config = setup(tmp_path)
     try:
         await replica._sync(config)
         original_pin = Transport.pinned_message
@@ -860,7 +879,9 @@ async def test_deletion_barrier_rechecks_pause_after_successful_remote_check(
 @pytest.mark.asyncio
 @pytest.mark.parametrize("stage", ["credentials", "catalog"])
 async def test_pause_during_local_snapshot_does_not_restart_telegram_work(
-    tmp_path, monkeypatch, stage,
+    tmp_path,
+    monkeypatch,
+    stage,
 ):
     _, store, remote, replica, config = setup(tmp_path)
     entered, release = asyncio.Event(), asyncio.Event()
@@ -911,7 +932,10 @@ async def test_worker_rechecks_pause_after_waiting_for_operation_lock(tmp_path):
 @pytest.mark.parametrize("action", ["pause", "disable"])
 @pytest.mark.parametrize("stage", ["start", "inspect", "close"])
 async def test_recovery_probe_does_not_undo_pause_or_disable(
-    tmp_path, monkeypatch, action, stage,
+    tmp_path,
+    monkeypatch,
+    action,
+    stage,
 ):
     _, store, remote, replica, config = setup(tmp_path)
     target_token = "345678:" + "z" * 30
@@ -941,9 +965,7 @@ async def test_recovery_probe_does_not_undo_pause_or_disable(
         assert replica.status()["phase"] == (
             "paused" if action == "pause" else "disabled"
         )
-        assert not [
-            call for call in remote.calls if call[0] in {"copy", "publish"}
-        ]
+        assert not [call for call in remote.calls if call[0] in {"copy", "publish"}]
         if action == "disable":
             assert replica.journal.get("recovery") is None
             assert replica.journal.get("candidate") is None
@@ -959,7 +981,8 @@ async def test_recovery_probe_does_not_undo_pause_or_disable(
 
 @pytest.mark.asyncio
 async def test_deletion_poll_does_not_extend_a_short_saved_telegram_wait(
-    tmp_path, monkeypatch,
+    tmp_path,
+    monkeypatch,
 ):
     from tgdrive.backup import BackupError
 
@@ -987,7 +1010,8 @@ async def test_deletion_poll_does_not_extend_a_short_saved_telegram_wait(
 
 @pytest.mark.asyncio
 async def test_deletion_barrier_rejects_saved_wait_at_expiry_boundary(
-    tmp_path, monkeypatch,
+    tmp_path,
+    monkeypatch,
 ):
     from tgdrive.backup import BackupError
 

@@ -260,8 +260,60 @@ outcomes privately. Never commit credentials or traces.
 
 ## CI and release evidence
 
+### When GitHub checks run
+
+The [CI workflow](../.github/workflows/ci.yml) keeps routine pushes focused:
+
+| Trigger | Checks |
+| --- | --- |
+| Push to `main` or `dev` | Quality/security, frontend and Python 3.14 tests with isolated MongoDB and coverage |
+| Pull request | Core checks with Python 3.11/3.13/3.14, plus production-frontend Chromium tests |
+| Manual run | Core checks with all three Python versions, plus the selected additional suite |
+
+Changes confined to Markdown, `docs/` or `LICENSE` skip automatic CI. If a pull
+request requires a skipped check under branch protection, run CI manually on
+its branch or adjust the required-check policy. Documentation changes can still
+affect release contents; verify the archive when preparing a release.
+
+In **Actions → CI → Run workflow**, select the branch and additional suite:
+
+| Suite | Additional work |
+| --- | --- |
+| `core` (default) | None |
+| `browser` | Chromium workflows against the synthetic backend |
+| `container` | AMD64/ARM64 image builds and local container smoke checks |
+| `release` | Container checks, then build/extract/rebuild/test the source ZIP |
+| `all` | Browser, container and source-release checks |
+
+Container checks wait for core checks; source verification waits for the
+container. Browser failures do not prevent those independent packaging checks
+in an `all` run, but every selected check must pass before release. These checks
+do not deploy, publish an image or create a GitHub release. Browser evidence and
+source candidates are retained as Actions artifacts for 14 days.
+
+This avoids rebuilding Docker images and extracted releases for every push
+while keeping installation and packaging verification available before shipping.
+
+### Recorded results
+
 Use these records to understand coverage. Validate the exact release commit and
 clean extraction; keep its checksum with the test record.
+
+<details>
+<summary>Focused CI repair checks — 2026-10-26</summary>
+
+The local WSL checkout passed **253 affected Python tests** and the **three
+previously failing Chromium cases**, plus repository-wide Ruff lint/format,
+Bandit, Python/npm dependency audits and the production frontend build.
+Two MongoDB receipt tests skipped because the isolated database was not enabled.
+The Python audit passed after updating the locked `filelock` dependency to 4.2.4.
+
+These focused results do not establish a passing full GitHub run, full Python
+matrix, Docker build or extracted-release run. `actionlint` was unavailable.
+The frontend build still reports upstream media-bundle size/CommonJS warnings;
+Bandit reports stale suppression warnings without findings.
+
+</details>
 
 <details>
 <summary>Self-hosting snapshot and live original-byte validation</summary>

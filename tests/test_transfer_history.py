@@ -324,7 +324,9 @@ def task_registry(request, tmp_path):
         registry.close()
 
 
-def folder_metadata(identity="folder-session-0001", name="Holiday photos", created=1000):
+def folder_metadata(
+    identity="folder-session-0001", name="Holiday photos", created=1000
+):
     return {
         "id": identity,
         "name": name,
@@ -338,11 +340,18 @@ async def test_clear_history_preserves_active_folders_and_recovery(task_registry
     active_folder = folder_metadata()
     browser_folder = folder_metadata("browser-folder-0001")
     for status in (
-        TransferStatus.COMPLETED, TransferStatus.ERROR, TransferStatus.CANCELLED
+        TransferStatus.COMPLETED,
+        TransferStatus.ERROR,
+        TransferStatus.CANCELLED,
     ):
         add(registry, "archived-" + status, status, kind="legacy")
     add(registry, "active-child", TransferStatus.COMPLETED, folder_upload=active_folder)
-    add(registry, "browser-child", TransferStatus.COMPLETED, folder_upload=browser_folder)
+    add(
+        registry,
+        "browser-child",
+        TransferStatus.COMPLETED,
+        folder_upload=browser_folder,
+    )
     running = add(
         registry, "running", TransferStatus.RUNNING, folder_upload=active_folder
     )
@@ -395,7 +404,7 @@ async def test_cleared_history_stays_cleared_after_restart_and_pruning(tmp_path)
 
 def test_clear_history_api_requires_login_and_keeps_live_jobs(tmp_path):
     settings = make_settings(tmp_path)
-    store = DriveStore(tmp_path / "clear-api.sqlite3")
+    store = DriveStore.create(tmp_path / "clear-api.sqlite3")
     runtime = FakeRuntime(store)
     finished = add(runtime.transfers.registry, "finished", TransferStatus.COMPLETED)
     queued = add(runtime.transfers.registry, "queued", TransferStatus.QUEUED)
@@ -493,7 +502,9 @@ async def test_task_status_and_search_apply_before_pagination_across_live_archiv
     assert (await registry.task_history(status="finished"))["total_tasks"] == 2
 
 
-async def test_legacy_folder_hints_are_ephemeral_and_durable_metadata_wins(task_registry):
+async def test_legacy_folder_hints_are_ephemeral_and_durable_metadata_wins(
+    task_registry,
+):
     registry = task_registry
     legacy = [
         add(registry, f"legacy-{index}", TransferStatus.COMPLETED).id
@@ -566,9 +577,12 @@ def test_task_history_http_hints_bounds_and_owner_boundary(tmp_path):
             assert response.headers["cache-control"] == "no-store"
             assert response.json()["total_tasks"] == 1
             assert len(response.json()["jobs"]) == 3
-            assert client.get("/api/v1/transfers/history", params={"page": 1}).json()[
-                "total_tasks"
-            ] == 3
+            assert (
+                client.get("/api/v1/transfers/history", params={"page": 1}).json()[
+                    "total_tasks"
+                ]
+                == 3
+            )
             assert client.post(route, json=payload | {"offset": -1}).status_code == 422
             assert client.post(route, json=payload | {"page": 0}).status_code == 422
             oversized = payload | {
@@ -588,7 +602,8 @@ def test_task_history_http_hints_bounds_and_owner_boundary(tmp_path):
             }
             assert len(json.dumps(large_hints)) > 65536
             assert client.post(route, json=large_hints).status_code == 200
-            assert client.post(route, content=b"x" * (256 * 1024 + 1)).status_code == 413
+            response = client.post(route, content=b"x" * (256 * 1024 + 1))
+            assert response.status_code == 413
             assert (
                 client.get(
                     "/api/v1/transfers/history",

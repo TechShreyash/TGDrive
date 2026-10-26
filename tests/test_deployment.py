@@ -411,6 +411,7 @@ def test_hosted_and_local_compose_resolve_without_real_credentials(tmp_path):
     # including zero and false, rather than being replaced by app fallbacks.
     overrides = {
         "DEMO_MODE": "true",
+        "REMOTE_DOWNLOAD_CONCURRENCY": "3",
         "CACHE_MEMORY_BYTES": "536870912",
         "CACHE_DISK_BYTES": "0",
         "AUTO_PRELOAD": "false",

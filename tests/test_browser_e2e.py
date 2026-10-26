@@ -383,7 +383,9 @@ def assert_pdf_header_layout(page: Any, dialog: Any) -> None:
       return {headerHeight:header.height,headerBottom:header.bottom,
         scrollTop:scroll.top};
     }""")
-    assert layout["headerHeight"] <= 72, "The fixed preview header must remain one row"
+    # Phone readers use a second row for navigation and accessible touch targets.
+    max_height = 120 if page.viewport_size["width"] <= 720 else 72
+    assert layout["headerHeight"] <= max_height, "Preview controls must stay compact"
     assert abs(layout["scrollTop"] - layout["headerBottom"]) <= 1, (
         "PDF viewport must start below the one header, without a second toolbar"
     )
@@ -443,7 +445,9 @@ def test_resumable_multiple_files_navigation_and_mobile_layout(
     server.finish(started[0]["id"])
     expect(row(page, "first.txt")).to_have_attribute("data-status", "completed")
     clear = page.get_by_role("button", name="Clear Finished", exact=True)
-    expect(clear).to_have_count(0)
+    expect(clear).to_be_enabled()
+    clear.click()
+    expect(row(page, "first.txt")).to_have_count(0)
     expect(row(page, "second.txt")).to_be_visible()
     server.finish(started[1]["id"])
     expect(row(page, "second.txt")).to_have_attribute("data-status", "completed")
@@ -458,13 +462,6 @@ def test_reload_reselect_checks_original_and_resumes_acknowledged_bytes(
     server: Server, desktop: tuple[Any, Any]
 ) -> None:
     _, page = desktop
-    page.add_init_script("""
-      const originalDigest = crypto.subtle.digest.bind(crypto.subtle);
-      crypto.subtle.digest = async (...args) => {
-        await new Promise(resolve => { window.__releaseOriginalCheck = resolve; });
-        return originalDigest(...args);
-      };
-    """)
     login(page, server.url)
     payload = {
         "name": "resumable.bin",
@@ -483,9 +480,20 @@ def test_reload_reselect_checks_original_and_resumes_acknowledged_bytes(
 
     page.route("**/api/v1/uploads/*", interrupt_after_first_chunk)
     page.locator("#file-input").set_input_files(payload)
-    expect(row(page, "resumable.bin")).to_have_attribute("data-status", "error")
+    # Network interruptions retry after 2, 4 and 8 seconds. Let those attempts
+    # exhaust before testing reload/reselection; do not block their hashing.
+    expect(row(page, "resumable.bin")).to_have_attribute(
+        "data-status", "error", timeout=25000
+    )
     assert server.control()["started"] == []
     page.unroute("**/api/v1/uploads/*", interrupt_after_first_chunk)
+    page.add_init_script("""
+      const originalDigest = crypto.subtle.digest.bind(crypto.subtle);
+      crypto.subtle.digest = async (...args) => {
+        await new Promise(resolve => { window.__releaseOriginalCheck = resolve; });
+        return originalDigest(...args);
+      };
+    """)
     page.reload()
     expect(row(page, "resumable.bin")).to_have_attribute("data-status", "error")
     expect(row(page, "resumable.bin").locator(".transfer-recovery")).to_be_visible()
@@ -3385,7 +3393,9 @@ def test_transfer_history_filters_cleared_records_and_empty_state(
         history.get_by_role("heading", name="No Failed Transfers", exact=True)
     ).to_be_visible()
     filters.get_by_role("button", name="All", exact=True).click()
-    expect(history.get_by_role("button", name="Show Files", exact=True)).to_have_count(0)
+    expect(history.get_by_role("button", name="Show Files", exact=True)).to_have_count(
+        0
+    )
     expect(history.locator(".transfer-item-name")).to_have_count(2)
     expect(row(page, "history-first.bin")).to_be_visible()
     expect(row(page, "history-second.bin")).to_be_visible()
@@ -3401,7 +3411,9 @@ def test_transfer_history_filters_cleared_records_and_empty_state(
 
     page.get_by_role("link", name="Transfers", exact=False).click()
     filters.get_by_role("button", name="Successful", exact=True).click()
-    expect(history.get_by_role("button", name="Show Files", exact=True)).to_have_count(0)
+    expect(history.get_by_role("button", name="Show Files", exact=True)).to_have_count(
+        0
+    )
     expect(history.locator(".transfer-item-name")).to_have_count(2)
     expect(history.locator("time")).to_have_count(2)
     expect(
@@ -3884,9 +3896,7 @@ def test_ordinary_files_stay_separate_and_folder_headers_stay_compact(
             for identity in hint["transfer_ids"]
         }
         rows = [
-            job | {"folder_upload": hints[job["id"]]}
-            if job["id"] in hints
-            else job
+            job | {"folder_upload": hints[job["id"]]} if job["id"] in hints else job
             for job in jobs
         ]
         total = len(

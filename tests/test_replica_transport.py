@@ -205,7 +205,9 @@ def session_settings(directory, *, api_id=12345, api_hash="a" * 32):
 @pytest.fixture
 def persistent_clients(monkeypatch):
     """Exercise real private SQLite auth storage without connecting to Telegram."""
-    state = SimpleNamespace(instances=[], expired=False, failure=None, account_id=234567)
+    state = SimpleNamespace(
+        instances=[], expired=False, failure=None, account_id=234567
+    )
 
     def create(session_path, *_args, **_kwargs):
         native = Native()
@@ -236,7 +238,8 @@ def persistent_clients(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_saved_bot_session_avoids_authorization_on_reconnect_and_replacement(
-    tmp_path, persistent_clients,
+    tmp_path,
+    persistent_clients,
 ):
     settings = session_settings(tmp_path)
     first = ReplicaTransport(
@@ -269,7 +272,9 @@ async def test_saved_bot_session_avoids_authorization_on_reconnect_and_replaceme
 @pytest.mark.asyncio
 @pytest.mark.parametrize("change", ["token", "api_id", "api_hash"])
 async def test_session_cache_is_isolated_when_credentials_change(
-    tmp_path, persistent_clients, change,
+    tmp_path,
+    persistent_clients,
+    change,
 ):
     settings = session_settings(tmp_path)
     first = ReplicaTransport(
@@ -299,7 +304,8 @@ async def test_session_cache_is_isolated_when_credentials_change(
 
 @pytest.mark.asyncio
 async def test_expired_saved_auth_preserves_typed_signin_wait_without_erasing_session(
-    tmp_path, persistent_clients,
+    tmp_path,
+    persistent_clients,
 ):
     settings = session_settings(tmp_path)
     first = ReplicaTransport(
@@ -328,7 +334,8 @@ async def test_expired_saved_auth_preserves_typed_signin_wait_without_erasing_se
 
 @pytest.mark.asyncio
 async def test_authorized_saved_session_still_requires_matching_bot_identity(
-    tmp_path, persistent_clients,
+    tmp_path,
+    persistent_clients,
 ):
     settings = session_settings(tmp_path)
     first = ReplicaTransport(
@@ -353,7 +360,9 @@ async def test_authorized_saved_session_still_requires_matching_bot_identity(
 @pytest.mark.asyncio
 @pytest.mark.parametrize("link", ["directory", "session", "journal", "wal", "shm"])
 async def test_session_storage_rejects_symbolic_links_without_touching_target(
-    tmp_path, persistent_clients, link,
+    tmp_path,
+    persistent_clients,
+    link,
 ):
     settings = session_settings(tmp_path)
     transport = ReplicaTransport(
@@ -552,14 +561,17 @@ def test_inflight_duplicate_is_retryable_without_echoing_provider_request():
 
 @pytest.mark.asyncio
 async def test_native_client_preserves_typed_error_for_durable_coordinator_retry(
-    monkeypatch, tmp_path,
+    monkeypatch,
+    tmp_path,
 ):
     native = Native()
     constructor = Mock(return_value=native)
     monkeypatch.setattr("tgdrive.replica_transport.TelegramClient", constructor)
     transport = ReplicaTransport(
         SimpleNamespace(
-            bot_tokens=(PRIMARY,), api_id=12345, api_hash=SecretStr("a" * 32),
+            bot_tokens=(PRIMARY,),
+            api_id=12345,
+            api_hash=SecretStr("a" * 32),
             resolved_data_dir=tmp_path,
         ),
         TOKEN,

@@ -136,6 +136,11 @@ does not remove environment variables or reset files, accounts, credentials or
 recovery keys. A stale save requires reloading; invalid values are rejected.
 An apply failure attempts rollback and reports if a restart is still needed.
 
+For Compose deployments, `REMOTE_DOWNLOAD_CONCURRENCY` sets the startup limit
+for simultaneous URL downloads (default **2**, range **1–8**). Set it in `.env`
+locally or in the hosting environment, then recreate/redeploy the container.
+A saved dashboard value still takes precedence.
+
 ## Cache settings
 
 | Setting | Default | Meaning |

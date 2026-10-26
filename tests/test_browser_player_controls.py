@@ -307,9 +307,7 @@ def test_http_window_is_sized_before_loading_and_keeps_received_bytes(
     server: Server, desktop: tuple[Any, Any]
 ) -> None:
     _, page = desktop
-    page.add_init_script(
-        "Object.defineProperty(navigator,'deviceMemory',{get:()=>8})"
-    )
+    page.add_init_script("Object.defineProperty(navigator,'deviceMemory',{get:()=>8})")
     original = (ROOT / "tests/fixtures/movtext-subtitles.mp4").read_bytes()
     padding = 40 * 1024**2 - len(original)
     payload = original + struct.pack(">I4s", padding, b"free") + bytes(padding - 8)

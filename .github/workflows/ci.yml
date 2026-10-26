@@ -5,8 +5,27 @@ on:
     branches:
       - main
       - dev
+    paths-ignore:
+      - '**.md'
+      - 'docs/**'
+      - LICENSE
   pull_request:
+    paths-ignore:
+      - '**.md'
+      - 'docs/**'
+      - LICENSE
   workflow_dispatch:
+    inputs:
+      suite:
+        description: Additional checks (core checks always run)
+        type: choice
+        default: core
+        options:
+          - core
+          - browser
+          - container
+          - release
+          - all
 
 permissions:
   contents: read
@@ -87,10 +106,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        python-version:
-          - "3.11"
-          - "3.13"
-          - "3.14"
+        python-version: ${{ fromJSON(github.event_name == 'push' && '["3.14"]' || '["3.11", "3.13", "3.14"]') }}
     steps:
       - name: Check out repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -151,6 +167,7 @@ jobs:
 
   browser:
     name: Chromium end-to-end
+    if: github.event_name == 'pull_request' || (github.event_name == 'workflow_dispatch' && (inputs.suite == 'browser' || inputs.suite == 'all'))
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
@@ -198,13 +215,13 @@ jobs:
 
   container:
     name: Container build
+    if: github.event_name == 'workflow_dispatch' && (inputs.suite == 'container' || inputs.suite == 'release' || inputs.suite == 'all')
     runs-on: ubuntu-latest
     timeout-minutes: 25
     needs:
       - quality
       - frontend
       - tests
-      - browser
     steps:
       - name: Check out repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -272,6 +289,7 @@ jobs:
 
   source-release:
     name: Verify source release archive
+    if: github.event_name == 'workflow_dispatch' && (inputs.suite == 'release' || inputs.suite == 'all')
     runs-on: ubuntu-latest
     timeout-minutes: 20
     needs:

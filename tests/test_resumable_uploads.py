@@ -535,7 +535,9 @@ async def test_cloud_creation_reconciles_jobs_on_loop_and_saves_on_worker(
         manager.store.close()
 
 
-async def test_explicit_folder_metadata_survives_receipt_restart_and_job_handoff(tmp_path):
+async def test_explicit_folder_metadata_survives_receipt_restart_and_job_handoff(
+    tmp_path,
+):
     uploads, manager = make(tmp_path)
     folder = manager.store.create_folder("/", "Photos")
     root_path = "/" + folder["id"]
@@ -559,7 +561,8 @@ async def test_explicit_folder_metadata_survives_receipt_restart_and_job_handoff
         job = await uploads.complete(item["id"])
         assert job.context["folder_upload"] == original
         assert job.as_dict()["folder_upload"] == original
-        assert (await manager.registry.history())["jobs"][0]["folder_upload"] == original
+        history = await manager.registry.history()
+        assert history["jobs"][0]["folder_upload"] == original
         standalone = uploads.create("standalone.bin", "/", 3)
         assert "folder_upload" not in standalone
         with pytest.raises(UploadError, match="outside"):
@@ -571,7 +574,9 @@ async def test_explicit_folder_metadata_survives_receipt_restart_and_job_handoff
 
 
 @pytest.mark.parametrize("move_ancestor", [False, True])
-async def test_new_folder_receipts_follow_moved_root_and_ancestor(tmp_path, move_ancestor):
+async def test_new_folder_receipts_follow_moved_root_and_ancestor(
+    tmp_path, move_ancestor
+):
     uploads, manager = make(tmp_path)
     store = manager.store
     ancestor = store.create_folder("/", "Original parent")

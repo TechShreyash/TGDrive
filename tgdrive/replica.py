@@ -255,7 +255,8 @@ class ChannelReplica:
                     config = self.journal.get("config", {})
                     recovery = self.journal.get("recovery")
                     if (
-                        state.get("phase") in {
+                        state.get("phase")
+                        in {
                             "paused",
                             "disabled",
                             "error",
@@ -301,7 +302,9 @@ class ChannelReplica:
                             phase=(
                                 phase
                                 if phase in {"paused", "disabled"}
-                                else "waiting" if retryable else "error"
+                                else "waiting"
+                                if retryable
+                                else "error"
                             ),
                             error={
                                 "code": getattr(error, "code", "REPLICA_FAILED"),
@@ -310,7 +313,8 @@ class ChannelReplica:
                                     "Leave TGDrive running. Backup will retry after "
                                     "the displayed deadline; channel permissions "
                                     "do not need changing for this cooldown."
-                                    if getattr(error, "code", None) == "REPLICA_FLOOD_WAIT"
+                                    if getattr(error, "code", None)
+                                    == "REPLICA_FLOOD_WAIT"
                                     else "Check channel access, bot permissions and "
                                     "the source file. Retry after correcting "
                                     "the problem. "
@@ -359,7 +363,9 @@ class ChannelReplica:
                 await verify_many(
                     destination, [(message, size) for _identity, message, size in batch]
                 )
-                verified.update((identity, message) for identity, message, _size in batch)
+                verified.update(
+                    (identity, message) for identity, message, _size in batch
+                )
                 batch.clear()
 
             for node in files:
@@ -533,8 +539,7 @@ class ChannelReplica:
             check_only
             and not error
             and not force_check
-            and state.get("checked_at", 0)
-            > time.time() - HEALTH_CHECK_INTERVAL_SECONDS
+            and state.get("checked_at", 0) > time.time() - HEALTH_CHECK_INTERVAL_SECONDS
         ):
             if state.get("phase") in {"idle", "waiting", "syncing"}:
                 self.update(phase="protected", current_file="", error=None)

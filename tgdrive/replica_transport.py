@@ -268,7 +268,12 @@ class ReplicaTransport:
         async with self._pacer.slot():
             try:
                 return await call(*args, **kwargs)
-            except (PhoneMigrateError, NetworkMigrateError, UserMigrateError, ValueError):
+            except (
+                PhoneMigrateError,
+                NetworkMigrateError,
+                UserMigrateError,
+                ValueError,
+            ):
                 # Login owns the bounded DC handoff; inspect owns unresolved peers.
                 raise
             except ReplicaTransportError:
@@ -403,7 +408,7 @@ class ReplicaTransport:
             result = await self._request(
                 "channels.getFullChannel",
                 self._client,
-                functions.channels.GetFullChannelRequest(utils.get_input_channel(peer))
+                functions.channels.GetFullChannelRequest(utils.get_input_channel(peer)),
             )
             chat = next(
                 (row for row in result.chats if utils.get_peer_id(row) == channel), None
@@ -472,7 +477,7 @@ class ReplicaTransport:
             result = await self._request(
                 "channels.getFullChannel",
                 self._client,
-                functions.channels.GetFullChannelRequest(utils.get_input_channel(peer))
+                functions.channels.GetFullChannelRequest(utils.get_input_channel(peer)),
             )
             identity = getattr(result.full_chat, "pinned_msg_id", None)
             return None if identity is None else _message(identity)
@@ -599,7 +604,7 @@ class ReplicaTransport:
                     message="",
                     random_id=random_id,
                     silent=True,
-                )
+                ),
             )
             identity = await self._sent(destination_channel, result, random_id)
             sent, copied = await self._get(destination_channel, identity)
@@ -670,7 +675,8 @@ class ReplicaTransport:
                 if document.size != size:
                     raise ReplicaTransportError(
                         "The channel document does not match its catalog size. "
-                        "Preserve the current catalog and choose another recovery point.",
+                        "Preserve the current catalog and choose another "
+                        "recovery point.",
                         "REPLICA_SIZE_MISMATCH",
                     )
 
@@ -780,7 +786,7 @@ class ReplicaTransport:
                     message=caption,
                     random_id=random_id,
                     silent=True,
-                )
+                ),
             )
             identity = await self._sent(channel, result, random_id)
             _, document = await self._get(channel, identity)
@@ -801,7 +807,7 @@ class ReplicaTransport:
                         peer=peer,
                         id=identity,
                         silent=True,
-                    )
+                    ),
                 )
             return identity
 
@@ -826,7 +832,7 @@ class ReplicaTransport:
                     self._client,
                     functions.channels.GetFullChannelRequest(
                         utils.get_input_channel(peer)
-                    )
+                    ),
                 )
                 message_id = getattr(full.full_chat, "pinned_msg_id", None)
                 if message_id is None:

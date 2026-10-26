@@ -39,7 +39,8 @@ Run these from the release checkout, with the development prerequisites from
 - [ ] Confirm `2.0.0` in `pyproject.toml`, the frontend
    package metadata and Docker image label. Review the user guides against the
    implemented settings and defaults.
-- [ ] Run CI against the exact release commit. Review quality/security,
+- [ ] In **Actions → CI → Run workflow**, select the release branch and suite
+   **`all`** against the exact release commit. Review quality/security,
    Python, frontend, Chromium, container and source-release results. Use the
    isolated test database described in Development; never run destructive tests
    against an operator's drive.

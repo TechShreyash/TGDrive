@@ -1068,8 +1068,9 @@ class TransferRegistry:
                     "NOT IN (" + ",".join("?" for _ in parameters) + ")"
                 )
             with self._db_lock, self._db:
+                # Only generated '?' placeholders enter the clause; IDs are bound.
                 cleared = self._db.execute(
-                    "DELETE FROM transfer_history "  # noqa: S608 -- bound IDs
+                    "DELETE FROM transfer_history "  # noqa: S608 # nosec B608
                     "WHERE status IN ('completed','error','cancelled')" + clause,
                     parameters,
                 ).rowcount

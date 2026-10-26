@@ -363,7 +363,9 @@ class ResumableUploads:
                     # snapshot here could race that synchronous terminal save.
                     continue
 
-                def reconcile() -> None:
+                def reconcile(
+                    item: dict[str, Any] = item, upload_id: str = upload_id
+                ) -> None:
                     if item["state"] in {"finished", "cancelled"}:
                         (self.root / (upload_id + ".part")).unlink(missing_ok=True)
                     self._save(item)
@@ -382,9 +384,7 @@ class ResumableUploads:
     ) -> dict[str, Any]:
         if self._mongo is None:
             # SQLite's connection retains its existing event-loop ownership.
-            return self.create(
-                name, parent_id, total_size, folder_upload=folder_upload
-            )
+            return self.create(name, parent_id, total_size, folder_upload=folder_upload)
         async with self._creation_lock:
             await self._reconcile_for_creation()
             item = self._admit(name, parent_id, total_size, folder_upload)
