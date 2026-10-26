@@ -84,7 +84,7 @@ def test_release_version_rejects_invalid_format(tmp_path: Path, version: str) ->
         f'[project]\nname = "tgdrive"\nversion = "{version}"\n', encoding="utf-8"
     )
 
-    with pytest.raises(ValueError, match="major.minor.patch"):
+    with pytest.raises(ValueError, match=r"major\.minor\.patch"):
         check_version(tmp_path)
 
 
@@ -93,7 +93,7 @@ def test_release_tag_must_match_version(tmp_path: Path) -> None:
     assert check_version(tmp_path, "v2.0.0") == "2.0.0"
 
     for tag in ("v2.0.1", "2.0.0"):
-        with pytest.raises(ValueError, match="Release tag must be v2.0.0"):
+        with pytest.raises(ValueError, match=r"Release tag must be v2\.0\.0"):
             check_version(tmp_path, tag)
 
 
