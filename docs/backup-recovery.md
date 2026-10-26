@@ -67,6 +67,13 @@ require a cooldown. Leave TGDrive running until the displayed retry deadline;
 new activity entries include the wait duration and the failed operation when
 available. A cooldown alone does not call for changing bot permissions.
 
+After confirmation, a healthy unchanged backup gets a routine health check
+hourly, rather than starting another file-copy run. The check verifies channel
+access, the saved recovery capsule and its pin. Changes to files, folders or
+saved settings can need a new recovery snapshot even without another upload;
+confirmed document mappings are reused. Browser status refreshes read saved
+progress and do not initiate Telegram logins or copies.
+
 <details>
 <summary>Copy pacing and verification on retry</summary>
 
@@ -91,6 +98,22 @@ survive restart. Adaptive pacing starts at one second after restart; the saved
 Telegram deadline must still expire before background work resumes. Recovery
 bundles are uploaded separately and downloaded for checksum verification; their
 internal media-chunk transfers retain Telethon's normal transfer behavior.
+
+The backup bot reuses its private authenticated Telegram session across checks
+and restarts. Session files live under `DATA_DIR/sessions`, with owner-only
+permissions; keep them private like bot tokens. Changing the bot token or API
+credentials selects a separate session and requires authentication again. A
+missing or invalidated session may also require sign-in, subject to Telegram's
+waits. An idle health-check wait retains the confirmed restore point; new
+activity messages identify that context instead of implying another file copy.
+
+Healthy unchanged checkpoints are checked after one hour. An explicit `sync`
+action requests an earlier check, but cannot bypass a saved provider deadline.
+File/catalog or recovery-settings changes are processed without waiting for
+the hourly check. After a failed check, its saved retry deadline governs the
+next attempt. Destructive Telegram mutations still require a fresh checkpoint
+check; the hourly idle policy cannot satisfy that deletion barrier. The browser's
+status refresh remains read-only.
 
 </details>
 

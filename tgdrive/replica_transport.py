@@ -16,6 +16,7 @@ import math
 import os
 import re
 import secrets
+import stat
 import time
 from contextlib import asynccontextmanager, suppress
 from pathlib import Path
@@ -23,7 +24,6 @@ from typing import Any
 
 from telethon import TelegramClient, functions, types, utils
 from telethon.errors import NetworkMigrateError, PhoneMigrateError, UserMigrateError
-from telethon.sessions import StringSession
 
 CAPSULE_NAME = "tgdrive-replica.tgdb"
 MAX_CAPSULE_BYTES = 64 * 1024 * 1024
@@ -216,6 +216,53 @@ class ReplicaTransport:
         self._lock = asyncio.Lock()
         self._pacer = pacer or ReplicaRequestPacer()
         self._peers = {}
+        self._session_file: Path | None = None
+
+    def _persistent_session(self, identity: int) -> Path:
+        """Keep backup authorization separate from primary bots and rotated tokens."""
+        fingerprint = hashlib.sha256(
+            (
+                f"{self._settings.api_id}\0"
+                f"{self._settings.api_hash.get_secret_value()}\0{self._token}"
+            ).encode()
+        ).hexdigest()[:24]
+        directory = self._settings.resolved_data_dir / "sessions"
+        path = directory / f"backup-bot-{identity}-{fingerprint}.session"
+        try:
+            if directory.is_symlink():
+                raise ValueError("Unsafe session directory")
+            directory.mkdir(parents=True, exist_ok=True, mode=0o700)
+            directory.chmod(0o700)
+            # Precreate privately before SQLite opens it. Reject existing links,
+            # special files and sidecar links rather than following them.
+            for candidate in (
+                path,
+                path.with_name(path.name + "-journal"),
+                path.with_name(path.name + "-wal"),
+                path.with_name(path.name + "-shm"),
+            ):
+                try:
+                    info = candidate.lstat()
+                except FileNotFoundError:
+                    continue
+                if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1:
+                    raise ValueError("Unsafe session file")
+                candidate.chmod(0o600)
+            descriptor = os.open(path, os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, 0o600)
+            try:
+                info = os.fstat(descriptor)
+                if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1:
+                    raise ValueError("Unsafe session file")
+                os.fchmod(descriptor, 0o600)
+            finally:
+                os.close(descriptor)
+        except (OSError, ValueError):
+            raise ReplicaTransportError(
+                "The saved backup bot session cannot be opened safely. "
+                "Check DATA_DIR session storage and permissions before retrying.",
+                "REPLICA_SESSION",
+            ) from None
+        return path
 
     async def _request(self, operation, call, *args, **kwargs):
         async with self._pacer.slot():
@@ -266,27 +313,41 @@ class ReplicaTransport:
                 "REPLICA_SAME_BOT",
             )
         if self._client is None:
-            self._client = TelegramClient(
-                StringSession(),
-                self._settings.api_id,
-                self._settings.api_hash.get_secret_value(),
-                receive_updates=False,
-                flood_sleep_threshold=0,
-                request_retries=0,
-                raise_last_call_error=True,
-                connection_retries=0,
-                timeout=15,
-                auto_reconnect=True,
-            )
+            self._session_file = self._persistent_session(identity)
+            try:
+                self._client = TelegramClient(
+                    str(self._session_file),
+                    self._settings.api_id,
+                    self._settings.api_hash.get_secret_value(),
+                    receive_updates=False,
+                    flood_sleep_threshold=0,
+                    request_retries=0,
+                    raise_last_call_error=True,
+                    connection_retries=0,
+                    timeout=15,
+                    auto_reconnect=True,
+                )
+            except Exception:
+                raise ReplicaTransportError(
+                    "The saved backup bot session could not be read. Preserve "
+                    "the session file and check its storage before retrying.",
+                    "REPLICA_SESSION",
+                ) from None
             self._client.parse_mode = None
         try:
             async with self._guard(30):
+                if self._session_file is not None:
+                    self._persistent_session(identity)
                 await self._client.connect()
                 for attempt in range(2):
                     try:
-                        await self._request(
-                            "sign_in", self._client.sign_in, bot_token=self._token
+                        authorized = await self._request(
+                            "is_user_authorized", self._client.is_user_authorized
                         )
+                        if not authorized:
+                            await self._request(
+                                "sign_in", self._client.sign_in, bot_token=self._token
+                            )
                         break
                     except (PhoneMigrateError, NetworkMigrateError, UserMigrateError):
                         # With request_retries=0, Telethon switches DC but raises
@@ -304,6 +365,8 @@ class ReplicaTransport:
                         "The backup bot identity did not match its token.",
                         "REPLICA_CREDENTIALS",
                     )
+                if self._session_file is not None:
+                    self._persistent_session(identity)
             self._started = True
         except BaseException:
             await self.close()

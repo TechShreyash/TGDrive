@@ -533,6 +533,207 @@ async def test_expired_health_check_detects_lost_channel_even_without_catalog_ch
 
 
 @pytest.mark.asyncio
+async def test_unchanged_backup_stays_idle_between_hourly_health_checks(tmp_path):
+    from tgdrive.replica import HEALTH_CHECK_INTERVAL_SECONDS
+
+    _, store, remote, replica, config = setup(tmp_path)
+    try:
+        await replica._sync(config)
+        point = replica.journal.get("restore_point")
+        remote.calls.clear()
+        connections = len(remote.instances)
+        replica.update(checked_at=time.time() - HEALTH_CHECK_INTERVAL_SECONDS + 60)
+        await replica._sync(config)
+        await replica._sync(config)
+        assert len(remote.instances) == connections
+        assert remote.calls == []
+        assert replica.status()["phase"] == "protected"
+        assert replica.journal.get("job") is None
+        assert replica.journal.get("restore_point") == point
+    finally:
+        await dispose(replica, store)
+
+
+@pytest.mark.asyncio
+async def test_hourly_health_check_does_not_start_a_copy_job_or_republish(
+    tmp_path, monkeypatch,
+):
+    _, store, remote, replica, config = setup(tmp_path)
+    try:
+        await replica._sync(config)
+        point = replica.journal.get("restore_point")
+        success = replica.status()["last_success_at"]
+        remote.calls.clear()
+        phases = []
+        start = Transport.start
+
+        async def record_start(self):
+            phases.append(replica.status()["phase"])
+            assert replica.journal.get("job") is None
+            await start(self)
+
+        monkeypatch.setattr(Transport, "start", record_start)
+        replica.update(checked_at=0)
+        await replica._sync(config)
+        assert phases == ["protected"]
+        assert [call[0] for call in remote.calls] == ["verify"]
+        assert replica.journal.get("restore_point") == point
+        assert replica.status()["last_success_at"] == success
+    finally:
+        await dispose(replica, store)
+
+
+@pytest.mark.asyncio
+async def test_new_catalog_revision_is_not_delayed_until_the_next_health_check(tmp_path):
+    _, store, remote, replica, config = setup(tmp_path)
+    try:
+        await replica._sync(config)
+        previous = replica.status()["protected_revision"]
+        connections = len(remote.instances)
+        store.create_folder("/", "New metadata")
+        await replica._sync(config)
+        assert len(remote.instances) == connections + 1
+        assert replica.status()["protected_revision"] > previous
+        assert replica.status()["protected_revision"] == store.revision
+    finally:
+        await dispose(replica, store)
+
+
+@pytest.mark.asyncio
+async def test_manual_sync_forces_health_check_but_resume_reuses_recent_confirmation(
+    tmp_path, monkeypatch,
+):
+    _, store, remote, replica, config = setup(tmp_path)
+    monkeypatch.setattr(replica, "start", lambda: None)
+    try:
+        await replica._sync(config)
+        connections = len(remote.instances)
+        await replica.action("pause")
+        await replica.action("resume")
+        await replica._sync(config)
+        assert len(remote.instances) == connections
+        assert replica.status()["phase"] == "protected"
+        await replica.action("sync")
+        await replica._sync(config)
+        assert len(remote.instances) == connections + 1
+        assert replica.status()["phase"] == "protected"
+    finally:
+        await dispose(replica, store)
+
+
+@pytest.mark.asyncio
+async def test_idle_health_wait_reports_context_and_retries_after_saved_deadline(
+    tmp_path, monkeypatch,
+):
+    _, store, remote, replica, config = setup(tmp_path)
+    original_start = Transport.start
+
+    async def limited_start(self):
+        error = ReplicaTransportError(
+            "Telegram requested a pause. Backup will resume after the wait.",
+            "REPLICA_FLOOD_WAIT", retry_after=120, retryable=True,
+        )
+        error.operation = "sign_in"
+        raise error
+
+    try:
+        await replica._sync(config)
+        replica.update(checked_at=0)
+        monkeypatch.setattr(Transport, "start", limited_start)
+        replica.start()
+        for _ in range(100):
+            if replica.status().get("error"):
+                break
+            await asyncio.sleep(0.01)
+        failure = replica.status()["error"]
+        assert "Routine backup health check delayed" in failure["detail"]
+        assert "sign_in" in failure["detail"]
+        assert "Retry in 120 seconds" in failure["detail"]
+        assert replica.journal.get("job") is None
+        assert replica.journal.get("restore_point") is not None
+        replica._task.cancel()
+        await asyncio.gather(replica._task, return_exceptions=True)
+        monkeypatch.setattr(Transport, "start", original_start)
+        connections = len(remote.instances)
+        await replica.action("sync")
+        replica._task.cancel()
+        await asyncio.gather(replica._task, return_exceptions=True)
+        assert replica.status()["error"]["retry_at"] == failure["retry_at"]
+        assert len(remote.instances) == connections
+        replica.update(error=failure | {"retry_at": 0}, checked_at=time.time())
+        await replica._sync(config)
+        assert len(remote.instances) == connections + 1
+        assert replica.status()["phase"] == "protected"
+        assert replica.status()["error"] is None
+    finally:
+        await dispose(replica, store)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("action", ["retry", "resume"])
+async def test_expired_health_wait_is_checked_on_manual_retry(tmp_path, monkeypatch, action):
+    _, store, remote, replica, config = setup(tmp_path)
+    monkeypatch.setattr(replica, "start", lambda: None)
+    try:
+        await replica._sync(config)
+        connections = len(remote.instances)
+        replica.update(
+            phase="waiting", checked_at=time.time(),
+            error={"code": "REPLICA_FLOOD_WAIT", "retry_at": time.time() - 1},
+        )
+        await replica.action(action)
+        await replica._sync(config)
+        assert len(remote.instances) == connections + 1
+        assert replica.status()["phase"] == "protected"
+    finally:
+        await dispose(replica, store)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("failure", ["access", "pin", "document"])
+async def test_deletion_barrier_rechecks_recent_checkpoint_before_mutation(tmp_path, failure):
+    from tgdrive.managed_settings import SettingsProblem
+
+    _, store, remote, replica, config = setup(tmp_path)
+    try:
+        await replica._sync(config)
+        point = replica.journal.get("restore_point")
+        if failure == "access":
+            remote.unavailable.add(BACKUP)
+        elif failure == "pin":
+            remote.pins[BACKUP] += 1
+        else:
+            remote.messages.pop((BACKUP, point["backup_message_id"]))
+        connections = len(remote.instances)
+        with pytest.raises((SettingsProblem, ReplicaTransportError)):
+            await replica.before_mutation()
+        assert len(remote.instances) == connections + 1
+        assert replica.journal.get("restore_point") == point
+    finally:
+        await dispose(replica, store)
+
+
+@pytest.mark.asyncio
+async def test_pause_during_health_check_stays_paused(tmp_path, monkeypatch):
+    _, store, remote, replica, config = setup(tmp_path)
+    try:
+        await replica._sync(config)
+        replica.update(checked_at=0)
+        original_pin = Transport.pinned_message
+
+        async def pause_after_pin(self, channel):
+            result = await original_pin(self, channel)
+            replica.update(phase="paused")
+            return result
+
+        monkeypatch.setattr(Transport, "pinned_message", pause_after_pin)
+        await replica._sync(config)
+        assert replica.status()["phase"] == "paused"
+    finally:
+        await dispose(replica, store)
+
+
+@pytest.mark.asyncio
 async def test_inspected_backup_rebuilds_replacement_main_when_original_main_is_lost(
     tmp_path,
 ):

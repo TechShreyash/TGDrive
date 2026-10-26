@@ -4,12 +4,15 @@ from __future__ import annotations
 
 import asyncio
 import copy
+import stat
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock
 
 import pytest
 from pydantic import SecretStr
 from telethon import TelegramClient, functions, types, utils
+from telethon.crypto import AuthKey
 from telethon.errors import (
     AccessTokenInvalidError,
     FloodWaitError,
@@ -18,7 +21,7 @@ from telethon.errors import (
     RandomIdDuplicateError,
     UserMigrateError,
 )
-from telethon.sessions import StringSession
+from telethon.sessions import SQLiteSession, StringSession
 
 from tgdrive.replica_transport import (
     CAPSULE_NAME,
@@ -77,6 +80,7 @@ def message(identity, channel_id, doc):
 class Native:
     def __init__(self):
         self.connect = AsyncMock()
+        self.is_user_authorized = AsyncMock(return_value=False)
         self.sign_in = AsyncMock()
         self.get_me = AsyncMock(return_value=SimpleNamespace(id=234567, bot=True))
         self.disconnect = AsyncMock()
@@ -188,6 +192,194 @@ async def started(native=None, *, primary=PRIMARY, pacer=None):
     )
     await transport.start()
     return transport, native
+
+
+def session_settings(directory, *, api_id=12345, api_hash="a" * 32):
+    return SimpleNamespace(
+        bot_tokens=(PRIMARY,),
+        api_id=api_id,
+        api_hash=SecretStr(api_hash),
+        resolved_data_dir=directory,
+    )
+
+
+@pytest.fixture
+def persistent_clients(monkeypatch):
+    """Exercise real private SQLite auth storage without connecting to Telegram."""
+    state = SimpleNamespace(instances=[], expired=False, failure=None, account_id=234567)
+
+    def create(session_path, *_args, **_kwargs):
+        native = Native()
+        native.session = SQLiteSession(session_path)
+
+        async def authorized():
+            key = native.session.auth_key
+            return not state.expired and key is not None and key.key is not None
+
+        async def authorize(**_kwargs):
+            if state.failure is not None:
+                raise state.failure
+            native.session.auth_key = AuthKey(bytes(range(256)))
+            native.session.save()
+
+        native.is_user_authorized = AsyncMock(side_effect=authorized)
+        native.sign_in = AsyncMock(side_effect=authorize)
+        native.get_me.return_value = SimpleNamespace(id=state.account_id, bot=True)
+        native.disconnect = AsyncMock(side_effect=native.session.close)
+        state.instances.append(native)
+        return native
+
+    monkeypatch.setattr("tgdrive.replica_transport.TelegramClient", create)
+    return state
+
+
+@pytest.mark.asyncio
+async def test_saved_bot_session_avoids_authorization_on_reconnect_and_replacement(
+    tmp_path, persistent_clients,
+):
+    settings = session_settings(tmp_path)
+    first = ReplicaTransport(
+        settings, TOKEN, pacer=ReplicaRequestPacer(interval=0, maximum_interval=0)
+    )
+    await first.start()
+    await first.close()
+    await first.start()
+    await first.close()
+    replacement = ReplicaTransport(
+        settings, TOKEN, pacer=ReplicaRequestPacer(interval=0, maximum_interval=0)
+    )
+    try:
+        await replacement.start()
+        original, restored = persistent_clients.instances
+        original.sign_in.assert_awaited_once_with(bot_token=TOKEN)
+        assert original.is_user_authorized.await_count == 2
+        assert original.get_me.await_count == 2
+        restored.sign_in.assert_not_awaited()
+        restored.is_user_authorized.assert_awaited_once()
+        restored.get_me.assert_awaited_once()
+        assert original.session.filename == restored.session.filename
+        path = Path(restored.session.filename)
+        assert path.name.startswith("backup-bot-234567-")
+        assert TOKEN not in str(path) and "a" * 32 not in str(path)
+        assert stat.S_IMODE(path.parent.stat().st_mode) == 0o700
+        assert stat.S_IMODE(path.stat().st_mode) == 0o600
+    finally:
+        await replacement.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("change", ["token", "api_id", "api_hash"])
+async def test_session_cache_is_isolated_when_credentials_change(
+    tmp_path, persistent_clients, change,
+):
+    settings = session_settings(tmp_path)
+    first = ReplicaTransport(
+        settings, TOKEN, pacer=ReplicaRequestPacer(interval=0, maximum_interval=0)
+    )
+    await first.start()
+    await first.close()
+    token = TOKEN
+    if change == "token":
+        token = "234567:" + "c" * 24
+    elif change == "api_id":
+        settings = session_settings(tmp_path, api_id=54321)
+    else:
+        settings = session_settings(tmp_path, api_hash="b" * 32)
+    replacement = ReplicaTransport(
+        settings, token, pacer=ReplicaRequestPacer(interval=0, maximum_interval=0)
+    )
+    try:
+        await replacement.start()
+        old, new = persistent_clients.instances
+        assert old.session.filename != new.session.filename
+        new.sign_in.assert_awaited_once_with(bot_token=token)
+        assert token not in new.session.filename
+    finally:
+        await replacement.close()
+
+
+@pytest.mark.asyncio
+async def test_expired_saved_auth_preserves_typed_signin_wait_without_erasing_session(
+    tmp_path, persistent_clients,
+):
+    settings = session_settings(tmp_path)
+    first = ReplicaTransport(
+        settings, TOKEN, pacer=ReplicaRequestPacer(interval=0, maximum_interval=0)
+    )
+    await first.start()
+    await first.close()
+    session_path = Path(persistent_clients.instances[0].session.filename)
+    persistent_clients.expired = True
+    persistent_clients.failure = FloodWaitError(request=TOKEN, capture=2876)
+    replacement = ReplicaTransport(
+        settings, TOKEN, pacer=ReplicaRequestPacer(interval=0, maximum_interval=0)
+    )
+    with pytest.raises(ReplicaTransportError) as raised:
+        await replacement.start()
+    assert raised.value.code == "REPLICA_FLOOD_WAIT"
+    assert raised.value.operation == "sign_in"
+    assert raised.value.retryable and raised.value.retry_after == 2876
+    assert TOKEN not in str(raised.value)
+    assert session_path.is_file()
+    expired = persistent_clients.instances[-1]
+    expired.sign_in.assert_awaited_once_with(bot_token=TOKEN)
+    expired.get_me.assert_not_awaited()
+    expired.disconnect.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_authorized_saved_session_still_requires_matching_bot_identity(
+    tmp_path, persistent_clients,
+):
+    settings = session_settings(tmp_path)
+    first = ReplicaTransport(
+        settings, TOKEN, pacer=ReplicaRequestPacer(interval=0, maximum_interval=0)
+    )
+    await first.start()
+    await first.close()
+    persistent_clients.account_id = 999999
+    replacement = ReplicaTransport(
+        settings, TOKEN, pacer=ReplicaRequestPacer(interval=0, maximum_interval=0)
+    )
+    with pytest.raises(ReplicaTransportError) as raised:
+        await replacement.start()
+    assert raised.value.code == "REPLICA_CREDENTIALS"
+    assert TOKEN not in str(raised.value)
+    restored = persistent_clients.instances[-1]
+    restored.sign_in.assert_not_awaited()
+    restored.get_me.assert_awaited_once()
+    restored.disconnect.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("link", ["directory", "session", "journal", "wal", "shm"])
+async def test_session_storage_rejects_symbolic_links_without_touching_target(
+    tmp_path, persistent_clients, link,
+):
+    settings = session_settings(tmp_path)
+    transport = ReplicaTransport(
+        settings, TOKEN, pacer=ReplicaRequestPacer(interval=0, maximum_interval=0)
+    )
+    outside = tmp_path / "preserve-this-file"
+    outside.write_bytes(b"unchanged")
+    if link == "directory":
+        target = tmp_path / "other-sessions"
+        target.mkdir()
+        (tmp_path / "sessions").symlink_to(target, target_is_directory=True)
+    else:
+        path = transport._persistent_session(234567)
+        if link == "session":
+            path.unlink()
+            path.symlink_to(outside)
+        else:
+            suffix = {"journal": "-journal", "wal": "-wal", "shm": "-shm"}[link]
+            path.with_name(path.name + suffix).symlink_to(outside)
+    with pytest.raises(ReplicaTransportError) as raised:
+        await transport.start()
+    assert raised.value.code == "REPLICA_SESSION"
+    assert TOKEN not in str(raised.value)
+    assert not persistent_clients.instances
+    assert outside.read_bytes() == b"unchanged"
 
 
 @pytest.mark.asyncio
@@ -361,14 +553,15 @@ def test_inflight_duplicate_is_retryable_without_echoing_provider_request():
 
 @pytest.mark.asyncio
 async def test_native_client_preserves_typed_error_for_durable_coordinator_retry(
-    monkeypatch,
+    monkeypatch, tmp_path,
 ):
     native = Native()
     constructor = Mock(return_value=native)
     monkeypatch.setattr("tgdrive.replica_transport.TelegramClient", constructor)
     transport = ReplicaTransport(
         SimpleNamespace(
-            bot_tokens=(PRIMARY,), api_id=12345, api_hash=SecretStr("a" * 32)
+            bot_tokens=(PRIMARY,), api_id=12345, api_hash=SecretStr("a" * 32),
+            resolved_data_dir=tmp_path,
         ),
         TOKEN,
     )
@@ -397,6 +590,7 @@ async def test_real_telethon_login_replays_auth_once_after_dc_switch(migration):
     )
     account = types.User(id=234567, access_hash=1, is_self=True, bot=True)
     native.connect = AsyncMock()
+    native.is_user_authorized = AsyncMock(return_value=False)
     native.disconnect = AsyncMock()
     native.get_me = AsyncMock(side_effect=[None, None, account])
     native._on_login = AsyncMock(return_value=account)

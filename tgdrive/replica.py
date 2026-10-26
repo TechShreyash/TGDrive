@@ -29,6 +29,8 @@ from tgdrive.replica_state import (
 )
 from tgdrive.store import DriveStore
 
+HEALTH_CHECK_INTERVAL_SECONDS = 60 * 60
+
 
 def now():
     return datetime.now(UTC).isoformat(timespec="seconds")
@@ -217,6 +219,8 @@ class ChannelReplica:
                 self.update(phase="waiting")
             else:
                 self.update(phase="idle", error=None)
+                if action == "sync" or error:
+                    self.update(checked_at=0)
             if config:
                 config["enabled"] = True
                 self.journal.set("config", config)
@@ -261,6 +265,13 @@ class ChannelReplica:
                             or hasattr(error, "code")
                             else "Telegram backup operation could not be confirmed."
                         )
+                        if (
+                            getattr(error, "code", None) == "REPLICA_FLOOD_WAIT"
+                            and not recovery
+                            and self.journal.get("job") is None
+                            and self.journal.get("restore_point")
+                        ):
+                            detail = "Routine backup health check delayed. " + detail
                         operation = getattr(error, "operation", None)
                         if operation:
                             detail += f" Operation: {operation}."
@@ -476,7 +487,7 @@ class ChannelReplica:
         )
         return ids
 
-    async def _sync(self, config):
+    async def _sync(self, config, *, force_check=False):
         store = self.runtime.store
         state = self.journal.get("status", {})
         error = state.get("error") or {}
@@ -492,11 +503,21 @@ class ChannelReplica:
             json.dumps(current_credentials, sort_keys=True).encode()
         ).hexdigest()
         same_credentials = self.journal.get("credentials_digest") == credentials_digest
-        if (
+        point = self.journal.get("restore_point", {})
+        check_only = (
             same_credentials
             and state.get("protected_revision") == store.revision
-            and state.get("checked_at", 0) > time.time() - 60
+            and bool(point.get("backup_message_id"))
+        )
+        if (
+            check_only
+            and not error
+            and not force_check
+            and state.get("checked_at", 0)
+            > time.time() - HEALTH_CHECK_INTERVAL_SECONDS
         ):
+            if state.get("phase") in {"idle", "waiting", "syncing"}:
+                self.update(phase="protected", current_file="", error=None)
             return
         job = self.journal.get("job")
         if (
@@ -513,7 +534,7 @@ class ChannelReplica:
                 code="REPLICA_MONGODB_KEY_CHANGED",
                 status=409,
             )
-        if job is None:
+        if job is None and not check_only:
             catalog = await asyncio.to_thread(store.export)
             if catalog.get("storage_channel_id") not in {
                 None,
@@ -524,18 +545,19 @@ class ChannelReplica:
             validate_catalog(catalog)
             job = {"catalog": catalog, "credentials": current_credentials}
             self.journal.set("job", job)
-        self.update(phase="syncing", error=None)
+        if check_only:
+            # The recorded checkpoint is still confirmed while its health is
+            # checked; do not present an unchanged drive as copying files again.
+            self.journal.set("job", None)
+            self.update(phase="protected", current_file="", error=None)
+        else:
+            self.update(phase="syncing", error=None)
         transport = self.factory(self.settings, config["token"])
         try:
             await transport.start()
             await transport.inspect(self.settings.storage_channel)
             await transport.inspect(config["channel"])
-            point = self.journal.get("restore_point", {})
-            if (
-                same_credentials
-                and state.get("protected_revision") == store.revision
-                and point.get("backup_message_id")
-            ):
+            if check_only:
                 await transport.verify(
                     config["channel"], point["backup_message_id"], point["bundle_size"]
                 )
@@ -548,7 +570,12 @@ class ChannelReplica:
                         code="REPLICA_PIN_CHANGED",
                         status=409,
                     )
-                self.update(phase="protected", error=None, checked_at=time.time())
+                phase = self.journal.get("status", {}).get("phase")
+                self.update(
+                    phase=phase if phase in {"paused", "disabled"} else "protected",
+                    error=None,
+                    checked_at=time.time(),
+                )
                 self._request_pacer.reset()
                 self.journal.set("job", None)
                 return
@@ -1019,7 +1046,7 @@ class ChannelReplica:
         async with self._operation:
             for _ in range(2):
                 try:
-                    await self._sync(config)
+                    await self._sync(config, force_check=True)
                 except Exception as error:
                     delay = getattr(error, "retry_after", None)
                     if delay:
