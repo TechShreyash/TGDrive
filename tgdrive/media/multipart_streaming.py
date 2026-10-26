@@ -40,6 +40,7 @@ async def stream_multipart_file(
     quality: str | None = None,
     authorize=None,
     request_id: str | None = None,
+    request_status=None,
 ) -> Response:
     if authorize is not None:
         await authorize()
@@ -186,4 +187,5 @@ async def stream_multipart_file(
         mime_type=mime_type,
         headers=headers,
         authorize=authorize,
+        request_status=request_status,
     )

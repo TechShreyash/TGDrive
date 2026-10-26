@@ -65,23 +65,42 @@ class TelegramFileNotFound(FileNotFoundError):
     )
 
 
+def _record_request_error(status, error):
+    if status is None:
+        return
+    status.update(phase="error", code=None, retry_at=None)
+    if isinstance(error, asyncio.CancelledError):
+        status["phase"] = None
+    elif isinstance(error, MediaQueueFull):
+        status.update(
+            phase="retry_wait",
+            code=error.code,
+            retry_at=time.monotonic() + error.retry_after,
+        )
+
+
 class _LeasedStreamingResponse(StreamingResponse):
     def __init__(
         self,
         *args: Any,
         release: Callable[[], Awaitable[None]],
         authorize=None,
+        request_status=None,
         **kwargs: Any,
     ) -> None:
         super().__init__(*args, **kwargs)
         self._release = release
         self._authorize = authorize
+        self._request_status = request_status
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         try:
             if self._authorize is not None:
                 await self._authorize()
             await super().__call__(scope, receive, send)
+        except BaseException as error:
+            _record_request_error(self._request_status, error)
+            raise
         finally:
             # ASGI send can fail while the body is suspended at a yield.
             # Explicitly close it so bounded prefetch work is not left to GC.
@@ -90,7 +109,14 @@ class _LeasedStreamingResponse(StreamingResponse):
                 if close is not None:
                     await close()
             finally:
-                await self._release()
+                try:
+                    await self._release()
+                finally:
+                    if (
+                        self._request_status is not None
+                        and self._request_status["phase"] == "receiving"
+                    ):
+                        self._request_status["phase"] = None
 
 
 class _PrimedBody:
@@ -290,7 +316,14 @@ def _observe_media_request(
 
 
 async def _prime_response(
-    iterator, *, release, status, mime_type, headers, authorize=None
+    iterator,
+    *,
+    release,
+    status,
+    mime_type,
+    headers,
+    authorize=None,
+    request_status=None,
 ):
     try:
         try:
@@ -298,6 +331,7 @@ async def _prime_response(
         except StopAsyncIteration:
             first = None
     except BaseException as error:
+        _record_request_error(request_status, error)
         try:
             await iterator.aclose()
         finally:
@@ -316,10 +350,13 @@ async def _prime_response(
                 },
             )
         raise
+    if request_status is not None:
+        request_status["phase"] = "receiving"
     return _LeasedStreamingResponse(
         _PrimedBody(iterator, first, authorize),
         release=release,
         authorize=authorize,
+        request_status=request_status,
         status_code=status,
         media_type=mime_type,
         headers=headers,
@@ -367,6 +404,7 @@ async def stream_telegram_file(
     parts: list[dict[str, Any]] | None = None,
     authorize=None,
     request_id: str | None = None,
+    request_status=None,
 ) -> Response:
     """Stream with an optional Premium user and a balanced client lease."""
     if authorize is not None:
@@ -387,6 +425,7 @@ async def stream_telegram_file(
             quality=quality,
             authorize=authorize,
             request_id=request_id,
+            request_status=request_status,
         )
 
     lease: AbstractAsyncContextManager[Any] = pool.lease(
@@ -651,6 +690,7 @@ async def stream_telegram_file(
             mime_type=mime_type,
             headers=headers,
             authorize=authorize,
+            request_status=request_status,
         )
     except BaseException:
         await release()

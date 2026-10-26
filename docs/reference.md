@@ -974,7 +974,22 @@ Owner cookie or scoped file/folder capability required; supply `path` and option
 | GET /api/v1/preview | name, size and kind:text/pdf/video/book/unsupported. Text includes text, language, truncated and preview_bytes; PDF includes an authorized local URL; unsupported includes a reason. |
 | GET /api/v1/media | original descriptor and variants list from the actual stored message. Each descriptor has id, label, is_original, size, mime_type, width, height and duration where applicable. |
 | GET /api/v1/thumbnail | TGDrive-generated JPEG cover when cached, otherwise a provider JPEG/PNG/WebP thumbnail, at most 128 KiB; optional `If-None-Match` can return `304`. |
-| GET /api/v1/file-status | Authorized `path`, opaque `request_id`, optional `auth`; request-specific queue estimate and logical size, without listing other callers. |
+| GET /api/v1/file-status | Authorized `path`, opaque `request_id`, optional `auth`; request-specific queue estimate, logical size, phase and retry guidance, without listing other callers. |
+
+`file-status` returns `queue`, `size`, `phase`, `code` and `retry_after`. Phase is
+`checking_file`, `waiting_for_telegram`, `receiving`, `retry_wait`, `error`, or
+`null` when no current phase is known. The initial file check includes metadata
+waits even when there is no origin queue entry. Queue positions count operations
+and can change as download requests take turns; they are not a file/user order
+or a completion ETA.
+
+A queue-full failure records `retry_wait`, `code: TELEGRAM_QUEUE_FULL` and
+remaining `retry_after` seconds, matching the response's `503`/`Retry-After`
+guidance. A new GET with that request ID clears the previous failure. Other
+errors expose no private exception details. Status is bound to the authorized
+file, held in a bounded in-memory registry, and may be absent before the GET,
+after eviction or after restart. For overlapping GETs with the same ID, phase
+reflects the latest GET while the queue estimate aggregates that ID's operations.
 
 **Thumbnails:** authorize before and after asynchronous reads, including cache hits
 and `304`. Responses use `Cache-Control: private, no-cache`, `Vary: Cookie` and an

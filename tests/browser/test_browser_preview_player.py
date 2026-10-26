@@ -37,7 +37,9 @@ def test_video_preview_does_not_poll_or_display_a_stale_server_queue(
     # Other preview types still show an actual provider queue when necessary.
     page.get_by_role("button", name="sample.png", exact=True).dblclick()
     image = preview_dialog(page)
-    expect(image.get_by_role("status")).to_contain_text("Queue position 7")
+    expect(image.get_by_role("status")).to_contain_text(
+        "Waiting for Telegram capacity · About 60 seconds"
+    )
     assert diagnostics
     image.get_by_role("button", name="Close Preview", exact=True).click()
     expect(image).to_have_count(0)
@@ -53,6 +55,62 @@ def test_video_preview_does_not_poll_or_display_a_stale_server_queue(
     page.wait_for_function("()=>document.querySelector('movi-player')?.currentTime>3")
     assert diagnostics == []
     expect(dialog.get_by_text("Waiting for Telegram", exact=False)).to_have_count(0)
+
+
+@pytest.mark.parametrize("close_while_waiting", [False, True])
+def test_image_preview_retries_busy_capacity_and_cancels_on_close(
+    server: Server, desktop: tuple[Any, Any], close_while_waiting: bool
+) -> None:
+    _, page = desktop
+    media_requests: list[str] = []
+
+    def busy_file(route: Any) -> None:
+        media_requests.append(route.request.url)
+        route.fulfill(
+            status=503,
+            headers={"Retry-After": "3"},
+            json={"code": "TELEGRAM_QUEUE_FULL", "detail": "Telegram is busy"},
+        )
+
+    page.route("**/file?*", busy_file)
+    page.route(
+        "**/api/v1/file-status?*",
+        lambda route: route.fulfill(
+            json={
+                "queue": None,
+                "phase": "retry_wait",
+                "code": "TELEGRAM_QUEUE_FULL",
+                "retry_after": 3,
+            }
+        ),
+    )
+    login(page, server.url)
+    page.get_by_role("button", name="Preview samples", exact=True).dblclick()
+    page.clock.install()
+    page.get_by_role("button", name="sample.png", exact=True).dblclick()
+    dialog = preview_dialog(page)
+    expect(dialog.get_by_role("status")).to_contain_text("will retry automatically")
+    assert len(media_requests) == 1
+    expect(dialog.get_by_text("Preview Unavailable", exact=True)).to_have_count(0)
+    if close_while_waiting:
+        dialog.get_by_role("button", name="Close Preview", exact=True).click()
+        page.clock.run_for(10000)
+        assert len(media_requests) == 1
+        return
+
+    page.clock.run_for(1000)
+    assert len(media_requests) == 1
+    page.clock.run_for(2500)
+    expect(dialog.get_by_role("status")).to_contain_text("will retry automatically")
+    assert len(media_requests) == 2
+    page.clock.run_for(3500)
+    expect(
+        dialog.get_by_role("button", name="Try Preview Again", exact=True)
+    ).to_be_visible()
+    expect(dialog.get_by_role("status")).to_contain_text("waiting queue is full")
+    assert len(media_requests) == 3
+    page.clock.run_for(10000)
+    assert len(media_requests) == 3
 
 
 @pytest.mark.parametrize("width,height", [(1440, 960), (390, 844)])

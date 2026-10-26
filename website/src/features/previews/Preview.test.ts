@@ -1,7 +1,12 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import { displayText, loadPreview, nativePreviewKind } from "./Preview";
+import {
+    displayText,
+    loadPreview,
+    nativePreviewKind,
+    previewRetryDelay,
+} from "./Preview";
 import { fileUrl } from "../../shared/types";
 import { api } from "../../shared/api";
 const viewerLoaders = vi.hoisted(
@@ -25,6 +30,37 @@ vi.mock("./books/BookPreview", () => {
 });
 afterEach(() => vi.unstubAllGlobals());
 describe("bounded safe previews", () => {
+    it("retries a full Telegram queue twice without shortening its retry delay", () => {
+        const status = {
+            phase: "retry_wait" as const,
+            code: "TELEGRAM_QUEUE_FULL",
+            retry_after: 17,
+        };
+        expect(previewRetryDelay(status, 0)).toBe(17000);
+        expect(previewRetryDelay(status, 1)).toBe(17000);
+        expect(previewRetryDelay(status, 2)).toBeNull();
+        expect(previewRetryDelay({ ...status, retry_after: 0 }, 0)).toBe(1000);
+    });
+    it("does not auto-retry permanent, unclassified or invalid preview failures", () => {
+        expect(previewRetryDelay({}, 0)).toBeNull();
+        expect(
+            previewRetryDelay({ phase: "error", code: "FILE_REMOVED" }, 0),
+        ).toBeNull();
+        expect(
+            previewRetryDelay({ code: "TELEGRAM_QUEUE_FULL" }, 0),
+        ).toBeNull();
+        for (const seconds of [-1, Number.NaN, Infinity, 2147484])
+            expect(
+                previewRetryDelay(
+                    {
+                        phase: "retry_wait",
+                        code: "TELEGRAM_QUEUE_FULL",
+                        retry_after: seconds,
+                    },
+                    0,
+                ),
+            ).toBeNull();
+    });
     it("does not let a delayed preview 401 dismiss a newer login", async () => {
         const events = new EventTarget();
         const expired = vi.fn();

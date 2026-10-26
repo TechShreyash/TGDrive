@@ -234,6 +234,27 @@ These cover fake HTTP responses, staging admission, advisory progress versus
 durable state, cancellation and handoff to fake Telegram. They do not measure
 live download speed or confirm a deployment.
 
+For Telegram download admission and request-status changes, the focused offline
+regressions are:
+
+```bash
+uv run --frozen --all-groups python -m pytest -W error \
+  tests/media/test_media_request_fairness.py tests/media/test_book_range_admission.py \
+  tests/media/test_file_status.py tests/media/test_media_scheduler.py \
+  tests/media/test_media_admission_priority.py tests/media/test_stream_delivery.py \
+  tests/media/test_multipart_streaming.py tests/web/test_app.py -q
+cd website
+npx vitest run src/features/previews/Preview.test.ts
+npm run typecheck
+```
+
+These exercise one bot sharing distinct cold files, priority and cancellation,
+one-slot thumbnail source reads, exact stream delivery, authorized status and
+bounded preview retry policy. The image retry/close and video status workflows
+are in `tests/browser/test_browser_preview_player.py`. These are synthetic
+regressions, not measurements of Telegram throughput. Run checks only with the
+approval required by `AGENTS.md`; listing commands here does not record a pass.
+
 For thumbnail regeneration and selective readers, focus on
 `tests/media/test_thumbnail_rebuild.py`, `tests/media/test_generated_thumbnails.py`,
 `tests/media/test_thumbnails.py`, `tests/media/test_books.py`, `tests/media/test_books_api.py` and

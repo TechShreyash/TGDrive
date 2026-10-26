@@ -117,8 +117,9 @@ Uploads default to **one slot per bot** (**1–4** allowed); Premium clients kee
 one each. FIFO admission selects least-active eligible clients, preferring ready
 Premium slots with bot fallback. Uploads/reads share account media/request budgets,
 channel pacing and persisted FloodWait deadlines. Demand precedes queued preloads
-without preempting running work.
-See [performance controls](performance.md#upload-pipeline-and-smaller-splits).
+without preempting running work. Download requests rotate their queued blocks
+after each admission; see [shared-download scheduling](performance.md#shared-download-load-and-queues)
+and [performance controls](performance.md#upload-pipeline-and-smaller-splits).
 
 <details>
 <summary>Identity, live limits and account failures</summary>

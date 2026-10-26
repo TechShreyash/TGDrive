@@ -179,10 +179,27 @@ still need authentication, server bandwidth, sockets, memory and proxy capacity.
 Cold misses share bounded account media/request admission and origin queues;
 uploads compete within the same account budget. Demand precedes background work.
 
+Requested payloads take turns in **1 MiB blocks**. After admitting a download
+block, its request's remaining queued blocks move behind other waiting requests
+at the same priority. This keeps one file's read-ahead from taking every next
+turn. Anonymous responses get their own internal request identity; identified
+parallel ranges share their supplied identity. This is request fairness, not a
+per-person quota, and running reads are not interrupted. Shared cache fills still
+fetch each block once for their subscribers.
+
+Uploads hold an operation slot for a Telegram document part. If configured upload
+concurrency fills every combined media slot, downloads must wait for a part to
+finish; the default one upload and three combined operations leave read capacity.
+Background thumbnail source metadata does not reserve a payload slot while its
+pooled reader waits for one, including with a one-operation account limit.
+
 Queue position/wait are estimates from recent durations and eligible capacity.
 Without enough samples, no ETA is invented. Seeks, outages and cooldowns can
 change estimates; overloaded queues can reject work. Respect response status
 and retry guidance rather than opening unlimited requests.
+Positions count origin operations, not files or people. The download queue and
+request-status observations are held in memory and do not survive a restart.
+Verified disk-cache blocks can still be reused after restart.
 
 ## URL import intake
 

@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import math
+import time
 from contextlib import asynccontextmanager, suppress
 from pathlib import Path
 from typing import Annotated, Any, cast
@@ -54,6 +56,7 @@ from tgdrive.media.previews import describe_media, describe_preview
 from tgdrive.media.streaming import (
     TelegramFileNotFound,
     TelegramVariantNotFound,
+    _record_request_error,
     stream_telegram_file,
 )
 from tgdrive.media.thumbnails import ThumbnailBusy, ThumbnailCache, load_thumbnail
@@ -1244,7 +1247,8 @@ def create_app(
         path, file_data = authorized_file(request, path, auth)
 
         pool = _runtime(request).pool
-        if request_id:
+        progress = None
+        if request_id and request.method == "GET":
             requests = getattr(pool, "_request_files", None)
             if requests is None:
                 requests = {}
@@ -1253,10 +1257,15 @@ def create_app(
                 except AttributeError:
                     requests = None
             if requests is not None:
-                requests[request_id] = (
-                    settings.storage_channel,
-                    file_data["message_id"],
-                    file_data["size"],
+                progress = requests[request_id] = dict(
+                    file=(
+                        settings.storage_channel,
+                        file_data["message_id"],
+                        file_data["size"],
+                    ),
+                    phase="checking_file",
+                    code=None,
+                    retry_at=None,
                 )
                 while len(requests) > 4096:
                     requests.pop(next(iter(requests)))
@@ -1325,7 +1334,7 @@ def create_app(
                 media_type=mime,
             )
         try:
-            return await stream_telegram_file(
+            response = await stream_telegram_file(
                 pool=_runtime(request).pool,
                 channel_id=settings.storage_channel,
                 message_id=file_data["message_id"],
@@ -1338,11 +1347,18 @@ def create_app(
                 quality=quality,
                 authorize=authorize,
                 request_id=request_id,
+                request_status=progress,
             )
-        except TelegramVariantNotFound as exc:
-            raise HTTPException(404, "This media quality is unavailable") from exc
-        except TelegramFileNotFound as exc:
-            raise HTTPException(status_code=404, detail=exc.public_detail) from exc
+            if progress is not None and progress["phase"] == "checking_file":
+                progress["phase"] = None
+            return response
+        except BaseException as exc:
+            _record_request_error(progress, exc)
+            if isinstance(exc, TelegramVariantNotFound):
+                raise HTTPException(404, "This media quality is unavailable") from exc
+            if isinstance(exc, TelegramFileNotFound):
+                raise HTTPException(status_code=404, detail=exc.public_detail) from exc
+            raise
 
     @app.get("/api/v1/file-status")
     async def file_status(
@@ -1356,14 +1372,31 @@ def create_app(
         _, data = authorized_file(request, path, auth)
         pool = _runtime(request).pool
         estimate = getattr(pool, "queue_estimate", None)
+        progress = getattr(pool, "_request_files", {}).get(request_id)
+        if progress is not None and progress["file"] != (
+            settings.storage_channel,
+            data["message_id"],
+            data["size"],
+        ):
+            progress = None
+        queue = (
+            estimate(request_id)
+            if progress is not None and callable(estimate)
+            else None
+        )
+        phase = progress["phase"] if progress is not None else None
+        if queue and queue.get("queued_operations") and not queue.get("active_operations"):
+            if phase in {"checking_file", "receiving"}:
+                phase = "waiting_for_telegram"
         return JSONResponse(
             {
-                "queue": estimate(request_id)
-                if callable(estimate)
-                and getattr(pool, "_request_files", {}).get(request_id)
-                == (settings.storage_channel, data["message_id"], data["size"])
-                else None,
+                "queue": queue,
                 "size": data["size"],
+                "phase": phase,
+                "code": progress["code"] if progress is not None else None,
+                "retry_after": max(0, math.ceil(progress["retry_at"] - time.monotonic()))
+                if progress is not None and progress["retry_at"] is not None
+                else None,
             },
             headers={"Cache-Control": "no-store"},
         )

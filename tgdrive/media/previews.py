@@ -15,6 +15,7 @@ from telethon.errors import RPCError
 from tgdrive.media.logical_media import read_logical_prefix
 from tgdrive.media.media_metadata import get_message
 from tgdrive.media.media_reader import MediaReadCache, stream_pooled_media
+from tgdrive.media.media_scheduler import media_priority
 from tgdrive.media.streaming import (
     PDF_PREVIEW_BYTES,
     TelegramFileNotFound,
@@ -155,12 +156,22 @@ async def lease_media(
 ) -> AsyncIterator[tuple[Any, Any, Any]]:
     """Release even when metadata fetch fails before response construction."""
 
-    priority = {"priority": "preload", "download": True} if background else {}
+    # Metadata must not hold the payload slot that its pooled reader needs.
+    priority = {"priority": "preload", "respect_cooldown": True} if background else {}
     lease = pool.lease(prefer_premium=True, **priority)
     client = await lease.__aenter__()
+
+    async def metadata():
+        token = media_priority.set("preload") if background else None
+        try:
+            return await get_message(client, channel_id, message_id)
+        finally:
+            if token is not None:
+                media_priority.reset(token)
+
     try:
         try:
-            message = await get_message(client, channel_id, message_id)
+            message = await metadata()
             media = _media_from_message(message)
             if message is None or getattr(message, "empty", False) or media is None:
                 raise TelegramFileNotFound(
@@ -174,7 +185,7 @@ async def lease_media(
             replacement = pool.lease(**priority)
             client = await replacement.__aenter__()
             lease = replacement
-            message = await get_message(client, channel_id, message_id)
+            message = await metadata()
             media = _media_from_message(message)
             if message is None or getattr(message, "empty", False) or media is None:
                 raise TelegramFileNotFound(

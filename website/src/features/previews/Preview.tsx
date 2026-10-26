@@ -183,6 +183,33 @@ function safePdfUrl(value?: string): string | undefined {
         /* An invalid descriptor cannot become an iframe navigation. */
     }
 }
+type FileRequestStatus = {
+    queue?: {
+        position: number;
+        estimated_wait_seconds: number | null;
+    } | null;
+    phase?:
+        | "checking_file"
+        | "waiting_for_telegram"
+        | "receiving"
+        | "retry_wait"
+        | "error"
+        | null;
+    retry_after?: number | null;
+    code?: string | null;
+};
+export function previewRetryDelay(status: FileRequestStatus, retries: number) {
+    if (
+        retries >= 2 ||
+        status.code !== "TELEGRAM_QUEUE_FULL" ||
+        status.phase !== "retry_wait"
+    )
+        return null;
+    const seconds = status.retry_after ?? 1;
+    if (!Number.isFinite(seconds) || seconds < 0 || seconds > 2147483)
+        return null;
+    return Math.max(1000, Math.ceil(seconds * 1000));
+}
 export default function Preview({
     item,
     auth,
@@ -263,10 +290,7 @@ export default function Preview({
             );
         }
     }
-    const [queue, setQueue] = useState<{
-        position: number;
-        estimated_wait_seconds: number | null;
-    } | null>(null);
+    const [fileStatus, setFileStatus] = useState<FileRequestStatus | null>(null);
     const [toolbarTarget, setToolbarTarget] = useState<HTMLDivElement | null>(
         null,
     );
@@ -312,7 +336,7 @@ export default function Preview({
     const descriptor = preview?.path === path ? preview.value : null;
     const kind = nativeKind || (descriptor?.kind === "video" ? "video" : null);
     useEffect(() => {
-        setQueue(null);
+        setFileStatus(null);
         // The player's own readiness state is authoritative for video. A server
         // transfer queue can stay busy while cached video is already playing.
         if (kind === "video" || (!nativeKind && !descriptor)) return;
@@ -325,12 +349,12 @@ export default function Preview({
         let timer: ReturnType<typeof setTimeout>;
         const poll = async () => {
             try {
-                const data = await request<{ queue: typeof queue }>(
+                const data = await request<FileRequestStatus>(
                     "/api/v1/file-status?" + params,
                     undefined,
                     { signal: controller.signal },
                 );
-                if (!controller.signal.aborted) setQueue(data.queue);
+                if (!controller.signal.aborted) setFileStatus(data);
             } catch {
                 /* Previews remain usable if queue diagnostics are unavailable. */
             }
@@ -350,6 +374,57 @@ export default function Preview({
         [],
     );
     const [quality, setQuality] = useState("original");
+    const [mediaFailure, setMediaFailure] = useState<
+        "checking" | "retrying" | "busy" | null
+    >(null);
+    const mediaRetries = useRef(0);
+    useEffect(() => {
+        mediaRetries.current = 0;
+        setMediaFailure(null);
+    }, [path, auth, quality]);
+    useEffect(() => {
+        if (!failed || (kind !== "image" && kind !== "audio")) return;
+        const controller = new AbortController();
+        let timer: ReturnType<typeof setTimeout> | undefined;
+        const params = new URLSearchParams({
+            path,
+            request_id: mediaRequestId(path, auth),
+        });
+        if (auth) params.set("auth", auth);
+        void request<FileRequestStatus>(
+            "/api/v1/file-status?" + params,
+            undefined,
+            { signal: controller.signal, timeoutMs: 10000 },
+        )
+            .then((status) => {
+                if (controller.signal.aborted) return;
+                setFileStatus(status);
+                if (status.code !== "TELEGRAM_QUEUE_FULL") {
+                    setMediaFailure(null);
+                    return;
+                }
+                const delay = previewRetryDelay(status, mediaRetries.current);
+                setMediaFailure(delay === null ? "busy" : "retrying");
+                if (delay === null) return;
+                mediaRetries.current++;
+                timer = setTimeout(() => {
+                    setFailed(false);
+                    setMediaFailure(null);
+                    setAttempt((value) => value + 1);
+                }, delay);
+            })
+            .catch(() => {
+                if (!controller.signal.aborted) setMediaFailure(null);
+            });
+        return () => {
+            controller.abort();
+            clearTimeout(timer);
+        };
+    }, [failed, path, auth, kind, attempt]);
+    function mediaFailed() {
+        setMediaFailure("checking");
+        setFailed(true);
+    }
     const playback = useRef<{ time: number; playing: boolean } | null>(null);
     const src =
         fileUrl(path, auth) +
@@ -423,6 +498,17 @@ export default function Preview({
     const fileType = /^[a-z0-9]{1,12}$/i.test(suffix)
         ? suffix.toUpperCase() + " file"
         : "File";
+    const queue = fileStatus?.queue;
+    const waiting =
+        fileStatus?.phase === "waiting_for_telegram" ||
+        (queue != null && queue.position > 0);
+    const waitMessage = waiting
+        ? "Waiting for Telegram capacity"
+        : fileStatus?.phase === "checking_file"
+          ? "Checking file…"
+          : fileStatus?.phase === "receiving"
+            ? "Receiving file…"
+            : null;
     return (
         <dialog
             ref={viewer}
@@ -555,14 +641,14 @@ export default function Preview({
                         {fullscreenError}
                     </p>
                 )}
-                {kind !== "video" && queue && queue.position > 0 && (
+                {kind !== "video" && !failed && waitMessage && (
                     <p className="preview-limit" role="status">
-                        Waiting for Telegram · Queue position {queue.position}
-                        {queue.estimated_wait_seconds != null
+                        {waitMessage}
+                        {waiting && queue?.estimated_wait_seconds != null
                             ? " · About " +
                               Math.ceil(queue.estimated_wait_seconds) +
                               " seconds"
-                            : " · Estimating wait…"}
+                            : ""}
                     </p>
                 )}
                 {details ? (
@@ -667,30 +753,52 @@ export default function Preview({
                                 </div>
                             ) : failed ? (
                                 <div className="empty-state">
-                                    <AlertCircle size={34} />
-                                    <h3>Preview Unavailable</h3>
-                                    <p>
-                                        This file could not be played or
-                                        displayed by your browser. Download the
-                                        original to open it on your device.
+                                    {mediaFailure === "checking" ||
+                                    mediaFailure === "retrying" ? (
+                                        <Spinner />
+                                    ) : (
+                                        <AlertCircle size={34} />
+                                    )}
+                                    <h3>
+                                        {mediaFailure === "checking"
+                                            ? "Checking preview…"
+                                            : mediaFailure
+                                              ? "Telegram is busy"
+                                              : "Preview Unavailable"}
+                                    </h3>
+                                    <p role={mediaFailure ? "status" : undefined}>
+                                        {mediaFailure === "checking"
+                                            ? "Checking whether Telegram is temporarily busy."
+                                            : mediaFailure === "retrying"
+                                              ? "Waiting for Telegram capacity. This preview will retry automatically."
+                                              : mediaFailure === "busy"
+                                                ? "Telegram's waiting queue is full. Try again in a moment."
+                                                : "This file could not be played or displayed by your browser. Download the original to open it on your device."}
                                     </p>
-                                    <button
-                                        className="secondary-button"
-                                        onClick={() => {
-                                            setFailed(false);
-                                            setAttempt((value) => value + 1);
-                                        }}
-                                    >
-                                        <RefreshCw size={16} /> Try Preview
-                                        Again
-                                    </button>
+                                    {mediaFailure !== "checking" &&
+                                        mediaFailure !== "retrying" && (
+                                            <button
+                                                className="secondary-button"
+                                                onClick={() => {
+                                                    mediaRetries.current = 0;
+                                                    setMediaFailure(null);
+                                                    setFailed(false);
+                                                    setAttempt(
+                                                        (value) => value + 1,
+                                                    );
+                                                }}
+                                            >
+                                                <RefreshCw size={16} /> Try
+                                                Preview Again
+                                            </button>
+                                        )}
                                 </div>
                             ) : kind === "image" ? (
                                 <img
                                     key={attempt}
                                     src={src}
                                     alt={item.name}
-                                    onError={() => setFailed(true)}
+                                    onError={mediaFailed}
                                 />
                             ) : kind === "video" ? (
                                 <AdvancedVideo
@@ -717,7 +825,7 @@ export default function Preview({
                                     src={src}
                                     controls
                                     preload="metadata"
-                                    onError={() => setFailed(true)}
+                                    onError={mediaFailed}
                                 />
                             ) : descriptor?.kind === "text" ? (
                                 <div className="text-preview">

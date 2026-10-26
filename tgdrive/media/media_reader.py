@@ -1034,6 +1034,7 @@ async def stream_pooled_media(
             await iterator.aclose()
         return
 
+    request_id = request_id or f"read-{secrets.token_urlsafe(12)}"
     if pool._media_read_cache is None:
         pool._media_read_cache = MediaReadCache(pool.media_cache_dir)
     cache = pool._media_read_cache

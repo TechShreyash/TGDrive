@@ -333,6 +333,16 @@ Closing the preview releases its browser buffer. Reopening requests the file
 again; authorized requests reuse the server's cached chunks while available.
 Protected originals use `no-store`, so browser disk caching is not promised.
 
+When a non-video preview waits, it can show **Checking file**, **Waiting for
+Telegram capacity**, or **Receiving file**. Any wait estimate is approximate;
+the underlying queue counts Telegram operations, not people. Image and audio
+previews automatically retry a full Telegram queue at most twice, respecting the
+server's retry delay. Keep the preview open for those retries; after they are
+exhausted, use **Try Preview Again**. Other failures still need manual retry.
+Video uses its own playback/buffer status. Downloads use the browser's download
+controls, require a connected browser, and have no saved queue position after a
+server restart. See [shared-download limits](performance.md#shared-download-load-and-queues).
+
 | File | Preview |
 | --- | --- |
 | Images, including SVG | Image viewer |
