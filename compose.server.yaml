@@ -1,0 +1,10 @@
+# For a server with its own HTTPS reverse proxy (Coolify uses compose.yaml alone).
+# Always use: docker compose -f compose.yaml -f compose.server.yaml <command>
+services:
+    app:
+        environment:
+            COOKIE_SECURE: "true"
+            TGDRIVE_PROXY_HOSTS: ""
+            FORWARDED_ALLOW_IPS: ${FORWARDED_ALLOW_IPS:-127.0.0.1}
+        ports:
+            - "127.0.0.1:${PORT:-8000}:8000"

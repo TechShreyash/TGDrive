@@ -1,0 +1,18 @@
+#bot-mode {
+    scroll-margin-top: 20px;
+}
+.bot-upload-destination {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    margin: 16px 0;
+    overflow-wrap: anywhere;
+}
+.bot-upload-destination > span {
+    color: var(--muted);
+    font-size: 13px;
+}
+.bot-upload-destination > strong {
+    font-size: 14px;
+    font-weight: 500;
+}

@@ -1,0 +1,54 @@
+.pip-controls {
+    padding: 8px;
+    gap: 6px;
+}
+.pip-btn-row {
+    gap: 0;
+    justify-content: space-between;
+}
+.pip-btn {
+    min-width: 44px;
+    min-height: 44px;
+    padding: 8px;
+    border-radius: 4px;
+}
+.pip-btn.mute-toggle,
+.pip-btn.back-to-tab {
+    position: static;
+}
+.pip-progress-bar,
+.pip-progress-bar:hover {
+    height: 16px;
+    background: transparent;
+}
+.pip-progress-bar::before {
+    content: "";
+    position: absolute;
+    inset: 6px 0 auto;
+    height: 3px;
+    border-radius: 2px;
+    background: rgb(255 255 255 / 20%);
+}
+.pip-progress-buffer,
+.pip-progress-fill {
+    top: 6px;
+    height: 3px;
+}
+body:focus-within .pip-controls,
+body:focus-within .pip-title {
+    opacity: 1;
+}
+body:is(:hover, :focus-within, .show-controls) .tgdrive-movtext-renderer {
+    padding-bottom: calc(7% + 88px);
+}
+.pip-btn:focus-visible,
+.pip-progress-bar:focus-visible {
+    outline: 2px solid #b9c6ff;
+    outline-offset: 2px;
+}
+@media (prefers-reduced-motion: reduce) {
+    .pip-controls,
+    .pip-title {
+        transition: none;
+    }
+}

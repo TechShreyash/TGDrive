@@ -1,0 +1,13 @@
+# Automatically loaded by local `docker compose` commands.
+# Coolify passes -f compose.yaml, so it does not load this local-only override.
+services:
+    app:
+        image: tgdrive:local
+        # Local installations start only when requested, including after a reboot.
+        restart: ${TGDRIVE_RESTART_POLICY:-no}
+        environment:
+            COOKIE_SECURE: ${COOKIE_SECURE:-false}
+            TGDRIVE_PROXY_HOSTS: ""
+            FORWARDED_ALLOW_IPS: ${FORWARDED_ALLOW_IPS:-127.0.0.1}
+        ports:
+            - "${BIND_ADDRESS:-127.0.0.1}:${PORT:-8000}:8000"

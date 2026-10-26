@@ -1,8 +1,53 @@
-*.pyc
-*.data
-t.py
-t2.py
-cache
-config copy.py
-logs.txt
+# Python
+__pycache__/
+*.py[cod]
+*.pyd
+.venv/
+venv/
+.pytest_cache/
+.ruff_cache/
+.coverage
+coverage.xml
+htmlcov/
+dist/
+output/
+
+# Secrets and Telegram sessions
 .env
+.env.*
+!.env.example
+*.session
+*.session-journal
+*.session-shm
+*.session-wal
+
+# Runtime state
+cache/
+data/
+downloads/
+*.data
+*.log
+logs.txt
+
+# Editors and OS files
+.idea/
+.vscode/*
+!.vscode/settings.json
+.DS_Store
+Thumbs.db
+
+node_modules/
+website/dist/
+playwright-report/
+test-results/
+
+# Downloaded manual samples have separate, unverified redistribution terms.
+testfiles/
+
+# Local agent skills and design state
+.agents/
+skills-lock.json
+.impeccable/
+
+# Private local request tracking
+/docs/request-tracker.md

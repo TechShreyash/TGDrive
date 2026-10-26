@@ -1,0 +1,168 @@
+.transfer-center .transfer-bytes,
+.transfer-center .transfer-batch-percent,
+.transfer-center .transfer-metrics {
+    font-variant-numeric: tabular-nums;
+}
+
+.transfer-center .transfer-batch-percent {
+    min-inline-size: 3ch;
+    text-align: end;
+}
+
+.transfer-center .transfer-speed,
+.transfer-center .transfer-eta {
+    white-space: nowrap;
+}
+
+.transfer-center .transfer-timing-state {
+    overflow-wrap: anywhere;
+}
+
+.transfer-precheck-progress {
+    grid-column: 1 / -1;
+    block-size: 4px;
+    overflow: hidden;
+    border-radius: 6px;
+    background: var(--line);
+    margin-block: 5px;
+}
+
+.transfer-precheck-progress > span {
+    display: block;
+    inline-size: 30%;
+    block-size: 100%;
+    background: var(--action);
+}
+
+.transfer-source-wait {
+    grid-column: 1 / -1;
+    color: var(--muted);
+    font-size: 12px;
+    line-height: 1.5;
+    overflow-wrap: anywhere;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+    .transfer-precheck-progress > span {
+        animation: transfer-checking 1.4s ease-in-out infinite alternate;
+    }
+    @keyframes transfer-checking {
+        to {
+            transform: translateX(233%);
+        }
+    }
+}
+
+.transfer-heading:has(.transfer-collapsed-status) h2 {
+    min-width: 0;
+}
+
+.transfer-collapsed-status {
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.transfer-center .transfer-device-status {
+    display: block;
+    grid-column: 1 / -1;
+    min-width: 0;
+    color: var(--ink);
+    font-size: 11px;
+    line-height: 1.5;
+    overflow-wrap: anywhere;
+}
+
+.transfer-page .transfer-device-status {
+    font-size: 12px;
+}
+
+.transfer-center .transfer-batch-status .transfer-device-status {
+    display: inline-block;
+    max-inline-size: 100%;
+    color: inherit;
+    font-size: inherit;
+}
+
+/* One metadata baseline for the current transfer, above its progress bar. */
+.transfer-center
+    .transfer-item[data-live-metrics="true"]
+    .transfer-row-details {
+    display: flex;
+    align-items: baseline;
+    gap: 4px 14px;
+    color: var(--muted);
+    font-size: 12px;
+}
+
+.transfer-center
+    .transfer-item[data-live-metrics="true"]
+    .transfer-row-details
+    .transfer-metrics {
+    display: contents;
+    font-size: inherit;
+}
+
+.transfer-center
+    .transfer-item[data-live-metrics="true"]
+    .transfer-row-details
+    > .transfer-bytes {
+    white-space: nowrap;
+}
+
+@container (min-width: 600px) {
+    .transfer-page .transfer-item[data-live-metrics="true"] .transfer-copy {
+        grid-template-columns: minmax(0, 1fr) minmax(0, 1.5fr);
+        column-gap: 24px;
+    }
+
+    .transfer-page
+        .transfer-item[data-live-metrics="true"]
+        .transfer-copy
+        > .transfer-item-title {
+        grid-column: 1;
+        grid-row: 1;
+    }
+
+    .transfer-page .transfer-item[data-live-metrics="true"] .transfer-phase {
+        grid-column: 1;
+        grid-row: 2;
+    }
+
+    .transfer-page .transfer-item[data-live-metrics="true"] .transfer-location,
+    .transfer-page
+        .transfer-item[data-live-metrics="true"]
+        .transfer-relative-path {
+        grid-column: 1;
+        grid-row: 3;
+    }
+
+    .transfer-page
+        .transfer-item[data-live-metrics="true"]
+        .transfer-row-details {
+        grid-column: 2;
+        grid-row: 1 / 4;
+        justify-content: flex-end;
+        align-self: center;
+    }
+
+    .transfer-page
+        .transfer-item[data-live-metrics="true"]
+        .transfer-copy
+        > progress {
+        grid-column: 1 / -1;
+        grid-row: 4;
+    }
+
+    .transfer-page
+        .transfer-item[data-live-metrics="true"]
+        .transfer-item-actions {
+        align-self: center;
+    }
+}
+
+@container (min-width: 900px) {
+    .transfer-page .transfer-item[data-live-metrics="true"] .transfer-copy {
+        grid-template-columns: minmax(0, 1fr) auto;
+    }
+}

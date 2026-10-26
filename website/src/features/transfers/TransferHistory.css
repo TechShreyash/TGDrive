@@ -1,0 +1,93 @@
+.transfer-history-filters {
+    margin: 4px 0 16px;
+}
+.transfer-history-toolbar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    flex-wrap: wrap;
+    gap: 8px 16px;
+    margin: 4px 0 16px;
+}
+.transfer-history-toolbar .transfer-history-filters {
+    min-width: 0;
+    margin: 0;
+}
+.transfer-history-clear {
+    min-height: 44px;
+    flex-shrink: 0;
+}
+.transfer-history .transfer-history-filters {
+    display: flex;
+    flex-wrap: nowrap;
+    overflow-x: auto;
+}
+.transfer-history-pagination {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 16px;
+    padding: 20px 0;
+    border-top: 1px solid var(--line);
+    margin-top: 16px;
+}
+.transfer-history-pagination > span {
+    color: var(--muted);
+    font-size: 13px;
+    font-variant-numeric: tabular-nums;
+}
+.transfer-history-page-controls,
+.transfer-history-page-numbers {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+}
+.transfer-history-page-controls {
+    flex-wrap: wrap;
+    justify-content: flex-end;
+}
+.transfer-history-page-numbers {
+    flex-wrap: wrap;
+    justify-content: center;
+}
+.transfer-history-page-numbers > span {
+    color: var(--muted);
+    padding-inline: 4px;
+}
+.transfer-history-pagination button {
+    min-width: 40px;
+    min-height: 40px;
+    padding: 8px;
+    font-variant-numeric: tabular-nums;
+}
+.transfer-history-pagination button[aria-current="page"] {
+    border-color: var(--action);
+    background: var(--action-soft);
+    color: var(--on-action-soft);
+    font-weight: 600;
+}
+@media (max-width: 360px) {
+    .transfer-history-page-numbers {
+        gap: 2px;
+    }
+}
+.transfer-history .transfer-category[data-category="finished"] > .empty-state {
+    padding-block: 40px;
+}
+@media (max-width: 540px) {
+    .transfer-history-pagination {
+        flex-wrap: wrap;
+    }
+    .transfer-history-page-controls {
+        width: 100%;
+        justify-content: center;
+    }
+    .transfer-history-page-numbers {
+        order: -1;
+        width: 100%;
+    }
+    .transfer-history-pagination button {
+        min-width: 36px;
+        min-height: 44px;
+    }
+}

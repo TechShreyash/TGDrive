@@ -1,0 +1,68 @@
+.folder-upload-summary {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    margin: 4px 0 20px;
+    color: var(--ink);
+}
+.folder-upload-summary > svg {
+    flex: 0 0 auto;
+    color: var(--action);
+}
+.folder-upload-summary > div {
+    display: flex;
+    flex-direction: column;
+    gap: 5px;
+    min-width: 0;
+}
+.folder-upload-summary strong {
+    overflow-wrap: anywhere;
+}
+.folder-upload-summary span,
+.folder-upload-note {
+    color: var(--muted);
+    font-size: 13px;
+    line-height: 1.65;
+}
+.folder-upload-skipped {
+    margin: 16px 0;
+    padding: 12px;
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    font-size: 13px;
+    line-height: 1.6;
+}
+.folder-upload-skipped summary {
+    cursor: pointer;
+    font-weight: 600;
+}
+.folder-upload-skipped ul {
+    max-height: 150px;
+    overflow: auto;
+    padding-inline-start: 20px;
+}
+.folder-upload-skipped li {
+    margin-block: 7px;
+    overflow-wrap: anywhere;
+}
+.folder-upload-progress {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    margin: 20px 0;
+    padding-block: 8px;
+}
+.folder-upload-action {
+    white-space: nowrap;
+}
+.transfer-item-path {
+    display: block;
+    color: var(--muted);
+    font-size: 12px;
+    overflow-wrap: anywhere;
+}
+
+.folder-upload-destination {
+    margin: 0 0 12px;
+    overflow-wrap: anywhere;
+}

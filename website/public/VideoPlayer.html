@@ -1,0 +1,130 @@
+<!doctype html>
+<html lang="en">
+    <head>
+        <meta charset="utf-8" />
+        <meta name="viewport" content="width=device-width, initial-scale=1" />
+        <meta name="color-scheme" content="dark" />
+        <meta name="theme-color" content="#0d1424" />
+        <meta name="description" content="Stream a video from TGDrive." />
+        <title>Video · TGDrive</title>
+        <link
+            rel="icon"
+            type="image/svg+xml"
+            href="/static/brand/favicon.svg"
+        />
+        <link
+            rel="icon"
+            type="image/png"
+            sizes="32x32"
+            href="/static/brand/favicon-32.png"
+        />
+        <link
+            rel="icon"
+            type="image/png"
+            sizes="16x16"
+            href="/static/brand/favicon-16.png"
+        />
+        <link rel="shortcut icon" href="/static/brand/favicon.ico" />
+        <link
+            rel="apple-touch-icon"
+            sizes="180x180"
+            href="/static/brand/apple-touch-icon.png"
+        />
+        <meta property="og:type" content="website" />
+        <meta property="og:title" content="Video · TGDrive" />
+        <meta
+            property="og:description"
+            content="Stream a video from TGDrive."
+        />
+        <meta property="og:image" content="/static/brand/social-preview.png" />
+        <meta property="og:image:width" content="1200" />
+        <meta property="og:image:height" content="630" />
+        <meta
+            property="og:image:alt"
+            content="TGDrive — your private Telegram-backed file drive"
+        />
+        <meta name="twitter:card" content="summary_large_image" />
+        <meta name="twitter:image" content="/static/brand/social-preview.png" />
+        <meta
+            name="twitter:image:alt"
+            content="TGDrive — your private Telegram-backed file drive"
+        />
+        <link rel="stylesheet" href="/static/player.css?v=2.0.0-r3" />
+        <script
+            type="module"
+            src="/static/js/video-player.js?v=2.0.0-r2"
+        ></script>
+    </head>
+    <body>
+        <main class="player-shell">
+            <header class="player-header">
+                <a
+                    class="player-brand"
+                    href="/?path=/"
+                    aria-label="Back to TGDrive"
+                >
+                    <img
+                        src="/static/brand/tgdrive-logo-dark.svg"
+                        width="2010"
+                        height="401"
+                        alt="TGDrive"
+                    />
+                </a>
+                <a class="back-link" href="/?path=/">Back to files</a>
+            </header>
+
+            <section class="player-card" aria-labelledby="player-title">
+                <div class="video-frame">
+                    <video
+                        id="video-player"
+                        controls
+                        playsinline
+                        preload="metadata"
+                    >
+                        Your browser does not support HTML video playback.
+                    </video>
+                    <div
+                        class="player-error"
+                        id="player-error"
+                        role="alert"
+                        hidden
+                    >
+                        <strong>Video unavailable</strong>
+                        <p id="player-error-message">
+                            This video could not be loaded.
+                        </p>
+                    </div>
+                </div>
+
+                <div class="player-details">
+                    <div>
+                        <p class="eyebrow">TGDrive stream</p>
+                        <h1 id="player-title">Video player</h1>
+                        <p id="player-status" role="status">
+                            Preparing your video…
+                        </p>
+                    </div>
+                    <div class="player-actions">
+                        <button id="copy-stream" type="button">
+                            Copy stream link
+                        </button>
+                        <button id="copy-file" type="button">
+                            Copy file link
+                        </button>
+                        <a id="download-link" href="#" download
+                            >Download original</a
+                        >
+                    </div>
+                </div>
+            </section>
+        </main>
+
+        <div
+            class="player-toast"
+            id="player-toast"
+            role="status"
+            aria-live="polite"
+            hidden
+        ></div>
+    </body>
+</html>

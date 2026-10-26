@@ -1,0 +1,295 @@
+.channel-backup {
+    min-width: 0;
+}
+.channel-backup-heading {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 16px;
+}
+.channel-backup-heading > div {
+    min-width: 0;
+}
+.channel-backup-heading h2 {
+    margin: 0 0 8px;
+}
+.channel-backup-heading p {
+    margin: 0;
+    max-width: 70ch;
+    color: var(--muted);
+    line-height: 1.6;
+}
+.channel-backup .icon-button {
+    flex: 0 0 auto;
+}
+.channel-backup-loading,
+.channel-backup-phase {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin: 20px 0 16px;
+}
+.channel-backup-channels,
+.channel-backup-candidate dl {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 16px 36px;
+    margin: 16px 0;
+}
+.channel-backup-channels div,
+.channel-backup-candidate dl div {
+    display: grid;
+    gap: 6px;
+    min-width: 0;
+}
+.channel-backup dt {
+    color: var(--muted);
+    font-size: 13px;
+}
+.channel-backup dd {
+    margin: 0;
+    overflow-wrap: anywhere;
+    font-variant-numeric: tabular-nums;
+}
+.channel-backup-confirmation p,
+.channel-backup-key-help {
+    margin: 10px 0;
+    color: var(--muted);
+    font-size: 13px;
+    line-height: 1.6;
+    max-width: 75ch;
+}
+.channel-backup-progress {
+    margin-block: 20px;
+}
+.channel-backup-progress-label {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: space-between;
+    gap: 8px 16px;
+    color: var(--muted);
+    font-size: 13px;
+    font-variant-numeric: tabular-nums;
+}
+.channel-backup progress {
+    display: block;
+    width: 100%;
+    height: 6px;
+    margin: 12px 0;
+    accent-color: var(--action);
+}
+.channel-backup-file {
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+    margin-bottom: 12px;
+}
+.channel-backup-progress-detail {
+    font-variant-numeric: tabular-nums;
+}
+.channel-backup-progress > p:not(.channel-backup-file),
+.channel-backup-feedback p {
+    color: var(--muted);
+    line-height: 1.6;
+    font-size: 13px;
+}
+.channel-backup-actions {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px 12px;
+    margin-block: 16px;
+}
+.channel-backup-actions button,
+.channel-backup-actions a,
+.channel-backup-form > button {
+    gap: 8px;
+}
+.channel-backup-feedback {
+    margin-block: 16px;
+}
+.channel-backup-feedback p {
+    margin-block: 8px;
+}
+.channel-backup-form {
+    margin-block: 20px;
+    display: grid;
+    gap: 16px;
+}
+.channel-backup-form h3,
+.channel-backup-candidate h3 {
+    margin: 0;
+    font-size: 16px;
+    font-weight: 600;
+}
+.channel-backup-form > p,
+.channel-backup-details > p,
+.channel-backup-candidate p {
+    margin: 0;
+    color: var(--muted);
+    line-height: 1.6;
+    max-width: 75ch;
+}
+.channel-backup-fields {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 16px;
+}
+.channel-backup label:not(.channel-backup-checkbox) {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    min-width: 0;
+    line-height: 1.5;
+}
+.channel-backup input:not([type="checkbox"]) {
+    width: 100%;
+    min-width: 0;
+    box-sizing: border-box;
+}
+.channel-backup-optional {
+    color: var(--muted);
+    font-size: 13px;
+}
+.channel-backup-checkbox {
+    display: flex;
+    align-items: flex-start;
+    gap: 10px;
+    max-width: 75ch;
+    line-height: 1.6;
+    cursor: pointer;
+}
+.channel-backup-checkbox input {
+    flex: 0 0 auto;
+    margin-top: 4px;
+    width: 18px;
+    height: 18px;
+    accent-color: var(--action);
+}
+.channel-backup-details {
+    margin-top: 20px;
+    padding-top: 16px;
+    border-top: 1px solid var(--line);
+}
+.channel-backup-details > summary {
+    cursor: pointer;
+    font-weight: 600;
+    padding-block: 8px;
+}
+.channel-backup-details[open] > summary {
+    margin-bottom: 12px;
+}
+.channel-backup-candidate {
+    margin-top: 20px;
+}
+.channel-backup-report {
+    padding: 0;
+    margin: 16px 0;
+    list-style: none;
+    max-height: 320px;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+}
+.channel-backup-report li {
+    display: grid;
+    grid-template-columns: minmax(100px, 190px) minmax(0, 1fr);
+    gap: 8px 16px;
+    padding-block: 10px;
+    border-bottom: 1px solid var(--line-subtle);
+    font-size: 13px;
+    line-height: 1.6;
+}
+.channel-backup-report time {
+    color: var(--muted);
+}
+.channel-backup-report span {
+    overflow-wrap: anywhere;
+}
+.channel-backup-guide {
+    display: inline-block;
+    margin-top: 20px;
+}
+@media (max-width: 720px) {
+    .channel-backup-fields {
+        grid-template-columns: minmax(0, 1fr);
+    }
+    .channel-backup-actions {
+        gap: 8px;
+    }
+    .channel-backup button,
+    .channel-backup .text-button,
+    .channel-backup summary {
+        min-height: 44px;
+    }
+    .channel-backup-actions > .primary-button,
+    .channel-backup-form > .primary-button {
+        width: 100%;
+        justify-content: center;
+    }
+    .channel-backup-report li {
+        grid-template-columns: minmax(0, 1fr);
+        gap: 4px;
+    }
+    .channel-backup-channels,
+    .channel-backup-candidate dl {
+        gap: 16px 24px;
+    }
+}
+
+.channel-recovery-shell {
+    height: 100dvh;
+    display: flex;
+    flex-direction: column;
+    background: var(--surface);
+}
+.channel-recovery-topbar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 16px;
+    min-height: 64px;
+    padding: 8px 24px;
+    border-bottom: 1px solid var(--line);
+}
+.channel-recovery-topbar > div {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+}
+.channel-recovery-topbar .sidebar-logout {
+    width: auto;
+    padding-inline: 12px;
+}
+.channel-recovery-main {
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+    width: 100%;
+    max-width: 1100px;
+    margin: 0 auto;
+    padding: 24px;
+}
+.channel-recovery-main > h1 {
+    font-size: 24px;
+    margin: 0 0 12px;
+}
+.channel-recovery-intro {
+    color: var(--muted);
+    margin: 0 0 24px;
+    max-width: 75ch;
+    line-height: 1.6;
+}
+@media (max-width: 720px) {
+    .channel-recovery-topbar {
+        flex-wrap: wrap;
+        gap: 4px 12px;
+        padding: max(8px, env(safe-area-inset-top)) 12px 8px;
+    }
+    .channel-recovery-topbar > div {
+        gap: 4px;
+        margin-inline-start: auto;
+    }
+    .channel-recovery-main {
+        padding: 20px 12px max(20px, env(safe-area-inset-bottom));
+    }
+}

@@ -1,0 +1,142 @@
+/* TextLayer positioning adapted from Mozilla PDF.js (Copyright 2014 Mozilla
+ * Foundation), licensed under Apache License 2.0.
+ * https://www.apache.org/licenses/LICENSE-2.0
+ * Scoped to our bounded visible-page layer. */
+.pdf-password {
+    width: min(24rem, calc(100% - 32px));
+    margin: auto;
+    padding: 24px;
+    color: var(--ink);
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: 10px;
+}
+.pdf-password h2 {
+    margin: 0 0 8px;
+    font-size: 18px;
+}
+.pdf-password label {
+    display: block;
+    margin-block: 16px 6px;
+}
+.pdf-password input {
+    width: 100%;
+    min-height: 44px;
+    padding: 10px;
+    color: var(--ink);
+    background: var(--canvas);
+    border: 1px solid var(--input-line);
+    border-radius: 6px;
+}
+.pdf-password .inline-actions {
+    justify-content: flex-end;
+    gap: 8px;
+    margin-top: 20px;
+}
+.pdf-password button {
+    min-height: 44px;
+}
+.pdf-text-layer {
+    color-scheme: only light;
+    position: absolute;
+    inset: 0;
+    overflow: clip;
+    text-align: initial;
+    line-height: 1;
+    letter-spacing: normal;
+    word-spacing: normal;
+    text-size-adjust: none;
+    forced-color-adjust: none;
+    transform-origin: 0 0;
+    caret-color: CanvasText;
+    --scale-round-x: 1px;
+    --scale-round-y: 1px;
+    --min-font-size: 1;
+    --text-scale-factor: calc(var(--total-scale-factor) * var(--min-font-size));
+    --min-font-size-inv: calc(1 / var(--min-font-size));
+}
+.pdf-text-layer :is(span, br) {
+    color: transparent;
+    position: absolute;
+    white-space: pre;
+    cursor: text;
+    transform-origin: 0% 0%;
+    user-select: text;
+}
+.pdf-text-layer > :not(.markedContent),
+.pdf-text-layer .markedContent span:not(.markedContent) {
+    --font-height: 0;
+    --scale-x: 1;
+    --rotate: 0deg;
+    z-index: 1;
+    font-size: calc(var(--text-scale-factor) * var(--font-height));
+    transform: rotate(var(--rotate)) scaleX(var(--scale-x))
+        scale(var(--min-font-size-inv));
+}
+.pdf-text-layer .markedContent {
+    display: contents;
+}
+.pdf-text-layer ::selection {
+    background: rgb(50 120 245 / 30%);
+    color: transparent;
+}
+
+.pdf-text-layer[data-main-rotation="90"] {
+    transform: rotate(90deg) translateY(-100%);
+}
+.pdf-text-layer[data-main-rotation="180"] {
+    transform: rotate(180deg) translate(-100%, -100%);
+}
+.pdf-text-layer[data-main-rotation="270"] {
+    transform: rotate(270deg) translateX(-100%);
+}
+
+@media (max-width: 720px), (pointer: coarse) {
+    .file-preview .pdf-options-toggle {
+        display: inline-flex;
+    }
+    .file-preview .pdf-controls .pdf-toolbar {
+        display: none;
+        position: fixed;
+        inset: calc(64px + env(safe-area-inset-top))
+            max(12px, env(safe-area-inset-right)) auto
+            max(12px, env(safe-area-inset-left));
+        width: auto;
+        max-width: none;
+        flex-direction: column;
+        align-items: stretch;
+        z-index: 5;
+        gap: 10px;
+        padding: 8px 12px;
+        border: 1px solid #454b55;
+        border-radius: 10px;
+        background: #25292f;
+        box-shadow: 0 6px 20px #0005;
+        max-height: calc(
+            100dvh - 80px - env(safe-area-inset-top) -
+                env(safe-area-inset-bottom)
+        );
+        overflow: auto;
+        overscroll-behavior: contain;
+    }
+    .file-preview .pdf-controls[data-open="true"] .pdf-toolbar {
+        display: flex;
+    }
+    .file-preview .pdf-toolbar .inline-actions {
+        flex-wrap: wrap;
+        gap: 6px;
+    }
+    .file-preview .pdf-toolbar .pdf-fit {
+        width: auto;
+        gap: 6px;
+        padding: 6px 10px;
+    }
+    .file-preview .pdf-toolbar .pdf-fit-label {
+        display: inline;
+    }
+    .file-preview .pdf-toolbar .icon-button,
+    .file-preview .pdf-toolbar .pdf-fit {
+        min-width: 44px;
+        min-height: 44px;
+    }
+}

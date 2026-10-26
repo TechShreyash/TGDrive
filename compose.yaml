@@ -1,0 +1,53 @@
+# Coolify: choose Docker Compose and /compose.yaml. No host ports are published.
+# Local docker compose commands also load compose.override.yaml automatically.
+name: tgdrive
+
+services:
+    app:
+        build:
+            context: .
+            dockerfile: Dockerfile
+        restart: ${TGDRIVE_RESTART_POLICY:-unless-stopped}
+        init: true
+        expose:
+            - "8000"
+        env_file:
+            - path: .env
+              required: false
+        environment:
+            MONGODB_URI: ${MONGODB_URI:?Set MONGODB_URI}
+            API_ID: ${API_ID:?Set API_ID}
+            API_HASH: ${API_HASH:?Set API_HASH}
+            MAIN_BOT_TOKEN: ${MAIN_BOT_TOKEN:-}
+            TELEGRAM_ADMIN_IDS: ${TELEGRAM_ADMIN_IDS:-}
+            STORAGE_CHANNEL: ${STORAGE_CHANNEL:?Set STORAGE_CHANNEL}
+            ADMIN_PASSWORD: ${ADMIN_PASSWORD:-}
+            # Container paths and hosting policy stay fixed across deployments.
+            DATA_DIR: /app/data
+            CACHE_DIR: /app/cache
+            COOKIE_SECURE: "true"
+            TGDRIVE_AUTO_SECRETS: "true"
+            TGDRIVE_PROXY_HOSTS: coolify-proxy
+            FORWARDED_ALLOW_IPS: ${FORWARDED_ALLOW_IPS:-auto}
+        # Coolify attaches declared middleware to its generated domain routers.
+        # Apply at the edge too: Traefik can append HTTP/3 advertisements to app headers.
+        labels:
+            - "traefik.http.middlewares.tgdrive-alt-svc.headers.customresponseheaders.Alt-Svc=clear"
+        volumes:
+            - tgdrive-data:/app/data
+            - tgdrive-cache:/app/cache
+        stop_grace_period: 60s
+        security_opt:
+            - no-new-privileges:true
+        cap_drop:
+            - ALL
+        pids_limit: 256
+        logging:
+            driver: local
+            options:
+                max-size: "10m"
+                max-file: "3"
+
+volumes:
+    tgdrive-data:
+    tgdrive-cache:

@@ -1,0 +1,344 @@
+name: CI
+
+on:
+    push:
+        branches:
+            - main
+            - dev
+        tags:
+            - "v*"
+        paths-ignore:
+            - "**.md"
+            - "docs/**"
+            - LICENSE
+    pull_request:
+    workflow_dispatch:
+        inputs:
+            suite:
+                description: Additional checks (core checks always run)
+                type: choice
+                default: core
+                options:
+                    - core
+                    - browser
+                    - container
+                    - release
+                    - all
+
+permissions:
+    contents: read
+
+concurrency:
+    group: ci-${{ github.workflow }}-${{ github.ref }}
+    cancel-in-progress: true
+
+env:
+    UV_VERSION: "0.13.4"
+
+jobs:
+    quality:
+        name: Quality and security
+        runs-on: ubuntu-latest
+        timeout-minutes: 20
+        steps:
+            - name: Check out repository
+              uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+            - name: Set up Python
+              uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+              with:
+                  python-version-file: .python-version
+
+            - name: Check release versions
+              run: |
+                  if [ "$GITHUB_REF_TYPE" = "tag" ]; then
+                    python scripts/build_release.py --check-version --tag "$GITHUB_REF_NAME"
+                  else
+                    python scripts/build_release.py --check-version
+                  fi
+
+            - name: Set up uv
+              uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
+              with:
+                  version: ${{ env.UV_VERSION }}
+                  enable-cache: true
+                  cache-dependency-glob: uv.lock
+
+            - name: Install locked dependencies
+              run: uv sync --frozen --python 3.14.8
+
+            - name: Ruff lint
+              run: uv run --frozen --python 3.14.8 ruff check tgdrive tests scripts
+
+            - name: Ruff format check
+              run: uv run --frozen --python 3.14.8 ruff format --check tgdrive tests scripts
+
+            - name: Bandit security scan
+              run: uv run --frozen --python 3.14.8 bandit -c pyproject.toml -r tgdrive
+
+            - name: Dependency vulnerability audit
+              run: uv run --frozen --all-groups --python 3.14.8 pip-audit --strict
+
+            - name: Frontend security smoke
+              run: uv run --frozen python -m pytest tests/web/test_frontend_security.py
+
+    frontend:
+        name: Frontend behavior
+        runs-on: ubuntu-latest
+        timeout-minutes: 10
+        steps:
+            - name: Check out repository
+              uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+            - name: Set up Node.js
+              uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+              with:
+                  node-version: "24.22.0"
+
+            - name: Install locked frontend dependencies
+              run: npm ci --prefix website
+
+            - name: Typecheck, test, build, and audit frontend
+              run: |
+                  npm run typecheck --prefix website
+                  npm test --prefix website
+                  npm run build --prefix website
+                  npm audit --prefix website --audit-level=high
+
+    tests:
+        name: Backend tests
+        runs-on: ubuntu-latest
+        timeout-minutes: 20
+        steps:
+            - name: Check out repository
+              uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+            - name: Set up Python
+              uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+              with:
+                  python-version-file: .python-version
+
+            - name: Set up uv
+              uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
+              with:
+                  version: ${{ env.UV_VERSION }}
+                  enable-cache: true
+                  cache-dependency-glob: uv.lock
+
+            - name: Install locked dependencies
+              run: uv sync --frozen
+
+            - name: Set up Node.js for application assets
+              uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+              with:
+                  node-version: "24.22.0"
+
+            - name: Build application assets
+              run: npm ci --prefix website && npm run build --prefix website
+
+            - name: Start isolated MongoDB replica set
+              run: |
+                  docker run -d --name tgdrive-test-mongo -p 127.0.0.1:27017:27017 \
+                    mongo:8.0@sha256:4a4ab5d4834207389e0d7270fac988e21ffedccecba77991a552f755df229907 --replSet tgdrive-test --bind_ip_all
+                  for attempt in $(seq 1 60); do
+                    if docker exec tgdrive-test-mongo mongosh --quiet --eval 'db.adminCommand({ping:1})'; then
+                      break
+                    fi
+                    sleep 1
+                  done
+                  docker exec tgdrive-test-mongo mongosh --quiet --eval \
+                    'rs.initiate({_id:"tgdrive-test",members:[{_id:0,host:"localhost:27017"}]})'
+                  for attempt in $(seq 1 60); do
+                    if docker exec tgdrive-test-mongo mongosh --quiet --eval \
+                      'if (!db.hello().isWritablePrimary) { quit(1); }'; then
+                      break
+                    fi
+                    sleep 1
+                  done
+                  docker exec tgdrive-test-mongo mongosh --quiet --eval \
+                    'if (!db.hello().isWritablePrimary) { quit(1); }'
+
+            - name: Run tests with coverage
+              env:
+                  TGDRIVE_MONGO_TESTS: "1"
+                  TGDRIVE_TEST_MONGODB_URI: mongodb://127.0.0.1:27017/?replicaSet=tgdrive-test&directConnection=true
+              run: >-
+                  uv run --frozen python -m pytest
+                  --cov=tgdrive --cov-report=term-missing
+
+    browser:
+        name: Chromium end-to-end
+        if: github.event_name == 'pull_request' || (github.event_name == 'workflow_dispatch' && (inputs.suite == 'browser' || inputs.suite == 'all'))
+        runs-on: ubuntu-24.04
+        timeout-minutes: 20
+        steps:
+            - name: Check out repository
+              uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+            - name: Set up Python
+              uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+              with:
+                  python-version-file: .python-version
+
+            - name: Set up uv
+              uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
+              with:
+                  version: ${{ env.UV_VERSION }}
+
+            - name: Set up Node.js
+              uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+              with:
+                  node-version: "24.22.0"
+
+            - name: Build frontend
+              run: npm ci --prefix website && npm run build --prefix website
+
+            - name: Install locked browser-test environment
+              run: |
+                  uv sync --frozen --group e2e
+                  uv run --frozen --group e2e playwright install --with-deps chromium
+
+            - name: Test production frontend in Chromium
+              env:
+                  TGDRIVE_E2E: "1"
+              run: >-
+                  uv run --frozen --group e2e python -m pytest
+                  -m e2e tests/browser/test_browser_e2e.py
+                  tests/browser/test_browser_player_native.py
+                  tests/browser/test_browser_pdf_features.py
+                  tests/browser/test_browser_pdf_ranges.py
+                  tests/browser/test_browser_channel_backup.py::test_slow_backup_poll_updates_progress_before_starting_the_next_request
+
+            - name: Upload browser screenshots and traces
+              if: always()
+              uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+              with:
+                  name: chromium-e2e-evidence
+                  path: cache/browser-e2e
+                  if-no-files-found: ignore
+                  retention-days: 14
+
+    container:
+        name: Container build
+        if: github.event_name == 'workflow_dispatch' && (inputs.suite == 'container' || inputs.suite == 'release' || inputs.suite == 'all')
+        runs-on: ubuntu-latest
+        timeout-minutes: 25
+        needs:
+            - quality
+            - frontend
+            - tests
+        steps:
+            - name: Check out repository
+              uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+            - name: Set up QEMU for ARM64 verification
+              uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1 # v4.4.0
+              with:
+                  platforms: arm64
+
+            - name: Set up Docker Buildx
+              uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+
+            - name: Build AMD64 and ARM64 release layouts
+              uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+              with:
+                  context: .
+                  platforms: linux/amd64,linux/arm64
+                  push: false
+                  outputs: type=oci,dest=/tmp/tgdrive-multiarch.tar
+                  cache-from: type=gha
+                  cache-to: type=gha,mode=max
+
+            - name: Build container image
+              uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+              with:
+                  context: .
+                  file: ./Dockerfile
+                  push: false
+                  load: true
+                  tags: tgdrive:ci
+                  cache-from: type=gha
+                  cache-to: type=gha,mode=max
+
+            - name: Verify container metadata
+              run: |
+                  test "$(docker image inspect tgdrive:ci --format '{{.Config.User}}')" = "10001:10001"
+                  docker image inspect tgdrive:ci --format '{{json .Config.Healthcheck.Test}}' | grep -q healthz
+                  docker run --rm --network none --entrypoint python tgdrive:ci \
+                    -c 'import ssl; roots = str(ssl.create_default_context().get_ca_certs()); assert "emSign ECC Root CA - G3" not in roots'
+                  docker run --rm --network none --entrypoint python tgdrive:ci \
+                    -c 'import tgdrive.web.app, aiohttp, telethon, cryptg, argon2; print("runtime imports passed")'
+                  docker run --rm --network none --entrypoint sh tgdrive:ci -c \
+                    'test -w /app/data && test -w /app/cache && test ! -e /app/.env && test ! -e /app/.git'
+
+            - name: Verify the application factory and bundled assets offline
+              run: |
+                  docker run --rm -i --network none --entrypoint python tgdrive:ci - <<'PY'
+                  import asyncio
+                  from pathlib import Path
+                  from types import SimpleNamespace
+                  from tgdrive.core.config import Settings
+                  from tgdrive.web.app import create_app
+                  settings = Settings(
+                      _env_file=None, API_ID=12345, API_HASH="a" * 32,
+                      MONGODB_URI="mongodb://synthetic.invalid/tgdrive",
+                      MAIN_BOT_TOKEN="123456:" + "x" * 30,
+                      TELEGRAM_ADMIN_IDS="12345",
+                      STORAGE_CHANNEL=-1001234567890,
+                      ADMIN_PASSWORD="synthetic-container-password",
+                      SESSION_SECRET="s" * 48,
+                  )
+                  app = create_app(settings, runtime=SimpleNamespace())
+                  stream = next(route for route in app.routes if route.path == "/stream")
+                  response = asyncio.run(stream.endpoint(path="/synthetic", auth=None))
+                  assert Path(response.path).is_file()
+                  print("Application factory and bundled player assets passed; runtime startup not exercised")
+                  PY
+
+    source-release:
+        name: Verify source release archive
+        if: github.event_name == 'workflow_dispatch' && (inputs.suite == 'release' || inputs.suite == 'all')
+        runs-on: ubuntu-latest
+        timeout-minutes: 20
+        needs:
+            - container
+        steps:
+            - name: Check out repository
+              uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+            - name: Set up Python
+              uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+              with:
+                  python-version-file: .python-version
+
+            - name: Set up Node.js
+              uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+              with:
+                  node-version: "24.22.0"
+
+            - name: Set up uv
+              uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
+              with:
+                  version: ${{ env.UV_VERSION }}
+
+            - name: Build and verify public source archive
+              run: |
+                  python scripts/build_release.py
+                  (cd dist && sha256sum --check *.zip.sha256)
+                  unzip -q dist/tgdrive-*.zip -d "$RUNNER_TEMP/tgdrive-source"
+                  cd "$RUNNER_TEMP/tgdrive-source"/tgdrive-*
+                  uv sync --frozen
+                  npm ci --prefix website
+                  npm run build --prefix website
+                  uv run --frozen python -m pytest
+                  npm test --prefix website
+
+            - name: Upload source candidate and checksum
+              uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+              with:
+                  name: tgdrive-source-candidate
+                  path: |
+                      dist/tgdrive-*.zip
+                      dist/tgdrive-*.zip.sha256
+                  if-no-files-found: error
+                  retention-days: 14
