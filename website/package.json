@@ -19,7 +19,7 @@
     "dependencies": {
         "@mantine/core": "9.7.3",
         "@mantine/hooks": "9.7.3",
-        "lucide-react": "1.58.0",
+        "lucide-react": "1.61.0",
         "movi-player": "file:vendor/movi-player-0.4.1-tgdrive.1.tgz",
         "pdfjs-dist": "file:vendor/pdfjs-dist-6.4.299-tgdrive.1.tgz",
         "react": "19.3.1",
