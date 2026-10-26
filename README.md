@@ -121,6 +121,11 @@ and ownership details, or [contact TechShreyash](https://t.me/TechShreyash).
 | Change settings, maintain the app or fix a problem | [Configuration](docs/configuration.md) · [Operations](docs/operations.md) |
 | Explore all guides, technical details and contributor resources | [Documentation home](docs/README.md) |
 
+## Updates and support
+
+Follow the [updates channel](https://t.me/TechZBots) for announcements, or join the
+[support group](https://t.me/TechZBots_Support) for help and discussion.
+
 ## Contribute
 
 Contributions, feedback, bug reports and feature requests are always welcome.
