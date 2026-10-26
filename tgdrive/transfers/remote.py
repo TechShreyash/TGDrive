@@ -18,7 +18,7 @@ from contextvars import ContextVar
 from dataclasses import dataclass
 from email.message import Message
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Protocol, TypeAlias
+from typing import TYPE_CHECKING, Any, Protocol
 from urllib.parse import unquote, urljoin, urlsplit, urlunsplit
 
 import aiohttp
@@ -103,8 +103,8 @@ class RemoteDestinationExists(RemoteError):
     """The safe destination name already exists and overwrite is disabled."""
 
 
-ProgressCallback: TypeAlias = Callable[[int, int | None], Awaitable[None] | None]
-RetryCallback: TypeAlias = Callable[[int, float, Exception], Awaitable[None] | None]
+type ProgressCallback = Callable[[int, int | None], Awaitable[None] | None]
+type RetryCallback = Callable[[int, float, Exception], Awaitable[None] | None]
 
 
 def source_retryable(error: Exception) -> bool:
@@ -134,7 +134,7 @@ class HTTPSessionLike(Protocol):
     def close(self) -> Awaitable[None] | None: ...
 
 
-SessionFactory: TypeAlias = Callable[
+type SessionFactory = Callable[
     [AbstractResolver, aiohttp.ClientTimeout],
     HTTPSessionLike | Awaitable[HTTPSessionLike],
 ]

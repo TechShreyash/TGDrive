@@ -11,7 +11,8 @@ previews, transfers and settings.
 
 **Use Docker Compose for every TGDrive deployment.** It builds the website and
 includes Python, dependencies and preview tools, with the same runtime on laptops
-and servers. No host Python or Node installation is needed for the main steps.
+and servers. TGDrive supports **Python 3.14.8 only**; the image supplies that exact
+version. No host Python or Node installation is needed for the main steps.
 
 For a **new v2 drive**, use an empty MongoDB database and a new private Telegram
 channel. v1 data and older catalog formats are not imported or upgraded.

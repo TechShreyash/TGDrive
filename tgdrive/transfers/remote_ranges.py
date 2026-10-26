@@ -98,10 +98,10 @@ def _retry_after(value: str | None) -> float:
     if value is not None:
         try:
             return max(0.0, float(int(value)))
-        except (ValueError, OverflowError):
+        except ValueError, OverflowError:
             try:
                 return max(0.0, parsedate_to_datetime(value).timestamp() - time.time())
-            except (ValueError, TypeError, OverflowError):
+            except ValueError, TypeError, OverflowError:
                 pass
     return 1.0
 

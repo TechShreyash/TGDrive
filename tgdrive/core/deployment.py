@@ -54,7 +54,7 @@ def installation_secrets(
                     or not re.fullmatch(r"[0-9a-fA-F]{64}", saved["MONGODB_BACKUP_KEY"])
                 ):
                     raise ValueError
-            except (ValueError, TypeError):
+            except ValueError, TypeError:
                 raise ValueError(
                     "Preserve deployment-secrets.json and repair its contents or "
                     "0600 permissions; saved keys were not replaced"

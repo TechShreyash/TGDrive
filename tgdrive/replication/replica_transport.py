@@ -256,7 +256,7 @@ class ReplicaTransport:
                 os.fchmod(descriptor, 0o600)
             finally:
                 os.close(descriptor)
-        except (OSError, ValueError):
+        except OSError, ValueError:
             raise ReplicaTransportError(
                 "The saved backup bot session cannot be opened safely. "
                 "Check DATA_DIR session storage and permissions before retrying.",
@@ -356,7 +356,7 @@ class ReplicaTransport:
                                 "sign_in", self._client.sign_in, bot_token=self._token
                             )
                         break
-                    except (PhoneMigrateError, NetworkMigrateError, UserMigrateError):
+                    except PhoneMigrateError, NetworkMigrateError, UserMigrateError:
                         # With request_retries=0, Telethon switches DC but raises
                         # before retrying authorization. Retry only sign-in;
                         # durable message retries remain owned by the journal.

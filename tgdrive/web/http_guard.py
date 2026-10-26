@@ -28,7 +28,7 @@ def _authenticated(scope: Scope, sessions: SessionManager) -> bool:
         if token is None:
             return False
         sessions.verify(token.value)
-    except (InvalidSession, CookieError, ValueError):
+    except InvalidSession, CookieError, ValueError:
         return False
     return True
 
@@ -167,7 +167,7 @@ class SameOriginMiddleware:
                 and not host.fragment
                 and host.hostname is not None
             )
-        except (UnicodeError, ValueError):
+        except UnicodeError, ValueError:
             return False
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:

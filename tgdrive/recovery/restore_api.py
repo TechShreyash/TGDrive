@@ -132,7 +132,7 @@ def register_restore_routes(app, settings, *, require_admin, get_runtime):
                     "drive. Existing data was preserved.",
                     "RESTORE_DESTINATION_NOT_EMPTY",
                 ) from None
-            except (DatabaseUnavailable, PyMongoError):
+            except DatabaseUnavailable, PyMongoError:
                 logger.warning(
                     "Database archive restore rejected: MongoDB is unavailable; "
                     "restore database access"
@@ -248,7 +248,7 @@ def register_restore_routes(app, settings, *, require_admin, get_runtime):
                     "file and its original recovery key; nothing was restored.",
                     "ARCHIVE_INVALID",
                 ) from None
-            except (DatabaseUnavailable, PyMongoError):
+            except DatabaseUnavailable, PyMongoError:
                 logger.warning(
                     "Database archive restore was not started: MongoDB access failed"
                 )

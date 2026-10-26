@@ -44,7 +44,7 @@ def system_snapshot(settings):
             name, value = line.split(":", 1)
             if name in {"MemTotal", "MemAvailable"}:
                 memory[name] = int(value.strip().split()[0]) * 1024
-    except (OSError, ValueError):
+    except OSError, ValueError:
         pass
     # Container limits matter more than host-wide free memory.
     for name, filename in (
@@ -54,11 +54,11 @@ def system_snapshot(settings):
         try:
             raw = (Path("/sys/fs/cgroup") / filename).read_text().strip()
             memory[name] = int(raw) if raw != "max" else None
-        except (OSError, ValueError):
+        except OSError, ValueError:
             pass
     try:
         load = list(os.getloadavg())
-    except (OSError, AttributeError):
+    except OSError, AttributeError:
         load = []
     current_rss = None
     try:
@@ -66,7 +66,7 @@ def system_snapshot(settings):
             if line.startswith("VmRSS:"):
                 current_rss = int(line.split()[1]) * 1024
                 break
-    except (OSError, ValueError, IndexError):
+    except OSError, ValueError, IndexError:
         pass
     return {
         "at": time.time(),

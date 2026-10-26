@@ -168,7 +168,7 @@ class RebuildSource:
                 start += len(data)
                 await asyncio.sleep(len(data) / RATE)
             await response.write_eof()
-        except (ConnectionError, SourceLimit, asyncio.CancelledError):
+        except ConnectionError, SourceLimit, asyncio.CancelledError:
             response.force_close()
         return response
 
@@ -234,7 +234,7 @@ class ThumbnailRebuild:
                         finished_at=time.time(),
                     )
                     await self.persist()
-        except (OSError, ValueError):
+        except OSError, ValueError:
             pass
 
     async def persist(self):
@@ -382,7 +382,7 @@ class ThumbnailRebuild:
                     rows = await asyncio.to_thread(
                         self.runtime().store.list_directory, path
                     )
-                except (NotFoundError, NotDirectoryError, TrashedItemError):
+                except NotFoundError, NotDirectoryError, TrashedItemError:
                     # A concurrent move/deletion can invalidate this directory.
                     continue
                 for row in rows.values():
@@ -398,7 +398,7 @@ class ThumbnailRebuild:
                 try:
                     store = self.runtime().store
                     data = store.get_file(store.resolve_id(item_id))
-                except (NotFoundError, NotFileError, TrashedItemError):
+                except NotFoundError, NotFileError, TrashedItemError:
                     self.state["skipped"] += 1
                     self.state["processed"] += 1
                     await self.persist()

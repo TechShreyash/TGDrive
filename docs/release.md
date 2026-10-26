@@ -42,7 +42,7 @@ can accumulate on `dev` for one upcoming release; they do not each need a tag.
 `main` receives stable updates after release review and required checks. `dev`
 contains ongoing development and may be unstable; do not use it for a stable
 deployment. Prefer a published tag to reproduce an exact release.
-See the [required merge checks](development.md#when-github-checks-run) for `main`.
+See the [release CI checks](development.md#when-github-checks-run) for `main`.
 
 | Change | Next version after `2.0.0` |
 | --- | --- |

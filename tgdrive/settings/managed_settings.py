@@ -124,7 +124,7 @@ def read_document(data_dir: Path) -> ManagedDocument | None:
                 backend._settings_cached = True
             document = backend._settings_document
             return document.model_copy(deep=True) if document is not None else None
-    except (PyMongoError, DatabaseUnavailable):
+    except PyMongoError, DatabaseUnavailable:
         raise DatabaseUnavailable(
             "MongoDB is unavailable. Restore database access before starting TGDrive."
         ) from None

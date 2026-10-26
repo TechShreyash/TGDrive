@@ -1,5 +1,5 @@
 # /// script
-# requires-python = ">=3.11"
+# requires-python = "==3.14.8"
 # dependencies = ["cairosvg>=2.8,<3", "pillow>=12,<13"]
 # ///
 """Render TGDrive's checked-in SVG masters: uv run --script scripts/brand-assets.py.

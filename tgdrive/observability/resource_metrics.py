@@ -33,7 +33,7 @@ class ResourceMetrics:
                 for line in (self.cgroup / "cpu.stat").read_text().splitlines()
             )
             return "cgroup", int(stats["usage_usec"]) / 1_000_000, capacity
-        except (OSError, ValueError, KeyError, ZeroDivisionError):
+        except OSError, ValueError, KeyError, ZeroDivisionError:
             pass
         try:
             counters = [
@@ -47,7 +47,7 @@ class ResourceMetrics:
                 return None
             idle = counters[3] + (counters[4] if len(counters) > 4 else 0)
             return "host", sum(counters) - idle, sum(counters)
-        except (OSError, ValueError, IndexError):
+        except OSError, ValueError, IndexError:
             return None
 
     def _network_counter(self):
@@ -92,7 +92,7 @@ class ResourceMetrics:
                 else None
             )
             return (interface, *interfaces[interface]) if interface else None
-        except (OSError, ValueError, IndexError):
+        except OSError, ValueError, IndexError:
             return None
 
     def sample(self):
@@ -152,7 +152,7 @@ class ResourceMetrics:
             try:
                 raw = (self.cgroup / filename).read_text().strip()
                 memory[key] = int(raw) if raw != "max" else None
-            except (OSError, ValueError):
+            except OSError, ValueError:
                 memory[key] = None
         at = time.time()
         if (

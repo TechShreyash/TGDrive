@@ -10,7 +10,7 @@ from collections.abc import AsyncIterator, Awaitable, Callable, Iterable
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from enum import StrEnum
-from typing import TYPE_CHECKING, Any, Literal, Protocol, TypeAlias
+from typing import TYPE_CHECKING, Any, Literal, Protocol
 
 from tgdrive.media.media_scheduler import (
     MediaPriority,
@@ -26,7 +26,7 @@ from tgdrive.telegram.connection_errors import (
 if TYPE_CHECKING:
     from tgdrive.core.config import Settings
 
-ClientKind: TypeAlias = Literal["bot", "user"]
+type ClientKind = Literal["bot", "user"]
 
 
 class TelegramClientLifecycle(Protocol):
@@ -37,10 +37,10 @@ class TelegramClientLifecycle(Protocol):
     def stop(self) -> Any | Awaitable[Any]: ...
 
 
-ClientFactory: TypeAlias = Callable[
+type ClientFactory = Callable[
     [], TelegramClientLifecycle | Awaitable[TelegramClientLifecycle]
 ]
-ClientSource: TypeAlias = TelegramClientLifecycle | ClientFactory
+type ClientSource = TelegramClientLifecycle | ClientFactory
 
 
 class PoolState(StrEnum):

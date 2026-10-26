@@ -470,7 +470,7 @@ async def upload_multipart(manager, record, local_path, destination, file_name, 
                         if capacity:
                             continue
                     raise
-                except (ClientPoolNotRunning, NoClientAvailable):
+                except ClientPoolNotRunning, NoClientAvailable:
                     active_parts.discard(part["index"])
                     in_flight.pop(part["index"], None)
                     if record.cancel_event.is_set() and not part.get("send_started"):
@@ -644,6 +644,6 @@ async def _cleanup_parts(manager, record, parts):
                 await manager.registry.persist(record)
                 await manager.pool.defer_channel(deadline)
                 await manager.pool.defer_client(part["sender"], deadline)
-            except (ClientPoolNotRunning, NoClientAvailable):
+            except ClientPoolNotRunning, NoClientAvailable:
                 await manager.registry.update(record.id, phase="waiting_for_telegram")
                 await asyncio.sleep(1)

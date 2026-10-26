@@ -92,7 +92,7 @@ class MongoBackend:
                     tz_aware=True, type_registry=TypeRegistry([_IntegerDecoder()])
                 ),
             )
-        except (PyMongoError, TypeError, ValueError):
+        except PyMongoError, TypeError, ValueError:
             client = getattr(self, "client", None)
             if client is not None:
                 client.close()

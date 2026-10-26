@@ -363,7 +363,7 @@ async def generate(
                 await process.wait()
                 if process.returncode == 0 and data.startswith(b"\xff\xd8\xff"):
                     return data
-        except (OSError, TimeoutError):
+        except OSError, TimeoutError:
             pass
         finally:
             if process is not None:

@@ -321,14 +321,14 @@ def _effective_memory(configured):
             for line in Path("/proc/meminfo").read_text().splitlines()
         )
         limits.append(int(fields["MemAvailable"].split()[0]) * 1024 // 4)
-    except (OSError, ValueError, KeyError):
+    except OSError, ValueError, KeyError:
         pass
     try:
         maximum = Path("/sys/fs/cgroup/memory.max").read_text().strip()
         if maximum != "max":
             current = int(Path("/sys/fs/cgroup/memory.current").read_text())
             limits.append(max(0, int(maximum) - current) // 4)
-    except (OSError, ValueError):
+    except OSError, ValueError:
         pass
     return max(0, min(limits))
 

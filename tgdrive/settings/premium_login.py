@@ -396,7 +396,7 @@ class PremiumLoginService:
             except SessionPasswordNeededError:
                 challenge.stage = "password"
                 return self._result(identity, challenge)
-            except (PhoneCodeInvalidError, PasswordHashInvalidError):
+            except PhoneCodeInvalidError, PasswordHashInvalidError:
                 if challenge.attempts < MAX_ATTEMPTS:
                     raise PremiumLoginProblem(
                         "That code is incorrect. Try again."

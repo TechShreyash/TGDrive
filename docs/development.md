@@ -407,20 +407,22 @@ The [CI workflow](../.github/workflows/ci.yml) keeps routine pushes focused:
 
 | Trigger | Checks |
 | --- | --- |
-| Push to `main` or `dev` | Quality/security, frontend and Python 3.14 tests with isolated MongoDB and coverage |
-| Pull request | Core checks with Python 3.11/3.13/3.14, plus production-frontend Chromium tests |
-| Manual run | Core checks with all three Python versions, plus the selected additional suite |
+| Push to `main` or `dev` | Quality/security, frontend and backend tests with isolated MongoDB and coverage |
+| Pull request | Core checks, plus production-frontend Chromium tests |
+| Manual run | Core checks, plus the selected additional suite |
+
+All Python jobs use **3.14.8**, the sole supported runtime pinned in
+`.python-version` and the Docker image. There is no older-version test matrix.
 
 Pushes confined to Markdown, `docs/` or `LICENSE` skip automatic CI. Every pull
 request runs CI, including documentation-only changes, so required merge checks
 can finish. Documentation changes can still affect release contents; verify
 custom archives when preparing them for distribution.
 
-`main` requires a pull request and an up-to-date branch with these GitHub Actions
-checks passing: `Quality and security`, `Frontend behavior`, `Tests (Python 3.11)`,
-`Tests (Python 3.13)`, `Tests (Python 3.14)` and `Chromium end-to-end`.
-These rules also apply to administrators; force pushes and branch deletion are
-blocked. No second reviewer is required, so a solo maintainer can merge after CI.
+Release pull requests should pass `Quality and security`, `Frontend behavior`,
+`Backend tests` and `Chromium end-to-end` before merging into `main`.
+Repository branch protection is currently disabled; maintainers follow this
+release process without GitHub enforcing a merge gate.
 Manual container and source-release checks are separate from the merge gate.
 
 In **Actions → CI → Run workflow**, select the branch and additional suite:
@@ -511,7 +513,7 @@ and Premium speedups need [separate evidence](roadmap.md#before-public-release).
 
 | Tool/runtime | Baseline |
 | --- | --- |
-| App Python | 3.14.8 default; supported 3.11–3.14 |
+| App Python | 3.14.8 only |
 | uv | 0.13.4 |
 | Frontend Node | 24.22.0 LTS |
 | Container targets | Linux AMD64/ARM64 |
@@ -519,7 +521,7 @@ and Premium speedups need [separate evidence](roadmap.md#before-public-release).
 Exact libraries live in [pyproject.toml](../pyproject.toml), [uv.lock](../uv.lock),
 [package.json](../website/package.json), [package-lock.json](../website/package-lock.json)
 and [Dockerfile](../Dockerfile). Do not replace locks with unconstrained installs.
-Updates need affected integration checks. CI configures Python 3.11/3.13/3.14;
+Updates need affected integration checks. CI uses Python 3.14.8 only;
 configuration alone is not executed evidence.
 
 ## Code conventions

@@ -216,7 +216,7 @@ async def test_archive_cover_generation_is_bounded_and_preserves_original(
     if kind == "cbr":
         try:
             import libarchive  # noqa: F401
-        except (ImportError, OSError, AttributeError):
+        except ImportError, OSError, AttributeError:
             pytest.skip("Native libarchive is not installed")
 
     if not shutil.which("ffmpeg"):

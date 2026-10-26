@@ -181,7 +181,7 @@ class TransferManager:
     ) -> str:
         try:
             return await self._resolve_upload_destination(record, path)
-        except (NotFoundError, NotDirectoryError, TrashedItemError, ValidationError):
+        except NotFoundError, NotDirectoryError, TrashedItemError, ValidationError:
             record.context["cancel_requested"] = True
             record.cancel_event.set()
             await self.registry.persist(record)
@@ -565,7 +565,7 @@ class TransferManager:
                 result.filename,
                 result.size,
             )
-        except (RemoteCancelled, TransferCancelled):
+        except RemoteCancelled, TransferCancelled:
             await self.registry.update(
                 record.id,
                 status=TransferStatus.CANCELLED,

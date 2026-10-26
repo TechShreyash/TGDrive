@@ -177,7 +177,7 @@ async def lease_media(
                 raise TelegramFileNotFound(
                     "Stored Telegram message has no media"
                 ) from None
-        except (OSError, RPCError, ValueError):
+        except OSError, RPCError, ValueError:
             if pool.kind_of(client) != "user":
                 raise
             await lease.__aexit__(None, None, None)

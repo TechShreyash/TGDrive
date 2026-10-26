@@ -513,7 +513,7 @@ class Client:
                 and bool(option.ipv6) == (":" in previous[1])
                 and not getattr(option, "tcpo_only", False)
             ]
-        except (OSError, RPCError, TimeoutError):
+        except OSError, RPCError, TimeoutError:
             return  # A failed optional refresh cannot prevent startup.
         if not options:
             return
@@ -791,7 +791,7 @@ class Client:
                         file_name="thumbnail.jpg",
                         progress=None,
                     )
-            except (OSError, TimeoutError, RPCError):
+            except OSError, TimeoutError, RPCError:
                 pass  # A failed optional thumbnail must not fail the original.
         media = types.InputMediaUploadedDocument(
             file=uploaded,

@@ -3,7 +3,7 @@ name = "tgdrive"
 version = "2.0.0"
 description = "A secure Telegram-backed personal file drive"
 readme = "README.md"
-requires-python = ">=3.11,<3.15"
+requires-python = "==3.14.8"
 license = "MIT"
 dependencies = [
     "aiofiles==25.1.0",
@@ -55,7 +55,7 @@ show_missing = true
 skip_covered = true
 
 [tool.ruff]
-target-version = "py311"
+target-version = "py314"
 line-length = 88
 extend-exclude = [".venv", "cache", "data"]
 

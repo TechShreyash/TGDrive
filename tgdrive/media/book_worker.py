@@ -472,7 +472,7 @@ def image_result(data, *, raw_images):
             not width or not height for width, height in dimensions
         ):
             raise ValueError
-    except (ValueError, struct.error, IndexError):
+    except ValueError, struct.error, IndexError:
         raise BookError(
             "This page has invalid or overly complex image dimensions. "
             "Download the original to open it in another reader."

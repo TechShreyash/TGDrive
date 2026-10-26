@@ -195,7 +195,7 @@ def video_seek_time(path: Path | str, suffix: str, *, remote=False) -> str:
         duration = float(result.stdout) if result.returncode == 0 else 0
         if math.isfinite(duration) and duration > 0:
             return f"{duration * (40 + secrets.randbelow(21)) / 100:.3f}"
-    except (OSError, ValueError, subprocess.TimeoutExpired):
+    except OSError, ValueError, subprocess.TimeoutExpired:
         pass
     return "10"
 

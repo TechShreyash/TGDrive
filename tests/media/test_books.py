@@ -228,7 +228,7 @@ def test_cbz_natural_page_order_and_one_resource():
 def test_cbr_real_rar_archive_and_page():
     try:
         import libarchive  # noqa: F401
-    except (ImportError, OSError, AttributeError):
+    except ImportError, OSError, AttributeError:
         pytest.skip("Install libarchive for the native CBR test")
     stream, _ = source(cbr())
     index = read_book(stream, "cbr")
