@@ -54,7 +54,9 @@ async def test_cold_book_range_uses_single_account_slot_without_nested_reservati
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("error", [OSError("metadata failed"), asyncio.CancelledError()])
+@pytest.mark.parametrize(
+    "error", [OSError("metadata failed"), asyncio.CancelledError()]
+)
 async def test_background_metadata_failure_releases_lease_and_priority(error):
     client = account("only-bot", b"book")
 

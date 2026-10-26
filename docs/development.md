@@ -446,6 +446,14 @@ enabled elsewhere. The exact CI Bandit command passed locally on Python 3.14.8
 with no issues after this correction; it emitted unused-suppression warnings
 for other keys in the same settings mapping. No GitHub rerun or push was made.
 
+The subsequent `a5a8b1c` push passed frontend checks but
+[failed Ruff lint](https://github.com/TechShreyash/TGDrive/actions/runs/40373319271/job/121749557834)
+on four long lines and a nested condition from the download-scheduling change.
+After wrapping those lines, merging the equivalent condition and formatting one
+scheduler lambda, repository-wide Ruff lint passed and its format check reported
+**270 files already formatted**. No tests, builds or security audits were rerun
+for this correction; GitHub CI has not verified these local edits.
+
 Browser, container and source-release jobs were intentionally skipped on these
 pushes. The failed Bandit step also prevented the later Python dependency audit
 and frontend security smoke steps from running.

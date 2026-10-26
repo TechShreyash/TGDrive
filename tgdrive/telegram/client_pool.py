@@ -627,9 +627,11 @@ class ClientPool:
                             if download:
                                 # Rotate read-ahead behind other waiting requests.
                                 self._origin_waiters.sort(
-                                    key=lambda row: row["download"]
-                                    and row["request_id"] == own["request_id"]
-                                    and row["priority"] == own["priority"]
+                                    key=lambda row: (
+                                        row["download"]
+                                        and row["request_id"] == own["request_id"]
+                                        and row["priority"] == own["priority"]
+                                    )
                                 )
                         break
                     deadlines = [

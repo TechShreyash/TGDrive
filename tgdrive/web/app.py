@@ -1385,16 +1385,22 @@ def create_app(
             else None
         )
         phase = progress["phase"] if progress is not None else None
-        if queue and queue.get("queued_operations") and not queue.get("active_operations"):
-            if phase in {"checking_file", "receiving"}:
-                phase = "waiting_for_telegram"
+        if (
+            queue
+            and queue.get("queued_operations")
+            and not queue.get("active_operations")
+            and phase in {"checking_file", "receiving"}
+        ):
+            phase = "waiting_for_telegram"
         return JSONResponse(
             {
                 "queue": queue,
                 "size": data["size"],
                 "phase": phase,
                 "code": progress["code"] if progress is not None else None,
-                "retry_after": max(0, math.ceil(progress["retry_at"] - time.monotonic()))
+                "retry_after": max(
+                    0, math.ceil(progress["retry_at"] - time.monotonic())
+                )
                 if progress is not None and progress["retry_at"] is not None
                 else None,
             },

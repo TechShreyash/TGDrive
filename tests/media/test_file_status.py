@@ -90,7 +90,9 @@ def test_file_status_reports_metadata_and_origin_admission_separately(app_client
     assert status["phase"] == "waiting_for_telegram" and status["queue"] == queue
     runtime.pool._request_files["viewer"]["phase"] = "receiving"
     queue = None
-    assert client.get("/api/v1/file-status", params=params).json()["phase"] == "receiving"
+    assert (
+        client.get("/api/v1/file-status", params=params).json()["phase"] == "receiving"
+    )
 
 
 @pytest.mark.asyncio
