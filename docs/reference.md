@@ -21,9 +21,12 @@ on demand. For everyday workflows, start with [Using TGDrive](usage.md) or the
 | --- | --- |
 | Catalog / metadata | Records describing your files and folders; not their contents |
 | Receipt | The server's record of upload bytes already received |
+| Staging | Temporary server disk holding unfinished upload bytes |
 | Manifest | The ordered list of Telegram parts making up one large file |
 | Lease / ownership | A temporary lock that keeps two installations from writing at once |
 | Share capability | A secret link/token that grants access to specific content |
+| Preload | A disposable cached copy prepared for faster access |
+| Restore point / checkpoint | A confirmed backup state that recovery can return to |
 | Idempotent request | Retrying the same request does not create a second result |
 
 ## Configuration
@@ -275,8 +278,8 @@ empty database or the untouched catalog created by automatic first setup.
 
 | Variable | Default | Validation and behavior |
 | --- | --- | --- |
-| `MAX_FILE_SIZE` | Unset | Optional positive logical-file byte ceiling, further bounded by staging and the maximum multipart manifest size. It does not require Premium for files above a bot document's limit. |
-| `STAGING_BUDGET_BYTES` | 17179869184 | Positive integer; 16 GiB total reservation budget for active browser receipts. |
+| `MAX_FILE_SIZE` | Unset | Optional positive logical-file byte ceiling; the runtime upload policy supports up to 2 TiB, further bounded by staging. Files above one Telegram document's limit do not require Premium. |
+| `STAGING_BUDGET_BYTES` | 17179869184 | Positive integer, at most 2 TiB in the runtime upload policy; 16 GiB total reservation budget by default. |
 | `MIN_FREE_BYTES` | 1073741824 | Nonnegative integer; preserve 1 GiB free space by default. Browser receipt admission reserves remaining bytes; URL downloads also check free space. |
 | `UPLOAD_SESSION_TTL_SECONDS` | 86400 | Integer at least 60; incomplete receipt idle lifetime in seconds, refreshed after each committed chunk. There is no declared upper bound in configuration. |
 | `MAX_CONCURRENT_TRANSFERS` | 2 | Integer 1–32; bounds local fingerprinting and receive work. Receipt handlers have a separate bound from this value. It does not cap Telegram uploads across bots. |
@@ -288,6 +291,8 @@ including Premium. `UPLOAD_SPLIT_MIB=0` uses that cap. Larger logical files use
 ordered parts and appear as one item with original downloads and range seeking.
 The `/api/config` logical limit is the minimum of `STAGING_BUDGET_BYTES`, optional
 `MAX_FILE_SIZE` and 2000 MiB x 4096 parts: **16 GiB by default**, subject to disk.
+The multipart format's 4096-part ceiling is separate from the current **2 TiB**
+upload-policy maximum; it does not make larger upload settings valid.
 TGDrive has no aggregate stored-byte quota; its catalog is bounded to 250,000
 file/folder entries, including the root.
 Premium is preferred when eligible; bot fallback and existing sender identities
@@ -798,6 +803,14 @@ table, such as `cache_disk_bytes`, `telegram_request_limit` and `auto_preload`.
 Unknown fields are rejected. Keep and send the returned revision when editing
 from multiple tabs; a stale update returns a conflict rather than silently
 overwriting another edit.
+
+The same performance endpoint saves upload-storage fields: `max_file_size`,
+`staging_budget_bytes` and `min_free_bytes`. File size and temporary budget are
+integers from 1 byte through 2 TiB; a save requires the budget to cover the file
+maximum and all current upload reservations. Saving an upload-storage change
+also requires a free-space reserve of at least 64 MiB. These fields are separate
+from `/api/v1/settings/uploads`, which only changes uploads per bot. See the
+[upload-storage controls](configuration.md#upload-size-and-available-disk-space).
 
 Inventory reports current ready-byte coverage with half-open intervals
 `[start, end)`, including observed ordinary downloads. A ready preparation is

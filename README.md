@@ -9,13 +9,12 @@
   <strong>Turn Telegram into your personal cloud drive.</strong>
 </p>
 
-TGDrive stores your files in a private Telegram channel and gives you a familiar
-web drive to manage them. Upload large files or whole folders, stream videos,
-read documents and share files or folders with a link—all from your browser.
-
-Free and open source under the [MIT License](LICENSE). Run it on your computer or
-a server; MongoDB is required for the file list, folders, settings and transfer
-records.
+TGDrive brings the convenience of Google Drive to
+[Telegram's free unlimited cloud storage](https://telegram.org/faq_premium#q-is-telegram-still-free).
+Run it on your own computer or server to store files in a private Telegram
+channel, organize folders, stream videos and read documents in your browser.
+Upload large files without splitting them yourself, and share files or folders
+through links you can set to expire or revoke.
 
 **[Try the demo](#try-the-public-demo)** · **[Set up your drive](docs/setup.md)** · **[Explore screenshots and videos](docs/showcase.md)**
 
@@ -38,6 +37,10 @@ New here? Start with the [storage, privacy and backup essentials](docs/new-user-
 Individual uploads default to **16 GiB per file**. You can raise the file limit
 and temporary upload budget when your server has enough free disk space.
 [File-size and storage settings →](docs/configuration.md#upload-size-and-available-disk-space)
+
+For device uploads, keep the tab open until **You can close this tab** appears,
+and keep the originals until **Completed**.
+[Upload status meanings →](docs/usage.md#can-i-close-the-tab)
 
 **Keep another copy of important files outside Telegram.** Account or channel
 restrictions can still make stored files unavailable.
@@ -85,8 +88,9 @@ not a physical phone. See [capture notes](docs/assets/README.md).
 
 ## Make it yours
 
-Choose where TGDrive runs. All features are free in every setup; you provide
-your own Telegram channel, bots and MongoDB database.
+Choose where TGDrive runs. The app is free and open source, with all features
+included in every setup. You provide your own Telegram channel, bots and MongoDB
+database; hosting and database resources may have their own costs.
 
 | Where to run it | Get started |
 | --- | --- |
@@ -101,10 +105,6 @@ keep accepted transfers running while your laptop is off. TGDrive, MongoDB and
 Telegram must remain available, and recipients must be able to reach the app.
 [Compare running on your computer and a server →](docs/hosting.md#local-computer-or-server)
 
-For device uploads, keep the tab open until **You can close this tab** appears,
-and keep the originals until **Completed**.
-[Upload status meanings →](docs/usage.md#can-i-close-the-tab)
-
 ### Prefer help with hosting?
 
 We offer optional **managed TGDrive hosting from ₹100/month, including a
@@ -112,13 +112,8 @@ server**. We handle deployment and ongoing maintenance, and provide a personal
 HTTPS subdomain. You keep full access to the server and TGDrive, using your own
 Telegram channel, bots and MongoDB account.
 
-Higher plans provide more server capacity, with the same app features. There
-are no extra hosting-plan limits on file size or upload/download counts.
-Configured upload limits, disk space and bandwidth still apply.
-
-You can also buy just a server from us and manage TGDrive yourself.
-[Hosting details, discounted server plans and ownership →](docs/hosting.md) ·
-[Contact TechShreyash](https://t.me/TechShreyash)
+Explore [managed and server-only hosting](docs/hosting.md) for plans, capacity
+and ownership details, or [contact TechShreyash](https://t.me/TechShreyash).
 
 ## Find your guide
 

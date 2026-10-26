@@ -27,7 +27,7 @@ Use the same login form with either of these passwords:
 | Password | Demo access |
 | --- | --- |
 | Existing `ADMIN_PASSWORD` or `ADMIN_PASSWORD_HASH` | Visitor access: settings/management stay read-only; files outside Demo Files remain editable. |
-| Separate `DEMO_ADMIN_PASSWORD` or `DEMO_ADMIN_PASSWORD_HASH` | Full access, including settings, backups and the sample files. Keep this password private. |
+| Separate `DEMO_ADMIN_PASSWORD` or `DEMO_ADMIN_PASSWORD_HASH` | Administrator access to settings, backups and sample files, except database archive restoration. Keep this password private. |
 
 The full-access password is optional and only works while `DEMO_MODE=true`.
 If omitted, every web login remains restricted. Use a different password of at
@@ -35,6 +35,10 @@ least 12 characters, or supply an existing compatible Argon2id hash. See
 [password storage and reset](operations.md#forgotten-login-password). Hashes take
 precedence over their corresponding plaintext values. Both demo administrator
 variables are deployment-only; they are not restored from the database.
+
+Database archive restoration is disabled for every login while demo mode is on.
+Use a separate private deployment for a restore or recovery rehearsal; see
+[database recovery](backup-recovery.md#restore-a-lost-database-from-telegram).
 
 Plaintext environment passwords are supported; hashes are optional. For example,
 keep your existing visitor password and add a private full-access password:
@@ -93,9 +97,11 @@ files outside the protected sample folder, so use disposable content there.
 Demo mode does not isolate visitors, reset content or add quotas. Closing a visitor's browser follows
 the [usual transfer rules](usage.md#what-upload-progress-means).
 
-To administer the demo, use the full-access password. To return to the normal
-single-password deployment, set `DEMO_MODE=false` and recreate/redeploy. Demo
-variables cannot be changed in the app. See [password storage and reset](operations.md#forgotten-login-password).
+To administer the demo, use its private administrator password. Before returning
+to a normal single-password deployment, replace any published visitor password
+with a private owner password, then set `DEMO_MODE=false` and recreate/redeploy.
+The usual owner password grants full access once demo mode is off. Demo variables
+cannot be changed in the app. See [password storage and reset](operations.md#forgotten-login-password).
 
 Keep the public address and visitor sign-in instructions in the
 [public demo guide](usage.md#try-the-public-demo). Keep the full-access password
@@ -107,7 +113,7 @@ Open **Configuration → Cache settings / Transfer limits / Timezone**.
 
 | Action | Effect |
 | --- | --- |
-| **Save Performance Settings** | Applies this category; other categories remain drafts. |
+| **Save changes** | Applies this category; other categories remain drafts. |
 | **Discard changes** | Reloads this category's saved values. |
 | **Restore defaults** | Loads built-in values into the form; save to apply. |
 | **Parallel uploads** actions | Save, discard or restore concurrency separately. |
@@ -195,7 +201,7 @@ limit if this prevents admission. Waiting URL sources reserve smaller windows.
 (default **2**, range **1–8**); see [URL intake](performance.md#url-import-intake)
 for slow queued connections, storage waits and link-expiry limits. Space is rechecked during receipt, but other disk
 users can still fill it. Browser disk-full failures retain the acknowledged resume
-offset; URL retrieval may restart from zero. See [URL intake](performance.md#url-import-intake).
+offset; URL retrieval may restart from zero.
 These limits describe local staging, not Telegram storage capacity.
 
 ## A modest server and a larger server
@@ -219,7 +225,8 @@ Check actual container limits and other disk users, not just host specifications
 On an 8 vCPU / 16 GiB RAM / 300 GiB disk server with ample actual headroom,
 try 2 GiB RAM cache, then 4 GiB; 100–150 GiB disk cache; and a 20–30 GiB
 free-space floor. Leave Telegram request limits unchanged initially.
-These are measured experiments, not portable defaults or performance guarantees.
+Measure each change on your own host; these values are examples, not defaults
+or speed guarantees.
 
 </details>
 

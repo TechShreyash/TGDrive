@@ -2,19 +2,21 @@
 
 [Docs home](README.md) · [User guide](usage.md) · [Live demo and password](usage.md#try-the-public-demo)
 
-Use these screenshots and videos to find a feature, then follow its linked
-guide for the full workflow and limits. The captures use disposable sample files
-on the live TGDrive website. The silent walkthroughs use continuous 30 fps browser
-recordings at normal speed, with a cursor overlay, click highlights and step
-captions. Upload and sharing are separate chapters with a title card and brief
-end holds. These are demonstrations, not speed measurements. The mobile screenshot uses an
-emulated 390 × 844 browser viewport, not a physical phone.
+Explore a feature below, then follow its linked guide for the steps and limits.
+The captures use disposable sample files in the public demo. Videos are silent
+and play at normal speed; the mobile layout uses an emulated viewport. These
+are demonstrations, not speed or physical-device tests.
+[Capture details and replacement instructions](assets/README.md).
 
 | Watch | Duration | Covers |
 | --- | --- | --- |
 | [Organize your files](assets/organize-files.mp4) | 3:26 | Views, search, sort, favorites, folder creation, rename and move |
 | [Upload and share](assets/upload-and-share.mp4) | 5:20 | Upload progress, history, Show in Folder, share label/expiry, copying and revocation confirmation |
 | [Preview and read](assets/readers-and-preview.mp4) | 5:51 | Image/audio/text previews, PDF/EPUB/comic navigation and video playback/settings |
+
+**The preview video shows earlier player controls.** Follow the
+[current playback controls](usage.md#open-preview-and-download) for today's labels
+and behavior.
 
 <details>
 <summary>Find a feature in the videos</summary>
@@ -156,7 +158,8 @@ and illustrated EPUB pages offer page fit and right-to-left navigation.
 
 </details>
 
-[Watch previews and readers](assets/readers-and-preview.mp4).
+[Watch previews and readers](assets/readers-and-preview.mp4); its player controls
+predate the [current version](usage.md#open-preview-and-download).
 
 ## Share selected content
 

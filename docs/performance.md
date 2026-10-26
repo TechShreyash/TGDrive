@@ -2,8 +2,9 @@
 
 [Docs home](README.md) · [Using TGDrive](usage.md) · [Configuration](configuration.md)
 
-Find the slow stage before changing limits. A cold file still travels from
-Telegram; a warm cache speeds repeat access.
+Find the slow stage before changing limits. **Cold** reads fetch bytes from
+Telegram; **warm** reads reuse bytes cached on the TGDrive server. Cached files
+still need a working server and a connection to the viewer.
 
 | Goal | Start here |
 | --- | --- |
@@ -19,11 +20,11 @@ examples from the recorded session, not throughput benchmarks.
 
 | Stage | Typical constraints |
 | --- | --- |
-| Device → server | Uplink, server ingress, staging disk, browser receive queue |
-| URL source → server | Source throughput, routing, server ingress and staging disk |
-| Server → Telegram | Account/file datacenter, latency, pipeline, cooldowns, egress |
-| Telegram → server | Routing, eligible accounts, origin admission, cold misses |
-| Server → viewer | Egress, proxy, viewer connection, concurrent consumers |
+| Device → server | Your upload connection, server bandwidth, temporary upload disk and browser queue |
+| URL source → server | Source speed, network route, server bandwidth and temporary upload disk |
+| Server → Telegram | Telegram datacenter, request latency, upload pipeline, cooldowns and server upload bandwidth |
+| Telegram → server | Network route, available Telegram accounts, request limits and missing cached bytes |
+| Server → viewer | Server upload bandwidth, proxy, viewer connection and simultaneous downloads |
 | Video decoding | Container/codec support and browser/device capacity |
 
 TGDrive uses Telethon with cryptg, bounded upload pipelining and pooled downloads.
@@ -54,8 +55,8 @@ restart. See [exact settings](reference.md#performance-and-cache-settings).
 | RAM expiry | 10 idle minutes |
 | Transient streaming payload | 32 MiB, availability-clamped with a 2 MiB floor |
 
-Budgets are instance-wide, separate from upload staging. Units are binary
-(1 GiB = 1024 MiB). **Cache is disposable acceleration, not a backup or CDN.**
+Budgets cover the running installation and are separate from temporary upload
+storage. Units are binary (1 GiB = 1024 MiB). **Cache is temporary, not a backup.**
 Clearing it leaves Telegram originals and the catalog intact.
 
 <details>
@@ -163,9 +164,10 @@ It runs on the server without downloading to your device.
 2. Open **Monitor → Preloads** and wait for **Ready** with full coverage.
    Blue segments show partial coverage.
 
-Admission requires the file to fit an effective tier. Concurrent preparations
-reserve capacity and verify retained ranges before completion; downloaded then
-evicted bytes do not count. Manual multipart preparation also checks complete
+Preloading starts only when the whole file fits the effective RAM or disk cache
+budget. Concurrent preparations reserve capacity and verify retained ranges
+before completion; bytes downloaded and then evicted do not count.
+Manual multipart preparation also checks complete
 part checksums. Cancellation/clearing does not delete the file. Eviction, expiry,
 reduced budgets, disk loss and restart can change coverage, so inspect current
 inventory before a planned viewing.
@@ -188,8 +190,9 @@ URL imports download to the server before uploading to Telegram. **Downloading
 from URL** shows the source-to-server rate; Telegram capacity affects the next
 stage. The browser can close after submission while the server keeps working.
 
-Large, known-length sources with a strong ETag use adaptive parallel HTTP
-ranges: TGDrive starts with two streams and probes four, then eight when aggregate
+Large, known-length sources with a strong ETag (the source's content-version
+identifier) use parallel HTTP ranges. TGDrive starts with two streams and probes
+four, then eight when aggregate
 throughput improves. Every range must match the original representation and exact
 requested interval. Unsuitable range responses abandon the partial attempt and
 restart as a single stream within the retry budget; rate-limit responses respect
@@ -269,8 +272,8 @@ run separately, so receipt verification does not hold the next file's device slo
 Eligible batches rotate through those slots. Slow disk, database commits, staging
 pressure and the uplink can still limit intake.
 
-MongoDB session creation keeps its initial file synchronization and receipt commit
-off the HTTP event loop, with staging reserved before it yields. See the
+Creating an upload receipt keeps its initial file synchronization and database
+commit off the HTTP event loop, with staging reserved before it yields. See the
 [transfer pipeline](architecture.md#transfer-pipeline) for admission and retry
 boundaries.
 

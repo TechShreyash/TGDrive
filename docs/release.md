@@ -12,6 +12,10 @@ The public source includes the [visual walkthroughs](showcase.md) and their
 [media assets](assets/README.md). Keep those files in the release allowlist when
 replacing captures.
 
+For development source before a v2 release is published, use
+[Get the source](setup.md#get-the-source). The procedures below describe preparing
+a release and checking its published archive.
+
 ## Choose the deployment
 
 | Deployment | Runtime | Guide |
@@ -70,9 +74,10 @@ excluded. Review the generated manifest and archive before distribution.
 
 ## Verify a downloaded source archive
 
-Download the release's **tgdrive-2.0.0.zip** and **tgdrive-2.0.0.zip.sha256**
-assets into the same folder. Use the custom release assets, rather than GitHub's
-automatic source-code ZIP. Open a terminal in that download folder.
+For a published **2.0.0** release, download its **tgdrive-2.0.0.zip** and
+**tgdrive-2.0.0.zip.sha256** assets into the same folder. These commands verify
+the custom release assets; the development ZIP from GitHub does not have this
+companion checksum. Open a terminal in that download folder.
 
 **Windows PowerShell:**
 

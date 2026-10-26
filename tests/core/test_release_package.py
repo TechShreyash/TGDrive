@@ -109,6 +109,7 @@ def test_source_archive_excludes_local_state_and_private_documents(
             "website/public/third-party/react-dom-LICENSE.txt",
             "website/public/third-party/scheduler-LICENSE.txt",
             "website/public/third-party/lucide-react-LICENSE.txt",
+            "website/public/third-party/octicons-MIT.txt",
             "tests/fixtures/multitrack.mkv",
         ):
             assert f"tgdrive-2.0.0/{public_asset}" in names

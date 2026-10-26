@@ -21,6 +21,10 @@ npm run build --prefix website
 
 Keep lockfiles. Ordinary tests inject fake resources and need no live Telegram credentials.
 
+Use the [supported runtimes](#version-baseline-and-dependency-policy) and run the
+commands in this guide only when the current task authorizes the relevant checks,
+as required by [contributor guidance](../AGENTS.md#ask-before-running-tests-or-validation).
+
 ## Run while editing
 
 With private configuration and an existing drive:
@@ -223,6 +227,10 @@ codec/device support.
 <details>
 <summary>Full lint, tests, security and build checks</summary>
 
+First start a [disposable MongoDB replica set](#opt-in-mongodb-replica-set-tests)
+and export its two test variables. The coverage command below needs that opt-in;
+never point it at your deployment database.
+
 ```bash
 uv lock --check
 npm run typecheck --prefix website
@@ -239,8 +247,8 @@ docker compose --env-file .env.example config --no-env-resolution --quiet
 ```
 
 Keep the 80% coverage floor. Compose validation checks syntax, not placeholder
-credential validity. The latest focused checks pass with warnings as errors;
-a full offline strict run still exposes existing SQLite fixture-cleanup warnings.
+credential validity. See the [recorded results](#latest-validation) for the
+environments, coverage and known limitations of earlier runs.
 
 </details>
 
@@ -439,7 +447,7 @@ editors. After approval,
 | `tests/` | Python tests grouped into domain packages, plus `browser/` |
 | `tests/support/` | Shared app fixtures, synthetic server and generated samples |
 | `tests/fixtures/` | Committed media fixtures shared by tests |
-| `scripts/` | Release packaging, viewer vendoring, benchmarks and brand asset tooling |
+| `scripts/` | Release packaging, viewer vendoring and brand asset tooling |
 | `docs/` | Public guides and their showcase assets |
 | `website/public/` | Browser assets, fonts, player and third-party notices |
 
@@ -591,8 +599,10 @@ navigation label.
   Successful, Failed and Cancelled filters and server-authoritative pagination.
 - Batch disclosure is one stable button without navigation; Show Folder is a
   separate completed action. Expanded children omit repeated locations/dates.
-  Retain disclosure state across category changes. Single-file progress uses one
-  stage; batch metrics use Telegram progress. Never invent queued timers/ETAs.
+  Retain disclosure state across category changes. Show device progress while any
+  local upload still needs the browser, then switch to Telegram progress after
+  every remaining file has an accepted server job. Follow the
+  [upload display rules](usage.md#what-upload-progress-means); never invent queued timers/ETAs.
 - Folder confirmation shows selection/count/size/destination/actions. Show skipped
   files only when present. Move conflicts use explicit themed choices.
 

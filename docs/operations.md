@@ -24,9 +24,9 @@ Server deployments add `-f compose.yaml -f compose.server.yaml` after `docker co
 Check **Connections** for Telegram health, **Storage & Backups** for database/disk/backups, and [performance controls](performance.md) for caches, queues and cooldowns. Queue times are estimates. `/health/ready` reports readiness, not a full file or public-domain check.
 
 An always-on server can keep file access, sharing and
-[background work](setup.md#why-host-on-a-server) available while your laptop is
-off. Keep the app and its dependencies running; closing the browser does not stop
-accepted server jobs.
+[background work](hosting.md#local-computer-or-server) available while your laptop
+is off. TGDrive must keep running and connected to MongoDB and Telegram; closing
+the browser does not stop accepted server jobs.
 
 ### Read useful logs
 
@@ -151,10 +151,7 @@ hosting access and ownership.
 If MongoDB survives, reconnect to the existing database. Missing staged upload
 bytes still need their originals.
 
-<details>
-<summary>Reinstall against the existing MongoDB drive</summary>
-
-1. Stop the old instance. Install the same release where possible and
+1. Stop the old instance. Use the same version or source commit where possible and
    [copy the configuration template](setup.md#3-configure-your-drive) using the
    command for your system. Use the existing values below.
 
@@ -170,8 +167,6 @@ bytes still need their originals.
 5. Sign in with the existing password. Check Connections, files, a representative download and unfinished transfers.
 
 For hosting, use [Coolify](setup.md#coolify) or [server Compose](setup.md#docker-compose-on-a-server). Retain surviving persistent volumes. If Atlas paused the cluster, [resume it](https://www.mongodb.com/docs/atlas/pause-terminate-cluster/) first.
-
-</details>
 
 ## Encrypted Telegram backups
 
@@ -262,7 +257,7 @@ See [password and session storage](reference.md#owner-authentication).
 ## Upgrade and rollback
 
 - [ ] Finish work, stop safely, and save a confirmed backup plus its key off-host.
-- [ ] Record the running release/revision and review the new release's requirements.
+- [ ] Record the running version and source commit; review the target version's requirements.
 - [ ] **Release archive:** [verify and extract](release.md#verify-a-downloaded-source-archive) the new archive into a separate folder. Copy your private `.env` into it and retain any reviewed Compose customizations. Keep the **same Compose project name**, including any `-p` argument, so Docker reuses the existing volumes. Keep the old folder for rollback; never copy the new `.env.example` over your real configuration.
 - [ ] **Git checkout:** record `git rev-parse HEAD`, then update with `git pull --ff-only`. Preserve local changes if Git refuses the update. **Coolify:** select the chosen release revision while retaining variables/mounts.
 - [ ] Rebuild from the updated project folder with `docker compose up -d --build` (server `-f` arguments where needed), or redeploy in Coolify. Preserve existing volumes; startup reopens the drive.

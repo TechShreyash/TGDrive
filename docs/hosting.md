@@ -18,16 +18,13 @@ computer running TGDrive. It still needs the internet to reach Telegram and
 MongoDB. A hosted server provides a reachable address while your personal
 computer is off.
 
-| Feature or workflow | Localhost on your computer | Server with a public HTTPS address |
+| Feature or workflow | Your computer, with default local access | Server with a public HTTPS address |
 | --- | --- | --- |
 | All TGDrive features | Included, free | Included, free |
-| Files, folders, search, stars and Trash | Available while TGDrive runs | Available while TGDrive runs |
-| Uploads, URL imports, previews and readers | Available while TGDrive runs | Available while TGDrive runs |
 | Access on the go | This computer by default; remote access needs extra setup | Phone, tablet or computer through an internet-connected browser |
 | Multiple people using the same drive | Possible if they can reach your installation | Simultaneous access within server capacity |
 | Public file and folder links | Other people need a reachable address; localhost links do not work on their devices | Recipients can use the public address while the server is available |
-| Accepted uploads, URL imports and manual preloads after closing the tab | Continue while your computer and TGDrive remain running | Continue while the server and TGDrive remain running |
-| Bot uploads, scheduled backups and other background work | Continue while your computer and TGDrive remain running | Continue while the server and TGDrive remain running |
+| Accepted uploads, URL imports, manual preloads, bot uploads and backups | Continue while your computer and TGDrive remain running | Continue while the server and TGDrive remain running |
 | Work while your laptop is asleep or off | Stops when the computer hosting TGDrive stops | Continues independently of your laptop |
 | Resources and maintenance | Your computer, connection and maintenance | Your chosen server; maintain it yourself or use optional management |
 
@@ -42,15 +39,13 @@ to files and settings; TGDrive does not provide separate personal accounts or
 per-person permissions. Use read-only share links for selected files or folders.
 [Device access and sessions](usage.md#use-several-devices) · [Sharing](usage.md#share-and-revoke)
 
-You can also configure remote access to a computer-hosted instance, but the
-computer must stay awake and reachable. See [server deployment](setup.md#hosting-beyond-your-machine)
-for HTTPS and deployment options. Hosting is a way to keep the same app available,
-not a requirement to unlock features.
+Remote access to a computer-hosted installation needs
+[HTTPS and deployment setup](setup.md#hosting-beyond-your-machine). That computer
+must stay awake and reachable.
 
 ## Optional managed hosting
 
-If you want to use TGDrive without deploying it, maintaining the server or fixing
-hosting problems yourself, we offer **managed TGDrive hosting from ₹100/month
+For help with deployment and maintenance, we offer **managed TGDrive hosting from ₹100/month
 (INR), including a server**. This is the total starting monthly price, not a
 management fee added to a separate server bill.
 

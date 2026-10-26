@@ -60,10 +60,10 @@ Hosting a demo? See [Public demo mode](configuration.md#public-demo-mode).
 | **Starred** | Quickly find files and folders you marked |
 | **Trash** | Restore files or delete them permanently |
 | **Monitor → Performance** | Inspect current server resources, Telegram activity and measured traffic |
-| **Monitor → Preloads** | Follow full-file preloads, inspect cached coverage, stop work, or evict cached bytes |
+| **Monitor → Preloads** | Prepare files for faster access, see which parts are cached, stop preparation or clear cached copies |
 | **Management → Connections** | Manage Telegram bots, Premium accounts and API credentials |
 | **Management → Storage & Backups** | Check saved data, temporary storage and database backups |
-| **Configuration → Cache settings** | Set RAM/disk budgets, reserves, retention and automatic preparation |
+| **Configuration → Cache settings** | Choose memory/disk cache limits, how long copies are kept and automatic preloading |
 | **Configuration → Transfer limits** | Set upload concurrency, splitting and shared Telegram request budgets |
 | **Configuration → Timezone** | Choose the installation's timezone |
 
@@ -112,10 +112,11 @@ See [performance tradeoffs](performance.md).
 Device uploads start with **two files**, adapting between **one and four** using
 measured total throughput. Failures/stalls reduce new concurrency; running files
 continue. Background pauses and server confirmation time are excluded.
-Each file queues for Telegram once its receipt is verified and accepted; it does
-not wait for the rest of the batch. If staging fills, remaining files wait/retry;
-smaller files may proceed when they fit. Keep the tab open
-until server receipt is confirmed. Small batches may finish before adaptation.
+Each file queues for Telegram once the server has verified and accepted its
+bytes; it does not wait for the rest of the batch. If temporary upload storage
+fills, remaining files wait/retry; smaller files may proceed when they fit. Keep
+the tab open until **You can close this tab** appears. Small batches may finish
+before adaptation.
 New batches share device-upload slots fairly with existing batches, so adding a
 folder does not wait for earlier Telegram work or an entire device batch.
 See [measurement rules](architecture.md#adaptive-device-upload-concurrency).
@@ -128,7 +129,7 @@ See [measurement rules](architecture.md#adaptive-device-upload-concurrency).
 downloads reconstruct original bytes and seeking crosses part boundaries.
 Database backups retain part mappings; independent backup copies the documents.
 
-Default: **16 GiB per file**, subject to staging space. Telegram documents use
+Default: **16 GiB per file**, subject to temporary upload space. Telegram documents use
 at most **2000 MiB** for every account; **File split size** can lower that
 (0 also means 2000 MiB). See [capacity limits](reference.md#file-capacity-staging-and-work-limits)
 and [backup coverage](backup-recovery.md).
@@ -139,17 +140,17 @@ and [backup coverage](backup-recovery.md).
 | --- | --- |
 | Uploading from your device | Your browser is sending bytes to the TGDrive machine |
 | Queued | Waiting for an available upload slot |
-| Uploading to Telegram | Sending bytes, including parts that are not yet channel messages |
+| Uploading to Telegram | Sending file contents; they may not yet be posted as channel messages |
 | Publishing to the channel | Finishing channel messages and saving the file record |
 | Completed | The file and its record are confirmed |
 
-The panel shows **device progress first** while any upload from this browser
-still needs server receipt. Files and folders already handed off show **Received**
-without Telegram progress, speed or ETA. Once every remaining device upload has
-an accepted server job, the panel switches to Telegram metrics. Telegram work
-continues in the background throughout. Single-file uploads omit redundant
-file-count summaries. Running/Queued counts include only unfinished files; a
-folder's file count includes its completed files.
+The panel shows **device progress first** while any file from this browser still
+needs to be received and accepted by the server. Files and folders already
+accepted show **Received** without Telegram progress, speed or estimated time
+remaining. Once all remaining files are accepted, the panel switches to Telegram
+progress. Telegram work continues in the background throughout. Single-file
+uploads omit redundant file-count summaries. Running/Queued counts include only
+unfinished files; a folder's file count includes its completed files.
 
 Time remaining estimates the bytes left in the displayed stage using recent
 transfer speed. Folder measurements continue across individual file handoffs,
@@ -160,7 +161,7 @@ remains; those waits have no reliable byte-based duration.
 **A full device bar alone is not a completed upload.** Keep the tab open during
 server confirmation. **You can close this tab** confirms that the remaining work
 can continue on the server; another batch still sending device bytes keeps the
-close warning active. Recovery resumes from the last confirmed offset.
+close warning active. Resuming keeps the bytes the server has already confirmed.
 
 <details>
 <summary>See upload progress</summary>
@@ -187,8 +188,8 @@ bytes together.
 | **Completed** | Yes. This upload no longer needs the local source. |
 
 To resume, use **Choose files / Choose folder / Choose file** in the existing
-batch and select the same originals. TGDrive checks received bytes, then continues
-from the acknowledged offset without resending them. Use the existing **Retry**
+batch and select the same originals. TGDrive checks the received bytes, then sends
+only what is still missing. Use the existing **Retry**
 action after failure to avoid duplicates.
 
 Temporary connection and server errors retry automatically once TGDrive has
@@ -246,8 +247,8 @@ browser-only history is cleared in the browser you use.
 
 On phones, the bottom upload status opens Transfers. The desktop floating panel
 shows this browser's work; Transfers also shows other devices' server jobs.
-Clearing the panel does not erase saved history. Completed/cancelled records
-survive restart until manually cleared; previously expired records cannot be recreated.
+Clearing the panel does not erase saved history. Finished history survives
+restart until manually cleared; previously expired records cannot be recreated.
 Start uploads in a destination in **My Files** using **New**.
 
 <details>
@@ -342,7 +343,7 @@ Protected originals use `no-store`, so browser disk caching is not promised.
 | Other unsupported formats | Original download |
 
 PDFs, EPUB and comics request needed sections without automatically preloading
-the whole file. PDFs support sources up to **256 MiB**. See
+the whole file. See
 [book/comic controls and practical limits](reading.md).
 
 <details>
@@ -419,7 +420,7 @@ automatically preload the original. Manual preloading always targets the origina
 ### Parallel and resumed downloads
 
 Use file **⋯ → Copy Download Link**, then paste into your download manager.
-It is a [share capability](#share-and-revoke), separate from browser-cookie access.
+This is a [read-only share link](#share-and-revoke), separate from your owner login.
 Managers can request ranges in parallel or resume; the manager must retain its
 own received-byte state. Downloads read ahead only within requested ranges,
 without warming unrelated gaps/the whole file. Shared cold blocks reuse origin
@@ -428,7 +429,9 @@ contains only the requested bytes. See [delivery policy](performance.md).
 
 ### Storage, progress and limits
 
-Full preloads must fit one effective cache tier, including overhead/reservations.
+The whole file must fit either the available memory cache or the disk cache,
+including overhead and other preparation jobs' reserved space. The two cache
+limits are not added together.
 If rejected, free space, raise **Configuration → Cache settings** or wait for
 other jobs. Larger files can still stream in chunks.
 Preloads sorts by newest downloaded data, not cache reads or page refreshes.
@@ -472,7 +475,7 @@ Trash revokes subtree links. Revocation stops future authorized stream blocks,
 not already downloaded copies. Invalid tokens fail even in an owner's browser.
 
 For download tools, use **Copy download link**, not an owner address that needs
-browser cookies. It creates/reuses a separate **Download link** capability;
+browser cookies. It creates or reuses a separate share labelled **Download link**;
 new links last **one day** and can be revoked in Shared Links. Keep the URL secret.
 
 ## Trash and permanent deletion
@@ -490,8 +493,8 @@ folder before restoring or deleting it.
 ### Why permanent deletion keeps the Telegram files
 
 > [!WARNING]
-> Permanent deletion removes database records and TGDrive access, regardless of
-> file age. It leaves original Telegram messages in the channel.
+> **Original Telegram files remain after permanent deletion.** Removing an item
+> from TGDrive does not securely erase its contents from Telegram.
 
 Channel members may still read those messages; older backups may restore records.
 Recipient copies and caches also remain. Erasing Telegram originals separately
@@ -506,9 +509,9 @@ retry automatically. Backup protection checks or upload cleanup may delay remova
 Running/failure details stay on Trash; successful notices dismiss after six
 seconds (paused on hover/focus) and do not return after navigation/reload.
 
-Old failed Telegram-deletion jobs now retry database-only removal. Previously
-erased messages cannot be restored by this change. Independent backup protection
-still applies; see [backup and recovery](backup-recovery.md).
+Retrying an older failed deletion job also removes only database records; it
+cannot restore Telegram messages that were previously erased. Independent backup
+protection still applies; see [backup and recovery](backup-recovery.md).
 
 </details>
 
@@ -523,7 +526,7 @@ a percentage appears only when file bytes start arriving.
 TGDrive downloads to the server, then sends to Telegram. By default two imports
 receive at full speed. Others show **Queued · receiving slowly** when a slow source
 connection is available, **Waiting for a source connection** at the connection cap,
-or **Waiting for temporary storage** when staging is full. Slow reception can help
+or **Waiting for temporary storage** when temporary upload storage is full. Slow reception can help
 avoid idle timeouts, but cannot extend a link's fixed expiry. Change full-speed
 concurrency (1–8) in **Configuration → Transfer limits → URL downloads**.
 
@@ -561,11 +564,7 @@ see [connection recovery](operations.md#revoked-tokens-removed-sessions-and-lost
 Finish/cancel pending transfers before changing accounts, enabled states or API
 credentials. Replacing credentials for the **same Telegram account** can repair
 pending work; keep other settings unchanged. Saved changes pause new uploads
-until restart. For local Docker:
-
-~~~bash
-docker compose restart app
-~~~
+until you [restart TGDrive](operations.md#run-and-monitor).
 
 Blank replacement fields keep current secrets; secrets are never displayed back.
 The web password/storage channel are installation settings.
@@ -575,7 +574,7 @@ The web password/storage channel are installation settings.
 **Management → Storage & Backups → Saved to MongoDB** confirms the saved catalog,
 not completion of unfinished uploads.
 
-- **Temporary storage** is disk reserved for unfinished uploads, not a Telegram quota.
+- **Temporary storage** is server disk reserved for unfinished uploads, not a Telegram storage limit.
 - **Back up now** makes a complete encrypted database copy in your private channel.
   Automatic copies normally run hourly.
 - **Save recovery key** downloads the key needed to restore those copies.

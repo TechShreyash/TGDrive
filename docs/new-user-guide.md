@@ -2,9 +2,10 @@
 
 [Docs home](README.md) · [Setup](setup.md) · [How to use TGDrive](usage.md) · [Backup & recovery](backup-recovery.md)
 
-Everyone using or operating a TGDrive installation should understand this page,
-including people using managed hosting. Installation commands live in
-[Setup](setup.md); this guide explains what to expect and how to protect your drive.
+Start here before storing important files, whether you run TGDrive yourself or
+use managed hosting. This guide explains where your data lives, what can keep
+the drive from working and what you need for recovery. Installation steps live
+in [Setup](setup.md).
 
 ## What TGDrive is
 
@@ -17,27 +18,24 @@ Your drive relies on three parts working together:
 
 | Part | What TGDrive uses it for |
 | --- | --- |
-| **Private Telegram channel** | Stores the actual files after uploads finish. Large files may be stored in several parts. |
+| **Private Telegram channel** | Stores completed uploads as Telegram messages. Large files may span several messages. |
 | **MongoDB database** | Saves file names, folders, settings and share links. Records which Telegram messages hold each file and how its parts fit together. |
 | **Your computer or server** | Runs the website and handles uploads, downloads and previews. Holds unfinished uploads, temporary file copies and private configuration. |
 
-To use TGDrive's website or share links, the computer or server hosting it must
-stay on, with TGDrive running and access to MongoDB and Telegram. Stopping TGDrive
-does not delete completed files, but its website and share links are unavailable
-until it runs again.
+To use TGDrive's website or share links, the computer or server running it
+(the **host**) must stay on and keep access to MongoDB and Telegram. Stopping
+TGDrive does not delete completed files, but its website and share links are
+unavailable until it runs again.
 
-The **catalog** is TGDrive's file index in MongoDB: it records file names, folders
-and which Telegram messages hold each file. For a large file split into several
-Telegram documents, it also records the order of those parts so TGDrive can
-deliver them as one file. Keeping the Telegram documents alone is not enough to
-restore the drive's organization and split-file mappings; preserve the database
-or a usable backup of it too.
+The **catalog** is the file index kept in MongoDB. Telegram messages alone do not
+rebuild your folders or tell TGDrive how to join split files. Preserve the
+database or a usable backup of it alongside the Telegram files.
 [Where data is saved](operations.md#what-is-saved-where).
 
-**No total stored-byte quota does not mean unlimited file size, permanent
-retention or immunity from account restrictions.** Telegram access, app limits,
-database capacity, server resources and backups still matter. A private channel
-restricts membership; TGDrive does not add end-to-end encryption to stored files.
+**Unlimited total storage is not a promise of unlimited file size or permanent
+access.** Telegram account/channel restrictions, database capacity and server
+resources still matter. A private channel limits membership; TGDrive does not
+add end-to-end encryption to stored files.
 
 ## The essentials everyone must know
 
@@ -47,12 +45,17 @@ restricts membership; TGDrive does not add end-to-end encryption to stored files
   this tab**, and keep source files until **Completed**. Independent protection
   requires its own **Backup confirmed** status.
 - **Treat the storage channel as app-managed.** Use a dedicated private broadcast
-  channel with auto-delete **Off**. Make file changes through TGDrive.
+  channel with auto-delete **Off**. Add files through TGDrive or its configured
+  upload bot, and make file changes through TGDrive. Do not edit storage messages,
+  recovery pins or channel history, or add cleanup/moderation bots.
 - **Protect the catalog and recovery material.** Preserve MongoDB, channel access,
   private configuration and persistent volumes. Save matching recovery keys and
   restore-point exports outside both the server and Telegram.
 - **Know who can access your drive.** The owner password grants full shared
-  access. Anyone holding a valid share link can read its scope.
+  access. A valid share link lets its holder read the selected file or folder.
+  Use HTTPS for remote access, a unique owner password, Telegram two-step
+  verification and secure database access. Keep credentials, channel invitations
+  and recovery keys private.
 - **Use only disposable files in the public demo.** It is a shared workspace,
   not your private drive. Other visitors can change unprotected files.
   [Demo instructions](usage.md#try-the-public-demo).
@@ -63,28 +66,35 @@ restricts membership; TGDrive does not add end-to-end encryption to stored files
    and open it to understand the full upload/download workflow.
 2. Try a share link in a signed-out browser, then revoke it. Share a specific
    file or folder rather than giving someone the owner password.
-3. If using independent backups, wait for **Backup confirmed**, save the matching
-   recovery export separately and follow the [recovery-kit guidance](backup-recovery.md#verify-your-recovery-kit-periodically).
-   Keep another readable copy of important files outside Telegram.
+3. If using independent backups, wait for **Backup confirmed** and save the
+   matching recovery export separately. An enabled backup switch or 100% copied
+   bytes alone is not confirmation. Follow the
+   [recovery-kit guidance](backup-recovery.md#verify-your-recovery-kit-periodically)
+   before relying on it.
 
 ## Do and don't
 
-| To keep the drive working and your data recoverable | Avoid |
-| --- | --- |
-| Keep storage bots as channel administrators with the [required permissions](setup.md#2-prepare-telegram), and preserve owner access to Telegram and MongoDB. | Removing bots, revoking tokens or changing the configured channel/database without following the maintenance or recovery guide. |
-| Keep channels private, auto-delete off and recovery pins under TGDrive's control. Use TGDrive or its configured upload bot to add files. | Clearing channel history, manually editing/deleting storage messages, posting unrelated content, or adding cleanup/moderation bots. |
-| Leave real disk space for unfinished uploads and caches; respect displayed Telegram cooldowns. | Assuming Telegram storage eliminates server disk needs, or repeatedly retrying/restarting to bypass a provider wait. |
-| Use existing **Retry** or resume controls and reselect the same originals when asked. | Deleting upload staging as if it were disposable cache, or assuming a full device progress bar means the file is finished. |
-| Run one active TGDrive instance per drive; preserve its saved state during upgrades or a move. | Running competing instances, reinitializing an existing drive, or deleting persistent volumes as a troubleshooting shortcut. |
-| Confirm backups, export matching keys and rehearse recovery using the [backup guide](backup-recovery.md). | Treating an enabled backup switch, 100% copied bytes, a recovery key alone or a database-only archive as a complete file backup. |
-| Use HTTPS for remote access, a unique owner password, Telegram two-step verification and secure database access. Share selected items through scoped links. | Publishing credentials, channel invitations or recovery keys, or giving the owner password to people who should only download a file. |
-| Store and share files you are entitled to use, following [Telegram's terms](https://telegram.org/tos). Keep independent copies of important originals. | Assuming a private channel permits prohibited activity or guarantees that Telegram will never restrict access. |
+- Keep storage bots as channel administrators with the
+  [required permissions](setup.md#2-prepare-telegram). Follow the
+  [connection maintenance guide](operations.md#connection-changes) before replacing
+  credentials, removing bots or changing channel/database bindings. Keep unrelated
+  posts out of the storage channel.
+- Run **one active TGDrive instance per drive**. Preserve its saved data and
+  persistent volumes during updates or a move; do not delete them to clear an error.
+- Leave disk space for unfinished uploads and cached file copies. Use the existing
+  **Retry** or resume action, reselect the same originals when asked, and respect
+  displayed Telegram waits. Repeated restarts do not bypass those waits. Keep
+  unfinished upload files; they are not disposable cache.
+- Store and share only files you are entitled to use, following
+  [Telegram's terms](https://telegram.org/tos). Private channels still follow those terms.
 
 If something breaks, keep the existing state and read the error before changing
 configuration. Start with [Operations](operations.md#troubleshooting). **Never
 replace an existing drive with an empty database as a repair.**
 
 ## Frequently asked questions
+
+### Basics and storage limits
 
 <details>
 <summary>Why use TGDrive if I can already upload files to a Telegram group?</summary>
@@ -158,17 +168,18 @@ and [exact capacity limits](reference.md#file-capacity-staging-and-work-limits).
 <details>
 <summary>Can I rely on a 3–4 TB library working?</summary>
 
-A multi-terabyte **library** and a single multi-terabyte **file** are different
-claims. No TGDrive aggregate-byte quota does not establish tested reliability or
-performance at every scale. Item count, file sizes, database capacity, server disk,
-network and Telegram behavior all matter.
+A multi-terabyte **library** is different from one multi-terabyte **file**.
+TGDrive has no total storage cap, but its practical limits and performance still
+apply. File count, individual file sizes, database capacity, server disk, network
+and Telegram all matter.
 
-An older release's personal storage experience is not a current-release scale
-benchmark. Do not present 3–4 TB as verified without workload-specific evidence.
-Start with representative files, grow gradually and keep a separate recovery
-copy. [Performance factors](performance.md#follow-the-data-path).
+Experience with a 3–4 TB library on an older release does not establish how the
+current version will handle your workload. Start with representative files, grow
+gradually and keep separate copies. [Performance factors](performance.md#follow-the-data-path).
 
 </details>
+
+### Privacy and backups
 
 <details>
 <summary>Can Telegram see or act on files in a private channel? Can it ban an account?</summary>
@@ -188,8 +199,8 @@ every channel copy is lost, but neither does another channel guarantee recovery.
 <details>
 <summary>Are my files end-to-end encrypted? Who else can read them?</summary>
 
-TGDrive does not encrypt original payloads or local staging/cache bytes. Its
-encrypted database backups do not make the original files end-to-end encrypted.
+TGDrive does not encrypt your original files, unfinished uploads or cached copies.
+Its encrypted database backups do not make the original files end-to-end encrypted.
 Treat the hosting operator, people with server or storage-channel access, and
 people with owner credentials as trusted parties. See the
 [security boundaries](reference.md#security-and-privacy) and Telegram's distinction
@@ -210,10 +221,11 @@ separately controlled Telegram account and backup bot. Configure it explicitly,
 wait for **Backup confirmed**, and save the matching recovery-key export outside
 Telegram and the server. Newer changes can still be pending.
 
-Recovery depends on a surviving accessible copy, the selected confirmed restore
-point and usable recovery material. It requires the recovery procedure, not
-automatic failover. Both channels remain on Telegram; keep another copy outside
-that provider for risks affecting both. [Independent backup setup and recovery](backup-recovery.md#set-up-an-independent-backup-channel).
+Recovery needs an accessible copy, a confirmed backup you can restore and its
+matching recovery material. You must follow the recovery procedure; TGDrive does
+not switch channels automatically. Both channels remain on Telegram; keep another
+copy outside that provider for risks affecting both.
+[Independent backup setup and recovery](backup-recovery.md#set-up-an-independent-backup-channel).
 
 </details>
 
@@ -231,6 +243,8 @@ local source, but valuable files should still have a separate readable copy.
 [Choose a recovery route](backup-recovery.md#choose-the-right-mongodb-recovery-route).
 
 </details>
+
+### Uploading and using files
 
 <details>
 <summary>Does uploading a folder copy everything and keep it synchronized?</summary>
@@ -284,6 +298,8 @@ app. Before hosting expires, preserve the database, credentials, volumes and
 recovery kit, then follow the [host-move guide](operations.md#when-a-hosting-plan-expires).
 
 </details>
+
+### Access, maintenance and recovery
 
 <details>
 <summary>Can I clean up Telegram messages, change channels or reinstall to fix an error?</summary>
@@ -342,9 +358,10 @@ Give that password only to fully trusted co-owners. TGDrive has no built-in seco
 factor for its owner login; Telegram two-step verification protects the Telegram
 account, not the TGDrive web password.
 
-For selected read-only access, use a share link. Its label is for your organization,
-not recipient authentication. Anyone with the valid URL can read its scope; a
-folder link includes accessible descendants, including files added later.
+To let someone read selected files without changing them, use a share link. Its
+label helps you organize links; it does not check the recipient's identity.
+Anyone with the valid URL can read the shared content. A folder link also grants
+access to files and subfolders added to it later.
 Expiry or revocation stops future access, not copies already downloaded.
 [Sharing rules](usage.md#share-and-revoke).
 
@@ -360,6 +377,8 @@ and reader limits; storing a file does not guarantee an inline preview.
 Use **Download Original** when needed. [Preview and download guide](usage.md#open-preview-and-download).
 
 </details>
+
+### Resources, deletion and support
 
 <details>
 <summary>If files live on Telegram, why does my host need disk space and bandwidth?</summary>
@@ -379,7 +398,7 @@ upload staging is not disposable cache. Hosting traffic allowances still matter.
 </details>
 
 <details>
-<summary>Does no storage quota mean unlimited speed or no cooldowns?</summary>
+<summary>Does unlimited storage mean unlimited speed or no waiting?</summary>
 
 No. Server resources, your connection and recipients' connections affect speed.
 Telegram's [file API](https://core.telegram.org/api/files) also describes transfer
@@ -419,12 +438,11 @@ a substitute for that review. [Useful logs](operations.md#read-useful-logs) ·
 <details>
 <summary>What is a clear explanation I can share with someone new?</summary>
 
-> TGDrive is a free, open-source web drive for files stored in your own Telegram
-> channel. It adds folders, previews, readers, large split-file uploads and share
-> links. TGDrive has no quota on total stored bytes, but individual uploads and
-> server resources have limits. You run it on a computer or server, and important
-> files still need independent backups. It cannot guarantee permanent storage or
-> immunity from Telegram restrictions.
+> TGDrive is a free, open-source web drive using Telegram for file storage.
+> Upload files or folders, organize them, preview media and share links in your
+> browser. It uses Telegram's free unlimited cloud storage and splits large files
+> automatically. You run it on a computer or server; file-size and resource limits
+> still apply. Keep separate backups: permanent access is not guaranteed.
 
 Send this guide with the [live demo instructions](usage.md#try-the-public-demo).
 

@@ -44,6 +44,7 @@ ROOT_FILES = (
     "website/public/third-party/react-dom-LICENSE.txt",
     "website/public/third-party/scheduler-LICENSE.txt",
     "website/public/third-party/lucide-react-LICENSE.txt",
+    "website/public/third-party/octicons-MIT.txt",
     "website/public/third-party/Inter-OFL-1.1.txt",
     "website/public/third-party/ui-components-LICENSES.txt",
     "website/public/static/fonts/InterVariable.woff2",

@@ -2,7 +2,7 @@
 
 [Docs home](README.md) · [API reference](reference.md#http-api) · [Performance](performance.md)
 
-Where files live, when work becomes durable, and how one drive stays consistent.
+Where files live, which work survives a restart, and how one drive stays consistent.
 
 For the user-facing screens around these flows, see the
 [visual walkthroughs](showcase.md).
@@ -57,7 +57,8 @@ and test layout is described in the
 ## Authoritative data and identity
 
 **MongoDB is the source of truth**, including on laptops. The in-memory catalog
-is an immutable read cache. Durable collections hold nodes and ordered parts,
+is an immutable read cache: it speeds up reads, while MongoDB keeps the saved
+state. Durable collections hold nodes and ordered parts,
 shares, operation IDs, jobs and receipts, deletion intents, private settings and
 sessions, backup records and the runtime ownership lease.
 
@@ -424,11 +425,52 @@ bots nor a cache guarantees codec/device playback speed.
 
 Background backups read consistent durable collections, compress/encrypt with
 AES-256-GCM, journal the encrypted source identity, and verify received ciphertext
-before confirmation. Restore requires the matching key and an empty database;
-it revokes browser sessions. Archives omit original Telegram media and staged
-payloads. See [recovery](operations.md#encrypted-telegram-backups),
+before confirmation. Restore requires the matching key and an empty or untouched
+automatically initialized database; it revokes browser sessions. Archives omit
+original Telegram media and staged payloads. See [recovery](operations.md#encrypted-telegram-backups),
 [independent channel protection](backup-recovery.md) and
 [security](reference.md#security-and-privacy).
+
+### Independent backup pacing and verification
+
+The optional second-channel transport uses fixed policies, separate from normal
+upload tuning. For setup, status meanings and recovery actions, use the
+[backup guide](backup-recovery.md#enable-and-confirm-the-first-copy).
+
+| Policy | Behavior |
+| --- | --- |
+| Operation pacing | One-second gap between explicit Telegram metadata reads, sends and verification calls. Each FloodWait doubles it, up to four seconds. A confirmed checkpoint resets it to one second. |
+| Retry verification | Recheck confirmed destination documents in batches of at most 32 parts, with a fresh channel inspection and grouped message read per batch. |
+| Idle checks | Recheck healthy unchanged checkpoints after one hour. Catalog, file or recovery-setting changes do not wait for that interval. |
+
+Replacement connections share the current pacer. A process restart resets its gap
+to one second, but persisted Telegram retry deadlines must still expire before
+work resumes. Telegram can require longer waits than the configured gaps.
+Recovery bundles are sent separately and downloaded for checksum verification;
+their internal chunk transfers retain Telethon's normal behavior.
+
+Missing, wrong-channel, protected or changed-size documents block confirmation.
+Only input peer references are cached within a connection; channel privacy,
+permissions and auto-delete checks remain fresh. New copies verify their
+destination documents and retain saved send identities. Confirmed mappings and
+provider deadlines survive restart.
+
+The backup bot reuses its private session under `DATA_DIR/sessions`, with
+owner-only permissions. Changing the bot token or API credentials selects a
+separate session; a missing or invalidated session can also require sign-in.
+Authorization-probe failures preserve Telegram's wait without starting another
+sign-in. Idle health-check waits retain the confirmed restore point and are
+identified separately in activity messages.
+
+Explicit **Sync** requests an earlier check but cannot bypass a saved deadline.
+A failed check's saved retry time governs the next attempt. Destructive Telegram
+operations need a fresh checkpoint check; the hourly idle check does not satisfy
+that barrier. Browser status refresh remains read-only.
+
+**Pause** and **Disable** remain effective after an in-flight failure; the retry
+deadline is still saved and **Resume** cannot bypass it. Destructive Telegram
+operations recheck backup controls after waiting and after checkpoint
+verification, so a concurrent pause keeps them blocked.
 
 ### Shared-link identity and re-copying
 

@@ -57,11 +57,24 @@ Linux users should install them using the official repository instructions.
 You do not need to open an Ubuntu terminal on Windows for the main steps.
 For Linux permission errors, follow Docker's [post-installation steps](https://docs.docker.com/engine/install/linux-postinstall/).
 
-Download the **TGDrive 2.0.0 source archive** and its checksum from
-[GitHub Releases](https://github.com/TechShreyash/TGDrive/releases),
-[verify and extract it](release.md#verify-a-downloaded-source-archive), then open a
-terminal in the extracted project folder. All commands below run there as your
-normal user. Leave disk space for unfinished uploads and cache.
+### Get the source
+
+The current v2 development source is on the
+[`dev` branch](https://github.com/TechShreyash/TGDrive/tree/dev). To try it:
+
+1. Download the [development ZIP](https://github.com/TechShreyash/TGDrive/archive/refs/heads/dev.zip).
+2. Extract it with your file manager and open the `TGDrive-dev` folder.
+3. Open a terminal in that folder. Run the commands below as your normal user.
+
+This is development code, not a published release. Start with disposable files
+and review the [remaining release checks](roadmap.md#before-public-release).
+Leave disk space for unfinished uploads and cache.
+
+When a v2 release is published on
+[GitHub Releases](https://github.com/TechShreyash/TGDrive/releases), prefer its
+custom source ZIP and matching checksum. Follow
+[verify and extract](release.md#verify-a-downloaded-source-archive), then run the
+same setup steps from the extracted folder.
 
 If you choose to use a WSL terminal, enable Docker Desktop's
 [WSL integration](https://docs.docker.com/desktop/features/wsl/) and keep the
@@ -266,42 +279,13 @@ import an already authorized session through its advanced controls.
 
 ## Hosting beyond your machine
 
-### Why host on a server?
+Use [Coolify](#coolify) to manage deployment on your server, or
+[server Compose](#docker-compose-on-a-server) with an HTTPS proxy you manage.
+The [hosting guide](hosting.md) compares local and server use, explains optional
+managed hosting and server plans, and lists the accounts you need to prepare.
 
-An always-on server keeps TGDrive working **24/7 without leaving your laptop on**.
-Open the same drive from your phone, tablet or computer, share reachable links,
-and let trusted people use the drive together. Server-side transfers, bot uploads,
-backups and queued work can keep running while your own device is offline.
-Self-hosted and managed installations have the same TGDrive features.
-
-[Compare localhost and server access](hosting.md#local-computer-or-server),
-including the shared-owner access model and background work. Device uploads still
-need the browser until **You can close this tab** appears. The server, TGDrive,
-MongoDB, Telegram and network must remain available; see
-[transfer states](usage.md#can-i-close-the-tab) and [performance](performance.md).
-
-### Server-only hosting
-
-If you prefer to manage deployment yourself, you can also
-[get just a server](hosting.md#server-plans-and-customization). Use
-[free self-hosted Coolify](#coolify) or [Docker Compose with your own proxy](#docker-compose-on-a-server).
-
-### Managed TGDrive hosting
-
-[Optional managed hosting](hosting.md#optional-managed-hosting) is available if
-you want help with the server, deployment and ongoing maintenance. You retain
-full server and TGDrive access, use your own Telegram bots/channel and MongoDB,
-and receive a personal public HTTPS subdomain. Prepare the
-[required accounts and credentials](hosting.md#what-you-prepare); the hosting
-guide covers the offer, capacity and ownership.
-
-### Keep your drive when a plan ends
-
-Hosting does not transfer ownership of your drive. Keep your
-[recovery kit](backup-recovery.md#keep-the-mongodb-recovery-kit-outside-the-server)
-outside the server and preserve access to MongoDB and Telegram. Follow
-[moving after hosting expires](operations.md#when-a-hosting-plan-expires) to
-reopen the drive elsewhere without re-uploading completed files.
+Preserve the database, private configuration and persistent volumes. If you
+change hosts, follow [move or reopen your drive](operations.md#when-a-hosting-plan-expires).
 
 ### Coolify
 
@@ -309,17 +293,15 @@ Coolify is recommended for **managing deployment on a server you provide**.
 Its [self-hosted edition is free](https://coolify.io/docs/usage); you pay for your
 own server/infrastructure. A paid Coolify Cloud subscription is optional.
 
-<details>
-<summary>Deploy with Coolify (deployment management)</summary>
-
 You need a Docker server, domain, reachable MongoDB replica set and Telegram
 setup above. [Install Coolify](https://coolify.io/docs/get-started/installation)
 if needed. Keep **one replica**; disable preview/parallel deployments against
 the production database/channel.
 
-Create a public Git application from `https://github.com/TechShreyash/TGDrive`:
-v2 release revision, **Docker Compose**, base directory `/`, file **`/compose.yaml`**.
-Set these runtime variables:
+Create a public Git application from `https://github.com/TechShreyash/TGDrive`.
+Select **`dev`** for the development source described in this guide; for a
+published v2 release, select its exact tag or commit instead. Choose **Docker
+Compose**, base directory `/`, file **`/compose.yaml`**. Set these runtime variables:
 
 | Variable | Value |
 | --- | --- |
@@ -363,12 +345,7 @@ Keep the same database, channel, credentials and both mounts. Initialize only on
 For machine loss, follow [recovery](operations.md#reopen-after-losing-the-local-installation).
 Only override `FORWARDED_ALLOW_IPS` when you know the actual proxy sources.
 
-</details>
-
 ### Docker Compose on a server
-
-<details>
-<summary>Deploy behind an HTTPS proxy you manage</summary>
 
 1. Prepare MongoDB/Telegram and private `.env` as in
    [configuration](#3-configure-your-drive). Keep app ingress private.
@@ -400,8 +377,6 @@ to `unless-stopped` restart. Keep project name/volumes and use the same
 `-f compose.yaml -f compose.server.yaml` arguments for `stop`, `restart app`
 and `up -d --build`. Health checks alone do not validate DNS, TLS or files.
 See [upgrade/rollback](operations.md#upgrade-and-rollback).
-
-</details>
 
 ### Other hosting
 

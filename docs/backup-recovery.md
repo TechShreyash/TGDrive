@@ -3,8 +3,8 @@
 [Docs home](README.md) · [Choose a recovery route](#choose-the-right-mongodb-recovery-route) · [Set up backups](#set-up-an-independent-backup-channel) · [Operations](operations.md)
 
 New users should first read the [storage and data-safety essentials](new-user-guide.md).
-Two Telegram channels can protect against some losses; they do not establish
-ban immunity, automatic failover or a backup outside Telegram.
+A second channel can help if one copy is lost, but both copies still use
+Telegram. Recovery is manual and needs a surviving copy with its matching keys.
 
 > [!IMPORTANT]
 > Save matching keys outside the server, wait for a **confirmed restore point**, and test recovery before relying on it. **Never replace an existing drive with an empty database as a repair.**
@@ -13,9 +13,11 @@ ban immunity, automatic failover or a backup outside Telegram.
 | --- | --- | --- |
 | Encrypted MongoDB archive | Catalog, part mappings, settings and shares | Cannot recreate deleted Telegram file bytes |
 | Optional independent channel | Completed documents/parts and matching recovery catalogs | Only confirmed copies; both channels still depend on Telegram |
-| Originals/backups outside Telegram | A separate provider recovery route | Check that your copies are readable |
+| Original files saved outside Telegram | Files you can upload again | Check that the copies open correctly |
 
-Split files follow the same model: ordered part mappings are backed up, and independent copies include every constituent document. Unfinished uploads and device originals need separate protection.
+Large files need every stored part and the catalog that joins them together.
+Unfinished uploads also need their staged bytes or original device files;
+the backups below do not contain those unfinished bytes.
 
 <details>
 <summary>Find Storage & Backups in the interface</summary>
@@ -75,52 +77,21 @@ confirmed document mappings are reused. Browser status refreshes read saved
 progress and do not initiate Telegram logins or copies.
 
 <details>
-<summary>Copy pacing and verification on retry</summary>
+<summary>Retries, restarts and private bot sessions</summary>
 
-The independent backup transport leaves a one-second gap between explicit
-Telegram operations, including metadata reads, document sends and verification.
-Each FloodWait doubles the gap to two, then at most four seconds. The same pacer
-is shared across replacement transport connections, so automatic retries do not
-immediately return to the fastest rate. A confirmed backup checkpoint restores
-the one-second gap. These are fixed backup policies, separate from upload tuning;
-Telegram can require longer waits regardless of these gaps.
+Retry/Resume verifies already copied documents before confirming a restore point.
+Missing or changed parts prevent confirmation. Saved retry deadlines and confirmed
+copies survive restart; restarting or choosing Resume does not bypass a Telegram
+cooldown. Pause and Disable remain effective if a request finishes or fails later.
 
-Every retry still verifies already confirmed destination documents. They are
-checked in batches of at most 32 parts, using one fresh channel inspection and
-one grouped message read per batch, instead of repeating both reads per part.
-Missing, changed-size, protected or wrong-channel documents prevent confirmation.
-Only input peer references are cached within a connection; channel privacy,
-permissions and auto-delete checks remain fresh. New copies retain their
-destination-document checks and saved send identities.
+The backup bot reuses private session files under `DATA_DIR/sessions`. Preserve
+them across restarts and keep them private like bot tokens. Changing the bot
+token or API credentials, losing a session or having it revoked can require
+authorization again, subject to Telegram's waits. An idle health-check wait
+preserves the last confirmed restore point.
 
-Provider retry deadlines and confirmed mappings are saved on the server and
-survive restart. Adaptive pacing starts at one second after restart; the saved
-Telegram deadline must still expire before background work resumes. Recovery
-bundles are uploaded separately and downloaded for checksum verification; their
-internal media-chunk transfers retain Telethon's normal transfer behavior.
-
-The backup bot reuses its private authenticated Telegram session across checks
-and restarts. Session files live under `DATA_DIR/sessions`, with owner-only
-permissions; keep them private like bot tokens. Changing the bot token or API
-credentials selects a separate session and requires authentication again. A
-missing or invalidated session may also require sign-in, subject to Telegram's
-waits. An authorization-probe failure preserves Telegram's wait and does not
-trigger another sign-in. An idle health-check wait retains the confirmed restore
-point; new activity messages identify that context instead of implying another
-file copy.
-
-Healthy unchanged checkpoints are checked after one hour. An explicit `sync`
-action requests an earlier check, but cannot bypass a saved provider deadline.
-File/catalog or recovery-settings changes are processed without waiting for
-the hourly check. After a failed check, its saved retry deadline governs the
-next attempt. Destructive Telegram mutations still require a fresh checkpoint
-check; the hourly idle policy cannot satisfy that deletion barrier. The browser's
-status refresh remains read-only.
-
-Pause and Disable remain effective when an in-flight request later fails. Its
-retry deadline is still saved; Resume cannot bypass it. Permanent Telegram
-mutations recheck backup controls after waiting for another operation and after
-checkpoint verification, so a concurrent Pause keeps the mutation blocked.
+See [backup pacing and verification](architecture.md#independent-backup-pacing-and-verification)
+for exact timing, batching and deletion-barrier rules.
 
 </details>
 
@@ -140,21 +111,13 @@ Old documents/capsules remain: this is not a deletion mirror. Older recovery poi
 
 ### Rebuild a lost backup from the surviving main channel
 
-<details>
-<summary>Replace only the backup destination</summary>
-
 Preserve the working main channel/catalog. Create an empty private backup channel on the independent account and grant the backup bot access to both channels. Choose **Backup settings → Replace backup channel**, verify the new destination, wait for confirmation and save an updated key export. Replacement leaves the old remote channel/capsules intact.
 
 For permission/network trouble, repair access and Retry/Resume the existing operation instead. Disabling automatic backup stops new protection; it does not confirm pending changes or erase existing copies.
 
-</details>
-
 ### Recover a lost main channel from a surviving channel
 
 **Only files in the selected confirmed restore point can be recovered.** Keep the source, saved key JSON and persistent `DATA_DIR` intact. Recovery pauses file mutations until activation or explicit cancellation.
-
-<details>
-<summary>Inspect, copy, verify and activate a replacement drive</summary>
 
 1. Open **Independent backup channel → Recover a channel or catalog**, or the authenticated **Storage recovery** screen if the catalog cannot open.
 2. Enter the surviving channel ID, a backup bot token with access, and the JSON's 64-character **`key` value**, not the whole JSON. Leave the key empty only for a verified plain catalog checkpoint.
@@ -165,18 +128,11 @@ For permission/network trouble, repair access and Retry/Resume the existing oper
 7. At **Recovered drive verified**, repeat the channel ID and choose **Activate recovered drive**. Copying alone does not switch drives. Restart the service/container when instructed; browser refresh is insufficient. The former catalog/configuration remain for review.
 8. Check representative images, videos, PDFs, split downloads, Starred items, shares and Connections. Restore optional bots/sessions as needed, configure a separate independent backup, confirm it and export the current key/restore point.
 
-</details>
-
 ### Recover only the database when the surviving channel is healthy
-
-<details>
-<summary>Use the surviving documents without copying the library</summary>
 
 After inspecting a capsule, choose **Restore the database only on this surviving channel**. Supply a main bot distinct from the backup bot and repeat the surviving channel ID.
 
 TGDrive verifies referenced parts/sizes. Activation is still explicit and requires a service restart. The surviving channel becomes main; configure a separate backup afterwards. Use this only when the channel and required documents remain accessible.
-
-</details>
 
 ### Interruptions and reports
 
@@ -262,10 +218,11 @@ Follow the [reinstall instructions](operations.md#reopen-after-losing-the-local-
 
 ### Restore a lost database from Telegram
 
-Use a confirmed `.tgdb` archive, its matching key and the matching TGDrive release. Restore into a **new empty MongoDB database with transaction support**. Changes after the snapshot will be absent; **older shares may reappear**.
-
-<details>
-<summary>Restore through the website and check the recovered drive</summary>
+Use a confirmed `.tgdb` archive, its matching key and the matching TGDrive
+version or source commit. Restore into a **new empty MongoDB database with
+transaction support**. Changes after the snapshot will be absent; **older shares
+may reappear**. Use a private deployment with demo mode off; archive restore is
+disabled in demo mode, including for the demo administrator.
 
 1. Download the confirmed database `.tgdb` archive from your private Telegram
    channel and find its matching 64-character key in the saved recovery-key file.
@@ -288,6 +245,9 @@ Use a confirmed `.tgdb` archive, its matching key and the matching TGDrive relea
    **restored share permissions**. Keep the old database/archive/key until
    verified, then make a fresh confirmed backup and export its key.
 
+<details>
+<summary>Restore limits and failure handling</summary>
+
 The website accepts archives up to 1 GiB and restores only an empty destination
 or the untouched catalog created by automatic first setup; it does not merge or
 overwrite a used drive. Invalid keys/damaged archives fail before stopping normal
@@ -300,6 +260,8 @@ after the attempt. Local unfinished upload bytes are not in the archive.
 
 ## Verify your recovery kit periodically
 
-Use the same release and a separate empty database to prove the archive decrypts, the catalog opens and Telegram payloads remain readable. A filename alone is not evidence. Keep unfinished-upload originals until completion.
+Use the same version or source commit and a separate empty database to confirm
+the archive decrypts, the catalog opens and Telegram files remain readable.
+A filename alone is not evidence. Keep unfinished-upload originals until completion.
 
 See [exact archive/API boundaries](reference.md#security-and-privacy) and [operational troubleshooting](operations.md#troubleshooting).

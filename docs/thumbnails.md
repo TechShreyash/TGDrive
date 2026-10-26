@@ -76,7 +76,7 @@ after the scan use normal automatic generation.
 Progress is saved locally between files and during reads when storage permits.
 After a server restart, the last run is marked **interrupted**; start another rebuild
 to continue refreshing covers. It does not silently restart a bandwidth-heavy job.
-Management is read-only for public demo sessions.
+Demo visitors cannot start or cancel a rebuild.
 
 ## Existing files and fallback
 
@@ -123,14 +123,14 @@ renderer.
 
 Automatic rendering has one slot per process, a two-second admission wait and
 12-second operation timeout. Manual rebuilding has its own single background
-slot. Automatic video metadata probing is limited to 1.5 seconds. Extraction tries a randomly
-chosen frame between 40% and 60% of the duration for up to six seconds, then the
-first frame for up to three seconds after an unsuccessful attempt. If duration
-is unavailable, the first attempt uses ten seconds instead. This avoids most
-intros/credits but cannot guarantee a nonblack frame; partial JPEG output is
-rejected. Busy admission or exhausted rendering
-limits keep the provider-cover/icon fallback rather than delaying the upload
-indefinitely. The Linux renderer has an eight-second CPU limit and a 768 MiB
+slot. Automatic video metadata probing is limited to 1.5 seconds. Extraction
+first seeks to a random position between 40% and 60% of the duration, with a
+six-second attempt timeout. If duration is unavailable, it seeks ten seconds
+into the file instead. If that attempt fails, it tries the first frame with a
+three-second timeout. This avoids most intros/credits but cannot guarantee a
+nonblack frame; partial JPEG output is rejected. Busy admission or exhausted
+rendering limits keep the provider-cover/icon fallback rather than delaying the
+upload indefinitely. The Linux renderer has an eight-second CPU limit and a 768 MiB
 virtual-address-space ceiling (including decoder reference frames, libraries and
 thread stacks, not a reserved amount of RAM), with one decoding/filter thread
 and a 64 MiB limit per allocation. These bounds accommodate tested UHD HEVC

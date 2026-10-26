@@ -7,19 +7,20 @@ original available if previewing fails.
 
 ## Choose a format
 
-| Format | Controls | Fetching |
+| Format | Controls | How it loads |
 | --- | --- | --- |
-| PDF, up to 256 MiB | Scroll, zoom, fit, selectable text | Lazy byte ranges; no cumulative reading cap. |
-| EPUB | Chapters, text size/typeface, image-page fit, right-to-left | Metadata, selected chapter and raster images. |
-| CBZ / CBR | Pages, fit, right-to-left | Selected image; solid RAR may also need earlier compressed entries. |
+| PDF, up to 256 MiB | Scroll, zoom, fit, selectable text | Sections of the file as needed. |
+| EPUB | Chapters, text size/font, image-page fit, right-to-left | Book details, the selected chapter and images. |
+| CBZ / CBR | Pages, fit, right-to-left | The selected image; some RAR archives also need earlier compressed data. |
 
-EPUB/comics remember your place in this browser for up to 50 books. EPUB text uses
-a narrower serif reading column by default; **Reading options** remembers your
-text size and serif/sans-serif choice in this browser. Generated resource filenames
-appear as readable cover, illustration or section labels. Use
-**Reading options** for text size or comic fit/direction, and **Enter Fullscreen**
-where supported. Arrow keys navigate while focused; right-to-left mode reverses
-them. Escape or browser Back closes the reader.
+EPUB/comics remember your place in this browser for up to 50 books. Use
+**Reading options** to change EPUB text size and font style, or
+comic fit and reading direction. EPUB text uses a narrower serif column by
+default; text preferences are saved in this browser. Generated resource filenames
+appear as readable cover, illustration or section labels.
+
+Choose **Enter Fullscreen** where supported. Arrow keys navigate while focused;
+right-to-left mode reverses them. Escape or browser Back closes the reader.
 
 Image-based manga works in EPUB and CBZ. Image-only EPUB chapters use the page-fit
 controls instead of the prose column. Choose **Fit width** for readable panels or

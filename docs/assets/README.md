@@ -90,6 +90,3 @@ playing a repository-relative video inline; these are not uploaded GitHub video
 attachments. If a maintainer later uploads a video attachment through GitHub's
 Markdown editor, replace the link with that real attachment URL.
 
-Capture inspection is part of preparing these media artifacts. No automated
-tests, builds, linters, performance benchmarks or recovery drills were run for
-this documentation change.

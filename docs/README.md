@@ -1,11 +1,10 @@
 <h1><img src="../website/public/static/brand/tgdrive-icon.svg" alt="" width="36" height="36"> TGDrive documentation</h1>
 
-**New here? Read the [new-user guide and FAQ](new-user-guide.md) first:** what TGDrive
-does, its limits, the rules for reliable use and how to protect your data.
+**New here? Read the [new-user guide and FAQ](new-user-guide.md) first** to understand
+how storage works, its limits and how to protect your files.
 Then [try the public demo](usage.md#try-the-public-demo) or follow [Setup](setup.md).
-These guides describe fresh TGDrive 2.0.0 deployments with MongoDB.
-
-[Know the essentials](new-user-guide.md) → [Install](setup.md) → [Upload and share](usage.md) → [Protect your drive](backup-recovery.md)
+These guides describe TGDrive 2.0.0 with MongoDB. The setup guide explains the
+available development-source and release options.
 
 **[Explore the screenshot gallery and video walkthroughs](showcase.md)** for a
 visual tour of the file browser, transfers, previews, sharing and administration.
