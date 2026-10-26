@@ -5,6 +5,11 @@
 Deployment uses [Docker Compose](setup.md). This page covers contributor builds,
 tests and development servers **inside WSL Ubuntu**, using the Linux checkout.
 
+Develop on `dev`; it contains work in progress and may be unstable. `main`
+receives reviewed, tested stable updates through versioned release PRs. Normal
+installations use a published tag or `main`; see [source selection](setup.md#get-the-source)
+and [release verification](release.md) for the checks required before promotion.
+
 The [showcase](showcase.md) documents live illustrative captures. Follow the
 [media guide](assets/README.md) when replacing them; captures do not replace the
 automated and live validation described below.

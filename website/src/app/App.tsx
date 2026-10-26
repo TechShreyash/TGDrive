@@ -1722,7 +1722,7 @@ export default function App() {
                         <div className="sidebar-support">
                             <a
                                 className="sidebar-help"
-                                href="https://github.com/TechShreyash/TGDrive/blob/dev/docs/README.md"
+                                href="https://github.com/TechShreyash/TGDrive/blob/main/docs/README.md"
                                 target="_blank"
                                 rel="noopener noreferrer"
                             >

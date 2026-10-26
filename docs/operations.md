@@ -310,10 +310,14 @@ See [password and session storage](reference.md#owner-authentication).
 
 ## Upgrade and rollback
 
+Use a published release tag for a fixed version, or `main` for stable source
+updates. `dev` contains ongoing work and may be unstable. Follow
+[Get the source](setup.md#get-the-source) when choosing the next version.
+
 - [ ] Finish work, stop safely, and save a confirmed backup plus its key off-host.
 - [ ] Record the running version and source commit; review the target version's requirements.
 - [ ] **Release archive:** [verify and extract](release.md#verify-a-downloaded-source-archive) the new archive into a separate folder. Copy your private `.env` into it and retain any reviewed Compose customizations. Keep the **same Compose project name**, including any `-p` argument, so Docker reuses the existing volumes. Keep the old folder for rollback; never copy the new `.env.example` over your real configuration.
-- [ ] **Git checkout:** record `git rev-parse HEAD`, then update with `git pull --ff-only`. Preserve local changes if Git refuses the update. **Coolify:** select the chosen release revision while retaining variables/mounts.
+- [ ] **Git checkout:** record `git rev-parse HEAD`. For a `main` clone, use `git switch main`, then `git pull --ff-only origin main`. For a version-pinned checkout, use `git fetch origin --tags`, then `git switch --detach v2.0.0` (choose the new published tag for later updates). Preserve local changes if Git refuses the switch or update. **Coolify:** select the chosen published release tag or `main`, retaining variables/mounts.
 - [ ] Rebuild from the updated project folder with `docker compose up -d --build` (server `-f` arguments where needed), or redeploy in Coolify. Preserve existing volumes; startup reopens the drive.
 - [ ] Start one instance; check database status, Connections and a representative file.
 

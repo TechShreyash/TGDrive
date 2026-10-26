@@ -5,6 +5,8 @@ on:
         branches:
             - main
             - dev
+        tags:
+            - "v*"
         paths-ignore:
             - "**.md"
             - "docs/**"
@@ -50,6 +52,14 @@ jobs:
               uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
               with:
                   python-version-file: .python-version
+
+            - name: Check release versions
+              run: |
+                  if [ "$GITHUB_REF_TYPE" = "tag" ]; then
+                    python scripts/build_release.py --check-version --tag "$GITHUB_REF_NAME"
+                  else
+                    python scripts/build_release.py --check-version
+                  fi
 
             - name: Set up uv
               uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0

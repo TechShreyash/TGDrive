@@ -693,7 +693,7 @@ export default function Preloads({
                     </p>
                     <a
                         className="inline-link"
-                        href="https://github.com/TechShreyash/TGDrive/blob/dev/docs/usage.md#preload-a-file-for-smoother-playback-and-downloads"
+                        href="https://github.com/TechShreyash/TGDrive/blob/main/docs/usage.md#preload-a-file-for-smoother-playback-and-downloads"
                         target="_blank"
                         rel="noopener noreferrer"
                     >

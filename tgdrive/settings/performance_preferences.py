@@ -166,7 +166,7 @@ class PerformanceSettings:
         return self.value.model_dump() | {
             "revision": self.etag(),
             "defaults": PerformancePreferences().model_dump(),
-            "documentation_url": "https://github.com/TechShreyash/TGDrive/blob/dev/docs/configuration.md",
+            "documentation_url": "https://github.com/TechShreyash/TGDrive/blob/main/docs/configuration.md",
         }
 
     async def save(self, changes, *, expected=None):

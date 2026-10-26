@@ -22,8 +22,9 @@ certified for every device or network.
 
 ## Before public release
 
-Use the [release procedure](release.md) against the exact commit and extracted
-archive. Publication is a separate maintainer action. Remaining live validation:
+Use the [release procedure](release.md) against the exact commit (and extracted
+archive if offering custom source assets). Publication is a separate maintainer
+action. Remaining live validation:
 
 - [ ] Fresh laptop and hosted installs, persistent volumes, stop/start and recovery.
 - [ ] Coolify DNS/TLS, trusted forwarding and isolation of the direct app port.

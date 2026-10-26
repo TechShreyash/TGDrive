@@ -262,7 +262,7 @@ export default function StorageView({
                 />
                 <a
                     className="inline-link backup-guide-link"
-                    href="https://github.com/TechShreyash/TGDrive/blob/dev/docs/backup-recovery.md"
+                    href="https://github.com/TechShreyash/TGDrive/blob/main/docs/backup-recovery.md"
                     target="_blank"
                     rel="noopener noreferrer"
                 >
@@ -443,7 +443,7 @@ export default function StorageView({
                 />
                 <a
                     className="inline-link"
-                    href="https://github.com/TechShreyash/TGDrive/tree/HEAD/docs"
+                    href="https://github.com/TechShreyash/TGDrive/blob/main/docs/backup-recovery.md"
                     target="_blank"
                     rel="noopener noreferrer"
                 >

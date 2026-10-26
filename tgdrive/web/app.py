@@ -27,6 +27,7 @@ from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import ValidationError as SettingsValidationError
 
+from tgdrive import __version__
 from tgdrive.core.config import Settings, get_settings
 from tgdrive.core.errors import (
     DriveError,
@@ -402,7 +403,7 @@ def create_app(
 
     app = FastAPI(
         title="TGDrive",
-        version="2.0.0",
+        version=__version__,
         docs_url=None,
         redoc_url=None,
         openapi_url=None,

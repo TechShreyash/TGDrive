@@ -182,12 +182,53 @@ def _write_entry(archive: zipfile.ZipFile, name: str, content: bytes) -> None:
     )
 
 
-def build_release(root: Path, output_dir: Path) -> tuple[Path, Path]:
-    root = root.resolve()
+def check_version(root: Path, tag: str | None = None) -> str:
+    """Reject release metadata drift before CI or archive creation."""
     metadata = tomllib.loads((root / "pyproject.toml").read_text(encoding="utf-8"))
     version = metadata["project"]["version"]
-    if not isinstance(version, str) or not re.fullmatch(r"\d+\.\d+\.\d+", version):
+    if not isinstance(version, str) or not re.fullmatch(
+        r"(?:0|[1-9][0-9]*)(?:\.(?:0|[1-9][0-9]*)){2}", version
+    ):
         raise ValueError("Release version must use major.minor.patch format")
+    package = json.loads((root / "website/package.json").read_text(encoding="utf-8"))
+    lock = json.loads((root / "website/package-lock.json").read_text(encoding="utf-8"))
+    lock_root = lock.get("packages", {}).get("", {})
+    uv_lock = tomllib.loads((root / "uv.lock").read_text(encoding="utf-8"))
+    versions = {
+        "website/package.json": package.get("version"),
+        "website/package-lock.json version": lock.get("version"),
+        "website/package-lock.json root package": lock_root.get("version"),
+        "uv.lock local project": next(
+            (
+                package.get("version")
+                for package in uv_lock.get("package", [])
+                if package.get("name") == metadata["project"]["name"]
+                and package.get("source") == {"virtual": "."}
+            ),
+            None,
+        ),
+    }
+    for name, pattern in (
+        ("tgdrive/__init__.py", r'^__version__\s*=\s*"([^"]+)"\s*$'),
+        ("Dockerfile", r'org\.opencontainers\.image\.version="([^"]+)"'),
+    ):
+        match = re.search(pattern, (root / name).read_text(encoding="utf-8"), re.M)
+        versions[name] = match.group(1) if match else None
+    for name, actual in versions.items():
+        if actual != version:
+            raise ValueError(
+                f"Release version mismatch: {name} is {actual!r}, expected {version!r}"
+            )
+    if tag is not None and tag != f"v{version}":
+        raise ValueError(f"Release tag must be v{version}, got {tag!r}")
+    return version
+
+
+def build_release(
+    root: Path, output_dir: Path, tag: str | None = None
+) -> tuple[Path, Path]:
+    root = root.resolve()
+    version = check_version(root, tag)
     prefix = f"tgdrive-{version}"
     contents = {
         path.relative_to(root).as_posix(): path.read_bytes()
@@ -220,9 +261,14 @@ def build_release(root: Path, output_dir: Path) -> tuple[Path, Path]:
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--output-dir", type=Path, default=Path("dist"))
+    parser.add_argument("--check-version", action="store_true")
+    parser.add_argument("--tag", help="Require the release tag to match v<version>")
     args = parser.parse_args()
     root = Path(__file__).resolve().parents[1]
-    archive, checksum = build_release(root, args.output_dir.resolve())
+    if args.check_version:
+        print(f"Release version: {check_version(root, args.tag)}")
+        return
+    archive, checksum = build_release(root, args.output_dir.resolve(), args.tag)
     print(f"Source archive: {archive}")
     print(f"SHA-256 file: {checksum}")
 

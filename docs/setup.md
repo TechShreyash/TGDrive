@@ -79,22 +79,36 @@ For Linux permission errors, follow Docker's [post-installation steps](https://d
 
 ### Get the source
 
-The current v2 development source is on the
-[`dev` branch](https://github.com/TechShreyash/TGDrive/tree/dev). To try it:
+The [`main` branch](https://github.com/TechShreyash/TGDrive/tree/main) receives
+reviewed, tested stable updates. The [`dev` branch](https://github.com/TechShreyash/TGDrive/tree/dev)
+is ongoing development and may be unstable; do not use it for a normal installation.
+See [release verification](release.md) for the required checks and their limits.
 
-1. Download the [development ZIP](https://github.com/TechShreyash/TGDrive/archive/refs/heads/dev.zip).
-2. Extract it with your file manager and open the `TGDrive-dev` folder.
-3. Open a terminal in that folder. Run the commands below as your normal user.
+With Git installed, open a terminal and clone the stable branch:
 
-This is development code, not a published release. Start with disposable files
-and review the [remaining release checks](roadmap.md#before-public-release).
+~~~bash
+git clone --branch main https://github.com/TechShreyash/TGDrive.git
+cd TGDrive
+~~~
+
+Run the setup commands below from that folder as your normal user. `main`
+advances with reviewed versioned releases; version tags stay fixed. To pin
+**2.0.0**, use this clone command instead, once the
+[v2.0.0 tag](https://github.com/TechShreyash/TGDrive/tree/v2.0.0) is published:
+
+~~~bash
+git clone --branch v2.0.0 --depth 1 https://github.com/TechShreyash/TGDrive.git
+cd TGDrive
+~~~
+
+Without Git, download the [stable source ZIP](https://github.com/TechShreyash/TGDrive/archive/refs/heads/main.zip),
+extract it and open a terminal in `TGDrive-main`. After `v2.0.0` is published,
+its [tagged source ZIP](https://github.com/TechShreyash/TGDrive/archive/refs/tags/v2.0.0.zip)
+provides the same fixed-version option. A custom source ZIP with a matching
+checksum may also be offered on the [release page](https://github.com/TechShreyash/TGDrive/releases/tag/v2.0.0);
+follow [verify and extract](release.md#verify-a-downloaded-source-archive) for those
+optional assets. Merging to `main` does not publish a tag or release assets.
 Leave disk space for unfinished uploads and cache.
-
-When a v2 release is published on
-[GitHub Releases](https://github.com/TechShreyash/TGDrive/releases), prefer its
-custom source ZIP and matching checksum. Follow
-[verify and extract](release.md#verify-a-downloaded-source-archive), then run the
-same setup steps from the extracted folder.
 
 If you choose to use a WSL terminal, enable Docker Desktop's
 [WSL integration](https://docs.docker.com/desktop/features/wsl/) and keep the
@@ -279,7 +293,8 @@ See [interruption recovery](operations.md#after-a-shutdown-crash-or-network-loss
 ## Apply updates to an existing drive
 
 Keep the database, channel, environment and persistent storage. Startup reopens
-the existing drive automatically.
+the existing drive automatically. Choose a published release tag, or stable
+`main` source, using [the source guidance above](#get-the-source); do not follow `dev`.
 
 | Installation | Update |
 | --- | --- |
@@ -353,8 +368,8 @@ valid HTTPS certificate: the browser app needs a secure context away from
 localhost. See [HTTP support and certificate limits](operations.md#can-tgdrive-run-over-http).
 
 Create a public Git application from `https://github.com/TechShreyash/TGDrive`.
-Select **`dev`** for the development source described in this guide; for a
-published v2 release, select its exact tag or commit instead. Under **General →
+Select **`main`** for stable source updates. Prefer **`v2.0.0`** once that release
+is published to pin this installation; do not deploy `dev`. Under **General →
 Build pipeline**, select **Compose** as the build strategy. Set **Base Directory**
 to `/` and **Docker Compose Location** to `/compose.yaml`, then save.
 In **Environment Variables**, enter:
@@ -390,6 +405,9 @@ with its saved settings and owner password.
 [TGDrive configuration](configuration.md) · [Updates and recovery](operations.md)
 
 ### Docker Compose on a server
+
+Use a published release tag or the stable `main` source from
+[Get the source](#get-the-source), rather than `dev`.
 
 1. Prepare MongoDB/Telegram and private `.env` as in
    [configuration](#3-configure-your-drive). Keep app ingress private.

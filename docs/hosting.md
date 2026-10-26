@@ -9,6 +9,10 @@ Its privacy, channel and backup responsibilities also apply to managed hosting.
 it under the [MIT License](../LICENSE). All features are available whether you
 run it on your own computer, choose your own server or ask us to manage hosting.
 
+Deploy a published release tag or stable `main` source; `dev` is ongoing work and
+may be unstable. Follow [source selection](setup.md#get-the-source) for local,
+Coolify and server installations.
+
 **Contents**
 
 - [Local computer or server](#local-computer-or-server)

@@ -4,7 +4,7 @@
 Learn the basics and find answers to common questions about using TGDrive.
 Then [try the public demo](usage.md#try-the-public-demo) or follow [Setup](setup.md).
 These guides describe TGDrive 2.0.0 with MongoDB. The setup guide explains the
-available development-source and release options.
+stable `main` source and version-pinned release options; `dev` may be unstable.
 
 **[Explore the screenshot gallery and video walkthroughs](showcase.md)** for a
 visual tour of the file browser, transfers, previews, sharing and administration.

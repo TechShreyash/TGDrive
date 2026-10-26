@@ -37,7 +37,7 @@ def test_owner_documentation_and_backup_recovery_links_open_safe_new_tabs(
     context, page = desktop
     login(page, server.url + "/?view=storage")
     context.route(
-        "https://github.com/TechShreyash/TGDrive/blob/dev/docs/**",
+        "https://github.com/TechShreyash/TGDrive/blob/main/docs/**",
         lambda route: route.fulfill(
             body="Documentation destination", content_type="text/plain"
         ),
@@ -45,7 +45,7 @@ def test_owner_documentation_and_backup_recovery_links_open_safe_new_tabs(
     guide = page.get_by_role("link", name="Backup & recovery guide", exact=True)
     expect(guide).to_have_attribute(
         "href",
-        "https://github.com/TechShreyash/TGDrive/blob/dev/docs/backup-recovery.md",
+        "https://github.com/TechShreyash/TGDrive/blob/main/docs/backup-recovery.md",
     )
     expect(guide).to_have_attribute("target", "_blank")
     expect(guide).to_have_attribute("rel", "noopener noreferrer")
@@ -58,7 +58,7 @@ def test_owner_documentation_and_backup_recovery_links_open_safe_new_tabs(
     page.get_by_role("button", name="Toggle Navigation", exact=True).click()
     docs = page.get_by_role("link", name="Documentation", exact=True)
     expect(docs).to_have_attribute(
-        "href", "https://github.com/TechShreyash/TGDrive/blob/dev/docs/README.md"
+        "href", "https://github.com/TechShreyash/TGDrive/blob/main/docs/README.md"
     )
     expect(docs).to_have_attribute("rel", "noopener noreferrer")
     with page.expect_popup() as opened:

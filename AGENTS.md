@@ -98,6 +98,26 @@ summarize what would be pushed and name the remote and branch, then ask and wait
 for approval. Keep the changes local until the user answers. Do not bypass this
 rule with scripts, automation or another tool that publishes the local commits.
 
+## Version every published update
+
+Every update published to `main` must belong to a new semantic version, starting
+with `2.0.0`. Use patch versions for compatible fixes, documentation and
+maintenance, minor versions for compatible features, and major versions for
+breaking changes. Development commits may accumulate for one upcoming release.
+`main` receives stable updates after review and required checks; `dev` is ongoing
+development and may be unstable. Point user-facing documentation links to `main`
+and release downloads to their version tags. Use `dev` links only for development
+instructions.
+
+Keep `pyproject.toml` authoritative and synchronize the runtime version, frontend
+package and lockfile, Python lockfile project entry, and Docker image label.
+Name the target version in the release PR. After merging, create an immutable
+annotated `vX.Y.Z` tag on the final `main` commit and link the PR and commit in the
+GitHub release. Cloning is sufficient; custom ZIP/checksum assets are optional.
+Never move a published tag; corrections require a new version. Follow
+[the release procedure](docs/release.md).
+The testing and push approval rules above still apply.
+
 ## Write useful commit titles and descriptions
 
 When committing, use a concise, specific title describing the resulting change

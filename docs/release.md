@@ -10,13 +10,14 @@ The public source includes the [visual walkthroughs](showcase.md) and their
 [media assets](assets/README.md). Keep those files in the release allowlist when
 replacing captures.
 
-For development source before a v2 release is published, use
-[Get the source](setup.md#get-the-source). The procedures below describe preparing
-a release and checking its published archive.
+For cloning or optional source downloads, use [Get the source](setup.md#get-the-source).
+The procedures below describe preparing a versioned release and optionally
+building a downloadable archive. Cloning is sufficient to install TGDrive.
 
 **Contents**
 
 - [Choose the deployment](#choose-the-deployment)
+- [Version every published update](#version-every-published-update)
 - [Prepare the source release](#prepare-the-source-release)
 - [Verify a downloaded source archive](#verify-a-downloaded-source-archive)
 - [Fresh-install smoke checks](#fresh-install-smoke-checks)
@@ -33,11 +34,51 @@ Follow [Setup](setup.md) for credentials, permissions and first initialization.
 Restarts and reinstalls must reuse the database, deployment identity, secrets
 and persistent storage. See [Operations](operations.md) for recovery.
 
+## Version every published update
+
+Every update published to `main` gets a new semantic version and a matching
+GitHub release, starting with **2.0.0** and tag **`v2.0.0`**. Development commits
+can accumulate on `dev` for one upcoming release; they do not each need a tag.
+`main` receives stable updates after release review and required checks. `dev`
+contains ongoing development and may be unstable; do not use it for a stable
+deployment. Prefer a published tag to reproduce an exact release.
+
+| Change | Next version after `2.0.0` |
+| --- | --- |
+| Compatible fixes, documentation or maintenance | `2.0.1` |
+| Compatible features | `2.1.0` |
+| Breaking changes | `3.0.0` |
+
+`pyproject.toml` is the version authority. Keep `tgdrive/__init__.py`, the
+frontend `package.json` and both root version entries in `package-lock.json`,
+the TGDrive project entry in `uv.lock`, and the Docker image version label in
+sync. The release builder rejects mismatched versions before creating an
+archive; CI checks the same metadata. To inspect it without building:
+
+```bash
+python3 scripts/build_release.py --check-version
+```
+
+Name the target version in the release PR, describe the changes and compatibility
+requirements, and link the actual validation results. After merging and checking
+the final `main` commit, create an **annotated** `vX.Y.Z` tag on that commit.
+Never tag an unmerged `dev` revision as the final release. A published tag is
+immutable: fix a release with a new version instead of moving its tag.
+User-facing GitHub documentation links point to `main`; release download links
+pin the corresponding tag. Reserve `dev` links for contributor instructions.
+
+The matching GitHub release must link its PR and exact commit (and the comparison
+with the previous tag for later releases) and explain upgrade requirements and
+known limits. Git users can clone the tag; no ZIP is required. If custom source
+assets are offered, attach the ZIP and SHA-256 file from that revision together.
+Follow the checks below before publishing. Creating a PR or tag does not publish
+custom assets, and repository approval rules still apply to checks and pushes.
+
 ## Prepare the source release
 
-Build from a clean, reviewed commit, validate the extracted archive, then publish
-the matching tag with its ZIP and checksum. Resolve local work without resetting
-or discarding changes. Building an artifact does not publish it.
+Prepare a clean, reviewed commit and its matching tag. If distributing a custom
+source ZIP, build and validate it from the same revision. Resolve local work
+without resetting or discarding changes. Building an artifact does not publish it.
 
 <details>
 <summary>Maintainer checklist: build, validate and publish</summary>
@@ -45,15 +86,15 @@ or discarding changes. Building an artifact does not publish it.
 Run these from the release checkout, with the development prerequisites from
 [Development](development.md).
 
-- [ ] Confirm `2.0.0` in `pyproject.toml`, the frontend
-   package metadata and Docker image label. Review the user guides against the
-   implemented settings and defaults.
+- [ ] Choose the release version using the policy above and synchronize all
+   version metadata. For this initial release, use `2.0.0`. Review the user
+   guides against the implemented settings and defaults.
 - [ ] In **Actions → CI → Run workflow**, select the release branch and suite
    **`all`** against the exact release commit. Review quality/security,
    Python, frontend, Chromium, container and source-release results. Use the
    isolated test database described in Development; never run destructive tests
    against an operator's drive.
-- [ ] Build the public source archive:
+- [ ] If offering custom source assets, build the public source archive:
 
 ```bash
 python3 scripts/build_release.py
@@ -65,15 +106,29 @@ The builder includes reviewed source, public documentation and a file-hash
 manifest. Runtime data, credentials, caches and installed dependencies are
 excluded. Review the generated manifest and archive before distribution.
 
-- [ ] Extract into a clean directory. Repeat dependency installation,
+- [ ] For custom source assets, extract into a clean directory. Repeat dependency installation,
    frontend build, relevant tests and Docker build from the extraction using
    [the documented commands](development.md). Confirm all three Compose modes
    resolve and that no private `.env` or runtime data enters the image.
-- [ ] Perform the fresh-install smoke checks below using the extracted source.
-   Record the commit, archive checksum, commands, environment and results.
-- [ ] After those checks, publish the matching tag/revision and attach the ZIP
-   and `.sha256` file together. Coolify users must select that same v2 revision.
-   Record changes and limitations in the release's description and Git commits.
+- [ ] Perform the fresh-install smoke checks below from a clean clone of the
+   release revision, or the extracted archive if distributing one. Record the
+   commit, commands, environment and results (and checksum for an archive).
+- [ ] After those checks, create the annotated tag on the final merged `main`
+   commit. For the initial release (substitute the next version for later ones):
+
+```bash
+git switch main
+git pull --ff-only origin main
+python3 scripts/build_release.py --check-version --tag v2.0.0
+git tag -a v2.0.0 -m "Release TGDrive 2.0.0"
+```
+
+- [ ] With approval for the specific tag push, push `v2.0.0` to `origin` and
+   create its GitHub release. Attach matching ZIP and `.sha256` files together
+   only if offering custom source assets.
+   Tag-push CI also checks that the tag matches the metadata. Coolify users must
+   select that same revision. Record changes and limitations in the release's
+   description and Git commits.
 
 </details>
 

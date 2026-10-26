@@ -7,7 +7,13 @@ from pathlib import Path
 
 import pytest
 
-from scripts.build_release import PUBLIC_DOCS, ROOT_FILES, SOURCE_TREES, build_release
+from scripts.build_release import (
+    PUBLIC_DOCS,
+    ROOT_FILES,
+    SOURCE_TREES,
+    build_release,
+    check_version,
+)
 
 
 def _source_tree(root: Path) -> None:
@@ -20,9 +26,75 @@ def _source_tree(root: Path) -> None:
     )
     for directory in SOURCE_TREES:
         (root / directory).mkdir(exist_ok=True)
+    (root / "tgdrive/__init__.py").write_text('__version__ = "2.0.0"\n')
+    (root / "website/package.json").write_text('{"version": "2.0.0"}\n')
+    (root / "website/package-lock.json").write_text(
+        '{"version": "2.0.0", "packages": {"": {"version": "2.0.0"}}}\n'
+    )
+    (root / "Dockerfile").write_text('LABEL org.opencontainers.image.version="2.0.0"\n')
+    (root / "uv.lock").write_text(
+        '[[package]]\nname = "tgdrive"\nversion = "2.0.0"\nsource = {virtual = "."}\n'
+    )
     application = root / "tgdrive" / "web" / "app.py"
     application.parent.mkdir(parents=True, exist_ok=True)
     application.write_text("# application\n", encoding="utf-8")
+
+
+@pytest.mark.parametrize(
+    ("name", "content"),
+    [
+        ("tgdrive/__init__.py", '__version__ = "2.0.1"\n'),
+        ("tgdrive/__init__.py", "# Missing version\n"),
+        ("website/package.json", '{"version": "2.0.1"}'),
+        (
+            "website/package-lock.json",
+            '{"version": "2.0.1", "packages": {"": {"version": "2.0.0"}}}',
+        ),
+        (
+            "website/package-lock.json",
+            '{"version": "2.0.0", "packages": {"": {"version": "2.0.1"}}}',
+        ),
+        ("Dockerfile", 'LABEL org.opencontainers.image.version="2.0.1"\n'),
+        ("Dockerfile", "FROM python\n"),
+        (
+            "uv.lock",
+            '[[package]]\nname = "tgdrive"\nversion = "2.0.1"\n'
+            'source = {virtual = "."}\n',
+        ),
+        ("uv.lock", "version = 1\n"),
+    ],
+)
+def test_source_archive_rejects_version_drift(
+    tmp_path: Path, name: str, content: str
+) -> None:
+    _source_tree(tmp_path)
+    (tmp_path / name).write_text(content, encoding="utf-8")
+    output = tmp_path / "output"
+
+    with pytest.raises(ValueError, match="Release version mismatch"):
+        build_release(tmp_path, output)
+
+    assert not output.exists()
+
+
+@pytest.mark.parametrize("version", ["2.0", "v2.0.0", "02.0.0", "2.0.0-rc.1"])
+def test_release_version_rejects_invalid_format(tmp_path: Path, version: str) -> None:
+    _source_tree(tmp_path)
+    (tmp_path / "pyproject.toml").write_text(
+        f'[project]\nname = "tgdrive"\nversion = "{version}"\n', encoding="utf-8"
+    )
+
+    with pytest.raises(ValueError, match="major.minor.patch"):
+        check_version(tmp_path)
+
+
+def test_release_tag_must_match_version(tmp_path: Path) -> None:
+    _source_tree(tmp_path)
+    assert check_version(tmp_path, "v2.0.0") == "2.0.0"
+
+    for tag in ("v2.0.1", "2.0.0"):
+        with pytest.raises(ValueError, match="Release tag must be v2.0.0"):
+            check_version(tmp_path, tag)
 
 
 def test_source_archive_excludes_local_state_and_private_documents(

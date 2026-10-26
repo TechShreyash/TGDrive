@@ -204,7 +204,7 @@ def test_cache_inventory_filters_verified_coverage_and_clear_actions(server, des
         help_panel.get_by_role("link", name="Read the preloading guide")
     ).to_have_attribute(
         "href",
-        "https://github.com/TechShreyash/TGDrive/blob/dev/docs/usage.md"
+        "https://github.com/TechShreyash/TGDrive/blob/main/docs/usage.md"
         "#preload-a-file-for-smoother-playback-and-downloads",
     )
     expect(help_panel).to_contain_text("downloads fetch their requested ranges")

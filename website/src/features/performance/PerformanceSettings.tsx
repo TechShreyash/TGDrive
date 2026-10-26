@@ -223,7 +223,7 @@ export default function PerformanceSettings({
                     className="inline-link"
                     href={
                         saved?.documentation_url ||
-                        "https://github.com/TechShreyash/TGDrive/blob/dev/docs/configuration.md"
+                        "https://github.com/TechShreyash/TGDrive/blob/main/docs/configuration.md"
                     }
                     target="_blank"
                     rel="noopener noreferrer"
