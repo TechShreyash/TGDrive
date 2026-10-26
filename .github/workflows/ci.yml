@@ -12,10 +12,6 @@ on:
             - "docs/**"
             - LICENSE
     pull_request:
-        paths-ignore:
-            - "**.md"
-            - "docs/**"
-            - LICENSE
     workflow_dispatch:
         inputs:
             suite:

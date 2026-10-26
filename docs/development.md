@@ -411,10 +411,17 @@ The [CI workflow](../.github/workflows/ci.yml) keeps routine pushes focused:
 | Pull request | Core checks with Python 3.11/3.13/3.14, plus production-frontend Chromium tests |
 | Manual run | Core checks with all three Python versions, plus the selected additional suite |
 
-Changes confined to Markdown, `docs/` or `LICENSE` skip automatic CI. If a pull
-request requires a skipped check under branch protection, run CI manually on
-its branch or adjust the required-check policy. Documentation changes can still
-affect release contents; verify the archive when preparing a release.
+Pushes confined to Markdown, `docs/` or `LICENSE` skip automatic CI. Every pull
+request runs CI, including documentation-only changes, so required merge checks
+can finish. Documentation changes can still affect release contents; verify
+custom archives when preparing them for distribution.
+
+`main` requires a pull request and an up-to-date branch with these GitHub Actions
+checks passing: `Quality and security`, `Frontend behavior`, `Tests (Python 3.11)`,
+`Tests (Python 3.13)`, `Tests (Python 3.14)` and `Chromium end-to-end`.
+These rules also apply to administrators; force pushes and branch deletion are
+blocked. No second reviewer is required, so a solo maintainer can merge after CI.
+Manual container and source-release checks are separate from the merge gate.
 
 In **Actions → CI → Run workflow**, select the branch and additional suite:
 
