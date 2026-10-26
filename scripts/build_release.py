@@ -117,6 +117,7 @@ PUBLIC_DOCS = (
     "docs/assets/starred-files.png",
     "docs/assets/storage-backups.png",
     "docs/assets/text-preview.png",
+    "docs/assets/tgdrive-v2-banner.png",
     "docs/assets/thumbnail-rebuild.png",
     "docs/assets/transfer-history.png",
     "docs/assets/transfer-settings.png",

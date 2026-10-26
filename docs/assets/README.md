@@ -2,14 +2,26 @@
 
 [Docs home](../README.md) · [Visual walkthroughs](../showcase.md) · [Project README](../../README.md)
 
-These are real captures of [TGDrive's public demo](../usage.md#try-the-public-demo),
-recorded on **24 October 2026** using original, disposable sample files. The
+The screenshots and demo videos are real captures of
+[TGDrive's public demo](../usage.md#try-the-public-demo), recorded on
+**24 October 2026** using original, disposable sample files. The
 README highlights the drive, video player and mobile layout; the
 [visual guide](../showcase.md) groups the full collection by workflow.
 
 The video captures predate the switch to Movi's native chapter/settings UI.
 Follow the [current controls guide](../usage.md#open-preview-and-download) for
 labels and behavior; replace these captures during the next live media refresh.
+
+## README banner
+
+[tgdrive-v2-banner.png](tgdrive-v2-banner.png) is AI-edited promotional artwork
+based on [drive-overview.png](drive-overview.png), not an unaltered screenshot.
+
+To replace it, use current TGDrive branding and a current screenshot without
+private information. Keep the text evergreen, avoiding launch-only labels such
+as “Now available”. Reuse the filename; if its path changes, update the
+[project README](../../README.md) and `PUBLIC_DOCS` in
+[build_release.py](../../scripts/build_release.py) together.
 
 ## What is included
 

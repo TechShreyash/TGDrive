@@ -1,13 +1,4 @@
-<h1 align="center">
-  <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="website/public/static/brand/tgdrive-logo-dark.svg">
-    <img src="website/public/static/brand/tgdrive-logo.svg" alt="TGDrive" width="400">
-  </picture>
-</h1>
-
-<p align="center">
-  <strong>Turn Telegram into your personal cloud drive.</strong>
-</p>
+# [![TGDrive v2 — Your Telegram. Your cloud drive. Upload, organize, stream and share.](docs/assets/tgdrive-v2-banner.png)](docs/showcase.md)
 
 TGDrive brings the convenience of Google Drive to
 [Telegram's free unlimited cloud storage](https://telegram.org/faq_premium#q-is-telegram-still-free).
@@ -22,8 +13,6 @@ through links you can set to expire or revoke.
 > **Must read before using TGDrive: [New-user guide and FAQs](docs/new-user-guide.md).**
 > Essential for everyone using or running TGDrive, including managed hosting:
 > storage limits, upload status, privacy and backups.
-
-[![TGDrive desktop file browser with sample folders and files](docs/assets/drive-overview.png)](docs/showcase.md)
 
 ## Features
 
