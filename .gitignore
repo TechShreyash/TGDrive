@@ -10,6 +10,7 @@ venv/
 coverage.xml
 htmlcov/
 dist/
+output/
 
 # Secrets and Telegram sessions
 .env
@@ -30,7 +31,8 @@ logs.txt
 
 # Editors and OS files
 .idea/
-.vscode/
+.vscode/*
+!.vscode/settings.json
 .DS_Store
 Thumbs.db
 

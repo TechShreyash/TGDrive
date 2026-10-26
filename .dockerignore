@@ -1,4 +1,5 @@
 .git
+.vscode
 .github
 .venv
 venv
@@ -9,9 +10,11 @@ __pycache__
 .coverage
 htmlcov
 dist
+output
 scripts
 !website/scripts
 !website/scripts/*.js
+!website/scripts/*.ts
 docs
 tests
 testfiles

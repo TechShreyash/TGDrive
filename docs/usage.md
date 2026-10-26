@@ -253,10 +253,9 @@ Start uploads in a destination in **My Files** using **New**.
 <details>
 <summary>History storage and limits</summary>
 
-New folder uploads save their grouping on the server for other devices and
-reloads. Older folders can use the paths still remembered by the uploading
-browser; if that information is unavailable or exceeds recovery bounds, old
-server records appear individually. Compact MongoDB summaries are included
+Folder uploads save their explicit selection and grouping on the server for
+other devices and reloads. Individually selected files remain separate, including
+files with similar names or paths. Compact MongoDB summaries are included
 in encrypted backups, omit payloads/source URLs/private recovery context, and
 consume database space. Device-only work remains browser-scoped and needs originals.
 
@@ -356,15 +355,20 @@ the whole file. PDFs support sources up to **256 MiB**. See
 | Single touch | Show/hide controls; outside an open menu, dismiss it |
 | Settings **Up/Down**, **Home/End**, **Enter/Space** | Navigate and select |
 | Settings **Escape** | Return from subpage, then close menu before preview |
-| **Chapters** | Real chapter titles/times; also available in fullscreen |
+| **Chapters** | Movi's native chapter strip and seek-bar segments; also available in fullscreen |
 | **Settings → Quality** | Telegram alternatives, when available; preserves position/play state |
 | **Try again** after a long wait | Retry video preserving position/play state |
 | PDF **Fit width / Fit page** | Reading width / whole page; manual zoom leaves fit mode |
 
 Phones put chapters/picture in picture in Settings when available. Audio/subtitle
-choices depend on the file. **Video glow** uses the picture's colors;
-**Reduce loud sounds** softens volume changes; **Video fit** explains cropping.
+choices depend on the file. **Ambient mode** uses the picture's colors;
+**Stable volume** softens volume changes; **Aspect** controls picture fit.
 Controls hide when idle but remain visible for keyboard focus.
+
+Use the native subtitle menu's **Add subtitle…** action for a local subtitle file;
+it stays in the browser. Chapters use embedded titles/times without extracting
+thumbnail frames from every chapter. The native player supplies track selection,
+speed, loop, HDR and picture controls when the file/browser supports them.
 
 The video timeline estimates the device's loaded ranges, separate from server
 cache coverage. Longer waits show **Waiting for video… / Loading this part…**.
@@ -373,7 +377,7 @@ these include seek/repeat reads, not a file-completion percentage. A compact sta
 strip stays above the controls; longer waits add an inline retry action. Playback
 can start before the whole file is loaded.
 
-All video previews retain TGDrive’s custom player. **Software decoding on this
+Video previews use Movi's browser-side player. **Software decoding on this
 device** means playback can be
 limited by the device even when download speed is fast; use **Download Original**
 to open a difficult file in a video app.

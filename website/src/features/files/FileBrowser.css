@@ -1,0 +1,698 @@
+.workspace.file-workspace {
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    padding-bottom: 0;
+}
+.file-workspace > :not(.file-browser) {
+    flex-shrink: 0;
+}
+.file-browser {
+    display: flex;
+    flex-direction: column;
+    flex: 1;
+    min-height: 0;
+    min-width: 0;
+}
+.file-browser > .file-toolbar {
+    flex-shrink: 0;
+    flex-wrap: wrap;
+    column-gap: 20px;
+    row-gap: 8px;
+    padding-bottom: 10px;
+    min-height: 54px;
+}
+.file-toolbar > .page-heading {
+    display: contents;
+}
+.file-toolbar .page-heading > div:first-child {
+    flex: 1 1 140px;
+    min-width: 0;
+}
+.file-toolbar h1 {
+    font-size: 24px;
+    line-height: 1.3;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+.file-toolbar .breadcrumbs {
+    flex-wrap: nowrap;
+    overflow: hidden;
+    margin-bottom: 4px;
+    white-space: nowrap;
+}
+.file-toolbar .breadcrumbs > span {
+    display: inline-flex;
+    min-width: 0;
+}
+.file-toolbar .breadcrumbs a {
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+.file-toolbar .search-form {
+    flex: 1 1 220px;
+    max-width: 380px;
+}
+.file-toolbar-controls {
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 8px;
+    flex: 0 0 auto;
+    min-height: 44px;
+}
+.file-toolbar-controls > span:first-child {
+    white-space: nowrap;
+    margin-inline-end: 8px;
+}
+.file-list-scroll {
+    flex: 1;
+    min-height: 0;
+    overflow: auto;
+    overscroll-behavior-y: contain;
+    scrollbar-gutter: stable;
+    padding-bottom: 88px;
+}
+.file-list-scroll:focus-visible {
+    outline: 2px solid var(--action);
+    outline-offset: -2px;
+}
+.file-list-scroll .file-table th {
+    position: sticky;
+    top: 0;
+    z-index: 1;
+    background: var(--surface);
+}
+@media (max-width: 720px),
+    (max-width: 1000px) and (max-height: 600px) and (pointer: coarse) {
+    .file-browser > .file-toolbar {
+        gap: 8px;
+    }
+    .file-toolbar .page-heading > div:first-child {
+        flex: 1 1 80px;
+    }
+    .file-toolbar h1 {
+        font-size: 21px;
+    }
+    .file-toolbar .page-heading .search-form {
+        flex-basis: 100%;
+        order: 2;
+        max-width: none;
+    }
+    .file-toolbar-controls {
+        margin-inline-start: auto;
+        gap: 2px;
+    }
+    .file-toolbar-actions {
+        gap: 0;
+    }
+    .file-toolbar-controls > span:first-child {
+        font-size: 11px;
+        margin-inline-end: 2px;
+    }
+    .file-toolbar .page-subtitle {
+        display: none;
+    }
+    .workspace.file-workspace,
+    .app-shell:has(#compact-new-button) .workspace.file-workspace {
+        overflow-y: auto;
+        padding: 12px 12px max(12px, env(safe-area-inset-bottom));
+        scrollbar-gutter: auto;
+        border-radius: 0;
+    }
+    .file-workspace .file-browser {
+        flex: 0 0 auto;
+    }
+    .file-list-scroll {
+        flex: 0 0 auto;
+        overflow: visible;
+        padding-bottom: 0;
+        scrollbar-gutter: auto;
+    }
+    .file-list-scroll .file-table th {
+        position: static;
+    }
+}
+
+.file-table .name-cell {
+    padding-inline-start: 12px;
+}
+.name-cell-content,
+.name-header-content {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    min-width: 0;
+}
+.name-cell-content {
+    min-height: 48px;
+}
+.file-selection-slot {
+    width: 32px;
+    height: 32px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    flex: 0 0 32px;
+}
+.file-name-details {
+    flex: 1;
+    min-width: 0;
+}
+.file-icon-spacer {
+    width: 32px;
+    flex: 0 0 32px;
+}
+.file-size-mobile {
+    display: none;
+}
+.file-name-details .file-name {
+    display: block;
+    max-width: 100%;
+}
+.search-result-location {
+    display: block;
+    margin-top: -8px;
+    padding: 0 5px 8px;
+    color: var(--muted);
+    font-size: 11px;
+    line-height: 1.5;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.file-toolbar-actions {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+@media (max-width: 720px),
+    (max-width: 1000px) and (max-height: 600px) and (pointer: coarse) {
+    .name-cell-content {
+        min-height: 60px;
+    }
+    .file-table .name-cell {
+        padding-inline-start: 0;
+    }
+    .search-result-location {
+        font-size: 11px;
+    }
+}
+
+.action-menu[popover] {
+    position: fixed;
+    inset: auto;
+    margin: 0;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+}
+
+/* Keep filenames uninterrupted; optional state is separate, quiet metadata. */
+.file-title-line {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    min-width: 0;
+}
+.file-title-line .file-name {
+    flex: 1 1 auto;
+    min-width: 0;
+}
+.file-item-status {
+    display: inline-flex;
+    align-items: center;
+    flex: 0 0 auto;
+    gap: 10px;
+    padding-inline-start: 12px;
+    color: var(--muted);
+    font-size: 12px;
+    font-weight: 400;
+    line-height: 18px;
+    white-space: nowrap;
+}
+.file-status-label + .file-status-label {
+    border-inline-start: 1px solid var(--line);
+    padding-inline-start: 10px;
+}
+.file-table th:first-child {
+    padding-inline-start: 12px;
+}
+.column-sort-button {
+    min-height: 32px;
+    padding-block: 6px;
+}
+.file-row {
+    touch-action: manipulation;
+}
+@media (max-width: 720px),
+    (max-width: 1000px) and (max-height: 600px) and (pointer: coarse) {
+    .file-table th:first-child {
+        padding-inline-start: 0;
+    }
+    .column-sort-button {
+        min-height: 44px;
+    }
+    .actions-cell {
+        width: 44px;
+    }
+    .file-table .item-actions > summary {
+        width: 44px;
+        height: 44px;
+    }
+}
+
+/* The same row baseline is shared by Files, Trash and Shared Links. */
+:root {
+    --list-row-min-height: 56px;
+    --list-row-padding: 8px;
+}
+.file-table:not(.file-grid) td {
+    height: var(--list-row-min-height);
+}
+.name-cell-content {
+    min-height: var(--list-row-min-height);
+}
+.file-toolbar-controls {
+    flex-wrap: wrap;
+    row-gap: 4px;
+}
+.file-view-toggle {
+    display: inline-flex;
+    flex: 0 0 auto;
+    border: 1px solid var(--line);
+    border-radius: 6px;
+    padding: 2px;
+}
+.file-view-toggle .icon-button {
+    width: 36px;
+    height: 36px;
+    border-radius: 4px;
+}
+.file-view-toggle button[aria-pressed="true"] {
+    background: var(--selected);
+    color: var(--on-action-soft);
+}
+.file-grid {
+    display: block;
+    padding: 12px 0;
+}
+.file-grid > ul {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(168px, 1fr));
+    gap: 12px;
+    list-style: none;
+    margin: 0;
+    padding: 0;
+}
+.file-grid .file-row {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) 44px;
+    align-content: stretch;
+    grid-template-rows: 1fr auto;
+    position: relative;
+    min-width: 0;
+    overflow: visible;
+    border: 1px solid var(--line-subtle);
+    border-radius: 8px;
+    background: var(--surface);
+}
+.file-grid .file-row:hover {
+    background: var(--hover);
+    border-color: var(--line);
+}
+.file-grid .file-row.selected {
+    background: var(--selected);
+    border-color: var(--action);
+}
+.file-grid .name-cell {
+    grid-column: 1 / -1;
+    padding: 0;
+    min-width: 0;
+}
+.file-tile-preview {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    aspect-ratio: 16 / 10;
+    overflow: hidden;
+    background: var(--canvas);
+    border-radius: 7px 7px 0 0;
+}
+.file-tile-preview img {
+    width: 100%;
+    height: 100%;
+    object-fit: contain;
+}
+.file-tile-preview .file-icon {
+    width: 48px;
+    height: 48px;
+}
+.file-tile-preview .file-icon svg {
+    width: 40px;
+    height: 40px;
+}
+.file-grid .name-cell-content {
+    padding: 8px 10px 0;
+    min-height: 0;
+    gap: 0;
+}
+.file-grid .file-selection-slot {
+    display: none;
+}
+.file-grid:has(input[type="checkbox"]) .file-selection-slot {
+    display: inline-flex;
+    position: absolute;
+    top: 6px;
+    left: 6px;
+    background: var(--surface);
+    border-radius: 4px;
+}
+.file-grid .file-name {
+    white-space: normal;
+    overflow-wrap: anywhere;
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+    line-height: 20px;
+    padding: 2px 0;
+    min-height: 24px;
+    max-width: 100%;
+}
+.file-grid .file-title-line {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 2px;
+}
+.file-grid .file-item-status {
+    padding: 0;
+}
+.file-grid .search-result-location {
+    padding: 0;
+    margin-top: 4px;
+}
+.file-grid .date-cell {
+    display: none;
+}
+.file-grid .size-cell {
+    display: flex;
+    align-items: center;
+    grid-column: 1;
+    width: auto;
+    padding: 4px 10px 8px;
+    font-size: 12px;
+}
+.file-grid .actions-cell {
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    grid-column: 2;
+    width: 44px;
+    padding: 0 4px 4px 0;
+}
+.file-grid .item-actions > summary {
+    width: 36px;
+    height: 36px;
+}
+@media (max-width: 720px),
+    (max-width: 1000px) and (max-height: 600px) and (pointer: coarse) {
+    .file-view-toggle .icon-button {
+        width: 40px;
+        height: 40px;
+        min-height: 44px;
+    }
+    .file-grid > ul {
+        grid-template-columns: repeat(auto-fill, minmax(132px, 1fr));
+        gap: 10px;
+    }
+    .file-grid .item-actions > summary {
+        width: 44px;
+        height: 44px;
+    }
+    .file-grid .actions-cell {
+        padding-inline-end: 0;
+    }
+    .file-grid .size-cell {
+        font-size: 11px;
+    }
+}
+
+.grid-select-all {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    min-height: 44px;
+    padding-inline: 8px;
+    font-size: 12px;
+}
+
+.file-table.file-grid .size-cell {
+    width: auto;
+    white-space: nowrap;
+    font-size: 12px;
+}
+
+.file-toolbar .file-selection-toggle {
+    border: 1px solid var(--line);
+    border-radius: 6px;
+    background: var(--surface);
+    min-height: 36px;
+    padding: 8px 12px;
+    gap: 8px;
+    font-weight: 500;
+}
+.file-selection-toggle > svg {
+    display: block;
+    flex-shrink: 0;
+}
+.file-selection-toggle:hover {
+    background: var(--hover);
+    border-color: var(--input-line);
+}
+@media (max-width: 720px),
+    (max-width: 1000px) and (max-height: 600px) and (pointer: coarse) {
+    .page-heading:has(> .compact-search-trigger) {
+        flex-direction: row;
+        flex-wrap: wrap;
+        align-items: center;
+        gap: 8px;
+    }
+    .page-heading:has(> .compact-search-trigger) > div:first-child {
+        width: auto;
+        flex: 1 1 0;
+        min-width: 0;
+    }
+    .page-heading > .compact-search-trigger {
+        width: 44px;
+        height: 44px;
+        flex: 0 0 44px;
+    }
+    .page-heading > .search-form {
+        flex: 1 0 100%;
+        order: 3;
+        margin: 0;
+        max-width: none;
+    }
+    .page-heading .search-form .icon-button {
+        width: 44px;
+        height: 44px;
+        flex: 0 0 44px;
+    }
+    .page-heading .search-form {
+        padding-inline: 0;
+        gap: 0;
+    }
+    .file-browser > .file-toolbar {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) auto auto;
+        column-gap: 4px;
+        row-gap: 8px;
+        min-height: 52px;
+        padding-bottom: 8px;
+    }
+    .file-toolbar .page-heading > div:first-child {
+        grid-column: 1;
+        grid-row: 1;
+        min-width: 0;
+    }
+    .file-toolbar .page-title-line {
+        gap: 6px;
+    }
+    .file-toolbar .page-title-line h1 {
+        font-size: 18px;
+        line-height: 24px;
+        min-width: 0;
+    }
+    .file-toolbar .demo-marker {
+        display: none;
+    }
+    .file-toolbar .breadcrumbs {
+        font-size: 11px;
+        line-height: 16px;
+        margin-bottom: 0;
+    }
+    .file-toolbar .compact-search-trigger {
+        grid-column: 2;
+        grid-row: 1;
+    }
+    .file-toolbar .file-toolbar-controls {
+        grid-column: 3;
+        grid-row: 1;
+        flex-wrap: nowrap;
+        gap: 0;
+        margin: 0;
+    }
+    .file-toolbar .file-item-count,
+    .file-toolbar .file-view-toggle {
+        display: none;
+    }
+    .file-toolbar .file-selection-toggle {
+        width: 44px;
+        min-width: 44px;
+        min-height: 44px;
+        padding: 0;
+        justify-content: center;
+    }
+    .file-toolbar .file-selection-toggle > svg {
+        display: block;
+    }
+    .file-toolbar .file-selection-toggle > span {
+        position: absolute;
+        width: 1px;
+        height: 1px;
+        padding: 0;
+        margin: -1px;
+        overflow: hidden;
+        clip: rect(0, 0, 0, 0);
+        white-space: nowrap;
+    }
+    .file-toolbar .file-selection-toggle[aria-pressed="true"] {
+        background: var(--selected);
+        color: var(--on-action-soft);
+    }
+    .file-toolbar .page-heading .search-form {
+        grid-column: 1 / -1;
+        grid-row: 2;
+        width: 100%;
+        max-width: none;
+        min-width: 0;
+    }
+    .file-toolbar[data-selection="true"] .file-toolbar-controls {
+        grid-column: 1 / -1;
+        grid-row: 1;
+        flex-wrap: nowrap;
+        justify-content: flex-start;
+        z-index: 1;
+        background: var(--surface);
+        gap: 4px;
+    }
+    .file-toolbar[data-selection="true"] .page-heading > div:first-child,
+    .file-toolbar[data-selection="true"] .compact-search-trigger {
+        visibility: hidden;
+        pointer-events: none;
+    }
+    .file-toolbar[data-selection="true"] .selection-count {
+        font-size: 13px;
+        margin-inline-end: auto;
+    }
+    .file-toolbar[data-selection="true"] .toolbar-divider,
+    .file-toolbar[data-selection="true"] .file-view-toggle {
+        display: none;
+    }
+    .file-toolbar .file-bulk-action {
+        min-width: 44px;
+        flex-shrink: 0;
+        justify-content: center;
+    }
+    .file-selection-slot {
+        width: 44px;
+        height: 44px;
+        flex-basis: 44px;
+    }
+    .file-toolbar .grid-select-all {
+        padding: 0;
+        flex-shrink: 0;
+    }
+    .file-toolbar[data-selection="true"]:has(.grid-select-all)
+        .file-bulk-action
+        > span {
+        display: none;
+    }
+    .file-list-scroll .file-name {
+        min-height: 44px;
+        width: 100%;
+        align-content: center;
+    }
+    .file-table:not(.file-grid) .size-cell {
+        display: none;
+    }
+    .file-table:not(.file-grid) .file-name-details {
+        display: grid;
+        grid-template-columns: max-content minmax(0, 1fr);
+        column-gap: 8px;
+        padding-bottom: 8px;
+    }
+    .file-table:not(.file-grid) .file-title-line {
+        display: contents;
+    }
+    .file-table:not(.file-grid) .file-name {
+        grid-column: 1 / -1;
+        grid-row: 1;
+        padding-block: 0;
+    }
+    .file-table:not(.file-grid) .file-size-mobile {
+        display: block;
+        grid-column: 1;
+        grid-row: 2;
+        font-size: 12px;
+        line-height: 18px;
+        color: var(--muted);
+    }
+    .file-table:not(.file-grid) .file-item-status {
+        grid-column: 2;
+        grid-row: 2;
+        padding: 0;
+        gap: 6px;
+        font-size: 11px;
+        min-width: 0;
+    }
+    .file-table:not(.file-grid) .file-status-label + .file-status-label {
+        padding-inline-start: 6px;
+    }
+    .file-table:not(.file-grid) .search-result-location {
+        grid-column: 1 / -1;
+        grid-row: 3;
+        padding: 0;
+        margin: 0;
+    }
+    .workspace.file-workspace,
+    .app-shell:has(#compact-new-button) .workspace.file-workspace {
+        padding-inline: max(12px, env(safe-area-inset-left))
+            max(12px, env(safe-area-inset-right));
+    }
+}
+
+@media (max-width: 400px) {
+    .file-toolbar .file-bulk-action > span {
+        display: none;
+    }
+}
+
+@media (max-width: 720px),
+    (max-width: 1000px) and (max-height: 600px) and (pointer: coarse) {
+    .file-title-line:has(.file-item-status) {
+        flex-direction: column;
+        align-items: flex-start;
+        gap: 0;
+    }
+    .file-title-line:has(.file-item-status) .file-name {
+        padding-block: 3px;
+    }
+    .file-title-line .file-item-status {
+        padding: 0 5px 3px;
+    }
+    .file-grid .file-title-line .file-item-status {
+        padding: 0;
+    }
+}

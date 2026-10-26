@@ -1,0 +1,29 @@
+.thumbnail-rebuild-status {
+    margin-block: 16px;
+}
+.thumbnail-rebuild-status > p:first-child {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+.thumbnail-rebuild-status progress {
+    width: 100%;
+    height: 8px;
+    accent-color: var(--action);
+}
+.thumbnail-rebuild-status p {
+    margin-block: 8px;
+}
+.thumbnail-current-file {
+    overflow-wrap: anywhere;
+}
+.thumbnail-rebuild-actions {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+    gap: 12px;
+    margin-top: 24px;
+}
+.thumbnail-settings > button {
+    margin-top: 12px;
+}

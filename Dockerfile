@@ -5,6 +5,7 @@ FROM --platform=$BUILDPLATFORM node:24.22.0-bookworm-slim@sha256:a5f4366e834695d
 
 WORKDIR /frontend
 COPY website/package.json website/package-lock.json ./
+COPY website/vendor ./vendor
 RUN --mount=type=cache,target=/root/.npm npm ci --ignore-scripts
 COPY website/ ./
 RUN npm run build
@@ -54,7 +55,6 @@ RUN groupadd --gid 10001 tgdrive \
     && chown -R tgdrive:tgdrive /app/data /app/cache
 
 COPY --from=builder /app/.venv /app/.venv
-COPY --chown=tgdrive:tgdrive main.py config.py ./
 COPY --chown=tgdrive:tgdrive LICENSE ./
 COPY --chown=tgdrive:tgdrive tgdrive ./tgdrive
 COPY --from=frontend --chown=tgdrive:tgdrive /frontend/dist ./website/dist

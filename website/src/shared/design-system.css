@@ -1,0 +1,606 @@
+/* TGDrive: one colorful, calm workspace. Native file/player controls share these tokens. */
+:root {
+    --mantine-color-body: var(--canvas);
+    --mantine-color-text: var(--ink);
+    --mantine-color-dimmed: var(--muted);
+    --mantine-color-default: var(--surface-raised);
+    --mantine-color-default-hover: var(--hover);
+    --mantine-color-default-color: var(--ink);
+    --mantine-color-default-border: var(--line);
+    --mantine-color-placeholder: var(--muted);
+}
+.main-content,
+.public-shell .main-content {
+    padding: 0;
+}
+.workspace {
+    border: 0;
+    border-inline-start: 1px solid var(--line-subtle);
+    border-radius: 0;
+}
+.sidebar {
+    background: var(--canvas);
+}
+.nav-section-label {
+    color: var(--muted);
+    letter-spacing: 0;
+}
+.drive-nav a {
+    transition:
+        background-color 140ms ease-out,
+        color 140ms ease-out;
+}
+.new-button {
+    background: var(--action);
+    color: var(--on-action);
+}
+.new-button:hover {
+    background: var(--action-hover);
+}
+.settings-help {
+    color: var(--muted);
+    font-size: 13px;
+    line-height: 1.55;
+}
+.page-heading h1 {
+    font-size: 24px;
+    letter-spacing: -0.025em;
+}
+.performance-settings > .performance-section-heading {
+    align-items: center;
+    gap: 16px;
+}
+.performance-settings > .performance-section-heading p {
+    margin: 0;
+    font-size: 13px;
+    max-width: 62ch;
+}
+.performance-settings .performance-setting-group {
+    padding: 12px 16px 4px;
+    margin: 24px 0 0;
+    background: var(--surface-subtle);
+    border: 1px solid var(--line);
+}
+.performance-settings .performance-setting-group legend {
+    padding-inline: 10px;
+    margin-left: -8px;
+    color: var(--ink);
+    font-size: 16px;
+}
+.configuration-group-title {
+    display: inline-flex;
+    align-items: center;
+    gap: 9px;
+}
+.configuration-group-title svg {
+    color: var(--action);
+}
+.performance-setting-group:has(.configuration-auto-preload)
+    .configuration-group-title
+    svg {
+    color: var(--success);
+}
+.performance-field {
+    padding-block: 16px;
+    gap: 20px;
+}
+.performance-field p {
+    font-size: 12px;
+    max-width: 58ch;
+}
+.performance-field label {
+    font-size: 14px;
+}
+.configuration-value {
+    min-width: 0;
+    display: grid;
+    gap: 8px;
+    justify-items: end;
+}
+.configuration-value > .mantine-NumberInput-root {
+    width: 100%;
+}
+.configuration-value input.mantine-NumberInput-input,
+.performance-field input.mantine-TextInput-input {
+    min-height: 42px;
+    margin: 0;
+    padding: 8px 34px 8px 12px;
+    background: var(--canvas);
+    border-color: var(--input-line);
+    font-size: 14px;
+    color: var(--ink);
+}
+.configuration-value .mantine-NumberInput-control {
+    color: var(--muted);
+    border-color: var(--line);
+}
+@media (max-width: 720px), (pointer: coarse) {
+    .configuration-value input.mantine-NumberInput-input,
+    .performance-field input.mantine-TextInput-input {
+        min-height: 44px;
+        font-size: 16px;
+    }
+    .mantine-Tabs-tab {
+        min-height: 44px;
+    }
+}
+.configuration-auto-preload {
+    border-top: 1px solid var(--line);
+    padding-top: 18px;
+    margin-block: 10px 16px;
+}
+.configuration-auto-preload .mantine-Switch-label {
+    color: var(--ink);
+    font-size: 14px;
+}
+.configuration-auto-preload .mantine-Switch-description {
+    max-width: 55ch;
+    color: var(--muted);
+    line-height: 1.55;
+}
+.performance-settings .performance-advanced {
+    background: var(--surface-subtle);
+    border: 1px solid var(--line);
+    border-radius: 12px;
+    padding: 8px 20px;
+}
+.performance-advanced > summary {
+    color: var(--warning);
+    font-size: 14px;
+}
+.performance-advanced > p {
+    font-size: 12px;
+}
+.preference-section.mantine-Paper-root {
+    margin-block: 24px;
+    padding: 20px;
+    background: var(--surface-subtle);
+    border-color: var(--line);
+}
+.configuration-section-heading {
+    display: flex;
+    align-items: baseline;
+    flex-wrap: wrap;
+    gap: 10px;
+    margin-bottom: 8px;
+}
+.preference-section .preference-description p {
+    font-size: 13px;
+    margin-bottom: 20px;
+}
+.preference-section .upload-limit-setting {
+    padding: 12px 0;
+    border-top: 0;
+}
+.preference-section .upload-limit-stepper {
+    background: var(--canvas);
+}
+.performance-actions,
+.upload-settings-actions {
+    gap: 10px;
+}
+.performance-actions {
+    background: var(--surface-subtle);
+    border: 1px solid var(--line);
+    border-radius: 12px;
+    padding: 14px 16px;
+}
+.performance-save-state {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 12px;
+}
+.mantine-Button-root {
+    min-height: 38px;
+    font-size: 13px;
+}
+.mantine-Button-root.primary-button {
+    background: var(--action);
+    color: var(--on-action);
+}
+.mantine-Button-root.primary-button:disabled {
+    background: var(--line);
+    color: var(--muted);
+    opacity: 0.7;
+}
+.mantine-Button-root.secondary-button {
+    background: var(--surface-raised);
+    border: 1px solid var(--line);
+    color: var(--ink);
+}
+.mantine-Button-root.text-button {
+    background: transparent;
+    color: var(--action);
+    padding-inline: 10px;
+}
+.mantine-Button-root.icon-button {
+    background: transparent;
+    padding: 0;
+    min-width: 32px;
+    width: 32px;
+    height: 38px;
+}
+.error-notice.mantine-Alert-root {
+    background: var(--danger-soft);
+    border: 1px solid var(--danger);
+    color: var(--danger-soft-ink);
+    padding: 12px 14px;
+    border-radius: 10px;
+}
+.error-notice .mantine-Alert-message {
+    color: var(--danger-soft-ink);
+}
+.performance-notice,
+.management-notice {
+    background: var(--success-soft);
+    border: 1px solid var(--line);
+    padding: 12px 14px;
+    border-radius: 10px;
+    color: var(--success);
+    font-size: 13px;
+}
+.performance-toolbar {
+    padding-bottom: 18px;
+}
+.performance-view-tabs.mantine-Tabs-list {
+    gap: 4px;
+}
+.performance-view-tabs.mantine-Tabs-list::before {
+    display: none;
+}
+.performance-view-tabs .mantine-Tabs-tab {
+    min-height: 40px;
+    padding: 10px 14px;
+    border: 0;
+    border-radius: 0;
+    border-bottom: 2px solid transparent;
+    color: var(--muted);
+}
+.performance-view-tabs .mantine-Tabs-tab[data-active] {
+    color: var(--action);
+    background: transparent;
+    border-bottom-color: var(--action);
+}
+.performance-view-tabs .mantine-Tabs-tab:hover {
+    background: var(--hover);
+}
+.performance-metric-chart.mantine-Paper-root {
+    padding: 18px;
+    background: var(--surface-subtle);
+    border-color: var(--line);
+}
+.performance-resource-charts {
+    gap: 20px;
+}
+.performance-chart-heading {
+    padding-bottom: 12px;
+    border-bottom: 1px solid var(--line-subtle);
+    margin-bottom: 14px;
+}
+.performance-metric-chart[data-metric="cpu_percent"] {
+    --action: var(--violet);
+}
+.performance-metric-chart[data-metric="memory_bytes"] {
+    --action: var(--success);
+}
+.performance-section-title {
+    padding-bottom: 10px;
+    border-bottom: 1px solid var(--line-subtle);
+    margin-bottom: 12px;
+}
+.performance-section-title h3 {
+    margin-bottom: 0;
+}
+.performance-live-traffic {
+    border: 1px solid var(--line);
+    border-radius: 12px;
+    background: var(--surface-subtle);
+    padding: 18px;
+}
+.performance-all-time {
+    border: 1px solid var(--line);
+    border-radius: 12px;
+    background: var(--surface-subtle);
+    padding: 18px;
+    margin-top: 0;
+}
+.performance-totals-table th {
+    color: var(--muted);
+}
+.performance-totals-table tbody th {
+    color: var(--ink);
+}
+.performance-overview-status {
+    background: var(--success-soft);
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    padding: 14px 16px;
+    color: var(--success);
+    margin-top: 16px;
+}
+.performance-table-wrap {
+    background: var(--surface-subtle);
+    border-color: var(--line);
+    border-radius: 10px;
+}
+.performance-table thead {
+    background: var(--surface-raised);
+}
+.preloads-page .cache-budget-summary {
+    background: var(--surface-subtle);
+    border: 1px solid var(--line);
+    border-radius: 12px;
+    padding: 16px;
+}
+.preloads-page .cache-budget-summary progress {
+    accent-color: var(--success);
+}
+.cache-ready-state[data-complete="true"] {
+    background: var(--success-soft);
+    border-radius: 6px;
+    padding: 2px 6px;
+}
+.preloads-page .preload-recent {
+    background: var(--surface-subtle);
+    padding: 16px;
+    border: 1px solid var(--line);
+    border-radius: 12px;
+}
+.storage-page > .settings-section,
+.connection-management > .settings-section {
+    background: var(--surface-subtle);
+    padding: 20px;
+    border: 1px solid var(--line);
+    border-radius: 12px;
+    margin-bottom: 20px;
+}
+.storage-protection:has(.connection-ready) {
+    background: var(--success-soft);
+    border-color: var(--line);
+}
+.storage-protection:has(.error-notice) {
+    background: var(--surface-subtle) !important;
+    border-color: var(--line) !important;
+}
+.managed-client-list > li {
+    border-color: var(--line);
+    background: var(--canvas);
+    border-radius: 10px;
+}
+.share-column-heading,
+.activity-section-heading {
+    color: var(--muted);
+}
+.performance-chart-now {
+    color: var(--success);
+}
+@media (max-width: 720px),
+    (max-width: 1000px) and (max-height: 600px) and (pointer: coarse) {
+    .main-content {
+        padding-top: 0;
+    }
+    .workspace {
+        border-inline-start: 0;
+        border-radius: 0;
+    }
+    .performance-settings > .performance-section-heading {
+        align-items: flex-start;
+        flex-wrap: wrap;
+    }
+    .performance-settings > .performance-section-heading > a {
+        font-size: 12px;
+    }
+    .performance-settings .performance-setting-group {
+        padding: 12px 14px 4px;
+        margin-top: 20px;
+    }
+    .performance-field {
+        grid-template-columns: 1fr;
+        gap: 10px;
+        padding-block: 14px;
+    }
+    .configuration-value {
+        grid-template-columns: minmax(0, 1fr) auto;
+        align-items: center;
+        justify-items: stretch;
+    }
+    .configuration-value input.mantine-NumberInput-input {
+        min-height: 44px;
+    }
+    .configuration-auto-preload {
+        margin-bottom: 14px;
+    }
+    .performance-actions {
+        gap: 10px;
+        padding: 12px;
+    }
+    .performance-actions .performance-save-state {
+        flex-basis: 100%;
+    }
+    .performance-actions .mantine-Button-root {
+        flex: 1;
+        min-height: 44px;
+        padding-inline: 10px;
+    }
+    .performance-actions .mantine-Button-root.text-button {
+        flex-basis: 100%;
+    }
+    .preference-section.mantine-Paper-root {
+        padding: 16px;
+    }
+    .upload-settings-actions {
+        flex-wrap: wrap;
+    }
+    .upload-settings-actions .mantine-Button-root {
+        min-height: 44px;
+    }
+    .performance-toolbar .performance-view-tabs .mantine-Tabs-tab {
+        padding-inline: 10px;
+    }
+    .performance-metric-chart.mantine-Paper-root {
+        padding: 14px;
+        margin-block: 8px;
+    }
+    .performance-live-traffic,
+    .performance-all-time {
+        padding: 14px;
+        margin-block: 8px;
+    }
+    .storage-page > .settings-section,
+    .connection-management > .settings-section {
+        padding: 16px;
+    }
+}
+@media (prefers-reduced-motion: no-preference) {
+    .mantine-Button-root {
+        transition:
+            background-color 140ms ease-out,
+            border-color 140ms ease-out;
+    }
+    .configuration-value input {
+        transition: border-color 140ms ease-out;
+    }
+}
+
+/* Static theme variables work under the application's strict stylesheet CSP. */
+:root[data-mantine-color-scheme] {
+    --mantine-scale: 1.1428571428571428;
+    --mantine-font-family:
+        InterVariable, Inter, ui-sans-serif, system-ui, sans-serif;
+    --mantine-font-family-headings: var(--mantine-font-family);
+    --mantine-font-size-xs: 12px;
+    --mantine-font-size-sm: 13px;
+    --mantine-font-size-md: 14px;
+    --mantine-font-size-lg: 16px;
+    --mantine-font-size-xl: 20px;
+    --mantine-color-body: var(--canvas);
+    --mantine-color-text: var(--ink);
+    --mantine-color-dimmed: var(--muted);
+    --mantine-color-placeholder: var(--muted);
+    --mantine-color-default: var(--surface-raised);
+    --mantine-color-default-color: var(--ink);
+    --mantine-color-default-hover: var(--hover);
+    --mantine-color-default-border: var(--line);
+    --mantine-primary-color-filled: var(--action);
+    --mantine-primary-color-filled-hover: var(--action-hover);
+    --mantine-primary-color-light: var(--action-soft);
+    --mantine-primary-color-light-color: var(--on-action-soft);
+    --mantine-primary-color-light-hover: var(--action-soft-hover);
+    --mantine-radius-default: var(--mantine-radius-md);
+}
+body,
+button,
+input,
+select,
+textarea {
+    font-family: InterVariable, Inter, ui-sans-serif, system-ui, sans-serif;
+}
+.drive-nav a:hover:not([aria-current]) {
+    background: var(--hover);
+    color: var(--ink);
+}
+.performance-metric-chart h3,
+.performance-chart-heading > strong {
+    color: var(--ink);
+}
+.performance-chart-heading > strong {
+    font-weight: 600;
+}
+.performance-overview-grid:not([hidden]) {
+    gap: 20px;
+}
+.performance-settings .performance-setting-group {
+    margin-top: 16px;
+    padding-top: 8px;
+}
+.performance-settings .performance-setting-group legend {
+    margin-bottom: 0;
+}
+.preference-section .configuration-section-heading h2 {
+    margin: 0;
+}
+.performance-settings .performance-field {
+    padding-block: 12px;
+}
+.performance-settings .performance-save-scope {
+    margin-top: 14px;
+    font-size: 12px;
+}
+.preference-section.mantine-Paper-root {
+    margin-block: 10px 18px;
+    padding: 16px 18px;
+}
+.preference-section .upload-limit-setting {
+    margin-block: 10px 4px;
+    padding-block: 10px;
+    gap: 12px;
+}
+.preference-section .settings-help {
+    margin-block: 6px 0;
+}
+.preference-section .upload-settings-actions {
+    margin-top: 8px;
+}
+@media (max-width: 720px),
+    (max-width: 1000px) and (max-height: 600px) and (pointer: coarse) {
+    .preference-section.mantine-Paper-root {
+        padding: 14px;
+        margin-top: 8px;
+    }
+    .preference-section .upload-limit-setting {
+        gap: 6px;
+    }
+    .preference-section .upload-limit-setting p {
+        margin-bottom: 0;
+    }
+    .preference-section .upload-limit-stepper {
+        margin-block: 0;
+    }
+    .preference-section .upload-settings-actions {
+        gap: 6px;
+    }
+    .preference-section .upload-settings-actions .mantine-Button-root {
+        min-height: 44px;
+    }
+    .performance-resource-charts:not([hidden]) {
+        gap: 12px;
+    }
+}
+
+.preference-section .upload-limit-setting {
+    margin-top: 0;
+    padding-top: 0;
+    border-top: 0;
+}
+.performance-actions {
+    background: transparent;
+    border: 0;
+    border-top: 1px solid var(--line);
+    border-radius: 0;
+    padding: 14px 0;
+}
+.performance-settings .performance-section-heading {
+    margin-bottom: 4px;
+}
+.performance-settings .performance-section-heading p {
+    max-width: 62ch;
+}
+.performance-chart-tooltip {
+    font-size: 12px;
+    box-shadow: none;
+}
+@media (prefers-reduced-motion: no-preference) {
+    .theme-menu,
+    .context-menu {
+        animation: drive-menu-open 120ms ease-out;
+    }
+    @keyframes drive-menu-open {
+        from {
+            opacity: 0;
+        }
+        to {
+            opacity: 1;
+        }
+    }
+}

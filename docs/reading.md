@@ -44,6 +44,9 @@ entries. Byte savings vary.
 
 Pages keep their original image bytes: TGDrive does not upscale, transcode or
 recompress them. Some colour pages or spreads are much larger than the average.
+Raster pages are limited to **16 million pixels** and **32,768 pixels per edge**.
+Oversized or unreadable image headers produce a preview error; download the
+unchanged original to open it in another reader.
 The reader shows received bytes after the server has prepared the selected
 resource, retries temporary image download failures up to three attempts
 (2/4-second waits, or a longer server retry hint up to 30 seconds),
@@ -69,6 +72,11 @@ nearby-page overscan starts. A PDF can still require distant metadata, fonts,
 shared masks, or large images before its first page appears; there is no promise
 of a fixed number of startup bytes. All PDF rendering happens in the browser,
 without server-side page conversion.
+
+Password-protected PDFs ask for their document password in the reader. The value
+is used in memory by PDF.js and is not saved; closing the preview discards it.
+Matching fonts, character maps, color profiles and image decoders are served by
+TGDrive itself, without an external asset CDN.
 
 EPUB supports passive text, tables and raster images in TGDrive's theme.
 Publisher scripts/styles, remote resources, exact fixed layouts, SVG illustrations,
@@ -97,6 +105,7 @@ slow or exceed device memory. These are bounds, not a fixed RAM reservation.
 | --- | --- |
 | Index/chapter/thumbnail operation | 32 MiB fetched; aligned 1 MiB reads and a four-block parser cache |
 | One selected original raster image | 64 MiB encoded image; up to 96 MiB source reads, without loading unrelated ZIP entries |
+| Raster dimensions | 16 million pixels and 32,768 pixels per edge, including declared animation frames; checked before image bytes leave the parser |
 | Archive | 10,000 entries; 2 MiB ZIP directory; stored/deflate ZIP methods |
 | EPUB / entries | 5,000 spine entries; 2 MiB/text entry; 16 MiB thumbnail-source image (independent of the 64 MiB reader page limit) |
 | Parser work | Two simultaneous operations, 16 pending requests, 45-second parser timeout; 55-second total route deadline including coalesced waits |
@@ -107,6 +116,10 @@ base64 expansion. This does not change the image delivered to the browser. CBR
 may need earlier compressed bytes and can exhaust its read budget before a page.
 Unsafe/duplicate names and extreme compression ratios fail. Busy readers receive
 retry guidance. Budgets apply per operation; cached content may be reused.
+Raster checks read format headers without decoding or resizing. JPEG dimensions
+must appear within the first 1 MiB; excessive or malformed header structure is
+rejected. The pixel limit is about 61 MiB for one RGBA frame, not a total browser
+memory guarantee: animation, decoder, GPU and other reader resources add overhead.
 Authorization is rechecked during reads. Revocation stops later reads through
 that link, while independent links remain valid; delivered bytes cannot be recalled.
 

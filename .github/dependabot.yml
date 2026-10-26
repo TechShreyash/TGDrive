@@ -1,46 +1,46 @@
 version: 2
 
 updates:
-  - package-ecosystem: uv
-    directory: /
-    schedule:
-      interval: weekly
-      day: monday
-      time: "04:00"
-      timezone: Asia/Kolkata
-    open-pull-requests-limit: 10
-    commit-message:
-      prefix: deps
+    - package-ecosystem: uv
+      directory: /
+      schedule:
+          interval: weekly
+          day: monday
+          time: "04:00"
+          timezone: Asia/Kolkata
+      open-pull-requests-limit: 10
+      commit-message:
+          prefix: deps
 
-  - package-ecosystem: github-actions
-    directory: /
-    schedule:
-      interval: weekly
-      day: monday
-      time: "04:15"
-      timezone: Asia/Kolkata
-    open-pull-requests-limit: 10
-    commit-message:
-      prefix: ci
+    - package-ecosystem: github-actions
+      directory: /
+      schedule:
+          interval: weekly
+          day: monday
+          time: "04:15"
+          timezone: Asia/Kolkata
+      open-pull-requests-limit: 10
+      commit-message:
+          prefix: ci
 
-  - package-ecosystem: docker
-    directory: /
-    schedule:
-      interval: weekly
-      day: monday
-      time: "04:30"
-      timezone: Asia/Kolkata
-    open-pull-requests-limit: 5
-    commit-message:
-      prefix: docker
+    - package-ecosystem: docker
+      directory: /
+      schedule:
+          interval: weekly
+          day: monday
+          time: "04:30"
+          timezone: Asia/Kolkata
+      open-pull-requests-limit: 5
+      commit-message:
+          prefix: docker
 
-  - package-ecosystem: npm
-    directory: /website
-    schedule:
-      interval: weekly
-      day: monday
-      time: "04:45"
-      timezone: Asia/Kolkata
-    open-pull-requests-limit: 5
-    commit-message:
-      prefix: frontend-deps
+    - package-ecosystem: npm
+      directory: /website
+      schedule:
+          interval: weekly
+          day: monday
+          time: "04:45"
+          timezone: Asia/Kolkata
+      open-pull-requests-limit: 5
+      commit-message:
+          prefix: frontend-deps

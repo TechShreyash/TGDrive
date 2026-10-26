@@ -42,7 +42,7 @@ larger plans increase capacity without promising a fixed transfer speed.
 
 Tune the running instance in **Configuration → Cache settings**. Saved MongoDB
 preferences override initial environment values. Save affects the visible category;
-**Reset Changes** returns to its last saved values. Environment changes need a
+**Discard changes** returns to its last saved values. Environment changes need a
 restart. See [exact settings](reference.md#performance-and-cache-settings).
 
 | Budget | Default |
@@ -61,7 +61,6 @@ Clearing it leaves Telegram originals and the catalog intact.
 <details>
 <summary>Memory, disk integrity and eviction</summary>
 
-- The legacy `?view=settings&section=performance` link still opens cache controls.
 - Disk space is consumed as blocks arrive, not reserved upfront. Cache writes
   respect their free-space floor; upload staging separately uses `MIN_FREE_BYTES`.
   Leave headroom for the OS, uploads and backups.

@@ -116,7 +116,7 @@ evidence out of public docs and reports.
 <details>
 <summary>Checks with disposable databases, channels and files</summary>
 
-- [ ] **Local Docker:** on Windows, macOS and Linux, initialize once, sign in on
+- [ ] **Local Docker:** on Windows, macOS and Linux, confirm automatic first setup, sign in on
   localhost, upload/download a small file, stop/start, and reopen it. Check that
   configuration and volumes persist. These are separate platform checks.
 - [ ] **Hosted:** verify HTTPS login, private-file denial without authentication,

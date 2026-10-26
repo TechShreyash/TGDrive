@@ -1,0 +1,60 @@
+.preference-description p {
+    margin-bottom: 0;
+}
+.preference-controls {
+    min-width: 0;
+}
+
+.upload-limit-setting {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 24px;
+    margin-block: 24px 12px;
+}
+.upload-limit-setting label {
+    font-weight: 500;
+}
+.upload-limit-setting p {
+    margin: 5px 0 0;
+    font-size: 13px;
+}
+.upload-limit-stepper {
+    display: flex;
+    align-items: center;
+    flex-shrink: 0;
+    padding: 4px;
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    background: var(--surface);
+}
+.upload-limit-stepper input {
+    appearance: textfield;
+    width: 46px;
+    padding: 8px 0;
+    border: 0;
+    background: transparent;
+    color: var(--ink);
+    text-align: center;
+    font-size: 16px;
+    font-variant-numeric: tabular-nums;
+}
+.upload-limit-stepper input::-webkit-inner-spin-button,
+.upload-limit-stepper input::-webkit-outer-spin-button {
+    appearance: none;
+    margin: 0;
+}
+.upload-settings-actions {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 16px;
+    margin-top: 20px;
+}
+@media (max-width: 480px) {
+    .upload-limit-setting {
+        align-items: flex-start;
+        flex-direction: column;
+        gap: 12px;
+    }
+}

@@ -23,10 +23,11 @@ including FFmpeg LGPL-2.1-or-later, dav1d BSD-2-Clause, and Signalsmith MIT.
 FFmpeg-LGPL-2.1.txt supplies the full LGPL-2.1 text from upstream FFmpeg.
 Preserve these notices when redistributing the emitted JS and WASM assets.
 
-TGDrive applies a reviewed JavaScript seek-resume correction to the slim player
-bundle before dev/test/build. The original license and WASM remain unchanged.
-See movi-player-TGDrive-patch-NOTICE.txt and website/scripts/patch-movi-player.js
-for the modification, exact upstream bundle hash and automatic build guard.
+TGDrive ships its reviewed modified JavaScript in a local pinned npm archive
+under website/vendor. The original license and WASM remain unchanged. See
+movi-player-TGDrive-patch-NOTICE.txt, website/vendor/manifest.json and
+website/scripts/patch-movi-player.js for the changes and upstream identity.
+Normal development/build/test commands do not mutate the installed package.
 
 Source and relinking archive (served from the same TGDrive origin):
 /third-party/movi-player-0.4.1-sources.tar.gz
@@ -49,10 +50,11 @@ Package: https://www.npmjs.com/package/pdfjs-dist/v/6.4.299
 Source: https://github.com/mozilla/pdf.js
 Source tag: https://github.com/mozilla/pdf.js/tree/v6.4.299
 pdfjs-LICENSE.txt is copied unchanged from the installed pdfjs-dist package.
-The bundled PDF.js JS and worker use Apache-2.0. TGDrive currently emits those
-modules; optional CMaps, ICC profiles, standard fonts, and external PDF.js
-WASM decoder files are not copied by this viewer build. If those assets are
-added, include their separate package license notices too.
+The bundled PDF.js JS and worker use Apache-2.0. The reviewed modified worker
+is installed from the local pinned package archive in website/vendor; see
+pdfjs-TGDrive-patch-NOTICE.txt. CMaps, ICC profiles, standard fonts and decoder
+WASM are served locally under /static/pdfjs/<upstream-version>/ with their
+original resource-directory notices. No external viewer asset CDN is required.
 
 Inter Variable 4.1
 ------------------

@@ -1,0 +1,16 @@
+{
+    "files.exclude": {
+        "**/__pycache__": true,
+        "**/.pytest_cache": true,
+        "**/.ruff_cache": true,
+        "**/.venv": true,
+        "**/node_modules": true,
+        "**/.vite": true,
+        "website/dist": true,
+        "dist": true,
+        "output": true,
+        "htmlcov": true,
+        ".coverage": true,
+        "coverage.xml": true
+    }
+}

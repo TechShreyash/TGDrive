@@ -1,16 +1,16 @@
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
-import App from "./App";
+import App from "./app/App";
 import "@mantine/core/styles.css";
-import "./style.css";
-import "./design-system.css";
-import DesignSystem from "./DesignSystem";
-import { initializeTheme } from "./theme";
+import "./app/style.css";
+import "./shared/design-system.css";
+import DesignSystem from "./shared/DesignSystem";
+import { initializeTheme } from "./shared/theme";
 initializeTheme();
 createRoot(document.getElementById("root")!).render(
-  <StrictMode>
-    <DesignSystem>
-      <App />
-    </DesignSystem>
-  </StrictMode>,
+    <StrictMode>
+        <DesignSystem>
+            <App />
+        </DesignSystem>
+    </StrictMode>,
 );

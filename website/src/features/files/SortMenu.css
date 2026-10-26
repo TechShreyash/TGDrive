@@ -1,0 +1,100 @@
+.file-sort-trigger {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 10px;
+    border-radius: 6px;
+    color: var(--muted);
+    min-height: 36px;
+    font-size: 13px;
+}
+.file-sort-trigger:hover,
+.file-sort-trigger[aria-expanded="true"] {
+    background: var(--canvas);
+    color: var(--ink);
+}
+.file-sort-menu {
+    position: fixed;
+    z-index: 120;
+    padding: 5px;
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    background: var(--surface);
+    color: var(--ink);
+    max-height: calc(100dvh - 24px);
+    overflow-y: auto;
+    overscroll-behavior: contain;
+}
+.file-sort-menu button {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 16px;
+    padding: 10px 12px;
+    min-height: 40px;
+    width: 100%;
+    border-radius: 4px;
+    text-align: start;
+    font-size: 13px;
+}
+.file-sort-menu button:hover,
+.file-sort-menu button:focus-visible {
+    background: var(--selected);
+}
+.file-sort-menu button:focus-visible {
+    outline-offset: -2px;
+}
+.sort-check-hidden {
+    visibility: hidden;
+}
+.file-table th .column-sort-button {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 0;
+    color: inherit;
+    font-size: inherit;
+    font-weight: inherit;
+}
+.column-sort-button:hover {
+    color: var(--action);
+}
+
+.sort-direction-group {
+    margin-top: 4px;
+    padding-top: 4px;
+    border-top: 1px solid var(--line);
+}
+.sort-direction-group small {
+    display: inline;
+    margin-inline-start: 8px;
+    color: var(--muted);
+    font-size: 11px;
+}
+@media (max-width: 720px),
+    (max-width: 1000px) and (max-height: 600px) and (pointer: coarse) {
+    .file-sort-trigger,
+    .file-sort-menu button {
+        min-height: 44px;
+    }
+}
+
+.sort-view-group {
+    margin-bottom: 4px;
+    padding-bottom: 4px;
+    border-bottom: 1px solid var(--line);
+}
+.sort-view-option {
+    display: inline-flex;
+    align-items: center;
+    gap: 10px;
+}
+@media (max-width: 720px),
+    (max-width: 1000px) and (max-height: 600px) and (pointer: coarse) {
+    .file-toolbar .file-sort-trigger {
+        width: 44px;
+        height: 44px;
+        justify-content: center;
+        padding: 0;
+    }
+}

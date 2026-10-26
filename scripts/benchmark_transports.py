@@ -186,11 +186,11 @@ async def main(args):
     from telethon import types
     from telethon.errors import FloodWaitError
 
-    from tgdrive.client_pool import ClientPool
-    from tgdrive.logical_media import PartLease, part_ranges
-    from tgdrive.media_reader import stream_pooled_media
-    from tgdrive.ranges import ByteRange
-    from tgdrive.telegram_clients import Client
+    from tgdrive.media.logical_media import PartLease, part_ranges
+    from tgdrive.media.media_reader import stream_pooled_media
+    from tgdrive.media.ranges import ByteRange
+    from tgdrive.telegram.client_pool import ClientPool
+    from tgdrive.telegram.clients import Client
 
     config = json.loads(args.config.read_text())
     directory = args.work_dir.resolve()
@@ -479,6 +479,9 @@ async def main(args):
                     whole_sha256_match=None,
                     timeout_seconds=args.manifest_timeout,
                 )
+                raise RuntimeError(
+                    "Manifest checksum verification timed out; result is incomplete"
+                ) from None
             if args.check_http:
                 valid = await asyncio.to_thread(check_http, config, boundaries)
                 if not valid:

@@ -36,7 +36,8 @@ has accepted the files; TGDrive must keep running to finish processing them.
 | --- | --- |
 | Components, data flow and durability | [Architecture](architecture.md) |
 | Environment variables and API contracts | [Reference](reference.md) |
-| Build commands and validation | [Development](development.md) |
+| Source layout, build commands and validation | [Development](development.md) · [Repository map](development.md#repository-map-and-test-map) |
+| Interface styling, branding and accessibility | [Frontend contracts](development.md#frontend-contracts) |
 | Source artifacts and release checks | [Release verification](release.md) |
 | Implemented features and remaining gaps | [Roadmap](roadmap.md) |
 | Dated playback measurements | [Streaming validation](streaming-validation-2026-10-18.md) |

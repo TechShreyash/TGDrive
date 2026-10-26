@@ -82,7 +82,10 @@ Browser receipts normally expire after 24 hours of inactivity; longer interrupti
 
 After an unclean stop, stop the old app, wait about a minute, then restart once. Never delete internal ownership records or disable single-instance protection.
 
-Unreachable MongoDB or insufficient permissions can prevent startup and owner login. Restore database access first: local recovery configuration provides no offline login. A reachable database with a missing/corrupt catalog can permit the owner recovery screen.
+Unreachable MongoDB or insufficient permissions rejects startup and owner login.
+Restore database access first: local recovery configuration provides no offline
+login. A reachable database with a missing/corrupt catalog can permit the owner
+recovery screen.
 
 </details>
 
@@ -145,7 +148,8 @@ hosting access and ownership.
 
 ## Reopen after losing the local installation
 
-If MongoDB survives, reconnect to it **without running `init`**. Missing staged upload bytes still need their originals.
+If MongoDB survives, reconnect to the existing database. Missing staged upload
+bytes still need their originals.
 
 <details>
 <summary>Reinstall against the existing MongoDB drive</summary>
@@ -188,7 +192,7 @@ Finish/cancel unfinished or failed transfers before changing account identities,
 | Problem | Repair |
 | --- | --- |
 | Revoked bot token | Replace with a valid token for the same bot; restart and retry. |
-| Expired/removed Premium session | Reconnect the same account through **Connections**, restart and retry. The [container maintenance command](reference.md#owner-maintenance-commands) can also generate a private session. |
+| Expired/removed Premium session | Reconnect the same account through **Connections**, restart and retry. |
 | Missing channel permissions | Restore membership/admin rights, Refresh and retry. A still-connected client can resume after a successful check. |
 | Network/Telegram wait | Follow reconnection, retry and cooldown status. |
 
@@ -232,31 +236,20 @@ After HTTPS setup, test owner login/upload, denied private access in an incognit
 TGDrive has no email-based reset or way to reveal a password from its hash. You
 can reset access if you control the deployment's private environment or `.env`:
 
-For a plaintext reset, set a new `ADMIN_PASSWORD`, clear `ADMIN_PASSWORD_HASH`
-and recreate/redeploy as in step 3 below. Coolify may retain the hash variable
-because Compose declares it; an empty value is sufficient. To use a hash instead:
-
-1. Generate a new hash interactively; the command does not need the old password
-   or a Telegram login, and does not change the running application:
-
-   ```bash
-   docker compose run --rm --no-deps app python -m tgdrive password-hash
-   ```
-
-2. Put the resulting hash in `ADMIN_PASSWORD_HASH` and leave `ADMIN_PASSWORD`
-   empty. In `.env`, quote the hash in single quotes to preserve its dollar signs.
-   Keep the replacement explicitly configured; missing owner credentials can
-   fall back to the original hash saved during setup.
-3. Recreate the app container with `docker compose up -d --force-recreate app`,
+1. Set a new private `ADMIN_PASSWORD` of at least 12 characters and clear
+   `ADMIN_PASSWORD_HASH`. TGDrive hashes the password internally. An empty hash
+   value is sufficient. Keep the replacement explicitly configured; missing owner
+   credentials can reuse the original hash saved during setup.
+2. Recreate the app container with `docker compose up -d --force-recreate app`,
    or update the private variables and **Redeploy** in Coolify. Use your existing
    Compose project, volumes and any server `-f` arguments. Do not initialize or
    delete the database or volumes.
-4. Confirm the new password works in a private browser window and the old
+3. Confirm the new password works in a private browser window and the old
    password/session fails. Changing the effective credential invalidates that
    password's existing browser sessions after restart. Shared links are separate.
 
-For the demo's private full-access password, use the same hash command but save
-the result as `DEMO_ADMIN_PASSWORD_HASH`, leaving `DEMO_ADMIN_PASSWORD` empty.
+For the demo's private full-access password, set `DEMO_ADMIN_PASSWORD` and clear
+`DEMO_ADMIN_PASSWORD_HASH` in the deployment environment, then recreate/redeploy.
 It does not change the visitor password. Rotating or removing this credential
 invalidates elevated demo sessions; ordinary visitor sessions remain independent.
 Rotate `SESSION_SECRET` too when both session types must be invalidated, and
@@ -272,7 +265,7 @@ See [password and session storage](reference.md#owner-authentication).
 - [ ] Record the running release/revision and review the new release's requirements.
 - [ ] **Release archive:** [verify and extract](release.md#verify-a-downloaded-source-archive) the new archive into a separate folder. Copy your private `.env` into it and retain any reviewed Compose customizations. Keep the **same Compose project name**, including any `-p` argument, so Docker reuses the existing volumes. Keep the old folder for rollback; never copy the new `.env.example` over your real configuration.
 - [ ] **Git checkout:** record `git rev-parse HEAD`, then update with `git pull --ff-only`. Preserve local changes if Git refuses the update. **Coolify:** select the chosen release revision while retaining variables/mounts.
-- [ ] Rebuild from the updated project folder with `docker compose up -d --build` (server `-f` arguments where needed), or redeploy in Coolify. **Skip init**; preserve existing volumes.
+- [ ] Rebuild from the updated project folder with `docker compose up -d --build` (server `-f` arguments where needed), or redeploy in Coolify. Preserve existing volumes; startup reopens the drive.
 - [ ] Start one instance; check database status, Connections and a representative file.
 
 Do not run an older app against an incompatible database format. Restore a compatible backup into a separate empty database for a data rollback.
@@ -282,9 +275,9 @@ Do not run an older app against an incompatible database format. Restore a compa
 | Symptom | Check |
 | --- | --- |
 | MongoDB cannot connect | URI/password, Atlas Network Access, cluster availability and permissions |
-| New installation waits; website unavailable | Verify the intended empty database and follow [initialization](setup.md). Never initialize an existing drive. |
+| Startup exits; website unavailable | Correct MongoDB configuration, authentication, network access and replica-set transaction support. A pristine database initializes automatically; existing or incomplete state requires recovery. See [setup](setup.md). |
 | Another installation owns the database | Stop the old app and let its lease expire. |
-| Catalog missing | Verify database name; use [recovery](backup-recovery.md), not `init`. |
+| Catalog missing | Verify database name and use [recovery](backup-recovery.md); preserve existing state. |
 | Connection changes pending | Restart to apply them. |
 | Backup fails/decryption fails | Matching key, intact archive, posting access, disk and retry time |
 | Upload cannot resume | Reselect its original in the existing transfer; missing staging may require re-upload. |

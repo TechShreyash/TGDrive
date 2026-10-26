@@ -1,0 +1,50 @@
+.deletion-notice {
+    margin: 0 0 20px;
+    padding: 12px 16px;
+    border: 1px solid var(--line);
+    border-radius: 12px;
+    color: var(--ink);
+    background: var(--surface);
+}
+.deletion-summary {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+}
+.deletion-summary > span {
+    flex: 1;
+    min-width: 0;
+    overflow-wrap: anywhere;
+}
+.deletion-summary > svg {
+    flex-shrink: 0;
+}
+.deletion-errors {
+    margin-top: 10px;
+}
+.deletion-progress-detail {
+    margin: 10px 0 0;
+}
+.deletion-errors summary {
+    cursor: pointer;
+    text-underline-offset: 3px;
+}
+.deletion-errors p {
+    max-width: 70ch;
+    margin: 12px 0;
+}
+.deletion-errors ul {
+    max-height: 180px;
+    overflow: auto;
+    overflow-wrap: anywhere;
+    padding-left: 22px;
+}
+.deletion-errors li {
+    margin: 8px 0;
+}
+@media (max-width: 720px) {
+    .deletion-errors summary {
+        min-height: 44px;
+        padding-block: 10px;
+    }
+}

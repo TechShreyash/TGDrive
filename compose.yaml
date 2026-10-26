@@ -3,89 +3,50 @@
 name: tgdrive
 
 services:
-  app:
-    build:
-      context: .
-      dockerfile: Dockerfile
-    restart: ${TGDRIVE_RESTART_POLICY:-unless-stopped}
-    init: true
-    expose:
-      - "8000"
-    environment:
-      MONGODB_URI: ${MONGODB_URI:?Set MONGODB_URI}
-      MONGODB_DATABASE: ${MONGODB_DATABASE:-tgdrive}
-      MONGODB_BACKUP_KEY: ${MONGODB_BACKUP_KEY:-}
-      MONGODB_BACKUP_SECONDS: ${MONGODB_BACKUP_SECONDS:-3600}
-      API_ID: ${API_ID:?Set API_ID}
-      API_HASH: ${API_HASH:?Set API_HASH}
-      BOT_TOKENS: ${BOT_TOKENS:?Set BOT_TOKENS}
-      STORAGE_CHANNEL: ${STORAGE_CHANNEL:?Set STORAGE_CHANNEL}
-      MAIN_BOT_TOKEN: ${MAIN_BOT_TOKEN:-}
-      PUBLIC_URL: ${PUBLIC_URL:-}
-      TELEGRAM_ADMIN_IDS: ${TELEGRAM_ADMIN_IDS:-}
-      # Required for a new drive; existing drives can reuse their saved hash.
-      ADMIN_PASSWORD: ${ADMIN_PASSWORD:-}
-      ADMIN_PASSWORD_HASH: ${ADMIN_PASSWORD_HASH:-}
-      SESSION_SECRET: ${SESSION_SECRET:-}
-      STRING_SESSIONS: ${STRING_SESSIONS:-}
-      DATA_DIR: /app/data
-      CACHE_DIR: /app/cache
-      COOKIE_SECURE: "true"
-      DEMO_MODE: ${DEMO_MODE:-false}
-      DEMO_ADMIN_PASSWORD: ${DEMO_ADMIN_PASSWORD:-}
-      DEMO_ADMIN_PASSWORD_HASH: ${DEMO_ADMIN_PASSWORD_HASH:-}
-      TGDRIVE_AUTO_SECRETS: "true"
-      TGDRIVE_PROXY_HOSTS: coolify-proxy
-      FORWARDED_ALLOW_IPS: ${FORWARDED_ALLOW_IPS:-auto}
-      INITIALIZE_EMPTY_DRIVE: "false"
-      SESSION_TTL_SECONDS: ${SESSION_TTL_SECONDS:-86400}
-      LOG_LEVEL: ${LOG_LEVEL:-INFO}
-      ALLOW_PRIVATE_REMOTE_URLS: ${ALLOW_PRIVATE_REMOTE_URLS:-false}
-      REMOTE_CONNECT_TIMEOUT: ${REMOTE_CONNECT_TIMEOUT:-20}
-      REMOTE_READ_TIMEOUT: ${REMOTE_READ_TIMEOUT:-120}
-      REMOTE_TOTAL_TIMEOUT: ${REMOTE_TOTAL_TIMEOUT:-21600}
-      REMOTE_MAX_REDIRECTS: ${REMOTE_MAX_REDIRECTS:-5}
-      MAX_CONCURRENT_TRANSFERS: ${MAX_CONCURRENT_TRANSFERS:-2}
-      REMOTE_DOWNLOAD_CONCURRENCY: ${REMOTE_DOWNLOAD_CONCURRENCY:-2}
-      MAX_FILE_SIZE: ${MAX_FILE_SIZE:-}
-      TRANSFER_TTL_SECONDS: ${TRANSFER_TTL_SECONDS:-3600}
-      UPLOAD_SESSION_TTL_SECONDS: ${UPLOAD_SESSION_TTL_SECONDS:-86400}
-      # Optional startup policy; saved dashboard preferences take precedence.
-      TELEGRAM_UPLOADS_PER_BOT: ${TELEGRAM_UPLOADS_PER_BOT:-1}
-      TIMEZONE: ${TIMEZONE:-Asia/Kolkata}
-      STAGING_BUDGET_BYTES: ${STAGING_BUDGET_BYTES:-17179869184}
-      MIN_FREE_BYTES: ${MIN_FREE_BYTES:-1073741824}
-      CACHE_MEMORY_BYTES: ${CACHE_MEMORY_BYTES:-268435456}
-      CACHE_DISK_BYTES: ${CACHE_DISK_BYTES:-10737418240}
-      CACHE_MIN_FREE_BYTES: ${CACHE_MIN_FREE_BYTES:-1073741824}
-      CACHE_TTL_SECONDS: ${CACHE_TTL_SECONDS:-86400}
-      AUTO_PRELOAD: ${AUTO_PRELOAD:-true}
-      PRELOAD_MAX_JOBS: ${PRELOAD_MAX_JOBS:-2}
-      TELEGRAM_UPLOAD_PIPELINE: ${TELEGRAM_UPLOAD_PIPELINE:-4}
-      TELEGRAM_REQUEST_LIMIT: ${TELEGRAM_REQUEST_LIMIT:-8}
-      TELEGRAM_PARTS_PER_SECOND: ${TELEGRAM_PARTS_PER_SECOND:-48}
-      TELEGRAM_MEDIA_PER_BOT: ${TELEGRAM_MEDIA_PER_BOT:-3}
-      TELEGRAM_MAX_QUEUE: ${TELEGRAM_MAX_QUEUE:-256}
-      UPLOAD_SPLIT_MIB: ${UPLOAD_SPLIT_MIB:-2000}
-    # Coolify attaches declared middleware to its generated domain routers.
-    # Apply at the edge too: Traefik can append HTTP/3 advertisements to app headers.
-    labels:
-      - "traefik.http.middlewares.tgdrive-alt-svc.headers.customresponseheaders.Alt-Svc=clear"
-    volumes:
-      - tgdrive-data:/app/data
-      - tgdrive-cache:/app/cache
-    stop_grace_period: 60s
-    security_opt:
-      - no-new-privileges:true
-    cap_drop:
-      - ALL
-    pids_limit: 256
-    logging:
-      driver: local
-      options:
-        max-size: "10m"
-        max-file: "3"
+    app:
+        build:
+            context: .
+            dockerfile: Dockerfile
+        restart: ${TGDRIVE_RESTART_POLICY:-unless-stopped}
+        init: true
+        expose:
+            - "8000"
+        env_file:
+            - path: .env
+              required: false
+        environment:
+            MONGODB_URI: ${MONGODB_URI:?Set MONGODB_URI}
+            API_ID: ${API_ID:?Set API_ID}
+            API_HASH: ${API_HASH:?Set API_HASH}
+            BOT_TOKENS: ${BOT_TOKENS:?Set BOT_TOKENS}
+            STORAGE_CHANNEL: ${STORAGE_CHANNEL:?Set STORAGE_CHANNEL}
+            ADMIN_PASSWORD: ${ADMIN_PASSWORD:-}
+            # Container paths and hosting policy stay fixed across deployments.
+            DATA_DIR: /app/data
+            CACHE_DIR: /app/cache
+            COOKIE_SECURE: "true"
+            TGDRIVE_AUTO_SECRETS: "true"
+            TGDRIVE_PROXY_HOSTS: coolify-proxy
+            FORWARDED_ALLOW_IPS: ${FORWARDED_ALLOW_IPS:-auto}
+        # Coolify attaches declared middleware to its generated domain routers.
+        # Apply at the edge too: Traefik can append HTTP/3 advertisements to app headers.
+        labels:
+            - "traefik.http.middlewares.tgdrive-alt-svc.headers.customresponseheaders.Alt-Svc=clear"
+        volumes:
+            - tgdrive-data:/app/data
+            - tgdrive-cache:/app/cache
+        stop_grace_period: 60s
+        security_opt:
+            - no-new-privileges:true
+        cap_drop:
+            - ALL
+        pids_limit: 256
+        logging:
+            driver: local
+            options:
+                max-size: "10m"
+                max-file: "3"
 
 volumes:
-  tgdrive-data:
-  tgdrive-cache:
+    tgdrive-data:
+    tgdrive-cache:

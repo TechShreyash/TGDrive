@@ -93,7 +93,9 @@ function initializePlayer() {
         status.textContent = "Playback complete";
     });
     player.addEventListener("error", () => {
-        showError("The file is unavailable or its format is not supported by this browser.");
+        showError(
+            "The file is unavailable or its format is not supported by this browser.",
+        );
     });
 
     copyButton.addEventListener("click", async () => {
@@ -101,7 +103,11 @@ function initializePlayer() {
             await copyText(pageUrl.toString());
             showToast("Stream link copied.");
         } catch (error) {
-            showToast(error instanceof Error ? error.message : "Could not copy the stream link.");
+            showToast(
+                error instanceof Error
+                    ? error.message
+                    : "Could not copy the stream link.",
+            );
         }
     });
 
@@ -110,7 +116,11 @@ function initializePlayer() {
             await copyText(fileUrl.toString());
             showToast("File link copied.");
         } catch (error) {
-            showToast(error instanceof Error ? error.message : "Could not copy the file link.");
+            showToast(
+                error instanceof Error
+                    ? error.message
+                    : "Could not copy the file link.",
+            );
         }
     });
 }

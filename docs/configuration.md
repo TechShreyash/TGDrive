@@ -11,6 +11,11 @@ RAM/disk can reduce them. Change one setting, then repeat the same workload.
 upload, URL import and timezone controls. Captures show the interface; follow the
 defaults and limits below when tuning your own installation.
 
+MongoDB is required for every deployment. Invalid database configuration or failed
+access stops startup; no local database is substituted. A pristine database is
+initialized automatically. See [setup](setup.md#4-start-locally) for deployment
+and [startup behavior](architecture.md#lifecycle) for recovery boundaries.
+
 ## Public demo mode
 
 Set `DEMO_MODE=true` in the demo deployment's environment, then recreate the
@@ -26,8 +31,8 @@ Use the same login form with either of these passwords:
 
 The full-access password is optional and only works while `DEMO_MODE=true`.
 If omitted, every web login remains restricted. Use a different password of at
-least 12 characters, or generate an Argon2id hash with the
-[password-hash command](operations.md#forgotten-login-password). Hashes take
+least 12 characters, or supply an existing compatible Argon2id hash. See
+[password storage and reset](operations.md#forgotten-login-password). Hashes take
 precedence over their corresponding plaintext values. Both demo administrator
 variables are deployment-only; they are not restored from the database.
 
@@ -48,30 +53,6 @@ enter the password you chose. See [password storage and reset](operations.md#for
 Coolify may prevent deleting a variable declared by Compose. To switch to a
 plaintext password, clear the corresponding hash variable's **Value**, save it
 and redeploy. A populated hash always takes precedence over plaintext.
-
-<details>
-<summary>Recreate a variable with Coolify's “Old escaping” warning</summary>
-
-Coolify 4.5.0 passes new variables exactly as entered but preserves legacy
-escaping for existing variables. That can make a password containing quotes
-differ from the value received by TGDrive. See the
-[Coolify release notes](https://github.com/coollabsio/coolify/releases/tag/v4.5.0).
-
-1. Pause automatic deployments before pushing the temporary Compose change.
-2. Remove the affected variable's mapping from the deployment branch's Compose
-   file, push it, then select **General → Reload Compose** in Coolify. For a
-   Git-backed application, change the file in Git; Coolify's editor is read-only.
-3. Delete and re-add the environment variable in Coolify. Confirm that the
-   **Old escaping** warning is gone.
-4. Restore the original Compose mapping, push it and **Reload Compose** again.
-5. Redeploy, then restore the previous automatic deployment setting.
-
-Do not deploy the intermediate Compose file. Removing its mapping prevents that
-file from passing the plaintext demo administrator password to the container;
-it does not disable demo mode. A configured `DEMO_ADMIN_PASSWORD_HASH` still
-takes precedence.
-
-</details>
 
 “Visitor” access describes permissions, not a separate account or an automatic
 content reset. Both login types use the configured session lifetime (24 hours

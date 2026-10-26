@@ -7,6 +7,10 @@ recorded on **24 October 2026** using original, disposable sample files. The
 README highlights the drive, video player and mobile layout; the
 [visual guide](../showcase.md) groups the full collection by workflow.
 
+The video captures predate the switch to Movi's native chapter/settings UI.
+Follow the [current controls guide](../usage.md#open-preview-and-download) for
+labels and behavior; replace these captures during the next live media refresh.
+
 ## What is included
 
 | PNG images | Coverage |

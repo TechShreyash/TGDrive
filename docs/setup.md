@@ -14,7 +14,7 @@ includes Python, dependencies and preview tools, with the same runtime on laptop
 and servers. No host Python or Node installation is needed for the main steps.
 
 For a **new v2 drive**, use an empty MongoDB database and a new private Telegram
-channel.
+channel. v1 data and older catalog formats are not imported or upgraded.
 
 [Prerequisites](#before-you-start) · [MongoDB](#1-prepare-mongodb) · [Telegram](#2-prepare-telegram) · [Configuration](#3-configure-your-drive) · [Start locally](#4-start-locally) · [Hosting](#hosting-beyond-your-machine)
 
@@ -34,7 +34,7 @@ files until uploads say **Completed**.
 
 ## Before you start
 
-Install a maintained Docker release with **Compose and Buildx**, following the
+Install a maintained Docker release with **Compose 2.24+ and Buildx**, following the
 official guide for your system:
 
 | System | Recommended installation | Terminal for this guide |
@@ -95,7 +95,6 @@ MongoDB holds catalog/settings; file contents live in Telegram.
 5. Send one identification message, then use **Copy Message Link**. For a link
    like `https://t.me/c/1234567890/1`, the channel ID is `-1001234567890`:
    prepend `-100` to the number after `/c/`. Use your own channel's ID.
-   The optional Docker wizard can convert the link for you.
 
 > [!IMPORTANT]
 > Treat the channel as app-managed storage. Make file changes in TGDrive;
@@ -135,16 +134,14 @@ brackets or the example additional-bot text in your values:
 | `STORAGE_CHANNEL` | Your private channel's negative numeric ID |
 | `ADMIN_PASSWORD` | A unique web password; 15+ characters recommended, 12-character minimum |
 
-Keep `MONGODB_DATABASE=tgdrive` and `COOKIE_SECURE=false` for local HTTP.
-Leave `SESSION_SECRET` and `MONGODB_BACKUP_KEY` blank: Compose generates them
-once and preserves them in persistent storage. Never replace
+The defaults use database `tgdrive` and allow local HTTP cookies. Session and
+backup keys are generated once and preserved in persistent storage; leave
+`SESSION_SECRET` and `MONGODB_BACKUP_KEY` unset for a new installation. Never replace
 an existing drive's keys. Save the exported recovery key after your first login.
 
 Keep `.env` private. Single-quote values containing `$`, including password
 hashes. Do not shell-source the file. For hashed passwords, explicit keys and all
 optional settings, see the [configuration reference](reference.md#configuration).
-Linux/WSL users choosing the [Docker wizard](#optional-docker-wizard) can let it
-create this file instead; skip manual copying and editing in that case.
 
 ## 4. Start locally
 
@@ -156,12 +153,6 @@ docker compose config --quiet
 docker compose build
 ~~~
 
-Initialize a **new, empty database only**. For an existing drive, skip this command:
-
-~~~bash
-docker compose run --rm --no-deps app python -m tgdrive init
-~~~
-
 Start TGDrive:
 
 ~~~bash
@@ -169,9 +160,15 @@ docker compose up -d
 docker compose ps
 ~~~
 
+TGDrive connects to MongoDB before becoming available. A new, empty database is
+initialized automatically; an existing drive is reopened. Missing or invalid
+`MONGODB_URI`, failed authentication, an unreachable database or an unsupported
+MongoDB deployment stops startup. There is no SQLite fallback. Correct the
+environment or database access and start again. Existing or incomplete drive
+state is preserved for explicit recovery; it is never replaced with an empty drive.
+
 The first build can take several minutes. `config --quiet` checks syntax, not
 credentials. Plain `docker compose config` prints secrets; keep its output private.
-**Run init only for a new empty database.** For an existing drive, skip it.
 
 Open [http://127.0.0.1:8000](http://127.0.0.1:8000) and follow
 [first login](#5-open-your-drive). Closing the terminal keeps the containers
@@ -195,32 +192,6 @@ You can quit Docker Desktop after stopping TGDrive; keep its saved volumes.
 > Do not use `docker compose down -v` or volume prune as a repair:
 > they remove keys, unfinished bytes and recovery journals.
 > Compose stores data inside its named volumes, not host `data/` and `cache/` folders.
-
-#### Optional Docker wizard
-
-<details>
-<summary>Interactive setup on Linux or WSL Ubuntu</summary>
-
-Instead of manually creating `.env` and running the first Docker commands, use
-Python 3.10+ on Linux/WSL with Docker, Compose and Buildx ready:
-
-~~~bash
-python3 scripts/setup.py --check
-python3 scripts/setup.py
-~~~
-
-Run as your normal user, without sudo. On WSL, enable Docker Desktop's WSL
-integration. The wizard does not support native Windows/macOS or remote Docker
-contexts; use the manual commands above there.
-
-Have the MongoDB URI, bot token, API ID/hash and channel link ready. Choose a
-password of at least 12 characters. Secret prompts hide what you type.
-
-The wizard builds the app, writes private `.env` configuration, checks access,
-asks for `NEW` before initializing a new drive, and prints the local address.
-It preserves an existing `.env`. Later starts/stops use the Docker table above.
-
-</details>
 
 ## 5. Open your drive
 
@@ -247,20 +218,14 @@ See [interruption recovery](operations.md#after-a-shutdown-crash-or-network-loss
 
 ## Apply updates to an existing drive
 
-Keep the database, channel, environment and persistent storage. **Skip the wizard
-and init** for an existing drive.
+Keep the database, channel, environment and persistent storage. Startup reopens
+the existing drive automatically.
 
 | Installation | Update |
 | --- | --- |
 | Local Docker | Follow [archive/Git update steps](operations.md#upgrade-and-rollback), preserving `.env` and project name; run `docker compose up -d --build`. |
 | Coolify | Redeploy the updated revision with the existing Compose configuration. |
 | Server Compose | Use the same `-f compose.yaml -f compose.server.yaml` files; run `up -d --build`. |
-
-If an existing Coolify application points to `/compose.coolify.yaml`, change its
-Compose file setting to `/compose.yaml` before redeploying; the compatibility
-file has been removed. Keep the same application, environment, storage volumes
-and domain. This changes the build definition, not the drive's database or
-Telegram channel. Do not initialize the drive again.
 
 Refresh the browser and reopen interrupted playback. Saved settings and
 persistent disk cache remain; RAM cache repopulates after restart.
@@ -296,9 +261,8 @@ Premium is optional: all accounts use the same **2000 MiB** document cap and
 [automatic splitting](usage.md#files-above-2-gb). Available Premium clients are
 preferred for transfer speed, but neither Premium nor extra bots guarantee
 higher throughput or remove Telegram cooldowns. A live Premium speedup has not
-been measured. Use the Premium login flow in **Connections**, or the
-[container maintenance command](reference.md#owner-maintenance-commands),
-to create an authorized Telethon StringSession.
+been measured. Use **Connections → Connect Premium account** to sign in, or
+import an already authorized session through its advanced controls.
 
 ## Hosting beyond your machine
 
@@ -369,6 +333,9 @@ Set these runtime variables:
 Choose **Literal** for values containing `$`. Keep secrets **unavailable during
 build**, **available at runtime**, then save. [Environment guide](https://coolify.io/docs/applications/configuration/environment-variables).
 
+Optional settings use TGDrive defaults. Add a runtime variable only when an
+override is needed; the stack's `env_file` passes it to the application.
+
 1. Route `app` to internal port **8000** with HTTPS, for example
    `https://drive.example.com:8000` in Coolify. Visitors use normal HTTPS;
    no host port mapping is needed.
@@ -376,9 +343,10 @@ build**, **available at runtime**, then save. [Environment guide](https://coolif
    hit certificate rate limits. Keep `COOKIE_SECURE=true` and app/database ports private.
 3. Preserve **`/app/data` and `/app/cache`** on every redeploy: keys/journals
    and unfinished uploads live there. [Storage guide](https://coolify.io/docs/core/persistent-storage/storage-mounts/overview).
-4. Deploy. For a **brand-new empty database only**, run `python -m tgdrive init`
-   in the application terminal once, then restart. Until initialization, the
-   container waits with terminal access available and health checks fail.
+4. Deploy. TGDrive checks MongoDB and initializes a new, empty database
+   automatically before serving the website. If database configuration, access
+   or transaction support fails, correct it and redeploy; startup fails rather
+   than switching to local storage.
 5. Sign in and save **Storage & Backups → Save recovery key** separately.
    Existing drives skip initialization and use their original owner password.
 
@@ -411,26 +379,20 @@ docker compose -f compose.yaml -f compose.server.yaml config --quiet
 docker compose -f compose.yaml -f compose.server.yaml build
 ~~~
 
-3. For a **new empty database only**, initialize once:
-
-~~~bash
-docker compose -f compose.yaml -f compose.server.yaml run --rm --no-deps app python -m tgdrive init
-~~~
-
-4. Start the server:
+3. Start the server; a new, empty MongoDB database is initialized automatically:
 
 ~~~bash
 docker compose -f compose.yaml -f compose.server.yaml up -d
 docker compose -f compose.yaml -f compose.server.yaml ps
 ~~~
 
-5. Forward HTTPS to host `127.0.0.1:8000`, preserving Host and setting forwarded
+4. Forward HTTPS to host `127.0.0.1:8000`, preserving Host and setting forwarded
    scheme/client headers. A containerized proxy needs a shared private network
    with `app:8000`, or its documented host-access route.
-6. Trust only proxy source addresses the app sees through `FORWARDED_ALLOW_IPS`;
+5. Trust only proxy source addresses the app sees through `FORWARDED_ALLOW_IPS`;
    never use `*` as a workaround. Follow
    [HTTPS/proxy checks](operations.md#https-and-private-configuration).
-7. Verify the public domain, Connections and a small upload/download.
+6. Verify the public domain, Connections and a small upload/download.
    Save the recovery key separately and confirm a database backup.
 
 The server file keeps secure cookies on, publishes loopback only and defaults

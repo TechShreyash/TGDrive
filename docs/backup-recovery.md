@@ -7,7 +7,7 @@ Two Telegram channels can protect against some losses; they do not establish
 ban immunity, automatic failover or a backup outside Telegram.
 
 > [!IMPORTANT]
-> Save matching keys outside the server, wait for a **confirmed restore point**, and test recovery before relying on it. **Never run `init` to repair an existing drive.**
+> Save matching keys outside the server, wait for a **confirmed restore point**, and test recovery before relying on it. **Never replace an existing drive with an empty database as a repair.**
 
 | Protection | Recovers | Limits |
 | --- | --- | --- |
@@ -131,8 +131,8 @@ The copy includes completed documents and an AES-256-GCM encrypted `tgdrive-repl
 | Recovery data | Main channel | Independent backup channel |
 | --- | --- | --- |
 | Encrypted channel recovery capsule | Saved | Saved and pinned |
-| Full encrypted MongoDB archive, when using MongoDB | Current archive created or reused | Same confirmed archive copied and verified before **Backup confirmed** |
-| Portable catalog, when using SQLite | Normal pinned `drive.json` checkpoint | Included in the encrypted recovery capsule |
+| Full encrypted MongoDB archive | Current archive created or reused | Same confirmed archive copied and verified before **Backup confirmed** |
+| Portable catalog | Included in channel recovery data | Included in the encrypted recovery capsule |
 
 Snapshots cover their confirmed revision. A failed setup does not establish a confirmed copy in the new backup channel. Save the recovery-key JSON outside the server and Telegram after confirmation.
 
@@ -181,6 +181,10 @@ TGDrive verifies referenced parts/sizes. Activation is still explicit and requir
 ### Interruptions and reports
 
 Retry/Resume the **existing operation** after repairing the underlying problem. Preserve `DATA_DIR`, its journal, bootstrap and activation files across redeployments. Never run competing instances, delete that state or change destinations to bypass an error.
+
+Activation requires a complete current-format private record, including the
+pre-recovery key baseline. Incomplete or older records are rejected without
+changing the drive; preserve them and repeat recovery inspection.
 
 <details>
 <summary>Failure handling, key rotation and local recovery state</summary>
@@ -244,60 +248,53 @@ Automatic snapshots normally run hourly (`MONGODB_BACKUP_SECONDS`). Failures lea
 
 Snapshots are compressed app records, limited to 1 GiB expanded; unrelated MongoDB collections are excluded. AES-256-GCM authenticates the archive. TGDrive downloads the uploaded ciphertext and checks SHA-256 before confirming; restore checks authentication, format and completeness before writing.
 
+Restore validation holds the archive, expanded content and parsed records in
+memory. Peak memory can substantially exceed the archive's file size; leave
+headroom when restoring a large catalog and rehearse it on the intended host.
+
 This encryption covers database archives, not original Telegram payloads or local upload/cache bytes. A catalog cannot recreate a deleted Telegram part.
 
 </details>
 
 ### Reopen the existing MongoDB drive
 
-Follow the [reinstall instructions](operations.md#reopen-after-losing-the-local-installation): reuse the existing database and original secrets, preserve volumes, and start **without `init`**. Check Connections, files, split downloads and unfinished work. Missing staged bytes still require the original source.
+Follow the [reinstall instructions](operations.md#reopen-after-losing-the-local-installation): reuse the existing database and original secrets, preserve volumes, and deploy. Check Connections, files, split downloads and unfinished work. Missing staged bytes still require the original source.
 
 ### Restore a lost database from Telegram
 
 Use a confirmed `.tgdb` archive, its matching key and the matching TGDrive release. Restore into a **new empty MongoDB database with transaction support**. Changes after the snapshot will be absent; **older shares may reappear**.
 
 <details>
-<summary>Restore commands and post-recovery checks</summary>
+<summary>Restore through the website and check the recovered drive</summary>
 
-1. Download or copy the archive into the matching release's project folder as `backup.tgdb`. Stop TGDrive and prepare a **new empty MongoDB database with transaction support** ([requirements](setup.md)). Do not initialize it.
-2. Create a private `.env.restore` in that folder with only the destination URI/name and archive's original key:
+1. Download the confirmed database `.tgdb` archive from your private Telegram
+   channel and find its matching 64-character key in the saved recovery-key file.
+   This is different from an independent channel recovery capsule/key.
+2. Prepare a **new empty MongoDB database with transaction support** and configure
+   a deployment using the normal [required environment values](setup.md#3-configure-your-drive).
+   Preserve the original channel and credentials. Deploy and sign in; automatic
+   first setup needs no terminal command. Do not upload files or change settings
+   in this temporary empty drive.
+3. Open **Storage & Backups → Recover on a New Installation → Restore database
+   archive**. The same form is available on the owner **Storage recovery** screen
+   when the catalog is missing. Select the archive, enter its matching key and
+   type `RESTORE` to confirm. Keep the browser open until the upload and result
+   finish.
+4. After success, restart/redeploy the application using Docker or Coolify's
+   controls, then sign in again. Restored browser sessions are revoked. Saved
+   backup credentials/settings apply after restart, subject to explicit
+   deployment overrides; see [reinstalling](operations.md#reopen-after-losing-the-local-installation).
+5. Check folders, representative downloads, split files, Connections and
+   **restored share permissions**. Keep the old database/archive/key until
+   verified, then make a fresh confirmed backup and export its key.
 
-   ```dotenv
-   MONGODB_URI=<destination-private-uri>
-   MONGODB_DATABASE=<new-empty-database-name>
-   MONGODB_BACKUP_KEY=<original-64-character-hexadecimal-key>
-   ```
-
-   Use plain `NAME=value` lines with no surrounding quotes: `docker run --env-file` treats quotes literally, unlike Compose's `.env` handling. On Linux/macOS/WSL, restrict access with `chmod 600 .env.restore`.
-
-3. Build the dedicated maintenance image from that project folder. It needs only those three settings:
-
-   ```bash
-   docker build -t tgdrive:restore .
-   ```
-
-   **Windows PowerShell:**
-
-   ```powershell
-   $restoreArchive = (Resolve-Path -LiteralPath .\backup.tgdb).Path
-   docker run --rm --env-file .env.restore --mount "type=bind,src=$restoreArchive,dst=/restore/backup.tgdb,readonly" tgdrive:restore python -m tgdrive restore-mongodb --file /restore/backup.tgdb
-   ```
-
-   **Linux/macOS/WSL Bash:**
-
-   ```bash
-   docker run --rm --user "$(id -u):$(id -g)" \
-     --env-file .env.restore \
-     --mount "type=bind,src=$(pwd)/backup.tgdb,dst=/restore/backup.tgdb,readonly" \
-     tgdrive:restore python -m tgdrive restore-mongodb --file /restore/backup.tgdb
-   ```
-
-   Both commands mount the archive read-only and leave deployment volumes intact. Bash uses your host user ID so it can read a private archive. The database must be reachable from the container; URI `localhost` means that container. Permit the restore machine in Atlas Network Access. Coolify users run this on a Docker machine with the matching checkout after stopping production.
-
-4. Point the deployment to the recovered URI/database and recreate/redeploy one instance, preserving the original storage channel/keys. Remove stale credential overrides or supply originals as in [reinstalling](operations.md#reopen-after-losing-the-local-installation). **Do not run `init`.** Sign in again; restored browser sessions are revoked.
-5. Check folders, representative downloads, split files, Connections and **restored share permissions**. Keep the old database/archive/key until verified, then make a fresh confirmed backup and export its key.
-
-Restore refuses an existing catalog/nonempty TGDrive collections; it does not merge. Invalid keys/damaged archives fail before catalog writes; database write failure rolls back the transaction. Check the destination rather than deleting records to bypass refusal.
+The website accepts archives up to 1 GiB and restores only an empty destination
+or the untouched catalog created by automatic first setup; it does not merge or
+overwrite a used drive. Invalid keys/damaged archives fail before stopping normal
+work. The archive is authenticated and the destination checked again inside the
+restore transaction. A failure after the service pauses can require a restart;
+the website reports that explicitly. Temporary uploaded ciphertext is removed
+after the attempt. Local unfinished upload bytes are not in the archive.
 
 </details>
 

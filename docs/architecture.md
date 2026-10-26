@@ -31,22 +31,26 @@ jobs continue without the browser while TGDrive stays running.
 <details>
 <summary>Code map</summary>
 
-Backend filenames are under `tgdrive/`.
+Backend packages are grouped by responsibility under `tgdrive/`. Import concrete
+modules from their owning package; package initializers do not load services.
 
-| Area | Main files |
+| Package | Responsibility |
 | --- | --- |
-| Web interface | `website/src/` |
-| HTTP/authentication | `app.py`, `api_v1.py`, `http_guard.py` |
-| MongoDB and read cache | `mongo.py`, `mongo_store.py` |
-| Upload receipts and jobs | `uploads.py`, `tasks.py`, `transfers.py` |
-| Split files and logical ranges | `multipart_transfer.py`, `multipart_streaming.py`, `logical_media.py` |
-| Telegram connections/admission | `telegram_clients.py`, `client_pool.py` |
-| Downloads and previews | `streaming.py`, `ranges.py`, `previews.py` |
-| Shared cache and preparation | `media_reader.py`, `media_cache.py`, `media_policy.py`, `preloading.py` |
-| URL imports | `remote.py`, `remote_ranges.py`, `remote_scheduler.py` |
-| Database backups | `mongo_backup.py` |
-| Connection settings/Premium login | `management.py`, `managed_settings.py`, `premium_login.py` |
-| Lifecycle/setup | `runtime.py`, `__main__.py`, `setup.py`, `scripts/setup.py` |
+| `core/` | Configuration, lifecycle, security, errors and deployment policy |
+| `web/` | Application factory, HTTP routes, schemas, guards and share links |
+| `storage/` | Catalog, MongoDB and file-part records |
+| `telegram/` | Client pools, account identity, channel access and bot mode |
+| `transfers/` | Durable jobs, upload receipts, staging, split uploads and URL imports |
+| `media/` | Range delivery, shared cache, scheduling, previews, readers and thumbnails |
+| `settings/` | Managed preferences, connection management and Premium login |
+| `recovery/` | Portable catalog validation, complete database backups and website archive restore |
+| `replication/` | Independent channel copies, private journal and recovery activation |
+| `observability/` | Resource metrics, traffic, history and performance endpoints |
+
+`server.py` launches the container's web application. Initialization runs in the
+application lifecycle; administration and recovery use the website. The frontend
+and test layout is described in the
+[repository map](development.md#repository-map-and-test-map).
 
 </details>
 
@@ -64,6 +68,11 @@ sessions, backup records and the runtime ownership lease.
 - Schema version 4 tracks revision/commit generation. Catalog bounds are
   128 levels and 250,000 items.
 
+MongoDB is required; the application has no SQLite catalog backend fallback.
+Only the current portable schema (4) is accepted for channel recovery.
+Snapshots must include their drive identity and share records. TGDrive does not
+import v1 pickle data or upgrade older catalog schemas.
+
 ### How a write becomes visible
 
 1. Change an isolated working copy.
@@ -78,14 +87,28 @@ MongoDB authority before further work.
 
 | Event | Behavior |
 | --- | --- |
-| Startup | Validate configuration, acquire ownership, load the existing catalog, start clients/jobs |
-| Missing catalog | Stop; never silently replace it with an empty drive |
+| Startup | Validate required MongoDB configuration and connectivity, acquire ownership, initialize a pristine database or load the existing catalog, start clients/jobs |
+| Invalid/unreachable MongoDB | Reject startup; saved local recovery settings do not bypass database access |
+| Missing catalog with prior state | Preserve it for explicit owner recovery; never replace it with an empty drive |
 | Lost ownership | Stop admitting writes; repair and restart safely |
 | Shutdown | Persist interrupted work, stop tasks, release resources/ownership |
 | Reinstall | Reuse the same MongoDB database and deployment identity |
 
 The cloud lease renews in the background and is checked inside writes.
 Recovery of unfinished uploads still requires their local staged bytes.
+Automatic initialization runs only under the ownership lock and refuses saved
+drive records or recovery state. The catalog, channel binding and initial
+connection settings commit in one transaction. Those initial connections are
+active in the same process; first setup does not ask for another restart.
+The local channel recovery journal and portable
+catalog validation helpers are internal mechanisms, not alternate live databases.
+`DATA_DIR/mongodb-drive.json` remembers that a drive has been opened; losing its
+MongoDB catalog cannot then be mistaken for a first deployment on that volume.
+
+Full archive recovery runs from the website. After authentication and archive
+validation, it pauses writers, reacquires exclusive MongoDB ownership and
+atomically restores an empty or untouched initial drive. Successful recovery
+revokes browser sessions; a service restart reloads saved credentials and state.
 
 ## Account identity and selection
 
@@ -152,7 +175,7 @@ excluded from saved bootstrap settings. See [authentication](reference.md#owner-
 
 At startup, demo mode creates a catalog folder with reserved identity
 `tgdrive-demo-files`. A request-scoped write policy reaches worker threads and
-background jobs. SQLite and MongoDB check its current ancestry within each write
+background jobs. MongoDB checks its current ancestry within each write
 transaction, including ancestor operations that would remove or move protected
 content. Upload and job controls also preflight destinations before work starts.
 Durable jobs retain the visitor policy and restore it on resume while demo mode
@@ -223,9 +246,9 @@ and enqueue after a completion-request disconnect; polling recovers their job ID
 
 Database backups exclude unfinished staged bytes.
 
-Receipt code: [uploads.py](../tgdrive/uploads.py). Browser handoff:
-[transfers.ts](../website/src/transfers.ts),
-[deviceUploadStatus.ts](../website/src/deviceUploadStatus.ts).
+Receipt code: [uploads.py](../tgdrive/transfers/uploads.py). Browser handoff:
+[transfers.ts](../website/src/features/transfers/transfers.ts),
+[deviceUploadStatus.ts](../website/src/features/transfers/deviceUploadStatus.ts).
 
 ### Adaptive device upload concurrency
 
@@ -251,7 +274,7 @@ Freed slots admit eligible files immediately; reductions let active files finish
 Waiting for first progress or a sent body's acknowledgement is not a stall.
 Hashing, resume offsets and Telegram work are excluded. Authentication,
 cancellation, checksum and storage failures do not lower the limit.
-See [deviceUploadConcurrency.ts](../website/src/deviceUploadConcurrency.ts).
+See [deviceUploadConcurrency.ts](../website/src/features/transfers/deviceUploadConcurrency.ts).
 
 </details>
 
@@ -336,14 +359,12 @@ of a running folder do not become a separate finished task.
 The Transfers page shows 20 finished tasks per numbered page. Browser-owned
 finished tasks consume page slots before server history; an explicit server
 offset fills the remaining slots. Folder exclusions keep a partially received
-local folder out of server-only finished counts. Temporary grouping hints recover
-remembered older folders without rewriting their archive. Hints are bounded by
-request size, 1,000 groups and 2,000 member IDs; older groups without usable hints
-remain separate server records.
+local folder out of server-only finished counts. Grouping uses the explicit
+folder-selection metadata persisted with each current upload.
 
 Exact task totals scan archived summaries in batches on a worker, holding task
 summaries and the selected folders' members rather than every archived job.
-Numbered reads are O(history size); the legacy indexed cursor API remains
+Numbered reads are O(history size); the indexed cursor API is also
 available. Startup does not load the full archive. Dismissing a deletion popup does
 not clear history; deletion notices stay separate.
 

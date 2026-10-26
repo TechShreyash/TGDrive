@@ -11,7 +11,7 @@ on demand. For everyday workflows, start with [Using TGDrive](usage.md) or the
 | Credentials and defaults | [Configuration](#configuration) |
 | File-size and concurrency limits | [Capacity](#file-capacity-staging-and-work-limits) |
 | Cache, preloads and media admission | [Performance settings](#performance-and-cache-settings) |
-| CLI commands | [Maintenance](#owner-maintenance-commands) |
+| Administration and recovery | [Owner administration](#owner-administration) |
 | Routes and request/response rules | [HTTP API](#http-api) |
 | Access, privacy and safe deployment | [Security](#security-and-privacy) |
 
@@ -40,6 +40,14 @@ recreation, rather than only a process restart. Saved dashboard performance
 preferences have their own precedence, described below.
 
 Settings are case-insensitive. Unknown names are ignored, so check for typos.
+
+The supplied `.env.example` lists only the six values needed for a new drive.
+Optional settings use application defaults; add an override to your private `.env`
+only when needed. Compose passes this file through `env_file`; its `environment`
+block contains bootstrap inputs and fixed container paths, cookie and proxy policy.
+Local Compose overrides the hosted cookie/proxy policy for localhost HTTP.
+Environment entries override matching values from `env_file`.
+See [Docker's environment guide](https://docs.docker.com/compose/how-tos/environment-variables/set-environment-variables/).
 
 | Deployment flag | Default | Behavior |
 | --- | --- | --- |
@@ -113,7 +121,7 @@ apply to new work immediately. Environment changes require a restart; recreating
 a container does not override saved preferences. Telegram credential edits use
 the separate restart-based connection editor.
 
-**Reset Changes** restores the last saved values. **Restore defaults** creates a
+**Discard changes** restores the last saved values. **Restore defaults** creates a
 category-scoped draft; Save validates and applies it. Defaults below use binary
 units: 1 GiB = 1024 MiB.
 
@@ -160,7 +168,7 @@ warming thresholds. Settings do not guarantee bandwidth or free disk.
 
 | Variable | Required/default | Validation and behavior |
 | --- | --- | --- |
-| `ADMIN_PASSWORD_HASH` | None by default, secret | Recommended owner credential. Valid Argon2id; memory cost 19,456–262,144 KiB, time cost 2–10, at most 16 lanes. Generate it with the owner CLI. |
+| `ADMIN_PASSWORD_HASH` | None by default, secret | Optional existing Argon2id owner credential; memory cost 19,456–262,144 KiB, time cost 2–10, at most 16 lanes. Otherwise set `ADMIN_PASSWORD`; TGDrive hashes it internally. |
 | `ADMIN_PASSWORD` | Empty by default, secret | Plaintext fallback when no hash is configured. At least 12 characters after trimming. If a hash is present, clear the example plaintext value. A malformed nonempty plaintext value still fails validation. |
 | `DEMO_ADMIN_PASSWORD` | Empty by default, secret | Optional different password granting full access only while `DEMO_MODE=true`. At least 12 characters after trimming. Not stored/restored in bootstrap preferences. |
 | `DEMO_ADMIN_PASSWORD_HASH` | None by default, secret | Optional Argon2id alternative to `DEMO_ADMIN_PASSWORD`, with the same validation bounds as `ADMIN_PASSWORD_HASH`. Takes precedence over demo administrator plaintext. Not stored/restored in bootstrap preferences. |
@@ -185,7 +193,7 @@ bootstrap records. See [reset instructions](operations.md#forgotten-login-passwo
 
 Blank or whitespace-only plaintext values are canonicalized to empty and
 require a valid explicit or saved bootstrap hash. Nonempty plaintext values must meet the minimum after
-trimming. The generated Argon2id hash setup is recommended.
+trimming.
 
 Use a unique password or passphrase of **15+ characters**; the implementation's
 minimum remains 12. There is no built-in MFA or passkey login. The stronger
@@ -215,16 +223,11 @@ login can receive `429` with code `LOGIN_BUSY`; the website retries that respons
 up to three total attempts, waiting 1–2 seconds between tries. Incorrect passwords,
 the five-failure throttle and network errors are not automatically retried.
 
-After configuring Compose's required variables, generate a hash in the container:
-
-```bash
-docker compose run --rm --no-deps app python -m tgdrive password-hash
-```
-
-It prompts twice, enforces a 12-character minimum, and does not connect to
-Telegram. Save the hash privately in `ADMIN_PASSWORD_HASH`, single-quote it in
-`.env`, and clear `ADMIN_PASSWORD`. Encrypted MongoDB restore needs only database
-access and the recovery key; use the [dedicated restore container](backup-recovery.md#restore-a-lost-database-from-telegram).
+Set `ADMIN_PASSWORD` in the private deployment environment; TGDrive hashes it
+internally. An existing compatible Argon2id hash may instead be supplied in
+`ADMIN_PASSWORD_HASH`, with `ADMIN_PASSWORD` empty. See
+[password reset](operations.md#forgotten-login-password) and
+[website archive restore](backup-recovery.md#restore-a-lost-database-from-telegram).
 
 </details>
 
@@ -235,7 +238,7 @@ access and the recovery key; use the [dedicated restore container](backup-recove
 
 | Variable | Default | Validation and behavior |
 | --- | --- | --- |
-| `MONGODB_URI` | Required for v2 deployment | Secret URI beginning mongodb:// or mongodb+srv://. Required by documented deployment. |
+| `MONGODB_URI` | Required | Secret URI beginning mongodb:// or mongodb+srv://. Missing/invalid configuration or failed database access rejects startup; no local database fallback. |
 | `MONGODB_DATABASE` | tgdrive | 1–63 ASCII letters/digits, underscores or hyphens; dedicated to one drive. |
 | `MONGODB_BACKUP_KEY` | None | Secret 64-hex-character AES-256 key. Keep a separate recovery copy. |
 | `MONGODB_BACKUP_SECONDS` | 3600 | Integer 60–604800 seconds between successful automatic safety copies. |
@@ -257,7 +260,11 @@ with missing keys fail rather than silently receiving replacement keys.
 The storage_channel_id binding is a nonzero signed 64-bit integer. Switching
 channels cannot silently reinterpret message IDs. Use a MongoDB replica set;
 the application uses transactions, majority writes and bounded request/pool
-settings. Initialization/restore refuses existing catalog state.
+settings. Startup initializes only a pristine database under the ownership lock.
+Existing records, saved settings or recovery state prevent automatic replacement
+of a missing catalog. Configuration, connection, authentication and transaction
+failures stop startup. Archive restore refuses a used drive; it accepts only an
+empty database or the untouched catalog created by automatic first setup.
 
 </details>
 
@@ -346,7 +353,7 @@ rejected alongside private, loopback, link-local, multicast and reserved ranges.
 
 `BIND_ADDRESS` only affects the local override. The server override always binds
 its published port to 127.0.0.1; Coolify's base Compose publishes no host port.
-`COOKIE_SECURE=true`, the internal data/cache paths, explicit initialization and
+`COOKIE_SECURE=true`, the internal data/cache paths, automatic first initialization and
 the single-worker launcher are enforced by the hosted Compose definitions.
 
 Compose forwards `FORWARDED_ALLOW_IPS` to the container. Trust only the reverse
@@ -358,43 +365,15 @@ owns the version compatibility baseline.
 
 </details>
 
-## Owner maintenance commands
+## Owner administration
 
-Run initialization/restore with the service stopped.
-
-Run maintenance through Docker Compose from the installation folder:
-
-```bash
-docker compose run --rm --no-deps app python -m tgdrive COMMAND
-```
-
-Replace `COMMAND` with a command below. Server deployments use their usual
-`-f compose.yaml -f compose.server.yaml` arguments. In a Coolify application
-terminal, run `python -m tgdrive COMMAND` inside the container. Database disaster
-restore uses its [dedicated Docker instructions](backup-recovery.md#restore-a-lost-database-from-telegram).
-
-| Command | Behavior |
-| --- | --- |
-| password-hash | Prompts in the container and prints an Argon2id owner hash. |
-| login | Authorizes an optional Premium account and saves a private session export. |
-| init | Creates a new MongoDB catalog/settings, refusing an existing drive. |
-| restore-mongodb --file FILE | Authenticates/decrypts a complete .tgdb archive and transactionally restores an empty database; revokes browser sessions. |
-
-Restore needs MONGODB_URI, MONGODB_DATABASE and the original
-MONGODB_BACKUP_KEY before normal settings are restored. It does not include
-local unsent file bytes. The guided wizard inspects/prepares a new or existing
-MongoDB drive and checks Telegram access without a backup-pin requirement.
-
-Prefer **Connections → Connect Premium account** for Premium login. The CLI
-alternative saves `/app/data/premium-session.txt` in the private data volume.
-Copy it out only when needed:
-
-```bash
-docker compose cp app:/app/data/premium-session.txt ./premium-session.txt
-```
-
-Treat its contents as an account credential. Paste it privately into Connections,
-remove the exported file after use, and restart to apply saved connection changes.
+Configure the environment, deploy and sign in. First initialization is automatic;
+TGDrive has no maintenance CLI or terminal setup wizard. Use **Connections** for
+Telegram login and repairs, **Transfers** for retries and cancellations, and
+**Storage & Backups** for protection and archive/channel recovery. Deployment
+credentials and service restarts remain in Docker Compose or Coolify; failures
+that prevent startup are explained in container logs. See
+[recovery](backup-recovery.md) and [password reset](operations.md#forgotten-login-password).
 
 ## HTTP API
 
@@ -412,8 +391,8 @@ There are no API keys or multi-user accounts. Interactive OpenAPI pages are disa
 
 All routes are relative to the app origin. Use JSON bodies with
 `Content-Type: application/json`, except multipart uploads and chunk PATCH.
-The React client uses both /api/v1 routes and compatibility routes; compatibility
-does not mean unused.
+The React client uses both versioned `/api/v1` routes and application routes such
+as `/api/getDirectory`. Both are active v2 interfaces.
 
 Drive paths contain **IDs**, not display names. Root is `/`; a nested item is
 `/<folder-id>/<item-id>`. In a listing, a node's `path` is its **parent** path;
@@ -447,6 +426,7 @@ permanent third-party API compatibility.
 | `GET /api/v1/status` | Owner | None | Connection, capacity, committed revision, backend, encrypted snapshot history and client health. |
 | `POST /api/v1/backup` | Owner | `{}` | `{"recovery":{...}}` after an encrypted MongoDB safety copy is verified; `503` if not confirmed. |
 | GET /api/v1/backup/recovery-key | Owner | None | Private no-store download of the backup decryption key. |
+| `POST /api/v1/backup/restore` | Owner, disabled in demo | Raw `.tgdb` bytes, `Content-Type: application/octet-stream`, `X-TGDrive-Recovery-Key: <64 hex characters>`, `X-TGDrive-Confirm: RESTORE` | Authenticates and restores a full archive into an empty or untouched automatically created drive; returns `restart_required: true`. |
 | `GET /health/live` | Public | None | `200 {"status":"ok"}` if HTTP can answer. |
 | `GET /health/ready` | Public | None | `200` if runtime/pool ready, otherwise `503`. |
 | `GET /healthz` | Public | None | Readiness alias used by Docker. |
@@ -492,6 +472,16 @@ POST /api/v1/backup explicitly takes a complete encrypted snapshot. Ordinary
 uploads do not call or wait for it. The recovery-key download is owner-only
 and absent from ordinary status/configuration.
 
+Archive restore accepts at most 1 GiB of ciphertext and 1 GiB expanded data.
+It validates the archive before pausing work, then rechecks the destination
+inside the restore transaction. Existing files, jobs, shares or saved settings
+changes reject replacement with `409 RESTORE_DESTINATION_NOT_EMPTY`. Browser
+sessions are revoked after success. A failure after pausing returns
+`503 DATABASE_RESTORE_UNCONFIRMED` and requires a service restart; the website
+keeps those instructions visible. This route is available in owner recovery
+mode and is excluded from the ordinary 64 KiB JSON-body limit. See
+[website recovery steps](backup-recovery.md#restore-a-lost-database-from-telegram).
+
 The Storage & Backups page additionally accounts for unfinished transfers. Queued/active
 uploads remain pending; failed/missing-original uploads need attention.
 Client health distinguishes configured accounts from healthy started accounts.
@@ -525,10 +515,12 @@ catalog. Channel IDs are negative integers; source and copy destinations must be
 different, except an explicitly requested database-only restore.
 
 The independent channel capsule `tgdrive-replica.tgdb` is an authenticated
-AES-256-GCM document bounded to 64 MiB. It contains paired portable catalogs and
-minimum recovery credentials, not original payload bytes or a complete MongoDB
-archive. A corrupt key, malformed paired catalogs or missing file parts prevents
-confirmation. Ordinary encrypted MongoDB backups and independent-channel
+AES-256-GCM document bounded to 64 MiB. It contains paired portable catalogs,
+recovery credentials, the managed connection document and all three saved policy
+records (performance, uploads and bot destination). Missing settings, a corrupt
+key, malformed paired catalogs or missing file parts prevents confirmation.
+Original payload bytes and the complete MongoDB archive are stored separately.
+Ordinary encrypted MongoDB backups and independent-channel
 capsules use different formats and recovery keys.
 
 The local `DATA_DIR/channel-backup.sqlite3` journal persists random operation IDs,
@@ -553,7 +545,7 @@ These routes cannot edit the storage channel or owner credentials.
 | GET /api/v1/settings/uploads | None | Uploads per bot, connected bot count and available configured bot slots. Owner only; no-store. |
 | PATCH /api/v1/settings/uploads | uploads_per_bot: integer 1–4 | Save in MongoDB and apply immediately to new Telegram leases. Existing transfers finish; provider waits are preserved. |
 | PATCH /api/v1/settings | expected_revision, optional api_id/api_hash/clients | Complete redacted snapshot after isolated verification and atomic save. |
-| POST /api/v1/settings/refresh | Empty object | 202 settings snapshot; schedules bounded background saved-credential/channel-permission checks and name refreshes for enabled clients without changing configuration revision. `/refresh-names` is an alias. |
+| POST /api/v1/settings/refresh | Empty object | 202 settings snapshot; schedules bounded background saved-credential/channel-permission checks and name refreshes for enabled clients without changing configuration revision. |
 | POST /api/v1/settings/premium-login/start | expected_revision, phone, label | challenge_id, stage:code and expires_in_seconds. |
 | POST /api/v1/settings/premium-login/verify | challenge_id and exactly one code/password for the current stage | stage:password with the challenge, or stage:complete plus settings snapshot. |
 | DELETE /api/v1/settings/premium-login/{challenge_id} | No body | status:cancelled; discards an owned unfinished challenge. |
@@ -658,7 +650,7 @@ and sorts a folder before slicing; this is not database cursor pagination.
   it preserves the original defaults: name ascending, date-added newest first, size
   largest first. Folders always come first; equal primary values use ascending
   casefolded name and ID ties.
-- Both catalog backends sort the full matching snapshot before offset/limit
+- The catalog sorts the full matching snapshot before offset/limit
   pagination, so changing direction affects the global result order.
 - Search pages have no computed total count.
 - The compatibility /search_ directory path is bounded to 500 results; use v1 paging for
@@ -1000,6 +992,10 @@ the descriptor may expose its XML. Ambiguous `.ts`/`.mts` require repeated MPEG
 packet evidence to become video; valid TypeScript and `.cts` remain source text.
 The source-byte cap does not bound all internal Telegram transfer bytes.
 
+Book raster pages are checked against the [reader dimension limits](reading.md#reader-limits)
+before delivery; an oversized or malformed image returns a preview error without
+changing its original download.
+
 **PDF:** at most 256 MiB source, lazy reads with no cumulative session cap.
 At most two reader requests run together; HTTP ranges are up to 1 MiB. Active
 response buffers share a 64 MiB target; a larger request runs alone, bounded by
@@ -1073,7 +1069,7 @@ and the recovery journal remain private.
 ### Transfer history
 
 <details>
-<summary>Owner-only task pages, filters and cursor compatibility</summary>
+<summary>Owner-only task pages, filters and indexed cursors</summary>
 
 The Transfers UI uses `POST /api/v1/transfers/history/tasks`:
 
@@ -1108,17 +1104,15 @@ its files returns the whole task. A page beyond the end clamps to the last page.
 | `page`, `limit` | Page starts at 1; limit 1–200, default 20 |
 | `q` | Normalized case-insensitive substring, at most 255 characters |
 | `offset` | Optional nonnegative task offset; overrides page slicing for browser-only finished tasks; callers handle page clamping |
-| `folders` | Optional legacy hints: `{folder_upload, transfer_ids}`; at most 1,000 hints and 2,000 IDs total |
 | `exclude_folders` | Up to 2,000 selection IDs omitted from server task totals/results while the browser owns the remaining folder work |
 
-Hints decorate records without saved folder metadata only for this response;
-durable metadata wins. They never rewrite the archive. This owner-only request
-allows up to 256 KiB of JSON. Exact task counts scan archive summaries in bounded
+Grouping uses saved folder-selection metadata. This owner-only request allows up
+to 256 KiB of JSON. Exact task counts scan archive summaries in bounded
 batches; see [history storage](architecture.md#finished-history).
 
 `GET /api/v1/transfers/history?page=1&limit=20` also returns numbered task pages,
-without browser hints/exclusions. Supplying a page and cursor together is invalid.
-Omitting `page` preserves the original cursor protocol:
+without browser exclusions. Supplying a page and cursor together is invalid.
+Omitting `page` selects the indexed cursor protocol:
 
 `GET /api/v1/transfers/history` accepts:
 
@@ -1150,7 +1144,7 @@ Dismissals survive reloads in the same browser; open tabs merge saved dismissals
 before polling/writing so a stale tab does not resurrect cleared rows. Server
 history and original files remain available. Browser-only queued work is
 not a durable server history record until a job exists.
-The floating panel only displays browser-initiated receipts; the global history
+The floating panel displays this browser's uploads and URL imports; global history
 continues to show server jobs initiated on other devices.
 
 Owner-only `POST /api/v1/transfers/location` accepts `transfer_id`, `destination` and `completed`. It resolves the current folder and exact saved item without mutation; missing/trashed items return `available:false`.
@@ -1258,7 +1252,7 @@ or browser-buffered bytes cannot be recalled.
 ### URL imports and transfer routes
 
 <details>
-<summary>Current compatibility endpoints and their limits</summary>
+<summary>Application endpoints and their limits</summary>
 
 All these POST routes are owner-only.
 
@@ -1268,9 +1262,6 @@ All these POST routes are owner-only.
 | `/api/startFileDownloadFromUrl` | `{"url":"https://example.org/file.bin","path":"/","filename":null,"singleThreaded":false,"client_request_id":"<unique-safe-id>"}` | status/id. |
 | `/api/getTransferByRequest` | `{"client_request_id":"..."}` | status/id/data compatibility start snapshot. |
 | `/api/getTransferProgress` | `{"id":"<job-id>"}` | status/data base job snapshot. |
-| `/api/getSaveProgress` | Same | Progress alias. |
-| `/api/getUploadProgress` | Same | Progress alias. |
-| `/api/getFileDownloadProgress` | Same | Progress alias. |
 | `/api/cancelUpload` | Either id or client_request_id, never both. | status/id/data cancellation snapshot. |
 
 `singleThreaded` defaults to `false` for adaptive parallel ranges with safe
@@ -1322,14 +1313,20 @@ every error phrase as a stable enum.
 | 503 | Runtime not ready or compatibility request capacity full. |
 | 507 | Insufficient staging budget/free space. |
 
+The shared browser API client has a 60-second deadline, including response-body
+reading, even when navigation supplies a cancellation signal. Resource-history
+and thumbnail controls use 15 seconds; channel status uses 20 seconds; connection
+saves, Premium verification and channel-copy actions allow 120 seconds. A client
+timeout does not prove that server work stopped.
+
 After a bulk timeout, refresh before replay. After a chunk timeout, read the
 server offset. After uncertain completion, reattach to the same receipt/job.
 For permanent deletion, retry its retained job rather than submitting another
 intent. Do not log cookies, share queries, or signed remote URLs.
 
-Implementation: [app.py](../tgdrive/app.py), [api_v1.py](../tgdrive/api_v1.py),
-[compatibility schemas](../tgdrive/schemas.py),
-[frontend client](../website/src/api.ts). Update schemas, client types, this
+Implementation: [app.py](../tgdrive/web/app.py), [api_v1.py](../tgdrive/web/api_v1.py),
+[request schemas](../tgdrive/web/schemas.py),
+[frontend client](../website/src/shared/api.ts). Update schemas, client types, this
 reference and relevant tests together when a contract changes. Proposed routes
 belong in [the roadmap](roadmap.md), not in this implemented API reference.
 

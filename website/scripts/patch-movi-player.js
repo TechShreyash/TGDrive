@@ -10,26 +10,26 @@ import { resolve } from "node:path";
 // growth. Video-only input must also obey video decoder backpressure.
 export const VERSION = "0.4.1";
 export const ORIGINAL_SHA256 =
-  "834efaa395f82503fdea3538e03c2ad83f01a7fc409ca93d93dea500affa63c7";
+    "834efaa395f82503fdea3538e03c2ad83f01a7fc409ca93d93dea500affa63c7";
 export const BEFORE = "if (this.needsSeekResumeQueue()) return";
 export const AFTER =
-  "if (this.needsSeekResumeQueue() || (!this.audioRenderer.isDroppingAudio() && !this.noSoundLeftToWaitFor() && this.audioSideStillPriming())) return";
+    "if (this.needsSeekResumeQueue() || (!this.audioRenderer.isDroppingAudio() && !this.noSoundLeftToWaitFor() && this.audioSideStillPriming())) return";
 export const VIDEO_ONLY_BEFORE =
-  "const Y2 = !this.disableAudio && !this.audioDemuxer,";
+    "const Y2 = !this.disableAudio && !this.audioDemuxer,";
 export const VIDEO_ONLY_AFTER =
-  "const Y2 = !this.disableAudio && !this.audioDemuxer && !!this.trackManager.getActiveAudioTrack(),";
+    "const Y2 = !this.disableAudio && !this.audioDemuxer && !!this.trackManager.getActiveAudioTrack(),";
 export const CACHE_BEFORE = 'cache: { type: "lru", maxSizeMB: 520 }';
 export const CACHE_AFTER =
-  'cache: { type: "lru", maxSizeMB: this._bufferSize > 0 ? this._bufferSize : 520 }';
+    'cache: { type: "lru", maxSizeMB: this._bufferSize > 0 ? this._bufferSize : 520 }';
 export const SIZE_BEFORE =
-  "C2 = I2 ? this.size : Math.floor(0.08 * this.size);";
+    "C2 = I2 ? this.size : Math.floor(0.08 * this.size);";
 export const SIZE_AFTER = "C2 = Math.min(this.size, A2, 33554432);";
 export const WINDOW_LOG_BEFORE =
-  'I2 ? "(full file cache)" : "(8% sliding window)"';
+    'I2 ? "(full file cache)" : "(8% sliding window)"';
 export const WINDOW_LOG_AFTER =
-  'this.bufferSize >= this.size ? "(full file cache)" : "(adaptive sliding window)"';
+    'this.bufferSize >= this.size ? "(full file cache)" : "(adaptive sliding window)"';
 export const WINDOW_BEFORE =
-  "g2 = this.size <= I2 ? this.size : Math.floor(0.08 * this.size);";
+    "g2 = this.size <= I2 ? this.size : Math.floor(0.08 * this.size);";
 export const WINDOW_AFTER = "g2 = Math.min(this.size, I2, 33554432);";
 export const RESIZE_BEFORE = `  resizeBuffer(A2) {
     const I2 = 1024 * this.maxBufferSizeMB * 1024, C2 = Math.max(EA, Math.min(I2, A2));
@@ -121,10 +121,26 @@ export const GATE_AFTER = `  playbackAheadBytes = Infinity;
       if (ahead >= this.playbackAheadBytes) this.playbackPrefetchHeld = true;
       else if (ahead < 0.75 * this.playbackAheadBytes)
         this.playbackPrefetchHeld = false;
-      if (!this._prefetchThrottled && !this.playbackPrefetchHeld) return;
+      // A pending demux read must complete before position can advance.
+      const readerNeedsData = [...(this.pendingReadEnds || [])].some((read) =>
+        read.generation === this.streamGeneration && read.end > this.bufferEnd);
+      if (!this._prefetchThrottled &&
+          (readerNeedsData || !this.playbackPrefetchHeld)) return;
       await new Promise((resolve) => setTimeout(resolve, 100));
     }
   }`;
+export const WAIT_BEFORE = `  async waitForData(A2, I2, C2 = 3e4) {`;
+export const WAIT_AFTER = `  pendingReadEnds = new Set();
+  async waitForData(offset, length, timeout = 3e4) {
+    const read = {end: offset + length, generation: this.streamGeneration};
+    this.pendingReadEnds.add(read);
+    try {
+      return await this.waitForDataUnchecked(offset, length, timeout);
+    } finally {
+      this.pendingReadEnds.delete(read);
+    }
+  }
+  async waitForDataUnchecked(A2, I2, C2 = 3e4) {`;
 export const GOAL_BEFORE = `    const A2 = this.mediaInfo.duration;
     if (A2 <= 0) return 0;`;
 export const GOAL_AFTER = `    const A2 = this.mediaInfo.duration;
@@ -148,9 +164,31 @@ export const REFRESH_AFTER = `        const { done: B3, value: Q3 } = await G2.r
 // decoder, which drops its output and is unsuitable for the end-of-file path.
 export const DRAIN_BEFORE = `  async flush() {
     if (this.openGopErrorCount = 0, this.justFlushed = true,`;
-export const DRAIN_AFTER = `  async flush(drain = false) {
+export const DRAIN_AFTER = `  _drainGeneration = 0;
+  async flush(drain = false) {
+    const generation = ++this._drainGeneration;
     if (drain && this.decoder && !this.useSoftware && !this.swDecoder) {
-      await this.decoder.flush();
+      const decoder = this.decoder;
+      const queued = decoder.decodeQueueSize || 0;
+      const timeout = Math.min(30000, Math.max(1000, 60 * queued));
+      let timer;
+      try {
+        await Promise.race([decoder.flush(), new Promise((resolve, reject) => {
+          timer = setTimeout(() => reject(new Error(
+            "EOF decoder drain timed out after " + timeout + "ms")), timeout);
+        })]);
+      } catch (error) {
+        // A newer seek, configuration or reset owns the decoder now.
+        if (this._drainGeneration === generation && this.decoder === decoder) {
+          try {
+            decoder.reset();
+            if (this.lastConfig) decoder.configure(this.lastConfig);
+          } catch {}
+        }
+        throw error;
+      } finally {
+        clearTimeout(timer);
+      }
       return;
     }
     if (this.openGopErrorCount = 0, this.justFlushed = true,`;
@@ -158,82 +196,116 @@ export const EOF_BEFORE = `        const A4 = ++this._eofFlushSeq;
         this.videoDecoder.flush().catch(() => {`;
 export const EOF_AFTER = `        const A4 = ++this._eofFlushSeq;
         this.videoDecoder.flush(true).catch(() => {`;
+export const EOF_SETTLED_BEFORE = `          this._eofFlushSettledSeq = A4;`;
+export const EOF_SETTLED_AFTER = `          if (A4 === this._eofFlushSeq) this._eofFlushSettledSeq = A4;`;
+export const DRAIN_RESET_BEFORE = `  reset() {
+    if (this.openGopErrorCount = 0, this.swDecoder`;
+export const DRAIN_RESET_AFTER = `  reset() {
+    ++this._drainGeneration;
+    if (this.openGopErrorCount = 0, this.swDecoder`;
+export const DRAIN_CONFIG_BEFORE = `  async configure(A2, I2, C2 = 0) {
+    if (this.currentTrack = A2,`;
+export const DRAIN_CONFIG_AFTER = `  async configure(A2, I2, C2 = 0) {
+    ++this._drainGeneration;
+    if (this.currentTrack = A2,`;
+export const TIMELINE_BEFORE = `    if (this._timelineGenerating) return;
+    this.player.setPreviewsEnabled(true);`;
+export const TIMELINE_AFTER = `    if (this._timelineGenerating) return;
+    this.player.setPreviewsEnabled(this._thumb || !!this._storyboard);`;
+export const CHAPTER_PREVIEW_BEFORE = `const C3 = h2[A3], B3 = C3.image ? null : await this.player.getPreviewFrame(C3.start, null, true);`;
+export const CHAPTER_PREVIEW_AFTER = `const C3 = h2[A3], B3 = C3.image || !(this._thumb || this._storyboard) ? null : await this.player.getPreviewFrame(C3.start, null, true);`;
+export const EMPTY_TIMELINE_BEFORE = `        C2 && (C2.textContent = "Timeline"), g2.textContent = "Generating...";`;
+export const EMPTY_TIMELINE_AFTER = `        if (!(this._thumb || this._storyboard)) {
+          if (C2) C2.textContent = "Chapters";
+          g2.textContent = "No chapters";
+          this._timelineComplete = true;
+          return;
+        }
+        C2 && (C2.textContent = "Timeline"), g2.textContent = "Generating...";`;
+export const SUBTITLE_DISCONNECT_BEFORE = `    this.player && (this.player.destroy(), this.player = null);
+  }
+  attributeChangedCallback(A2, I2, C2) {`;
+export const SUBTITLE_DISCONNECT_AFTER = `    this.player && (this.player.destroy(), this.player = null);
+    for (const A2 of this._pickedSubtitleUrls) URL.revokeObjectURL(A2);
+    this._pickedSubtitleUrls = [];
+  }
+  attributeChangedCallback(A2, I2, C2) {`;
 export const PATCHES = [
-  [BEFORE, AFTER],
-  [VIDEO_ONLY_BEFORE, VIDEO_ONLY_AFTER],
-  [CACHE_BEFORE, CACHE_AFTER],
-  [SIZE_BEFORE, SIZE_AFTER],
-  [WINDOW_LOG_BEFORE, WINDOW_LOG_AFTER],
-  [WINDOW_BEFORE, WINDOW_AFTER],
-  [RESIZE_BEFORE, RESIZE_AFTER],
-  [GATE_BEFORE, GATE_AFTER],
-  [GOAL_BEFORE, GOAL_AFTER],
-  [RANGE_BEFORE, RANGE_AFTER],
-  [WRITER_BEFORE, WRITER_AFTER],
-  [REFRESH_BEFORE, REFRESH_AFTER],
-  [DRAIN_BEFORE, DRAIN_AFTER],
-  [EOF_BEFORE, EOF_AFTER],
+    [BEFORE, AFTER],
+    [VIDEO_ONLY_BEFORE, VIDEO_ONLY_AFTER],
+    [CACHE_BEFORE, CACHE_AFTER],
+    [SIZE_BEFORE, SIZE_AFTER],
+    [WINDOW_LOG_BEFORE, WINDOW_LOG_AFTER],
+    [WINDOW_BEFORE, WINDOW_AFTER],
+    [RESIZE_BEFORE, RESIZE_AFTER],
+    [GATE_BEFORE, GATE_AFTER],
+    [WAIT_BEFORE, WAIT_AFTER],
+    [GOAL_BEFORE, GOAL_AFTER],
+    [RANGE_BEFORE, RANGE_AFTER],
+    [WRITER_BEFORE, WRITER_AFTER],
+    [REFRESH_BEFORE, REFRESH_AFTER],
+    [DRAIN_BEFORE, DRAIN_AFTER],
+    [DRAIN_RESET_BEFORE, DRAIN_RESET_AFTER],
+    [DRAIN_CONFIG_BEFORE, DRAIN_CONFIG_AFTER],
+    [EOF_BEFORE, EOF_AFTER],
+    [EOF_SETTLED_BEFORE, EOF_SETTLED_AFTER],
+    [TIMELINE_BEFORE, TIMELINE_AFTER],
+    [CHAPTER_PREVIEW_BEFORE, CHAPTER_PREVIEW_AFTER],
+    [EMPTY_TIMELINE_BEFORE, EMPTY_TIMELINE_AFTER],
+    [SUBTITLE_DISCONNECT_BEFORE, SUBTITLE_DISCONNECT_AFTER],
 ];
 export const NOTICE =
-  "/*! Modified by TGDrive (2026-10-20): coordinate seek resume with playable audio. See third-party/movi-player-TGDrive-patch-NOTICE.txt. */\n";
+    "/*! Modified by TGDrive (2026-10-20): coordinate seek resume with playable audio. See third-party/movi-player-TGDrive-patch-NOTICE.txt. */\n";
 export const digest = (source) =>
-  createHash("sha256").update(source).digest("hex");
+    createHash("sha256").update(source).digest("hex");
 
 export function patchMoviSource(source, version) {
-  if (version !== VERSION)
-    throw new Error(
-      `TGDrive's seek fix requires movi-player ${VERSION}; found ${version}. Review the upstream fix before updating the pinned player.`,
-    );
-  const marked = source.startsWith(NOTICE);
-  let original = marked ? source.slice(NOTICE.length) : source;
-  // The previous reviewed gate is recognized so an existing npm install can
-  // receive this update; the reconstructed upstream bundle must still hash.
-  const previousGate = GATE_AFTER.replace(
-    `      // A distant seek starts a new source window before the demuxer can
-      // finish its first read and advance position. Skipped bytes are not
-      // buffered data; counting that gap deadlocks the new window at zero.
-      const consumed = Math.max(this.atomicGetBufferStart(), this.getPosition());
-      const ahead = Math.max(0, this.bufferEnd - consumed);`,
-    `      const ahead = Math.max(0, this.bufferEnd - this.getPosition());`,
-  );
-  original = original.replace(previousGate, GATE_BEFORE);
-  for (const [before, after] of PATCHES)
-    original = original.replace(after, before);
-  if (
-    digest(original) !== ORIGINAL_SHA256 ||
-    PATCHES.some(([before]) => original.split(before).length !== 2)
-  )
-    throw new Error(
-      marked
-        ? "TGDrive's installed Movi seek patch was modified. Run npm ci and rebuild."
-        : "The pinned Movi bundle does not match TGDrive's reviewed seek fix. Run npm ci; do not apply the patch to an unknown bundle.",
-    );
-  let patched = original;
-  for (const [before, after] of PATCHES)
-    patched = patched.replace(before, after);
-  return NOTICE + patched;
+    if (version !== VERSION)
+        throw new Error(
+            `TGDrive's seek fix requires movi-player ${VERSION}; found ${version}. Review the upstream fix before updating the pinned player.`,
+        );
+    const marked = source.startsWith(NOTICE);
+    let original = marked ? source.slice(NOTICE.length) : source;
+    for (const [before, after] of PATCHES)
+        original = original.replace(after, before);
+    if (
+        digest(original) !== ORIGINAL_SHA256 ||
+        PATCHES.some(([before]) => original.split(before).length !== 2)
+    )
+        throw new Error(
+            marked
+                ? "TGDrive's installed Movi seek patch was modified. Run npm ci and rebuild."
+                : "The pinned Movi bundle does not match TGDrive's reviewed seek fix. Run npm ci; do not apply the patch to an unknown bundle.",
+        );
+    let patched = original;
+    for (const [before, after] of PATCHES)
+        patched = patched.replace(before, after);
+    return NOTICE + patched;
 }
 
 export async function patchInstalledMovi() {
-  const root = new URL("../", import.meta.url);
-  const manifest = JSON.parse(
-    await readFile(
-      new URL("node_modules/movi-player/package.json", root),
-      "utf8",
-    ),
-  );
-  const bundle = new URL("node_modules/movi-player/dist/element.slim.js", root);
-  const source = await readFile(bundle, "utf8");
-  const patched = patchMoviSource(source, manifest.version);
-  if (patched !== source) await writeFile(bundle, patched);
-  console.info(
-    `[TGDrive] Movi ${VERSION} seek, source-window and decoder-backpressure fixes verified.`,
-  );
+    const root = new URL("../", import.meta.url);
+    const manifest = JSON.parse(
+        await readFile(
+            new URL("node_modules/movi-player/package.json", root),
+            "utf8",
+        ),
+    );
+    const bundle = new URL(
+        "node_modules/movi-player/dist/element.slim.js",
+        root,
+    );
+    const source = await readFile(bundle, "utf8");
+    const patched = patchMoviSource(source, manifest.version);
+    if (patched !== source) await writeFile(bundle, patched);
+    console.info(
+        `[TGDrive] Movi ${VERSION} seek, source-window and decoder-backpressure fixes verified.`,
+    );
 }
 
 if (
-  process.argv[1] &&
-  resolve(process.argv[1]) === fileURLToPath(import.meta.url)
+    process.argv[1] &&
+    resolve(process.argv[1]) === fileURLToPath(import.meta.url)
 ) {
-  await patchInstalledMovi();
+    await patchInstalledMovi();
 }

@@ -13,14 +13,25 @@ channel a drive-style interface: folders, search, uploads, previews, readers and
 share links. It is an independent project, not an official Telegram storage service.
 The [MIT License](../LICENSE) permits use, modification and redistribution.
 
-| Part | What it holds or does |
-| --- | --- |
-| Your private Telegram storage channel | Completed file documents, including the parts of split files |
-| Your MongoDB database | The file/folder catalog, part locations, settings and other saved app state |
-| Your TGDrive computer or server | Runs the app, handles transfers and previews, and holds temporary uploads, caches and private configuration |
+Your drive relies on three parts working together:
 
-You need the app and its dependencies available to use the drive. A folder full
-of Telegram documents is not a replacement for the catalog that organizes them.
+| Part | What TGDrive uses it for |
+| --- | --- |
+| **Private Telegram channel** | Stores the actual files after uploads finish. Large files may be stored in several parts. |
+| **MongoDB database** | Saves file names, folders, settings and share links. Records which Telegram messages hold each file and how its parts fit together. |
+| **Your computer or server** | Runs the website and handles uploads, downloads and previews. Holds unfinished uploads, temporary file copies and private configuration. |
+
+To use TGDrive's website or share links, the computer or server hosting it must
+stay on, with TGDrive running and access to MongoDB and Telegram. Stopping TGDrive
+does not delete completed files, but its website and share links are unavailable
+until it runs again.
+
+The **catalog** is TGDrive's file index in MongoDB: it records file names, folders
+and which Telegram messages hold each file. For a large file split into several
+Telegram documents, it also records the order of those parts so TGDrive can
+deliver them as one file. Keeping the Telegram documents alone is not enough to
+restore the drive's organization and split-file mappings; preserve the database
+or a usable backup of it too.
 [Where data is saved](operations.md#what-is-saved-where).
 
 **No total stored-byte quota does not mean unlimited file size, permanent
@@ -71,7 +82,7 @@ restricts membership; TGDrive does not add end-to-end encryption to stored files
 
 If something breaks, keep the existing state and read the error before changing
 configuration. Start with [Operations](operations.md#troubleshooting). **Never
-run `init` to repair an existing drive.**
+replace an existing drive with an empty database as a repair.**
 
 ## Frequently asked questions
 

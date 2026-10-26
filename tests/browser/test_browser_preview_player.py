@@ -1,0 +1,264 @@
+"""Video preview chrome stays consistent with the real playback state."""
+
+from __future__ import annotations
+
+import hashlib
+from pathlib import Path
+from typing import Any
+
+import pytest
+
+from tests.browser.test_browser_e2e import (
+    ARTIFACTS,
+    ROOT,
+    Server,
+    expect,
+    login,
+    preview_dialog,
+)
+
+pytestmark = pytest.mark.e2e
+pytest_plugins = ("tests.browser.test_browser_e2e",)
+
+
+def test_video_preview_does_not_poll_or_display_a_stale_server_queue(
+    server: Server, desktop: tuple[Any, Any]
+) -> None:
+    _, page = desktop
+    diagnostics: list[str] = []
+
+    def queued(route: Any) -> None:
+        diagnostics.append(route.request.url)
+        route.fulfill(json={"queue": {"position": 7, "estimated_wait_seconds": 60}})
+
+    page.route("**/api/v1/file-status?*", queued)
+    login(page, server.url)
+    page.get_by_role("button", name="Preview samples", exact=True).dblclick()
+    # Other preview types still show an actual provider queue when necessary.
+    page.get_by_role("button", name="sample.png", exact=True).dblclick()
+    image = preview_dialog(page)
+    expect(image.get_by_role("status")).to_contain_text("Queue position 7")
+    assert diagnostics
+    image.get_by_role("button", name="Close Preview", exact=True).click()
+    expect(image).to_have_count(0)
+    diagnostics.clear()
+
+    page.get_by_role("button", name="multitrack.mkv", exact=True).dblclick()
+    dialog = preview_dialog(page)
+    player = dialog.locator("movi-player")
+    expect(dialog.locator(".advanced-state")).to_have_count(0, timeout=30000)
+    expect(dialog.locator(".preview-limit")).to_have_count(0)
+    player.locator("button.movi-play-pause").click()
+    # Real playback advances beyond the former diagnostic polling interval.
+    page.wait_for_function("()=>document.querySelector('movi-player')?.currentTime>3")
+    assert diagnostics == []
+    expect(dialog.get_by_text("Waiting for Telegram", exact=False)).to_have_count(0)
+
+
+@pytest.mark.parametrize("width,height", [(1440, 960), (390, 844)])
+def test_video_header_fullscreen_download_and_close_stay_reachable(
+    server: Server, desktop: tuple[Any, Any], width: int, height: int
+) -> None:
+    _, page = desktop
+    page.set_viewport_size({"width": width, "height": height})
+    login(page, server.url)
+    page.get_by_role("button", name="Preview samples", exact=True).dblclick()
+    file_button = page.get_by_role("button", name="multitrack.mkv", exact=True)
+    file_button.dblclick()
+    dialog = preview_dialog(page)
+    player = dialog.locator("movi-player")
+    expect(dialog.locator(".advanced-state")).to_have_count(0, timeout=30000)
+    fullscreen = dialog.get_by_role("button", name="Enter Fullscreen", exact=True)
+    fullscreen.click()
+    page.wait_for_function(
+        "()=>document.fullscreenElement===document.querySelector('movi-player')"
+    )
+    expect(player).to_be_focused()
+    # Exiting the player returns keyboard focus to its visible toolbar action.
+    page.evaluate("document.exitFullscreen()")
+    page.wait_for_function("()=>!document.fullscreenElement")
+    expect(fullscreen).to_be_focused()
+    expect(dialog.get_by_role("heading", name="multitrack.mkv")).to_be_visible()
+    assert page.evaluate("document.documentElement.scrollWidth<=innerWidth")
+    page.screenshot(path=ARTIFACTS / f"video-preview-header-{width}.png")
+    with page.expect_download() as result:
+        dialog.get_by_role("link", name="Download Original", exact=True).click()
+    assert hashlib.sha256(Path(result.value.path()).read_bytes()).digest() == (
+        hashlib.sha256((ROOT / "tests/fixtures/multitrack.mkv").read_bytes()).digest()
+    )
+    dialog.get_by_role("button", name="Close Preview", exact=True).click()
+    expect(dialog).to_have_count(0)
+    expect(file_button).to_be_focused()
+    expect(page.locator("movi-player")).to_have_count(0)
+
+
+def _open_settings(player: Any, *, touch: bool) -> Any:
+    if not touch:
+        player.hover()
+    settings = player.locator("button.movi-settings-btn")
+    if not settings.is_visible():
+        more = player.locator("button.movi-more-btn")
+        more.tap() if touch else more.click()
+    settings.tap() if touch else settings.click()
+    menu = player.locator(".movi-settings-menu")
+    expect(menu).to_be_visible()
+    return menu
+
+
+@pytest.mark.parametrize("touch", [False, True], ids=["desktop", "touch-phone"])
+def test_video_quality_uses_bounded_player_settings_without_a_preview_bar(
+    server: Server, browser: Any, touch: bool
+) -> None:
+    width, height = (390, 844) if touch else (1440, 960)
+    context = browser.new_context(
+        viewport={"width": width, "height": height},
+        has_touch=touch,
+        is_mobile=touch,
+    )
+    page = context.new_page()
+    errors: list[str] = []
+    page.on("pageerror", lambda error: errors.append(str(error)))
+    try:
+        login(page, server.url)
+        for name in ("Preview samples", "multitrack.mkv"):
+            button = page.get_by_role("button", name=name, exact=True)
+            button.tap() if touch else button.press("Enter")
+        dialog = preview_dialog(page)
+        player = dialog.locator("movi-player")
+        page.wait_for_function("()=>document.querySelector('movi-player')?.duration>4")
+        expect(dialog.locator(".preview-quality")).to_have_count(0)
+        expect(
+            dialog.get_by_role("combobox", name="Preview Quality", exact=True)
+        ).to_have_count(0)
+        download = dialog.get_by_role("link", name="Download Original", exact=True)
+        original_download = download.get_attribute("href")
+        player.evaluate(
+            "async element=>{await element.pause();await element.player.seek(2)}"
+        )
+        page.wait_for_function(
+            "()=>Math.abs(document.querySelector('movi-player').currentTime-2)<0.2"
+        )
+        menu = _open_settings(player, touch=touch)
+        for name in ("Ambient mode", "Stable volume"):
+            expect(menu.get_by_role("button", name=name, exact=True)).to_be_visible()
+        quality = menu.locator('.movi-settings-row[data-page="quality"]')
+        quality.tap() if touch else quality.click()
+        expect(menu.locator(".movi-settings-page-title")).to_have_text("Quality")
+        original = menu.get_by_role("button", name="Original", exact=True)
+        expect(original).to_be_visible()
+        expect(original).to_have_attribute("aria-pressed", "true")
+        back = menu.locator(".movi-settings-back")
+        back.tap() if touch else back.click()
+        expect(quality).to_be_visible()
+        quality.tap() if touch else quality.click()
+        expect(
+            menu.get_by_role("group", name="Video quality", exact=True)
+        ).to_be_visible()
+        alternate = menu.get_by_role(
+            "button", name="Fixture alternate source", exact=True
+        )
+        expect(alternate).to_be_visible()
+        assert player.evaluate("element=>element.scrollLeft===0&&element.scrollTop===0")
+        bounds = menu.bounding_box()
+        assert bounds is not None
+        assert bounds["x"] >= -1 and bounds["x"] + bounds["width"] <= width + 1
+        assert bounds["y"] >= -1 and bounds["y"] + bounds["height"] <= height + 1
+        assert page.evaluate("document.documentElement.scrollWidth<=innerWidth")
+        ARTIFACTS.mkdir(parents=True, exist_ok=True)
+        kind = "touch-phone" if touch else "desktop"
+        page.screenshot(path=ARTIFACTS / f"video-quality-settings-{kind}.png")
+        player.evaluate("element=>window.previousQualityPlayer=element")
+        alternate.tap() if touch else alternate.click()
+        page.wait_for_function("""()=>{
+          const player=document.querySelector('movi-player');
+          return player&&player!==window.previousQualityPlayer&&player.duration>4;
+        }""")
+        page.wait_for_function(
+            "()=>Math.abs(document.querySelector('movi-player').currentTime-2)<0.2"
+        )
+        assert player.evaluate("element=>element.paused")
+        expect(download).to_have_attribute("href", original_download)
+        expect(dialog.locator(".preview-quality")).to_have_count(0)
+        menu = _open_settings(player, touch=touch)
+        quality.tap() if touch else quality.click()
+        expect(alternate).to_have_attribute("aria-pressed", "true")
+        player.evaluate("element=>window.previousQualityPlayer=element")
+        original.tap() if touch else original.click()
+        page.wait_for_function("""()=>{
+          const player=document.querySelector('movi-player');
+          return player&&player!==window.previousQualityPlayer&&player.duration>4;
+        }""")
+        page.wait_for_function(
+            "()=>Math.abs(document.querySelector('movi-player').currentTime-2)<0.2"
+        )
+        assert player.evaluate("element=>element.paused")
+        expect(download).to_have_attribute("href", original_download)
+        assert errors == []
+    finally:
+        context.close()
+
+
+def test_video_without_alternate_sources_has_no_quality_row_or_preview_bar(
+    server: Server, desktop: tuple[Any, Any]
+) -> None:
+    _, page = desktop
+    login(page, server.url)
+    page.get_by_role("button", name="Preview samples", exact=True).press("Enter")
+    page.get_by_role("button", name="movtext-subtitles.mp4", exact=True).press("Enter")
+    dialog = preview_dialog(page)
+    player = dialog.locator("movi-player")
+    page.wait_for_function("()=>document.querySelector('movi-player')?.duration>4")
+    expect(dialog.locator(".preview-quality")).to_have_count(0)
+    menu = _open_settings(player, touch=False)
+    expect(menu.locator('.movi-settings-row[data-page="quality"]')).to_have_count(0)
+
+
+def test_quality_switch_in_fullscreen_keeps_video_position_and_f_exits(
+    server: Server, desktop: tuple[Any, Any]
+) -> None:
+    _, page = desktop
+    media_requests: list[str] = []
+    page.on(
+        "request",
+        lambda request: (
+            media_requests.append(request.url)
+            if "/file?" in request.url and request.method == "GET"
+            else None
+        ),
+    )
+    login(page, server.url)
+    page.get_by_role("button", name="Preview samples", exact=True).press("Enter")
+    page.get_by_role("button", name="multitrack.mkv", exact=True).press("Enter")
+    dialog = preview_dialog(page)
+    player = dialog.locator("movi-player")
+    page.wait_for_function("()=>document.querySelector('movi-player')?.duration>4")
+    player.evaluate(
+        "async element=>{await element.pause();await element.player.seek(2)}"
+    )
+    page.wait_for_function(
+        "()=>Math.abs(document.querySelector('movi-player').currentTime-2)<0.2"
+    )
+    dialog.get_by_role("button", name="Enter Fullscreen", exact=True).click()
+    page.wait_for_function(
+        "()=>document.fullscreenElement===document.querySelector('movi-player')"
+    )
+    menu = _open_settings(player, touch=False)
+    menu.locator('.movi-settings-row[data-page="quality"]').click()
+    player.evaluate("element=>window.fullscreenQualityPlayer=element")
+    menu.get_by_role("button", name="Fixture alternate source", exact=True).click()
+    page.wait_for_function("""()=>{
+      const player=document.querySelector('movi-player');
+      return player&&player!==window.fullscreenQualityPlayer&&player.duration>4;
+    }""")
+    page.wait_for_function(
+        "()=>Math.abs(document.querySelector('movi-player').currentTime-2)<0.2"
+    )
+    assert player.evaluate("element=>element.paused")
+    assert player.evaluate("element=>!!document.fullscreenElement?.contains(element)")
+    assert any("quality=fixture-same-bytes" in url for url in media_requests)
+    expect(player).to_be_focused()
+    player.press("f")
+    page.wait_for_function("()=>!document.fullscreenElement")
+    expect(
+        dialog.get_by_role("button", name="Enter Fullscreen", exact=True)
+    ).to_be_focused()

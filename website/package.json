@@ -1,38 +1,38 @@
 {
-  "name": "tgdrive-web",
-  "version": "2.0.0",
-  "private": true,
-  "type": "module",
-  "engines": {
-    "node": ">=24.22.0 <25"
-  },
-  "scripts": {
-    "predev": "node scripts/patch-movi-player.js && node scripts/patch-pdf-worker.js",
-    "dev": "vite --host 127.0.0.1",
-    "typecheck": "tsc --noEmit",
-    "check": "npm run typecheck",
-    "prebuild": "node scripts/patch-movi-player.js && node scripts/patch-pdf-worker.js",
-    "build": "tsc --noEmit && vite build",
-    "pretest": "node scripts/patch-movi-player.js && node scripts/patch-pdf-worker.js && node --test scripts/check-movi-player.js scripts/check-pdf-worker.js",
-    "test": "vitest run"
-  },
-  "dependencies": {
-    "@mantine/core": "9.7.3",
-    "@mantine/hooks": "9.7.3",
-    "lucide-react": "1.58.0",
-    "movi-player": "0.4.1",
-    "pdfjs-dist": "6.4.299",
-    "react": "19.3.1",
-    "react-dom": "19.3.1"
-  },
-  "devDependencies": {
-    "@types/node": "24.19.2",
-    "@types/react": "19.3.0",
-    "@types/react-dom": "19.3.0",
-    "@vitejs/plugin-react": "6.1.2",
-    "prettier": "3.9.10",
-    "typescript": "7.0.2",
-    "vite": "8.3.4",
-    "vitest": "5.0.5"
-  }
+    "name": "tgdrive-web",
+    "version": "2.0.0",
+    "private": true,
+    "type": "module",
+    "engines": {
+        "node": ">=24.22.0 <25"
+    },
+    "scripts": {
+        "dev": "vite --host 127.0.0.1",
+        "typecheck": "tsc --noEmit",
+        "check": "npm run typecheck",
+        "format": "prettier --write src",
+        "format:check": "prettier --check src",
+        "build": "tsc --noEmit && vite build",
+        "pretest": "node --test scripts/check-movi-player.js scripts/check-pdf-worker.js",
+        "test": "vitest run"
+    },
+    "dependencies": {
+        "@mantine/core": "9.7.3",
+        "@mantine/hooks": "9.7.3",
+        "lucide-react": "1.58.0",
+        "movi-player": "file:vendor/movi-player-0.4.1-tgdrive.1.tgz",
+        "pdfjs-dist": "file:vendor/pdfjs-dist-6.4.299-tgdrive.1.tgz",
+        "react": "19.3.1",
+        "react-dom": "19.3.1"
+    },
+    "devDependencies": {
+        "@types/node": "24.19.2",
+        "@types/react": "19.3.0",
+        "@types/react-dom": "19.3.0",
+        "@vitejs/plugin-react": "6.1.2",
+        "prettier": "3.9.10",
+        "typescript": "7.0.2",
+        "vite": "8.3.4",
+        "vitest": "5.0.5"
+    }
 }

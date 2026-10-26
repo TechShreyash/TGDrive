@@ -2,6 +2,14 @@
 
 **Project rule: Make sure you are documenting important features and workings of TGDrive.**
 
+## Collaborate with independent judgment
+
+Treat the user's proposed approaches as suggestions open to discussion. If you
+disagree or see a better approach, say so plainly, explain the tradeoff and
+recommend it. Distinguish suggestions and questions from explicit requests to
+change something; do not implement every idea automatically. Continue to honor
+explicit requirements, constraints and approval boundaries.
+
 ## Keep documentation current with the implementation
 
 When adding or changing an important feature, workflow, default, limit, recovery
@@ -76,6 +84,19 @@ asking. Ordinary code reading and Git status/diff inspection may continue.
 
 Report checks actually performed and remaining limitations. Never imply a change
 was tested when validation was not requested or approved.
+
+## Ask before pushing
+
+Do not push commits, branches or tags to any remote unless the user explicitly
+requests the current push or approves that specific proposed push. Earlier push
+permission applies only to that requested action; it is not standing permission
+for later changes. Requests to edit, fix, continue work or commit do not authorize
+a push.
+
+When the current push is not explicitly authorized, finish the local work first,
+summarize what would be pushed and name the remote and branch, then ask and wait
+for approval. Keep the changes local until the user answers. Do not bypass this
+rule with scripts, automation or another tool that publishes the local commits.
 
 ## Write useful commit titles and descriptions
 

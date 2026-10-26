@@ -26,7 +26,7 @@ Keep lockfiles. Ordinary tests inject fake resources and need no live Telegram c
 With private configuration and an existing drive:
 
 ```bash
-COOKIE_SECURE=false uv run --frozen python -m uvicorn main:app \
+COOKIE_SECURE=false uv run --frozen python -m uvicorn tgdrive.web.app:create_app --factory \
   --host 127.0.0.1 --port 8000 --workers 1 \
   --timeout-graceful-shutdown 45 --no-access-log
 ```
@@ -48,7 +48,7 @@ Vite normally serves 5173 and proxies API/media to 8000; production builds use 8
 ```bash
 npm run build --prefix website
 TGDRIVE_UI_SHOWCASE=1 uv run --frozen --group e2e python -m uvicorn \
-  --app-dir tests browser_transfer_app:app --host 0.0.0.0 --port 18767
+  tests.support.browser_transfer_app:app --host 0.0.0.0 --port 18767
 ```
 
 Open [localhost:18767](http://localhost:18767/) with `offline browser test password`.
@@ -58,9 +58,65 @@ without Telegram credentials. Restart resets it. CBR needs
 16 GiB file cap; ordinary browser tests use 32 MiB. Never publicly deploy the
 fixture or its `/__test__` endpoints.
 
-## Latest focused validation
+## Latest validation
 
 Recorded evidence describes a tested snapshot, not the state of a later checkout.
+
+<details>
+<summary>Repository cleanup, viewers and settings — 2026-10-26</summary>
+
+Checks used Node **24.22.0** and Python **3.14.8**. The complete offline run passed
+**1,908 Python cases and 36 subtests**, including the complete Vitest behavior
+suite, in **87.20 seconds**. Its two fixture setup errors passed after repair;
+an additional directory-authorization regression also passed. The 78 skips
+covered opt-in browser and live MongoDB cases, checked separately below.
+
+All **287 Chromium cases** passed across the full run and focused failed-case
+reruns. Coverage includes native player chapters/subtitles, PDF ranges and
+passwords, book readers, transfers, sharing and responsive settings. Two policy
+gate cases also passed after fixing cross-category draft loss. Desktop/phone
+and light/dark screenshots were inspected. Native CBR checks passed after
+installing the required libarchive runtime.
+
+The disposable MongoDB replica-set run passed **103 cases** across its initial
+run and two repaired fixture reruns, including **43 live database cases**.
+No deployment database or private environment file was used.
+
+The production build, **28 viewer patch cases**, Ruff lint/format on **267 Python
+files**, authored frontend formatting, Bandit, lockfile consistency and Python/npm
+dependency audits passed. Local documentation checks found no broken references
+among 557 links, images and anchors. The AMD64 Docker build and offline factory,
+imports, bundled-resource and container-policy smoke checks passed.
+The public source archive's 522 file hashes matched its manifest; a fresh
+extraction installed its frontend dependencies and built successfully.
+
+Passing cases were reused; the entire suite was not repeated after every final
+fix. These checks do not validate live Telegram transfers, production startup,
+deployment, ARM64 or physical-device/GPU behavior. Viewer archives were generated
+from integrity-checked upstream packages; normal commands use the local archives.
+
+</details>
+
+<details>
+<summary>MongoDB-only startup and website archive recovery — 2026-10-26</summary>
+
+The final configuration, first-initialization, catalog-decoding, portable-part
+and channel-recovery checks passed **257 backend cases** across the initial run
+and failed-case reruns. Outdated local-storage fixtures and client doubles were
+corrected. Earlier focused runtime, persistence, archive API and startup-error
+checks also passed. Coverage includes atomic first setup, immediately active
+initial connections, no local database fallback, refused startup, archive
+validation, preserved destinations and recovery failure reporting.
+
+The new archive-form/transport tests passed **11 frontend tests**, and TypeScript
+`--noEmit` passed.
+
+These were synthetic checks. No live MongoDB, Docker/Coolify deployment, browser
+session, full suite or release build was run. Frontend checks used the available
+Linux Node **24.21.0**, below the declared **24.22.0** minimum; repeat them on the
+supported runtime before release. Database recovery still needs live validation.
+
+</details>
 
 <details>
 <summary>URL intake, slow queue and immediate start feedback — 2026-10-23</summary>
@@ -145,9 +201,9 @@ For URL intake changes, the focused offline checks are:
 
 ```bash
 uv run --frozen --all-groups python -m pytest -W error \
-  tests/test_remote.py tests/test_remote_ranges.py tests/test_remote_retries.py \
-  tests/test_remote_scheduler.py tests/test_transfers.py \
-  tests/test_transfer_metrics.py tests/test_staging_admission.py -q
+  tests/transfers/test_remote.py tests/transfers/test_remote_ranges.py tests/transfers/test_remote_retries.py \
+  tests/transfers/test_remote_scheduler.py tests/transfers/test_transfers.py \
+  tests/observability/test_transfer_metrics.py tests/transfers/test_staging_admission.py -q
 ```
 
 These cover fake HTTP responses, staging admission, advisory progress versus
@@ -155,11 +211,11 @@ durable state, cancellation and handoff to fake Telegram. They do not measure
 live download speed or confirm a deployment.
 
 For thumbnail regeneration and selective readers, focus on
-`tests/test_thumbnail_rebuild.py`, `tests/test_generated_thumbnails.py`,
-`tests/test_thumbnails.py`, `tests/test_books.py`, `tests/test_books_api.py` and
-`tests/test_multipart_previews.py`. The rebuild tests use generated images/books,
+`tests/media/test_thumbnail_rebuild.py`, `tests/media/test_generated_thumbnails.py`,
+`tests/media/test_thumbnails.py`, `tests/media/test_books.py`, `tests/media/test_books_api.py` and
+`tests/media/test_multipart_previews.py`. The rebuild tests use generated images/books,
 a loopback range bridge and fake Telegram reads, including padded archives that
-must not be fetched in full. `tests/test_browser_thumbnail_rebuild.py` covers
+must not be fetched in full. `tests/browser/test_browser_thumbnail_rebuild.py` covers
 confirmation, progress/reload/cancellation and image-based EPUB manga fit/direction.
 These synthetic checks do not establish live Telegram throughput or universal
 codec/device support.
@@ -172,8 +228,8 @@ uv lock --check
 npm run typecheck --prefix website
 npm test --prefix website
 npm run build --prefix website
-uv run --frozen --all-groups ruff check tgdrive tests scripts config.py main.py
-uv run --frozen --all-groups ruff format --check tgdrive tests scripts config.py main.py
+uv run --frozen --all-groups ruff check tgdrive tests scripts
+uv run --frozen --all-groups ruff format --check tgdrive tests scripts
 uv run --frozen --all-groups python -m pytest -W error \
   --cov=tgdrive --cov-report=term-missing
 uv run --frozen --all-groups bandit -c pyproject.toml -r tgdrive
@@ -194,11 +250,11 @@ a full offline strict run still exposes existing SQLite fixture-cleanup warnings
 ```bash
 uv run --frozen --group e2e playwright install --with-deps chromium
 TGDRIVE_E2E=1 uv run --frozen --group e2e python -m pytest \
-  -m e2e tests/test_browser*.py
+  -m e2e tests/browser/
 
 # Focused explicit-refresh pending, failure and confirmation checks
 TGDRIVE_E2E=1 uv run --frozen --group e2e python -m pytest \
-  tests/test_browser_refresh_feedback.py
+  tests/browser/test_browser_refresh_feedback.py
 ```
 
 Install Chromium/libraries inside WSL. Evidence stays in ignored `cache/browser-e2e`
@@ -207,7 +263,7 @@ live Telegram transfers. Only dedicated tests generate image-heavy PDF fixtures.
 
 For player interaction changes, include `test_browser_player_gestures.py`,
 `test_browser_player_mobile.py` and `test_browser_player_settings.py` under
-`tests/`. They use decoded media, a generated 65-second H.264/AAC gesture fixture,
+`tests/browser/`. They use decoded media, a generated 65-second H.264/AAC gesture fixture,
 320/390 px portrait and 720 px landscape layouts, keyboard and fullscreen checks.
 Emulated touch is separate from physical-device/other-browser validation.
 
@@ -216,7 +272,7 @@ and decoded audio, frame stalls, retries, source-byte retention and buffered
 forward seeks during simulated network loss. The pinned-player checks in
 `website/scripts/check-movi-player.js` also exercise bitrate scaling, refill
 hysteresis, allocation failure, shared/non-shared buffer growth and hardware EOF
-drain. `website/src/videoBufferMemory.test.ts` covers device-hint ceilings and the
+drain. `website/src/features/previews/video/videoBufferMemory.test.ts` covers device-hint ceilings and the
 missing-hint fallback. Validate actual HEVC profiles on the
 target browser/OS; browser-native support alone does not validate the custom
 player. Thumbnail repair tests use cached sources and forbid origin payload reads;
@@ -239,7 +295,7 @@ until docker exec tgdrive-test-mongo mongosh --quiet --eval \
   'if (!db.hello().isWritablePrimary) { quit(1); }'; do sleep 1; done
 export TGDRIVE_MONGO_TESTS=1
 export TGDRIVE_TEST_MONGODB_URI='mongodb://127.0.0.1:27017/?replicaSet=tgdrive-test&directConnection=true'
-uv run --frozen --all-groups python -Werror -m pytest tests/test_mongodb.py -q
+uv run --frozen --all-groups python -Werror -m pytest tests/storage/test_mongodb.py -q
 ```
 
 Tests require `TGDRIVE_TEST_MONGODB_URI`, never infer the deployment URI, and
@@ -339,7 +395,6 @@ and Premium speedups need [separate evidence](roadmap.md#before-public-release).
 | Tool/runtime | Baseline |
 | --- | --- |
 | App Python | 3.14.8 default; supported 3.11–3.14 |
-| Setup host | Python 3.10+; Docker supplies app runtime |
 | uv | 0.13.4 |
 | Frontend Node | 24.22.0 LTS |
 | Container targets | Linux AMD64/ARM64 |
@@ -350,52 +405,138 @@ and [Dockerfile](../Dockerfile). Do not replace locks with unconstrained install
 Updates need affected integration checks. CI configures Python 3.11/3.13/3.14;
 configuration alone is not executed evidence.
 
+## Code conventions
+
+Use the existing tool policies: Python follows the Ruff rules and 88-column limit
+in `pyproject.toml`; frontend TypeScript uses strict checking and the 80-column
+Prettier configuration in `website/.prettierrc.json`. Authored code uses four-space
+indentation. `.editorconfig` keeps UTF-8, LF and final newlines consistent across
+editors. After approval,
+`npm run format:check --prefix website` checks authored frontend formatting;
+`npm run format --prefix website` applies it.
+
+- Give each module a focused responsibility and name it after the behavior it owns.
+  Import its concrete owner instead of adding forwarding modules or barrel exports.
+- Use descriptive names and explicit units for time, byte counts and limits. Type
+  service boundaries and structured results; avoid spreading `Any` or type casts.
+- Keep components with their feature. Shared code serves multiple features and
+  does not import the application shell. Extract independently useful helpers
+  when they make policy or control flow clearer.
+- Prefer guard clauses and named decisions to deeply nested branches. Comments
+  explain intent, invariants and recovery limits; docstrings describe contracts.
+- Catch the errors a boundary can handle. Preserve cancellation, request identity
+  and durable-state ordering in transfer and recovery code; see the
+  [architecture contracts](architecture.md).
+
 ## Repository map and test map
 
-<details>
-<summary>Find the relevant tests</summary>
-
-Names below are under `tests/` unless stated otherwise.
-
-| Area | Code/tests |
+| Location | What belongs here |
 | --- | --- |
-| Backend / web app | `tgdrive/` / `website/src/` |
-| MongoDB | `test_mongodb.py`, `test_mongodb_unit.py` |
-| Jobs/receipts | `test_tasks.py`, `test_durable_jobs.py`, `test_resumable_uploads.py` |
-| Split files | `test_multipart_transfers.py`, `test_multipart_streaming.py`, `test_multipart_previews.py` |
-| Telegram | `test_client_pool.py`, `test_telegram_clients.py`, `test_telethon_transport.py` |
-| HTTP/security | `test_app.py`, `test_http_guard.py`, `test_security.py`, `test_remote.py` |
-| Public demo access and protected samples | `test_demo_mode.py`, `test_demo_admin_auth.py`, `test_demo_files.py`, `test_demo_task_policy.py`, `test_browser_demo_mode.py`, `test_browser_demo_access.py` |
-| Connections | `test_management.py`, `test_management_admission.py`, `test_premium_login.py` |
-| Cache/preloads | `test_adaptive_read_ahead.py`, `test_preloading.py`, `test_preload_api.py` |
-| Thumbnails | `test_thumbnails.py`, `test_generated_thumbnails.py`, `test_cached_thumbnail_repair.py`, `test_thumbnail_repair_access.py` |
-| UI | `website/src/*.test.ts`, `test_browser*.py` |
-| Store/checkpoints | `test_store.py`, `test_backup.py`, `test_recovery.py` |
-| Packaging | `scripts/build_release.py`, `test_release_package.py` |
+| `tgdrive/` | Backend domain packages; see the [backend code map](architecture.md#components) |
+| `website/src/app/` | Application shell, login, navigation and page composition |
+| `website/src/features/` | Files, shares, transfers, previews, settings/storage, performance and backup UI |
+| `website/src/shared/` | Common API client, types, controls, branding and theme |
+| `tests/` | Python tests grouped into domain packages, plus `browser/` |
+| `tests/support/` | Shared app fixtures, synthetic server and generated samples |
+| `tests/fixtures/` | Committed media fixtures shared by tests |
+| `scripts/` | Release packaging, viewer vendoring, benchmarks and brand asset tooling |
+| `docs/` | Public guides and their showcase assets |
+| `website/public/` | Browser assets, fonts, player and third-party notices |
 
-Generated/private output belongs in ignored `data/`, `cache/` and `dist/`.
-For side-effect changes, test retry, cancellation, interruption and ownership loss
-against the [architecture contracts](architecture.md).
+Keep new code in its owning domain. Frontend styles and `*.test.ts` / `*.test.tsx`
+files stay beside the module they exercise. Backend imports use concrete modules,
+for example `tgdrive.storage.store`; Python test helpers use qualified imports
+such as `tests.support.app_fixtures`. Retain lazy imports where they break
+dependency cycles; reusable fixtures belong in support modules, outside test cases.
+Use feature folders for cohesive groups of code. Single-screen code belongs with
+its existing owner: login in `app/`, and the storage/settings screen in `settings/`.
+
+Use `tgdrive.web.app:create_app` as the ASGI factory and import settings from
+`tgdrive.core.config`. `tgdrive/server.py` launches the container; startup handles
+initialization and the website provides administration and recovery.
+Keep Compose files, the Dockerfile, manifests and lockfiles at the root for tooling.
+`website/src/main.tsx` remains the frontend entrypoint.
+
+Runtime state belongs in `data/` and `cache/`; dependencies, bytecode and builds
+belong in their ignored generated directories. VS Code hides these generated
+folders through `.vscode/settings.json` without removing their contents. Existing
+`output/` captures and design drafts are ignored local development evidence;
+public showcase media belongs in `docs/assets/`.
+
+<details>
+<summary>Choose a focused test area</summary>
+
+| Area | Python test directory |
+| --- | --- |
+| Lifecycle, configuration and packaging | `tests/core/` |
+| HTTP, security, sharing, listing, connections and demo access | `tests/web/` |
+| Catalog and MongoDB | `tests/storage/` |
+| Telegram clients, bot mode and Premium login | `tests/telegram/` |
+| Jobs, uploads, split files and URL imports | `tests/transfers/` |
+| Streaming, cache, previews, books and thumbnails | `tests/media/` |
+| Checkpoints and database recovery | `tests/recovery/` |
+| Independent channel backups and activation | `tests/replication/` |
+| Performance counters, logging, request IDs and history | `tests/observability/` |
+| Real Chromium with synthetic backend | `tests/browser/` |
+
+The default pytest invocation still discovers `tests/` recursively. Browser tests
+remain opt-in through `TGDRIVE_E2E=1`; MongoDB integration tests retain their own
+opt-in configuration. For side-effect changes, cover retry, cancellation,
+interruption and ownership loss against the [architecture contracts](architecture.md).
 
 </details>
 
 ## Frontend contracts
 
-Use [the design system](../website/DESIGN.md), semantic tokens, local Inter and
-Lucide. Preserve keyboard/focus, saved appearance and reduced motion. Keep upload
-byte verification, stable operation IDs and atomic folder preparation intact.
+Keep the file manager focused on browsing, transfers and maintenance. Use a
+compact toolbar, independently scrolling workspace and restrained bordered
+sections. The [checked-in captures](showcase.md) illustrate the interface.
+
+| Concern | Canonical source |
+| --- | --- |
+| Palette, typography and workspace layout | [Application CSS](../website/src/app/style.css) |
+| Shared control styles | [Design-system CSS](../website/src/shared/design-system.css) |
+| Mantine provider and component defaults | [DesignSystem.tsx](../website/src/shared/DesignSystem.tsx) |
+| Light, dark and system appearance | [theme.ts](../website/src/shared/theme.ts) |
+| Brand artwork | [SVG masters](../website/public/static/brand/) |
+
+- Reuse semantic tokens, self-hosted Inter and Lucide icons. Keep logo cobalt
+  separate from interface action colors. Use tabular numerals for measurements.
+- Use `BrandLogo`; preserve the SVG masters' proportions, openings
+  and clear space. Generate raster assets with `scripts/brand-assets.py`.
+- Retain native dialog and custom player behavior. Keep shared theme variables
+  in bundled external CSS and preserve the content security policy.
+- Preserve keyboard focus and saved appearance. Target 4.5:1 text contrast, 3:1
+  meaningful control/chart contrast and 44px touch targets. Respect browser zoom.
+- Keep menus and controls brief and responsive; avoid decorative entrance effects.
+  Honor reduced motion, and keep correctness independent of animation completion.
+- Show fresh-request progress and actionable errors. Announce successful saves or
+  refreshes only after completion; background polling stays quiet. Keep performance
+  measurements honest about missing data and uncertainty, and show preload coverage
+  across the available workspace width.
+
+Keep upload byte verification, stable operation IDs and atomic folder preparation
+intact. The interaction and accessibility contracts below cover individual flows.
 
 <details>
 <summary>Media compatibility and redistribution</summary>
 
-[MovTextRenderer.ts](../website/src/MovTextRenderer.ts) renders MP4 mov_text/tx3g
+Movi and PDF.js install from committed modified npm archives in
+[`website/vendor/`](../website/vendor/README.md). The lockfile records archive
+integrity; normal installs, development and builds do not rewrite dependencies.
+New upstream releases cannot silently replace these viewer packages. Upgrades
+are deliberate: review the upstream source, update the recipes, regenerate with
+`scripts/vendor_viewers.py` and run the focused checks. Other dependencies still
+come from the locked npm installation; this is not a fully offline build.
+
+[MovTextRenderer.ts](../website/src/features/previews/video/MovTextRenderer.ts) renders MP4 mov_text/tx3g
 through the public subtitle extension as inert text: strict UTF-8/BOM UTF-16,
 no style/link boxes. Bounds are 128 KiB packets, 16 Ki-character cues, 4096 cues /
 2 Mi characters queued, eight visible overlaps. Seeking/track changes clear cues;
 Off/source cleanup removes owned DOM/styles. Test visible English/Hindi,
 HTML-looking text, seeking/Off and original bytes; MKV/SRT is a separate regression.
 
-[AdvancedVideo.tsx](../website/src/AdvancedVideo.tsx) adapts Movi 0.4.1 private
+[AdvancedVideo.tsx](../website/src/features/previews/video/AdvancedVideo.tsx) adapts Movi 0.4.1 private
 `addStyles` for local fonts and CSP. Upgrades must recheck APIs/styles using the
 real WASM fixture, EAC3 output/track changes, subtitles, seek/close and external-
 request/CSP checks. Inspect worker diagnostics as well as document CSP events.
@@ -426,8 +567,8 @@ Keep indicators visible beside truncated names. Unreconstructable URLs offer
 ### UI Capitalization
 
 Title-case fixed labels/actions; sentence-case explanatory text. Display user
-filenames verbatim, without text transforms. Only TGDrive's initial root label
-may be normalized in location displays.
+filenames verbatim, without text transforms. Use **My Files** for TGDrive's root
+navigation label.
 
 ### Quiet Overlays and Touch Controls
 
@@ -496,7 +637,7 @@ extraction. Shipped tests must not require omitted private fixtures.
 ```bash
 docker buildx build --platform linux/amd64 --load -t tgdrive:release-candidate .
 docker run --rm --network none --entrypoint python tgdrive:release-candidate \
-  -c 'import tgdrive.app, telethon, cryptg, argon2; print("runtime imports passed")'
+  -c 'import tgdrive.web.app, telethon, cryptg, argon2; print("runtime imports passed")'
 docker buildx build --platform linux/arm64 --load -t tgdrive:release-candidate-arm64 .
 ```
 
@@ -513,12 +654,6 @@ Follow [AGENTS.md](../AGENTS.md): update important behavior with its implementat
 keep one canonical explanation, link focused public guides from Docs home and add
 them to `PUBLIC_DOCS` in `scripts/build_release.py`. Keep guides brief, put technical
 detail in collapsible sections, and record change history in meaningful Git commits.
-
-## Shared UI components
-
-Mantine Core/Hooks 9.7.3 and React 19 are pinned together. Library controls use the
-root provider; specialized file/player UI shares semantic CSS tokens. See
-[Design system](../website/DESIGN.md) for component, theme and motion rules.
 
 ## Independent channel backup contracts
 
@@ -544,7 +679,7 @@ The offline transport/coordinator tests cover request pacing, fresh channel and
 document checks, bounded batch verification, ambiguous sends and durable waits:
 
 ```bash
-uv run --frozen python -m pytest tests/test_replica_transport.py tests/test_replica.py -q
+uv run --frozen python -m pytest tests/replication/test_replica_transport.py tests/replication/test_replica.py -q
 ```
 
 These tests use synthetic Telegram clients; they do not establish live Telegram
@@ -556,18 +691,18 @@ session authorization waits, archive handoff and activation/bootstrap recovery:
 
 ```bash
 TGDRIVE_MONGO_TESTS=0 uv run --frozen python -m pytest \
-  tests/test_replica.py tests/test_replica_transport.py \
-  tests/test_replica_state.py tests/test_replica_settings.py \
-  tests/test_replica_mongo.py tests/test_replica_activation.py \
-  tests/test_replica_activation_mongodb.py tests/test_replica_bootstrap.py \
-  tests/test_replica_api.py tests/test_replica_deletion_barrier.py -q
+  tests/replication/test_replica.py tests/replication/test_replica_transport.py \
+  tests/replication/test_replica_state.py tests/replication/test_replica_settings.py \
+  tests/replication/test_replica_mongo.py tests/replication/test_replica_activation.py \
+  tests/replication/test_replica_activation_mongodb.py tests/replication/test_replica_bootstrap.py \
+  tests/replication/test_replica_api.py tests/replication/test_replica_deletion_barrier.py -q
 ```
 
 The opt-in live MongoDB tests are skipped by this command. It makes no live
 Telegram requests and does not replace a recovery rehearsal.
 
 ```bash
-TGDRIVE_E2E=1 PYTHONPATH=.:tests uv run --frozen --group e2e python -m pytest tests/test_browser_channel_backup.py -q
+TGDRIVE_E2E=1 uv run --frozen --group e2e python -m pytest tests/browser/test_browser_channel_backup.py -q
 ```
 
 This uses real auth/API/UI with a synthetic replica service at 1440/390/320 px.
@@ -580,18 +715,26 @@ directions and database-only recovery without risking the only copy.
 
 ### Selective book pages and shared PDF resources
 
-The pinned PDF.js worker patch (`website/scripts/patch-pdf-worker.js`) keeps image substreams sparse during parsing, defers image
+The vendored PDF.js worker keeps image substreams sparse during parsing, defers image
 stream bodies in page resource discovery and loads a painted image's dependencies
-before decoding. Version/source identity guards reject unknown upstream bundles;
-`predev`, `prebuild`, and `pretest` apply it. The browser bundles this worker locally.
-Review the patch when updating PDF.js. Integrity tests live in
+after dimension/size rejection and before decoding. Its recipe is
+`website/scripts/patch-pdf-worker.js`; version/source guards reject unknown inputs
+during deliberate vendor regeneration. Normal frontend commands use the committed
+modified package. Review the recipe when updating PDF.js. Focused tests live in
 `website/scripts/check-pdf-worker.js`; the `shared` case in
-`tests/test_browser_pdf_ranges.py` exercises a generated PDF with every page image
+`tests/browser/test_browser_pdf_ranges.py` exercises a generated PDF with every page image
 in one shared resource dictionary. These are synthetic fixtures, not a guarantee
 for all PDFs or devices.
 
-`tests/test_books.py` covers unchanged large original page bytes and bounded result
-reuse. `tests/test_books_api.py` covers access checks on cached/conditional responses.
-`website/src/bookImage.test.ts` covers download progress, errors, retry and cancellation;
+`website/scripts/pdfjs-assets.ts` serves and emits matching local CMaps, standard
+fonts, color profiles and decoder WASM with their resource notices. These resources
+support additional character sets and image formats without an asset CDN. Keep
+sparse transport, page/image/pixel bounds and XFA/script restrictions intact.
+Password prompts pass only an in-memory value to PDF.js; passwords are never
+stored in browser preferences or sent to a TGDrive password endpoint.
+
+`tests/media/test_books.py` covers unchanged large original page bytes and bounded result
+reuse. `tests/media/test_books_api.py` covers access checks on cached/conditional responses.
+`website/src/features/previews/books/bookImage.test.ts` covers download progress, errors, retry and cancellation;
 the comic error/recovery, large original page and EPUB offscreen-image cases in
-`tests/test_browser_books_shares.py` exercise the shipped UI and HTTP path.
+`tests/browser/test_browser_books_shares.py` exercise the shipped UI and HTTP path.

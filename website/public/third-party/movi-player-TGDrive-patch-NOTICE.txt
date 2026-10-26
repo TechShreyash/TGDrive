@@ -1,4 +1,4 @@
-TGDrive modification to Movi Player 0.4.1, 20 October 2026
+TGDrive modifications to Movi Player 0.4.1, 26 October 2026
 
 Movi Player is Copyright Ujjawal Kashyap and its contributors, licensed under
 Apache License 2.0. The original license is distributed alongside this notice
@@ -12,9 +12,11 @@ dropped audio, absent/disabled audio and media after the audio tail retain the
 upstream behavior.
 
 The exact version and original bundle SHA256 are checked by
-website/scripts/patch-movi-player.js. The patch is applied automatically before
-development, tests and production builds, including Docker builds. An unknown
-or changed bundle fails clearly instead of receiving an unreviewed patch.
+website/scripts/patch-movi-player.js. The reviewed modified package is shipped in
+website/vendor and installed from that local archive. Normal development and
+builds do not rewrite dependencies.
+scripts/vendor_viewers.py verifies upstream package integrity and applies the
+reviewed recipe only during deliberate vendor regeneration.
 
 TGDrive additionally requires an active audio track before the shared-demux
 audio read-ahead branch can bypass video decoder backpressure (2026-10-23).
@@ -37,3 +39,13 @@ existing window and caps subsequent growth for the opening (2026-10-23).
 The read-ahead gate counts bytes only within the current source window. Distant
 seeks do not count the skipped file gap as already buffered, allowing the first
 range at the new position to arrive before the demuxer advances (2026-10-23).
+
+The decoder EOF drain is bounded and ignores obsolete decoder generations.
+In-flight demuxer reads can receive their required byte range without being
+blocked by the speculative read-ahead target. Native chapter navigation uses
+chapter titles and times without extracting frames unless thumbnails or a
+storyboard are explicitly enabled (2026-10-26).
+
+Disconnecting the native element revokes picked subtitle Blob URLs and clears
+their ownership list, including when source reset and disconnect both run
+(2026-10-26).

@@ -42,8 +42,6 @@ def white_matte(image: Image.Image) -> Image.Image:
 def main() -> None:
     icon_source = (BRAND / "tgdrive-icon.svg").read_bytes()
     (BRAND / "favicon.svg").write_bytes(icon_source)
-    for alias in ("tgdrive-symbol.svg", "tgdrive.svg"):
-        (BRAND.parent / alias).write_bytes(icon_source)
 
     for name in ("tgdrive-icon", "tgdrive-logo", "tgdrive-logo-dark"):
         width = 512 if name == "tgdrive-icon" else 2010

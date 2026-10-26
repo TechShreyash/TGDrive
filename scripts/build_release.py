@@ -12,10 +12,12 @@ from pathlib import Path
 
 ROOT_FILES = (
     ".dockerignore",
+    ".editorconfig",
     ".env.example",
     ".gitattributes",
     ".gitignore",
     ".python-version",
+    ".vscode/settings.json",
     "AGENTS.md",
     "Dockerfile",
     "LICENSE",
@@ -23,19 +25,21 @@ ROOT_FILES = (
     "compose.yaml",
     "compose.override.yaml",
     "compose.server.yaml",
-    "config.py",
-    "docker_start.sh",
-    "main.py",
     "pyproject.toml",
     "uv.lock",
     "website/package.json",
     "website/package-lock.json",
+    "website/vendor/README.md",
+    "website/vendor/manifest.json",
+    "website/vendor/movi-player-0.4.1-tgdrive.1.tgz",
+    "website/vendor/pdfjs-dist-6.4.299-tgdrive.1.tgz",
     "website/public/third-party/README.txt",
     "website/public/third-party/movi-player-LICENSE.txt",
     "website/public/third-party/movi-player-TGDrive-patch-NOTICE.txt",
     "website/public/third-party/movi-player-0.4.1-sources.tar.gz",
     "website/public/third-party/FFmpeg-LGPL-2.1.txt",
     "website/public/third-party/pdfjs-LICENSE.txt",
+    "website/public/third-party/pdfjs-TGDrive-patch-NOTICE.txt",
     "website/public/third-party/react-LICENSE.txt",
     "website/public/third-party/react-dom-LICENSE.txt",
     "website/public/third-party/scheduler-LICENSE.txt",
@@ -123,8 +127,6 @@ PUBLIC_DOCS = (
     "docs/assets/organize-files.mp4",
     "docs/assets/readers-and-preview.mp4",
     "docs/assets/upload-and-share.mp4",
-    "website/PRODUCT.md",
-    "website/DESIGN.md",
 )
 
 ZIP_TIMESTAMP = (1980, 1, 1, 0, 0, 0)
@@ -172,8 +174,7 @@ def source_files(root: Path) -> list[Path]:
 def _write_entry(archive: zipfile.ZipFile, name: str, content: bytes) -> None:
     entry = zipfile.ZipInfo(name, date_time=ZIP_TIMESTAMP)
     entry.create_system = 3
-    permissions = 0o100755 if name.endswith("/docker_start.sh") else 0o100644
-    entry.external_attr = permissions << 16
+    entry.external_attr = 0o100644 << 16
     archive.writestr(
         entry, content, compress_type=zipfile.ZIP_DEFLATED, compresslevel=9
     )

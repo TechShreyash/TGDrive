@@ -6,8 +6,6 @@ import ipaddress
 import logging
 import os
 import socket
-import time
-from pathlib import Path
 
 import uvicorn
 
@@ -42,11 +40,9 @@ def trusted_proxy_ips() -> str:
 
 
 def main() -> None:
-    # A fresh container must remain available for init without owning its database.
-    # Existing installations with recovery configuration can serve the owner shell.
-    wait_for_initialization()
     uvicorn.run(
-        "main:app",
+        "tgdrive.web.app:create_app",
+        factory=True,
         host=_CONTAINER_BIND,
         port=8000,
         workers=1,
@@ -55,49 +51,6 @@ def main() -> None:
         timeout_graceful_shutdown=45,
         access_log=False,
     )
-
-
-def wait_for_initialization() -> None:
-    """Keep a new container accessible for its explicit owner init command."""
-    if os.environ.get("TGDRIVE_AUTO_SECRETS") != "true":
-        return
-    from tgdrive.mongo import configure
-
-    uri = os.environ.get("MONGODB_URI")
-    if not uri:
-        return
-    directory = Path(os.environ.get("DATA_DIR", "data")).expanduser().resolve()
-    if any(
-        (directory / name).exists()
-        for name in (
-            "replica-bootstrap.json",
-            "channel-activation.json",
-        )
-    ):
-        return
-    backend = configure(
-        directory,
-        uri,
-        os.environ.get("MONGODB_DATABASE", "tgdrive"),
-    )
-    if backend.db.catalog.find_one({"_id": "catalog"}):
-        return
-    saved = getattr(backend.db, "settings", None)
-    if saved is not None and saved.find_one({"_id": "bootstrap"}):
-        return
-    logger.warning(
-        "Drive is not initialized. Run 'python -m tgdrive init' once in this "
-        "container's terminal for a NEW drive. For an existing drive, check "
-        "MONGODB_URI/MONGODB_DATABASE instead. Existing state is preserved."
-    )
-    while not backend.db.catalog.find_one({"_id": "catalog"}):
-        time.sleep(5)
-    # The init command creates the catalog before saving its settings and
-    # releasing ownership. Do not race its final transaction/startup cleanup.
-    while backend.db.runtime.find_one(
-        {"_id": "owner", "$expr": {"$gt": ["$expires_at", "$$NOW"]}}
-    ):
-        time.sleep(1)
 
 
 if __name__ == "__main__":
