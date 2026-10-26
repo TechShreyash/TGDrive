@@ -6,7 +6,7 @@
 </h1>
 
 <p align="center">
-  <strong>Your personal cloud. Unlimited storage. Big files welcome.</strong>
+  <strong>Your personal cloud. No storage quota. Big files welcome.</strong>
 </p>
 
 Keep your media and files in one place. Upload whole folders,
@@ -16,7 +16,7 @@ TGDrive is free, open-source software you can use, modify and deploy under the
 [MIT License](LICENSE). Run it on your laptop or server; it stores your files in
 a private channel on Telegram.
 
-[Try the public demo](#try-the-public-demo) · [Set up your drive](docs/setup.md) ·
+[New-user guide](docs/new-user-guide.md) · [Try the public demo](#try-the-public-demo) · [Set up your drive](docs/setup.md) ·
 [See it in action](#see-it-in-action) · [Visual walkthroughs](docs/showcase.md) · [User guide](docs/usage.md) · [Documentation](docs/README.md)
 
 ![TGDrive desktop file browser with sample folders and files](docs/assets/drive-overview.png)
@@ -36,6 +36,10 @@ a private channel on Telegram.
 Individual uploads default to **16 GiB per file**. You can raise the file limit
 and temporary upload budget when your server has enough free disk space.
 [File-size and storage settings →](docs/configuration.md#upload-size-and-available-disk-space)
+
+**Before storing important files, read the [new-user guide and FAQ](docs/new-user-guide.md).**
+Keep independent copies: no storage quota does not guarantee permanent retention
+or protection from Telegram account/channel restrictions.
 
 ## Try the public demo
 

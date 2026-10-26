@@ -2,6 +2,9 @@
 
 [Docs home](README.md) · [Setup](setup.md) · [Help with problems](operations.md#troubleshooting)
 
+**First time using TGDrive? Read the [new-user guide and FAQ](new-user-guide.md)**
+for essential limits, channel rules, privacy and backup responsibilities.
+
 Upload in **My Files**, follow progress in **Transfers**, and share only what
 you choose.
 

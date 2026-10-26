@@ -2,6 +2,9 @@
 
 [Docs home](README.md) · [Setup](setup.md) · [Using TGDrive](usage.md)
 
+Read the [new-user guide and FAQ](new-user-guide.md) before storing important
+files. Its privacy, channel and backup responsibilities also apply to managed hosting.
+
 **TGDrive is completely free and open source.** Anyone can use, modify and deploy
 it under the [MIT License](../LICENSE). All features are available whether you
 run it on your own computer, choose your own server or ask us to manage hosting.

@@ -6,6 +6,7 @@ the file bytes and MongoDB holding the catalog.
 
 | Looking for | Go to |
 | --- | --- |
+| What every new user should know about limits, privacy and safe use | [New-user guide and FAQ](../docs/new-user-guide.md) |
 | Features and everyday workflows | [User guide](../docs/usage.md) |
 | Localhost, server access and optional managed setup | [Hosting guide](../docs/hosting.md) |
 | Layout, themes, branding and interaction rules | [Interface design](DESIGN.md) |

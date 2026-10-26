@@ -69,6 +69,7 @@ SOURCE_TREES = {
 }
 PUBLIC_DOCS = (
     "docs/README.md",
+    "docs/new-user-guide.md",
     "docs/showcase.md",
     "docs/setup.md",
     "docs/hosting.md",

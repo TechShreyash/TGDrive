@@ -2,6 +2,10 @@
 
 [Docs home](README.md) · Next: [Using TGDrive](usage.md)
 
+**Read the [new-user guide and FAQ](new-user-guide.md) before storing files.**
+It explains the storage model, channel rules, limits and backup responsibilities;
+these installation steps do not replace it.
+
 [See the interface before installing](showcase.md), including the file browser,
 previews, transfers and settings.
 

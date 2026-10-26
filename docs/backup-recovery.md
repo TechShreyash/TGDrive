@@ -2,6 +2,10 @@
 
 [Docs home](README.md) · [Choose a recovery route](#choose-the-right-mongodb-recovery-route) · [Set up backups](#set-up-an-independent-backup-channel) · [Operations](operations.md)
 
+New users should first read the [storage and data-safety essentials](new-user-guide.md).
+Two Telegram channels can protect against some losses; they do not establish
+ban immunity, automatic failover or a backup outside Telegram.
+
 > [!IMPORTANT]
 > Save matching keys outside the server, wait for a **confirmed restore point**, and test recovery before relying on it. **Never run `init` to repair an existing drive.**
 

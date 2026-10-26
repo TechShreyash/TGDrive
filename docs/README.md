@@ -1,15 +1,18 @@
 <h1><img src="../website/public/static/brand/tgdrive-icon.svg" alt="" width="36" height="36"> TGDrive documentation</h1>
 
-**New here? [Get the live demo link and password](usage.md#try-the-public-demo), or start with [Setup](setup.md).**
+**New here? Read the [new-user guide and FAQ](new-user-guide.md) first:** what TGDrive
+does, its limits, the rules for reliable use and how to protect your data.
+Then [try the public demo](usage.md#try-the-public-demo) or follow [Setup](setup.md).
 These guides describe fresh TGDrive 2.0.0 deployments with MongoDB.
 
-[Install](setup.md) → [Upload and share](usage.md) → [Protect your drive](backup-recovery.md)
+[Know the essentials](new-user-guide.md) → [Install](setup.md) → [Upload and share](usage.md) → [Protect your drive](backup-recovery.md)
 
 **[Explore the screenshot gallery and video walkthroughs](showcase.md)** for a
 visual tour of the file browser, transfers, previews, sharing and administration.
 
 | I want to… | Read |
 | --- | --- |
+| Understand storage, privacy, account risks and everyday do/don't rules | [New-user guide and expandable FAQ](new-user-guide.md) |
 | Try TGDrive before hosting it | [Live demo and password](usage.md#try-the-public-demo) |
 | Compare local use, access on the go and background processing | [Local computer or server?](hosting.md#local-computer-or-server) |
 | Run locally on Windows, macOS or Linux | [Docker installation](setup.md#before-you-start) · [TGDrive setup](setup.md#4-start-locally) |
