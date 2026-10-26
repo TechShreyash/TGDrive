@@ -499,6 +499,21 @@ These tests use synthetic Telegram clients; they do not establish live Telegram
 rate limits or demonstrate production backup completion. Pacing and retry policy
 are documented in the [backup guide](backup-recovery.md#enable-and-confirm-the-first-copy).
 
+For the broader offline backup group, including journal rollback, pause races,
+session authorization waits, archive handoff and activation/bootstrap recovery:
+
+```bash
+TGDRIVE_MONGO_TESTS=0 uv run --frozen python -m pytest \
+  tests/test_replica.py tests/test_replica_transport.py \
+  tests/test_replica_state.py tests/test_replica_settings.py \
+  tests/test_replica_mongo.py tests/test_replica_activation.py \
+  tests/test_replica_activation_mongodb.py tests/test_replica_bootstrap.py \
+  tests/test_replica_api.py tests/test_replica_deletion_barrier.py -q
+```
+
+The opt-in live MongoDB tests are skipped by this command. It makes no live
+Telegram requests and does not replace a recovery rehearsal.
+
 ```bash
 TGDRIVE_E2E=1 PYTHONPATH=.:tests uv run --frozen --group e2e python -m pytest tests/test_browser_channel_backup.py -q
 ```

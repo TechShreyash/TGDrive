@@ -249,6 +249,23 @@ class ChannelReplica:
                 and (recovery or config.get("enabled"))
             ):
                 async with self._operation:
+                    # A control request may arrive while another operation owns
+                    # the lock. Do not execute the earlier eligibility snapshot.
+                    state = self.journal.get("status", {})
+                    config = self.journal.get("config", {})
+                    recovery = self.journal.get("recovery")
+                    if (
+                        state.get("phase") in {
+                            "paused",
+                            "disabled",
+                            "error",
+                            "ready_to_activate",
+                            "restart_required",
+                        }
+                        or (state.get("error") or {}).get("retry_at", 0) > time.time()
+                        or not (recovery or config.get("enabled"))
+                    ):
+                        continue
                     try:
                         if recovery:
                             await self._recover_copy(recovery)
@@ -279,8 +296,13 @@ class ChannelReplica:
                             detail += f" Retry in {math.ceil(delay)} seconds."
                         # Never echo arbitrary credential-bearing provider exceptions.
                         detail = detail[:400]
+                        phase = self.journal.get("status", {}).get("phase")
                         self.update(
-                            phase="waiting" if retryable else "error",
+                            phase=(
+                                phase
+                                if phase in {"paused", "disabled"}
+                                else "waiting" if retryable else "error"
+                            ),
                             error={
                                 "code": getattr(error, "code", "REPLICA_FAILED"),
                                 "detail": detail,
@@ -463,27 +485,23 @@ class ChannelReplica:
             else:
                 await transport.verify(channel, message, path.stat().st_size)
             ids.append(message)
-        self.journal.set(
-            "restore_point",
+        self.journal.set_many(
             {
-                "source_channel": source,
-                "source_message_id": ids[1],
-                "backup_channel": target,
-                "backup_message_id": ids[0],
-                "revision": catalog["revision"],
-                "created_at": now(),
-                "bundle_size": path.stat().st_size,
-            },
-        )
-        self.journal.set(
-            "credentials_digest",
-            hashlib.sha256(
-                json.dumps(credentials, sort_keys=True).encode()
-            ).hexdigest(),
-        )
-        self.journal.set("restore_point_key", key)
-        self.journal.set(
-            "restore_point_mongodb_key", credentials.get("mongodb_backup_key")
+                "restore_point": {
+                    "source_channel": source,
+                    "source_message_id": ids[1],
+                    "backup_channel": target,
+                    "backup_message_id": ids[0],
+                    "revision": catalog["revision"],
+                    "created_at": now(),
+                    "bundle_size": path.stat().st_size,
+                },
+                "credentials_digest": hashlib.sha256(
+                    json.dumps(credentials, sort_keys=True).encode()
+                ).hexdigest(),
+                "restore_point_key": key,
+                "restore_point_mongodb_key": credentials.get("mongodb_backup_key"),
+            }
         )
         return ids
 
@@ -499,6 +517,8 @@ class ChannelReplica:
                 retry_after=error["retry_at"] - time.time(),
             )
         current_credentials = await asyncio.to_thread(self._credentials)
+        if self.journal.get("status", {}).get("phase") in {"paused", "disabled"}:
+            return
         credentials_digest = hashlib.sha256(
             json.dumps(current_credentials, sort_keys=True).encode()
         ).hexdigest()
@@ -536,6 +556,8 @@ class ChannelReplica:
             )
         if job is None and not check_only:
             catalog = await asyncio.to_thread(store.export)
+            if self.journal.get("status", {}).get("phase") in {"paused", "disabled"}:
+                return
             if catalog.get("storage_channel_id") not in {
                 None,
                 self.settings.storage_channel,
@@ -773,6 +795,11 @@ class ChannelReplica:
         return self.status()
 
     async def _recover_copy(self, recovery):
+        if (
+            self.journal.get("status", {}).get("phase") in {"paused", "disabled"}
+            or self.journal.get("recovery") is None
+        ):
+            return
         candidate = self.journal.get("candidate")
         source = candidate["catalog"]["storage_channel_id"]
         transport = self.factory(self.settings, candidate["token"])
@@ -781,6 +808,11 @@ class ChannelReplica:
             await transport.inspect(source)
             await transport.inspect(recovery["target"])
             target_pin = await transport.pinned_message(recovery["target"])
+            if (
+                self.journal.get("status", {}).get("phase") in {"paused", "disabled"}
+                or self.journal.get("recovery") is None
+            ):
+                return
             reservation = {
                 "drive_id": candidate["catalog"]["drive_id"],
                 "source": source,
@@ -807,10 +839,21 @@ class ChannelReplica:
                 await probe.inspect(recovery["target"])
             finally:
                 await probe.close()
+            if (
+                self.journal.get("status", {}).get("phase") in {"paused", "disabled"}
+                or self.journal.get("recovery") is None
+            ):
+                return
             self.update(phase="recovering", error=None)
             if recovery.get("catalog_only"):
                 for node in files_in(candidate["catalog"]):
                     for part in parts_in(node):
+                        if (
+                            self.journal.get("status", {}).get("phase")
+                            in {"paused", "disabled"}
+                            or self.journal.get("recovery") is None
+                        ):
+                            return
                         await transport.verify(source, part["message_id"], part["size"])
                 restored = remap_catalog(
                     candidate["catalog"],
@@ -907,10 +950,17 @@ class ChannelReplica:
             ):
                 return
             if recovery.get("catalog_only"):
-                self.journal.set("restore_point", candidate["inspection"])
-                self.journal.set("restore_point_key", candidate["key"])
-                self.journal.set(
-                    "restore_point_mongodb_key", credentials.get("mongodb_backup_key")
+                self.journal.set_many(
+                    {
+                        "restore_point": candidate["inspection"],
+                        "restore_point_key": candidate["key"],
+                        "restore_point_mongodb_key": credentials.get(
+                            "mongodb_backup_key"
+                        ),
+                        "credentials_digest": hashlib.sha256(
+                            json.dumps(credentials, sort_keys=True).encode()
+                        ).hexdigest(),
+                    }
                 )
             candidate.update(catalog=restored, credentials=credentials, complete=True)
             self.journal.set("candidate", candidate)
@@ -1026,7 +1076,7 @@ class ChannelReplica:
         else:
             await transport.verify(catalog["storage_channel_id"], message, len(raw))
 
-    async def before_mutation(self):
+    def _mutation_config(self):
         if self.blocked:
             raise SettingsProblem(
                 "Channel recovery is in progress. Resume it or disable the "
@@ -1035,23 +1085,48 @@ class ChannelReplica:
             )
         config = self.journal.get("config", {})
         if not config.get("enabled"):
-            return
+            return None
         if self.journal.get("status", {}).get("phase") in {"paused", "disabled"}:
             raise SettingsProblem(
                 "Resume independent backup before Telegram mutations, "
                 "or explicitly disable backup protection.",
                 status=409,
             )
-        required = self.runtime.store.revision
+        return config
+
+    async def before_mutation(self):
+        if self._mutation_config() is None:
+            return
         async with self._operation:
+            config = self._mutation_config()
+            if config is None:
+                return
+            required = self.runtime.store.revision
             for _ in range(2):
+                saved_retry_at = (
+                    self.journal.get("status", {}).get("error") or {}
+                ).get("retry_at", 0)
+                remaining_wait = saved_retry_at - time.time()
+                if remaining_wait > 0:
+                    from tgdrive.backup import BackupError
+
+                    # Reject outside the provider-error handler: a later check
+                    # must not turn the saved cooldown into a new deadline.
+                    raise BackupError(
+                        "Telegram requested a wait before backup resumes.",
+                        retry_after=remaining_wait,
+                    )
                 try:
                     await self._sync(config, force_check=True)
                 except Exception as error:
                     delay = getattr(error, "retry_after", None)
-                    if delay:
+                    if delay or getattr(error, "retryable", False):
+                        delay = max(5, float(delay or 30))
+                        phase = self.journal.get("status", {}).get("phase")
                         self.update(
-                            phase="waiting",
+                            phase=(
+                                phase if phase in {"paused", "disabled"} else "waiting"
+                            ),
                             error={
                                 "code": getattr(error, "code", "REPLICA_WAIT"),
                                 "detail": (
@@ -1065,6 +1140,8 @@ class ChannelReplica:
                             },
                         )
                     raise
+                if self._mutation_config() is None:
+                    return
                 if (
                     self.journal.get("status", {}).get("protected_revision", 0)
                     >= required

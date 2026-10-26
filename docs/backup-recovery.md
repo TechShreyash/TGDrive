@@ -104,8 +104,10 @@ and restarts. Session files live under `DATA_DIR/sessions`, with owner-only
 permissions; keep them private like bot tokens. Changing the bot token or API
 credentials selects a separate session and requires authentication again. A
 missing or invalidated session may also require sign-in, subject to Telegram's
-waits. An idle health-check wait retains the confirmed restore point; new
-activity messages identify that context instead of implying another file copy.
+waits. An authorization-probe failure preserves Telegram's wait and does not
+trigger another sign-in. An idle health-check wait retains the confirmed restore
+point; new activity messages identify that context instead of implying another
+file copy.
 
 Healthy unchanged checkpoints are checked after one hour. An explicit `sync`
 action requests an earlier check, but cannot bypass a saved provider deadline.
@@ -114,6 +116,11 @@ the hourly check. After a failed check, its saved retry deadline governs the
 next attempt. Destructive Telegram mutations still require a fresh checkpoint
 check; the hourly idle policy cannot satisfy that deletion barrier. The browser's
 status refresh remains read-only.
+
+Pause and Disable remain effective when an in-flight request later fails. Its
+retry deadline is still saved; Resume cannot bypass it. Permanent Telegram
+mutations recheck backup controls after waiting for another operation and after
+checkpoint verification, so a concurrent Pause keeps the mutation blocked.
 
 </details>
 
@@ -191,6 +198,11 @@ During bot sign-in, Telegram can redirect a fresh connection to another data cen
 **Activity and report → Download report** gives progress and actionable failures without tokens/keys. Names and IDs may still be private; review before sharing. Never share raw private state or keys.
 
 The full MongoDB archive's revision can differ from the channel capsule's revision; they are distinct restore points. Keep both keys. In the JSON, `key` and `mongodb_backup_key` match the recorded `restore_point`; `next_backup_key` and `next_mongodb_backup_key` describe the next generation. Preserve the whole export and older pairs. If pending work captured an older MongoDB key, restore that key or verify **Backup settings** again to capture a fresh snapshot.
+
+The local journal commits each confirmed restore point and its matching keys in
+one transaction. If publication is interrupted, the export retains the prior
+complete pair or the new complete pair; it cannot combine generations. Preserve
+the journal across restarts and save an updated export after confirmation.
 
 Private `DATA_DIR/replica-bootstrap.json` retains owner recovery credentials/password hash. It does **not** provide offline login: MongoDB must be reachable with valid permissions, or startup may fail. A missing/corrupt catalog with reachable MongoDB can permit owner web recovery.
 

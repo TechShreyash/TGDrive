@@ -341,11 +341,13 @@ class ReplicaTransport:
                 await self._client.connect()
                 for attempt in range(2):
                     try:
-                        authorized = await self._request(
-                            "is_user_authorized", self._client.is_user_authorized
-                        )
-                        if not authorized:
-                            await self._request(
+                        # Telethon's is_user_authorized() catches every RPCError,
+                        # including FloodWait, and treats it as a signed-out
+                        # session. get_me() only treats Unauthorized as signed
+                        # out, so provider waits reach the durable coordinator.
+                        account = await self._request("get_me", self._client.get_me)
+                        if account is None:
+                            account = await self._request(
                                 "sign_in", self._client.sign_in, bot_token=self._token
                             )
                         break
@@ -355,7 +357,6 @@ class ReplicaTransport:
                         # durable message retries remain owned by the journal.
                         if attempt:
                             raise
-                account = await self._request("get_me", self._client.get_me)
                 if (
                     account is None
                     or not getattr(account, "bot", False)

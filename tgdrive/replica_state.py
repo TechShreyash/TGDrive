@@ -82,12 +82,19 @@ class ReplicaJournal:
             return json.loads(row[0]) if row else copy.deepcopy(default)
 
     def set(self, key, value):
-        raw = json.dumps(value, allow_nan=False, ensure_ascii=False)
+        self.set_many({key: value})
+
+    def set_many(self, values):
+        """Commit related state together, including explicit null values."""
+        rows = [
+            (key, json.dumps(value, allow_nan=False, ensure_ascii=False))
+            for key, value in values.items()
+        ]
         with self.lock, self.db:
-            self.db.execute(
+            self.db.executemany(
                 "INSERT INTO state VALUES(?,?) ON CONFLICT(key) "
                 "DO UPDATE SET value=excluded.value",
-                (key, raw),
+                rows,
             )
 
     def intent(self, key, size):

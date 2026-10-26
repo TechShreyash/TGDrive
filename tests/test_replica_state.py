@@ -4,6 +4,11 @@ from __future__ import annotations
 
 import copy
 import json
+import sqlite3
+import subprocess
+import sys
+import textwrap
+from types import SimpleNamespace
 
 import pytest
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
@@ -253,6 +258,141 @@ def test_journal_retains_exact_intent_and_confirmation_across_restarts(tmp_path)
         assert (tmp_path / "channel-backup.sqlite3").stat().st_mode & 0o777 == 0o600
     finally:
         journal.close()
+
+
+def test_atomic_state_rejects_unserializable_value_without_changing_any_key(tmp_path):
+    journal = ReplicaJournal(tmp_path)
+    journal.set_many({"restore_point": {"revision": 17}, "restore_point_key": KEY})
+    try:
+        with pytest.raises(ValueError):
+            journal.set_many(
+                {"restore_point": {"revision": 18}, "restore_point_key": float("nan")}
+            )
+    finally:
+        journal.close()
+    reopened = ReplicaJournal(tmp_path)
+    try:
+        assert reopened.get("restore_point") == {"revision": 17}
+        assert reopened.get("restore_point_key") == KEY
+    finally:
+        reopened.close()
+
+
+def test_process_death_cannot_pair_new_restore_point_with_old_keys(tmp_path):
+    old = {
+        "restore_point": {"revision": 17, "backup_message_id": 901},
+        "restore_point_key": KEY,
+        "restore_point_mongodb_key": "b2" * 32,
+        "credentials_digest": "a" * 64,
+    }
+    new = {
+        "restore_point": {"revision": 18, "backup_message_id": 902},
+        "restore_point_key": "c3" * 32,
+        "restore_point_mongodb_key": None,
+        "credentials_digest": "d" * 64,
+    }
+    journal = ReplicaJournal(tmp_path)
+    journal.set_many(old)
+    journal.close()
+    script = textwrap.dedent(
+        """
+        import json
+        import os
+        import sys
+        from pathlib import Path
+        from tgdrive.replica_state import ReplicaJournal
+
+        journal = ReplicaJournal(Path(sys.argv[1]))
+        journal.db.create_function("crash_before_key", 0, lambda: os._exit(73))
+        journal.db.executescript('''
+            CREATE TRIGGER crash_publication BEFORE INSERT ON state
+            WHEN NEW.key = 'restore_point_key'
+            BEGIN SELECT crash_before_key(); END;
+        ''')
+        journal.set_many(json.loads(sys.argv[2]))
+        raise SystemExit("Crash injection did not execute")
+        """
+    )
+    stopped = subprocess.run(
+        [sys.executable, "-c", script, str(tmp_path), json.dumps(new)],
+        capture_output=True,
+        text=True,
+        timeout=30,
+        check=False,
+    )
+    assert stopped.returncode == 73, stopped.stderr
+    reopened = ReplicaJournal(tmp_path)
+    try:
+        assert {key: reopened.get(key) for key in old} == old
+        reopened.db.execute("DROP TRIGGER crash_publication")
+        reopened.db.commit()
+        reopened.set_many(new)
+    finally:
+        reopened.close()
+    committed = ReplicaJournal(tmp_path)
+    try:
+        assert {key: committed.get(key) for key in new} == new
+        assert committed.get("restore_point_mongodb_key", "stale") is None
+    finally:
+        committed.close()
+
+
+@pytest.mark.asyncio
+async def test_capsule_publication_rolls_back_point_and_keys_as_one_generation(
+    tmp_path,
+):
+    from pydantic import SecretStr
+    from test_replica import BACKUP, dispose, setup
+
+    from tgdrive.replica import ChannelReplica
+
+    configured, store, remote, replica, config = setup(tmp_path)
+    try:
+        configured.mongodb_backup_key = SecretStr("b2" * 32)
+        await replica._sync(config)
+        replica.journal.set("key", "c3" * 32)
+        configured.mongodb_backup_key = SecretStr("d4" * 32)
+        previous = replica.recovery_kit()
+        store.create_folder("/", "Next generation")
+        replica.journal.db.executescript(
+            """
+            CREATE TRIGGER reject_publication BEFORE INSERT ON state
+            WHEN NEW.key = 'restore_point_key'
+            BEGIN SELECT RAISE(ABORT, 'injected key write failure'); END;
+            """
+        )
+        with pytest.raises(sqlite3.IntegrityError, match="injected key write failure"):
+            await replica._sync(config)
+        await replica.close()
+        replica = ChannelReplica(
+            configured, SimpleNamespace(store=store), transport_factory=remote.factory
+        )
+        assert replica.recovery_kit() == previous
+        original = decode_bundle(
+            remote.messages[BACKUP, previous["restore_point"]["backup_message_id"]],
+            previous["key"],
+        )
+        assert (
+            original["credentials"]["mongodb_backup_key"]
+            == previous["mongodb_backup_key"]
+        )
+        replica.journal.db.execute("DROP TRIGGER reject_publication")
+        replica.journal.db.commit()
+        await replica._sync(config)
+        current = replica.recovery_kit()
+        assert current["restore_point"] != previous["restore_point"]
+        assert current["key"] == "c3" * 32
+        assert current["mongodb_backup_key"] == "d4" * 32
+        recovered = decode_bundle(
+            remote.messages[BACKUP, current["restore_point"]["backup_message_id"]],
+            current["key"],
+        )
+        assert (
+            recovered["credentials"]["mongodb_backup_key"]
+            == current["mongodb_backup_key"]
+        )
+    finally:
+        await dispose(replica, store)
 
 
 def test_private_archive_write_and_read_reject_world_readable_or_symlink(tmp_path):

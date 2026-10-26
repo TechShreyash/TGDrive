@@ -80,9 +80,8 @@ def message(identity, channel_id, doc):
 class Native:
     def __init__(self):
         self.connect = AsyncMock()
-        self.is_user_authorized = AsyncMock(return_value=False)
-        self.sign_in = AsyncMock()
-        self.get_me = AsyncMock(return_value=SimpleNamespace(id=234567, bot=True))
+        self.sign_in = AsyncMock(return_value=SimpleNamespace(id=234567, bot=True))
+        self.get_me = AsyncMock(return_value=None)
         self.disconnect = AsyncMock()
         self.chats = {MAIN: channel(MAIN), BACKUP: channel(BACKUP)}
         self.messages = {(MAIN, 77): message(77, MAIN, document())}
@@ -212,19 +211,21 @@ def persistent_clients(monkeypatch):
         native = Native()
         native.session = SQLiteSession(session_path)
 
-        async def authorized():
+        async def account():
             key = native.session.auth_key
-            return not state.expired and key is not None and key.key is not None
+            if not state.expired and key is not None and key.key is not None:
+                return SimpleNamespace(id=state.account_id, bot=True)
+            return None
 
         async def authorize(**_kwargs):
             if state.failure is not None:
                 raise state.failure
             native.session.auth_key = AuthKey(bytes(range(256)))
             native.session.save()
+            return SimpleNamespace(id=state.account_id, bot=True)
 
-        native.is_user_authorized = AsyncMock(side_effect=authorized)
         native.sign_in = AsyncMock(side_effect=authorize)
-        native.get_me.return_value = SimpleNamespace(id=state.account_id, bot=True)
+        native.get_me = AsyncMock(side_effect=account)
         native.disconnect = AsyncMock(side_effect=native.session.close)
         state.instances.append(native)
         return native
@@ -252,10 +253,8 @@ async def test_saved_bot_session_avoids_authorization_on_reconnect_and_replaceme
         await replacement.start()
         original, restored = persistent_clients.instances
         original.sign_in.assert_awaited_once_with(bot_token=TOKEN)
-        assert original.is_user_authorized.await_count == 2
         assert original.get_me.await_count == 2
         restored.sign_in.assert_not_awaited()
-        restored.is_user_authorized.assert_awaited_once()
         restored.get_me.assert_awaited_once()
         assert original.session.filename == restored.session.filename
         path = Path(restored.session.filename)
@@ -323,7 +322,7 @@ async def test_expired_saved_auth_preserves_typed_signin_wait_without_erasing_se
     assert session_path.is_file()
     expired = persistent_clients.instances[-1]
     expired.sign_in.assert_awaited_once_with(bot_token=TOKEN)
-    expired.get_me.assert_not_awaited()
+    expired.get_me.assert_awaited_once()
     expired.disconnect.assert_awaited_once()
 
 
@@ -575,6 +574,56 @@ async def test_native_client_preserves_typed_error_for_durable_coordinator_retry
 
 
 @pytest.mark.asyncio
+async def test_real_telethon_auth_probe_preserves_floodwait_without_signing_in():
+    native = TelegramClient(
+        StringSession(),
+        12345,
+        "a" * 32,
+        receive_updates=False,
+        request_retries=0,
+        raise_last_call_error=True,
+        flood_sleep_threshold=0,
+    )
+    account = types.User(id=234567, access_hash=1, is_self=True, bot=True)
+    native.connect = AsyncMock()
+    native.disconnect = AsyncMock()
+    native.sign_in = AsyncMock(wraps=native.sign_in)
+    requests = []
+
+    async def respond(request):
+        request = getattr(request, "query", request)
+        requests.append(request)
+        if len(requests) == 1:
+            raise FloodWaitError(request=request, capture=2876)
+        # If the initial wait is swallowed, get_me succeeds and allows the
+        # erroneous startup to continue, reproducing the real SDK behavior.
+        assert isinstance(request, functions.users.GetUsersRequest)
+        return [account]
+
+    native._sender = SimpleNamespace(
+        send=Mock(side_effect=lambda request, **_kwargs: respond(request))
+    )
+    transport = ReplicaTransport(
+        SimpleNamespace(bot_tokens=(PRIMARY,)),
+        TOKEN,
+        client=native,
+        pacer=ReplicaRequestPacer(interval=0, maximum_interval=0),
+    )
+    with pytest.raises(ReplicaTransportError) as raised:
+        await transport.start()
+    assert raised.value.code == "REPLICA_FLOOD_WAIT"
+    assert raised.value.retry_after == 2876
+    assert raised.value.retryable
+    assert raised.value.operation == "get_me"
+    assert TOKEN not in str(raised.value)
+    assert len(requests) == 1
+    assert isinstance(requests[0], functions.users.GetUsersRequest)
+    native.sign_in.assert_not_awaited()
+    native.disconnect.assert_awaited_once()
+    assert not transport._started
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     "migration", [UserMigrateError, NetworkMigrateError, PhoneMigrateError]
 )
@@ -590,9 +639,8 @@ async def test_real_telethon_login_replays_auth_once_after_dc_switch(migration):
     )
     account = types.User(id=234567, access_hash=1, is_self=True, bot=True)
     native.connect = AsyncMock()
-    native.is_user_authorized = AsyncMock(return_value=False)
     native.disconnect = AsyncMock()
-    native.get_me = AsyncMock(side_effect=[None, None, account])
+    native.get_me = AsyncMock(side_effect=[None, None, None, None])
     native._on_login = AsyncMock(return_value=account)
     native._switch_dc = AsyncMock()
     native._authorized = False
@@ -646,7 +694,7 @@ async def test_repeated_login_migration_is_bounded_and_sanitized(migration):
     assert TOKEN not in str(error.value)
     assert error.value.__cause__ is None
     assert not transport._started
-    native.get_me.assert_not_awaited()
+    assert native.get_me.await_count == 2
     native.disconnect.assert_awaited_once()
 
 

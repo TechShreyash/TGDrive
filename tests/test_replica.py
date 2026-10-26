@@ -303,6 +303,8 @@ async def test_pause_mid_copy_resumes_confirmed_parts_without_resending(tmp_path
         replica = ChannelReplica(
             configured, SimpleNamespace(store=store), transport_factory=remote.factory
         )
+        assert replica.status()["phase"] == "paused"
+        replica.update(phase="idle")  # Explicitly resume the saved paused job.
         await replica._sync(config)
         assert [call[2] for call in remote.calls if call[0] == "copy"] == [77, 78]
         assert replica.status()["done_parts"] == 2
@@ -734,6 +736,280 @@ async def test_pause_during_health_check_stays_paused(tmp_path, monkeypatch):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("caller", ["worker", "mutation"])
+@pytest.mark.parametrize("action", ["pause", "disable"])
+@pytest.mark.parametrize("code", ["REPLICA_FLOOD_WAIT", "REPLICA_UNAVAILABLE"])
+async def test_stop_during_failed_request_preserves_control_and_saved_wait(
+    tmp_path, monkeypatch, caller, action, code,
+):
+    _, store, remote, replica, config = setup(tmp_path)
+    entered, release, recorded = asyncio.Event(), asyncio.Event(), asyncio.Event()
+    mutation = None
+    report = replica.report
+
+    async def failed_start(self):
+        entered.set()
+        await release.wait()
+        error = ReplicaTransportError(
+            "Provider requested a wait.", code,
+            retry_after=120 if code == "REPLICA_FLOOD_WAIT" else None,
+            retryable=True,
+        )
+        error.operation = "sign_in"
+        raise error
+
+    def record_error(level, message):
+        report(level, message)
+        if level == "error":
+            recorded.set()
+
+    try:
+        await replica._sync(config)
+        replica.update(checked_at=0)
+        monkeypatch.setattr(Transport, "start", failed_start)
+        monkeypatch.setattr(replica, "report", record_error)
+        if caller == "worker":
+            replica.start()
+        else:
+            mutation = asyncio.create_task(replica.before_mutation())
+        await asyncio.wait_for(entered.wait(), 1)
+        await replica.action(action)
+        release.set()
+        if mutation is not None:
+            with pytest.raises(ReplicaTransportError):
+                await mutation
+        else:
+            await asyncio.wait_for(recorded.wait(), 1)
+        expected_phase = "paused" if action == "pause" else "disabled"
+        state = replica.status()
+        assert state["phase"] == expected_phase
+        assert state["error"]["retry_at"] > time.time()
+        assert state["enabled"] is (action == "pause")
+        deadline = state["error"]["retry_at"]
+        connections = len(remote.instances)
+        await replica.action("resume")
+        await asyncio.sleep(0)
+        assert replica.status()["phase"] == "waiting"
+        assert replica.status()["error"]["retry_at"] == deadline
+        assert len(remote.instances) == connections
+    finally:
+        release.set()
+        if mutation is not None and not mutation.done():
+            mutation.cancel()
+            await asyncio.gather(mutation, return_exceptions=True)
+        await dispose(replica, store)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("action", ["pause", "disable"])
+async def test_deletion_barrier_rechecks_control_after_waiting_for_operation_lock(
+    tmp_path, action,
+):
+    from tgdrive.managed_settings import SettingsProblem
+
+    _, store, remote, replica, config = setup(tmp_path)
+    mutation = None
+    try:
+        await replica._sync(config)
+        connections = len(remote.instances)
+        async with replica._operation:
+            mutation = asyncio.create_task(replica.before_mutation())
+            await asyncio.sleep(0)
+            assert not mutation.done()
+            await replica.action(action)
+        if action == "pause":
+            with pytest.raises(SettingsProblem, match="Resume independent backup"):
+                await mutation
+        else:
+            await mutation  # Explicitly disabling protection permits the mutation.
+        assert len(remote.instances) == connections
+        assert replica.status()["phase"] == (
+            "paused" if action == "pause" else "disabled"
+        )
+    finally:
+        if mutation is not None and not mutation.done():
+            mutation.cancel()
+            await asyncio.gather(mutation, return_exceptions=True)
+        await dispose(replica, store)
+
+
+@pytest.mark.asyncio
+async def test_deletion_barrier_rechecks_pause_after_successful_remote_check(
+    tmp_path, monkeypatch,
+):
+    from tgdrive.managed_settings import SettingsProblem
+
+    _, store, remote, replica, config = setup(tmp_path)
+    try:
+        await replica._sync(config)
+        original_pin = Transport.pinned_message
+
+        async def pause_after_pin(self, channel):
+            result = await original_pin(self, channel)
+            await replica.action("pause")
+            return result
+
+        monkeypatch.setattr(Transport, "pinned_message", pause_after_pin)
+        with pytest.raises(SettingsProblem, match="Resume independent backup"):
+            await replica.before_mutation()
+        assert replica.status()["phase"] == "paused"
+    finally:
+        await dispose(replica, store)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("stage", ["credentials", "catalog"])
+async def test_pause_during_local_snapshot_does_not_restart_telegram_work(
+    tmp_path, monkeypatch, stage,
+):
+    _, store, remote, replica, config = setup(tmp_path)
+    entered, release = asyncio.Event(), asyncio.Event()
+    original_thread = asyncio.to_thread
+    selected = replica._credentials if stage == "credentials" else store.export
+
+    async def blocked_snapshot(function, *args, **kwargs):
+        if function == selected:
+            entered.set()
+            await release.wait()
+        return await original_thread(function, *args, **kwargs)
+
+    monkeypatch.setattr("tgdrive.replica.asyncio.to_thread", blocked_snapshot)
+    operation = asyncio.create_task(replica._sync(config))
+    try:
+        await asyncio.wait_for(entered.wait(), 1)
+        await replica.action("pause")
+        release.set()
+        await operation
+        assert replica.status()["phase"] == "paused"
+        assert replica.journal.get("job") is None
+        assert not remote.instances
+    finally:
+        release.set()
+        if not operation.done():
+            operation.cancel()
+            await asyncio.gather(operation, return_exceptions=True)
+        await dispose(replica, store)
+
+
+@pytest.mark.asyncio
+async def test_worker_rechecks_pause_after_waiting_for_operation_lock(tmp_path):
+    _, store, remote, replica, _config = setup(tmp_path)
+    try:
+        async with replica._operation:
+            replica.start()
+            await asyncio.sleep(0)
+            await replica.action("pause")
+        await asyncio.sleep(0)
+        await asyncio.sleep(0)
+        assert replica.status()["phase"] == "paused"
+        assert not remote.instances
+    finally:
+        await dispose(replica, store)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("action", ["pause", "disable"])
+@pytest.mark.parametrize("stage", ["start", "inspect", "close"])
+async def test_recovery_probe_does_not_undo_pause_or_disable(
+    tmp_path, monkeypatch, action, stage,
+):
+    _, store, remote, replica, config = setup(tmp_path)
+    target_token = "345678:" + "z" * 30
+    entered, release = asyncio.Event(), asyncio.Event()
+    original = getattr(Transport, stage)
+    operation = None
+
+    async def blocked_probe(self, *args, **kwargs):
+        if self.token == target_token:
+            entered.set()
+            await release.wait()
+        return await original(self, *args, **kwargs)
+
+    try:
+        await replica._sync(config)
+        await replica.inspect_recovery(BACKUP, TOKEN, replica.key())
+        recovery = {"target": REPLACEMENT, "target_token": target_token}
+        replica.journal.set("recovery", recovery)
+        replica.update(phase="recovering")
+        remote.calls.clear()
+        monkeypatch.setattr(Transport, stage, blocked_probe)
+        operation = asyncio.create_task(replica._recover_copy(recovery))
+        await asyncio.wait_for(entered.wait(), 1)
+        await replica.action(action)
+        release.set()
+        await operation
+        assert replica.status()["phase"] == (
+            "paused" if action == "pause" else "disabled"
+        )
+        assert not [
+            call for call in remote.calls if call[0] in {"copy", "publish"}
+        ]
+        if action == "disable":
+            assert replica.journal.get("recovery") is None
+            assert replica.journal.get("candidate") is None
+        else:
+            assert not replica.journal.get("candidate")["complete"]
+    finally:
+        release.set()
+        if operation is not None and not operation.done():
+            operation.cancel()
+            await asyncio.gather(operation, return_exceptions=True)
+        await dispose(replica, store)
+
+
+@pytest.mark.asyncio
+async def test_deletion_poll_does_not_extend_a_short_saved_telegram_wait(
+    tmp_path, monkeypatch,
+):
+    from tgdrive.backup import BackupError
+
+    _, store, remote, replica, config = setup(tmp_path)
+    try:
+        await replica._sync(config)
+        timestamp = [1000.0]
+        monkeypatch.setattr("tgdrive.replica.time.time", lambda: timestamp[0])
+        error = {
+            "code": "REPLICA_FLOOD_WAIT",
+            "detail": "Saved provider cooldown",
+            "retry_at": 1003.0,
+        }
+        replica.update(phase="waiting", error=error)
+        connections = len(remote.instances)
+        for current in (1000.0, 1001.0, 1002.9):
+            timestamp[0] = current
+            with pytest.raises(BackupError):
+                await replica.before_mutation()
+            assert replica.status()["error"] == error
+            assert len(remote.instances) == connections
+    finally:
+        await dispose(replica, store)
+
+
+@pytest.mark.asyncio
+async def test_deletion_barrier_rejects_saved_wait_at_expiry_boundary(
+    tmp_path, monkeypatch,
+):
+    from tgdrive.backup import BackupError
+
+    _, store, remote, replica, config = setup(tmp_path)
+    try:
+        await replica._sync(config)
+        error = {"code": "REPLICA_FLOOD_WAIT", "retry_at": 1003.0}
+        replica.update(phase="waiting", error=error)
+        connections = len(remote.instances)
+        timestamps = iter([1002.999999])
+        monkeypatch.setattr(
+            "tgdrive.replica.time.time", lambda: next(timestamps, 1003.0)
+        )
+        with pytest.raises(BackupError):
+            await replica.before_mutation()
+        assert replica.status()["error"] == error
+        assert len(remote.instances) == connections
+    finally:
+        await dispose(replica, store)
+
+
+@pytest.mark.asyncio
 async def test_inspected_backup_rebuilds_replacement_main_when_original_main_is_lost(
     tmp_path,
 ):
@@ -752,6 +1028,7 @@ async def test_inspected_backup_rebuilds_replacement_main_when_original_main_is_
             "target_token": "345678:" + "z" * 30,
         }
         replica.journal.set("recovery", recovery)
+        replica.update(phase="recovering")
         await replica._recover_copy(recovery)
         restored = replica.journal.get("candidate")
         assert restored["complete"]
@@ -787,6 +1064,7 @@ async def test_database_only_restore_checks_existing_parts_without_payload_copie
             "catalog_only": True,
         }
         replica.journal.set("recovery", recovery)
+        replica.update(phase="recovering")
         await replica._recover_copy(recovery)
         assert replica.journal.get("candidate")["complete"]
         assert len([call for call in remote.calls if call[0] == "copy"]) == before
@@ -1040,6 +1318,7 @@ async def test_recovery_resumes_its_accepted_pin_after_lost_publication_response
         await replica.inspect_recovery(BACKUP, TOKEN, replica.key())
         recovery = {"target": REPLACEMENT, "target_token": "345678:" + "z" * 30}
         replica.journal.set("recovery", recovery)
+        replica.update(phase="recovering")
         if lost_at == "capsule":
             remote.lose_publish_response_channel = REPLACEMENT
         else:
@@ -1085,6 +1364,7 @@ async def test_recovery_refuses_unrelated_pin_introduced_during_pause(tmp_path, 
         await replica.inspect_recovery(BACKUP, TOKEN, replica.key())
         recovery = {"target": REPLACEMENT, "target_token": "345678:" + "z" * 30}
         replica.journal.set("recovery", recovery)
+        replica.update(phase="recovering")
         remote.after_copy = lambda: replica.update(phase="paused")
         await replica._recover_copy(recovery)
         assert not replica.journal.get("candidate")["complete"]
