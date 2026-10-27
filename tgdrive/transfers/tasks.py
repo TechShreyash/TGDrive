@@ -1082,6 +1082,7 @@ class TransferRegistry:
             previous_status = record.status
             previous_current = record.current
             previous_total = record.total
+            previous_error = record.error
             if status is not None:
                 record.status = status
             if phase is not None:
@@ -1133,7 +1134,7 @@ class TransferRegistry:
             }
             if (
                 transition
-                or error is not _ERROR_UNSET
+                or record.error != previous_error
                 or context_changed
                 or (
                     checkpoint_progress

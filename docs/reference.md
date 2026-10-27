@@ -465,7 +465,7 @@ permanent third-party API compatibility.
 | `POST /api/checkPassword` | Public, throttled | `{"pass":"<owner-password>"}` | `200 {"status":"ok"}` plus session cookie. |
 | `POST /api/logout` | Cookie if present | `{}` | `200 {"status":"ok"}`; revokes an active owner session and clears the cookie. Missing/invalid/expired/revoked cookies do not trigger a session database write. |
 | `GET /api/v1/session` | Public | None | `{"authenticated":true}` or false. |
-| `GET /api/v1/status` | Owner | None | Connection, capacity, committed revision, backend, encrypted snapshot history and client health. |
+| `GET /api/v1/status` | Owner | None | Connection, capacity, committed revision, backend, latest locally observed encrypted snapshot record and client health. The backup observation reloads at startup and updates during publication; this polling endpoint does not query backup history. |
 | `POST /api/v1/backup` | Owner | `{}` | `{"recovery":{...}}` after an encrypted MongoDB safety copy is verified; `503` if not confirmed. |
 | GET /api/v1/backup/recovery-key | Owner | None | Private no-store download of the backup decryption key. |
 | `POST /api/v1/backup/restore` | Owner, disabled in demo | Raw `.tgdb` bytes, `Content-Type: application/octet-stream`, `X-TGDrive-Recovery-Key: <64 hex characters>`, `X-TGDrive-Confirm: RESTORE` | Authenticates and restores a full archive into an empty or untouched automatically created drive; returns `restart_required: true`. |

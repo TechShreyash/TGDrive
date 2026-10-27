@@ -92,6 +92,25 @@ fixture or its `/__test__` endpoints.
 Recorded evidence describes a tested snapshot, not the state of a later checkout.
 
 <details>
+<summary>Upload responsiveness and repeated-work reductions — 2026-10-27</summary>
+
+The focused run passed **168 Python cases** across transfer journals, multipart
+hashes, queue estimates, backup observations, catalog statistics and HTTP routes.
+The selected six Vitest files passed **123 cases**, including upload cadence,
+acknowledged-offset persistence, cross-tab recovery and byte formatting.
+All **five new Chromium cases** passed for navigation request reuse, obsolete
+breadcrumb cancellation and share-badge invalidation, including delayed startup
+configuration and partial metadata failures.
+
+The production frontend build and TypeScript checks passed on Node **24.22.0**.
+Existing viewer CommonJS and bundle-size warnings remain. These checks used
+offline or synthetic fixtures; no full suite, lint run, live MongoDB/Telegram
+validation, speed benchmark or deployment was performed. See
+[the performance policy](performance.md#navigation-during-uploads).
+
+</details>
+
+<details>
 <summary>Reader HTTP compression — 2026-10-26</summary>
 
 The focused `bookImage.test.ts` Vitest file passed **12 tests** on Node **24.22.0**.
@@ -266,6 +285,16 @@ status on desktop and mobile;
 [`test_browser_books_shares.py`](../tests/browser/test_browser_books_shares.py)
 includes EPUB anchor navigation. These use synthetic data and do not establish
 live Telegram integrity. Run them only with the approval required above.
+
+Upload-load regressions include
+[`test_browser_navigation_requests.py`](../tests/browser/test_browser_navigation_requests.py)
+for breadcrumb request reuse, obsolete-request cancellation and share-badge
+invalidation, and
+[`test_catalog_statistics.py`](../tests/storage/test_catalog_statistics.py)
+for committed-snapshot reuse and invalidation. Transfer tests also protect
+immediate acknowledged-offset persistence, bounded progress notifications,
+coalesced jobs refreshes and cross-tab recovery. These checks use synthetic
+state; they do not measure a deployment's network, MongoDB or disk latency.
 
 For URL intake changes, the focused offline checks are:
 

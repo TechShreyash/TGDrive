@@ -85,7 +85,7 @@ function hideItemMenus() {
 export default function FileBrowser({
     directory,
     listingKey,
-    refresh = 0,
+    shareRefreshKey,
     highlightId = "",
     loading,
     refreshing = false,
@@ -112,7 +112,7 @@ export default function FileBrowser({
 }: {
     directory: Directory;
     listingKey: string;
-    refresh?: number;
+    shareRefreshKey: string;
     highlightId?: string;
     loading: boolean;
     refreshing?: boolean;
@@ -160,7 +160,7 @@ export default function FileBrowser({
         return () => {
             ignore = true;
         };
-    }, [directory, refresh, isPublic, isTrash]);
+    }, [shareRefreshKey, isPublic, isTrash]);
     const [shareTick, tickShares] = useState(0);
     useEffect(() => {
         if (!activeShares.length) return;

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import threading
 from types import SimpleNamespace
 from typing import Any
 
@@ -59,6 +60,53 @@ def test_login_cookie_and_directory_access_control(app_client: tuple[Any, ...]) 
     directory = client.post("/api/getDirectory", json={"path": "/"})
     assert directory.status_code == 200
     assert directory.json()["data"]["contents"] == {}
+
+
+@pytest.mark.parametrize(
+    "path,method",
+    [
+        ("/", "get_directory"),
+        ("/trash", "list_trash"),
+        ("/search_report", "search_page"),
+        ("shared", "get_directory"),
+    ],
+)
+def test_directory_reads_and_serialization_run_off_the_event_loop(
+    app_client, monkeypatch, path, method
+):
+    client, store, _, _ = app_client
+    login(client)
+    payload = {"path": path}
+    if path == "shared":
+        folder = store.create_folder("/", "Shared")
+        folder_path = "/" + folder["id"]
+        payload = {
+            "path": "/share_" + folder["id"],
+            "auth": store.create_share(folder_path),
+        }
+        client.post("/api/logout")
+    assert client.portal is not None
+    loop_thread = client.portal.call(threading.get_ident)
+    read = getattr(store, method)
+    response_type = app_module.JSONResponse
+    calls = []
+
+    def worker_read(*args, **kwargs):
+        assert threading.get_ident() != loop_thread
+        calls.append("read")
+        return read(*args, **kwargs)
+
+    def worker_response(*args, **kwargs):
+        assert threading.get_ident() != loop_thread
+        calls.append("response")
+        return response_type(*args, **kwargs)
+
+    monkeypatch.setattr(store, method, worker_read)
+    monkeypatch.setattr(app_module, "JSONResponse", worker_response)
+    response = client.post("/api/getDirectory", json=payload)
+    assert response.status_code == 200
+    assert response.json()["data"]["contents"] == {}
+    assert calls == ["read", "response"]
 
 
 def test_wrong_password_and_known_folder_ids_cannot_browse_private_directories(

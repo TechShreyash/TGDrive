@@ -156,6 +156,75 @@ async def test_bounded_origin_queue_is_retryable_and_does_not_block_metadata():
 
 
 @pytest.mark.asyncio
+async def test_batch_queue_estimates_keep_priority_counts_and_active_only_fields():
+    pool = ClientPool([Account()], media_per_bot=2)
+    await pool.start()
+    tasks = []
+
+    async def waiting(identity, priority):
+        async with pool.lease(
+            download=True, request_id=identity, priority=priority
+        ):
+            pass
+
+    try:
+        async with (
+            pool.lease(media=True, request_id="shared"),
+            pool.lease(download=True, request_id="active-only"),
+        ):
+            try:
+                for identity, priority in (
+                    ("preload", "preload"),
+                    ("shared", "demand"),
+                    ("shared", "demand"),
+                    ("other", "demand"),
+                ):
+                    tasks.append(asyncio.create_task(waiting(identity, priority)))
+                    await wait_until(
+                        lambda: pool.performance_snapshot()["queued"] == len(tasks)
+                    )
+                pool._origin_durations.append(2)
+                before = pool.performance_snapshot()
+                estimates = pool.queue_estimates(
+                    ["shared", "other", "preload", "active-only", "missing", "shared"]
+                )
+                assert set(estimates) == {"shared", "other", "preload", "active-only"}
+                shared = estimates["shared"]
+                assert shared["position"] == 1
+                assert shared["priority"] == "demand"
+                assert shared["active_operations"] == 1
+                assert shared["queued_operations"] == 2
+                assert shared["estimated_wait_seconds"] == 2
+                assert shared["waiting_seconds"] >= 0
+                assert estimates["other"]["position"] == 3
+                assert estimates["other"]["estimated_wait_seconds"] == 4
+                assert estimates["preload"]["position"] == 4
+                assert estimates["preload"]["priority"] == "preload"
+                assert estimates["active-only"] == {
+                    "request_id": "active-only",
+                    "position": 0,
+                    "estimated_wait_seconds": 0.0,
+                    "active_operations": 1,
+                    "queued_operations": 0,
+                    "estimates": True,
+                }
+                assert set(pool.queue_estimates(["shared"])) == {"shared"}
+                assert pool.queue_estimate("missing") is None
+                assert pool.queue_estimates([]) == {}
+                after = pool.performance_snapshot()
+                assert after["active"] == before["active"]
+                assert [row["request_id"] for row in after["queue"]] == [
+                    row["request_id"] for row in before["queue"]
+                ]
+            finally:
+                for task in tasks:
+                    task.cancel()
+                await asyncio.gather(*tasks, return_exceptions=True)
+    finally:
+        await pool.stop()
+
+
+@pytest.mark.asyncio
 async def test_configured_media_capacity_allows_four_reads_and_bounds_fifth():
     pool = ClientPool([Account()], media_per_bot=4)
     await pool.start()

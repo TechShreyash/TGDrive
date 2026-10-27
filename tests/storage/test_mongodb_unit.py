@@ -3,8 +3,9 @@
 import asyncio
 import hashlib
 import threading
-from contextlib import nullcontext
+from contextlib import asynccontextmanager, nullcontext
 from datetime import UTC, datetime
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock
 
@@ -66,6 +67,38 @@ async def test_failed_cloud_journal_does_not_admit_an_unrecorded_job():
     with pytest.raises(DatabaseUnavailable):
         await registry.create("queued")
     assert registry.list() == []
+
+
+async def test_startup_read_cannot_rewind_concurrent_backup_confirmation(monkeypatch):
+    pending = {
+        "id": "publishing",
+        "status": "pending",
+        "created_at": "2026-10-27T01:00:00+00:00",
+    }
+    confirmed = dict(
+        pending, status="confirmed", confirmed_at="2026-10-27T01:01:00+00:00"
+    )
+    loop = asyncio.get_running_loop()
+
+    def read(query, **_kwargs):
+        if query["status"] == "pending":
+            return pending
+        loop.call_soon_threadsafe(service._observe_backup, confirmed)
+        return None
+
+    backend = SimpleNamespace(db=SimpleNamespace(backups=SimpleNamespace(find_one=read)))
+    service = MongoProtection(
+        SimpleNamespace(mongodb_backup_seconds=3600), object(), backend
+    )
+
+    async def stop_wait(awaitable, timeout):
+        awaitable.close()
+        return True
+
+    monkeypatch.setattr("tgdrive.recovery.mongo_backup.asyncio.wait_for", stop_wait)
+    await service._loop(object())
+    assert service.latest_history() == [confirmed]
+    assert service._last_success_at == confirmed["confirmed_at"]
 
 
 def test_mongodb_connection_credentials_are_redacted():
@@ -152,6 +185,181 @@ async def test_snapshot_record_uses_exported_revision_when_catalog_advances(
     assert store.revision == exported_revision + 1
     assert len(decoded["nodes"]) == 1
     assert len(backend.db.nodes.find({})) == 2
+    observed = service.latest_history()[0]
+    assert observed["id"] == record["id"]
+    assert observed["status"] == "pending"
+    assert "_id" not in observed and "local_path" not in observed
+    assert service._last_success_at is None
+
+
+async def test_backup_observation_reloads_on_restore_and_history_stays_fresh(
+    snapshot_source,
+):
+    service, store, backend = snapshot_source
+    first = {
+        "_id": "first",
+        "id": "first",
+        "status": "confirmed",
+        "created_at": "2026-10-27T01:00:00+00:00",
+        "confirmed_at": "2026-10-27T01:01:00+00:00",
+        "local_path": "/private/first.tgdb",
+        "counts": {"nodes": 1},
+    }
+    backend.db.backups.insert_one(first)
+    reopened = await service.restore()
+    try:
+        assert reopened.revision == store.revision
+        observed = service.latest_history()[0]
+        assert observed["id"] == "first"
+        assert "_id" not in observed and "local_path" not in observed
+        assert service._last_success_at == first["confirmed_at"]
+        observed["counts"]["nodes"] = 999
+        assert service.latest_history()[0]["counts"] == {"nodes": 1}
+
+        second = dict(
+            first, _id="second", id="second", created_at="2026-10-27T02:00:00+00:00"
+        )
+        backend.db.backups.insert_one(second)
+        assert service.history(limit=1)[0]["id"] == "second"
+        assert service.latest_history()[0]["id"] == "first"
+    finally:
+        reopened.close()
+    reopened = await service.restore()
+    try:
+        assert service.latest_history()[0]["id"] == "second"
+        backend.db.backups.delete_many({})
+    finally:
+        reopened.close()
+    reopened = await service.restore()
+    try:
+        assert service.latest_history() == []
+        assert service._last_success_at is None
+    finally:
+        reopened.close()
+
+
+async def test_optional_backup_history_failure_does_not_block_catalog_or_owner_checks(
+    snapshot_source, monkeypatch
+):
+    service, store, backend = snapshot_source
+    monkeypatch.setattr(
+        service, "history", Mock(side_effect=ConnectionFailure("History unavailable"))
+    )
+    reopened = await service.restore()
+    try:
+        assert reopened.revision == store.revision
+        assert service.latest_history() == []
+        assert service.protection_status(reopened)["state"] == "protected"
+        assert service._last_error
+
+        async def stop_wait(awaitable, timeout):
+            awaitable.close()
+            return True
+
+        monkeypatch.setattr("tgdrive.recovery.mongo_backup.asyncio.wait_for", stop_wait)
+        await service._loop(reopened)
+        assert service._last_error is None
+        service._last_error = "Existing snapshot retry error"
+        await service._loop(reopened)
+        assert service._last_error == "Existing snapshot retry error"
+        monkeypatch.setattr(
+            backend, "check_owner", Mock(side_effect=DatabaseUnavailable("Lost owner"))
+        )
+        assert service.protection_status(reopened)["state"] == "error"
+    finally:
+        reopened.close()
+
+
+@pytest.mark.parametrize("confirmation_fails", [False, True])
+async def test_backup_observation_confirms_only_after_verified_publication_and_commit(
+    snapshot_source, monkeypatch, confirmation_fails
+):
+    service, store, backend = snapshot_source
+    payload = b""
+
+    async def send_document(_channel, path, **_kwargs):
+        nonlocal payload
+        assert service.latest_history()[0]["status"] == "pending"
+        payload = Path(path).read_bytes()
+        return SimpleNamespace(id=77)
+
+    async def get_messages(*_args, **_kwargs):
+        return SimpleNamespace(document=SimpleNamespace(file_size=len(payload)))
+
+    async def stream_media(*_args, **_kwargs):
+        yield payload
+
+    @asynccontextmanager
+    async def lease(**_kwargs):
+        yield SimpleNamespace(
+            name="backup-bot",
+            send_document=send_document,
+            get_messages=get_messages,
+            stream_media=stream_media,
+        )
+
+    service.pool.lease = lease
+    if confirmation_fails:
+        update = backend.db.backups.update_one
+
+        def fail_confirmation(query, change, **kwargs):
+            if change.get("$set", {}).get("status") == "confirmed":
+                raise ConnectionFailure("Confirmation acknowledgement unavailable")
+            return update(query, change, **kwargs)
+
+        monkeypatch.setattr(backend.db.backups, "update_one", fail_confirmation)
+        with pytest.raises(ConnectionFailure, match="Confirmation"):
+            await service.snapshot_now(store)
+    else:
+        assert await service.snapshot_now(store)
+    observed = service.latest_history()[0]
+    record = backend.db.backups.find_one({"id": observed["id"]})
+    assert "_id" not in observed and "local_path" not in observed
+    if confirmation_fails:
+        assert observed["status"] == record["status"] == "pending"
+        assert service._last_success_at is None
+        assert Path(record["local_path"]).is_file()
+    else:
+        assert observed["status"] == record["status"] == "confirmed"
+        assert observed["message_id"] == 77
+        assert service._last_success_at == observed["confirmed_at"]
+        assert not Path(record["local_path"]).exists()
+        service._observe_backup(
+            dict(
+                record,
+                id="older",
+                created_at="2000-01-01T00:00:00+00:00",
+                confirmed_at="2000-01-01T00:01:00+00:00",
+            )
+        )
+        assert service.latest_history()[0]["id"] == record["id"]
+        assert service._last_success_at == observed["confirmed_at"]
+
+
+async def test_missing_pending_snapshot_updates_observed_status(snapshot_source):
+    service, store, backend = snapshot_source
+    with pytest.raises(RuntimeError, match="Publication paused"):
+        await service.snapshot_now(store)
+    record = backend.db.backups.find_one({"status": "pending"})
+    Path(record["local_path"]).unlink()
+    with pytest.raises(BackupError, match="previous backup file is unavailable"):
+        await service.snapshot_now(store)
+    assert service.latest_history()[0]["status"] == "interrupted"
+    assert service._last_success_at is None
+
+
+async def test_snapshot_cooldown_updates_observation_without_confirmation(snapshot_source):
+    service, store, _backend = snapshot_source
+    error = RuntimeError("Synthetic provider cooldown")
+    error.seconds = 30
+    service.pool.lease = Mock(side_effect=error)
+    service.pool.defer_channel = AsyncMock()
+    with pytest.raises(RuntimeError, match="provider cooldown"):
+        await service.snapshot_now(store)
+    observed = service.latest_history()[0]
+    assert observed["status"] == "pending" and observed["retry_at"] > 0
+    assert service._last_success_at is None
+    service.pool.defer_channel.assert_awaited_once_with(observed["retry_at"])
 
 
 @pytest.mark.parametrize(

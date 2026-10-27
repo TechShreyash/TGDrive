@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import copy
 import hashlib
 import os
 import secrets
@@ -35,6 +36,7 @@ COLLECTIONS = (
     "backups",
 )
 MAX_EXPANDED = 1024**3
+_HISTORY_UNAVAILABLE = "Encrypted Telegram backup history is temporarily unavailable."
 
 
 def backup_key(settings):
@@ -269,11 +271,44 @@ class MongoProtection:
         self._lock = asyncio.Lock()
         self._last_error = None
         self._last_success_at = None
+        self._latest_backup = None
         self.recovery_required = False
         self.recovery_error = None
 
     async def restore(self):
-        return await asyncio.to_thread(MongoStore, self.backend)
+        store = await asyncio.to_thread(MongoStore, self.backend)
+        self._latest_backup = None
+        self._last_success_at = None
+        self._last_error = None
+        try:
+            latest = await asyncio.to_thread(self.history, limit=1)
+        except Exception:
+            self._last_error = _HISTORY_UNAVAILABLE
+        else:
+            if latest:
+                self._observe_backup(latest[0])
+        return store
+
+    def _observe_backup(self, row):
+        if (
+            self._latest_backup is None
+            or row.get("created_at", "") >= self._latest_backup.get("created_at", "")
+        ):
+            self._latest_backup = {
+                key: value for key, value in row.items() if key not in {"_id", "local_path"}
+            }
+        if row.get("status") == "confirmed":
+            confirmed_at = row.get("confirmed_at")
+            if confirmed_at and (
+                self._last_success_at is None or confirmed_at > self._last_success_at
+            ):
+                self._last_success_at = confirmed_at
+
+    def latest_history(self):
+        """Read the latest observed publication without querying MongoDB."""
+        if self._latest_backup is None:
+            return []
+        return copy.deepcopy([self._latest_backup])
 
     def check_local_binding(self, store):
         if store.storage_channel_id not in (None, self.settings.storage_channel):
@@ -317,13 +352,10 @@ class MongoProtection:
         return result
 
     def history(self, *, limit=None):
-        rows = self.backend.db.backups.find({}, {"_id": 0, "local_path": 0}).sort(
-            "created_at", -1
-        )
-        result = list(rows.limit(limit or 100))
-        if result and result[0].get("status") == "confirmed":
-            self._last_success_at = result[0].get("confirmed_at")
-        return result
+        rows = self.backend.db.backups.find(
+            {}, projection={"_id": 0, "local_path": 0}
+        ).sort("created_at", -1)
+        return list(rows.limit(limit or 100))
 
     async def backup(self, store, *, force=False):
         self.check_upload_allowed(store)
@@ -385,6 +417,7 @@ class MongoProtection:
                 }
                 await asyncio.to_thread(backend.db.backups.insert_one, row)
                 pending = row
+            self._observe_backup(pending)
             if pending["channel_id"] != self.settings.storage_channel:
                 raise BackupError("Pending backup belongs to another channel")
             remaining = pending.get("retry_at", 0) - time.time()
@@ -401,6 +434,8 @@ class MongoProtection:
                     {"_id": pending["_id"]},
                     {"$set": {"status": "interrupted"}},
                 )
+                pending["status"] = "interrupted"
+                self._observe_backup(pending)
                 raise BackupError(
                     "The previous backup file is unavailable; "
                     "a new snapshot will be scheduled"
@@ -417,6 +452,7 @@ class MongoProtection:
                             {"_id": pending["_id"]},
                             {"$set": {"sender": client.name}},
                         )
+                        self._observe_backup(pending)
                     message = await client.send_document(
                         self.settings.storage_channel,
                         str(path),
@@ -448,20 +484,21 @@ class MongoProtection:
                         await iterator.aclose()
                     if remote_hash.hexdigest() != digest:
                         raise BackupError("Telegram backup verification failed")
+                confirmed_at = datetime.now(UTC).isoformat()
+                confirmed = {
+                    "status": "confirmed",
+                    "message_id": identity,
+                    "confirmed_at": confirmed_at,
+                }
                 await asyncio.to_thread(
                     backend.db.backups.update_one,
                     {"_id": pending["_id"]},
-                    {
-                        "$set": {
-                            "status": "confirmed",
-                            "message_id": identity,
-                            "confirmed_at": datetime.now(UTC).isoformat(),
-                        }
-                    },
+                    {"$set": confirmed},
                 )
+                pending.update(confirmed)
+                self._observe_backup(pending)
                 path.unlink(missing_ok=True)
                 self._last_error = None
-                self._last_success_at = datetime.now(UTC).isoformat()
                 return True
             except Exception as exc:
                 seconds = getattr(exc, "seconds", None)
@@ -472,6 +509,8 @@ class MongoProtection:
                         {"_id": pending["_id"]},
                         {"$set": {"retry_at": deadline}},
                     )
+                    pending["retry_at"] = deadline
+                    self._observe_backup(pending)
                     await self.pool.defer_channel(deadline)
                 self._last_error = (
                     "The encrypted Telegram backup will retry automatically."
@@ -485,6 +524,7 @@ class MongoProtection:
 
     async def _loop(self, store):
         delay = 30
+        observed = self._latest_backup
         try:
             pending = await asyncio.to_thread(
                 self.backend.db.backups.find_one, {"status": "pending"}
@@ -494,6 +534,14 @@ class MongoProtection:
                 {"status": "confirmed"},
                 sort=[("created_at", -1)],
             )
+            if self._last_error == _HISTORY_UNAVAILABLE:
+                self._last_error = None
+            # Startup reads must not overwrite publication progress made while awaiting them.
+            if self._latest_backup is observed:
+                if latest:
+                    self._observe_backup(latest)
+                if pending:
+                    self._observe_backup(pending)
             if pending:
                 delay = max(1, pending.get("retry_at", 0) - time.time())
             elif latest and latest.get("confirmed_at"):

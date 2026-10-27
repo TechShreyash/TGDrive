@@ -75,6 +75,16 @@ const STORAGE_KEY = "tgdrive.uploads.v2";
 const STORAGE_PREFIX = STORAGE_KEY + ":";
 const DISMISSED_KEY = "tgdrive.dismissed-jobs.v1";
 const DISMISSED_PREFIX = DISMISSED_KEY + ":";
+function isRecoveryRecord(value: unknown, key: string): value is Transfer {
+    if (!value || typeof value !== "object") return false;
+    const row = value as Transfer;
+    return (
+        row.key === key &&
+        typeof row.name === "string" &&
+        typeof row.destination === "string" &&
+        Number.isFinite(row.size)
+    );
+}
 function readRecoveryRecords() {
     // The current v2 array is a read-only seed until its rows are updated or cleared.
     let seed: Transfer[] = [];
@@ -94,13 +104,7 @@ function readRecoveryRecords() {
         if (value === null) rows.delete(key);
         else if (!value || typeof value !== "object") invalid = true;
         else if (value.kind !== "delete" && value.initiatedHere === true) {
-            if (
-                value.key === key &&
-                typeof value.name === "string" &&
-                typeof value.destination === "string" &&
-                Number.isFinite(value.size)
-            )
-                rows.set(key, value);
+            if (isRecoveryRecord(value, key)) rows.set(key, value);
             else invalid = true;
         }
     };
@@ -128,6 +132,8 @@ const MAX_HISTORY_BATCHES = 30;
 const MAX_HISTORY_ROWS = 2000;
 // Receipt verification/handoff is control work, independent of payload slots.
 const RECEIPT_COMPLETION_CONCURRENCY = 2;
+const PROGRESS_UPDATE_MS = 250;
+const JOB_POLL_INTERVAL_MS = 1500;
 const DEVICE_RETRY_DELAYS_MS = [2000, 4000, 8000];
 const TRANSIENT_DEVICE_STATUSES = new Set([0, 408, 500, 502, 503, 504]);
 export interface UploadEntry {
@@ -450,8 +456,10 @@ export class TransferManager {
     private deviceConcurrency = new DeviceUploadConcurrency();
     private concurrencyTimer: ReturnType<typeof setInterval> | undefined;
     private timer: ReturnType<typeof setTimeout> | undefined;
+    private progressTimer: ReturnType<typeof setTimeout> | undefined;
     private stagingTimer: ReturnType<typeof setTimeout> | undefined;
     private polling = false;
+    private lastPollAt = 0;
     private refreshRequested = false;
     private stagingRetries = new Map<string, number>();
     private deviceRetryAttempts = new Map<string, number>();
@@ -471,11 +479,16 @@ export class TransferManager {
     private remoteSubmitting = new Set<string>();
     private persisted = new Map<string, string>();
     private restoredRecovery = new Map<string, string>();
+    private recoverySeedKeys = new Set<string>();
+    private recoveryInvalid = false;
+    private historyStorageDirty = false;
     constructor(
         private readonly sendChunk: UploadChunkTransport = sendUploadChunk,
     ) {
         try {
             const saved = readRecoveryRecords();
+            this.recoverySeedKeys = new Set(saved.seed.map((row) => row.key));
+            this.recoveryInvalid = saved.invalid;
             this.restoredRecovery = new Map(
                 saved.rows.map((row) => [row.key, JSON.stringify(row)]),
             );
@@ -618,14 +631,35 @@ export class TransferManager {
         );
     }
     private deviceStorageChanged = (event: StorageEvent) => {
+        if (
+            event.key === null ||
+            event.key === STORAGE_KEY ||
+            event.key === DISMISSED_KEY ||
+            event.key?.startsWith(DISMISSED_PREFIX)
+        )
+            this.historyStorageDirty = true;
         if (!event.key?.startsWith(STORAGE_PREFIX)) return;
         let state: TransferState | undefined;
         try {
             const saved = JSON.parse(event.newValue || "null");
+            if (
+                saved !== null &&
+                !isRecoveryRecord(saved, event.key.slice(STORAGE_PREFIX.length))
+            ) {
+                this.historyStorageDirty = true;
+                return;
+            }
+            if (
+                !saved ||
+                terminal.has(saved.state) ||
+                saved.state === "cancelling"
+            )
+                this.historyStorageDirty = true;
             if (saved && !["cancelling", "cancelled"].includes(saved.state))
                 return;
             state = saved?.state;
         } catch {
+            this.historyStorageDirty = true;
             return;
         }
         const item = this.items.find(
@@ -688,6 +722,14 @@ export class TransferManager {
         if (this.polling) this.refreshRequested = true;
         else void this.poll();
     };
+    private scheduleJobsRefresh() {
+        if (!this.enabled || this.polling) return;
+        clearTimeout(this.timer);
+        this.timer = setTimeout(
+            () => void this.poll(),
+            Math.max(0, this.lastPollAt + JOB_POLL_INTERVAL_MS - Date.now()),
+        );
+    }
     async retryDeletion(id: string) {
         if (
             !this.deletionJobs.some(
@@ -710,29 +752,36 @@ export class TransferManager {
         // A poll started before this retry must be followed by a fresh request.
         this.refreshJobs();
     }
-    private mergeDismissed() {
-        try {
-            let saved: unknown;
+    private mergeDismissed(readStorage = true) {
+        if (readStorage) {
             try {
-                saved = JSON.parse(localStorage.getItem(DISMISSED_KEY) || "[]");
+                let saved: unknown;
+                try {
+                    saved = JSON.parse(
+                        localStorage.getItem(DISMISSED_KEY) || "[]",
+                    );
+                } catch {
+                    /* Independent dismissal records remain readable. */
+                }
+                if (Array.isArray(saved))
+                    for (const id of saved)
+                        if (typeof id === "string") this.dismissed.add(id);
+                const records: [string, number][] = [];
+                for (let index = 0; index < localStorage.length; index++) {
+                    const key = localStorage.key(index);
+                    if (key?.startsWith(DISMISSED_PREFIX))
+                        records.push([
+                            key,
+                            Number(localStorage.getItem(key)) || 0,
+                        ]);
+                }
+                records.sort((a, b) => a[1] - b[1] || a[0].localeCompare(b[0]));
+                for (const [key] of records)
+                    this.dismissed.add(key.slice(DISMISSED_PREFIX.length));
+                this.dismissed = new Set([...this.dismissed].slice(-1000));
             } catch {
-                /* Independent dismissal records remain readable. */
+                /* Keep in-memory dismissals when browser storage is unavailable. */
             }
-            if (Array.isArray(saved))
-                for (const id of saved)
-                    if (typeof id === "string") this.dismissed.add(id);
-            const records: [string, number][] = [];
-            for (let index = 0; index < localStorage.length; index++) {
-                const key = localStorage.key(index);
-                if (key?.startsWith(DISMISSED_PREFIX))
-                    records.push([key, Number(localStorage.getItem(key)) || 0]);
-            }
-            records.sort((a, b) => a[1] - b[1] || a[0].localeCompare(b[0]));
-            for (const [key] of records)
-                this.dismissed.add(key.slice(DISMISSED_PREFIX.length));
-            this.dismissed = new Set([...this.dismissed].slice(-1000));
-        } catch {
-            /* Keep in-memory dismissals when browser storage is unavailable. */
         }
         const unfinished = new Set(
             this.items
@@ -749,7 +798,9 @@ export class TransferManager {
                 unfinished.has(transferTaskId(item)),
         );
     }
-    private publish(persist = true) {
+    private publish(persist = true, changed?: Transfer[]) {
+        clearTimeout(this.progressTimer);
+        this.progressTimer = undefined;
         const now = Date.now();
         if (this.enabled && !this.admissionPaused)
             this.batchProgress.observe(summarizeBatches(this.items, now), now);
@@ -760,7 +811,9 @@ export class TransferManager {
             return;
         }
         // Another tab may have cleared finished rows since the previous poll.
-        this.mergeDismissed();
+        const previousSize = this.items.length;
+        const full = !changed || this.historyStorageDirty;
+        this.mergeDismissed(full);
         const retained = retainTransferBatches(this.items);
         const retainedKeys = new Set(retained.map((item) => item.key));
         for (const item of this.items)
@@ -768,9 +821,12 @@ export class TransferManager {
                 this.dismissed.add(item.jobId);
         this.items = [...retained];
         try {
-            const invalid = this.persistRecovery();
-            this.persistDismissed();
-            this.recoveryWarning = invalid
+            if (full || this.items.length !== previousSize) {
+                this.persistRecovery();
+                this.persistDismissed();
+                this.historyStorageDirty = false;
+            } else this.persistRecovery(changed!);
+            this.recoveryWarning = this.recoveryInvalid
                 ? "Some transfer recovery information could not be loaded. Valid saved transfers are still available."
                 : "";
         } catch {
@@ -779,9 +835,15 @@ export class TransferManager {
         }
         for (const listener of this.listeners) listener();
     }
-    private persistRecovery() {
-        const { seed, invalid } = readRecoveryRecords();
-        const seedKeys = new Set(seed.map((row) => row.key));
+    private persistRecovery(changed?: Transfer[]) {
+        let seed: Transfer[] = [];
+        if (!changed) {
+            const saved = readRecoveryRecords();
+            seed = saved.seed;
+            this.recoverySeedKeys = new Set(seed.map((row) => row.key));
+            this.recoveryInvalid = saved.invalid;
+        }
+        const seedKeys = this.recoverySeedKeys;
         const remove = (key: string) => {
             // A seed tombstone prevents a still-open tab restoring a cleared row.
             if (seedKeys.has(key))
@@ -790,9 +852,9 @@ export class TransferManager {
         };
         for (const row of seed)
             if (!row.initiatedHere || row.kind === "delete") remove(row.key);
-        const current = new Map<string, string>();
+        const current = changed ? this.persisted : new Map<string, string>();
         const removed = new Set<string>();
-        for (const row of safeTransferMetadata(this.items)) {
+        for (const row of safeTransferMetadata(changed || this.items)) {
             if (!row.initiatedHere || row.kind === "delete") continue;
             const stored = localStorage.getItem(STORAGE_PREFIX + row.key);
             if (
@@ -802,17 +864,28 @@ export class TransferManager {
                     !seedKeys.has(row.key))
             ) {
                 removed.add(row.key);
+                current.delete(row.key);
                 continue;
+            }
+            if (changed && stored !== null) {
+                try {
+                    if (!isRecoveryRecord(JSON.parse(stored), row.key))
+                        this.recoveryInvalid = true;
+                } catch {
+                    this.recoveryInvalid = true;
+                }
             }
             const serialized = JSON.stringify(row);
             if (serialized !== this.persisted.get(row.key))
                 localStorage.setItem(STORAGE_PREFIX + row.key, serialized);
             current.set(row.key, serialized);
         }
-        for (const key of this.persisted.keys())
-            if (!current.has(key) && !removed.has(key)) remove(key);
+        if (!changed)
+            for (const key of this.persisted.keys())
+                if (!current.has(key) && !removed.has(key)) remove(key);
         this.items = this.items.filter((row) => !removed.has(row.key));
         this.persisted = current;
+        if (changed) return;
         const saved = readRecoveryRecords().rows;
         const retained = new Set(
             retainTransferBatches(saved).map((row) => row.key),
@@ -829,8 +902,8 @@ export class TransferManager {
             for (const row of seed)
                 if (localStorage.getItem(STORAGE_PREFIX + row.key) === "null")
                     localStorage.removeItem(STORAGE_PREFIX + row.key);
+            this.recoverySeedKeys.clear();
         }
-        return invalid;
     }
     private persistDismissed() {
         for (const id of this.dismissed)
@@ -868,9 +941,15 @@ export class TransferManager {
                     Date.now(),
                 );
             else item.meter = undefined;
-            this.publish(
-                Object.keys(values).some((key) => key !== "sentCurrent"),
+            const progressOnly = Object.keys(values).every(
+                (key) => key === "sentCurrent",
             );
+            if (progressOnly && (item.sentCurrent ?? 0) < item.total)
+                this.progressTimer ??= setTimeout(
+                    () => this.publish(false),
+                    PROGRESS_UPDATE_MS,
+                );
+            else this.publish(!progressOnly, [item]);
         }
     }
     setEnabled(enabled: boolean) {
@@ -880,6 +959,8 @@ export class TransferManager {
             window.removeEventListener("storage", this.deviceStorageChanged);
             this.batchProgress.clear();
             clearTimeout(this.timer);
+            clearTimeout(this.progressTimer);
+            this.progressTimer = undefined;
             clearTimeout(this.stagingTimer);
             clearInterval(this.concurrencyTimer);
             this.concurrencyTimer = undefined;
@@ -888,6 +969,7 @@ export class TransferManager {
             return;
         }
         window.addEventListener("storage", this.deviceStorageChanged);
+        this.historyStorageDirty = true;
         void this.poll();
         void this.startNext();
     }
@@ -2031,12 +2113,13 @@ export class TransferManager {
                 total: item.size,
                 file: undefined,
             });
-        this.refreshJobs();
+        this.scheduleJobsRefresh();
     }
     private async poll() {
         if (!this.enabled || this.polling) return;
         clearTimeout(this.timer);
         this.polling = true;
+        this.lastPollAt = Date.now();
         for (const item of this.items
             .filter(
                 (row) =>
@@ -2093,7 +2176,8 @@ export class TransferManager {
                 )
             )
                 filesChanged = true;
-            this.mergeDismissed();
+            this.mergeDismissed(this.historyStorageDirty);
+            const changed: Transfer[] = [];
             const clearedKeys = new Set<string>();
             for (const job of payload.jobs) {
                 // Deletions are a single file-operation notice, never upload transfers.
@@ -2154,6 +2238,7 @@ export class TransferManager {
                 if (terminal.has(item.state)) item.finishedAt ??= Date.now();
                 else item.finishedAt = undefined;
                 item.meter = undefined;
+                changed.push(item);
                 if (
                     !wasVisible &&
                     (item.state === "completed" ||
@@ -2166,12 +2251,16 @@ export class TransferManager {
                     .filter((item) => !terminal.has(item.state))
                     .map(transferTaskId),
             );
+            const previousSize = this.items.length;
             this.items = this.items.filter(
                 (item) =>
                     !clearedKeys.has(item.key) ||
                     unfinished.has(transferTaskId(item)),
             );
-            this.publish();
+            this.publish(
+                true,
+                this.items.length === previousSize ? changed : undefined,
+            );
             if (filesChanged)
                 window.dispatchEvent(new Event("tgdrive:files-changed"));
         } catch {
@@ -2185,7 +2274,7 @@ export class TransferManager {
             for (const item of this.items)
                 if (item.jobId && !terminal.has(item.state))
                     item.error = "Progress connection lost. Trying again…";
-            this.publish();
+            this.publish(false);
         } finally {
             this.polling = false;
             if (this.refreshRequested && this.enabled) {
@@ -2213,7 +2302,7 @@ export class TransferManager {
                                     "interrupted",
                                 ].includes(job.status),
                         )
-                        ? 1500
+                        ? JOB_POLL_INTERVAL_MS
                         : 10000,
                 );
         }

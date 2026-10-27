@@ -84,6 +84,10 @@ state. Durable collections hold nodes and ordered parts,
 shares, operation IDs, jobs and receipts, deletion intents, private settings and
 sessions, backup records and the runtime ownership lease.
 
+Directory responses are assembled in workers, and resource totals reuse an
+unchanged committed snapshot. See [navigation during uploads](performance.md#navigation-during-uploads)
+for browser update, polling and read-reuse policies.
+
 - Paths use stable item IDs: moves and renames retain identity.
 - Names are Unicode-normalized with case-insensitive sibling uniqueness.
 - Files reference one Telegram document or ordered parts with offsets, sizes

@@ -196,6 +196,7 @@ class MongoStore(DriveStore):
 
         state = self.backend.transaction(read)
         self._committed = state
+        self._statistics_cache = None
         if hasattr(self._local, "working"):
             self._local.working = state
         self._validate_state()
@@ -299,6 +300,7 @@ class MongoStore(DriveStore):
                 if outer and self._state != before:
                     self._commit(before)
                     self._committed = self._state
+                    self._statistics_cache = None
             except BaseException:
                 if not outer:
                     self._local.working = before
@@ -1336,6 +1338,10 @@ class MongoStore(DriveStore):
 
     def statistics(self):
         with self._transaction():
+            state = self._state
+            cached = getattr(self, "_statistics_cache", None)
+            if cached is not None and cached[0] is state:
+                return dict(cached[1])
             result = {
                 "files": 0,
                 "folders": 0,
@@ -1354,4 +1360,7 @@ class MongoStore(DriveStore):
                     result["trashed_bytes" if hidden else "total_bytes"] += row["size"]
                 elif not hidden:
                     result["folders"] += 1
-            return result
+            # Working batches can change again before committing or rolling back.
+            if state is self._committed:
+                self._statistics_cache = (state, result)
+            return dict(result)

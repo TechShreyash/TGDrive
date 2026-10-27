@@ -182,12 +182,8 @@ def register_routes(
             if not item.healthy
         ]
         backup = getattr(runtime, "backup", None)
-        history = []
-        if backup and hasattr(backup, "history"):
-            try:
-                history = await asyncio.to_thread(backup.history, limit=1)
-            except TypeError:
-                history = (await asyncio.to_thread(backup.history))[:1]
+        latest = getattr(backup, "latest_history", None)
+        history = latest() if callable(latest) else []
         connections = getattr(runtime, "connection_manager", None)
         restart_required = bool(connections and connections.restart_required)
         return {
@@ -419,18 +415,19 @@ def register_routes(
         check_receipt(get_store(request), uploads(request).get_unchecked(upload_id))
         return await uploads(request).cancel(upload_id)
 
-    def job_snapshot(record: Any, request: Request) -> dict[str, Any]:
+    def job_snapshot(record: Any, request: Request, queues=None) -> dict[str, Any]:
         record = record.committed
+        if queues is None:
+            estimate = getattr(get_runtime(request).pool, "queue_estimate", None)
+            queue = estimate(record.id) if callable(estimate) else None
+        else:
+            queue = queues.get(record.id)
         return record.as_dict() | {
             "name": record.context.get("name", "Transfer"),
             "kind": record.context.get(
                 "source_kind", record.context.get("kind", "upload")
             ),
-            "queue": (
-                get_runtime(request).pool.queue_estimate(record.id)
-                if callable(getattr(get_runtime(request).pool, "queue_estimate", None))
-                else None
-            ),
+            "queue": queue,
             "destination": record.context.get("destination", "/"),
             "history_cleared": record.history_hidden,
         }
@@ -438,10 +435,12 @@ def register_routes(
     @app.get("/api/v1/jobs", dependencies=admin)
     async def jobs(request: Request, response: Response) -> dict[str, Any]:
         response.headers["Cache-Control"] = "no-store"
+        records = get_manager(request).registry.list()
+        estimate = getattr(get_runtime(request).pool, "queue_estimates", None)
+        queues = estimate(record.id for record in records) if callable(estimate) else None
         return {
             "jobs": [
-                job_snapshot(record, request)
-                for record in get_manager(request).registry.list()
+                job_snapshot(record, request, queues) for record in records
             ]
         }
 

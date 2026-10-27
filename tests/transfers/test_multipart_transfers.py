@@ -16,6 +16,7 @@ from tgdrive.storage.mongo import for_directory
 from tgdrive.storage.store import DriveStore
 from tgdrive.telegram.client_pool import ClientPool, NoClientAvailable
 from tgdrive.transfers.manager import TransferError, TransferManager
+from tgdrive.transfers.multipart_transfer import fingerprint
 from tgdrive.transfers.tasks import TransferRegistry, TransferStatus
 
 
@@ -27,6 +28,24 @@ def mongo_backend(tmp_path, monkeypatch):
 def registry_for(directory):
     backend = for_directory(directory)
     return TransferRegistry(mongo=backend.db.jobs, mongo_backend=backend)
+
+
+@pytest.mark.parametrize("payload", [b"", b"a", b"abcd", b"abcde", b"abcdefgh"])
+def test_fingerprint_preserves_whole_and_part_hashes_at_split_boundaries(
+    tmp_path, payload
+):
+    source = tmp_path / "fingerprint.bin"
+    source.write_bytes(payload)
+    checksum, parts = fingerprint(source, len(payload), 4)
+    assert checksum == hashlib.sha256(payload).hexdigest()
+    assert len(parts) == (len(payload) + 3) // 4
+    for index, part in enumerate(parts):
+        content = payload[index * 4 : (index + 1) * 4]
+        assert part["index"] == index
+        assert part["offset"] == index * 4
+        assert part["size"] == len(content)
+        assert part["sha256"] == hashlib.sha256(content).hexdigest()
+    assert source.read_bytes() == payload
 
 
 class Ledger:

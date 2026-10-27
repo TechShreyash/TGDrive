@@ -4,6 +4,7 @@ import asyncio
 import errno
 import logging
 import time
+from unittest.mock import Mock
 
 import pytest
 
@@ -146,6 +147,35 @@ async def test_explicit_error_clear_is_persisted_without_losing_omission_semanti
 
         assert record.error is None
         assert backend.db.jobs.find_one({"_id": record.id})["data"]["error"] is None
+    finally:
+        registry.close()
+
+
+@pytest.mark.parametrize("error", [None, "x" * 600])
+async def test_unchanged_normalized_error_skips_write_but_keeps_other_commits(
+    monkeypatch, error
+):
+    backend = FakeMongoBackend()
+    registry = TransferRegistry(mongo=backend.db.jobs, mongo_backend=backend)
+    record = await registry.create("uploading", total=10)
+    await registry.update(record.id, status=TransferStatus.RUNNING, error=error)
+    write = Mock(wraps=backend.write)
+    monkeypatch.setattr(backend, "write", write)
+    try:
+        await registry.update(record.id, current=1, error=error)
+        write.assert_not_called()
+
+        record.context["sender"] = "storage-bot"
+        await registry.update(record.id, error=error)
+        write.assert_called_once()
+        saved = backend.db.jobs.find_one({"_id": record.id})["data"]
+        assert saved["context"]["sender"] == "storage-bot"
+        assert saved["error"] == (error[:500] if error else None)
+
+        await registry.update(record.id, phase="retry_wait", error=error)
+        assert write.call_count == 2
+        await registry.update(record.id, status=TransferStatus.QUEUED, error=error)
+        assert write.call_count == 3
     finally:
         registry.close()
 
