@@ -436,6 +436,19 @@ export default function App() {
             item.initiatedHere &&
             ["error", "awaiting_file"].includes(item.state),
     );
+    const mobileActiveCount = new Set(
+        items
+            .filter(
+                (item) =>
+                    ![
+                        "completed",
+                        "error",
+                        "cancelled",
+                        "awaiting_file",
+                    ].includes(item.state),
+            )
+            .map(transferTaskId),
+    ).size;
     const deviceUploadPending =
         authenticated === true && !isPublic && items.some(needsDeviceUpload);
     useEffect(() => {
@@ -2115,7 +2128,7 @@ export default function App() {
                 {mobile &&
                     !isPublic &&
                     view !== "activity" &&
-                    (activeCount > 0 || mobileUploadIssues) && (
+                    (mobileActiveCount > 0 || mobileUploadIssues) && (
                         <button
                             className="mobile-transfer-status"
                             onClick={() => navigate("/", "activity")}
@@ -2123,9 +2136,9 @@ export default function App() {
                         >
                             <Upload size={18} aria-hidden="true" />
                             <span>
-                                {activeCount > 0
-                                    ? activeCount +
-                                      (activeCount === 1
+                                {mobileActiveCount > 0
+                                    ? mobileActiveCount +
+                                      (mobileActiveCount === 1
                                           ? " upload in progress"
                                           : " uploads in progress")
                                     : "Uploads need attention"}

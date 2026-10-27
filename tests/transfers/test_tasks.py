@@ -131,6 +131,25 @@ async def test_registry_cancellation_sets_event() -> None:
     assert record.error == "Transfer cancelled"
 
 
+async def test_explicit_error_clear_is_persisted_without_losing_omission_semantics():
+    backend = FakeMongoBackend()
+    registry = TransferRegistry(mongo=backend.db.jobs, mongo_backend=backend)
+    record = await registry.create("uploading", total=10)
+    try:
+        await registry.update(
+            record.id, status=TransferStatus.RUNNING, error="Waiting for Telegram"
+        )
+        await registry.update(record.id, current=1)
+        assert record.error == "Waiting for Telegram"
+
+        await registry.update(record.id, error=None)
+
+        assert record.error is None
+        assert backend.db.jobs.find_one({"_id": record.id})["data"]["error"] is None
+    finally:
+        registry.close()
+
+
 async def test_late_progress_cannot_mutate_cancelled_snapshot() -> None:
     registry = TransferRegistry()
     record = await registry.create("uploading", total=100)

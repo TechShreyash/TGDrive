@@ -274,11 +274,28 @@ The job's first durable record includes its staged path, destination, name and
 upload identity. A restart between job creation and receipt handoff can therefore
 resume the existing job while the staged bytes survive.
 
+Receipt inspection takes the same per-upload lock as chunk writes, completion
+and cancellation. Resolving a moved destination updates the inspected copy;
+the next durable write saves it. GET/HEAD cannot replace a newer acknowledged
+offset or checksum journal. Expiry cleanup leaves staged bytes owned by an
+accepted job for that job's completion/cancellation path.
+
 Browser recovery metadata is saved per transfer, and finished-job dismissals per
 job, so another tab cannot replace the whole recovery list. Malformed entries
 produce a warning without hiding valid transfers. This metadata does not contain
 the original device files; clearing browser storage or losing staged bytes can
 still require selecting the originals again.
+
+Device senders hold a per-transfer Web Lock through receipt handoff. When browser
+recovery storage is available, a waiting tab reloads saved ownership before
+sending, so it reuses an accepted receipt or job instead of creating another.
+Cross-tab cancellation signals the current sender to stop, waits for its
+in-flight work to drain, then cancels the latest
+server identity. Web Locks are required for device sending; unsupported browsers
+fail explicitly. The locks coordinate tabs in one browser origin, not other
+devices, and closing a tab releases its lock. Server-owned work remains durable
+independently of browser ownership. If recovery storage fails, keep the original
+tab open: other tabs may not know its latest receipt or job identity.
 
 | Signal | Guarantee |
 | --- | --- |

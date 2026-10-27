@@ -470,11 +470,15 @@ export class TransferManager {
     >();
     private remoteSubmitting = new Set<string>();
     private persisted = new Map<string, string>();
+    private restoredRecovery = new Map<string, string>();
     constructor(
         private readonly sendChunk: UploadChunkTransport = sendUploadChunk,
     ) {
         try {
             const saved = readRecoveryRecords();
+            this.restoredRecovery = new Map(
+                saved.rows.map((row) => [row.key, JSON.stringify(row)]),
+            );
             if (saved.invalid)
                 this.recoveryWarning =
                     "Some transfer recovery information could not be loaded. Valid saved transfers are still available.";
@@ -534,6 +538,108 @@ export class TransferManager {
         };
     };
     snapshot = () => this.items;
+    private reconcileDeviceTransfer(
+        item: Transfer,
+        records?: Map<string, Transfer>,
+        invalidRecords = false,
+    ): boolean {
+        if (item.kind === "remote") return true;
+        let saved: Transfer | undefined;
+        let unreadable = false;
+        try {
+            if (records) saved = records.get(item.key);
+            else {
+                const recovery = readRecoveryRecords();
+                saved = recovery.rows.find((row) => row.key === item.key);
+                invalidRecords = recovery.invalid;
+            }
+            unreadable =
+                !saved &&
+                invalidRecords &&
+                localStorage.getItem(STORAGE_PREFIX + item.key) !== "null";
+        } catch {
+            this.recoveryWarning =
+                "Your browser could not read transfer recovery information. Keep this tab open until device transfers finish.";
+            if (!this.persisted.has(item.key)) return true;
+            throw new Error(
+                "Your browser could not read this transfer's recovery information. Restore browser storage access before resuming or cancelling it.",
+            );
+        }
+        if (!saved) {
+            if (!this.persisted.has(item.key)) return true;
+            if (unreadable) {
+                this.recoveryWarning =
+                    "Some transfer recovery information could not be loaded. Valid saved transfers are still available.";
+                throw new Error(
+                    "This transfer's saved recovery information is unreadable. Keep this tab open and restore browser storage before resuming or cancelling it.",
+                );
+            }
+            item.controller?.abort();
+            this.items = this.items.filter((row) => row !== item);
+            this.publish(false);
+            return false;
+        }
+        const serialized = JSON.stringify(saved);
+        // Restoring a row changes its UI state, not the stored version seen by this tab.
+        if (
+            serialized !== this.persisted.get(item.key) &&
+            serialized !== this.restoredRecovery.get(item.key)
+        ) {
+            const uploadId = item.uploadId || saved.uploadId;
+            const jobId = item.jobId || saved.jobId;
+            Object.assign(item, safeTransferMetadata([saved])[0], {
+                uploadId,
+                jobId,
+            });
+            if (item.state !== "error") item.error = undefined;
+            if (item.jobId || ["completed", "cancelled"].includes(item.state))
+                item.file = undefined;
+            this.persisted.set(item.key, serialized);
+        }
+        if (serialized !== this.restoredRecovery.get(item.key))
+            this.restoredRecovery.delete(item.key);
+        return true;
+    }
+    private deviceLock<T>(
+        key: string,
+        work: () => Promise<T>,
+        signal?: AbortSignal,
+    ): Promise<T> {
+        if (!globalThis.navigator?.locks)
+            return Promise.reject(
+                new Error(
+                    "Device uploads require a browser with Web Locks over HTTPS or localhost. Update your browser and reopen TGDrive securely.",
+                ),
+            );
+        return navigator.locks.request(
+            "tgdrive.device-upload:" + key,
+            { signal },
+            work,
+        );
+    }
+    private deviceStorageChanged = (event: StorageEvent) => {
+        if (!event.key?.startsWith(STORAGE_PREFIX)) return;
+        let state: TransferState | undefined;
+        try {
+            const saved = JSON.parse(event.newValue || "null");
+            if (saved && !["cancelling", "cancelled"].includes(saved.state))
+                return;
+            state = saved?.state;
+        } catch {
+            return;
+        }
+        const item = this.items.find(
+            (row) => row.key === event.key!.slice(STORAGE_PREFIX.length),
+        );
+        if (!item || item.kind === "remote") return;
+        // Cancellation is a signal; another tab's older snapshot cannot replace this owner's IDs or offsets.
+        item.state = state || "cancelling";
+        item.phase = "Cancelling and cleaning up";
+        item.controller?.abort();
+        if (state === "cancelled") item.file = undefined;
+        if (!state) this.items = this.items.filter((row) => row !== item);
+        this.publish(false);
+    };
     batchProgressSnapshot = () => this.batchProgress.snapshot();
     deletionSnapshot = () => this.deletionProgress;
     private updateDeletionProgress(error = "") {
@@ -771,6 +877,7 @@ export class TransferManager {
         if (this.enabled === enabled) return;
         this.enabled = enabled;
         if (!enabled) {
+            window.removeEventListener("storage", this.deviceStorageChanged);
             this.batchProgress.clear();
             clearTimeout(this.timer);
             clearTimeout(this.stagingTimer);
@@ -780,6 +887,7 @@ export class TransferManager {
             for (const item of this.items) item.controller?.abort();
             return;
         }
+        window.addEventListener("storage", this.deviceStorageChanged);
         void this.poll();
         void this.startNext();
     }
@@ -1021,6 +1129,14 @@ export class TransferManager {
                 "URL uploads resume on the server. Retry the transfer instead.",
             );
         if (
+            !this.reconcileDeviceTransfer(item) ||
+            item.jobId ||
+            ["completed", "cancelled", "cancelling"].includes(item.state)
+        ) {
+            this.publish(false);
+            return;
+        }
+        if (
             file.name.normalize("NFC") !== item.name.normalize("NFC") ||
             file.size !== item.size
         )
@@ -1038,9 +1154,20 @@ export class TransferManager {
         void this.startNext();
     }
     async resumeBatchFiles(batchId: string, files: File[]) {
-        const batch = this.items.filter(
-            (item) => transferTaskId(item) === batchId,
-        );
+        let recovery: ReturnType<typeof readRecoveryRecords>;
+        try {
+            recovery = readRecoveryRecords();
+        } catch {
+            throw new Error(
+                "Your browser could not read transfer recovery information. Restore browser storage access before resuming this folder.",
+            );
+        }
+        const saved = new Map(recovery.rows.map((row) => [row.key, row]));
+        const batch = this.items
+            .filter((item) => transferTaskId(item) === batchId)
+            .filter((item) =>
+                this.reconcileDeviceTransfer(item, saved, recovery.invalid),
+            );
         const pending = batch.filter(
             (item) =>
                 !item.jobId &&
@@ -1181,7 +1308,12 @@ export class TransferManager {
     }
     async cancel(key: string) {
         const item = this.items.find((item) => item.key === key);
-        if (!item || !canCancelTransfer(item)) return;
+        if (
+            !item ||
+            !this.reconcileDeviceTransfer(item) ||
+            !canCancelTransfer(item)
+        )
+            return;
         this.stagingRetries.delete(item.key);
         this.deviceRetryAttempts.delete(item.key);
         this.update(key, {
@@ -1190,45 +1322,54 @@ export class TransferManager {
             error: undefined,
         });
         item.controller?.abort();
-        try {
-            if (item.jobId) {
-                const result = await api.cancelJob(item.jobId);
-                if (result.data)
-                    this.update(key, fromJob(result.data, item.kind));
-            } else if (item.kind === "remote" && item.remoteRequestId) {
-                this.acceptRemote(
-                    key,
-                    await api.cancelRemoteRequest(item.remoteRequestId),
-                );
-                this.remoteStarts.delete(key);
-            } else {
-                if (item.uploadId) await api.cancelUpload(item.uploadId);
+        const cancel = async () => {
+            try {
+                if (!this.reconcileDeviceTransfer(item)) return;
+                if (item.jobId) {
+                    const result = await api.cancelJob(item.jobId);
+                    if (result.data)
+                        this.update(key, fromJob(result.data, item.kind));
+                } else if (item.kind === "remote" && item.remoteRequestId) {
+                    this.acceptRemote(
+                        key,
+                        await api.cancelRemoteRequest(item.remoteRequestId),
+                    );
+                    this.remoteStarts.delete(key);
+                } else {
+                    if (item.uploadId) await api.cancelUpload(item.uploadId);
+                    this.update(key, {
+                        state: "cancelled",
+                        phase: "Cancelled",
+                        file: undefined,
+                    });
+                }
+            } catch (error) {
+                if (
+                    error instanceof ApiError &&
+                    error.code === "BACKUP_PENDING"
+                ) {
+                    this.update(key, {
+                        state: "uploading",
+                        stage: "backup_pending",
+                        error: undefined,
+                        phase: "Securing your drive backup in Telegram",
+                    });
+                    void this.poll();
+                    return;
+                }
                 this.update(key, {
-                    state: "cancelled",
-                    phase: "Cancelled",
-                    file: undefined,
+                    state: "cancelling",
+                    error: errorMessage(error),
+                    phase: "Cancellation not yet confirmed. Try Again.",
                 });
+                throw error;
+            } finally {
+                void this.startNext();
             }
-        } catch (error) {
-            if (error instanceof ApiError && error.code === "BACKUP_PENDING") {
-                this.update(key, {
-                    state: "uploading",
-                    stage: "backup_pending",
-                    error: undefined,
-                    phase: "Securing your drive backup in Telegram",
-                });
-                void this.poll();
-                return;
-            }
-            this.update(key, {
-                state: "cancelling",
-                error: errorMessage(error),
-                phase: "Cancellation not yet confirmed. Try Again.",
-            });
-            throw error;
-        } finally {
-            void this.startNext();
-        }
+        };
+        if (item.kind === "remote" || !globalThis.navigator?.locks)
+            await cancel();
+        else await this.deviceLock(item.key, cancel);
     }
     clearFinished() {
         for (const item of this.items)
@@ -1251,6 +1392,9 @@ export class TransferManager {
             this.items
                 .filter(
                     (item) =>
+                        (!item.jobId &&
+                            item.kind !== "remote" &&
+                            item.state === "error") ||
                         !["completed", "cancelled", "error"].includes(
                             item.state,
                         ),
@@ -1468,9 +1612,38 @@ export class TransferManager {
         }
     }
     private async receiveNext(item: Transfer) {
+        const controller = new AbortController();
+        item.controller = controller;
         try {
-            await this.receive(item);
+            await this.deviceLock(
+                item.key,
+                async () => {
+                    if (!this.reconcileDeviceTransfer(item)) return;
+                    if (
+                        item.jobId ||
+                        ["completed", "cancelled", "cancelling"].includes(
+                            item.state,
+                        )
+                    ) {
+                        this.publish(false);
+                        return;
+                    }
+                    if (!this.enabled || controller.signal.aborted)
+                        throw new DOMException("Upload paused", "AbortError");
+                    await this.receive(item, controller);
+                },
+                controller.signal,
+            );
         } catch (error) {
+            try {
+                this.reconcileDeviceTransfer(item);
+            } catch (recoveryError) {
+                this.update(item.key, {
+                    state: "error",
+                    error: errorMessage(recoveryError),
+                });
+                return;
+            }
             if (
                 this.enabled &&
                 !this.admissionPaused &&
@@ -1559,11 +1732,9 @@ export class TransferManager {
             this.startNext();
         }
     }
-    private async receive(item: Transfer) {
+    private async receive(item: Transfer, controller: AbortController) {
         const file = item.file!;
         const previouslyAcknowledged = item.current;
-        const controller = new AbortController();
-        item.controller = controller;
         this.update(item.key, {
             state: "receiving",
             stage: "preparing",
@@ -1584,7 +1755,12 @@ export class TransferManager {
             this.update(item.key, { uploadId: snapshot.id });
         }
         if (["cancelling", "cancelled"].includes(item.state)) {
-            if (item.uploadId) await api.cancelUpload(item.uploadId);
+            // The cancelling tab owns cleanup after this operation releases its lock.
+            if (
+                item.uploadId &&
+                (item.state === "cancelled" || !this.items.includes(item))
+            )
+                await api.cancelUpload(item.uploadId);
             return;
         }
         if (controller.signal.aborted)

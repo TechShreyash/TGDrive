@@ -172,6 +172,7 @@ export async function loadTaskHistoryPage(
     page: number,
     signal: AbortSignal,
     query = "",
+    onLocalItems?: (items: Transfer[]) => void,
 ): Promise<TransferTaskHistoryPage & { localItems: Transfer[] }> {
     const tasks = summarizeBatches(local, Date.now());
     const context: TransferHistoryContext = { exclude_folders: [] };
@@ -212,6 +213,7 @@ export async function loadTaskHistoryPage(
         start,
         start + TRANSFER_TASK_PAGE_SIZE,
     );
+    onLocalItems?.(localPage.flatMap((task) => task.items));
     context.offset = Math.max(0, start - localFinished.length);
     const result = await api.transferTaskHistory(
         filter === "all" ? "finished" : filter,

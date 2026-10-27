@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { stubDeviceLocks } from "./transferTestLocks";
 import { TransferManager } from "./transfers";
 import type { UploadChunkTransport } from "./uploadTransport";
 
@@ -145,6 +146,7 @@ async function runningUploads(count = 10, resumeFirstFile = false) {
 }
 
 beforeEach(() => {
+    stubDeviceLocks();
     vi.useFakeTimers();
     const values = new Map<string, string>();
     vi.stubGlobal("localStorage", {

@@ -10,6 +10,7 @@ import {
     type Transfer,
 } from "./transfers";
 import { transferTaskId } from "./transferTasks";
+import { stubDeviceLocks } from "./transferTestLocks";
 import {
     fileUrl,
     itemPath,
@@ -46,6 +47,7 @@ async function hash(data: string) {
         .join("");
 }
 beforeEach(() => {
+    stubDeviceLocks();
     const data = new Map<string, string>();
     vi.stubGlobal("localStorage", {
         get length() {
@@ -60,6 +62,56 @@ beforeEach(() => {
 });
 afterEach(() => vi.unstubAllGlobals());
 describe("manual transfer history clearing", () => {
+    it("keeps reloaded browser-only errors and their completed folder members recoverable", async () => {
+        vi.stubGlobal(
+            "fetch",
+            vi.fn(async () => Response.json({ cleared: 0 })),
+        );
+        const first = managerForTest();
+        const folder = folderBatch("Folder");
+        first.addEntries(
+            ["pending.bin", "done.bin"].map((name) => ({
+                file: new File(["data"], name),
+                destination: "/Folder",
+                relativePath: "Folder/" + name,
+            })),
+            10,
+            true,
+            folder,
+        );
+        Object.assign(first.snapshot()[0], {
+            state: "error",
+            uploadId: "partial-receipt",
+            current: 2,
+        });
+        Object.assign(first.snapshot()[1], {
+            state: "completed",
+            jobId: "finished-member",
+        });
+        first.clearFinished();
+        const restored = managerForTest();
+        expect(restored.snapshot()[0].state).toBe("error");
+        expect(restored.snapshot()[0].file).toBeUndefined();
+        await restored.clearHistory();
+        expect(fetch).toHaveBeenCalledWith(
+            "/api/v1/transfers/history",
+            expect.objectContaining({
+                body: JSON.stringify({
+                    exclude_folders: [folder.folderUpload.id],
+                }),
+            }),
+        );
+        expect(managerForTest().snapshot()).toMatchObject([
+            {
+                name: "pending.bin",
+                uploadId: "partial-receipt",
+                current: 2,
+                state: "error",
+            },
+            { name: "done.bin", jobId: "finished-member", state: "completed" },
+        ]);
+    });
+
     function seedHistory(manager: TransferManager) {
         manager.addEntries(
             ["completed", "cancelled", "error", "queued", "awaiting_file"].map(
@@ -1244,7 +1296,9 @@ describe("whole-batch recovery and bounded admission", () => {
     it("still reports unrelated and changed-size originals as unmatched", async () => {
         const file = (path: string, data = "same") => {
             const source = new File([data], path.split("/").at(-1)!);
-            Object.defineProperty(source, "webkitRelativePath", { value: path });
+            Object.defineProperty(source, "webkitRelativePath", {
+                value: path,
+            });
             return source;
         };
         const manager = managerForTest();
@@ -1437,7 +1491,7 @@ describe("independent browser receiving and Telegram backlog", () => {
             manager.setEnabled(false);
         }
     });
-    it("cancels a late-created receipt even when its row was cleared before creation returned", async () => {
+    it("keeps a late-created receipt until its cancellation is confirmed", async () => {
         let created!: (response: Response) => void;
         let cancellations = 0;
         vi.stubGlobal(
@@ -1462,9 +1516,9 @@ describe("independent browser receiving and Telegram backlog", () => {
             manager.setEnabled(true);
             manager.add([new File(["data"], "file")], "/", 10);
             await vi.waitFor(() => expect(created).toBeDefined());
-            await manager.cancel(manager.snapshot()[0].key);
+            const cancelling = manager.cancel(manager.snapshot()[0].key);
             manager.clearFinished();
-            expect(manager.snapshot()).toHaveLength(0);
+            expect(manager.snapshot()[0].state).toBe("cancelling");
             created(
                 Response.json({
                     id: "late",
@@ -1473,8 +1527,10 @@ describe("independent browser receiving and Telegram backlog", () => {
                     chunk_size: 4,
                 }),
             );
+            await cancelling;
             await vi.waitFor(() => expect(cancellations).toBe(1));
             expect(send).not.toHaveBeenCalled();
+            manager.clearFinished();
             expect(manager.snapshot()).toHaveLength(0);
         } finally {
             manager.setEnabled(false);

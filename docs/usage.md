@@ -176,6 +176,16 @@ progress. Telegram work continues in the background throughout. Single-file
 uploads omit redundant file-count summaries. Running/Queued counts include only
 unfinished files; a folder's file count includes its completed files.
 
+On desktop, choose **Hide** to keep a compact status panel while you browse. It
+shows which uploads are running, queued, cancelling or need attention, with a
+folder counted once in each applicable state. The second line tells you whether
+to keep this tab open or open details to continue. After uploads complete or are
+cancelled, it briefly shows **Uploads complete**, **Uploads cancelled** or
+**Uploads finished** for mixed outcomes, then disappears after five seconds.
+**Show** reopens the details.
+On small screens, the status button opens **Transfers** and shows **Uploads need
+attention** when only blocked uploads remain.
+
 Time remaining estimates the bytes left in the displayed stage using recent
 transfer speed. Folder measurements continue across individual file handoffs,
 including small files that finish between updates. Estimates disappear when
@@ -213,12 +223,21 @@ bytes together.
 
 To resume, use **Choose files / Choose folder / Choose file** in the existing
 batch and select the same originals. TGDrive checks the received bytes, then sends
-only what is still missing. The resume notice reports how many files were added
-to the queue; it is not a live count of files awaiting checks. When you choose the
-whole folder again, files already in progress, received, completed or cancelled
+only what is still missing. The dismissible resume result stays with its upload
+batch and reports how many files were added to the queue; it is not a live count
+of files awaiting checks. When you choose the whole folder again, files already
+in progress, received, completed or cancelled
 are skipped without a mismatch warning. Files outside that upload or with a
 different name or size still count as unmatched. Use the existing **Retry** action
 after failure to avoid duplicates.
+
+Only one tab in the same browser can send a saved device upload at a time.
+Resuming it in another tab waits for the current sender, then checks the latest
+server receipt. Device uploads require HTTPS (or localhost) and browser support
+for Web Locks; an unsupported browser shows an error instead of starting an
+uncoordinated upload. Server-owned jobs do not need that browser feature.
+If TGDrive warns that recovery information cannot be saved, keep the original
+tab open; another tab may not have its latest receipt or job identity.
 
 Temporary connection and server errors retry automatically once TGDrive has
 confirmed an upload session. Keep the tab open and the original files available
@@ -226,7 +245,8 @@ while it retries. If retries stop, read the file's error and use **Retry** (or
 **Retry Failed** on a folder). An interrupted session-creation request still needs manual
 retry because the browser may not have received its session identity.
 
-Cancel may take time after Telegram work begins. **Cancel all** confirms the
+Cancel waits for in-flight device requests and server cleanup before confirming;
+it may also take time after Telegram work begins. **Cancel all** confirms the
 currently selected unfinished work; completed files and later uploads are kept.
 Desktop **Hide/Show** only collapses the panel; **Clear finished** only clears its list.
 
@@ -261,6 +281,10 @@ once, and each ordinary file or URL counts separately. Use the page numbers or
 arrow buttons to navigate. A folder's files stay together; matching its name or
 any child's name keeps that whole folder in the search results.
 
+If saved server history cannot load, this browser's recovery rows remain
+available alongside the error. You can still choose originals, retry or cancel;
+the upload endpoints must be reachable for those actions to finish.
+
 Double-click a completed file or choose **Show in folder** to highlight it;
 folder batches have **Show folder**. Moves/renames are followed. Trashed or
 deleted items become unavailable; unfinished/failed rows do not navigate.
@@ -269,7 +293,8 @@ Choose **Clear history** beside the finished filters, then confirm to remove
 successful, failed and cancelled entries across all pages, regardless of the
 current filter or search. This also removes entries for deleted files and cannot
 be undone. Stored files, queued/running uploads and transfers waiting for an
-original file are kept. Folders with unfinished uploads keep their member rows;
+original file are kept, including failed device uploads that still have a
+resumable receipt. Folders with unfinished uploads keep their member rows;
 clear again after they finish. Saved server history is cleared for all devices;
 browser-only history is cleared in the browser you use.
 

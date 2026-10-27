@@ -26,6 +26,9 @@ comic fit and reading direction. EPUB text uses a narrower serif column by
 default; text preferences are saved in this browser. Generated resource filenames
 appear as readable cover, illustration or section labels.
 
+EPUB internal references follow named anchors within a chapter or into another
+chapter, including targets attached to links and images.
+
 Choose **Enter Fullscreen** where supported. Arrow keys navigate while focused;
 right-to-left mode reverses them. Escape or browser Back closes the reader.
 

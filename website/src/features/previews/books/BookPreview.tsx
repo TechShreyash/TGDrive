@@ -306,11 +306,13 @@ export default function BookPreview({
     };
     const render = (node: Node, key: number): ReactNode => {
         if (typeof node === "string") return node;
+        const id = node.id ? "book-anchor-" + node.id : undefined;
         const children = node.children.map(render);
         if (node.tag === "img")
             return node.src ? (
                 <BookImage
                     key={key}
+                    id={id}
                     src={bookUrl(path, auth, node.src)}
                     alt={node.alt || ""}
                 />
@@ -319,17 +321,20 @@ export default function BookPreview({
             return node.href ? (
                 <button
                     key={key}
+                    id={id}
                     className="book-reference"
                     onClick={() => follow(node.href)}
                 >
                     {children}
                 </button>
             ) : (
-                <span key={key}>{children}</span>
+                <span key={key} id={id}>
+                    {children}
+                </span>
             );
         return createElement(
             node.tag,
-            { key, id: node.id ? "book-anchor-" + node.id : undefined },
+            { key, id },
             ...(node.tag === "br" || node.tag === "hr" ? [] : children),
         );
     };

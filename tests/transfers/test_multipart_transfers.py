@@ -4,6 +4,7 @@ import asyncio
 import hashlib
 import threading
 import time
+from contextlib import asynccontextmanager
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
@@ -13,7 +14,7 @@ from telethon.errors import FloodWaitError
 from tests.support.mongo_fixtures import register_test_backend
 from tgdrive.storage.mongo import for_directory
 from tgdrive.storage.store import DriveStore
-from tgdrive.telegram.client_pool import ClientPool
+from tgdrive.telegram.client_pool import ClientPool, NoClientAvailable
 from tgdrive.transfers.manager import TransferError, TransferManager
 from tgdrive.transfers.tasks import TransferRegistry, TransferStatus
 
@@ -213,6 +214,38 @@ async def test_bot_only_parts_commit_once_then_checkpoint(tmp_path):
         assert not source.exists()
     finally:
         release.set()
+        await dispose(manager)
+
+
+async def test_telegram_recovery_clears_waiting_error_before_completion(
+    tmp_path, monkeypatch
+):
+    manager, _ = await manager_for(tmp_path)
+    lease = manager.pool.lease
+    attempts = 0
+
+    @asynccontextmanager
+    async def recover_after_one_wait(*args, **kwargs):
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            raise NoClientAvailable("Telegram temporarily unavailable")
+        async with lease(*args, **kwargs) as client:
+            yield client
+
+    monkeypatch.setattr(manager.pool, "lease", recover_after_one_wait)
+    try:
+        record = await manager.enqueue_upload(
+            staged(manager, b"abc"), "/", "small.bin", 3
+        )
+        await record.task
+
+        assert attempts == 2
+        assert record.status is TransferStatus.COMPLETED
+        assert record.error is None
+        assert record.as_dict()["error"] is None
+        assert stored(manager)["size"] == 3
+    finally:
         await dispose(manager)
 
 

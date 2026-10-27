@@ -257,6 +257,16 @@ offline tests alone do not sufficiently exercise the production database.
 | Transfer/recovery | Retry, cancellation, interruption and ownership-loss cases |
 | Release | Full checks below, then a clean extracted archive |
 
+Upload-recovery regressions include concurrent inspection after a folder move,
+explicit error clearing, cross-tab sending/cancellation, and retained originals
+after clearing history. The browser cases in
+[`test_browser_transfer_recovery.py`](../tests/browser/test_browser_transfer_recovery.py)
+exercise failed-history recovery, scoped resume feedback and compact upload
+status on desktop and mobile;
+[`test_browser_books_shares.py`](../tests/browser/test_browser_books_shares.py)
+includes EPUB anchor navigation. These use synthetic data and do not establish
+live Telegram integrity. Run them only with the approval required above.
+
 For URL intake changes, the focused offline checks are:
 
 ```bash

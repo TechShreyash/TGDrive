@@ -167,26 +167,31 @@ class ResumableUploads:
                 "The destination folder is unavailable. "
                 "Restore it or cancel this upload."
             ) from exc
-        if (
-            item.get("parent_node_id") != binding["id"]
-            or item["parent_id"] != binding["path"]
-        ):
-            item.update(parent_node_id=binding["id"], parent_id=binding["path"])
-            self._save(item)
+        item.update(parent_node_id=binding["id"], parent_id=binding["path"])
         return binding["path"]
 
     def get(self, upload_id: str) -> dict[str, Any]:
+        # Server callers hold the receipt lock through any expiry cleanup.
         item = self.get_unchecked(upload_id)
         # Inspection remains available when a folder is trashed/deleted, so owners
         # can cancel the receipt; active chunks/complete enforce the binding below.
         with suppress(UploadError):
             self._destination(item)
         if item["state"] == "receiving" and item["expires_at"] <= time.time():
-            lock = self.locks.get(upload_id)
-            if lock is None or not lock.locked():
-                self._cancel_receiving(item)
+            record = self._existing_job(upload_id)
+            if record is not None:
+                item["state"] = {
+                    "completed": "finished",
+                    "cancelled": "cancelled",
+                }.get(str(record.status), "queued")
+                return item
+            self._cancel_receiving(item)
             raise UploadError("Upload session expired. Select the file again.", 410)
         return item
+
+    async def inspect(self, upload_id: str) -> dict[str, Any]:
+        async with self.locks.setdefault(upload_id, asyncio.Lock()):
+            return await self._owned_worker(self.get, upload_id)
 
     def path(self, upload_id: str) -> Path:
         self.get_unchecked(upload_id)

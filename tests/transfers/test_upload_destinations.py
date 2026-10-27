@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import threading
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
@@ -71,6 +72,61 @@ async def test_receipt_follows_moved_ancestor_and_rejects_new_stale_requests(rec
     job = await uploads.complete(receiving["id"])
     assert job.context["destination"] == current
     assert uploads.get(receiving["id"])["parent_id"] == current
+
+
+async def test_inspection_of_moved_receipt_cannot_rewind_concurrent_append(
+    receipt, monkeypatch
+):
+    uploads, manager = receipt
+    monkeypatch.setattr("tgdrive.transfers.uploads.CHUNK_SIZE", 4)
+    parent = folder(manager.store, "Original")
+    target = folder(manager.store, "Target", parent)
+    receiving = uploads.create("file.bin", target, 8)
+    manager.store.move(parent, folder(manager.store, "Other"))
+    current = manager.store.resolve_id(receiving["parent_node_id"])
+    entered = asyncio.Event()
+    release = threading.Event()
+    loop = asyncio.get_running_loop()
+    destination = uploads._destination
+    first = True
+
+    def hold_inspection(item):
+        nonlocal first
+        result = destination(item)
+        if first:
+            first = False
+            loop.call_soon_threadsafe(entered.set)
+            assert release.wait(2), "Inspection worker was not released"
+        return result
+
+    monkeypatch.setattr(uploads, "_destination", hold_inspection)
+    inspection = asyncio.create_task(uploads.inspect(receiving["id"]))
+    append = None
+    try:
+        await asyncio.wait_for(entered.wait(), 2)
+        assert uploads.get_unchecked(receiving["id"])["parent_id"] == target
+        append = asyncio.create_task(uploads.append(receiving["id"], 0, b"abcd"))
+        await asyncio.sleep(0)
+        assert not append.done()
+        release.set()
+        snapshot = await inspection
+        assert snapshot["parent_id"] == current
+        assert snapshot["offset"] == 0
+        await append
+        committed = uploads.get_unchecked(receiving["id"])
+        assert committed["parent_id"] == current
+        assert committed["offset"] == 4
+        assert committed["checksums"] == [
+            {"offset": 0, "size": 4, "sha256": hashlib.sha256(b"abcd").hexdigest()}
+        ]
+        assert uploads.path(receiving["id"]).read_bytes() == b"abcd"
+    finally:
+        release.set()
+        await asyncio.gather(
+            inspection,
+            *([append] if append is not None else []),
+            return_exceptions=True,
+        )
 
 
 async def test_move_during_receipt_verification_uses_latest_path(receipt, monkeypatch):

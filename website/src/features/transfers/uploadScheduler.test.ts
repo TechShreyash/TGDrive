@@ -5,6 +5,7 @@ import {
     TransferManager,
 } from "./transfers";
 import type { UploadChunkTransport } from "./uploadTransport";
+import { stubDeviceLocks } from "./transferTestLocks";
 
 function deferred<T>() {
     let resolve!: (value: T) => void;
@@ -41,6 +42,7 @@ const managerForTest = (sendChunk?: UploadChunkTransport) => {
 };
 
 beforeEach(() => {
+    stubDeviceLocks();
     const values = new Map<string, string>();
     vi.stubGlobal("localStorage", {
         get length() {
@@ -168,10 +170,11 @@ describe("device upload scheduling", () => {
         manager.setEnabled(true);
         await snapshotStarted.promise;
         const key = manager.snapshot()[0].key;
-        await manager.cancel(key);
-        expect(manager.snapshot()[0].state).toBe("cancelled");
+        const cancelling = manager.cancel(key);
+        expect(manager.snapshot()[0].state).toBe("cancelling");
 
         snapshot.resolve(receipt("cancelled-receipt"));
+        await cancelling;
         await vi.waitFor(() =>
             expect(manager.snapshot()[0].controller).toBeUndefined(),
         );

@@ -26,6 +26,7 @@ from tgdrive.storage.demo_files import (
 from tgdrive.storage.store import (
     MAX_NAME_LENGTH,
     MAX_SEARCH_OFFSET,
+    ROOT_ID,
     FolderTreeConflictError,
 )
 from tgdrive.telegram.client_pool import current_upload_limit
@@ -366,12 +367,12 @@ def register_routes(
     @app.get("/api/v1/uploads/{upload_id}", dependencies=admin)
     async def inspect_upload(upload_id: str, request: Request) -> dict[str, Any]:
         with write_policy(False):
-            return await ResumableUploads._owned_worker(uploads(request).get, upload_id)
+            return await uploads(request).inspect(upload_id)
 
     @app.head("/api/v1/uploads/{upload_id}", dependencies=admin)
     async def upload_offset(upload_id: str, request: Request) -> Response:
         with write_policy(False):
-            item = await ResumableUploads._owned_worker(uploads(request).get, upload_id)
+            item = await uploads(request).inspect(upload_id)
         return Response(
             headers={
                 "Upload-Offset": str(item["offset"]),
@@ -569,7 +570,11 @@ def register_routes(
         if payload.share_id:
             rows = [row for row in rows if row["id"] == payload.share_id]
         elif payload.path:
-            path = store.resolve_id(payload.path.rstrip("/").rsplit("/", 1)[-1])
+            path = store.resolve_id(
+                ROOT_ID
+                if payload.path == "/"
+                else payload.path.rstrip("/").rsplit("/", 1)[-1]
+            )
             rows = [row for row in rows if row["path"] == path]
             if len(rows) > 1:
                 raise HTTPException(409, "Choose the individual link in Shared Links.")
@@ -714,7 +719,11 @@ def register_routes(
             if payload.share_id:
                 store.revoke_share(payload.share_id)
             elif payload.path:
-                path = store.resolve_id(payload.path.rstrip("/").rsplit("/", 1)[-1])
+                path = store.resolve_id(
+                    ROOT_ID
+                    if payload.path == "/"
+                    else payload.path.rstrip("/").rsplit("/", 1)[-1]
+                )
                 store.revoke_share(path)
             else:
                 raise HTTPException(422, "A link ID or item path is required.")
