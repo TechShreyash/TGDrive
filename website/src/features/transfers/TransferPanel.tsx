@@ -194,7 +194,13 @@ export default function TransferPanel({
         setNotice(
             result.matched +
                 (result.matched === 1 ? " file" : " files") +
-                " queued for verification." +
+                " added to the resume queue." +
+                (result.skipped
+                    ? " " +
+                      result.skipped +
+                      (result.skipped === 1 ? " file did" : " files did") +
+                      " not need resuming."
+                    : "") +
                 (result.remaining
                     ? " " +
                       result.remaining +

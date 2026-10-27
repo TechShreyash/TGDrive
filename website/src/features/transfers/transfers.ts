@@ -1038,13 +1038,15 @@ export class TransferManager {
         void this.startNext();
     }
     async resumeBatchFiles(batchId: string, files: File[]) {
-        const pending = this.items.filter(
+        const batch = this.items.filter(
+            (item) => transferTaskId(item) === batchId,
+        );
+        const pending = batch.filter(
             (item) =>
-                transferTaskId(item) === batchId &&
                 !item.jobId &&
                 (item.state === "awaiting_file" || item.state === "error"),
         );
-        const folderBatch = pending.some((item) => Boolean(item.folderUpload));
+        const folderBatch = batch.some((item) => Boolean(item.folderUpload));
         const fileKey = (file: File) =>
             folderBatch
                 ? "path:" + (file.webkitRelativePath || "").normalize("NFC")
@@ -1106,6 +1108,21 @@ export class TransferManager {
             this.deviceRetryAttempts.delete(item.key);
             this.stagingRetries.delete(item.key);
             matched += 1;
+            selected.delete(key);
+        }
+        let skipped = 0;
+        for (const item of batch) {
+            if (pending.includes(item)) continue;
+            const key = itemKey(item);
+            const candidates = selected.get(key);
+            if (!candidates?.length) continue;
+            const remaining = candidates.filter(
+                (file) =>
+                    file.name.normalize("NFC") !== item.name.normalize("NFC") ||
+                    file.size !== item.size,
+            );
+            skipped += candidates.length - remaining.length;
+            selected.set(key, remaining);
         }
         if (matched) {
             this.publish();
@@ -1113,8 +1130,9 @@ export class TransferManager {
         }
         return {
             matched,
+            skipped,
             remaining: pending.length - matched,
-            unmatched: files.length - matched,
+            unmatched: files.length - matched - skipped,
             errors,
         };
     }

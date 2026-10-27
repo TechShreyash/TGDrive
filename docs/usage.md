@@ -213,8 +213,12 @@ bytes together.
 
 To resume, use **Choose files / Choose folder / Choose file** in the existing
 batch and select the same originals. TGDrive checks the received bytes, then sends
-only what is still missing. Use the existing **Retry**
-action after failure to avoid duplicates.
+only what is still missing. The resume notice reports how many files were added
+to the queue; it is not a live count of files awaiting checks. When you choose the
+whole folder again, files already in progress, received, completed or cancelled
+are skipped without a mismatch warning. Files outside that upload or with a
+different name or size still count as unmatched. Use the existing **Retry** action
+after failure to avoid duplicates.
 
 Temporary connection and server errors retry automatically once TGDrive has
 confirmed an upload session. Keep the tab open and the original files available
