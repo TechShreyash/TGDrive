@@ -1,6 +1,7 @@
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import App from "./app/App";
+import EmbedView from "./features/shares/EmbedView";
 import "@mantine/core/styles.css";
 import "./app/style.css";
 import "./shared/design-system.css";
@@ -10,7 +11,7 @@ initializeTheme();
 createRoot(document.getElementById("root")!).render(
     <StrictMode>
         <DesignSystem>
-            <App />
+            {window.location.pathname === "/embed" ? <EmbedView /> : <App />}
         </DesignSystem>
     </StrictMode>,
 );

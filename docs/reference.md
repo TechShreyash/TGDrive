@@ -461,11 +461,12 @@ permanent third-party API compatibility.
 | Method and route | Access | Request | Success |
 | --- | --- | --- | --- |
 | `GET /` | Public shell | None | React HTML; build instructions if frontend source is not built. |
+| `GET /embed?path=...&auth=...` | Public embed shell | File ID path or `/share_<folder-id>` and share token used by the viewer. | Embeddable React file viewer/folder browser; data requests enforce capability access. |
 | `GET /api/config` | Public | None | Includes `status`, `max_file_size` (default 16 GiB logical limit), `timezone`, `recovery_only` and `demo_mode` (default false). |
 | `POST /api/checkPassword` | Public, throttled | `{"pass":"<owner-password>"}` | `200 {"status":"ok"}` plus session cookie. |
 | `POST /api/logout` | Cookie if present | `{}` | `200 {"status":"ok"}`; revokes an active owner session and clears the cookie. Missing/invalid/expired/revoked cookies do not trigger a session database write. |
 | `GET /api/v1/session` | Public | None | `{"authenticated":true}` or false. |
-| `GET /api/v1/status` | Owner | None | Connection, capacity, committed revision, backend, encrypted snapshot history and client health. |
+| `GET /api/v1/status` | Owner | None | Connection, capacity, committed revision, backend, latest locally observed encrypted snapshot record and client health. The backup observation reloads at startup and updates during publication; this polling endpoint does not query backup history. |
 | `POST /api/v1/backup` | Owner | `{}` | `{"recovery":{...}}` after an encrypted MongoDB safety copy is verified; `503` if not confirmed. |
 | GET /api/v1/backup/recovery-key | Owner | None | Private no-store download of the backup decryption key. |
 | `POST /api/v1/backup/restore` | Owner, disabled in demo | Raw `.tgdb` bytes, `Content-Type: application/octet-stream`, `X-TGDrive-Recovery-Key: <64 hex characters>`, `X-TGDrive-Confirm: RESTORE` | Authenticates and restores a full archive into an empty or untouched automatically created drive; returns `restart_required: true`. |
@@ -1242,12 +1243,13 @@ Snapshots preserve annotations; the drive root cannot be starred.
 | --- | --- | --- | --- |
 | `GET /api/v1/shares` | Owner | None | `{"shares":[...]}` includes active and expired entries, IDs, current path/name/type/size, folder_path/folder_label, created_at/expires_at, optional label and copyable. No bearer tokens. |
 | `POST /api/v1/shares` | Owner | `{"path":"/<id>","label":"Alex","expires_in_days":7}`; optional ISO `expires_at` overrides the days. | `201 {"auth":"<bearer-token>","id":"<share-id>","path":"...","expires_at":"<ISO-date>","label":"Alex"}`. Adds an independent link. |
-| `POST /api/v1/shares/link` | Owner | `{"share_id":"<share-id>"}` | Existing active link auth/path/type/node_id; no rotation. `409` if unrecoverable, `410` if expired/revoked. Path selection returns `409` when multiple links exist. No-store response. |
+| `POST /api/v1/shares/link` | Owner | `{"share_id":"<share-id>"}` or `{"path":"/<id>"}` (including `/` for the drive root). | Existing active link auth/path/type/node_id; no rotation. `409` if unrecoverable, `410` if expired/revoked. Path selection returns `409` when multiple links exist. No-store response. |
 | `PATCH /api/v1/shares` | Owner | `{"share_id":"<share-id>","label":"Alex","expires_at":"<future ISO-date>"}`; omitted fields stay unchanged; explicit null expiry means never. | Updated link metadata; changes only this link. |
 | `POST /api/v1/download-links` | Owner | `{"path":"/<id>"}` | Signed attachment `url`, canonical `path`, and `expires_at`; reuse an active copyable file share labelled `Download link` or create one expiring in one day. Other recipient links are left alone. Visible in Shared Links; no-store response. |
-| `DELETE /api/v1/shares` | Owner | `{"share_id":"<share-id>"}` | `{"status":"ok"}`. Revokes one link. Alternate `{"path":"/<id>"}` revokes all direct links for that node. |
+| `DELETE /api/v1/shares` | Owner | `{"share_id":"<share-id>"}` | `{"status":"ok"}`. Revokes one link. Alternate `{"path":"/<id>"}` revokes all direct links for that node; `/` selects the drive root. |
 | `POST /api/getFolderShareAuth` | Owner | `{"path":"/<folder-id>"}` | Alternate creation: status and auth. |
 | `POST /api/getFileShareAuth` | Owner | `{"path":"/<file-id>"}` | Same, for a file. |
+| `GET /api/v1/embed` | Valid scoped capability, including a parent folder share | Required `path` (1–4096 characters) and `auth` (1–512 characters). | File viewer metadata: `{id,name,type:"file",size,upload_date,path:""}`. No parent hierarchy or Telegram storage metadata. |
 | `GET /file`, `HEAD /file` | Owner or scoped capability | Required path, optional auth/Range; quality selects a discovered preview, preview=1 marks a preview (including the supported PDF path and original media playback), download=1 forces the original attachment. | Bytes/headers or access/not-found error. |
 
 Share expiry accepts 1–3650 days (default 7), null for no expiry, or a future
@@ -1278,6 +1280,15 @@ The UI creates links from the stable folder ID alone; nested shared browsing
 can use ID paths beneath that root.
 Authorization resolves stable final IDs after a move; inherited folder access
 depends on the new location.
+
+Embed URLs use `/embed?path=%2F<file-id>&auth=<encoded-token>` for files and
+`/embed?path=%2Fshare_<folder-id>&auth=<encoded-token>` for folders. Both copy
+actions reuse the selected share capability; no extra share or expiry is created.
+The embed entry renders only the public viewer, never the owner interface. File
+metadata requires an explicit nonempty token even with an owner cookie; folder
+browsing uses the existing shared-directory authorization and navigation boundary.
+Preview and download requests continue to enforce their own capability checks.
+See [embedding steps and iframe example](usage.md#embed-a-file-or-folder-in-a-website).
 
 An owner-only file URL without `auth` needs the owner session cookie. Copying
 it into another browser or a download tool does not make it public. The owner's
@@ -1437,7 +1448,12 @@ belong in [the roadmap](roadmap.md), not in this implemented API reference.
   bytes cannot be withdrawn. Compatibility single-item mutations lack v1's public
   exposure confirmation; direct callers must check sharing themselves.
 - **Browser:** local scripts/fonts/assets use CSP, nosniff, frame and referrer
-  restrictions. The trusted video decoder permits WASM compilation, blob workers/
+  restrictions. Only successful `/embed` shell responses permit cross-origin
+  framing (`frame-ancestors *`, no `X-Frame-Options`); other routes retain
+  `frame-ancestors 'none'` and `X-Frame-Options: DENY`. Embeds use `no-referrer`
+  and a no-store shell. A reverse proxy must preserve this route-specific policy,
+  and the containing website must allow TGDrive in its frame policy. The trusted
+  video decoder permits WASM compilation, blob workers/
   media, inline styles and `data:` decoder connections; arbitrary script eval and
   inline scripts stay disabled. HTML/code stays passive; PDF scripts, forms and
   annotations do not execute. Selected images/audio/video can render inline;

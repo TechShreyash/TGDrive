@@ -67,6 +67,10 @@ export default function TransferHistory({
                     pageNumber,
                     signal,
                     query,
+                    (rows) => {
+                        if (!signal.aborted && generation.current === version)
+                            setLocalItems(rows);
+                    },
                 );
                 if (signal.aborted || generation.current !== version)
                     return false;
@@ -87,6 +91,9 @@ export default function TransferHistory({
             } catch (cause) {
                 if (signal.aborted || generation.current !== version)
                     return false;
+                setJobs([]);
+                setPage(null);
+                if (pageNumber > 1) setPageNumber(1);
                 setError(errorMessage(cause));
                 if (explicit) throw cause;
                 return false;

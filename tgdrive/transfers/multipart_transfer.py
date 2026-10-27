@@ -41,7 +41,7 @@ def fingerprint(
         offset = 0
         while offset < size:
             length = min(part_size, size - offset)
-            digest = hashlib.sha256()
+            digest = whole if size <= part_size else hashlib.sha256()
             remaining = length
             while remaining:
                 if (cancel_event is not None and cancel_event.is_set()) or (
@@ -52,7 +52,8 @@ def fingerprint(
                 if not chunk:
                     raise TransferError("Staged file changed. Reselect the source.")
                 whole.update(chunk)
-                digest.update(chunk)
+                if digest is not whole:
+                    digest.update(chunk)
                 remaining -= len(chunk)
             parts.append(
                 dict(

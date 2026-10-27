@@ -349,7 +349,13 @@ class SecurityHeadersMiddleware:
                 # edge must preserve this policy after proxy-generated headers.
                 headers["Alt-Svc"] = "clear"
                 headers.setdefault("X-Content-Type-Options", "nosniff")
-                headers.setdefault("X-Frame-Options", "DENY")
+                embeddable = (
+                    getattr(scope.get("route"), "path", None) == "/embed"
+                    and message["status"] == 200
+                )
+                if not embeddable:
+                    headers.setdefault("X-Frame-Options", "DENY")
+                frame_ancestors = "*" if embeddable else "'none'"
                 headers.setdefault("Referrer-Policy", "no-referrer")
                 headers.setdefault(
                     "Permissions-Policy",
@@ -358,7 +364,8 @@ class SecurityHeadersMiddleware:
                 headers.setdefault(
                     "Content-Security-Policy",
                     "default-src 'self'; base-uri 'none'; object-src 'none'; "
-                    "frame-ancestors 'none'; form-action 'self'; "
+                    f"frame-ancestors {frame_ancestors}; "
+                    "form-action 'self'; "
                     "script-src 'self' 'wasm-unsafe-eval'; worker-src 'self' blob:; "
                     "style-src 'self'; style-src-elem 'self'; "
                     "style-src-attr 'unsafe-inline'; "

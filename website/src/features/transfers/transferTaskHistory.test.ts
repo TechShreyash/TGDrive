@@ -78,6 +78,43 @@ function serverHistory(count: number) {
 }
 
 describe("finished transfer task pages", () => {
+    it("publishes matching local recovery rows before a history request fails", async () => {
+        let reject!: (error: Error) => void;
+        vi.spyOn(api, "transferTaskHistory").mockImplementation(
+            () =>
+                new Promise((_resolve, fail) => {
+                    reject = fail;
+                }),
+        );
+        const rows = folder(3);
+        rows[0].state = "awaiting_file";
+        const onLocalItems = vi.fn();
+        const loading = loadTaskHistoryPage(
+            rows,
+            "all",
+            1,
+            new AbortController().signal,
+            "file-0",
+            onLocalItems,
+        );
+        expect(onLocalItems).toHaveBeenCalledWith(rows);
+        reject(new Error("History unavailable"));
+        await expect(loading).rejects.toThrow("History unavailable");
+        const visible = visibleHistory(
+            [],
+            onLocalItems.mock.calls[0][0],
+            "all",
+            true,
+            true,
+        );
+        expect(visible.map(({ key, state }) => ({ key, state }))).toEqual(
+            rows.map(({ key, state }) => ({ key, state })),
+        );
+        expect(visibleHistory([], visible, "completed", true, true)).toEqual(
+            [],
+        );
+    });
+
     it("counts a remembered 72-file folder once and fills the other 19 task slots", async () => {
         const backend = serverHistory(25);
         const localFolder = folder();

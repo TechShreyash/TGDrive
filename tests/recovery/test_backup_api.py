@@ -1,5 +1,8 @@
 """Owner backup status/actions and cancellation boundaries through real routes."""
 
+from types import SimpleNamespace
+from unittest.mock import Mock
+
 import pytest
 from fastapi.testclient import TestClient
 
@@ -15,12 +18,16 @@ class Backup:
     def __init__(self):
         self.calls = []
         self.history_limits = []
+        self.latest = []
         self.confirmed = 0
         self.fail = False
 
     def history(self, *, limit=None):
         self.history_limits.append(limit)
         return []
+
+    def latest_history(self):
+        return self.latest
 
     def protection_status(self, store):
         return {
@@ -72,14 +79,14 @@ def test_backup_actions_require_owner_and_same_origin(owner):
     assert runtime.backup.calls == []
 
 
-def test_manual_backup_confirms_current_revision_and_limits_status_history(owner):
+def test_manual_backup_confirms_current_revision_without_querying_status_history(owner):
     client, store, runtime, _ = owner
     login(client)
     store.create_folder("/", "Recoverable")
     pending = client.get("/api/v1/status")
     assert pending.status_code == 200
     assert pending.json()["recovery"]["state"] == "pending"
-    assert runtime.backup.history_limits == [1]
+    assert runtime.backup.history_limits == []
     protected = client.post("/api/v1/backup", json={})
     assert protected.status_code == 200
     assert runtime.backup.calls == [store.revision]
@@ -90,6 +97,48 @@ def test_manual_backup_confirms_current_revision_and_limits_status_history(owner
     }
     store.create_folder("/", "New changes")
     assert client.get("/api/v1/status").json()["recovery"]["state"] == "pending"
+
+
+def test_status_uses_observed_backup_without_reading_history(owner):
+    client, _, runtime, _ = owner
+    login(client)
+    runtime.backup.latest = [{"id": "observed", "status": "pending"}]
+    runtime.backup.history = Mock(
+        side_effect=AssertionError("Unexpected history query")
+    )
+    for _ in range(3):
+        response = client.get("/api/v1/status")
+        assert response.status_code == 200
+        assert response.json()["backup"] == runtime.backup.latest
+    runtime.backup.history.assert_not_called()
+
+
+def test_jobs_calculate_one_queue_observation_for_the_whole_response(owner):
+    client, _, runtime, _ = owner
+    login(client)
+    registry = runtime.transfers.registry
+    records = [client.portal.call(lambda: registry.create("queued")) for _ in range(3)]
+    batches = []
+
+    def estimates(identities):
+        batches.append(set(identities))
+        return {records[0].id: {"position": 1, "queued_operations": 2}}
+
+    single = Mock(return_value={"position": 1, "queued_operations": 2})
+    runtime.pool = SimpleNamespace(queue_estimates=estimates, queue_estimate=single)
+    response = client.get("/api/v1/jobs")
+    assert response.status_code == 200
+    assert batches == [{record.id for record in records}]
+    jobs = {job["id"]: job for job in response.json()["jobs"]}
+    assert jobs[records[0].id]["queue"] == {"position": 1, "queued_operations": 2}
+    assert jobs[records[1].id]["queue"] is None
+    assert jobs[records[2].id]["queue"] is None
+    single.assert_not_called()
+    assert client.get("/api/v1/jobs/" + records[0].id).json()["queue"] == {
+        "position": 1,
+        "queued_operations": 2,
+    }
+    single.assert_called_once_with(records[0].id)
 
 
 def test_manual_backup_failure_never_claims_confirmation_or_exposes_provider_error(

@@ -88,6 +88,32 @@ def test_same_item_copy_edit_and_revoke_preserve_other_links(share_client, kind)
     )
 
 
+def test_root_share_can_be_copied_and_revoked_by_path(share_client):
+    client, store, independent = share_client
+    response = client.post("/api/v1/shares", json={"path": "/", "label": "Whole drive"})
+    assert response.status_code == 201
+    share = response.json()
+    copied = client.post("/api/v1/shares/link", json={"path": "/"})
+    assert copied.status_code == 200
+    assert copied.json()["path"] == "/"
+    assert copied.json()["auth"] == share["auth"]
+    assert store.authorize_directory("/", share["auth"]) == "/"
+
+    assert client.post("/api/v1/shares/link", json={"path": "///"}).status_code == 400
+    invalid = client.request("DELETE", "/api/v1/shares", json={"path": "///"})
+    assert invalid.status_code == 400
+    assert store.authorize_directory("/", share["auth"]) == "/"
+
+    revoked = client.request("DELETE", "/api/v1/shares", json={"path": "/"})
+
+    assert revoked.status_code == 200
+    assert not store.authorize_directory("/", share["auth"])
+    assert client.post("/api/v1/shares/link", json={"path": "/"}).status_code == 410
+    remaining = {row["id"] for row in client.get("/api/v1/shares").json()["shares"]}
+    assert independent["id"] in remaining
+    assert share["id"] not in remaining
+
+
 @pytest.mark.parametrize("kind", ["file", "folder"])
 @pytest.mark.parametrize("unavailable", ["random", "changed-secret", "expired"])
 def test_uncopyable_and_expired_links_never_mint_or_replace_links(

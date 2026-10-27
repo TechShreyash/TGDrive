@@ -26,6 +26,7 @@ from tgdrive.storage.demo_files import (
 from tgdrive.storage.store import (
     MAX_NAME_LENGTH,
     MAX_SEARCH_OFFSET,
+    ROOT_ID,
     FolderTreeConflictError,
 )
 from tgdrive.telegram.client_pool import current_upload_limit
@@ -181,12 +182,8 @@ def register_routes(
             if not item.healthy
         ]
         backup = getattr(runtime, "backup", None)
-        history = []
-        if backup and hasattr(backup, "history"):
-            try:
-                history = await asyncio.to_thread(backup.history, limit=1)
-            except TypeError:
-                history = (await asyncio.to_thread(backup.history))[:1]
+        latest = getattr(backup, "latest_history", None)
+        history = latest() if callable(latest) else []
         connections = getattr(runtime, "connection_manager", None)
         restart_required = bool(connections and connections.restart_required)
         return {
@@ -366,12 +363,12 @@ def register_routes(
     @app.get("/api/v1/uploads/{upload_id}", dependencies=admin)
     async def inspect_upload(upload_id: str, request: Request) -> dict[str, Any]:
         with write_policy(False):
-            return await ResumableUploads._owned_worker(uploads(request).get, upload_id)
+            return await uploads(request).inspect(upload_id)
 
     @app.head("/api/v1/uploads/{upload_id}", dependencies=admin)
     async def upload_offset(upload_id: str, request: Request) -> Response:
         with write_policy(False):
-            item = await ResumableUploads._owned_worker(uploads(request).get, upload_id)
+            item = await uploads(request).inspect(upload_id)
         return Response(
             headers={
                 "Upload-Offset": str(item["offset"]),
@@ -418,18 +415,19 @@ def register_routes(
         check_receipt(get_store(request), uploads(request).get_unchecked(upload_id))
         return await uploads(request).cancel(upload_id)
 
-    def job_snapshot(record: Any, request: Request) -> dict[str, Any]:
+    def job_snapshot(record: Any, request: Request, queues=None) -> dict[str, Any]:
         record = record.committed
+        if queues is None:
+            estimate = getattr(get_runtime(request).pool, "queue_estimate", None)
+            queue = estimate(record.id) if callable(estimate) else None
+        else:
+            queue = queues.get(record.id)
         return record.as_dict() | {
             "name": record.context.get("name", "Transfer"),
             "kind": record.context.get(
                 "source_kind", record.context.get("kind", "upload")
             ),
-            "queue": (
-                get_runtime(request).pool.queue_estimate(record.id)
-                if callable(getattr(get_runtime(request).pool, "queue_estimate", None))
-                else None
-            ),
+            "queue": queue,
             "destination": record.context.get("destination", "/"),
             "history_cleared": record.history_hidden,
         }
@@ -437,12 +435,12 @@ def register_routes(
     @app.get("/api/v1/jobs", dependencies=admin)
     async def jobs(request: Request, response: Response) -> dict[str, Any]:
         response.headers["Cache-Control"] = "no-store"
-        return {
-            "jobs": [
-                job_snapshot(record, request)
-                for record in get_manager(request).registry.list()
-            ]
-        }
+        records = get_manager(request).registry.list()
+        estimate = getattr(get_runtime(request).pool, "queue_estimates", None)
+        queues = (
+            estimate(record.id for record in records) if callable(estimate) else None
+        )
+        return {"jobs": [job_snapshot(record, request, queues) for record in records]}
 
     @app.get("/api/v1/transfers/history", dependencies=admin)
     async def transfer_history(
@@ -569,7 +567,11 @@ def register_routes(
         if payload.share_id:
             rows = [row for row in rows if row["id"] == payload.share_id]
         elif payload.path:
-            path = store.resolve_id(payload.path.rstrip("/").rsplit("/", 1)[-1])
+            path = store.resolve_id(
+                ROOT_ID
+                if payload.path == "/"
+                else payload.path.rstrip("/").rsplit("/", 1)[-1]
+            )
             rows = [row for row in rows if row["path"] == path]
             if len(rows) > 1:
                 raise HTTPException(409, "Choose the individual link in Shared Links.")
@@ -714,7 +716,11 @@ def register_routes(
             if payload.share_id:
                 store.revoke_share(payload.share_id)
             elif payload.path:
-                path = store.resolve_id(payload.path.rstrip("/").rsplit("/", 1)[-1])
+                path = store.resolve_id(
+                    ROOT_ID
+                    if payload.path == "/"
+                    else payload.path.rstrip("/").rsplit("/", 1)[-1]
+                )
                 store.revoke_share(path)
             else:
                 raise HTTPException(422, "A link ID or item path is required.")

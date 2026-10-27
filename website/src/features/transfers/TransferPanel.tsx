@@ -70,7 +70,11 @@ export default function TransferPanel({
             window.matchMedia("(max-width: 720px)").matches ||
             pageContext !== "files",
     );
-    const [notice, setNotice] = useState("");
+    const [notice, setNotice] = useState<{
+        batchId: string;
+        text: string;
+        remaining: number;
+    } | null>(null);
     const [expandedBatches, setExpandedBatches] = useState<Set<string>>(
         new Set(),
     );
@@ -108,16 +112,19 @@ export default function TransferPanel({
         now,
         transfers.batchProgressSnapshot(),
     );
+    useEffect(() => {
+        if (!notice) return;
+        const batch = batches.find((batch) => batch.id === notice.batchId);
+        const remaining = batch?.items.filter(
+            (item) =>
+                !item.jobId && ["awaiting_file", "error"].includes(item.state),
+        ).length;
+        if (!batch?.pending || remaining !== notice.remaining) setNotice(null);
+    }, [items, notice]);
     const deviceUploadsPending =
         items.some(needsDeviceUpload) ||
         transfers.snapshot().some(needsDeviceUpload);
     const deviceMessage = deviceUploadMessage(items, deviceUploadsPending);
-    const collapsedDeviceLabel =
-        !expandedPage && collapsed && deviceMessage
-            ? deviceUploadsPending
-                ? "Keep this tab open"
-                : "You can close this tab"
-            : null;
     const categories = expandedPage
         ? [
               { key: "running", label: "Running" },
@@ -187,12 +194,13 @@ export default function TransferPanel({
         void task.catch((error) => onError(errorMessage(error)));
     };
     const reselect = async (files: File[]) => {
-        const result = await transfers.resumeBatchFiles(
-            resumeBatch.current,
-            files,
-        );
-        setNotice(
-            result.matched +
+        const batchId = resumeBatch.current;
+        const result = await transfers.resumeBatchFiles(batchId, files);
+        setNotice({
+            batchId,
+            remaining: result.remaining,
+            text:
+                result.matched +
                 (result.matched === 1 ? " file" : " files") +
                 " added to the resume queue." +
                 (result.skipped
@@ -212,7 +220,7 @@ export default function TransferPanel({
                       " selected files did not match this upload."
                     : "") +
                 (result.errors.length ? " " + result.errors[0] : ""),
-        );
+        });
     };
     if (!expandedPage && !floatingVisible) return null;
     if (!items.length && !finishedControls)
@@ -238,25 +246,18 @@ export default function TransferPanel({
                 <h2
                     id="transfer-summary"
                     className={expandedPage ? "sr-only" : undefined}
-                    title={
-                        collapsedDeviceLabel
-                            ? deviceMessage || undefined
-                            : undefined
-                    }
                 >
-                    <Upload size={18} />
+                    {(!collapsed || expandedPage) && <Upload size={18} />}
                     {expandedPage ? (
                         batches.length +
                         (batches.length === 1
                             ? " transfer shown"
                             : " transfers shown")
-                    ) : collapsedDeviceLabel ? (
-                        <span
-                            className="transfer-collapsed-status"
-                            role="status"
-                        >
-                            {collapsedDeviceLabel}
-                        </span>
+                    ) : collapsed ? (
+                        <CollapsedTransferSummary
+                            batches={batches}
+                            deviceMessage={deviceMessage}
+                        />
                     ) : (
                         heading
                     )}
@@ -302,11 +303,6 @@ export default function TransferPanel({
                     )}
                 </div>
             </header>
-            {notice && (
-                <p className="transfer-notice" role="status">
-                    {notice}
-                </p>
-            )}
             <div
                 id="transfer-list"
                 className="transfer-list"
@@ -335,6 +331,15 @@ export default function TransferPanel({
                                 <BatchTransfer
                                     key={batch.id}
                                     batch={batch}
+                                    resumeNotice={
+                                        notice?.batchId === batch.id
+                                            ? {
+                                                  text: notice.text,
+                                                  dismiss: () =>
+                                                      setNotice(null),
+                                              }
+                                            : undefined
+                                    }
                                     deviceUploadsPending={deviceUploadsPending}
                                     expanded={expandedBatches.has(batch.id)}
                                     onToggleExpanded={() =>
@@ -365,10 +370,12 @@ export default function TransferPanel({
                                     now={now}
                                     run={run}
                                     onChooseFile={(key) => {
+                                        setNotice(null);
                                         resumeKey.current = key;
                                         input.current?.click();
                                     }}
                                     onChooseBatch={() => {
+                                        setNotice(null);
                                         resumeBatch.current = batch.id;
                                         if (batch.folder)
                                             folderInput.current?.click();
@@ -480,6 +487,87 @@ export default function TransferPanel({
     );
 }
 
+export function CollapsedTransferSummary({
+    batches,
+    deviceMessage,
+}: {
+    batches: TransferBatch[];
+    deviceMessage: string | null;
+}) {
+    const uploading = batches.filter(
+        (batch) =>
+            batch.active >
+            batch.items.filter((item) => item.state === "cancelling").length,
+    ).length;
+    const queued = batches.filter(
+        (batch) => !batch.active && batch.queued > 0,
+    ).length;
+    const attention = batches.filter(
+        (batch) => batch.failed || batch.awaiting,
+    ).length;
+    const cancelling = batches.filter((batch) =>
+        batch.items.some((item) => item.state === "cancelling"),
+    ).length;
+    const complete =
+        batches.length > 0 &&
+        batches.every((batch) => batch.completed === batch.count);
+    const cancelled =
+        batches.length > 0 &&
+        batches.every((batch) => batch.cancelled === batch.count);
+    const pending = [
+        uploading ? uploading + " uploading" : "",
+        queued ? queued + " queued" : "",
+        cancelling ? cancelling + " cancelling" : "",
+        attention
+            ? attention +
+              (attention === 1 ? " needs attention" : " need attention")
+            : "",
+    ]
+        .filter(Boolean)
+        .join(" · ");
+    const summary =
+        pending ||
+        (complete
+            ? "Uploads complete"
+            : cancelled
+              ? "Uploads cancelled"
+              : batches.length
+                ? "Uploads finished"
+                : "Transfers");
+    const StatusIcon = attention
+        ? AlertCircle
+        : uploading
+          ? Upload
+          : queued
+            ? Clock3
+            : cancelling || cancelled
+              ? X
+              : complete
+                ? Check
+                : Upload;
+    const guidance =
+        attention && !uploading && !queued && !cancelling
+            ? "Open details to continue"
+            : deviceMessage;
+    return (
+        <span
+            className="transfer-collapsed-status"
+            role="status"
+            aria-atomic="true"
+        >
+            <StatusIcon size={18} aria-hidden="true" />
+            <span className="transfer-collapsed-copy">
+                <span>{summary}</span>
+                {guidance && (
+                    <span className="transfer-collapsed-guidance">
+                        {guidance}
+                    </span>
+                )}
+            </span>
+        </span>
+    );
+}
+
 function batchStatus(batch: TransferBatch, deviceStage: boolean) {
     const counts = [
         deviceStage
@@ -522,6 +610,7 @@ export function BatchTransfer({
     folderPickerSupported,
     showTimestamp = false,
     onLocate,
+    resumeNotice,
 }: {
     onLocate?: (item: Transfer, folder?: boolean) => void;
     batch: TransferBatch;
@@ -534,6 +623,7 @@ export function BatchTransfer({
     onChooseFile: (key: string) => void;
     onChooseBatch: () => void;
     folderPickerSupported: boolean;
+    resumeNotice?: { text: string; dismiss: () => void };
 }) {
     const [filter, setFilter] = useState("all");
     const [limit, setLimit] = useState(20);
@@ -712,6 +802,21 @@ export function BatchTransfer({
                       : "active"
             }
         >
+            {resumeNotice && (
+                <div className="transfer-notice">
+                    <p role="status">
+                        {batch.name}: {resumeNotice.text}
+                    </p>
+                    <button
+                        type="button"
+                        className="icon-button"
+                        aria-label={"Dismiss resume result for " + batch.name}
+                        onClick={resumeNotice.dismiss}
+                    >
+                        <X size={16} aria-hidden="true" />
+                    </button>
+                </div>
+            )}
             <div className="transfer-batch-summary">
                 <div className="transfer-batch-title">
                     <button

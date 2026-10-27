@@ -153,25 +153,26 @@
     align-items: center;
     min-width: 0;
 }
-.share-copy[aria-disabled="true"] {
+:is(.share-copy, .share-embed-copy)[aria-disabled="true"] {
     opacity: 0.55;
     cursor: help;
 }
-.share-copy[aria-disabled="true"]:hover {
+:is(.share-copy, .share-embed-copy)[aria-disabled="true"]:hover {
     background: none;
 }
-.share-copy-control {
+:is(.share-copy-control, .share-embed-control) {
     position: relative;
     display: inline-flex;
     flex-shrink: 0;
 }
-.share-copy-control[data-unavailable="true"] {
+:is(.share-copy-control, .share-embed-control)[data-unavailable="true"] {
     cursor: help;
 }
-.share-copy-control[data-unavailable="true"] .share-copy {
+:is(.share-copy-control, .share-embed-control)[data-unavailable="true"]
+    :is(.share-copy, .share-embed-copy) {
     pointer-events: none;
 }
-.share-copy-control:focus-visible {
+:is(.share-copy-control, .share-embed-control):focus-visible {
     outline: 2px solid var(--action);
     outline-offset: 2px;
     border-radius: 8px;
@@ -183,8 +184,8 @@
     max-width: calc(100vw - 48px);
     white-space: normal;
 }
-.share-copy-control:hover .share-copy-explanation,
-.share-copy-control:focus .share-copy-explanation {
+:is(.share-copy-control, .share-embed-control):hover .share-copy-explanation,
+:is(.share-copy-control, .share-embed-control):focus .share-copy-explanation {
     display: block;
 }
 .share-row-actions .icon-button {
@@ -223,7 +224,7 @@
     }
     .share-columns {
         display: grid;
-        grid-template-columns: minmax(0, 1fr) 210px 172px;
+        grid-template-columns: minmax(0, 1fr) 210px 216px;
         gap: 16px;
         padding: 14px 8px 12px 48px;
         border-bottom: 1px solid var(--line-subtle);
@@ -232,7 +233,7 @@
         text-align: right;
     }
     .share-row {
-        grid-template-columns: 24px minmax(0, 1fr) 210px 172px;
+        grid-template-columns: 24px minmax(0, 1fr) 210px 216px;
         column-gap: 16px;
         padding: var(--list-row-padding, 8px) 8px;
         min-height: var(--list-row-min-height, 56px);

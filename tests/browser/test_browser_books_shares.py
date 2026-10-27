@@ -380,6 +380,68 @@ def test_large_original_comic_page_renders_and_revalidates_without_resending(
     assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
 
 
+def test_epub_links_reach_anchor_and_image_targets(server, desktop):
+    _, page = desktop
+    login(page, server.url)
+    folder = page.request.post(server.url + "/__test__/books", headers=CONTROL).json()[
+        "path"
+    ]
+    page.route(
+        "**/api/v1/books?**entry=OPS%2Fone.xhtml",
+        lambda route: route.fulfill(
+            json={
+                "kind": "chapter",
+                "nodes": [
+                    {
+                        "tag": "a",
+                        "href": "OPS/two.xhtml#note",
+                        "children": ["Read footnote"],
+                    }
+                ],
+            }
+        ),
+    )
+    paragraphs = [
+        {"tag": "p", "children": ["An authored chapter paragraph. " * 8]}
+        for _ in range(40)
+    ]
+    page.route(
+        "**/api/v1/books?**entry=OPS%2Ftwo.xhtml",
+        lambda route: route.fulfill(
+            json={
+                "kind": "chapter",
+                "nodes": [
+                    {
+                        "tag": "a",
+                        "id": "jump",
+                        "href": "OPS/two.xhtml#illustration",
+                        "children": ["Jump to illustration"],
+                    },
+                    *paragraphs,
+                    {"tag": "a", "id": "note", "children": ["The footnote"]},
+                    *paragraphs,
+                    {
+                        "tag": "img",
+                        "id": "illustration",
+                        "src": "OPS/images/page.png",
+                        "alt": "Target illustration",
+                        "children": [],
+                    },
+                ],
+            }
+        ),
+    )
+    page.goto(server.url + "/?path=" + folder)
+    page.get_by_role("button", name="The little journey.epub", exact=True).press(
+        "Enter"
+    )
+    page.get_by_role("button", name="Read footnote", exact=True).click()
+    expect(page.locator("span#book-anchor-note")).to_be_in_viewport()
+    expect(page.locator("button#book-anchor-jump")).to_have_text("Jump to illustration")
+    page.get_by_role("button", name="Jump to illustration", exact=True).click()
+    expect(page.locator(".book-image#book-anchor-illustration")).to_be_in_viewport()
+
+
 def test_epub_offscreen_images_release_blobs_and_load_only_near_viewport(
     server, desktop
 ):

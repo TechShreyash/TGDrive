@@ -55,12 +55,33 @@
 
 .transfer-heading:has(.transfer-collapsed-status) h2 {
     min-width: 0;
+    flex: 1;
 }
 
 .transfer-collapsed-status {
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
+    display: flex;
+    align-items: flex-start;
+    gap: 9px;
+    min-width: 0;
+    overflow-wrap: anywhere;
+}
+
+.transfer-collapsed-status > svg {
+    flex-shrink: 0;
+}
+
+.transfer-collapsed-copy {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    min-width: 0;
+}
+
+.transfer-collapsed-guidance {
+    color: var(--muted);
+    font-size: 11px;
+    font-weight: 400;
+    line-height: 1.4;
 }
 
 .transfer-center .transfer-device-status {
@@ -165,4 +186,14 @@
     .transfer-page .transfer-item[data-live-metrics="true"] .transfer-copy {
         grid-template-columns: minmax(0, 1fr) auto;
     }
+}
+.transfer-batch > .transfer-notice {
+    display: flex;
+    align-items: flex-start;
+    gap: 8px;
+}
+
+.transfer-batch > .transfer-notice p {
+    flex: 1;
+    margin: 0;
 }

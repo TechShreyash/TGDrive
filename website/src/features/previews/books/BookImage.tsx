@@ -4,10 +4,12 @@ import { Spinner } from "../../../shared/components";
 import { loadBookImage, type ImageProgress } from "./bookImage";
 
 export default function BookImage({
+    id,
     src,
     alt,
     eager = false,
 }: {
+    id?: string;
     src: string;
     alt: string;
     eager?: boolean;
@@ -71,6 +73,7 @@ export default function BookImage({
     const amount = (progress.received / 1024 / 1024).toFixed(1) + " MiB";
     return (
         <span
+            id={id}
             ref={container}
             className="book-image"
             aria-busy={visible && !ready && !error}

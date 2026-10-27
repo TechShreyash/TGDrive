@@ -28,6 +28,7 @@ Prefer a visual introduction? [Open the gallery and walkthrough videos](showcase
 - [Preload a file for smoother playback and downloads](#preload-a-file-for-smoother-playback-and-downloads)
   - [Parallel and resumed downloads](#parallel-and-resumed-downloads)
 - [Share and revoke](#share-and-revoke)
+  - [Embed a file or folder in a website](#embed-a-file-or-folder-in-a-website)
 - [Trash and permanent deletion](#trash-and-permanent-deletion)
 - [Import from a URL](#import-from-a-url)
 - [Settings and connections](#settings-and-connections)
@@ -176,6 +177,16 @@ progress. Telegram work continues in the background throughout. Single-file
 uploads omit redundant file-count summaries. Running/Queued counts include only
 unfinished files; a folder's file count includes its completed files.
 
+On desktop, choose **Hide** to keep a compact status panel while you browse. It
+shows which uploads are running, queued, cancelling or need attention, with a
+folder counted once in each applicable state. The second line tells you whether
+to keep this tab open or open details to continue. After uploads complete or are
+cancelled, it briefly shows **Uploads complete**, **Uploads cancelled** or
+**Uploads finished** for mixed outcomes, then disappears after five seconds.
+**Show** reopens the details.
+On small screens, the status button opens **Transfers** and shows **Uploads need
+attention** when only blocked uploads remain.
+
 Time remaining estimates the bytes left in the displayed stage using recent
 transfer speed. Folder measurements continue across individual file handoffs,
 including small files that finish between updates. Estimates disappear when
@@ -213,12 +224,21 @@ bytes together.
 
 To resume, use **Choose files / Choose folder / Choose file** in the existing
 batch and select the same originals. TGDrive checks the received bytes, then sends
-only what is still missing. The resume notice reports how many files were added
-to the queue; it is not a live count of files awaiting checks. When you choose the
-whole folder again, files already in progress, received, completed or cancelled
+only what is still missing. The dismissible resume result stays with its upload
+batch and reports how many files were added to the queue; it is not a live count
+of files awaiting checks. When you choose the whole folder again, files already
+in progress, received, completed or cancelled
 are skipped without a mismatch warning. Files outside that upload or with a
 different name or size still count as unmatched. Use the existing **Retry** action
 after failure to avoid duplicates.
+
+Only one tab in the same browser can send a saved device upload at a time.
+Resuming it in another tab waits for the current sender, then checks the latest
+server receipt. Device uploads require HTTPS (or localhost) and browser support
+for Web Locks; an unsupported browser shows an error instead of starting an
+uncoordinated upload. Server-owned jobs do not need that browser feature.
+If TGDrive warns that recovery information cannot be saved, keep the original
+tab open; another tab may not have its latest receipt or job identity.
 
 Temporary connection and server errors retry automatically once TGDrive has
 confirmed an upload session. Keep the tab open and the original files available
@@ -226,7 +246,8 @@ while it retries. If retries stop, read the file's error and use **Retry** (or
 **Retry Failed** on a folder). An interrupted session-creation request still needs manual
 retry because the browser may not have received its session identity.
 
-Cancel may take time after Telegram work begins. **Cancel all** confirms the
+Cancel waits for in-flight device requests and server cleanup before confirming;
+it may also take time after Telegram work begins. **Cancel all** confirms the
 currently selected unfinished work; completed files and later uploads are kept.
 Desktop **Hide/Show** only collapses the panel; **Clear finished** only clears its list.
 
@@ -261,6 +282,10 @@ once, and each ordinary file or URL counts separately. Use the page numbers or
 arrow buttons to navigate. A folder's files stay together; matching its name or
 any child's name keeps that whole folder in the search results.
 
+If saved server history cannot load, this browser's recovery rows remain
+available alongside the error. You can still choose originals, retry or cancel;
+the upload endpoints must be reachable for those actions to finish.
+
 Double-click a completed file or choose **Show in folder** to highlight it;
 folder batches have **Show folder**. Moves/renames are followed. Trashed or
 deleted items become unavailable; unfinished/failed rows do not navigate.
@@ -269,7 +294,8 @@ Choose **Clear history** beside the finished filters, then confirm to remove
 successful, failed and cancelled entries across all pages, regardless of the
 current filter or search. This also removes entries for deleted files and cannot
 be undone. Stored files, queued/running uploads and transfers waiting for an
-original file are kept. Folders with unfinished uploads keep their member rows;
+original file are kept, including failed device uploads that still have a
+resumable receipt. Folders with unfinished uploads keep their member rows;
 clear again after they finish. Saved server history is cleared for all devices;
 browser-only history is cleared in the browser you use.
 
@@ -497,6 +523,7 @@ location, creation time and expiry so links for the same item stay distinguishab
 | --- | --- |
 | **Active / Expired / All** | Filter links by whether they still grant access. |
 | Copy icon | Copy this exact active link again; no replacement or extra link is created. |
+| **Copy embed link** | Copy this link's file viewer or folder browser for an iframe. |
 | **Edit link** | Change this link's label or expiry, including a custom date or no expiry. |
 | Click the name or **Show in folder** | Open its current directory and highlight the item. |
 | **Revoke link** | Confirm before blocking this link. Other links keep working. |
@@ -515,6 +542,43 @@ not already downloaded copies. Invalid tokens fail even in an owner's browser.
 For download tools, use **Copy download link**, not an owner address that needs
 browser cookies. It creates or reuses a separate share labelled **Download link**;
 new links last **one day** and can be revoked in Shared Links. Keep the URL secret.
+
+### Embed a file or folder in a website
+
+1. Create a share link from the file or folder's share action.
+2. Use **Copy Embed Link** in that popup, or **Copy embed link** on its row in
+   **Shared Links**. If clipboard access fails, select and copy the displayed URL.
+3. Paste the embed URL into your website's iframe `src`. For example, replace
+   the example URL below with your copied link (write `&` as `&amp;` in HTML).
+
+```html
+<iframe
+  src="https://drive.example.com/embed?path=%2Fshare_FOLDER_ID&amp;auth=TOKEN"
+  title="Shared project files"
+  width="100%"
+  height="600"
+  allow="fullscreen; picture-in-picture"
+  allowfullscreen
+  loading="lazy"
+  referrerpolicy="no-referrer"
+></iframe>
+```
+
+A file embed opens TGDrive's viewer; unsupported formats offer a download.
+A folder embed lets visitors browse its accessible subfolders, preview files
+and download originals. Visitors do not need the owner password. TGDrive must
+stay running and reachable; the page containing the iframe controls its size.
+
+The embed and ordinary share link use **the same access, expiry and revocation**.
+Copying an embed link creates no additional share. Folder access includes current
+and future accessible descendants. Anyone who can view the containing page can
+obtain the link and read those contents; use public pages only for content you
+intend their visitors to access. Revoking the link also blocks the embed's future
+requests, but cannot recall delivered or downloaded data.
+
+If a frame is blocked, your website must permit TGDrive in its frame policy,
+and TGDrive's reverse proxy must allow framing **`/embed` only**. Keep frame
+protection on owner pages. See [the browser policy](reference.md#security-and-privacy).
 
 ## Trash and permanent deletion
 

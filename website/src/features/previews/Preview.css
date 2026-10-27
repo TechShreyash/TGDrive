@@ -1,3 +1,17 @@
+.file-preview.preview-embedded.file-details {
+    margin: 0;
+    width: 100%;
+    max-width: none;
+    height: 100dvh;
+    max-height: none;
+    border-radius: 0;
+    box-shadow: none;
+}
+.preview-embedded.file-details .file-details-body {
+    max-width: 480px;
+    margin: auto;
+    padding: 24px;
+}
 /* Keep preview controls reachable when browser chrome or rotation reduces space. */
 .file-preview .preview-surface-message {
     overflow: auto;

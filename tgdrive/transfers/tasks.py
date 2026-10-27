@@ -31,6 +31,7 @@ _SHUTDOWN_DRAIN_SECONDS = 5.0
 _PROGRESS_JOURNAL_SECONDS = 0.5
 _PROGRESS_STALE_SECONDS = 15.0
 _BYTE_PHASES = frozenset({"saving", "downloading", "uploading"})
+_ERROR_UNSET = object()
 
 
 def _journalled(operation):
@@ -1067,7 +1068,7 @@ class TransferRegistry:
         phase: str | None = None,
         current: int | None = None,
         total: int | None = None,
-        error: str | None = None,
+        error=_ERROR_UNSET,
         checkpoint_progress: bool = True,
     ) -> TransferRecord:
         async with self._journal_lock:
@@ -1081,6 +1082,7 @@ class TransferRegistry:
             previous_status = record.status
             previous_current = record.current
             previous_total = record.total
+            previous_error = record.error
             if status is not None:
                 record.status = status
             if phase is not None:
@@ -1089,8 +1091,8 @@ class TransferRegistry:
                 record.current = max(0, current)
             if total is not None:
                 record.total = max(0, total)
-            if error is not None:
-                record.error = error[:500]
+            if error is not _ERROR_UNSET:
+                record.error = error[:500] if error is not None else None
             now = time.time()
             monotonic = time.monotonic()
             record.updated_at = now
@@ -1132,7 +1134,7 @@ class TransferRegistry:
             }
             if (
                 transition
-                or error is not None
+                or record.error != previous_error
                 or context_changed
                 or (
                     checkpoint_progress

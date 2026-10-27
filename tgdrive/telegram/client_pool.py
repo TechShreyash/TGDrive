@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import inspect
 import time
-from collections import deque
+from collections import Counter, deque
 from collections.abc import AsyncIterator, Awaitable, Callable, Iterable
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
@@ -801,48 +801,52 @@ class ClientPool:
 
     def queue_estimate(self, request_id: str) -> dict[str, Any] | None:
         """Find a request without exposing other visitors' queue identifiers."""
+        return self.queue_estimates((request_id,)).get(request_id)
+
+    def queue_estimates(self, request_ids: Iterable[str]) -> dict[str, dict[str, Any]]:
+        """Share one queue observation across a batch of owner transfer snapshots."""
         now = time.monotonic()
-        active = sum(
-            row["request_id"] == request_id for row in self._origin_active.values()
-        )
+        requested = set(request_ids)
+        active = Counter(row["request_id"] for row in self._origin_active.values())
         queue = sorted(
             self._origin_waiters, key=lambda row: row["priority"] == "preload"
         )
-        matches = [
-            (index, row)
-            for index, row in enumerate(queue)
-            if row["request_id"] == request_id
-        ]
-        if not matches:
-            return (
-                dict(
-                    request_id=request_id,
-                    position=0,
-                    estimated_wait_seconds=0.0,
-                    active_operations=active,
-                    queued_operations=0,
-                    estimates=True,
-                )
-                if active
-                else None
-            )
-        index, row = matches[0]
+        matches = {}
+        counts = Counter()
+        for index, row in enumerate(queue):
+            identity = row["request_id"]
+            if identity in requested:
+                matches.setdefault(identity, (index, row))
+                counts[identity] += 1
         mean = (
             sum(self._origin_durations) / len(self._origin_durations)
             if self._origin_durations
             else None
         )
-        estimate = self._estimate_origin_wait(row, index, mean)
-        return dict(
-            request_id=request_id,
-            position=index + 1,
-            priority=row["priority"],
-            estimated_wait_seconds=estimate,
-            waiting_seconds=round(now - row["queued_at"], 3),
-            active_operations=active,
-            queued_operations=len(matches),
-            estimates=True,
-        )
+        result = {}
+        for identity in requested:
+            if identity in matches:
+                index, row = matches[identity]
+                result[identity] = dict(
+                    request_id=identity,
+                    position=index + 1,
+                    priority=row["priority"],
+                    estimated_wait_seconds=self._estimate_origin_wait(row, index, mean),
+                    waiting_seconds=round(now - row["queued_at"], 3),
+                    active_operations=active.get(identity, 0),
+                    queued_operations=counts[identity],
+                    estimates=True,
+                )
+            elif identity in active:
+                result[identity] = dict(
+                    request_id=identity,
+                    position=0,
+                    estimated_wait_seconds=0.0,
+                    active_operations=active[identity],
+                    queued_operations=0,
+                    estimates=True,
+                )
+        return result
 
     async def media_capacity(self, *, premium=False, allow_users=False) -> int:
         """Potential media slots; leases enforce occupancy, fairness and cooldowns.

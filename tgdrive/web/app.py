@@ -542,6 +542,7 @@ def create_app(
         message = "; ".join(error["msg"] for error in exc.errors())
         return _json_error(message or "Invalid request", 422)
 
+    @app.get("/embed")
     @app.get("/")
     async def home_page() -> Response:
         index = WEBSITE_DIR / "dist" / "index.html"
@@ -675,50 +676,59 @@ def create_app(
     async def get_directory(
         payload: DirectoryRequest, request: Request
     ) -> JSONResponse:
-        if _is_admin(request):
+        requested = payload.path
+        if _is_admin(request) or not requested.startswith("/share_"):
             await require_admin(request)
         store = _store(request)
-        requested = payload.path
-        auth_home_path: str | None = None
-        if requested == "/trash":
-            await require_admin(request)
-            data: dict[str, Any] = {"contents": store.list_trash()}
-        elif requested.startswith("/search_"):
-            await require_admin(request)
-            query = requested.removeprefix("/search_")
-            page = store.search_page(query, limit=500)
-            data = {
-                "contents": {row["id"]: row for row in page["items"]},
-                "search": {key: value for key, value in page.items() if key != "items"},
-            }
-        elif requested.startswith("/share_"):
-            if getattr(
-                getattr(_runtime(request), "backup", None), "recovery_required", False
-            ):
-                raise RecoveryConflict(
-                    "Shared access is paused until recovery completes"
+
+        def read_directory():
+            auth_home_path: str | None = None
+            if requested == "/trash":
+                data: dict[str, Any] = {"contents": store.list_trash()}
+            elif requested.startswith("/search_"):
+                query = requested.removeprefix("/search_")
+                page = store.search_page(query, limit=500)
+                data = {
+                    "contents": {row["id"]: row for row in page["items"]},
+                    "search": {
+                        key: value for key, value in page.items() if key != "items"
+                    },
+                }
+            elif requested.startswith("/share_"):
+                if getattr(
+                    getattr(_runtime(request), "backup", None),
+                    "recovery_required",
+                    False,
+                ):
+                    raise RecoveryConflict(
+                        "Shared access is paused until recovery completes"
+                    )
+                real_path = "/" + requested.removeprefix("/share_").lstrip("/")
+                if real_path != "/":
+                    real_path = store.resolve_id(
+                        real_path.rstrip("/").rsplit("/", 1)[-1]
+                    )
+                auth_home_path = store.authorize_directory(
+                    real_path, payload.auth or ""
                 )
-            real_path = "/" + requested.removeprefix("/share_").lstrip("/")
-            if real_path != "/":
-                real_path = store.resolve_id(real_path.rstrip("/").rsplit("/", 1)[-1])
-            auth_home_path = store.authorize_directory(real_path, payload.auth or "")
-            if auth_home_path is None:
-                raise HTTPException(status_code=403, detail="Invalid share link")
-            data = store.get_directory(real_path)
-            for item in data.get("contents", {}).values():
-                item.pop("starred", None)
-        else:
-            await require_admin(request)
-            data = store.get_directory(requested)
-        if settings.demo_mode:
-            annotate(data)
-        return JSONResponse(
-            {
-                "status": "ok",
-                "data": data,
-                "auth_home_path": auth_home_path,
-            }
-        )
+                if auth_home_path is None:
+                    raise HTTPException(status_code=403, detail="Invalid share link")
+                data = store.get_directory(real_path)
+                for item in data.get("contents", {}).values():
+                    item.pop("starred", None)
+            else:
+                data = store.get_directory(requested)
+            if settings.demo_mode:
+                annotate(data)
+            return JSONResponse(
+                {
+                    "status": "ok",
+                    "data": data,
+                    "auth_home_path": auth_home_path,
+                }
+            )
+
+        return await asyncio.to_thread(read_directory)
 
     @app.post("/api/createNewFolder")
     async def create_folder(
@@ -992,6 +1002,17 @@ def create_app(
             if not authorized:
                 raise HTTPException(status_code=403, detail="Invalid share link")
         return path, store.get_file(path)
+
+    @app.get("/api/v1/embed")
+    async def embed_file(
+        request: Request,
+        path: Annotated[str, Query(min_length=1, max_length=4096)],
+        auth: Annotated[str, Query(min_length=1, max_length=512)],
+    ) -> dict[str, Any]:
+        _, data = await asyncio.to_thread(authorized_file, request, path, auth)
+        return {
+            key: data[key] for key in ("id", "name", "type", "size", "upload_date")
+        } | {"path": ""}
 
     @app.get("/api/v1/preview")
     async def file_preview(

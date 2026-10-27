@@ -4,6 +4,9 @@
     gap: 8px;
     margin-bottom: 16px;
 }
+.share-dialog-actions {
+    flex-wrap: wrap;
+}
 .item-name-field input {
     flex: 1;
     min-width: 0;

@@ -135,19 +135,16 @@ export function itemPath(item: DriveItem): string {
     const parent = item.path.endsWith("/") ? item.path.slice(0, -1) : item.path;
     return parent + "/" + item.id;
 }
+const byteNumberFormat = new Intl.NumberFormat(undefined, {
+    maximumFractionDigits: 2,
+});
 export function formatBytes(value: number | undefined): string {
     if (value === undefined || !Number.isFinite(value) || value < 0) return "—";
     if (value < 1024)
-        return (
-            new Intl.NumberFormat(undefined, {
-                maximumFractionDigits: 2,
-            }).format(value) + " B"
-        );
+        return byteNumberFormat.format(value) + " B";
     const exponent = Math.min(Math.floor(Math.log(value) / Math.log(1024)), 4);
     return (
-        new Intl.NumberFormat(undefined, { maximumFractionDigits: 2 }).format(
-            value / 1024 ** exponent,
-        ) +
+        byteNumberFormat.format(value / 1024 ** exponent) +
         " " +
         ["B", "KB", "MB", "GB", "TB"][exponent]
     );

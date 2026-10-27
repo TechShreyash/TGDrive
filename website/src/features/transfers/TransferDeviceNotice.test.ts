@@ -1,8 +1,12 @@
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import TransferPanel, { BatchTransfer } from "./TransferPanel";
+import TransferPanel, {
+    BatchTransfer,
+    CollapsedTransferSummary,
+} from "./TransferPanel";
 import { summarizeBatches } from "./transferBatches";
+import { deviceUploadMessage } from "./deviceUploadStatus";
 import type { Transfer } from "./transfers";
 import { getTimezone, setTimezone } from "../../shared/types";
 
@@ -47,7 +51,16 @@ function render(items: Transfer[], expandedPage = true) {
     );
 }
 
-function renderExpandedBatches(items: Transfer[]) {
+function renderCollapsedSummary(items: Transfer[]) {
+    return renderToStaticMarkup(
+        createElement(CollapsedTransferSummary, {
+            batches: summarizeBatches(items, 10000),
+            deviceMessage: deviceUploadMessage(items),
+        }),
+    );
+}
+
+function renderExpandedBatches(items: Transfer[], noticeBatch?: string) {
     const batches = summarizeBatches(items, 10000);
     const deviceUploadsPending = batches.some((batch) => batch.device.pending);
     return renderToStaticMarkup(
@@ -58,6 +71,13 @@ function renderExpandedBatches(items: Transfer[]) {
                 createElement(BatchTransfer, {
                     key: batch.id,
                     batch,
+                    resumeNotice:
+                        batch.id === noticeBatch
+                            ? {
+                                  text: "1 still need their original files.",
+                                  dismiss: () => {},
+                              }
+                            : undefined,
                     deviceUploadsPending,
                     expanded: true,
                     onToggleExpanded: () => {},
@@ -73,6 +93,33 @@ function renderExpandedBatches(items: Transfer[]) {
 }
 
 describe("visible device receipt feedback", () => {
+    it("keeps dismissible resume feedback inside its originating folder", () => {
+        const html = renderExpandedBatches(
+            [
+                local({
+                    key: "jee-file",
+                    name: "missing.bin",
+                    batchId: "jee",
+                    relativePath: "jee/missing.bin",
+                    state: "awaiting_file",
+                }),
+                local({
+                    key: "solar-file",
+                    name: "source.bin",
+                    batchId: "solar",
+                    relativePath: "SolarSync/source.bin",
+                    state: "receiving",
+                }),
+            ],
+            "jee",
+        );
+        expect(html).toContain("jee: 1 still need their original files.");
+        expect(html).toContain('aria-label="Dismiss resume result for jee"');
+        expect(html.slice(html.indexOf('data-batch-id="solar"'))).not.toContain(
+            "transfer-notice",
+        );
+    });
+
     it("uses the instance timezone for finished file and folder dates", () => {
         const previousTimezone = getTimezone();
         const finishedAt = Date.parse("2026-01-02T00:30:00Z");
@@ -359,25 +406,95 @@ describe("visible device receipt feedback", () => {
         ).not.toContain("transfer-device-status");
     });
 
-    it("keeps collapsed readiness in the original header without adding an overlay row", () => {
+    it("shows ongoing work above collapsed tab guidance without adding an overlay row", () => {
         vi.stubGlobal("window", {
             history: { state: { tgdriveReveal: true } },
             matchMedia: () => ({ matches: false }),
         });
-        const pending = render([local()], false);
-        expect(pending).toContain(
-            'class="transfer-collapsed-status" role="status">Keep this tab open',
+        const pending = render([local({ state: "receiving" })], false);
+        const pendingHeader = pending.split("</h2>")[0];
+        expect(pendingHeader).toContain("<span>1 uploading</span>");
+        expect(pendingHeader).toContain(
+            'class="transfer-collapsed-guidance">Keep this tab open',
         );
+        expect(pendingHeader).toContain('role="status" aria-atomic="true"');
         expect(pending).not.toContain('class="transfer-notice"');
         const accepted = render(
             [local({ jobId: "accepted", state: "uploading" })],
             false,
         );
-        expect(accepted).toContain(
-            'class="transfer-collapsed-status" role="status">You can close this tab',
+        const acceptedHeader = accepted.split("</h2>")[0];
+        expect(acceptedHeader).toContain("<span>1 uploading</span>");
+        expect(acceptedHeader).toContain(
+            'class="transfer-collapsed-guidance">You can close this tab',
         );
-        expect(accepted).toContain('title="You can close this tab"');
         expect(accepted).not.toContain('class="transfer-notice"');
+    });
+
+    it("counts folder tasks once and keeps mixed attention visible beside active and queued work", () => {
+        const html = renderCollapsedSummary([
+            local({
+                key: "sending",
+                batchId: "folder",
+                relativePath: "Pictures/Photo.jpg",
+                state: "receiving",
+            }),
+            local({
+                key: "original-needed",
+                batchId: "folder",
+                relativePath: "Pictures/Second.jpg",
+                state: "awaiting_file",
+            }),
+            local({ key: "queued" }),
+            local({ key: "failed", state: "error" }),
+            local({ key: "old-success", state: "completed", jobId: "old" }),
+        ]);
+        expect(html).toContain("1 uploading · 1 queued · 2 need attention");
+        expect(html).toContain("Keep this tab open");
+        expect(html).not.toContain("completed");
+        expect(html).not.toContain("Uploads complete");
+    });
+
+    it("asks for details when minimized uploads are blocked on originals", () => {
+        const html = renderCollapsedSummary([
+            local({ state: "awaiting_file" }),
+        ]);
+        expect(html).toContain("1 needs attention");
+        expect(html).toContain("Open details to continue");
+        expect(html).not.toContain("Keep this tab open");
+        expect(html).not.toContain("uploading");
+    });
+
+    it.each([
+        ["completed", "Uploads complete"],
+        ["cancelled", "Uploads cancelled"],
+    ] as const)(
+        "shows %s without counting old finished history",
+        (state, label) => {
+            const html = renderCollapsedSummary(
+                Array.from({ length: 29 }, (_, index) =>
+                    local({ key: "finished-" + index, state }),
+                ),
+            );
+            expect(html).toContain("<span>" + label + "</span>");
+            expect(html).not.toContain("transfer-collapsed-guidance");
+            expect(html).not.toContain("uploading");
+        },
+    );
+
+    it("uses a neutral finished status when completions and cancellations are mixed", () => {
+        const html = renderCollapsedSummary([
+            local({ state: "completed" }),
+            local({ key: "cancelled", state: "cancelled" }),
+        ]);
+        expect(html).toContain("Uploads finished");
+        expect(html).not.toContain("Uploads complete");
+    });
+
+    it("does not call cancelling work uploading", () => {
+        const html = renderCollapsedSummary([local({ state: "cancelling" })]);
+        expect(html).toContain("1 cancelling");
+        expect(html).not.toContain("uploading");
     });
 
     it("shows only device bytes, rates and received child states before handoff", () => {

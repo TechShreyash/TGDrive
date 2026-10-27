@@ -217,7 +217,7 @@ export default function Preview({
 }: {
     item: DriveItem;
     auth: string;
-    onClose: () => void;
+    onClose?: () => void;
 }) {
     const nativeKind = nativePreviewKind(item.name);
     const path = itemPath(item);
@@ -301,7 +301,9 @@ export default function Preview({
         const position = { x: window.scrollX, y: window.scrollY };
         document.body.style.overflow = "hidden";
         node.showModal();
-        node.querySelector<HTMLButtonElement>(".preview-close")?.focus();
+        node.querySelector<HTMLElement>(
+            ".preview-close, .preview-download, .file-details-download",
+        )?.focus();
         return () => {
             node.querySelectorAll<HTMLMediaElement>("video,audio").forEach(
                 (media) => {
@@ -512,7 +514,11 @@ export default function Preview({
     return (
         <dialog
             ref={viewer}
-            className={"file-preview" + (details ? " file-details" : "")}
+            className={
+                "file-preview" +
+                (details ? " file-details" : "") +
+                (!onClose ? " preview-embedded" : "")
+            }
             aria-labelledby="preview-title"
             aria-describedby={details ? "file-details-reason" : undefined}
             onClick={(event) => {
@@ -524,7 +530,7 @@ export default function Preview({
                     event.clientY < bounds.top ||
                     event.clientY > bounds.bottom
                 )
-                    onClose();
+                    onClose?.();
             }}
             onCancel={(event) => {
                 event.preventDefault();
@@ -537,7 +543,7 @@ export default function Preview({
                     void document.exitFullscreen().catch(() => {});
                     return;
                 }
-                onClose();
+                onClose?.();
             }}
         >
             <div className="preview-fullscreen-surface" ref={fullscreenSurface}>
@@ -577,14 +583,16 @@ export default function Preview({
                             : "")
                     }
                 >
-                    <button
-                        className="preview-close icon-button"
-                        type="button"
-                        aria-label="Close Preview"
-                        onClick={onClose}
-                    >
-                        {details ? <X size={21} /> : <ArrowLeft size={22} />}
-                    </button>
+                    {onClose && (
+                        <button
+                            className="preview-close icon-button"
+                            type="button"
+                            aria-label="Close Preview"
+                            onClick={onClose}
+                        >
+                            {details ? <X size={21} /> : <ArrowLeft size={22} />}
+                        </button>
+                    )}
                     {!details && (
                         <>
                             <FileIcon name={item.name} />

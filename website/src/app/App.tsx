@@ -185,7 +185,7 @@ export default function App() {
         demo_read_only?: boolean;
         demo_admin?: boolean;
         recovery_only?: boolean;
-    }>({ max_file_size: 0 });
+    }>({ max_file_size: 0, recovery_only: false });
     const demoReadOnly = Boolean(config.demo_read_only ?? config.demo_mode);
     const [configLoad, setConfigLoad] = useState<"loading" | "ready" | "error">(
         "loading",
@@ -215,6 +215,7 @@ export default function App() {
     const [loading, setLoading] = useState(true);
     const [loadError, setLoadError] = useState("");
     const [refresh, setRefresh] = useState(0);
+    const [metadataRefresh, setMetadataRefresh] = useState(0);
     const [dialog, setDialog] = useState<ActionDialogState | null>(null);
     const [demoFilesReadOnly, setDemoFilesReadOnly] = useState(false);
     const [query, setQuery] = useState("");
@@ -436,6 +437,19 @@ export default function App() {
             item.initiatedHere &&
             ["error", "awaiting_file"].includes(item.state),
     );
+    const mobileActiveCount = new Set(
+        items
+            .filter(
+                (item) =>
+                    ![
+                        "completed",
+                        "error",
+                        "cancelled",
+                        "awaiting_file",
+                    ].includes(item.state),
+            )
+            .map(transferTaskId),
+    ).size;
     const deviceUploadPending =
         authenticated === true && !isPublic && items.some(needsDeviceUpload);
     useEffect(() => {
@@ -490,6 +504,14 @@ export default function App() {
         transfers.dismissDeletionResult();
     }, [deletionProgress, notify]);
     const reload = useCallback(() => setRefresh((value) => value + 1), []);
+    const invalidateMetadata = useCallback(() => {
+        names.current = new Map([["/", "My Files"]]);
+        setMetadataRefresh((value) => value + 1);
+    }, []);
+    const reloadMetadata = useCallback(() => {
+        invalidateMetadata();
+        reload();
+    }, [invalidateMetadata, reload]);
     const navigate = useCallback(
         (
             path: string,
@@ -790,8 +812,17 @@ export default function App() {
                         reconcileDirectory(previous, result.data),
                     );
                     setShareRoot(result.auth_home_path || "");
-                    if (result.data.name)
-                        names.current.set(currentPath, result.data.name);
+                    const name = result.data.name;
+                    if (name && names.current.get(currentPath) !== name) {
+                        names.current.set(currentPath, name);
+                        setCrumbs((previous) =>
+                            previous.map((crumb) =>
+                                crumb.path === currentPath
+                                    ? { ...crumb, name }
+                                    : crumb,
+                            ),
+                        );
+                    }
                     return true;
                 })
                 .catch((error) => {
@@ -857,13 +888,14 @@ export default function App() {
         if (
             config.recovery_only ||
             databaseRestore.phase !== "idle" ||
+            (!authenticated && !isPublic) ||
             !isFiles ||
             isSearch ||
             view === "trash" ||
             view === "starred"
         )
             return;
-        let cancelled = false;
+        const controller = new AbortController();
         const realPath = isPublic
             ? "/" + currentPath.slice(7).replace(/^\/+/, "")
             : currentPath;
@@ -885,12 +917,17 @@ export default function App() {
             paths.map(async (path) => {
                 const navPath = isPublic ? "/share_" + path.slice(1) : path;
                 let name = names.current.get(navPath);
+                // The listing request already supplies the current folder's name.
+                if (navPath === currentPath)
+                    return { path: navPath, name: name || "Folder" };
                 if (!name) {
                     try {
                         const result = await api.directory(
                             navPath,
                             location.auth,
+                            controller.signal,
                         );
+                        if (controller.signal.aborted) return;
                         name = result.data.name || "Folder";
                         names.current.set(navPath, name);
                     } catch {
@@ -900,13 +937,23 @@ export default function App() {
                 return { path: navPath, name };
             }),
         ).then((result) => {
-            if (!cancelled) setCrumbs([...base, ...result]);
+            if (!controller.signal.aborted)
+                setCrumbs([
+                    ...base,
+                    ...result
+                        .filter((item) => item !== undefined)
+                        .map((crumb) => ({
+                            ...crumb,
+                            name: names.current.get(crumb.path) || crumb.name,
+                        })),
+                ]);
         });
         return () => {
-            cancelled = true;
+            controller.abort();
         };
     }, [
         currentPath,
+        authenticated,
         isPublic,
         isSearch,
         isFiles,
@@ -915,7 +962,7 @@ export default function App() {
         config.recovery_only,
         databaseRestore.phase,
         location.auth,
-        directory.name,
+        metadataRefresh,
     ]);
     useEffect(() => {
         if (!location.previewId || loading || view !== "files") return;
@@ -924,7 +971,8 @@ export default function App() {
     }, [location.previewId, directory.contents, loading, view]);
     const closeDialog = () => {
         if (dialog?.type !== "preview") {
-            if (dialog?.type === "share") reload();
+            if (dialog && !["url", "prepare"].includes(dialog.type))
+                reloadMetadata();
             setDialog(null);
             return;
         }
@@ -1062,15 +1110,13 @@ export default function App() {
         }
     };
     const open = (item: DriveItem) => {
-        if (item.type === "folder")
-            navigate(
-                isPublic
-                    ? "/share_" + itemPath(item).replace(/^\/+/, "")
-                    : itemPath(item),
-                "files",
-                location.auth,
-            );
-        else {
+        if (item.type === "folder") {
+            const path = isPublic
+                ? "/share_" + itemPath(item).replace(/^\/+/, "")
+                : itemPath(item);
+            names.current.set(path, item.name);
+            navigate(path, "files", location.auth);
+        } else {
             const url = new URL(window.location.href);
             url.searchParams.set("preview", item.id);
             window.history.pushState(
@@ -1127,7 +1173,7 @@ export default function App() {
                       ? "Restored to your drive."
                       : "Deletion started.",
             );
-            reload();
+            reloadMetadata();
         } catch (error) {
             if (
                 type === "restore" &&
@@ -1137,7 +1183,7 @@ export default function App() {
                 setDialog({ type: "restore", items: targets });
             else if (type !== "delete" && !allowPublic)
                 notify(errorMessage(error), true);
-            reload();
+            reloadMetadata();
             throw error;
         }
     };
@@ -1918,7 +1964,11 @@ export default function App() {
                             }
                             directory={directory}
                             listingKey={listingKey}
-                            refresh={refresh}
+                            shareRefreshKey={JSON.stringify([
+                                view,
+                                isSearch ? "search" : currentPath,
+                                metadataRefresh,
+                            ])}
                             highlightId={location.highlightId}
                             loading={loading}
                             refreshing={listingRefreshAction.refreshing}
@@ -1945,9 +1995,13 @@ export default function App() {
                             auth={location.auth}
                             onReload={() =>
                                 void listingRefreshAction.run(
-                                    async () =>
-                                        listingRefresh.current?.request() ??
-                                        false,
+                                    async () => {
+                                        invalidateMetadata();
+                                        return (
+                                            listingRefresh.current?.request() ??
+                                            false
+                                        );
+                                    },
                                     view === "trash"
                                         ? "Trash refreshed."
                                         : view === "starred"
@@ -2000,7 +2054,7 @@ export default function App() {
                             refresh={refresh}
                             onError={(message) => notify(message, true)}
                             onNotice={notify}
-                            onChange={reload}
+                            onChange={reloadMetadata}
                             onLocate={(share) =>
                                 navigate(
                                     share.folder_path ||
@@ -2115,7 +2169,7 @@ export default function App() {
                 {mobile &&
                     !isPublic &&
                     view !== "activity" &&
-                    (activeCount > 0 || mobileUploadIssues) && (
+                    (mobileActiveCount > 0 || mobileUploadIssues) && (
                         <button
                             className="mobile-transfer-status"
                             onClick={() => navigate("/", "activity")}
@@ -2123,9 +2177,9 @@ export default function App() {
                         >
                             <Upload size={18} aria-hidden="true" />
                             <span>
-                                {activeCount > 0
-                                    ? activeCount +
-                                      (activeCount === 1
+                                {mobileActiveCount > 0
+                                    ? mobileActiveCount +
+                                      (mobileActiveCount === 1
                                           ? " upload in progress"
                                           : " uploads in progress")
                                     : "Uploads need attention"}
@@ -2244,7 +2298,7 @@ export default function App() {
                     auth={location.auth}
                     onClose={closeDialog}
                     onChanged={() => {
-                        reload();
+                        reloadMetadata();
                         if (dialog.type !== "download-link") setDialog(null);
                     }}
                     onNotice={notify}

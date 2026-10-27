@@ -277,6 +277,23 @@ async def test_wrong_offset_and_short_nonfinal_chunks_do_not_advance(tmp_path):
     assert uploads.path(item["id"]).stat().st_size == 0
 
 
+async def test_inspection_expires_and_cleans_receipt_under_its_lock(
+    tmp_path, monkeypatch
+):
+    uploads, _ = make(tmp_path)
+    item = uploads.create("expired.bin", "/", 3)
+    await uploads.append(item["id"], 0, b"one")
+    deadline = uploads.get_unchecked(item["id"])["expires_at"]
+    monkeypatch.setattr(module.time, "time", lambda: deadline + 1)
+
+    with pytest.raises(UploadError) as expired:
+        await uploads.inspect(item["id"])
+
+    assert expired.value.status == 410
+    assert uploads.get_unchecked(item["id"])["state"] == "cancelled"
+    assert not uploads.path(item["id"]).exists()
+
+
 async def test_failed_offset_commit_replays_written_bytes_safely(tmp_path, monkeypatch):
     uploads, _ = make(tmp_path)
     item = uploads.create("one.bin", "/", 3)
@@ -460,6 +477,34 @@ async def test_restart_reconciles_job_committed_before_receipt_queue_commit(
     restarted, _ = make(tmp_path, manager=manager, staging_budget_bytes=3)
     assert restarted.get(item["id"])["state"] == "finished"
     assert restarted.create("replacement.bin", "/", 3)["offset"] == 0
+
+
+async def test_expired_receipt_inspection_keeps_bytes_owned_by_admitted_job(
+    tmp_path, monkeypatch
+):
+    uploads, manager = make(tmp_path)
+    item = uploads.create("owned.bin", "/", 3)
+    await uploads.append(item["id"], 0, b"one")
+    save = uploads._save
+
+    def fail_queued(state):
+        if state["state"] == "queued":
+            raise ConnectionFailure("receipt commit failed after job admission")
+        save(state)
+
+    monkeypatch.setattr(uploads, "_save", fail_queued)
+    with pytest.raises(ConnectionFailure):
+        await uploads.complete(item["id"])
+    assert uploads.get_unchecked(item["id"])["state"] == "receiving"
+    deadline = uploads.get_unchecked(item["id"])["expires_at"]
+    monkeypatch.setattr(module.time, "time", lambda: deadline + 1)
+
+    snapshot = await uploads.inspect(item["id"])
+
+    assert snapshot["state"] == "queued"
+    assert snapshot["offset"] == 3
+    assert uploads.path(item["id"]).read_bytes() == b"one"
+    assert manager.registry.get(item["id"]).status is TransferStatus.QUEUED
 
 
 def test_abandoned_upload_service_retains_shared_mongodb_receipts(

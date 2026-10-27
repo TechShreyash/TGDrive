@@ -5,6 +5,7 @@ import {
     TransferManager,
 } from "./transfers";
 import type { UploadChunkTransport } from "./uploadTransport";
+import { stubDeviceLocks } from "./transferTestLocks";
 
 function deferred<T>() {
     let resolve!: (value: T) => void;
@@ -41,6 +42,7 @@ const managerForTest = (sendChunk?: UploadChunkTransport) => {
 };
 
 beforeEach(() => {
+    stubDeviceLocks();
     const values = new Map<string, string>();
     vi.stubGlobal("localStorage", {
         get length() {
@@ -168,10 +170,11 @@ describe("device upload scheduling", () => {
         manager.setEnabled(true);
         await snapshotStarted.promise;
         const key = manager.snapshot()[0].key;
-        await manager.cancel(key);
-        expect(manager.snapshot()[0].state).toBe("cancelled");
+        const cancelling = manager.cancel(key);
+        expect(manager.snapshot()[0].state).toBe("cancelling");
 
         snapshot.resolve(receipt("cancelled-receipt"));
+        await cancelling;
         await vi.waitFor(() =>
             expect(manager.snapshot()[0].controller).toBeUndefined(),
         );
@@ -416,4 +419,303 @@ describe("device upload scheduling", () => {
         );
         expect(maximum).toBe(BROWSER_RECEIVE_INITIAL_CONCURRENCY);
     });
+});
+
+describe("upload responsiveness", () => {
+    it.each(["sent", "cancelled", "error", "disabled"])(
+        "coalesces byte progress and immediately handles %s",
+        async (transition) => {
+            vi.useFakeTimers();
+            const chunk = deferred<Response>();
+            let report: ((bytes: number) => void) | undefined;
+            vi.stubGlobal(
+                "fetch",
+                vi.fn(async (url: string) => {
+                    if (url === "/api/v1/jobs")
+                        return Response.json({ jobs: [] });
+                    if (url.endsWith("/cancel"))
+                        return Response.json({ state: "cancelled" });
+                    return receipt("progress");
+                }),
+            );
+            const manager = managerForTest((_url, _options, progress) => {
+                report = progress;
+                return chunk.promise;
+            });
+            manager.add([new File(["data"], "progress.bin")], "/", 10);
+            manager.setEnabled(true);
+            await vi.advanceTimersByTimeAsync(0);
+            expect(report).toBeDefined();
+            const published = vi.fn();
+            manager.subscribe(published);
+            report!(1);
+            report!(2);
+            expect(manager.snapshot()[0].sentCurrent).toBe(2);
+            expect(published).not.toHaveBeenCalled();
+            await vi.advanceTimersByTimeAsync(249);
+            expect(published).not.toHaveBeenCalled();
+            await vi.advanceTimersByTimeAsync(1);
+            expect(published).toHaveBeenCalledOnce();
+            report!(3);
+            expect(published).toHaveBeenCalledOnce();
+            if (transition === "sent") {
+                report!(4);
+                expect(published).toHaveBeenCalledTimes(2);
+                expect(manager.snapshot()[0].phase).toContain(
+                    "Waiting for server confirmation",
+                );
+                const stored = JSON.parse(
+                    localStorage.getItem(
+                        "tgdrive.uploads.v2:" + manager.snapshot()[0].key,
+                    )!,
+                );
+                expect(stored.current).toBe(0);
+                expect(stored.sentCurrent).toBeUndefined();
+            } else if (transition === "cancelled") {
+                const cancelling = manager.cancel(manager.snapshot()[0].key);
+                expect(manager.snapshot()[0].state).toBe("cancelling");
+                expect(published.mock.calls.length).toBeGreaterThan(1);
+                chunk.resolve(received());
+                await cancelling;
+                await vi.advanceTimersByTimeAsync(0);
+                expect(manager.snapshot()[0].state).toBe("cancelled");
+            } else if (transition === "error") {
+                chunk.resolve(
+                    Response.json({ detail: "Rejected" }, { status: 403 }),
+                );
+                await vi.advanceTimersByTimeAsync(0);
+                expect(manager.snapshot()[0].state).toBe("error");
+                expect(published.mock.calls.length).toBeGreaterThan(1);
+            } else manager.setEnabled(false);
+            const notifications = published.mock.calls.length;
+            await vi.advanceTimersByTimeAsync(250);
+            expect(published).toHaveBeenCalledTimes(notifications);
+        },
+    );
+
+    it.each([false, true])(
+        "bounds completion-driven polls while the initial poll is held=%s and keeps explicit refresh immediate",
+        async (held) => {
+            vi.useFakeTimers();
+            const initial = deferred<Response>();
+            let polls = 0;
+            let created = 0;
+            vi.stubGlobal(
+                "fetch",
+                vi.fn(async (url: string) => {
+                    if (url === "/api/v1/jobs") {
+                        polls++;
+                        if (held && polls === 1) return initial.promise;
+                        return Response.json({ jobs: [] });
+                    }
+                    if (url === "/api/v1/uploads")
+                        return receipt("small-" + ++created);
+                    if (url.endsWith("/complete"))
+                        return Response.json({ id: url.split("/")[4] });
+                    return received();
+                }),
+            );
+            const manager = managerForTest();
+            manager.add(
+                Array.from(
+                    { length: 8 },
+                    (_, index) => new File(["data"], "small-" + index),
+                ),
+                "/",
+                10,
+            );
+            manager.setEnabled(true);
+            await vi.advanceTimersByTimeAsync(0);
+            expect(manager.snapshot().every((item) => item.jobId)).toBe(true);
+            initial.resolve(Response.json({ jobs: [] }));
+            await vi.advanceTimersByTimeAsync(0);
+            expect(polls).toBe(1);
+            await vi.advanceTimersByTimeAsync(1499);
+            expect(polls).toBe(1);
+            await vi.advanceTimersByTimeAsync(1);
+            expect(polls).toBe(2);
+            manager.refreshJobs();
+            await vi.advanceTimersByTimeAsync(0);
+            expect(polls).toBe(3);
+        },
+    );
+
+    it("persists an acknowledged chunk immediately without scanning queued recovery records", async () => {
+        vi.useFakeTimers();
+        const firstChunk = deferred<Response>();
+        const nextChunk = deferred<Response>();
+        let sent = 0;
+        let created = 0;
+        vi.stubGlobal(
+            "fetch",
+            vi.fn(async (url: string) =>
+                url === "/api/v1/jobs"
+                    ? Response.json({ jobs: [] })
+                    : receipt("acknowledged-" + ++created, 8),
+            ),
+        );
+        const manager = managerForTest(() =>
+            ++sent === 1 ? firstChunk.promise : nextChunk.promise,
+        );
+        manager.add(
+            Array.from(
+                { length: 100 },
+                (_, index) => new File(["abcdefgh"], "source-" + index),
+            ),
+            "/",
+            10,
+        );
+        manager.setEnabled(true);
+        await vi.advanceTimersByTimeAsync(0);
+        const scans = vi.spyOn(localStorage, "key");
+        const writes = vi.spyOn(localStorage, "setItem");
+        firstChunk.resolve(received(4));
+        await vi.advanceTimersByTimeAsync(0);
+        expect(sent).toBe(BROWSER_RECEIVE_INITIAL_CONCURRENCY + 1);
+        expect(manager.snapshot()[0].current).toBe(4);
+        expect(scans).not.toHaveBeenCalled();
+        expect(writes).toHaveBeenCalledOnce();
+        const stored = JSON.parse(writes.mock.calls[0][1]);
+        expect(stored.current).toBe(4);
+        expect(stored.sentCurrent).toBeUndefined();
+        scans.mockRestore();
+        writes.mockRestore();
+    });
+
+    it("updates only a polled receipt, preserves storage warnings and respects a cleared record", async () => {
+        vi.useFakeTimers();
+        for (let index = 0; index < 100; index++)
+            localStorage.setItem(
+                "tgdrive.uploads.v2:record-" + index,
+                JSON.stringify({
+                    key: "record-" + index,
+                    initiatedHere: true,
+                    name: "file-" + index,
+                    destination: "/",
+                    size: 8,
+                    total: 8,
+                    current: 0,
+                    lastModified: 0,
+                    state: "awaiting_file",
+                    phase: "Choose the original file to resume",
+                    ...(index === 0 ? { jobId: "job" } : {}),
+                }),
+            );
+        localStorage.setItem("tgdrive.uploads.v2:broken", "{invalid");
+        let current = 0;
+        vi.stubGlobal(
+            "fetch",
+            vi.fn(async () =>
+                Response.json({
+                    jobs: [
+                        {
+                            id: "job",
+                            kind: "upload",
+                            status: "running",
+                            phase: "uploading",
+                            total: 8,
+                            current,
+                        },
+                    ],
+                }),
+            ),
+        );
+        const manager = managerForTest();
+        manager.setEnabled(true);
+        await vi.advanceTimersByTimeAsync(0);
+        const scans = vi.spyOn(localStorage, "key");
+        const reads = vi.spyOn(localStorage, "getItem");
+        const writes = vi.spyOn(localStorage, "setItem");
+        current = 4;
+        manager.refreshJobs();
+        await vi.advanceTimersByTimeAsync(0);
+        expect(scans).not.toHaveBeenCalled();
+        expect(reads.mock.calls.map(([key]) => key)).toEqual([
+            "tgdrive.uploads.v2:record-0",
+        ]);
+        expect(writes).toHaveBeenCalledOnce();
+        expect(JSON.parse(writes.mock.calls[0][1]).current).toBe(4);
+        expect(manager.recoveryWarning).toContain(
+            "Some transfer recovery information",
+        );
+        writes.mockImplementationOnce(() => {
+            throw new Error("Storage temporarily unavailable");
+        });
+        current = 5;
+        manager.refreshJobs();
+        await vi.advanceTimersByTimeAsync(0);
+        expect(manager.recoveryWarning).toContain("could not save");
+        expect(
+            JSON.parse(localStorage.getItem("tgdrive.uploads.v2:record-0")!)
+                .current,
+        ).toBe(4);
+        writes.mockClear();
+        manager.refreshJobs();
+        await vi.advanceTimersByTimeAsync(0);
+        expect(writes).toHaveBeenCalledOnce();
+        expect(JSON.parse(writes.mock.calls[0][1]).current).toBe(5);
+        expect(manager.recoveryWarning).toContain(
+            "Some transfer recovery information",
+        );
+        localStorage.setItem("tgdrive.uploads.v2:record-0", "null");
+        writes.mockClear();
+        current = 6;
+        manager.refreshJobs();
+        await vi.advanceTimersByTimeAsync(0);
+        expect(writes).not.toHaveBeenCalled();
+        expect(manager.snapshot().some((item) => item.key === "record-0")).toBe(
+            false,
+        );
+        expect(localStorage.getItem("tgdrive.uploads.v2:record-0")).toBe("null");
+        scans.mockRestore();
+        reads.mockRestore();
+        writes.mockRestore();
+    });
+
+    it.each([
+        "{invalid",
+        "42",
+        JSON.stringify({
+            key: "another-record",
+            initiatedHere: true,
+            name: "source.bin",
+            destination: "/",
+            size: 8,
+        }),
+    ])(
+        "keeps a recovery warning when a changed record contains %s",
+        async (malformed) => {
+            vi.useFakeTimers();
+            let current = 0;
+            vi.stubGlobal(
+                "fetch",
+                vi.fn(async () =>
+                    Response.json({
+                        jobs: [
+                            {
+                                id: "job",
+                                status: "running",
+                                phase: "uploading",
+                                total: 8,
+                                current,
+                            },
+                        ],
+                    }),
+                ),
+            );
+            const manager = managerForTest();
+            manager.addJob("job", "source.bin", "/");
+            manager.setEnabled(true);
+            await vi.advanceTimersByTimeAsync(0);
+            const key = "tgdrive.uploads.v2:" + manager.snapshot()[0].key;
+            localStorage.setItem(key, malformed);
+            current = 4;
+            manager.refreshJobs();
+            await vi.advanceTimersByTimeAsync(0);
+            expect(manager.recoveryWarning).toContain(
+                "Some transfer recovery information",
+            );
+            expect(JSON.parse(localStorage.getItem(key)!).current).toBe(4);
+        },
+    );
 });

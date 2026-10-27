@@ -23,7 +23,7 @@ through links you can set to expire or revoke.
 - **Organize and find files.** Create folders, search by name, star favorites, switch between list and grid views, and restore items from Trash.
 - **Play videos and audio in your browser.** Stream supported media, with subtitles, audio-track selection and chapters when available.
 - **View documents, photos, ebooks and comics.** Open images, PDFs and text, and read EPUB ebooks and CBZ/CBR comics in your browser.
-- **Share files and folders with a link.** Give others read-only access, choose an expiry and revoke access when needed.
+- **Share files and folders with a link.** Give others read-only access, choose an expiry and revoke access when needed. [Embed a file viewer or folder browser](docs/usage.md#embed-a-file-or-folder-in-a-website) in your website using the same link access.
 - **Prepare files for smoother access.** Preload before watching or sharing. While file data stays cached, repeat visits and shared-link viewers can reuse it without downloading it from Telegram again.
 - **Follow transfers and server activity.** Track progress, search transfer history, and monitor server resources, traffic, Telegram activity and cache use.
 - **Backups and recovery.** Save encrypted backups of your file list, folders and settings, and optionally copy completed files to a separate Telegram channel.

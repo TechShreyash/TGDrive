@@ -26,6 +26,7 @@ examples from the recorded session, not throughput benchmarks.
 - [Shared-download load and queues](#shared-download-load-and-queues)
 - [URL import intake](#url-import-intake)
 - [Device upload receipts](#device-upload-receipts)
+- [Navigation during uploads](#navigation-during-uploads)
 - [Upload pipeline and smaller splits](#upload-pipeline-and-smaller-splits)
 - [Video controls and startup](#video-controls-and-startup)
   - [Browser playback buffer](#browser-playback-buffer)
@@ -322,6 +323,33 @@ state transition without blocking reads of the last acknowledged job state.
 Bulk move, Trash and restore also share batch working copies rather than copying
 the full catalog for each item; name, ancestry and share checks still depend on
 catalog size.
+
+### Navigation during uploads
+
+The browser coalesces transient sent-byte display updates into **250 ms** ticks.
+Acknowledged offsets, state changes, errors and cancellation remain immediate;
+this display cadence does not limit upload bandwidth. Acknowledging a chunk
+saves its changed recovery record synchronously. Migration, history retention
+and cross-tab history reconciliation use the full recovery path when needed.
+
+Receipt completions share a **1.5-second minimum jobs-request start cadence**;
+explicit refresh and retry actions remain immediate. Breadcrumbs reuse the
+current listing and known folder names, and cancel obsolete ancestor requests.
+Upload-driven listing refreshes reuse share badges; metadata changes and manual
+refresh invalidate them.
+
+Directory reads and JSON serialization run off the HTTP event loop. Performance
+totals reuse the same committed catalog snapshot; a commit or reload invalidates
+them. Frequent owner status reads use the latest backup observation loaded at
+startup and updated by publication, while explicit backup history still queries
+MongoDB. If that optional startup read fails, status reports no backup observation
+until publication observes one; opening the catalog can still succeed. These
+policies reduce repeated work; network, proxy, database and disk latency can still
+delay requests.
+
+Single-document uploads reuse the identical whole-file and document digest.
+Persisted receipt verification and send-time integrity checks still run; durable
+offsets continue to require synchronized bytes and a MongoDB receipt commit.
 
 ## Upload pipeline and smaller splits
 

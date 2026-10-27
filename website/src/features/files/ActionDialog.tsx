@@ -9,12 +9,14 @@ import {
     Copy,
     Download,
     AlertCircle,
+    Code,
 } from "lucide-react";
 import { api, request, ApiError, errorMessage } from "../../shared/api";
 import { performanceApi } from "../performance/performanceApi";
 import { itemPath, formatTimestamp, type DriveItem } from "../../shared/types";
 import { transfers } from "../transfers/transfers";
 import { Modal, ErrorNotice, Spinner } from "../../shared/components";
+import { embedUrl } from "../shares/embedLinks";
 import "./ActionDialog.css";
 export type ActionDialogState =
     | { type: "folder" }
@@ -401,6 +403,18 @@ export default function ActionDialog({
                             readOnly
                             onFocus={(event) => event.target.select()}
                         />
+                        <label htmlFor="embed-link">Embed Link</label>
+                        <input
+                            id="embed-link"
+                            value={embedUrl(link)}
+                            readOnly
+                            onFocus={(event) => event.target.select()}
+                        />
+                        <p className="muted">
+                            Use the embed link as an iframe source on your
+                            website. It has the same access and expiry as this
+                            share link.
+                        </p>
                         <p className="muted">
                             {expiry
                                 ? "Expires " + formatTimestamp(expiry) + "."
@@ -408,7 +422,7 @@ export default function ActionDialog({
                             Revoke access from Shared Links.
                         </p>
                         <ErrorNotice message={error} />
-                        <div className="dialog-actions">
+                        <div className="dialog-actions share-dialog-actions">
                             <button
                                 className="secondary-button"
                                 onClick={close}
@@ -416,7 +430,27 @@ export default function ActionDialog({
                                 Done
                             </button>
                             <button
+                                className="secondary-button"
+                                disabled={busy}
+                                onClick={() =>
+                                    void run(async () => {
+                                        if (!navigator.clipboard)
+                                            throw new Error(
+                                                "Clipboard access is unavailable. Select and copy the embed link above.",
+                                            );
+                                        await navigator.clipboard.writeText(
+                                            embedUrl(link),
+                                        );
+                                        onNotice("Embed Link copied.");
+                                    })
+                                }
+                            >
+                                <Code size={16} aria-hidden="true" /> Copy Embed
+                                Link
+                            </button>
+                            <button
                                 className="primary-button"
+                                disabled={busy}
                                 onClick={() =>
                                     void run(async () => {
                                         if (!navigator.clipboard)
