@@ -103,7 +103,9 @@ def test_status_uses_observed_backup_without_reading_history(owner):
     client, _, runtime, _ = owner
     login(client)
     runtime.backup.latest = [{"id": "observed", "status": "pending"}]
-    runtime.backup.history = Mock(side_effect=AssertionError("Unexpected history query"))
+    runtime.backup.history = Mock(
+        side_effect=AssertionError("Unexpected history query")
+    )
     for _ in range(3):
         response = client.get("/api/v1/status")
         assert response.status_code == 200

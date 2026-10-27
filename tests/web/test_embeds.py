@@ -59,9 +59,12 @@ def test_file_embed_metadata_is_minimal_and_requires_a_capability(app_client, ki
             "upload_date": node["upload_date"],
         }
         assert response.headers["cache-control"] == "no-store"
-        assert client.get(
-            "/api/v1/embed", params={"path": "/" + private["id"], "auth": auth}
-        ).status_code == 403
+        assert (
+            client.get(
+                "/api/v1/embed", params={"path": "/" + private["id"], "auth": auth}
+            ).status_code
+            == 403
+        )
 
 
 @pytest.mark.parametrize("kind", ["file", "folder"])
@@ -76,9 +79,12 @@ def test_embed_reuses_share_expiry_revocation_and_trash_rules(
     file_path = folder_path + "/" + node["id"]
     share_path = folder_path if kind == "folder" else file_path
     auth = store.create_share(share_path)
-    assert client.get(
-        "/api/v1/embed", params={"path": "/" + node["id"], "auth": auth}
-    ).status_code == 200
+    assert (
+        client.get(
+            "/api/v1/embed", params={"path": "/" + node["id"], "auth": auth}
+        ).status_code
+        == 200
+    )
 
     if unavailable == "expired":
         later = (datetime.now(UTC) + timedelta(days=8)).isoformat()
@@ -89,13 +95,23 @@ def test_embed_reuses_share_expiry_revocation_and_trash_rules(
         store.set_trashed(share_path, True)
 
     login(client)
-    assert client.get(
-        "/api/v1/embed", params={"path": "/" + node["id"], "auth": auth}
-    ).status_code == 403
-    assert client.head(
-        "/file", params={"path": "/" + node["id"], "auth": auth}
-    ).status_code == 403
+    assert (
+        client.get(
+            "/api/v1/embed", params={"path": "/" + node["id"], "auth": auth}
+        ).status_code
+        == 403
+    )
+    assert (
+        client.head(
+            "/file", params={"path": "/" + node["id"], "auth": auth}
+        ).status_code
+        == 403
+    )
     if kind == "folder":
-        assert client.post(
-            "/api/getDirectory", json={"path": "/share_" + folder["id"], "auth": auth}
-        ).status_code == 403
+        assert (
+            client.post(
+                "/api/getDirectory",
+                json={"path": "/share_" + folder["id"], "auth": auth},
+            ).status_code
+            == 403
+        )

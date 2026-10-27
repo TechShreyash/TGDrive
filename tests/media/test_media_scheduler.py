@@ -162,9 +162,7 @@ async def test_batch_queue_estimates_keep_priority_counts_and_active_only_fields
     tasks = []
 
     async def waiting(identity, priority):
-        async with pool.lease(
-            download=True, request_id=identity, priority=priority
-        ):
+        async with pool.lease(download=True, request_id=identity, priority=priority):
             pass
 
     try:

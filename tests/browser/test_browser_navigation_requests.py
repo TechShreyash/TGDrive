@@ -27,9 +27,11 @@ def test_folder_navigation_does_not_fetch_current_listing_for_breadcrumbs(
     requests: list[str] = []
     page.on(
         "request",
-        lambda request: requests.append(request.post_data_json["path"])
-        if request.url.endswith("/api/getDirectory")
-        else None,
+        lambda request: (
+            requests.append(request.post_data_json["path"])
+            if request.url.endswith("/api/getDirectory")
+            else None
+        ),
     )
     folder.dblclick()
     expect(page.get_by_role("button", name="sample.json", exact=True)).to_be_visible()
@@ -103,9 +105,7 @@ def test_cold_breadcrumbs_fetch_only_ancestors_and_cancel_obsolete_requests(
             page.wait_for_timeout(25)
         assert len(held) == 1
         page.get_by_role("link", name="My Files", exact=True).click()
-        expect(
-            page.get_by_role("heading", name="My Files", exact=True)
-        ).to_be_visible()
+        expect(page.get_by_role("heading", name="My Files", exact=True)).to_be_visible()
         deadline = time.monotonic() + 5
         while not cancelled and time.monotonic() < deadline:
             page.wait_for_timeout(25)
@@ -126,9 +126,11 @@ def test_upload_refreshes_skip_shares_but_metadata_changes_refresh_badges(
     shares: list[Any] = []
     page.on(
         "request",
-        lambda request: shares.append(request)
-        if request.method == "GET" and request.url.endswith("/api/v1/shares")
-        else None,
+        lambda request: (
+            shares.append(request)
+            if request.method == "GET" and request.url.endswith("/api/v1/shares")
+            else None
+        ),
     )
     login(page, server.url)
     page.get_by_label("Actions for 資料", exact=True).click()
@@ -156,14 +158,16 @@ def test_upload_refreshes_skip_shares_but_metadata_changes_refresh_badges(
     dialog = page.get_by_role("dialog", name="Rename", exact=True)
     dialog.get_by_label("Name", exact=True).fill("Renamed shared folder")
     with page.expect_response(
-        lambda response: response.request.method == "GET"
-        and response.url.endswith("/api/v1/shares")
+        lambda response: (
+            response.request.method == "GET" and response.url.endswith("/api/v1/shares")
+        )
     ):
         dialog.get_by_role("button", name="Save Name", exact=True).click()
     folder = page.get_by_role("button", name="Renamed shared folder", exact=True)
     expect(folder).to_be_visible()
     expect(page.get_by_label("Shared by Link", exact=True)).to_have_count(1)
     if removal == "partial-trash":
+
         def partial_trash(route: Any) -> None:
             response = route.fetch()
             payload = response.json()
@@ -173,8 +177,10 @@ def test_upload_refreshes_skip_shares_but_metadata_changes_refresh_badges(
         page.route("**/api/v1/nodes/bulk", partial_trash)
         page.get_by_label("Actions for Renamed shared folder", exact=True).click()
         with page.expect_response(
-            lambda response: response.request.method == "GET"
-            and response.url.endswith("/api/v1/shares")
+            lambda response: (
+                response.request.method == "GET"
+                and response.url.endswith("/api/v1/shares")
+            )
         ):
             page.get_by_role("button", name="Move to Trash", exact=True).click()
         expect(folder).to_have_count(0)

@@ -36,9 +36,7 @@ def test_embed_copy_reuses_popup_share_in_shared_links(
     login(page, server.url)
     path = server.control()["seed"][kind]
     name = "資料" if kind == "folder" else "résumé #1.txt"
-    page.goto(
-        server.url + "/?" + urlencode({"path": path.rsplit("/", 1)[0] or "/"})
-    )
+    page.goto(server.url + "/?" + urlencode({"path": path.rsplit("/", 1)[0] or "/"}))
     page.locator(f'summary[aria-label="Actions for {name}"]').click()
     page.get_by_role("button", name="Share Link", exact=True).click()
     page.get_by_role("button", name="Create Share Link", exact=True).click()
@@ -58,7 +56,8 @@ def test_embed_copy_reuses_popup_share_in_shared_links(
         )
         link.focus()
         assert link.evaluate(
-            "input => input.selectionStart === 0 && input.selectionEnd === input.value.length"
+            "input => input.selectionStart === 0 && "
+            "input.selectionEnd === input.value.length"
         )
     before = page.request.get(server.url + "/api/v1/shares").json()["shares"]
     assert len(before) == 1
@@ -84,9 +83,10 @@ def test_embed_copy_reuses_popup_share_in_shared_links(
     shared_params = parse_qs(urlsplit(shared_url).query)
     assert urlsplit(shared_url).path == "/embed"
     assert shared_params["auth"] == parse_qs(urlsplit(embed_url).query)["auth"]
-    assert shared_params["path"][0] == (
-        "/share_" if kind == "folder" else "/"
-    ) + path.rsplit("/", 1)[-1]
+    assert (
+        shared_params["path"][0]
+        == ("/share_" if kind == "folder" else "/") + path.rsplit("/", 1)[-1]
+    )
     assert page.request.get(server.url + "/api/v1/shares").json()["shares"] == before
 
 
@@ -115,9 +115,7 @@ def test_cross_origin_embed_renders_and_rejects_invalid_or_revoked_links(
         path = seed["preview_folder"] + "/" + node["id"]
     else:
         path = seed["file"]
-    share = page.request.post(
-        server.url + "/api/v1/shares", data={"path": path}
-    ).json()
+    share = page.request.post(server.url + "/api/v1/shares", data={"path": path}).json()
     params = {
         "path": "/share_" + path.rsplit("/", 1)[-1] if kind == "folder" else path,
         "auth": share["auth"],
@@ -140,10 +138,12 @@ def test_cross_origin_embed_renders_and_rejects_invalid_or_revoked_links(
     private_requests = []
     page.on(
         "request",
-        lambda request: private_requests.append(request.url)
-        if urlsplit(request.url).path
-        in {"/api/v1/session", "/api/v1/status", "/api/v1/shares", "/api/v1/jobs"}
-        else None,
+        lambda request: (
+            private_requests.append(request.url)
+            if urlsplit(request.url).path
+            in {"/api/v1/session", "/api/v1/status", "/api/v1/shares", "/api/v1/jobs"}
+            else None
+        ),
     )
     page.set_viewport_size({"width": width, "height": 900})
     page.goto(parent_url)
@@ -181,7 +181,8 @@ def test_cross_origin_embed_renders_and_rejects_invalid_or_revoked_links(
     for auth in ("invalid-token", share["auth"]):
         failed_url = server.url + "/embed?" + urlencode({**params, "auth": auth})
         with page.expect_event(
-            "framenavigated", predicate=lambda frame: frame.url == failed_url
+            "framenavigated",
+            predicate=lambda frame, failed_url=failed_url: frame.url == failed_url,
         ):
             page.locator("#tgdrive-embed").evaluate(
                 "(node, url) => { node.src = url; }", failed_url

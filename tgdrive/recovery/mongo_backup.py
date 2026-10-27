@@ -290,12 +290,13 @@ class MongoProtection:
         return store
 
     def _observe_backup(self, row):
-        if (
-            self._latest_backup is None
-            or row.get("created_at", "") >= self._latest_backup.get("created_at", "")
-        ):
+        if self._latest_backup is None or row.get(
+            "created_at", ""
+        ) >= self._latest_backup.get("created_at", ""):
             self._latest_backup = {
-                key: value for key, value in row.items() if key not in {"_id", "local_path"}
+                key: value
+                for key, value in row.items()
+                if key not in {"_id", "local_path"}
             }
         if row.get("status") == "confirmed":
             confirmed_at = row.get("confirmed_at")
@@ -536,7 +537,7 @@ class MongoProtection:
             )
             if self._last_error == _HISTORY_UNAVAILABLE:
                 self._last_error = None
-            # Startup reads must not overwrite publication progress made while awaiting them.
+            # Startup reads must not overwrite publication progress made meanwhile.
             if self._latest_backup is observed:
                 if latest:
                     self._observe_backup(latest)

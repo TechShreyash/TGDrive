@@ -86,7 +86,9 @@ async def test_startup_read_cannot_rewind_concurrent_backup_confirmation(monkeyp
         loop.call_soon_threadsafe(service._observe_backup, confirmed)
         return None
 
-    backend = SimpleNamespace(db=SimpleNamespace(backups=SimpleNamespace(find_one=read)))
+    backend = SimpleNamespace(
+        db=SimpleNamespace(backups=SimpleNamespace(find_one=read))
+    )
     service = MongoProtection(
         SimpleNamespace(mongodb_backup_seconds=3600), object(), backend
     )
@@ -348,7 +350,9 @@ async def test_missing_pending_snapshot_updates_observed_status(snapshot_source)
     assert service._last_success_at is None
 
 
-async def test_snapshot_cooldown_updates_observation_without_confirmation(snapshot_source):
+async def test_snapshot_cooldown_updates_observation_without_confirmation(
+    snapshot_source,
+):
     service, store, _backend = snapshot_source
     error = RuntimeError("Synthetic provider cooldown")
     error.seconds = 30

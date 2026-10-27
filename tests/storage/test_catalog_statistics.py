@@ -37,7 +37,12 @@ def test_statistics_reuse_snapshot_and_invalidate_after_catalog_changes(monkeypa
 
         store.set_trashed(path, True)
         assert store.statistics() == dict(
-            expected, files=0, folders=0, total_bytes=0, trashed_files=1, trashed_bytes=7
+            expected,
+            files=0,
+            folders=0,
+            total_bytes=0,
+            trashed_files=1,
+            trashed_bytes=7,
         )
         store.set_trashed(path, False)
         assert store.statistics() == expected

@@ -437,12 +437,10 @@ def register_routes(
         response.headers["Cache-Control"] = "no-store"
         records = get_manager(request).registry.list()
         estimate = getattr(get_runtime(request).pool, "queue_estimates", None)
-        queues = estimate(record.id for record in records) if callable(estimate) else None
-        return {
-            "jobs": [
-                job_snapshot(record, request, queues) for record in records
-            ]
-        }
+        queues = (
+            estimate(record.id for record in records) if callable(estimate) else None
+        )
+        return {"jobs": [job_snapshot(record, request, queues) for record in records]}
 
     @app.get("/api/v1/transfers/history", dependencies=admin)
     async def transfer_history(
