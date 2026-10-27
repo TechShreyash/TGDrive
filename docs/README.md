@@ -3,7 +3,7 @@
 **Must read before using TGDrive: [New-user guide and FAQs](new-user-guide.md).**
 Learn the basics and find answers to common questions about using TGDrive.
 Then [try the public demo](usage.md#try-the-public-demo) or follow [Setup](setup.md).
-These guides describe TGDrive 2.0.0 with MongoDB. The setup guide explains the
+These guides describe TGDrive 2.1.0 with MongoDB. The setup guide explains the
 stable `main` source and version-pinned release options; `dev` may be unstable.
 
 **[Explore the screenshot gallery and video walkthroughs](showcase.md)** for a
