@@ -28,6 +28,7 @@ Prefer a visual introduction? [Open the gallery and walkthrough videos](showcase
 - [Preload a file for smoother playback and downloads](#preload-a-file-for-smoother-playback-and-downloads)
   - [Parallel and resumed downloads](#parallel-and-resumed-downloads)
 - [Share and revoke](#share-and-revoke)
+  - [Embed a file or folder in a website](#embed-a-file-or-folder-in-a-website)
 - [Trash and permanent deletion](#trash-and-permanent-deletion)
 - [Import from a URL](#import-from-a-url)
 - [Settings and connections](#settings-and-connections)
@@ -522,6 +523,7 @@ location, creation time and expiry so links for the same item stay distinguishab
 | --- | --- |
 | **Active / Expired / All** | Filter links by whether they still grant access. |
 | Copy icon | Copy this exact active link again; no replacement or extra link is created. |
+| **Copy embed link** | Copy this link's file viewer or folder browser for an iframe. |
 | **Edit link** | Change this link's label or expiry, including a custom date or no expiry. |
 | Click the name or **Show in folder** | Open its current directory and highlight the item. |
 | **Revoke link** | Confirm before blocking this link. Other links keep working. |
@@ -540,6 +542,43 @@ not already downloaded copies. Invalid tokens fail even in an owner's browser.
 For download tools, use **Copy download link**, not an owner address that needs
 browser cookies. It creates or reuses a separate share labelled **Download link**;
 new links last **one day** and can be revoked in Shared Links. Keep the URL secret.
+
+### Embed a file or folder in a website
+
+1. Create a share link from the file or folder's share action.
+2. Use **Copy Embed Link** in that popup, or **Copy embed link** on its row in
+   **Shared Links**. If clipboard access fails, select and copy the displayed URL.
+3. Paste the embed URL into your website's iframe `src`. For example, replace
+   the example URL below with your copied link (write `&` as `&amp;` in HTML).
+
+```html
+<iframe
+  src="https://drive.example.com/embed?path=%2Fshare_FOLDER_ID&amp;auth=TOKEN"
+  title="Shared project files"
+  width="100%"
+  height="600"
+  allow="fullscreen; picture-in-picture"
+  allowfullscreen
+  loading="lazy"
+  referrerpolicy="no-referrer"
+></iframe>
+```
+
+A file embed opens TGDrive's viewer; unsupported formats offer a download.
+A folder embed lets visitors browse its accessible subfolders, preview files
+and download originals. Visitors do not need the owner password. TGDrive must
+stay running and reachable; the page containing the iframe controls its size.
+
+The embed and ordinary share link use **the same access, expiry and revocation**.
+Copying an embed link creates no additional share. Folder access includes current
+and future accessible descendants. Anyone who can view the containing page can
+obtain the link and read those contents; use public pages only for content you
+intend their visitors to access. Revoking the link also blocks the embed's future
+requests, but cannot recall delivered or downloaded data.
+
+If a frame is blocked, your website must permit TGDrive in its frame policy,
+and TGDrive's reverse proxy must allow framing **`/embed` only**. Keep frame
+protection on owner pages. See [the browser policy](reference.md#security-and-privacy).
 
 ## Trash and permanent deletion
 

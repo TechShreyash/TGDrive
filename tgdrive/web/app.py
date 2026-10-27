@@ -542,6 +542,7 @@ def create_app(
         message = "; ".join(error["msg"] for error in exc.errors())
         return _json_error(message or "Invalid request", 422)
 
+    @app.get("/embed")
     @app.get("/")
     async def home_page() -> Response:
         index = WEBSITE_DIR / "dist" / "index.html"
@@ -1001,6 +1002,17 @@ def create_app(
             if not authorized:
                 raise HTTPException(status_code=403, detail="Invalid share link")
         return path, store.get_file(path)
+
+    @app.get("/api/v1/embed")
+    async def embed_file(
+        request: Request,
+        path: Annotated[str, Query(min_length=1, max_length=4096)],
+        auth: Annotated[str, Query(min_length=1, max_length=512)],
+    ) -> dict[str, Any]:
+        _, data = await asyncio.to_thread(authorized_file, request, path, auth)
+        return {
+            key: data[key] for key in ("id", "name", "type", "size", "upload_date")
+        } | {"path": ""}
 
     @app.get("/api/v1/preview")
     async def file_preview(

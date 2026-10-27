@@ -20,6 +20,7 @@ visual tour of the file browser, transfers, previews, sharing and administration
 | Keep my drive after hosting expires | [Move to a laptop or another server](operations.md#when-a-hosting-plan-expires) |
 | Offer a public demo with settings locked | [Public demo mode](configuration.md#public-demo-mode) |
 | Upload, browse, preview or share | [User guide](usage.md) |
+| Embed a file viewer or folder browser in my website | [Embed links](usage.md#embed-a-file-or-folder-in-a-website) |
 | Read ebooks/comics or understand covers | [Readers](reading.md) · [Thumbnails and rebuilds](thumbnails.md) |
 | Change settings or look up cache and transfer policies | [Configuration](configuration.md) · [Performance policies](performance.md) |
 | Diagnose load, queues or cache needs before upgrading | [Load and capacity guide](performance-tuning.md) |

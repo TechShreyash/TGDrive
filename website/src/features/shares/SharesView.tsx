@@ -7,6 +7,7 @@ import {
     X,
     Check,
     Pencil,
+    Code,
 } from "lucide-react";
 import { api, errorMessage, request } from "../../shared/api";
 import { useManualRefresh } from "../../shared/useManualRefresh";
@@ -17,6 +18,7 @@ import {
     type Share,
 } from "../../shared/types";
 import { FileIcon, Spinner, ErrorNotice, Modal } from "../../shared/components";
+import { embedUrl } from "./embedLinks";
 import "./SharesView.css";
 
 export function shareExpired(share: Share) {
@@ -98,12 +100,15 @@ export default function SharesView({
     const { refreshing, run } = useManualRefresh(onNotice);
     const [busy, setBusy] = useState<{
         id: string;
-        action: "copy" | "revoke";
+        action: "copy" | "embed" | "revoke";
     } | null>(null);
     const [copied, setCopied] = useState("");
     const [confirm, setConfirm] = useState<Share | null>(null);
     const [revokeError, setRevokeError] = useState("");
-    const [manualLink, setManualLink] = useState("");
+    const [manualLink, setManualLink] = useState<{
+        url: string;
+        embed: boolean;
+    } | null>(null);
     const [editing, setEditing] = useState<Share | null>(null);
     // Expiry changes while this page is open, without a database refresh.
     const [, tick] = useState(0);
@@ -211,24 +216,25 @@ export default function SharesView({
             setBusy(null);
         }
     };
-    const copy = async (share: Share) => {
+    const copy = async (share: Share, embed = false) => {
         if (busy) return;
         const issue = shareCopyIssue(share);
         if (issue) return;
-        setBusy({ id: share.id!, action: "copy" });
+        setBusy({ id: share.id!, action: embed ? "embed" : "copy" });
         setCopied("");
         try {
             const result = await api.shareLink(share.path, share.id);
-            const url = shareUrl(
+            const link = shareUrl(
                 result.auth,
                 result.node_id,
                 result.type === "folder",
             );
+            const url = embed ? embedUrl(link) : link;
             try {
                 await navigator.clipboard.writeText(url);
-                setCopied(share.id!);
+                setCopied((embed ? "embed:" : "") + share.id!);
             } catch {
-                setManualLink(url);
+                setManualLink({ url, embed });
             }
         } catch (cause) {
             onError(errorMessage(cause));
@@ -254,7 +260,9 @@ export default function SharesView({
             onError(errorMessage(cause));
         }
     };
-    const copiedShare = shares.find((share) => share.id === copied);
+    const copiedShare = shares.find(
+        (share) => share.id === copied || "embed:" + share.id === copied,
+    );
     return (
         <div className="shares-page" aria-busy={loading || refreshing}>
             <div className="shares-toolbar">
@@ -345,22 +353,13 @@ export default function SharesView({
                             const ended = shareExpired(share);
                             const name = share.name || "Shared Item";
                             const copyIssue = shareCopyIssue(share);
-                            const copying =
-                                busy?.id === share.id &&
-                                busy?.action === "copy";
                             const revoking =
                                 busy?.id === share.id &&
                                 busy?.action === "revoke";
-                            const wasCopied = !!share.id && copied === share.id;
                             const detailsId = share.id
                                 ? `share-details-${share.id}`
                                 : undefined;
                             const description = shareDescription(share);
-                            const copyTitle = copying
-                                ? "Copying link"
-                                : wasCopied
-                                  ? "Link copied"
-                                  : "Copy link";
                             const expiryDate = new Date(
                                 typeof share.expires_at === "number"
                                     ? share.expires_at * 1000
@@ -478,71 +477,132 @@ export default function SharesView({
                                         </time>
                                     </div>
                                     <div className="share-row-actions">
-                                        <span
-                                            className="share-copy-control"
-                                            data-unavailable={!!copyIssue}
-                                            role={
-                                                copyIssue ? "group" : undefined
-                                            }
-                                            tabIndex={copyIssue ? 0 : undefined}
-                                            aria-label={
-                                                copyIssue
-                                                    ? `Copy link unavailable for ${share.label || name}. ${copyIssue}`
-                                                    : undefined
-                                            }
-                                            aria-describedby={
-                                                copyIssue
-                                                    ? detailsId
-                                                    : undefined
-                                            }
-                                            onClick={
-                                                copyIssue
-                                                    ? (event) =>
-                                                          event.currentTarget.focus()
-                                                    : undefined
-                                            }
-                                            onKeyDown={(event) => {
-                                                if (event.key === "Escape")
-                                                    event.currentTarget.blur();
-                                            }}
-                                        >
-                                            <button
-                                                className="icon-button share-copy"
-                                                disabled={!!busy || !!copyIssue}
-                                                aria-disabled={!!copyIssue}
-                                                aria-busy={copying}
-                                                aria-label={`${copyTitle} for ${share.label || name}${copyIssue ? ". " + copyIssue : ""}`}
-                                                aria-describedby={detailsId}
-                                                title={
-                                                    copyIssue
-                                                        ? undefined
-                                                        : copyTitle
-                                                }
-                                                onClick={() => void copy(share)}
-                                            >
-                                                {copying ? (
-                                                    <Spinner />
-                                                ) : wasCopied ? (
-                                                    <Check
-                                                        size={18}
-                                                        aria-hidden="true"
-                                                    />
-                                                ) : (
-                                                    <Copy
-                                                        size={18}
-                                                        aria-hidden="true"
-                                                    />
-                                                )}
-                                            </button>
-                                            {copyIssue && (
+                                        {[false, true].map((embed) => {
+                                            const copying =
+                                                busy?.id === share.id &&
+                                                busy?.action ===
+                                                    (embed ? "embed" : "copy");
+                                            const wasCopied =
+                                                !!share.id &&
+                                                copied ===
+                                                    (embed ? "embed:" : "") +
+                                                        share.id;
+                                            const linkName = embed
+                                                ? "embed link"
+                                                : "link";
+                                            const copyTitle = copying
+                                                ? "Copying " + linkName
+                                                : wasCopied
+                                                  ? (embed
+                                                        ? "Embed link"
+                                                        : "Link") + " copied"
+                                                  : "Copy " + linkName;
+                                            return (
                                                 <span
-                                                    className="share-copy-explanation"
-                                                    role="tooltip"
+                                                    key={linkName}
+                                                    className={
+                                                        embed
+                                                            ? "share-embed-control"
+                                                            : "share-copy-control"
+                                                    }
+                                                    data-unavailable={
+                                                        !!copyIssue
+                                                    }
+                                                    role={
+                                                        copyIssue
+                                                            ? "group"
+                                                            : undefined
+                                                    }
+                                                    tabIndex={
+                                                        copyIssue
+                                                            ? 0
+                                                            : undefined
+                                                    }
+                                                    aria-label={
+                                                        copyIssue
+                                                            ? `Copy ${linkName} unavailable for ${share.label || name}. ${copyIssue}`
+                                                            : undefined
+                                                    }
+                                                    aria-describedby={
+                                                        copyIssue
+                                                            ? detailsId
+                                                            : undefined
+                                                    }
+                                                    onClick={
+                                                        copyIssue
+                                                            ? (event) =>
+                                                                  event.currentTarget.focus()
+                                                            : undefined
+                                                    }
+                                                    onKeyDown={(event) => {
+                                                        if (
+                                                            event.key ===
+                                                            "Escape"
+                                                        )
+                                                            event.currentTarget.blur();
+                                                    }}
                                                 >
-                                                    {copyIssue}
+                                                    <button
+                                                        className={
+                                                            "icon-button " +
+                                                            (embed
+                                                                ? "share-embed-copy"
+                                                                : "share-copy")
+                                                        }
+                                                        disabled={
+                                                            !!busy ||
+                                                            !!copyIssue
+                                                        }
+                                                        aria-disabled={
+                                                            !!copyIssue
+                                                        }
+                                                        aria-busy={copying}
+                                                        aria-label={`${copyTitle} for ${share.label || name}${copyIssue ? ". " + copyIssue : ""}`}
+                                                        aria-describedby={
+                                                            detailsId
+                                                        }
+                                                        title={
+                                                            copyIssue
+                                                                ? undefined
+                                                                : copyTitle
+                                                        }
+                                                        onClick={() =>
+                                                            void copy(
+                                                                share,
+                                                                embed,
+                                                            )
+                                                        }
+                                                    >
+                                                        {copying ? (
+                                                            <Spinner />
+                                                        ) : wasCopied ? (
+                                                            <Check
+                                                                size={18}
+                                                                aria-hidden="true"
+                                                            />
+                                                        ) : embed ? (
+                                                            <Code
+                                                                size={18}
+                                                                aria-hidden="true"
+                                                            />
+                                                        ) : (
+                                                            <Copy
+                                                                size={18}
+                                                                aria-hidden="true"
+                                                            />
+                                                        )}
+                                                    </button>
+                                                    {copyIssue && (
+                                                        <span
+                                                            className="share-copy-explanation"
+                                                            role="tooltip"
+                                                        >
+                                                            {copyIssue}
+                                                        </span>
+                                                    )}
                                                 </span>
-                                            )}
-                                        </span>
+                                            );
+                                        })}
                                         {share.id && (
                                             <button
                                                 className="icon-button"
@@ -615,10 +675,14 @@ export default function SharesView({
                 </>
             )}
             <span className="sr-only" role="status">
-                {busy?.action === "copy"
-                    ? "Copying share link"
+                {busy?.action === "copy" || busy?.action === "embed"
+                    ? "Copying " +
+                      (busy.action === "embed" ? "embed" : "share") +
+                      " link"
                     : copiedShare
-                      ? "Share link copied. " + shareDescription(copiedShare)
+                      ? (copied.startsWith("embed:") ? "Embed" : "Share") +
+                        " link copied. " +
+                        shareDescription(copiedShare)
                       : ""}
             </span>
             {confirm && (
@@ -677,21 +741,25 @@ export default function SharesView({
             )}
             {manualLink && (
                 <Modal
-                    title="Copy Share Link"
-                    onClose={() => setManualLink("")}
+                    title={
+                        manualLink.embed ? "Copy Embed Link" : "Copy Share Link"
+                    }
+                    onClose={() => setManualLink(null)}
                 >
                     <p>Select and copy the link below.</p>
-                    <label htmlFor="existing-share-url">Share Link</label>
+                    <label htmlFor="existing-share-url">
+                        {manualLink.embed ? "Embed Link" : "Share Link"}
+                    </label>
                     <input
                         id="existing-share-url"
                         readOnly
-                        value={manualLink}
+                        value={manualLink.url}
                         onFocus={(event) => event.target.select()}
                     />
                     <div className="dialog-actions">
                         <button
                             className="primary-button"
-                            onClick={() => setManualLink("")}
+                            onClick={() => setManualLink(null)}
                         >
                             Done
                         </button>
