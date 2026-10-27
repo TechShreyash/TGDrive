@@ -94,19 +94,19 @@ cd TGDrive
 
 Run the setup commands below from that folder as your normal user. `main`
 advances with reviewed versioned releases; version tags stay fixed. To pin
-**2.0.0**, use this clone command instead, once the
-[v2.0.0 tag](https://github.com/TechShreyash/TGDrive/tree/v2.0.0) is published:
+**2.1.0**, use this clone command instead, once the
+[v2.1.0 tag](https://github.com/TechShreyash/TGDrive/tree/v2.1.0) is published:
 
 ~~~bash
-git clone --branch v2.0.0 --depth 1 https://github.com/TechShreyash/TGDrive.git
+git clone --branch v2.1.0 --depth 1 https://github.com/TechShreyash/TGDrive.git
 cd TGDrive
 ~~~
 
 Without Git, download the [stable source ZIP](https://github.com/TechShreyash/TGDrive/archive/refs/heads/main.zip),
-extract it and open a terminal in `TGDrive-main`. After `v2.0.0` is published,
-its [tagged source ZIP](https://github.com/TechShreyash/TGDrive/archive/refs/tags/v2.0.0.zip)
+extract it and open a terminal in `TGDrive-main`. After `v2.1.0` is published,
+its [tagged source ZIP](https://github.com/TechShreyash/TGDrive/archive/refs/tags/v2.1.0.zip)
 provides the same fixed-version option. A custom source ZIP with a matching
-checksum may also be offered on the [release page](https://github.com/TechShreyash/TGDrive/releases/tag/v2.0.0);
+checksum may also be offered on the [release page](https://github.com/TechShreyash/TGDrive/releases/tag/v2.1.0);
 follow [verify and extract](release.md#verify-a-downloaded-source-archive) for those
 optional assets. Merging to `main` does not publish a tag or release assets.
 Leave disk space for unfinished uploads and cache.
@@ -369,7 +369,7 @@ valid HTTPS certificate: the browser app needs a secure context away from
 localhost. See [HTTP support and certificate limits](operations.md#can-tgdrive-run-over-http).
 
 Create a public Git application from `https://github.com/TechShreyash/TGDrive`.
-Select **`main`** for stable source updates. Prefer **`v2.0.0`** once that release
+Select **`main`** for stable source updates. Prefer **`v2.1.0`** once that release
 is published to pin this installation; do not deploy `dev`. Under **General →
 Build pipeline**, select **Compose** as the build strategy. Set **Base Directory**
 to `/` and **Docker Compose Location** to `/compose.yaml`, then save.

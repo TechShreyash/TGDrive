@@ -2,9 +2,9 @@
 
 [Docs home](README.md) · [Setup](setup.md) · [Development](development.md)
 
-TGDrive **2.0.0** targets a fresh MongoDB database and dedicated private Telegram
-channel. MongoDB is required on laptops and servers; local recovery journals do
-not replace it. Use Docker Compose for all deployments.
+TGDrive **2.1.0** uses MongoDB and a dedicated private Telegram channel.
+MongoDB is required on laptops and servers; local recovery journals do not
+replace it. Use Docker Compose for all deployments.
 
 The public source includes the [visual walkthroughs](showcase.md) and their
 [media assets](assets/README.md). Keep those files in the release allowlist when
@@ -88,7 +88,7 @@ Run these from the release checkout, with the development prerequisites from
 [Development](development.md).
 
 - [ ] Choose the release version using the policy above and synchronize all
-   version metadata. For this initial release, use `2.0.0`. Review the user
+   version metadata. The current release target is `2.1.0`. Review the user
    guides against the implemented settings and defaults.
 - [ ] In **Actions → CI → Run workflow**, select the release branch and suite
    **`all`** against the exact release commit. Review quality/security,
@@ -99,8 +99,8 @@ Run these from the release checkout, with the development prerequisites from
 
 ```bash
 python3 scripts/build_release.py
-(cd dist && sha256sum --check tgdrive-2.0.0.zip.sha256)
-python3 -m zipfile -t dist/tgdrive-2.0.0.zip
+(cd dist && sha256sum --check tgdrive-2.1.0.zip.sha256)
+python3 -m zipfile -t dist/tgdrive-2.1.0.zip
 ```
 
 The builder includes reviewed source, public documentation and a file-hash
@@ -115,16 +115,16 @@ excluded. Review the generated manifest and archive before distribution.
    release revision, or the extracted archive if distributing one. Record the
    commit, commands, environment and results (and checksum for an archive).
 - [ ] After those checks, create the annotated tag on the final merged `main`
-   commit. For the initial release (substitute the next version for later ones):
+   commit. For `2.1.0` (substitute the chosen version for later releases):
 
 ```bash
 git switch main
 git pull --ff-only origin main
-python3 scripts/build_release.py --check-version --tag v2.0.0
-git tag -a v2.0.0 -m "Release TGDrive 2.0.0"
+python3 scripts/build_release.py --check-version --tag v2.1.0
+git tag -a v2.1.0 -m "Release TGDrive 2.1.0"
 ```
 
-- [ ] With approval for the specific tag push, push `v2.0.0` to `origin` and
+- [ ] With approval for the specific tag push, push `v2.1.0` to `origin` and
    create its GitHub release. Attach matching ZIP and `.sha256` files together
    only if offering custom source assets.
    Tag-push CI also checks that the tag matches the metadata. Coolify users must
@@ -135,39 +135,39 @@ git tag -a v2.0.0 -m "Release TGDrive 2.0.0"
 
 ## Verify a downloaded source archive
 
-For a published **2.0.0** release, download its **tgdrive-2.0.0.zip** and
-**tgdrive-2.0.0.zip.sha256** assets into the same folder. These commands verify
+If custom assets are offered for **2.1.0**, download **tgdrive-2.1.0.zip** and
+**tgdrive-2.1.0.zip.sha256** into the same folder. These commands verify
 the custom release assets; the development ZIP from GitHub does not have this
 companion checksum. Open a terminal in that download folder.
 
 **Windows PowerShell:**
 
 ```powershell
-$expectedHash = (Get-Content .\tgdrive-2.0.0.zip.sha256 -Raw).Split(' ')[0]
-if ((Get-FileHash .\tgdrive-2.0.0.zip -Algorithm SHA256).Hash -ne $expectedHash) {
+$expectedHash = (Get-Content .\tgdrive-2.1.0.zip.sha256 -Raw).Split(' ')[0]
+if ((Get-FileHash .\tgdrive-2.1.0.zip -Algorithm SHA256).Hash -ne $expectedHash) {
     throw 'Checksum mismatch. Download the release files again.'
 }
-Expand-Archive .\tgdrive-2.0.0.zip -DestinationPath .
-Set-Location .\tgdrive-2.0.0
+Expand-Archive .\tgdrive-2.1.0.zip -DestinationPath .
+Set-Location .\tgdrive-2.1.0
 ```
 
 **macOS Terminal:**
 
 ```bash
-shasum -a 256 -c tgdrive-2.0.0.zip.sha256
+shasum -a 256 -c tgdrive-2.1.0.zip.sha256
 ```
 
 **Linux/WSL terminal:**
 
 ```bash
-sha256sum --check tgdrive-2.0.0.zip.sha256
+sha256sum --check tgdrive-2.1.0.zip.sha256
 ```
 
 On macOS/Linux/WSL, continue **only after the checksum reports OK**, then extract:
 
 ```bash
-unzip tgdrive-2.0.0.zip
-cd tgdrive-2.0.0
+unzip tgdrive-2.1.0.zip
+cd tgdrive-2.1.0
 ```
 
 Your file manager can extract the ZIP if `unzip` is unavailable.
