@@ -1156,6 +1156,141 @@ describe("whole-batch recovery and bounded admission", () => {
         expect(reloaded.snapshot()[0].state).toBe("queued");
         expect(reloaded.snapshot()[1].state).toBe("awaiting_file");
     });
+    it("skips recognized folder members that no longer need their originals", async () => {
+        const file = (name: string) => {
+            const source = new File(["same"], name);
+            Object.defineProperty(source, "webkitRelativePath", {
+                value: "Root/" + name,
+            });
+            return source;
+        };
+        const states = [
+            "awaiting_file",
+            "queued",
+            "receiving",
+            "verifying",
+            "uploading",
+            "completed",
+            "cancelled",
+            "error",
+        ] as const;
+        const files = states.map((state, index) => file(state + index));
+        const manager = managerForTest();
+        const folder = folderBatch("Root");
+        manager.addEntries(
+            files.map((source) => ({
+                file: source,
+                relativePath: source.webkitRelativePath,
+                destination: "/Root",
+            })),
+            10,
+            true,
+            folder,
+        );
+        const members = manager.snapshot();
+        members.forEach((item, index) => {
+            item.state = states[index];
+            if (index === 0) item.file = undefined;
+            if ([4, 5, 7].includes(index)) {
+                item.jobId = "job-" + index;
+                item.file = undefined;
+            }
+        });
+        manager.addEntries(
+            [
+                {
+                    file: files[0],
+                    relativePath: "Root/" + files[0].name,
+                    destination: "/other",
+                },
+            ],
+            10,
+            true,
+            folderBatch("Root", "/other"),
+        );
+        const other = manager.snapshot().at(-1)!;
+        other.state = "awaiting_file";
+        other.file = undefined;
+        const untouched = manager
+            .snapshot()
+            .slice(1)
+            .map((item) => ({ ...item }));
+
+        expect(
+            await manager.resumeBatchFiles(folder.folderUpload.id, files),
+        ).toEqual({
+            matched: 1,
+            remaining: 0,
+            skipped: 7,
+            unmatched: 0,
+            errors: [],
+        });
+        expect(manager.snapshot()[0]).toMatchObject({
+            state: "queued",
+            file: files[0],
+        });
+        expect(manager.snapshot().slice(1)).toEqual(untouched);
+        expect(
+            await manager.resumeBatchFiles(folder.folderUpload.id, files),
+        ).toEqual({
+            matched: 0,
+            remaining: 0,
+            skipped: 8,
+            unmatched: 0,
+            errors: [],
+        });
+        expect(manager.snapshot().slice(1)).toEqual(untouched);
+    });
+    it("still reports unrelated and changed-size originals as unmatched", async () => {
+        const file = (path: string, data = "same") => {
+            const source = new File([data], path.split("/").at(-1)!);
+            Object.defineProperty(source, "webkitRelativePath", { value: path });
+            return source;
+        };
+        const manager = managerForTest();
+        const folder = folderBatch("Root");
+        const originals = [
+            file("Root/pending"),
+            file("Root/changed"),
+            file("Root/completed"),
+        ];
+        manager.addEntries(
+            originals.map((source) => ({
+                file: source,
+                relativePath: source.webkitRelativePath,
+                destination: "/Root",
+            })),
+            10,
+            true,
+            folder,
+        );
+        const members = manager.snapshot();
+        members[0].state = "awaiting_file";
+        members[0].file = undefined;
+        members[1].state = "awaiting_file";
+        members[1].file = undefined;
+        members[2].state = "completed";
+        members[2].jobId = "completed-job";
+        members[2].file = undefined;
+
+        const result = await manager.resumeBatchFiles(folder.folderUpload.id, [
+            originals[0],
+            file("Root/changed", "different size"),
+            file("Root/completed", "different size"),
+            file("Other/pending"),
+        ]);
+        expect(result).toMatchObject({
+            matched: 1,
+            remaining: 1,
+            skipped: 0,
+            unmatched: 3,
+        });
+        expect(manager.snapshot().map((item) => item.state)).toEqual([
+            "queued",
+            "awaiting_file",
+            "completed",
+        ]);
+    });
 });
 
 describe("independent browser receiving and Telegram backlog", () => {
