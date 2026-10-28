@@ -419,6 +419,7 @@ again; authorized requests reuse the server's cached chunks while available.
 Protected originals use `no-store`, so browser disk caching is not promised.
 
 Reopen a video preview and choose **Continue from…** to resume its saved position.
+Positions use **h:mm:ss** from one hour onward, for example **1:17:15**.
 Opening alone does not start playback; the usual **Play** button starts from the
 beginning. Progress is saved on this site's browser profile, so different devices
 and browsers can watch independently even with the same TGDrive login. People

@@ -142,6 +142,11 @@ all networks, physical-phone behavior, Safari/Firefox support or standalone
 native stream-player resume. Quality switching and storage failures were covered
 offline rather than induced on the live account.
 
+Hour-long timestamp formatting subsequently passed **23 watch-position unit
+cases**, including ten label regressions covering hour rollover and both reported
+timestamps. TypeScript and the production build passed. This formatting fix has
+not been validated on the live deployment.
+
 </details>
 
 <details>

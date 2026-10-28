@@ -16,7 +16,11 @@ import { installVideoPlayerPip } from "./videoPlayerPip";
 import { attachVideoGestures } from "./videoPlayerGestures";
 import { formatBytes } from "../../../shared/types";
 import { videoSourceMemoryBudgetMiB } from "./videoBufferMemory";
-import { readVideoPosition, saveVideoPosition } from "./videoWatchProgress";
+import {
+    formatVideoTime,
+    readVideoPosition,
+    saveVideoPosition,
+} from "./videoWatchProgress";
 import "./AdvancedVideo.css";
 import advancedStyles from "./AdvancedVideo.css?inline";
 
@@ -1053,8 +1057,7 @@ export default function AdvancedVideo({
                     }}
                 >
                     <Play size={16} aria-hidden="true" /> Continue from{" "}
-                    {Math.floor(continueTime / 60)}:
-                    {String(Math.floor(continueTime % 60)).padStart(2, "0")}
+                    {formatVideoTime(continueTime)}
                 </button>
             </div>
         ) : null;
