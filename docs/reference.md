@@ -42,6 +42,7 @@ on demand. For everyday workflows, start with [Using TGDrive](usage.md) or the
   - [Starred items](#starred-items)
   - [Shares, downloads, and ranges](#shares-downloads-and-ranges)
   - [URL imports and transfer routes](#url-imports-and-transfer-routes)
+  - [Torrent imports](#torrent-imports)
   - [Errors and retry discipline](#errors-and-retry-discipline)
 
 </details>
@@ -323,7 +324,7 @@ empty database or the untouched catalog created by automatic first setup.
 | `STAGING_BUDGET_BYTES` | 17179869184 | Positive integer, at most 2 TiB in the runtime upload policy; 16 GiB total reservation budget by default. |
 | `MIN_FREE_BYTES` | 1073741824 | Nonnegative integer; preserve 1 GiB free space by default. Browser receipt admission reserves remaining bytes; URL downloads also check free space. |
 | `UPLOAD_SESSION_TTL_SECONDS` | 86400 | Integer at least 60; incomplete receipt idle lifetime in seconds, refreshed after each committed chunk. There is no declared upper bound in configuration. |
-| `MAX_CONCURRENT_TRANSFERS` | 2 | Integer 1–32; bounds local fingerprinting and receive work. Receipt handlers have a separate bound from this value. It does not cap Telegram uploads across bots. |
+| `MAX_CONCURRENT_TRANSFERS` | 2 | Integer 1–32; bounds local fingerprinting and receive work. Torrent downloads and receipt handlers each use a separate bound of this size, so slow peers do not occupy local upload-preparation slots. It does not cap Telegram uploads across bots. |
 | `TELEGRAM_UPLOADS_PER_BOT` | 1 | Integer 1–4; initial per-bot Telegram media limit. **Configuration → Transfer limits** saves an override in MongoDB and applies it immediately. Premium clients remain limited to one media upload each. |
 | `TRANSFER_TTL_SECONDS` | 3600 | Integer 60-86400 inclusive; terminal jobs become eligible for cleanup on admission or explicit pruning. Compact server-transfer history is kept separately; files are unaffected. |
 
@@ -1364,6 +1365,46 @@ client_request_id. It is owner-authenticated and bounded, but receives a whole
 multipart request rather than the durable offset/checksum receipt protocol.
 
 </details>
+
+### Torrent imports
+
+`POST /api/startTorrentDownload` is owner-only and accepts
+`{"url":"magnet:?xt=urn:btih:...","path":"/","client_request_id":"<unique-safe-id>"}`.
+`url` also accepts a public HTTP(S) `.torrent` URL; authentication and destination
+checks precede job creation. It returns `{"status":"ok","id":"<job-id>"}`;
+use the existing job progress, cancellation and retry routes. Request IDs use
+the same process-local compatibility mapping described above; retain the job ID
+for recovery across server restarts. Public snapshots omit the source link.
+
+| Policy | Behavior |
+| --- | --- |
+| Engine | `aria2c` must be on the server's `PATH`; bundled in Docker. |
+| Concurrency | At most `MAX_CONCURRENT_TRANSFERS` torrent engines (default 2), independently of local receive/fingerprinting work; Telegram uploading uses its existing admission. |
+| Sources | BitTorrent v1 metadata, including a compatible v1 part in hybrid torrents; v2-only torrents are unsupported. |
+| Metadata | At most 8 MiB; magnet discovery times out after 120 seconds. |
+| Contents | 1–10,000 nonempty files, at most 1,000 folders including the torrent root, and 64 folder levels; the existing destination depth limit also applies. |
+| Paths | Unsafe names, traversal, symlinks, duplicate names and file/folder collisions are rejected before payload downloading. |
+| Storage | Each file must fit the upload limit; the entire torrent reserves the shared staging budget and free-space reserve. Failed partial data keeps its storage claim. |
+| Peer discovery | IPv4 DHT and public UDP trackers. HTTP(S) trackers, web seeds and magnet auxiliary source URLs are ignored; HTTP-only private torrents cannot import. |
+| Network | Local peer discovery is disabled. Peers still see the server IP; peer traffic does not inherit the HTTP downloader's private-address filter. Outbound peer access must suit the host's network policy. |
+| Timeout | A torrent with no byte progress for five minutes fails with a retry action. |
+| Seeding | Pieces may upload while downloading; seeding stops after download completion. |
+
+The job uses `torrent_metadata`, `downloading`, then `torrent_uploading` phases.
+Progress resets between source downloading and Telegram uploading;
+`torrent_files: {total, completed}` counts files saved during the latter stage.
+One parent task appears in Transfers; its internal upload jobs use the normal
+splitting, catalog commit and protection rules.
+
+Validated metadata is cached and pinned to the original info hash for retries.
+Interrupted torrent downloads can reuse retained pieces after hash checking;
+after downloading, retries use staged files and skip completed uploads. Normal
+restart recovery resumes active jobs; failed jobs remain available for **Retry**.
+Preserve the cache volume and job journal. Missing staging, unavailable peers,
+changed destinations or broken Telegram credentials can still prevent recovery.
+Cancellation stops unfinished work and reclaims safe temporary data; files
+already catalogued remain in the drive. A folder import can therefore leave a
+partially populated folder after failure or cancellation.
 
 ### Errors and retry discipline
 

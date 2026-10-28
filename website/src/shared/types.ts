@@ -35,6 +35,7 @@ export interface Job {
     folder_upload?: FolderUploadMetadata;
     queue?: { position: number; estimated_wait_seconds: number | null } | null;
     telegram_parts?: { total: number; stored: number };
+    torrent_files?: { total: number; completed: number };
     location?: TransferLocation;
     id: string;
     status: string;

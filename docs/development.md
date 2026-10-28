@@ -46,6 +46,11 @@ npm run build --prefix website
 
 Keep lockfiles. Ordinary tests inject fake resources and need no live Telegram credentials.
 
+Native development needs `aria2c` on `PATH` to perform real torrent imports
+(`sudo apt-get install aria2` on Ubuntu). Docker includes it. Torrent unit tests
+use synthetic metadata and engine responses; passing them does not establish
+live swarm reachability or real Telegram upload behavior.
+
 Use the [supported runtimes](#version-baseline-and-dependency-policy) and run the
 commands in this guide only when the current task authorizes the relevant checks,
 as required by [contributor guidance](../AGENTS.md#ask-before-running-tests-or-validation).
@@ -90,6 +95,41 @@ fixture or its `/__test__` endpoints.
 ## Latest validation
 
 Recorded evidence describes a tested snapshot, not the state of a later checkout.
+
+<details>
+<summary>Torrent and magnet imports — 2026-10-28</summary>
+
+Focused validation passed **76 Python tests**: 19 engine cases and 57 integration,
+HTTP, staging, restart, destination and history cases. The selected eight Vitest
+files passed **80 tests**, including torrent submission, source privacy, lost
+responses, reload recovery, cancellation and existing URL/device transfer behavior.
+The production frontend build and TypeScript checks passed on Node **24.22.0**;
+the existing viewer CommonJS and bundle-size warnings remain.
+
+Four Chromium cases passed: torrent dialog/submission and reload recovery at
+1,440, 390 and 320 pixels, plus existing menu/dialog keyboard navigation.
+Desktop and phone-width screenshots were inspected. These use synthetic HTTP
+responses and mocked torrent/Telegram transports. No live swarm, live Telegram,
+throughput benchmark, full suite, lint, container build or deployment was run.
+
+After review fixes, **24 focused Python cases** passed across torrent integration
+and staging admission, including two new regressions for retained disk allocation
+during hash checking and ordinary uploads proceeding while torrent slots are busy.
+Passing frontend/build/browser results were reused; no UI code changed for these fixes.
+
+Relevant focused commands, after approval:
+
+```bash
+.venv/bin/python -m pytest -q tests/transfers/test_torrent.py \
+  tests/transfers/test_torrent_imports.py tests/web/test_torrent_imports.py \
+  tests/transfers/test_staging_admission.py tests/transfers/test_remote_job_recovery.py \
+  tests/transfers/test_upload_destinations.py tests/transfers/test_transfer_history.py
+npm run build --prefix website
+TGDRIVE_E2E=1 .venv/bin/python -m pytest -q tests/browser/test_browser_torrent_import.py \
+  tests/browser/test_browser_e2e.py::test_keyboard_dialog_focus_and_unicode_search
+```
+
+</details>
 
 <details>
 <summary>Idle polling and thumbnail scroll reuse — 2026-10-28</summary>

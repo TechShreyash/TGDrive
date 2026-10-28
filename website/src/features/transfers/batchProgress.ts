@@ -22,7 +22,7 @@ export class BatchProgressTracker {
             if (
                 !batch.pending ||
                 batch.items.some((item) =>
-                    ["remote", "delete"].includes(item.kind || ""),
+                    ["remote", "torrent", "delete"].includes(item.kind || ""),
                 )
             )
                 continue;

@@ -136,6 +136,12 @@ prevents admission, use a source that reports its file size or lower the file li
 Waiting URL sources reserve smaller windows; see
 [URL storage policy](performance.md#url-import-intake).
 
+Torrent imports reserve the entire torrent against the same temporary budget
+before downloading file contents. Each file must fit the file maximum; the
+combined torrent must fit the temporary budget and actual free space. The URL
+download concurrency setting controls HTTP imports, not torrent peer traffic.
+See [torrent limits](reference.md#torrent-imports).
+
 Space is rechecked during receipt, but other disk users can still fill it.
 Browser disk-full failures retain the confirmed resume position; URL retrieval
 may restart from zero. These settings control temporary server disk use;

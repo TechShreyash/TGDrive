@@ -1,4 +1,4 @@
-"""Supervised browser, URL, and Telegram transfer pipelines."""
+"""Supervised browser, URL, torrent, and Telegram transfer pipelines."""
 
 from __future__ import annotations
 
@@ -8,10 +8,11 @@ import logging
 import math
 import secrets
 import shutil
+import stat
 import time
 from collections.abc import Awaitable, Callable, Iterable
 from contextlib import suppress
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any
 
 import aiofiles
@@ -157,6 +158,7 @@ class TransferManager:
         self.cache_dir = settings.resolved_cache_dir
         self.cache_dir.mkdir(parents=True, exist_ok=True)
         self._semaphore = asyncio.Semaphore(settings.max_concurrent_transfers)
+        self._torrent_slots = asyncio.Semaphore(settings.max_concurrent_transfers)
         self._pending_staging: dict[str, int] = {}
 
     async def _resolve_upload_destination(
@@ -363,6 +365,302 @@ class TransferManager:
         if info.size is not None and info.size > limit:
             raise RemoteTooLarge(limit, info.size)
         return info
+
+    @_journalled
+    async def start_torrent(self, *, source: str, destination: str) -> TransferRecord:
+        from tgdrive.transfers.torrent import TorrentError, available, validate_source
+
+        validate_source(source)
+        if not available():
+            raise TorrentError(
+                "Torrent imports need aria2c on the server. "
+                "Install aria2 or update the TGDrive Docker image."
+            )
+        if self._check_upload_allowed is not None:
+            self._check_upload_allowed()
+        binding = self.store.upload_destination(destination)
+        record = await self.registry.create(
+            "torrent_metadata",
+            context=dict(
+                kind="torrent",
+                source_kind="torrent",
+                source=source,
+                name="Torrent import",
+                destination=binding["path"],
+                destination_id=binding["id"],
+            ),
+        )
+        task = self.registry.spawn(record.id, self._torrent_pipeline)
+        task.add_done_callback(lambda _: self._discard_torrent_stage(record))
+        return record
+
+    async def _torrent_pipeline(self, record: TransferRecord) -> None:
+        from tgdrive.transfers.torrent import (
+            TorrentCancelled,
+            download_torrent,
+        )
+
+        context = record.context
+        directory = self.cache_dir / "torrents" / record.id
+        context["staging_directory"] = str(directory)
+        try:
+            destination = await self._check_destination_or_cancel(
+                record, context["destination"]
+            )
+            if record.cancel_event.is_set():
+                raise TransferCancelled("Transfer destination is unavailable")
+            if self._check_upload_allowed is not None:
+                self._check_upload_allowed()
+            await self.registry.update(
+                record.id, status=TransferStatus.QUEUED, phase="torrent_metadata"
+            )
+            if not context.get("torrent_downloaded"):
+                limit = await current_upload_limit(self.settings, self.pool)
+                retained_written = 0
+
+                async def admit(manifest):
+                    nonlocal retained_written
+                    if any(file.size > limit for file in manifest.files):
+                        raise RemoteTooLarge(limit)
+                    saved = dict(
+                        name=manifest.name,
+                        files=[
+                            dict(path=file.path, size=file.size)
+                            for file in manifest.files
+                        ],
+                        total_size=manifest.total_size,
+                        is_folder=manifest.is_folder,
+                        info_hash=manifest.info_hash,
+                    )
+                    if context.get("torrent_manifest", saved) != saved:
+                        raise TransferError(
+                            "Torrent metadata changed. Start a new import."
+                        )
+
+                    def allocated_payload_bytes():
+                        root = directory.resolve()
+                        written = 0
+                        for file in manifest.files:
+                            relative = PurePosixPath(file.path)
+                            path = directory / relative
+                            if (
+                                relative.is_absolute()
+                                or ".." in relative.parts
+                                or path.resolve() != root / relative
+                            ):
+                                raise TransferError("Torrent staging path is unsafe")
+                            try:
+                                info = path.stat(follow_symlinks=False)
+                            except FileNotFoundError:
+                                continue
+                            if not stat.S_ISREG(info.st_mode):
+                                raise TransferError("Torrent staging file is unsafe")
+                            blocks = getattr(info, "st_blocks", None)
+                            allocated = info.st_size if blocks is None else blocks * 512
+                            written += min(file.size, allocated)
+                        return written
+
+                    retained_written = await asyncio.to_thread(allocated_payload_bytes)
+                    check_staging(
+                        self.settings,
+                        self,
+                        manifest.total_size,
+                        exclude=record.id,
+                        written=retained_written,
+                    )
+                    context.update(
+                        name=manifest.name,
+                        torrent_manifest=saved,
+                        staging_size=manifest.total_size,
+                        staging_written=retained_written,
+                    )
+                    await self.registry.update(
+                        record.id,
+                        phase="downloading",
+                        current=0,
+                        total=manifest.total_size,
+                    )
+
+                async def progress(current, total):
+                    # Hash verification can report zero while retained bytes occupy disk.
+                    context["staging_written"] = max(retained_written, current)
+                    check_staging(
+                        self.settings,
+                        self,
+                        context["staging_size"],
+                        exclude=record.id,
+                        written=context["staging_written"],
+                    )
+                    await self.registry.update(
+                        record.id,
+                        current=current,
+                        total=total,
+                        checkpoint_progress=False,
+                    )
+
+                async with self._torrent_slots:
+                    if record.cancel_event.is_set():
+                        raise TransferCancelled("Transfer cancelled")
+                    await self.registry.update(record.id, status=TransferStatus.RUNNING)
+                    await download_torrent(
+                        context["source"],
+                        directory,
+                        remote=self.remote,
+                        cancel_event=record.cancel_event,
+                        progress=progress,
+                        admit=admit,
+                    )
+                context["torrent_downloaded"] = True
+                await self.registry.persist(record)
+            manifest = context["torrent_manifest"]
+            if manifest["is_folder"]:
+                tree = context.get("torrent_tree")
+                if tree is None:
+                    folders = set()
+                    for file in manifest["files"]:
+                        parts = PurePosixPath(file["path"]).parts[1:-1]
+                        folders.update(
+                            parts[:depth] for depth in range(1, len(parts) + 1)
+                        )
+                    tree = await asyncio.to_thread(
+                        self.store.prepare_folder_tree,
+                        destination,
+                        manifest["name"],
+                        [list(parts) for parts in folders],
+                        record.id,
+                    )
+                    context["torrent_tree"] = tree
+                    context.update(
+                        destination=tree["folders"][""],
+                        destination_id=tree["root"]["id"],
+                    )
+                    await self.registry.persist(record)
+            else:
+                tree = None
+            await self.registry.update(
+                record.id,
+                status=TransferStatus.RUNNING,
+                phase="torrent_uploading",
+                current=0,
+                total=manifest["total_size"],
+            )
+            completed = context.setdefault("torrent_completed", [])
+            completed_indexes = set(completed)
+            uploaded_total = sum(manifest["files"][i]["size"] for i in completed)
+            for index, file in enumerate(manifest["files"]):
+                if index in completed_indexes:
+                    continue
+                if record.cancel_event.is_set():
+                    raise TransferCancelled("Transfer cancelled")
+                path = PurePosixPath(file["path"])
+                target = (
+                    tree["folders"]["/".join(path.parts[1:-1])]
+                    if tree else destination
+                )
+                if tree:
+                    target = self.store.resolve_id(target.rsplit("/", 1)[-1])
+                identity = f"{record.id}_{index}"
+                try:
+                    child = self.registry.get(identity)
+                except KeyError:
+                    binding = self.store.upload_destination(target)
+                    child = await self.registry.create(
+                        "queued",
+                        total=file["size"],
+                        transfer_id=identity,
+                        context=dict(
+                            kind="upload",
+                            torrent_parent_id=record.id,
+                            torrent_file_index=index,
+                            local_path=str(directory / path),
+                            destination=binding["path"],
+                            destination_id=binding["id"],
+                            name=path.name,
+                            size=file["size"],
+                        ),
+                    )
+                if child.status is TransferStatus.ERROR:
+                    await self.retry_job(child.id)
+                elif not child.terminal and (child.task is None or child.task.done()):
+                    await self._resume(child)
+                while child.task is not None and not child.task.done():
+                    if record.cancel_event.is_set():
+                        raise TransferCancelled("Transfer cancelled")
+                    uploaded = uploaded_total
+                    if child.phase in {"uploading", "finalizing", "backup_pending"}:
+                        uploaded += child.current
+                    await self.registry.update(
+                        record.id,
+                        current=uploaded,
+                        checkpoint_progress=False,
+                    )
+                    await asyncio.wait({child.task}, timeout=0.5)
+                if child.status is not TransferStatus.COMPLETED:
+                    raise TransferError(
+                        child.error or "A torrent file could not be uploaded"
+                    )
+                completed.append(index)
+                completed_indexes.add(index)
+                uploaded_total += file["size"]
+                await self.registry.update(
+                    record.id,
+                    current=uploaded_total,
+                )
+            await self.registry.update(
+                record.id,
+                status=TransferStatus.COMPLETED,
+                phase="completed",
+                current=manifest["total_size"],
+                total=manifest["total_size"],
+            )
+        except (TorrentCancelled, TransferCancelled):
+            record.cancel_event.set()
+            await self.registry.update(
+                record.id,
+                status=TransferStatus.CANCELLED,
+                phase="cancelled",
+                error="Transfer cancelled",
+            )
+        finally:
+            if record.cancel_event.is_set():
+                await self._cancel_torrent_children(record)
+            if record.status in {TransferStatus.COMPLETED, TransferStatus.CANCELLED}:
+                self._discard_torrent_stage(record)
+
+    async def _cancel_torrent_children(self, record: TransferRecord) -> None:
+        pending = []
+        for child in self.registry.list():
+            if child.context.get("torrent_parent_id") != record.id or child.status in {
+                TransferStatus.COMPLETED,
+                TransferStatus.CANCELLED,
+            }:
+                continue
+            try:
+                await self.cancel_job(child.id)
+            except BackupPending:
+                if child.status is TransferStatus.ERROR:
+                    await self.retry_job(child.id)
+            if child.task is not None and not child.task.done():
+                child.task.add_done_callback(
+                    lambda _, parent=record: self._discard_torrent_stage(parent)
+                )
+                pending.append(child.task)
+        if pending:
+            await asyncio.shield(asyncio.gather(*pending, return_exceptions=True))
+
+    def _discard_torrent_stage(self, record: TransferRecord) -> None:
+        if record.status not in {TransferStatus.COMPLETED, TransferStatus.CANCELLED}:
+            return
+        if any(
+            child.context.get("torrent_parent_id") == record.id
+            and (
+                child.status not in {TransferStatus.COMPLETED, TransferStatus.CANCELLED}
+                or (child.task is not None and not child.task.done())
+            )
+            for child in self.registry.list()
+        ):
+            return
+        shutil.rmtree(self.cache_dir / "torrents" / record.id, ignore_errors=True)
 
     @_journalled
     async def start_remote(
@@ -663,7 +961,7 @@ class TransferManager:
             for row in self.registry.list()
             if row.status is TransferStatus.ERROR
             and row.context.get("restart_retryable") is True
-            and row.context.get("kind") in {"upload", "remote", "delete"}
+            and row.context.get("kind") in {"upload", "remote", "torrent", "delete"}
             and not row.context.get("cancel_requested")
         ]
         if (
@@ -695,6 +993,11 @@ class TransferManager:
                 "or retry this transfer instead of cancelling it."
             )
         record = await self.registry.cancel(job_id)
+        if record.context.get("source_kind") == "torrent":
+            if record.status is TransferStatus.CANCELLED:
+                await self._cancel_torrent_children(record)
+                self._discard_torrent_stage(record)
+            return record
         if (
             record.context.get("send_started")
             and (record.task is None or record.task.done())
@@ -730,7 +1033,10 @@ class TransferManager:
 
     async def _resume(self, record: TransferRecord) -> None:
         context = record.context
-        if self._metadata_committed(record):
+        if context.get("kind") == "torrent":
+            task = self.registry.spawn(record.id, self._torrent_pipeline)
+            task.add_done_callback(lambda _: self._discard_torrent_stage(record))
+        elif self._metadata_committed(record):
             self.registry.spawn(
                 record.id,
                 lambda item: self._upload_path(

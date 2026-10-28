@@ -109,6 +109,7 @@ from tgdrive.web.schemas import (
     RemoteInspectRequest,
     RemoteStartRequest,
     RenameRequest,
+    TorrentStartRequest,
     TransferCancelRequest,
     TransferLookupRequest,
     TransferRequest,
@@ -513,6 +514,12 @@ def create_app(
         else:
             code = 502
         return _json_error(str(exc), code)
+
+    from tgdrive.transfers.torrent import TorrentError, available as torrent_available
+
+    @app.exception_handler(TorrentError)
+    async def torrent_error_handler(_request: Request, exc: TorrentError) -> JSONResponse:
+        return _json_error(str(exc), 400 if torrent_available() else 503)
 
     @app.exception_handler(TransferNotFound)
     @app.exception_handler(RequestIdNotFound)
@@ -937,6 +944,34 @@ def create_app(
             raise
         if entry:
             starts.bind(entry, record)
+        return {"status": "ok", "id": record.id}
+
+    @app.post("/api/startTorrentDownload")
+    async def start_torrent(
+        payload: TorrentStartRequest,
+        request: Request,
+        _admin: Admin,
+    ) -> dict[str, Any]:
+        check_path(_store(request), payload.path)
+        entry: TransferStart | None = None
+        if payload.client_request_id:
+            entry, created = starts.claim(
+                payload.client_request_id, ("torrent", payload.path, payload.url)
+            )
+            if not created:
+                snapshot = entry.snapshot()
+                return {"status": "ok", "id": snapshot["id"], "data": snapshot}
+        try:
+            manager = _transfers(request)
+            record = await manager.start_torrent(
+                source=payload.url, destination=payload.path
+            )
+        except Exception as exc:
+            if entry:
+                starts.fail(entry, str(exc) or type(exc).__name__)
+            raise
+        if entry and starts.bind(entry, record):
+            await manager.cancel_job(record.id)
         return {"status": "ok", "id": record.id}
 
     @app.post("/api/getTransferByRequest")

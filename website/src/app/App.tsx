@@ -31,6 +31,7 @@ import {
     X,
     Plug,
     Globe,
+    Magnet,
     ShieldCheck,
     ShieldAlert,
     Menu,
@@ -954,7 +955,7 @@ export default function App() {
     }, [location.previewId, directory.contents, loading, view]);
     const closeDialog = () => {
         if (dialog?.type !== "preview") {
-            if (dialog && !["url", "prepare"].includes(dialog.type))
+            if (dialog && !["url", "torrent", "prepare"].includes(dialog.type))
                 reloadMetadata();
             setDialog(null);
             return;
@@ -1069,7 +1070,9 @@ export default function App() {
             const target = await api.transferLocation(
                 folder ? undefined : item.jobId,
                 destination,
-                !folder && item.state === "completed",
+                !folder &&
+                    item.kind !== "torrent" &&
+                    item.state === "completed",
             );
             if (!target.available || !target.folder_path) {
                 notify(
@@ -2217,6 +2220,14 @@ export default function App() {
                             }}
                         >
                             <Globe size={18} /> Upload from URL
+                        </button>
+                        <button
+                            onClick={() => {
+                                setDialog({ type: "torrent" });
+                                setNewOpen(false);
+                            }}
+                        >
+                            <Magnet size={18} /> Import torrent
                         </button>
                     </div>
                 </>

@@ -397,6 +397,17 @@ before that file can close or a fallback can truncate it. Source retrieval relea
 its slot before Telegram upload. See [URL intake](performance.md#url-import-intake)
 for scheduling, representation checks, storage claims and expiry limits.
 
+Torrent imports use a durable parent job and a private `aria2c` subprocess.
+Guarded HTTP retrieval or magnet discovery yields bounded metadata; validated
+paths and shared staging admission precede payload download. Sanitized metadata
+is cached per job so retries keep the same torrent identity. The engine verifies
+pieces, stops seeding on completion and exits before Telegram uploading begins.
+For folder torrents, idempotent tree preparation preserves hierarchy; stable
+per-file child jobs reuse normal upload splitting and catalog protection. The
+parent journals completed files and owns the shared staging reservation, avoiding
+duplicate byte claims and duplicate history rows. Browser closure does not stop
+server work. See [torrent limits and recovery](reference.md#torrent-imports).
+
 Permanent deletion journals intent, then atomically removes the subtree/shares
 and drops completed-intent message references. **Original Telegram messages remain**,
 for every file age and retry. Reconciliation, lineage and independent-backup

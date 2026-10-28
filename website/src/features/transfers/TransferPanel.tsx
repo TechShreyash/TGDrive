@@ -642,7 +642,7 @@ export function BatchTransfer({
             batch.items.some(
                 (item) =>
                     !item.historyOnly &&
-                    !["remote", "delete"].includes(item.kind || ""),
+                    !["remote", "torrent", "delete"].includes(item.kind || ""),
             ));
     const receiptComplete = deviceStage && !batch.device.pending;
     if (!hasFolder)
@@ -1111,12 +1111,19 @@ function TransferRow({
     const received =
         deviceStage && !needsDeviceUpload(item) && item.state !== "cancelled";
     const checkingSource =
-        item.kind === "remote" &&
-        ["checking_source", "source_retry_wait"].includes(item.stage || "") &&
+        ["remote", "torrent"].includes(item.kind || "") &&
+        ["checking_source", "source_retry_wait", "torrent_metadata"].includes(
+            item.stage || "",
+        ) &&
         item.state === "uploading";
     const sourceWaiting =
         checkingSource &&
-        ["Checking source…", "Starting URL import…"].includes(item.phase) &&
+        [
+            "Checking source…",
+            "Starting URL import…",
+            "Starting torrent import…",
+            "Reading torrent metadata…",
+        ].includes(item.phase) &&
         item.serverStatus !== "queued" &&
         now - (item.startedAt || item.createdAt || now) >= 5000;
     const deviceMessage =
@@ -1132,7 +1139,7 @@ function TransferRow({
         status !== "queued" &&
         meter.fraction !== undefined;
     const needsOriginal =
-        item.kind !== "remote" &&
+        !["remote", "torrent"].includes(item.kind || "") &&
         (item.state === "awaiting_file" ||
             (item.state === "error" && !item.jobId && !item.file));
     const canLocate =

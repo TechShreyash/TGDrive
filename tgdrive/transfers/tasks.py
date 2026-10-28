@@ -30,7 +30,7 @@ _DEFAULT_CANCEL_GRACE_SECONDS = 10.0
 _SHUTDOWN_DRAIN_SECONDS = 5.0
 _PROGRESS_JOURNAL_SECONDS = 0.5
 _PROGRESS_STALE_SECONDS = 15.0
-_BYTE_PHASES = frozenset({"saving", "downloading", "uploading"})
+_BYTE_PHASES = frozenset({"saving", "downloading", "uploading", "torrent_uploading"})
 _ERROR_UNSET = object()
 
 
@@ -198,7 +198,9 @@ class TransferRecord:
 
     @property
     def history_hidden(self) -> bool:
-        return self.terminal and bool(self.committed.context.get("history_cleared"))
+        return bool(self.committed.context.get("torrent_parent_id")) or (
+            self.terminal and bool(self.committed.context.get("history_cleared"))
+        )
 
     def as_dict(self) -> dict[str, Any]:
         if self._committed is not None:
@@ -282,6 +284,14 @@ class TransferRecord:
             result["folder_upload"] = {
                 key: copy.deepcopy(folder_upload[key]) for key in folder_fields
             }
+        if self.context.get("source_kind") == "torrent":
+            result["name"] = self.context.get("name", "Torrent import")
+            manifest = self.context.get("torrent_manifest")
+            if isinstance(manifest, dict):
+                result["torrent_files"] = {
+                    "total": len(manifest["files"]),
+                    "completed": len(self.context.get("torrent_completed", [])),
+                }
         return result
 
 
@@ -508,7 +518,9 @@ class TransferRegistry:
             return
         kind = record.context.get("kind")
         kind = (
-            kind if kind in {"upload", "remote", "delete", "receiving"} else "transfer"
+            kind
+            if kind in {"upload", "remote", "torrent", "delete", "receiving"}
+            else "transfer"
         )
         now = time.time()
         if current[2] and not previous[2]:
@@ -565,10 +577,20 @@ class TransferRegistry:
                 record.total,
             )
 
-    @staticmethod
-    def _retained(record: TransferRecord) -> bool:
+    def _retained(self, record: TransferRecord) -> bool:
         record = record.committed
         context = record.context
+        parent = self._records.get(context.get("torrent_parent_id"))
+        if (
+            parent is not None
+            and context.get("torrent_file_index")
+            not in parent.committed.context.get("torrent_completed", [])
+            and parent.status not in {
+                TransferStatus.COMPLETED,
+                TransferStatus.CANCELLED,
+            }
+        ):
+            return True
         deadlines = [context.get("retry_at"), context.get("channel_retry_at")]
         plan = context.get("multipart_plan")
         if isinstance(plan, dict) and isinstance(plan.get("parts"), list):
@@ -585,11 +607,16 @@ class TransferRegistry:
         if record.context.get("kind") in {
             "upload",
             "remote",
+            "torrent",
             "delete",
         } and record.status not in {TransferStatus.COMPLETED, TransferStatus.CANCELLED}:
             return True
         source = record.context.get("local_path")
-        return bool(source and Path(source).exists())
+        directory = record.context.get("staging_directory")
+        return bool(
+            (source and Path(source).exists())
+            or (directory and Path(directory).exists())
+        )
 
     @staticmethod
     def history_snapshot(
@@ -618,6 +645,7 @@ class TransferRegistry:
             if record.terminal
             and not record.history_hidden
             and record.context.get("kind") != "delete"
+            and not record.context.get("torrent_parent_id")
             else None
         )
         if self._mongo is not None:

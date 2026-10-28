@@ -31,6 +31,7 @@ Prefer a visual introduction? [Open the gallery and walkthrough videos](showcase
   - [Embed a file or folder in a website](#embed-a-file-or-folder-in-a-website)
 - [Trash and permanent deletion](#trash-and-permanent-deletion)
 - [Import from a URL](#import-from-a-url)
+- [Import a torrent or magnet link](#import-a-torrent-or-magnet-link)
 - [Settings and connections](#settings-and-connections)
   - [Storage and backup](#storage-and-backup)
   - [Upload through your Telegram bot](#optional-telegram-bot-interface)
@@ -643,6 +644,28 @@ attempt number. **Retry** is needed after the bounded retry budget is exhausted
 or after correcting a permanent error; intake restarts from the beginning.
 Private network URLs are blocked by default. URL jobs never need a device file;
 if the server job is gone, submit a new URL import.
+
+## Import a torrent or magnet link
+
+Choose **New → Import torrent** in the destination folder and paste a magnet link
+or a public HTTP(S) URL to a `.torrent` file. TGDrive imports every file and keeps
+nested folders. A single-file torrent becomes a file in the selected folder;
+a folder torrent creates its own folder there.
+
+Transfers shows metadata discovery, torrent downloading and then Telegram
+uploading. Percentages describe the current stage. After submission you can close
+the tab while TGDrive keeps running. Downloads depend on available peers; a link
+with no reachable seeds may fail even when the link is valid.
+
+Use **Retry** on a failed transfer, or **Cancel** to stop unfinished work.
+Files already saved to your drive remain. Torrent imports need temporary server
+space for the whole torrent before Telegram uploading starts. See
+[torrent import limits and recovery](reference.md#torrent-imports) for supported
+sources and restart behavior.
+
+The torrent network sees the TGDrive server's IP address. Downloaded pieces may
+be shared with peers while downloading; TGDrive stops seeding when the download
+finishes. Import only content you are entitled to use.
 
 ## Settings and connections
 

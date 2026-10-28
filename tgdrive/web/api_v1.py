@@ -435,7 +435,11 @@ def register_routes(
     @app.get("/api/v1/jobs", dependencies=admin)
     async def jobs(request: Request, response: Response) -> dict[str, Any]:
         response.headers["Cache-Control"] = "no-store"
-        records = get_manager(request).registry.list()
+        records = [
+            record
+            for record in get_manager(request).registry.list()
+            if not record.context.get("torrent_parent_id")
+        ]
         estimate = getattr(get_runtime(request).pool, "queue_estimates", None)
         queues = (
             estimate(record.id for record in records) if callable(estimate) else None

@@ -92,6 +92,7 @@ Start the **same deployment**, then check **Transfers**, **Connections** and **S
 | Browser upload | Resume the existing transfer; reselect the same original if asked. A closed browser cannot send remaining bytes. |
 | Telegram upload | Preserve both volumes and retry the existing job; recovery uses staged bytes and confirmed work. |
 | URL import | Retry its server job in Transfers. Remote downloading may restart; expired URLs need replacement. |
+| Torrent import | Retry its server job in Transfers. Keep its staging directory and job journal; completed files stay saved. See [torrent recovery](reference.md#torrent-imports). |
 | Telegram outage | Restore connectivity and observe the displayed retry/cooldown time; restarting does not bypass it. |
 | Database/ownership failure | Restore MongoDB access and stop competing instances before restarting. |
 | Backup/channel copy | Check its status. Only the last confirmed restore point is protected. |

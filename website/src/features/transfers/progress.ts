@@ -100,7 +100,9 @@ export function transferDetails(item: ProgressTransfer, now: number) {
     const server =
         item.state === "uploading" &&
         item.serverStatus !== "queued" &&
-        ["saving", "uploading", "downloading"].includes(item.stage || "") &&
+        ["saving", "uploading", "downloading", "torrent_uploading"].includes(
+            item.stage || "",
+        ) &&
         item.kind !== "delete";
     const freshServer =
         now - (item.serverObservedAt || 0) < 15000 &&

@@ -75,6 +75,14 @@ class RemoteStartRequest(RemoteInspectRequest):
     )
 
 
+class TorrentStartRequest(RequestModel):
+    url: str = Field(min_length=1, max_length=16384)
+    path: str = Field(min_length=1, max_length=4096)
+    client_request_id: str | None = Field(
+        default=None, min_length=16, max_length=128, pattern=r"^[A-Za-z0-9_-]+$"
+    )
+
+
 class FolderTreeRequest(BaseModel):
     """Folder names are validated verbatim; whitespace must not be silently stripped."""
 

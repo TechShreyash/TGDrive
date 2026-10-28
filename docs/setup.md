@@ -13,6 +13,7 @@ previews, transfers and settings.
 includes Python, dependencies and preview tools, with the same runtime on laptops
 and servers. TGDrive supports **Python 3.14.8 only**; the image supplies that exact
 version. No host Python or Node installation is needed for the main steps.
+The image also includes `aria2c` for [torrent imports](usage.md#import-a-torrent-or-magnet-link).
 
 For a **new v2 drive**, use an empty MongoDB database and a new private Telegram
 channel. v1 data and older catalog formats are not imported or upgraded.

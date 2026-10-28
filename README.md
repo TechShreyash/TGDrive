@@ -19,7 +19,7 @@ through links you can set to expire or revoke.
 - **No fixed total storage limit.** TGDrive does not cap the total space your files use in Telegram.
 - **Upload files larger than 2 GB without manual splitting.** TGDrive splits the upload into smaller parts and presents it as one file for playback and downloading.
 - **Resumable file and folder uploads.** Preserve folder structure and resume interrupted device uploads by reselecting the originals. Once TGDrive confirms it has received all files, Telegram uploading can finish with the tab closed while the app runs.
-- **Import from URLs or Telegram.** Paste a direct file URL, or send and forward files to your configured Telegram bot, to add them to your drive.
+- **Import from URLs, torrents or Telegram.** Paste a direct file URL, [magnet link or torrent URL](docs/usage.md#import-a-torrent-or-magnet-link), or send and forward files to your configured Telegram bot. Torrent imports keep the original folder structure.
 - **Organize and find files.** Create folders, search by name, star favorites, switch between list and grid views, and restore items from Trash.
 - **Play videos and audio in your browser.** Stream supported media, with subtitles, audio-track selection and chapters when available.
 - **View documents, photos, ebooks and comics.** Open images, PDFs and text, and read EPUB ebooks and CBZ/CBR comics in your browser.

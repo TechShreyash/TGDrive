@@ -12,7 +12,7 @@ import type {
     TransferLocation,
     FolderUploadMetadata,
 } from "../../shared/types";
-import { transferTaskId } from "./transferTasks";
+import { isServerImport, transferTaskId } from "./transferTasks";
 import { sampleProgress, type ProgressSample } from "./progress";
 import { BatchProgressTracker } from "./batchProgress";
 import { summarizeBatches } from "./transferBatches";
@@ -321,7 +321,9 @@ export function fromJob(job: Job, previousKind?: string): Partial<Transfer> {
                 ? "Deletion failed. Retry to finish cleanup"
                 : job.phase === "backup_pending"
                   ? "Backup Needs Attention. Retry to secure this file"
-                  : "Upload failed"
+                  : job.kind === "torrent"
+                    ? "Torrent import failed"
+                    : "Upload failed"
             : state === "cancelled"
               ? "Cancelled"
               : state === "completed"
@@ -371,6 +373,27 @@ export function fromJob(job: Job, previousKind?: string): Partial<Transfer> {
                                       : "Uploading to Telegram";
     if (
         state === "uploading" &&
+        (previousKind === "torrent" || job.kind === "torrent")
+    ) {
+        if (job.phase === "torrent_metadata")
+            phase =
+                job.status === "queued"
+                    ? "Waiting to read torrent"
+                    : "Reading torrent metadata…";
+        else if (job.phase === "downloading")
+            phase = "Downloading from torrent peers";
+        else if (job.phase === "torrent_uploading")
+            phase = "Importing files to Telegram";
+        if (job.torrent_files && job.phase === "torrent_uploading")
+            phase +=
+                " · " +
+                job.torrent_files.completed +
+                "/" +
+                job.torrent_files.total +
+                " files";
+    }
+    if (
+        state === "uploading" &&
         job.status === "running" &&
         ["uploading", "finalizing"].includes(job.phase) &&
         job.telegram_parts &&
@@ -390,6 +413,13 @@ export function fromJob(job: Job, previousKind?: string): Partial<Transfer> {
     return {
         state,
         phase,
+        ...(job.kind === "torrent" || previousKind === "torrent"
+            ? {
+                  size: job.total,
+                  ...(job.name ? { name: job.name, batchName: job.name } : {}),
+                  ...(job.destination ? { destination: job.destination } : {}),
+              }
+            : {}),
         ...(job.folder_upload
             ? {
                   folderUpload: job.folder_upload,
@@ -399,8 +429,8 @@ export function fromJob(job: Job, previousKind?: string): Partial<Transfer> {
               }
             : {}),
         ...(job.location ? { location: job.location } : {}),
-        ...(previousKind === "remote"
-            ? { kind: "remote" }
+        ...(previousKind === "remote" || previousKind === "torrent"
+            ? { kind: previousKind }
             : job.kind
               ? { kind: job.kind }
               : {}),
@@ -476,6 +506,7 @@ export class TransferManager {
             destination: string;
             singleThreaded: boolean;
             requestId: string;
+            kind: "remote" | "torrent";
         }
     >();
     private remoteSubmitting = new Set<string>();
@@ -512,15 +543,15 @@ export class TransferManager {
                     Date.now(),
                 state:
                     item.jobId ||
-                    (item.kind === "remote" && item.remoteRequestId)
+                    (isServerImport(item) && item.remoteRequestId)
                         ? item.state
                         : terminal.has(item.state)
                           ? item.state
-                          : item.kind === "remote"
+                          : isServerImport(item)
                             ? "error"
                             : "awaiting_file",
                 phase:
-                    item.kind === "remote" &&
+                    isServerImport(item) &&
                     item.remoteRequestId &&
                     !item.jobId &&
                     !terminal.has(item.state)
@@ -529,8 +560,8 @@ export class TransferManager {
                           ? item.phase
                           : terminal.has(item.state)
                             ? item.phase
-                            : item.kind === "remote"
-                              ? "URL transfer is missing its server job. Start a new URL upload."
+                            : isServerImport(item)
+                              ? "Import is missing its server job. Start a new import."
                               : "Choose the original file to resume",
             }));
         } catch {
@@ -558,7 +589,7 @@ export class TransferManager {
         records?: Map<string, Transfer>,
         invalidRecords = false,
     ): boolean {
-        if (item.kind === "remote") return true;
+        if (isServerImport(item)) return true;
         let saved: Transfer | undefined;
         let unreadable = false;
         try {
@@ -667,7 +698,7 @@ export class TransferManager {
         const item = this.items.find(
             (row) => row.key === event.key!.slice(STORAGE_PREFIX.length),
         );
-        if (!item || item.kind === "remote") return;
+        if (!item || isServerImport(item)) return;
         // Cancellation is a signal; another tab's older snapshot cannot replace this owner's IDs or offsets.
         item.state = state || "cancelling";
         item.phase = "Cancelling and cleaning up";
@@ -1152,16 +1183,45 @@ export class TransferManager {
         destination: string,
         singleThreaded: boolean,
         requestId: string,
+        kind: "remote" | "torrent" = "remote",
     ): string {
-        const parsed = new URL(url);
-        if (!["http:", "https:"].includes(parsed.protocol))
-            throw new Error("Enter a direct HTTP or HTTPS file link.");
+        url = url.trim();
+        let parsed: URL;
+        try {
+            parsed = new URL(url);
+        } catch {
+            throw new Error(
+                kind === "torrent"
+                    ? "Enter a magnet link or a public HTTP or HTTPS .torrent URL."
+                    : "Enter a direct HTTP or HTTPS file link.",
+            );
+        }
+        const magnet = kind === "torrent" && parsed.protocol === "magnet:";
+        if (
+            (!["http:", "https:"].includes(parsed.protocol) && !magnet) ||
+            parsed.username ||
+            parsed.password ||
+            (magnet &&
+                !parsed.searchParams
+                    .getAll("xt")
+                    .some((value) =>
+                        /^urn:btih:(?:[a-f0-9]{40}|[a-z2-7]{32})$/i.test(value),
+                    ))
+        )
+            throw new Error(
+                kind === "torrent"
+                    ? "Enter a v1 or hybrid magnet link, or a public HTTP or HTTPS .torrent URL."
+                    : "Enter a direct HTTP or HTTPS file link.",
+            );
         if (!this.canQueue(1))
             throw new Error(
                 "Finish or cancel an existing transfer before adding more.",
             );
         const key = crypto.randomUUID();
-        let name = parsed.pathname.split("/").at(-1) || "URL import";
+        let name = magnet
+            ? parsed.searchParams.get("dn") || "Torrent import"
+            : parsed.pathname.split("/").at(-1) ||
+              (kind === "torrent" ? "Torrent import" : "URL import");
         try {
             name = decodeURIComponent(name);
         } catch {
@@ -1181,21 +1241,28 @@ export class TransferManager {
             lastModified: 0,
             current: 0,
             total: 0,
-            kind: "remote",
+            kind,
             remoteRequestId: requestId,
             state: "uploading",
-            stage: "checking_source",
-            phase: "Starting URL import…",
+            stage: kind === "torrent" ? "torrent_metadata" : "checking_source",
+            phase:
+                kind === "torrent"
+                    ? "Starting torrent import…"
+                    : "Starting URL import…",
         });
         this.remoteStarts.set(key, {
             url,
             destination,
             singleThreaded,
             requestId,
+            kind,
         });
         this.publish();
         void this.submitRemote(key);
         return key;
+    }
+    startTorrent(url: string, destination: string, requestId: string): string {
+        return this.startRemote(url, destination, false, requestId, "torrent");
     }
     private acceptRemote(key: string, result: { id: string; data?: Job }) {
         const item = this.items.find((row) => row.key === key);
@@ -1209,11 +1276,15 @@ export class TransferManager {
             this.remoteStarts.delete(key);
         }
         if (result.data && item.state !== "cancelled")
-            Object.assign(item, fromJob(result.data, "remote"));
+            Object.assign(item, fromJob(result.data, item.kind));
         else if (!["cancelled", "cancelling"].includes(item.state)) {
             item.state = "uploading";
-            item.phase = "Checking source…";
-            item.stage = "checking_source";
+            item.phase =
+                item.kind === "torrent"
+                    ? "Reading torrent metadata…"
+                    : "Checking source…";
+            item.stage =
+                item.kind === "torrent" ? "torrent_metadata" : "checking_source";
             item.error = undefined;
         }
         this.publish();
@@ -1235,7 +1306,10 @@ export class TransferManager {
             if (["cancelled", "cancelling"].includes(item.state)) return;
             this.update(key, {
                 state: "error",
-                stage: "checking_source",
+                stage:
+                    item.kind === "torrent"
+                        ? "torrent_metadata"
+                        : "checking_source",
                 phase: "Import needs attention",
                 error: errorMessage(originalError || error),
             });
@@ -1248,12 +1322,18 @@ export class TransferManager {
         try {
             this.acceptRemote(
                 key,
-                await api.remote(
-                    pending.url,
-                    pending.destination,
-                    pending.singleThreaded,
-                    pending.requestId,
-                ),
+                pending.kind === "torrent"
+                    ? await api.torrent(
+                          pending.url,
+                          pending.destination,
+                          pending.requestId,
+                      )
+                    : await api.remote(
+                          pending.url,
+                          pending.destination,
+                          pending.singleThreaded,
+                          pending.requestId,
+                      ),
             );
         } catch (error) {
             // A lost response must not silently create a second import on retry.
@@ -1266,9 +1346,9 @@ export class TransferManager {
     async resume(key: string, file: File) {
         const item = this.items.find((item) => item.key === key);
         if (!item) return;
-        if (item.kind === "remote")
+        if (isServerImport(item))
             throw new Error(
-                "URL uploads resume on the server. Retry the transfer instead.",
+                "Imports resume on the server. Retry the transfer instead.",
             );
         if (
             !this.reconcileDeviceTransfer(item) ||
@@ -1429,7 +1509,7 @@ export class TransferManager {
                 phase: "Waiting to resume",
             });
             void this.startNext();
-        } else if (item.kind === "remote") {
+        } else if (isServerImport(item)) {
             this.update(key, {
                 state: "uploading",
                 error: undefined,
@@ -1439,7 +1519,7 @@ export class TransferManager {
             else if (item.remoteRequestId) await this.recoverRemote(key);
             else
                 throw new Error(
-                    "This URL transfer has no server job. Start a new URL upload.",
+                    "This import has no server job. Start a new import.",
                 );
         } else
             this.update(key, {
@@ -1471,7 +1551,7 @@ export class TransferManager {
                     const result = await api.cancelJob(item.jobId);
                     if (result.data)
                         this.update(key, fromJob(result.data, item.kind));
-                } else if (item.kind === "remote" && item.remoteRequestId) {
+                } else if (isServerImport(item) && item.remoteRequestId) {
                     this.acceptRemote(
                         key,
                         await api.cancelRemoteRequest(item.remoteRequestId),
@@ -1509,7 +1589,7 @@ export class TransferManager {
                 void this.startNext();
             }
         };
-        if (item.kind === "remote" || !globalThis.navigator?.locks)
+        if (isServerImport(item) || !globalThis.navigator?.locks)
             await cancel();
         else await this.deviceLock(item.key, cancel);
     }
@@ -1535,7 +1615,7 @@ export class TransferManager {
                 .filter(
                     (item) =>
                         (!item.jobId &&
-                            item.kind !== "remote" &&
+                            !isServerImport(item) &&
                             item.state === "error") ||
                         !["completed", "cancelled", "error"].includes(
                             item.state,
@@ -2187,7 +2267,7 @@ export class TransferManager {
         for (const item of this.items
             .filter(
                 (row) =>
-                    row.kind === "remote" &&
+                    isServerImport(row) &&
                     row.remoteRequestId &&
                     !row.jobId &&
                     !terminal.has(row.state) &&

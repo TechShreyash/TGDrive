@@ -480,7 +480,7 @@ class Runtime:
         self._validate_runtime_path(data_dir, "DATA_DIR")
         if cache_dir.is_relative_to(data_dir) or data_dir.is_relative_to(cache_dir):
             raise ValueError("CACHE_DIR and DATA_DIR must not overlap")
-        cleanup_paths = [cache_dir / name for name in ("uploads", "remote")]
+        cleanup_paths = [cache_dir / name for name in ("uploads", "remote", "torrents")]
         for cleanup_path in cleanup_paths:
             resolved = cleanup_path.resolve()
             if resolved == cache_dir or not resolved.is_relative_to(cache_dir):

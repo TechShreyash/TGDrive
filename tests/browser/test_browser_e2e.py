@@ -753,7 +753,7 @@ def test_keyboard_dialog_focus_and_unicode_search(
     expect(menu.get_by_role("button", name="Upload Folder", exact=True)).to_be_focused()
     page.keyboard.press("End")
     expect(
-        menu.get_by_role("button", name="Upload from URL", exact=True)
+        menu.get_by_role("button", name="Import torrent", exact=True)
     ).to_be_focused()
     page.keyboard.press("Home")
     expect(menu.get_by_role("button", name="Upload Files", exact=True)).to_be_focused()
@@ -786,7 +786,7 @@ def test_keyboard_dialog_focus_and_unicode_search(
     expect(menu.get_by_role("button", name="Upload Files", exact=True)).to_be_focused()
     page.keyboard.press("ArrowUp")
     expect(
-        menu.get_by_role("button", name="Upload from URL", exact=True)
+        menu.get_by_role("button", name="Import torrent", exact=True)
     ).to_be_focused()
     page.keyboard.press("Escape")
     expect(menu).to_have_count(0)

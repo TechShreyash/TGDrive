@@ -2,7 +2,7 @@ import type { Transfer } from "./transfers";
 import { currentRate, transferDetails, transferProgress } from "./progress";
 import { deviceUploadProgress, needsDeviceUpload } from "./deviceUploadStatus";
 import type { BatchProgressMeters } from "./batchProgress";
-import { isFolderTransfer, transferTaskId } from "./transferTasks";
+import { isFolderTransfer, isServerImport, transferTaskId } from "./transferTasks";
 
 export interface TransferBatch {
     id: string;
@@ -38,9 +38,6 @@ function positive(value: number | undefined | null): value is number {
 function bounded(value: number, maximum: number): number {
     return Number.isFinite(value) ? Math.max(0, Math.min(value, maximum)) : 0;
 }
-function isUrl(item: Transfer): boolean {
-    return item.kind === "remote";
-}
 function isQueued(item: Transfer): boolean {
     return (
         item.state === "queued" ||
@@ -54,7 +51,8 @@ function finished(item: Transfer): boolean {
 function sizeOf(item: Transfer): number | undefined {
     if (item.kind === "delete") return;
     if (positive(item.size)) return item.size;
-    if ((item.jobId || isUrl(item)) && positive(item.total)) return item.total;
+    if ((item.jobId || isServerImport(item)) && positive(item.total))
+        return item.total;
 }
 function priority(item: Transfer): number {
     if (item.state === "error") return 0;
@@ -99,7 +97,7 @@ function progress(
     if (items.every((item) => item.state === "completed")) return 1;
     if (
         !positive(total) ||
-        items.some((item) => isUrl(item) || item.kind === "delete")
+        items.some((item) => isServerImport(item) || item.kind === "delete")
     )
         return;
     return Math.min(0.99, uploadedBytes / total);
@@ -130,7 +128,7 @@ function summarize(
             deviceRate += rate;
         else if (
             item.state === "uploading" &&
-            item.stage === "uploading" &&
+            ["uploading", "torrent_uploading"].includes(item.stage || "") &&
             item.kind !== "delete"
         )
             telegramRate += rate;
@@ -198,7 +196,7 @@ function summarize(
                 item.jobId &&
                 item.state === "uploading" &&
                 !item.error &&
-                !isUrl(item) &&
+                !isServerImport(item) &&
                 item.kind !== "delete" &&
                 (["uploading", "queued"].includes(item.stage || "") ||
                     (["finalizing", "backup_pending"].includes(
