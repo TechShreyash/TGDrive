@@ -1628,6 +1628,11 @@ async def test_key_kit_pairs_confirmed_point_with_its_original_keys_after_rotati
         point = replica.journal.get("restore_point")
         original_key = replica.key()
         replica.journal.set("key", "c3" * 32)
+        # Deliberate rotation updates both sources; a local-only change conflicts.
+        replica.runtime.mongo.db.settings.update_one(
+            {"_id": "recovery-key"},
+            {"$set": {"document": {"key": "c3" * 32, "drive_id": store.drive_id}}},
+        )
         replica.settings.mongodb_backup_key = SecretStr("b2" * 32)
         kit = replica.recovery_kit()
         assert kit["restore_point"] == point
