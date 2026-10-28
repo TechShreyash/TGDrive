@@ -117,6 +117,34 @@ live MongoDB/Telegram restore rehearsal or deployment was performed.
 </details>
 
 <details>
+<summary>Video Continue and local watch positions — 2026-10-28</summary>
+
+The focused run passed **57 video unit cases** across four files and **55
+synthetic Chromium cases** across resume, controls, settings, gestures, mobile,
+picture in picture and preview suites. These cover invalid/unavailable storage,
+completion and retry cleanup, plus existing player interactions. The previously
+successful production build was reused; no build or full repository suite was
+rerun for this validation.
+
+Live deployment checks used a real 30-second, 17.01 MiB video in Chrome and the
+Codex in-app browser. Saved positions survived preview close/reopen and reload;
+Continue resumed from the saved time, ordinary Play started at zero, and natural
+completion removed the offer. Fullscreen Continue worked with Enter. A real
+paused position also resumed through the phone layout, and the two browser
+profiles retained independent positions for the same drive.
+
+Desktop, 320/390-pixel portrait and 740-pixel landscape layouts were inspected.
+The Continue button stayed inside the viewport with a 44-pixel minimum height;
+the measured 320/740-pixel layouts had no horizontal overflow. No console errors
+were captured in either browser. One Chrome resume briefly buffered and continued
+without intervention. These checks do not establish uninterrupted playback on
+all networks, physical-phone behavior, Safari/Firefox support or standalone
+native stream-player resume. Quality switching and storage failures were covered
+offline rather than induced on the live account.
+
+</details>
+
+<details>
 <summary>Live imports and unnamed URL history fix — 2026-10-28</summary>
 
 Live deployment checks reproduced an HTTP 500 when new transfer admission tried
@@ -187,7 +215,12 @@ A later focused run passed **57 archive/API cases**, **72 frontend cases across
 eight files**, TypeScript and the production build. Focused Ruff lint and format
 checks passed across **11 Python files** after formatting the archive changes,
 binding the ZIP-entry writer's loop variable and moving two filesystem checks
-off the event loop. These local repairs require deployment to reach the server.
+off the event loop. These repairs were subsequently confirmed on deployment
+`0c76e03`: Coolify reported **Success / Running**, startup logs showed the existing
+MongoDB drive reopened and bot mode started, and both live/readiness health
+endpoints returned OK. The tiny-fixture workflow below passed again on that
+deployment, including completion of a UI-queued ZIP after closing its browser
+tab. Earlier applicable local results were reused.
 
 Additional live checks used tiny disposable fixtures: a **505-byte** ZIP created
 from a file and folder downloaded with exact original member bytes and extracted
