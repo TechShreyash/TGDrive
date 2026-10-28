@@ -159,21 +159,21 @@ jobs:
                   docker run -d --name tgdrive-test-mongo -p 127.0.0.1:27017:27017 \
                     mongo:8.0@sha256:4a4ab5d4834207389e0d7270fac988e21ffedccecba77991a552f755df229907 --replSet tgdrive-test --bind_ip_all
                   for attempt in $(seq 1 60); do
-                    if docker exec tgdrive-test-mongo mongosh --quiet --eval 'db.adminCommand({ping:1})'; then
+                    if docker exec -e HOME=/tmp tgdrive-test-mongo mongosh --quiet --eval 'db.adminCommand({ping:1})'; then
                       break
                     fi
                     sleep 1
                   done
-                  docker exec tgdrive-test-mongo mongosh --quiet --eval \
+                  docker exec -e HOME=/tmp tgdrive-test-mongo mongosh --quiet --eval \
                     'rs.initiate({_id:"tgdrive-test",members:[{_id:0,host:"localhost:27017"}]})'
                   for attempt in $(seq 1 60); do
-                    if docker exec tgdrive-test-mongo mongosh --quiet --eval \
+                    if docker exec -e HOME=/tmp tgdrive-test-mongo mongosh --quiet --eval \
                       'if (!db.hello().isWritablePrimary) { quit(1); }'; then
                       break
                     fi
                     sleep 1
                   done
-                  docker exec tgdrive-test-mongo mongosh --quiet --eval \
+                  docker exec -e HOME=/tmp tgdrive-test-mongo mongosh --quiet --eval \
                     'if (!db.hello().isWritablePrimary) { quit(1); }'
 
             - name: Show isolated MongoDB startup failure

@@ -305,10 +305,10 @@ Use a disposable local replica set or a dedicated test URI:
 ```bash
 docker run -d --name tgdrive-test-mongo -p 127.0.0.1:27017:27017 \
   mongo:8.0 --replSet tgdrive-test --bind_ip_all
-until docker exec tgdrive-test-mongo mongosh --quiet --eval 'db.adminCommand({ping:1})'; do sleep 1; done
-docker exec tgdrive-test-mongo mongosh --quiet --eval \
+until docker exec -e HOME=/tmp tgdrive-test-mongo mongosh --quiet --eval 'db.adminCommand({ping:1})'; do sleep 1; done
+docker exec -e HOME=/tmp tgdrive-test-mongo mongosh --quiet --eval \
   'rs.initiate({_id:"tgdrive-test",members:[{_id:0,host:"localhost:27017"}]})'
-until docker exec tgdrive-test-mongo mongosh --quiet --eval \
+until docker exec -e HOME=/tmp tgdrive-test-mongo mongosh --quiet --eval \
   'if (!db.hello().isWritablePrimary) { quit(1); }'; do sleep 1; done
 export TGDRIVE_MONGO_TESTS=1
 export TGDRIVE_TEST_MONGODB_URI='mongodb://127.0.0.1:27017/?replicaSet=tgdrive-test&directConnection=true'
@@ -348,6 +348,8 @@ All Python jobs use **3.14.8**, the sole supported runtime pinned in
 The backend job uses Ubuntu 24.04, the last verified baseline for its pinned
 MongoDB container. A startup failure records the container state and logs before
 stopping; application tests require a writable isolated replica set.
+Its shell probes keep their temporary home in `/tmp`, outside the entrypoint's
+data-directory ownership pass, so short-lived shell lock files cannot abort startup.
 
 Pushes confined to Markdown, `docs/` or `LICENSE` skip automatic CI. Every pull
 request runs CI, including documentation-only changes, so required merge checks
