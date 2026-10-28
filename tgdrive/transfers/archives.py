@@ -1,4 +1,4 @@
-"""Bounded ZIP jobs using the normal durable Telegram upload pipeline."""
+"""Bounded archive jobs using the normal durable Telegram upload pipeline."""
 
 from __future__ import annotations
 
@@ -11,14 +11,16 @@ import secrets
 import shutil
 import stat
 import struct
+import sys
 from pathlib import Path
-from zipfile import ZIP_DEFLATED, ZIP_STORED, BadZipFile, ZipFile
+from zipfile import ZIP_BZIP2, ZIP_DEFLATED, ZIP_LZMA, ZIP_STORED, BadZipFile, ZipFile
 
 from tgdrive.core.errors import InvalidNameError, NotDirectoryError, ValidationError
 from tgdrive.media.logical_media import PartLease
 from tgdrive.media.ranges import ByteRange
 from tgdrive.storage.demo_files import write_policy
 from tgdrive.storage.store import _name_key, _normalize_name, _normalize_path
+from tgdrive.transfers.archive_worker import Manifest, WorkerError, archive_format
 from tgdrive.transfers.manager import BackupPending, TransferCancelled, TransferError
 from tgdrive.transfers.staging import check_staging
 from tgdrive.transfers.tasks import TransferStatus, _journalled
@@ -227,9 +229,11 @@ def zip_manifest(path, limit, budget):
                     if entry.flag_bits & 1 or entry.compress_type not in {
                         ZIP_STORED,
                         ZIP_DEFLATED,
+                        ZIP_BZIP2,
+                        ZIP_LZMA,
                     }:
                         raise ArchiveError(
-                            "Use an unencrypted ZIP with stored or Deflate compression."
+                            "Use an unencrypted ZIP with Stored, Deflate, BZIP2 or LZMA compression."
                         )
                     if (
                         key in explicit
@@ -441,8 +445,10 @@ async def start_extraction(
     if manager._check_upload_allowed is not None:
         manager._check_upload_allowed()
     file = manager.store.get_file(path)
-    if not file["name"].lower().endswith(".zip"):
-        raise ArchiveError("TGDrive currently extracts ZIP archives only.")
+    try:
+        archive_format(file["name"])
+    except ValueError as error:
+        raise ArchiveError(str(error)) from None
     if folder_name is not None:
         folder_name = _normalize_name(folder_name)
     binding = manager.store.upload_destination(destination)
@@ -588,91 +594,246 @@ async def _extract_files(manager, record, directory):
             context["archive_downloaded"] = True
             await manager.registry.persist(record)
         if not context.get("archive_extracted"):
-            if not source.exists():
+            if not await _worker(source.exists):
                 raise ArchiveError(
-                    "Temporary ZIP bytes are missing. Cancel this job and "
+                    "Temporary archive bytes are missing. Cancel this job and "
                     "start again; preserve CACHE_DIR across restarts."
                 )
-            plan = await _worker(
-                zip_manifest,
-                source,
-                manager.settings.upload_limit,
-                manager.settings.staging_budget_bytes,
+            await _decode_archive(manager, record, source, directory)
+
+
+@_journalled
+async def _stop_decoder(process, cancelled=None):
+    if process.returncode is None:
+        try:
+            process.kill()
+        except ProcessLookupError:
+            pass
+    await process.wait()
+    if cancelled is not None:
+        cancelled.cancel()
+        await asyncio.gather(cancelled, return_exceptions=True)
+
+
+async def _decoder_line(process, cancelled):
+    reading = asyncio.create_task(process.stdout.readline())
+    try:
+        await asyncio.wait({reading, cancelled}, return_when=asyncio.FIRST_COMPLETED)
+        if cancelled.done():
+            raise TransferCancelled("Transfer cancelled")
+        try:
+            return reading.result()
+        except ValueError as error:
+            raise ArchiveError(
+                "The archive processor exceeded its response limit."
+            ) from error
+    finally:
+        if not reading.done():
+            reading.cancel()
+            await asyncio.gather(reading, return_exceptions=True)
+
+
+def _validate_plan(plan, limit, budget, directory):
+    if (
+        not isinstance(plan, dict)
+        or len(plan.get("files", [])) + len(plan.get("folders", [])) > MAX_ENTRIES
+    ):
+        raise ArchiveError("The archive processor returned an invalid manifest.")
+    verified = Manifest(limit, budget)
+    try:
+        for parts in plan["folders"]:
+            verified.add(
+                "/".join(parts) + "/", directory=True, size=0, index=0, container="zip"
             )
-            reserved = source.stat().st_size + plan["size"]
-            check_staging(
-                manager.settings,
-                manager,
-                reserved,
-                exclude=record.id,
-                written=context["staging_written"],
+        for index, entry in enumerate(plan["files"]):
+            verified.add(
+                entry["name"],
+                directory=False,
+                size=entry["size"],
+                index=entry["index"],
+                container="zip",
             )
-            context.update(
-                archive_plan=plan,
-                staging_size=reserved,
-                staging_written=source.stat().st_size,
-            )
-            await manager.registry.update(
-                record.id,
-                status=TransferStatus.RUNNING,
-                phase="extracting",
-                current=0,
-                total=plan["size"],
-            )
-            archive = await _open(ZipFile, source)
-            current = 0
-            try:
-                for index, file in enumerate(plan["files"]):
-                    entry = archive.infolist()[file["index"]]
-                    incoming = await _open(archive.open, entry)
-                    output = None
-                    received = 0
-                    try:
-                        output = await _open((directory / f"{index}.file").open, "wb")
-                        while True:
-                            if record.cancel_event.is_set():
-                                raise TransferCancelled("Transfer cancelled")
-                            data = await _worker(incoming.read, BLOCK)
-                            if not data:
-                                break
-                            received += len(data)
-                            if received > file["size"]:
-                                raise ArchiveError(
-                                    "A ZIP entry exceeded its declared size."
-                                )
-                            check_staging(
-                                manager.settings,
-                                manager,
-                                reserved,
-                                exclude=record.id,
-                                written=context["staging_written"],
-                            )
-                            await _worker(output.write, data)
-                            current += len(data)
-                            context["staging_written"] += len(data)
-                            await manager.registry.update(
-                                record.id, current=current, checkpoint_progress=False
-                            )
-                        if received != file["size"]:
-                            raise ArchiveError(
-                                "A ZIP entry ended before its declared size."
-                            )
-                        await _worker(_sync, output)
-                    finally:
-                        try:
-                            await _worker(incoming.close)
-                        finally:
-                            if output is not None:
-                                await _worker(output.close)
-            except (BadZipFile, EOFError) as exc:
+            staged = (directory / f"{index}.file").lstat()
+            if not stat.S_ISREG(staged.st_mode) or staged.st_size != entry["size"]:
                 raise ArchiveError(
-                    "This ZIP failed its size or CRC verification. "
-                    "No files were imported."
-                ) from exc
-            finally:
-                await _worker(archive.close)
-            context["archive_extracted"] = True
-            await manager.registry.persist(record)
+                    "Temporary extracted files failed size verification."
+                )
+        result = verified.result()
+        if result["size"] != plan["size"]:
+            raise ArchiveError("The archive processor returned an invalid size.")
+        return result
+    except (KeyError, TypeError, WorkerError) as error:
+        raise ArchiveError(
+            "The archive processor returned an invalid manifest."
+        ) from error
+
+
+async def _decode_archive(manager, record, source, directory):
+    context = record.context
+    original = await _worker(lambda: source.stat().st_size)
+    total = 0
+    if archive_format(context["name"])[1][0] == "zip":
+        metadata = await _worker(
+            zip_manifest,
+            source,
+            manager.settings.upload_limit,
+            manager.settings.staging_budget_bytes,
+        )
+        total = metadata["size"]
+
+    def discard_partial():
+        for file in directory.glob("*.file"):
+            if file.stem.isdecimal():
+                file.unlink()
+
+    await _worker(discard_partial)
+    context.update(staging_size=original, staging_written=original)
+    await manager.registry.update(
+        record.id,
+        status=TransferStatus.RUNNING,
+        phase="extracting",
+        current=0,
+        total=total,
+    )
+    environment = {
+        "PATH": os.defpath,
+        "LANG": "C.UTF-8",
+        "PYTHONPATH": str(Path(__file__).resolve().parents[2]),
+    }
+    if os.environ.get("LIBARCHIVE"):
+        environment["LIBARCHIVE"] = os.environ["LIBARCHIVE"]
+    launch = asyncio.create_task(
+        asyncio.create_subprocess_exec(
+            sys.executable,
+            "-m",
+            "tgdrive.transfers.archive_worker",
+            stdin=asyncio.subprocess.PIPE,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.DEVNULL,
+            env=environment,
+            limit=MAX_MANIFEST_BYTES + 1024,
+        )
+    )
+    interrupted = False
+    while True:
+        try:
+            process = await asyncio.shield(launch)
+            break
+        except asyncio.CancelledError:
+            if launch.cancelled():
+                raise
+            interrupted = True
+    if interrupted:
+        await _stop_decoder(process)
+        raise asyncio.CancelledError
+    cancelled = asyncio.create_task(record.cancel_event.wait())
+    try:
+        process.stdin.write(
+            json.dumps(
+                {
+                    "source": str(source),
+                    "destination": str(directory),
+                    "name": context["name"],
+                    "limit": manager.settings.upload_limit,
+                    "budget": manager.settings.staging_budget_bytes,
+                }
+            ).encode()
+            + b"\n"
+        )
+        await process.stdin.drain()
+        reserved = current = 0
+        while True:
+            if record.cancel_event.is_set():
+                raise TransferCancelled("Transfer cancelled")
+            line = await _decoder_line(process, cancelled)
+            if not line or len(line) > MAX_MANIFEST_BYTES + 128:
+                raise ArchiveError(
+                    "The archive processor stopped or exceeded its resource limits "
+                    "(512 MiB memory / 600 CPU seconds). Try a smaller archive or dictionary."
+                )
+            message = json.loads(line)
+            if "error" in message:
+                raise ArchiveError(str(message["error"])[:500])
+            if "result" in message:
+                await process.wait()
+                if process.returncode:
+                    raise ArchiveError(
+                        "The archive processor did not finish successfully."
+                    )
+                plan = await _worker(
+                    _validate_plan,
+                    message["result"],
+                    manager.settings.upload_limit,
+                    manager.settings.staging_budget_bytes - original,
+                    directory,
+                )
+                if plan["size"] > reserved:
+                    raise ArchiveError("The archive exceeded its storage reservation.")
+                context.update(
+                    archive_plan=plan,
+                    archive_extracted=True,
+                    staging_size=original + plan["size"],
+                    staging_written=original + plan["size"],
+                )
+                await manager.registry.persist(record)
+                return
+            if "reserve" in message:
+                reserved = message["reserve"]
+                if (
+                    type(reserved) is not int
+                    or not current
+                    <= reserved
+                    <= manager.settings.staging_budget_bytes - original
+                ):
+                    raise ArchiveError(
+                        "The archive processor requested invalid storage."
+                    )
+                check_staging(
+                    manager.settings,
+                    manager,
+                    original + reserved,
+                    exclude=record.id,
+                    written=context["staging_written"],
+                )
+                context["staging_size"] = original + reserved
+                await manager.registry.persist(record)
+            elif "write" in message:
+                length = message["write"]
+                if (
+                    type(length) is not int
+                    or not 0 < length <= BLOCK
+                    or current + length > reserved
+                ):
+                    raise ArchiveError(
+                        "The archive processor exceeded its storage reservation."
+                    )
+                check_staging(
+                    manager.settings,
+                    manager,
+                    original + reserved,
+                    exclude=record.id,
+                    written=context["staging_written"],
+                )
+            elif "progress" in message:
+                progress = message["progress"]
+                if type(progress) is not int or not current <= progress <= reserved:
+                    raise ArchiveError(
+                        "The archive processor returned invalid progress."
+                    )
+                current = progress
+                context["staging_written"] = original + current
+                await manager.registry.update(
+                    record.id, current=current, checkpoint_progress=False
+                )
+                continue
+            else:
+                raise ArchiveError(
+                    "The archive processor returned an invalid response."
+                )
+            process.stdin.write(b"ok\n")
+            await process.stdin.drain()
+    finally:
+        await _stop_decoder(process, cancelled)
 
 
 def _prepare_folders(manager, record, destination):

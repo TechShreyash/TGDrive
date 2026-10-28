@@ -39,7 +39,7 @@ import { FileIcon, Spinner } from "../../shared/components";
 import SortMenu, { type FileSort } from "./SortMenu";
 import "./FileBrowser.css";
 import FileThumbnail from "./FileThumbnail";
-import { isZipArchive } from "./archiveApi";
+import { isExtractableArchive } from "./archiveApi";
 import { COMPACT_LAYOUT_QUERY } from "../../shared/responsive";
 import {
     defaultSortOrder,
@@ -1364,7 +1364,7 @@ export default function FileBrowser({
                                                                                 : "Add to Starred"}
                                                                         </button>
                                                                     )}
-                                                                    {isZipArchive(
+                                                                    {isExtractableArchive(
                                                                         item,
                                                                     ) && (
                                                                         <button
@@ -1388,7 +1388,7 @@ export default function FileBrowser({
                                                                                 aria-hidden="true"
                                                                             />{" "}
                                                                             Extract
-                                                                            ZIP
+                                                                            archive
                                                                         </button>
                                                                     )}
                                                                     <button

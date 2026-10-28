@@ -23,6 +23,7 @@ For the user-facing screens around these flows, see the
   - [Adaptive device upload concurrency](#adaptive-device-upload-concurrency)
   - [Bounds and retries](#bounds-and-retries)
   - [Cancellation and destination changes](#cancellation-and-destination-changes)
+  - [Archive jobs](#archive-jobs)
   - [Finished history](#finished-history)
 - [Telegram transport and file responses](#telegram-transport-and-file-responses)
 - [Media and performance](#media-and-performance)
@@ -431,26 +432,34 @@ and drops completed-intent message references. **Original Telegram messages rema
 for every file age and retry. Reconciliation, lineage and independent-backup
 barriers still apply; different selected items complete independently.
 
-### ZIP archive jobs
+<a id="zip-archive-jobs"></a>
+
+### Archive jobs
 
 Archive creation and extraction run through the transfer registry rather than
 holding an HTTP request open. Creation reads source files from Telegram directly
-into the ZIP writer with bounded memory. Extraction stages and verifies the ZIP
+into the ZIP writer with bounded memory. Extraction stages and verifies the archive
 and its expanded files before publishing outputs. Created ZIPs and extracted
 files enter the existing upload pipeline, keeping multipart transport, catalog
-identities and backup handling in
-one place. The browser queues work and displays progress; it does not hold the
-source bytes or need to remain open after acceptance.
+identities and backup handling in one place. The browser queues work and displays
+progress; it does not hold the source bytes or need to remain open after acceptance.
 
 Extraction uses one visible parent job with internal upload children. Completed
 children stay retained until their parent records progress, so retry reconciles
 existing uploads instead of deliberately sending them again.
 
-Workspace admission shares the upload staging budget and disk reserve. ZIP paths
+The existing libarchive dependency handles extraction inside a separate process
+with memory/CPU limits and a minimal environment. The worker streams archive
+entries, including solid 7z/RAR data, writes only numbered private staging files and
+requests storage admission before writing output. It returns a bounded manifest
+after decoding and integrity checks finish; catalog folders and normal upload
+children are created afterward. Browser closure does not stop the worker.
+
+Workspace admission shares the upload staging budget and disk reserve. Archive paths
 and entry metadata are checked before extraction publishes output. Existing items
 are kept when names collide. Persisted job state allows retry without deliberately
 recreating completed outputs; cancellation and failures can retain earlier
-committed files and folders. [Archive limits and API](reference.md#zip-archive-jobs)
+committed files and folders. [Archive limits and API](reference.md#archive-jobs)
 are the canonical contract.
 
 ### Finished history

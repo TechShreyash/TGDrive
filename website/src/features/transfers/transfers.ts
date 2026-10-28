@@ -393,9 +393,9 @@ export function fromJob(job: Job, previousKind?: string): Partial<Transfer> {
             else if (job.phase === "extracting")
                 phase = "Extracting files on the server";
             else if (job.phase === "downloading")
-                phase = "Reading ZIP from your drive";
+                phase = "Reading archive from your drive";
             else if (job.phase === "verifying")
-                phase = "Checking ZIP before saving";
+                phase = "Checking archive before saving";
             else if (job.phase === "uploading" && job.kind === "extract")
                 phase = "Saving extracted files to Telegram";
         }

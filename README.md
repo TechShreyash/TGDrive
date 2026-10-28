@@ -21,7 +21,7 @@ through links you can set to expire or revoke.
 - **Resumable file and folder uploads.** Preserve folder structure and resume interrupted device uploads by reselecting the originals. Once TGDrive confirms it has received all files, Telegram uploading can finish with the tab closed while the app runs.
 - **Import from URLs, torrents or Telegram.** Paste a direct file URL, [magnet link or torrent URL](docs/usage.md#import-a-torrent-or-magnet-link), or send and forward files to your configured Telegram bot. Torrent imports keep the original folder structure.
 - **Organize and find files.** Create folders, search by name, star favorites, switch between list and grid views, and restore items from Trash.
-- **Create and extract ZIP archives.** Bundle selected files and folders into one downloadable ZIP, or extract an uploaded ZIP into the current folder or a new folder. [Archive workflow and limits](docs/usage.md#create-and-extract-zip-archives).
+- **Create ZIPs and extract archives.** Bundle selected files and folders into one downloadable ZIP, or unpack ZIP, 7z, RAR and TAR archives into the current folder or a new folder. [Supported formats and workflow](docs/usage.md#create-zips-and-extract-archives).
 - **Play videos and audio in your browser.** Stream supported media, with subtitles, audio-track selection and chapters when available.
 - **View documents, photos, ebooks and comics.** Open images, PDFs and text, and read EPUB ebooks and CBZ/CBR comics in your browser.
 - **Share files and folders with a link.** Give others read-only access, choose an expiry and revoke access when needed. [Embed a file viewer or folder browser](docs/usage.md#embed-a-file-or-folder-in-a-website) in your website using the same link access.

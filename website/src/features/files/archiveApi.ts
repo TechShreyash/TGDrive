@@ -1,12 +1,20 @@
 import { request } from "../../shared/api";
 import type { DriveItem, Job } from "../../shared/types";
 
-export function isZipArchive(item: Pick<DriveItem, "name" | "type">): boolean {
-    return item.type === "file" && /\.zip$/i.test(item.name);
+const extractionSuffix =
+    /\.(?:tar\.(?:gz|bz2|xz|zst)|zip|7z|rar|tar|tgz|tbz2?|txz|tzst|gz|bz2|xz|zst)$/i;
+
+export function isExtractableArchive(
+    item: Pick<DriveItem, "name" | "type">,
+): boolean {
+    return item.type === "file" && extractionSuffix.test(item.name);
 }
 
 export function extractionFolderName(name: string): string {
-    return name.replace(/\.zip$/i, "") || "Extracted files";
+    return (
+        Array.from(name.replace(extractionSuffix, "")).slice(0, 255).join("") ||
+        "Extracted files"
+    );
 }
 
 export function defaultArchiveName(items: DriveItem[]): string {

@@ -36,7 +36,7 @@ on demand. For everyday workflows, start with [Using TGDrive](usage.md) or the
   - [Move and bulk actions](#move-and-bulk-actions)
   - [Performance, cache inventory and preparation](#performance-cache-inventory-and-preparation)
   - [Resumable browser receipts](#resumable-browser-receipts)
-  - [ZIP archive jobs](#zip-archive-jobs)
+  - [Archive jobs](#archive-jobs)
   - [Previews and media](#previews-and-media)
   - [Jobs](#jobs)
   - [Transfer history](#transfer-history)
@@ -923,15 +923,17 @@ shared work belonging to other authorized subscribers. See
 
 </details>
 
-### ZIP archive jobs
+<a id="zip-archive-jobs"></a>
+
+### Archive jobs
 
 Archive routes require the owner session; public share links cannot start jobs.
-See the [user workflow](usage.md#create-and-extract-zip-archives).
+See the [user workflow and supported suffixes](usage.md#create-zips-and-extract-archives).
 
 | Route | JSON request | Result |
 | --- | --- | --- |
 | `POST /api/v1/archives` | `paths`: selected file/folder paths, `destination`: existing folder path, `name`: ZIP filename | Accepted job identity and snapshot: `{id, job}`. |
-| `POST /api/v1/archives/extract` | `path`: ZIP file path, `destination`: existing folder path, `folder_name`: new folder name or `null` to extract here | Accepted job identity and snapshot: `{id, job}`. |
+| `POST /api/v1/archives/extract` | `path`: supported archive/compressed-file path, `destination`: existing folder path, `folder_name`: new folder name or `null` to extract here | Accepted job identity and snapshot: `{id, job}`. |
 
 Both accept `allow_public_exposure`, default `false`, to acknowledge a publicly
 shared destination. Poll and control the returned identity through the existing
@@ -944,21 +946,33 @@ for the current phase. Created ZIPs use the ordinary file download route.
 - ZIP creation stores entries without recompression. This prioritizes predictable
   resource use and bundles already compressed media without adding compression
   settings. Folder names and relative structure are retained.
-- Extraction accepts stored or Deflate-compressed ZIPs; split-volume ZIPs are
-  unsupported. A job accepts up to 1,000 entries, including implicit folders,
-  with at most 64 relative path components, 4,096 path characters, an 8 MiB ZIP
-  directory and a 4 MiB expanded extraction manifest. Extraction validates paths
-  and metadata before creating output folders or files.
+- Extraction accepts ZIP, 7z, RAR/RAR5, TAR and gzip/bzip2/xz/Zstandard-compressed
+  TAR or single files. ZIP supports Stored, Deflate, BZIP2 and LZMA entries.
+  Encrypted and split-volume archives are unsupported; some RAR features remain
+  unsupported by the installed native reader. A job accepts up to 1,000 entries,
+  including implicit folders, with at most 64 relative path components,
+  4,096 path characters, an 8 MiB ZIP
+  directory and a 4 MiB expanded extraction manifest. Extraction validates paths,
+  sizes and available archive-provided integrity checks before creating output
+  folders or files. TAR has no payload checksum, so it cannot detect every
+  same-size content change.
   Absolute/traversal paths, encrypted entries, symlinks/special files, duplicate
   paths and empty regular files are rejected. Empty directories are retained.
+  Decoded TAR streams may use the remaining staging budget plus an allowance of
+  8 MiB + 1,000 KiB for headers and padding; larger decoded tails are rejected.
+  Compressed streams are checked through EOF, and native-reader warnings fail
+  the job before catalog publication.
 - Temporary workspace shares `STAGING_BUDGET_BYTES` and `MIN_FREE_BYTES` with
   uploads and imports. Creation reserves the ZIP bytes plus headers; extraction
-  needs space for the source ZIP and its expanded files together. Defaults are
+  needs space for the source archive and its expanded files together. Defaults are
   16 GiB of shared staging and a 1 GiB free-disk reserve. Normal logical-file
   upload limits and catalog depth/item limits still apply.
 - Source files are read from Telegram, including multipart files, using bounded
-  reads directly into the ZIP writer. Extraction verifies every file's declared
-  size and CRC before creating catalog outputs. Outputs use the normal upload,
+  reads directly into the ZIP writer. Extraction runs the native reader in a
+  separate worker with a 512 MiB address-space ceiling and 600 seconds of CPU
+  time. Large dictionaries or unusually expensive archives can exceed these
+  limits even when their output would fit in staging. Cancellation kills and
+  reaps the worker before workspace cleanup. Outputs use the normal upload,
   catalog and protection pipeline. Existing files are never overwritten.
 - Accepted jobs are server-owned. Retry/restart reuse persisted job identities;
   cancellation does not roll back files already committed to the drive. Preserve

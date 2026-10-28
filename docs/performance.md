@@ -29,6 +29,7 @@ examples from the recorded session, not throughput benchmarks.
 - [Browser progress and health checks](#browser-progress-and-health-checks)
 - [Navigation during uploads](#navigation-during-uploads)
 - [Upload pipeline and smaller splits](#upload-pipeline-and-smaller-splits)
+- [Archive work](#archive-work)
 - [Video controls and startup](#video-controls-and-startup)
   - [Browser playback buffer](#browser-playback-buffer)
 - [Operator checklist](#operator-checklist)
@@ -415,6 +416,22 @@ or increasing cooldowns; reduce concurrency/pacing when contention grows. Never
 rotate identities around provider waits.
 
 </details>
+
+## Archive work
+
+ZIP creation stores entries without recompression to keep CPU use low. Extraction
+stages the source and decoded files on the server before uploading outputs, so it
+uses server disk and Telegram bandwidth. Native decoding runs outside the main
+application process and shares the existing transfer slots and staging admission.
+Single compressed files have no trusted expanded size; their disk reservation
+grows in 8 MiB steps as bytes arrive, with a free-space check before each write.
+
+Solid 7z/RAR entries are consumed sequentially, avoiding a separate decompression
+pass per file. Memory, CPU, output and metadata limits keep unusual archives
+bounded; they can also reject valid archives with expensive dictionaries. See
+[supported formats](usage.md#create-zips-and-extract-archives) and
+[exact resource limits](reference.md#archive-jobs). No archive throughput target
+has been measured.
 
 ## Video controls and startup
 

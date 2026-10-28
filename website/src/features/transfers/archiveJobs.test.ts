@@ -70,7 +70,12 @@ describe("archive transfer presentation", () => {
         expect(fromJob(job()).phase).toBe("Creating ZIP on the server");
         expect(
             fromJob(job({ kind: "extract", phase: "downloading" })).phase,
-        ).toBe("Reading ZIP from your drive");
+        ).toBe("Reading archive from your drive");
+        expect(
+            fromJob(
+                job({ kind: "extract", name: "Photos.7z", phase: "verifying" }),
+            ).phase,
+        ).toBe("Checking archive before saving");
         expect(
             fromJob(job({ kind: "extract", phase: "extracting" })).phase,
         ).toBe("Extracting files on the server");

@@ -90,6 +90,10 @@ def test_reject_symlinks_and_unsupported_compression(tmp_path):
     with pytest.raises(ArchiveError, match="symlinks"):
         zip_manifest(path, 1024, 1024**2)
     path = write_zip(tmp_path, [("file", b"content")], compression=ZIP_LZMA)
+    assert zip_manifest(path, 1024, 1024**2)["size"] == 7
+    data = bytearray(path.read_bytes())
+    struct.pack_into("<H", data, data.index(b"PK\x01\x02") + 10, 99)
+    path.write_bytes(data)
     with pytest.raises(ArchiveError, match="Deflate"):
         zip_manifest(path, 1024, 1024**2)
 

@@ -25,7 +25,7 @@ Prefer a visual introduction? [Open the gallery and walkthrough videos](showcase
   - [Starred files and folders](#starred-files-and-folders)
   - [Search](#search)
 - [Open, preview, and download](#open-preview-and-download)
-- [Create and extract ZIP archives](#create-and-extract-zip-archives)
+- [Create ZIPs and extract archives](#create-zips-and-extract-archives)
 - [Preload a file for smoother playback and downloads](#preload-a-file-for-smoother-playback-and-downloads)
   - [Parallel and resumed downloads](#parallel-and-resumed-downloads)
 - [Share and revoke](#share-and-revoke)
@@ -369,7 +369,9 @@ previous folder. Switching pages clears the query. **/** or **Ctrl/Cmd+K** focus
 search outside an editing field. On phones, the search icon opens it; Close
 Search/Escape collapses an empty field.
 
-## Create and extract ZIP archives
+<a id="create-and-extract-zip-archives"></a>
+
+## Create ZIPs and extract archives
 
 To download several items together, choose **Select**, select the files or
 folders, then choose **Create ZIP**. Enter a ZIP filename and start the job.
@@ -378,10 +380,23 @@ download it from its item menu when the job finishes. A folder's item menu also
 offers **Create ZIP**. Folder structure and empty folders are preserved, and
 originals stay in place.
 
-To unpack an uploaded ZIP, open its item menu and choose **Extract ZIP**. Choose
+To unpack a supported upload, open its item menu and choose **Extract archive**. Choose
 the current folder or a new folder, enter the new folder's name when needed,
 then start extraction. Existing names are kept: outputs use available names
-instead of replacing existing items. The original ZIP is kept.
+instead of replacing existing items. The original archive is kept.
+
+| Extract | Filename extensions |
+| --- | --- |
+| ZIP, 7-Zip and RAR | `.zip`, `.7z`, `.rar` |
+| TAR | `.tar` |
+| Compressed TAR | `.tar.gz` / `.tgz`, `.tar.bz2` / `.tbz` / `.tbz2`, `.tar.xz` / `.txz`, `.tar.zst` / `.tzst` |
+| A single compressed file | `.gz`, `.bz2`, `.xz`, `.zst` |
+
+For example, `backup.tar.gz` extracts its folder tree, while `notes.txt.gz`
+produces one `notes.txt` file. Single compressed files use the uploaded name
+without the final compression suffix. ZIP creation remains uncompressed for low
+CPU use. The Docker image includes the native archive reader; other installations
+need libarchive installed, as for CBR reading.
 
 Follow progress, retry failures or cancel in **Transfers**. Once accepted, archive
 work can continue with the tab closed while TGDrive, MongoDB and Telegram remain
@@ -391,14 +406,16 @@ server disk space and consume Telegram bandwidth. A ZIP stored inside a publicly
 shared folder, or files extracted there, inherits that folder's public access;
 review the warning before continuing.
 
-ZIP is the supported format. Encrypted archives, unsafe paths, links, duplicate
-paths and ZIPs containing empty regular files are rejected. TGDrive cannot upload
+Encrypted and split/multi-volume archives, unsafe paths, links, duplicate
+paths and archives containing empty regular files are rejected. TGDrive cannot upload
 zero-byte files to Telegram. Empty folders are supported. Cancellation or failure
 can leave files and folders already created; retry the existing job to continue
 rather than starting another extraction. Preserve the server's cache directory
 across restarts. If temporary archive data has been removed, the error may ask
 you to cancel and start again; earlier committed outputs remain. See the
-[archive API and exact limits](reference.md#zip-archive-jobs).
+[archive API and exact limits](reference.md#archive-jobs). Some RAR features and
+archives requiring very large decompression dictionaries are unsupported; the
+job reports an error and keeps the source intact.
 
 ## Open, preview, and download
 

@@ -191,6 +191,34 @@ SHA-256 was performed. The video integrity check sampled its head and tail.
 </details>
 
 <details>
+<summary>Multi-format extraction — 2026-10-28</summary>
+
+Focused local runs have applicable passing results for **94 archive service,
+format and API cases**. Real small fixtures cover all supported suffixes, 7z,
+RAR4/RAR5 and ZIP Stored/Deflate/BZIP2/LZMA, with extracted name/byte assertions.
+Regressions cover TAR `./` paths, links/special files, duplicates, empty files,
+gzip corruption/truncation and excessive decoded padding, raw-size staging
+admission, memory-limit failure, native-reader warnings, and worker reaping
+during ordinary or repeated cancellation. Initial implementation and fixture
+failures were corrected; affected cases were rerun rather than repeating every
+passing case. Service/API checks use a local catalog and fake Telegram transport.
+
+The focused archive frontend run passed **45 cases**, and TypeScript plus the
+production build passed on Node **24.22.0**. Existing viewer CommonJS and
+bundle-size warnings remain. **16 synthetic Chromium cases** passed, including
+7z/RAR/TAR/gzip action discovery, default folder names, extraction destinations,
+progress/cancellation, errors/public consent and output navigation. Desktop and
+320-pixel screenshots were inspected; browser responses and job states are
+stubbed, so browser checks do not verify native codecs.
+
+These checks cover this feature snapshot. No live deployment/Telegram test,
+container build, lint, full suite, throughput benchmark or physical-device check
+was run for this update. Earlier ZIP-only live evidence below does not establish
+that the new formats are deployed.
+
+</details>
+
+<details>
 <summary>ZIP creation and extraction — 2026-10-28</summary>
 
 Across focused offline runs, **33 archive service cases** and **24 archive API
@@ -513,11 +541,11 @@ tests protect sending and retry behavior independently of progress requests.
 while scrolling away and back. These use mocked requests or synthetic browser
 fixtures. They require the approval described above; listing them records no pass.
 
-For ZIP work, use the archive service/API and UI checks after approval:
+For archive work, use the service/format/API and UI checks after approval:
 
 ```bash
 uv run --frozen --all-groups python -m pytest -q \
-  tests/transfers/test_archives.py tests/web/test_archives.py
+  tests/transfers/test_archives.py tests/transfers/test_archive_formats.py tests/web/test_archives.py
 cd website
 npx vitest run src/features/files/archiveApi.test.ts src/features/transfers/archiveJobs.test.ts
 npm run build

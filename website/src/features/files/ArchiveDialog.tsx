@@ -97,7 +97,7 @@ export default function ArchiveDialog({
     };
     return (
         <Modal
-            title={extracting ? "Extract ZIP" : "Create ZIP"}
+            title={extracting ? "Extract archive" : "Create ZIP"}
             initialFocus="#archive-name"
             onClose={close}
         >
@@ -114,7 +114,7 @@ export default function ArchiveDialog({
                 </p>
                 <p>
                     {extracting
-                        ? "Extract the ZIP’s files and folders into your drive. The original ZIP is kept."
+                        ? "Extract the archive’s files and folders into your drive. The original is kept."
                         : "Save one ZIP in your drive to download these items together. Original files and folders are kept."}
                 </p>
                 <p className="archive-location">
@@ -170,10 +170,17 @@ export default function ArchiveDialog({
                     work continues on the server after you close this tab.
                 </p>
                 {extracting && (
-                    <p className="muted">
-                        Password-protected ZIPs and ZIPs containing empty files
-                        are not supported. Empty folders are kept.
-                    </p>
+                    <>
+                        <p className="muted">
+                            Supports ZIP, 7z, RAR, TAR (including compressed
+                            TAR), GZip, BZip2, XZ and Zstandard.
+                        </p>
+                        <p className="muted">
+                            Password-protected or split archives, and archives
+                            containing empty files, are not supported. Empty
+                            folders are kept.
+                        </p>
+                    </>
                 )}
                 <ErrorNotice message={error} />
                 {exposure && (
@@ -214,7 +221,7 @@ export default function ArchiveDialog({
                         ) : (
                             <Archive size={16} aria-hidden="true" />
                         )}
-                        {extracting ? "Extract ZIP" : "Create ZIP"}
+                        {extracting ? "Extract archive" : "Create ZIP"}
                     </button>
                 </div>
             </form>

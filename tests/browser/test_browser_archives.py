@@ -1,7 +1,7 @@
 """Archive dialogs and server-job feedback on the production browser bundle.
 
 Archive payloads and job progress are synthetic; Python archive tests exercise
-the real ZIP reader, writer, upload pipeline and recovery behavior.
+the real archive readers, ZIP writer, upload pipeline and recovery behavior.
 """
 
 from __future__ import annotations
@@ -22,7 +22,8 @@ ZIP_ID = "fixture-archive-source"
 
 
 class ArchiveRequests:
-    def __init__(self, page: Any):
+    def __init__(self, page: Any, source_name: str = ZIP_NAME):
+        self.source_name = source_name
         self.requests: list[dict[str, Any]] = []
         self.jobs: list[dict[str, Any]] = []
         self.reject: tuple[int, dict[str, str]] | None = None
@@ -43,7 +44,7 @@ class ArchiveRequests:
             body["data"]["contents"][ZIP_ID] = {
                 "id": ZIP_ID,
                 "path": parent,
-                "name": ZIP_NAME,
+                "name": self.source_name,
                 "type": "file",
                 "size": 4096,
             }
@@ -60,7 +61,7 @@ class ArchiveRequests:
         at = time.time()
         job = {
             "id": "fixture-archive-" + str(len(self.jobs)),
-            "name": ZIP_NAME if extracting else payload["name"],
+            "name": self.source_name if extracting else payload["name"],
             "kind": "extract" if extracting else "archive",
             "status": "running",
             "phase": "extracting" if extracting else "archiving",
@@ -181,8 +182,8 @@ def test_extract_zip_current_and_new_folder_keep_clear_destinations(
     archive = ArchiveRequests(page)
     login(page, server.url)
     for current_folder in (False, True):
-        item_action(page, ZIP_NAME, "Extract ZIP")
-        dialog = page.get_by_role("dialog", name="Extract ZIP", exact=True)
+        item_action(page, ZIP_NAME, "Extract archive")
+        dialog = page.get_by_role("dialog", name="Extract archive", exact=True)
         expect(
             dialog.get_by_role("radio", name="New folder", exact=True)
         ).to_be_checked()
@@ -197,7 +198,7 @@ def test_extract_zip_current_and_new_folder_keep_clear_destinations(
         assert_dialog_layout(page, dialog)
         if not current_folder:
             page.screenshot(path=ARTIFACTS / f"archive-extract-{width}.png")
-        dialog.get_by_role("button", name="Extract ZIP", exact=True).click()
+        dialog.get_by_role("button", name="Extract archive", exact=True).click()
         expect(dialog).not_to_be_visible()
         payload = archive.requests[-1]
         assert payload["path"] == "/" + ZIP_ID
@@ -209,10 +210,49 @@ def test_extract_zip_current_and_new_folder_keep_clear_destinations(
     assert len(archive.requests) == 2
     if width == 1440:
         page.get_by_role("button", name="Private folder", exact=True).press("Enter")
-        item_action(page, ZIP_NAME, "Extract ZIP")
-        dialog = page.get_by_role("dialog", name="Extract ZIP", exact=True)
+        item_action(page, ZIP_NAME, "Extract archive")
+        dialog = page.get_by_role("dialog", name="Extract archive", exact=True)
         expect(dialog.get_by_text("Current folder", exact=True)).to_be_visible()
         page.keyboard.press("Escape")
+
+
+@pytest.mark.parametrize("width", [1440, 320])
+@pytest.mark.parametrize(
+    "source_name,folder_name",
+    [
+        ("Project files.7z", "Project files"),
+        ("Photos.RAR", "Photos"),
+        ("Source bundle.tar.gz", "Source bundle"),
+        ("notes.txt.gz", "notes.txt"),
+    ],
+)
+def test_common_archive_formats_offer_extraction_with_clear_folder_names(
+    server, desktop, width, source_name, folder_name
+):
+    _, page = desktop
+    page.set_viewport_size({"width": width, "height": 844})
+    archive = ArchiveRequests(page, source_name)
+    login(page, server.url)
+    item_action(page, source_name, "Extract archive")
+    dialog = page.get_by_role("dialog", name="Extract archive", exact=True)
+    expect(dialog.get_by_label("New folder name", exact=True)).to_have_value(
+        folder_name
+    )
+    expect(dialog.get_by_label("New folder name", exact=True)).to_be_focused()
+    assert_dialog_layout(page, dialog)
+    if source_name.endswith(".tar.gz"):
+        page.screenshot(path=ARTIFACTS / f"archive-tar-gz-{width}.png")
+    dialog.get_by_role("button", name="Extract archive", exact=True).click()
+    expect(dialog).not_to_be_visible()
+    assert archive.requests == [
+        {
+            "extracting": True,
+            "path": "/" + ZIP_ID,
+            "destination": "/",
+            "folder_name": folder_name,
+            "allow_public_exposure": False,
+        }
+    ]
 
 
 def test_archive_failures_stay_inline_and_public_destination_requires_consent(
@@ -313,10 +353,10 @@ def test_completed_extraction_opens_its_new_output_folder(server, desktop):
 
     page.route("**/api/v1/transfers/location", locate)
     page.route("**/api/getDirectory", output_directory)
-    item_action(page, ZIP_NAME, "Extract ZIP")
-    dialog = page.get_by_role("dialog", name="Extract ZIP", exact=True)
+    item_action(page, ZIP_NAME, "Extract archive")
+    dialog = page.get_by_role("dialog", name="Extract archive", exact=True)
     dialog.get_by_label("New folder name", exact=True).fill("Unpacked project")
-    dialog.get_by_role("button", name="Extract ZIP", exact=True).click()
+    dialog.get_by_role("button", name="Extract archive", exact=True).click()
     expect(dialog).not_to_be_visible()
     page.goto(server.url + "/?view=activity")
     row = page.locator(".transfer-page .transfer-item").filter(has_text=ZIP_NAME)

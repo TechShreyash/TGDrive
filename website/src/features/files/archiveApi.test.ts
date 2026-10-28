@@ -3,7 +3,7 @@ import {
     archiveApi,
     defaultArchiveName,
     extractionFolderName,
-    isZipArchive,
+    isExtractableArchive,
 } from "./archiveApi";
 import type { DriveItem } from "../../shared/types";
 
@@ -16,15 +16,77 @@ const item: DriveItem = {
 
 afterEach(() => vi.unstubAllGlobals());
 
-describe("ZIP actions", () => {
-    it("offers extraction only for ZIP files, including uppercase extensions", () => {
-        expect(isZipArchive({ name: "Photos.ZIP", type: "file" })).toBe(true);
-        expect(isZipArchive({ name: "Photos.zip", type: "folder" })).toBe(
-            false,
-        );
-        expect(isZipArchive({ name: "Photos.zip.exe", type: "file" })).toBe(
-            false,
-        );
+describe("archive actions", () => {
+    it.each([
+        "zip",
+        "7z",
+        "rar",
+        "tar",
+        "tar.gz",
+        "tgz",
+        "tar.bz2",
+        "tbz",
+        "tbz2",
+        "tar.xz",
+        "txz",
+        "tar.zst",
+        "tzst",
+        "gz",
+        "bz2",
+        "xz",
+        "zst",
+    ])(
+        "offers extraction for supported %s files, including uppercase extensions",
+        (suffix) => {
+            expect(
+                isExtractableArchive({
+                    name: "Photos." + suffix,
+                    type: "file",
+                }),
+            ).toBe(true);
+            expect(
+                isExtractableArchive({
+                    name: "Photos." + suffix.toUpperCase(),
+                    type: "file",
+                }),
+            ).toBe(true);
+            expect(
+                isExtractableArchive({
+                    name: "Photos." + suffix,
+                    type: "folder",
+                }),
+            ).toBe(false);
+        },
+    );
+
+    it.each(["Photos.zip.exe", "Photos.7z.001", "Photos.iso", "Photos.txt"])(
+        "does not offer extraction for unsupported %s files",
+        (name) => {
+            expect(isExtractableArchive({ name, type: "file" })).toBe(false);
+        },
+    );
+
+    it.each([
+        ["Photos.ZIP", "Photos"],
+        ["Photos.7z", "Photos"],
+        ["Photos.rar", "Photos"],
+        ["Photos.tar.gz", "Photos"],
+        ["Photos.TAR.BZ2", "Photos"],
+        ["Photos.tar.xz", "Photos"],
+        ["Photos.tar.zst", "Photos"],
+        ["Photos.tgz", "Photos"],
+        ["Photos.tbz", "Photos"],
+        ["Photos.tbz2", "Photos"],
+        ["Photos.txz", "Photos"],
+        ["Photos.tzst", "Photos"],
+        ["notes.txt.gz", "notes.txt"],
+        ["notes.txt.bz2", "notes.txt"],
+        ["notes.txt.xz", "notes.txt"],
+        ["notes.txt.zst", "notes.txt"],
+        [".tar.gz", "Extracted files"],
+        [".zip", "Extracted files"],
+    ])("suggests %s extraction folder as %s", (name, expected) => {
+        expect(extractionFolderName(name)).toBe(expected);
     });
 
     it("suggests bounded ZIP and extraction names without splitting Unicode", () => {
@@ -40,8 +102,8 @@ describe("ZIP actions", () => {
                 { ...item, name: "a".repeat(250) + "📁" + "b".repeat(10) },
             ]),
         ).toBe("a".repeat(250) + "📁.zip");
-        expect(extractionFolderName("Photos.ZIP")).toBe("Photos");
-        expect(extractionFolderName(".zip")).toBe("Extracted files");
+        const longName = "a".repeat(254) + "📁" + "tail.tar.gz";
+        expect(extractionFolderName(longName)).toBe("a".repeat(254) + "📁");
     });
 
     it("sends the destination choice and explicit public-access consent", async () => {
