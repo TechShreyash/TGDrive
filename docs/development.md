@@ -99,20 +99,32 @@ Recorded evidence describes a tested snapshot, not the state of a later checkout
 <details>
 <summary>Independent backup database retry safety — 2026-10-28</summary>
 
-The offline `tests/replication` and `tests/recovery` run passed **346 cases**;
-**five live MongoDB cases were skipped**. After fixing the remaining snapshot
-error handoff, the affected MongoDB/error tests passed **19 cases**. Regressions
-cover connection failures and timeouts, terminal permissions/ownership errors,
-safe diagnostics, restart deadlines, unchanged restore-point keys, pending copy
-identities and deletion blocking until backup succeeds. Existing fault tests
-also cover partial publication, key changes and ambiguous Telegram responses.
+On `a452dae`, the offline `tests/replication` and `tests/recovery` run passed
+**350 cases**. The **five real MongoDB activation cases** passed separately in
+an isolated local MongoDB 8.0 replica set; its temporary container was removed
+afterward. These tests cover connection failures and timeouts, terminal
+permissions/ownership errors, safe diagnostics, restart deadlines, unchanged
+restore-point keys, pending copy identities and deletion blocking until backup
+succeeds. Fault tests also cover partial publication, key changes and ambiguous
+Telegram responses.
 
 The synthetic channel-backup browser suite passed **seven cases**, including
 database retry feedback and the zero-deadline display regression. The frontend
-typecheck/build, changed-file Ruff checks and component Prettier check passed.
+typecheck/build and focused backend Ruff checks passed.
 The build still reports chunk-size and vendored media-player module warnings.
-These checks used isolated fixtures; no production backup was changed, and no
-live MongoDB/Telegram restore rehearsal or deployment was performed.
+
+Coolify reported `a452dae` successfully deployed and running. Live checks passed
+for readiness, owner backup status and rejection of anonymous status/report/key
+requests. **Back Up Now** created a fresh confirmed encrypted Telegram database
+archive with a recorded checksum/message ID. **Sync now** advanced the independent
+backup's verification time while preserving its recorded restore point and
+archive mapping, with zero pending revisions. No browser console errors or runtime
+warnings/errors were observed during these checks.
+
+Existing files, recovery settings and confirmed restore points were retained.
+Production outages and full live Telegram failover/restoration were not induced;
+the isolated fault/activation tests do not establish recovery after every possible
+provider or account failure.
 
 </details>
 
