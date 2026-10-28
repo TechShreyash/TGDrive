@@ -553,6 +553,13 @@ for channel preparation, private permissions, key custody and recovery drills.
 | `POST /api/v1/replica/recover` | `target_channel`, write-only `target_bot_token`, matching typed `confirm_channel`, optional `catalog_only: true` | Uses the inspected server-side candidate to copy into an empty private destination, or verify an existing surviving catalog without copying files. |
 | `POST /api/v1/replica/recover` | `activate: true`, `confirm_channel` matching the pending candidate's destination channel ID | Explicitly activates a completed candidate; service restart is required. Missing/wrong confirmation or incomplete candidates cannot be activated. |
 
+Database connection failures and timeouts report
+`error.code: REPLICA_MONGODB_UNAVAILABLE`, phase `waiting` and a Unix-second
+`retry_at`. Database access/configuration or ownership failures report
+`REPLICA_MONGODB_FAILED`, phase `error` and `retry_at: 0`. Neither advances the
+confirmed revision or discards the pending backup. See the
+[retry policy](backup-recovery.md#enable-and-confirm-the-first-copy).
+
 All routes require owner authentication and normal same-origin mutation checks.
 A recovery-only startup exposes the authenticated recovery surface when the local
 catalog cannot open; it must not enable ordinary file mutations against a missing

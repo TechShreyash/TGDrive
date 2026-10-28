@@ -8,12 +8,14 @@ from unittest.mock import AsyncMock
 
 import pytest
 from pydantic import SecretStr
+from pymongo.errors import ConnectionFailure, OperationFailure
 
 from tests.replication.test_replica import BACKUP, dispose, setup
 from tests.replication.test_replica import replica_backend as replica_backend
 from tgdrive.replication.replica_mongo import mirror_mongodb
 from tgdrive.replication.replica_transport import ReplicaTransportError
 from tgdrive.settings.managed_settings import SettingsProblem
+from tgdrive.storage.mongo import DatabaseUnavailable
 
 pytestmark = pytest.mark.usefixtures("replica_backend")
 
@@ -269,5 +271,43 @@ async def test_full_snapshot_errors_are_retryable_and_never_echo_provider_secret
         assert "credential=private" not in str(raised.value)
         if kind == "flood":
             assert raised.value.retry_after == 123
+    finally:
+        await dispose(replica, store)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "error,retryable",
+    [
+        (ConnectionFailure("credential=private"), True),
+        (OperationFailure("credential=private", code=13), False),
+        (DatabaseUnavailable("credential=private"), False),
+    ],
+)
+async def test_snapshot_database_errors_reach_shared_safe_failure_handling(
+    tmp_path, error, retryable
+):
+    configured, store, remote, replica, _ = setup(tmp_path)
+    configured.mongodb_backup_key = SecretStr("a1" * 32)
+    replica.runtime.mongo = object()
+    replica.runtime.backup = SimpleNamespace(snapshot_now=AsyncMock(side_effect=error))
+    transport = remote.factory(configured, "234567:" + "b" * 24)
+    try:
+        with pytest.raises(type(error)) as raised:
+            await mirror_mongodb(
+                replica,
+                transport,
+                source_channel=configured.storage_channel,
+                destination_channel=BACKUP,
+            )
+        assert raised.value is error
+        replica.runtime.backup.snapshot_now.assert_awaited_once_with(store)
+        failure = replica._record_failure(raised.value)
+        assert failure.retryable is retryable
+        assert replica.status()["phase"] == ("waiting" if retryable else "error")
+        assert "credential=private" not in str(failure)
+        assert "credential=private" not in str(replica.status())
+        assert replica.journal.get("restore_point") is None
+        assert not remote.calls
     finally:
         await dispose(replica, store)

@@ -97,6 +97,26 @@ fixture or its `/__test__` endpoints.
 Recorded evidence describes a tested snapshot, not the state of a later checkout.
 
 <details>
+<summary>Independent backup database retry safety — 2026-10-28</summary>
+
+The offline `tests/replication` and `tests/recovery` run passed **346 cases**;
+**five live MongoDB cases were skipped**. After fixing the remaining snapshot
+error handoff, the affected MongoDB/error tests passed **19 cases**. Regressions
+cover connection failures and timeouts, terminal permissions/ownership errors,
+safe diagnostics, restart deadlines, unchanged restore-point keys, pending copy
+identities and deletion blocking until backup succeeds. Existing fault tests
+also cover partial publication, key changes and ambiguous Telegram responses.
+
+The synthetic channel-backup browser suite passed **seven cases**, including
+database retry feedback and the zero-deadline display regression. The frontend
+typecheck/build, changed-file Ruff checks and component Prettier check passed.
+The build still reports chunk-size and vendored media-player module warnings.
+These checks used isolated fixtures; no production backup was changed, and no
+live MongoDB/Telegram restore rehearsal or deployment was performed.
+
+</details>
+
+<details>
 <summary>Live imports and unnamed URL history fix — 2026-10-28</summary>
 
 Live deployment checks reproduced an HTTP 500 when new transfer admission tried

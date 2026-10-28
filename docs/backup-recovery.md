@@ -94,6 +94,13 @@ saved settings can need a new recovery snapshot even without another upload;
 confirmed document mappings are reused. Browser status refreshes read saved
 progress and do not initiate Telegram logins or copies.
 
+Temporary MongoDB connection failures and timeouts show **Waiting to retry** and
+retry automatically after 30 seconds while the server runs, including when no
+files have changed. Confirmed restore points, matching keys and pending copy
+identities are retained. Database permissions, invalid configuration or lost
+ownership require repair; restore access and restart TGDrive before retrying.
+Until backup confirmation succeeds, permanent catalog removal remains blocked.
+
 <details>
 <summary>Retries, restarts and private bot sessions</summary>
 
@@ -169,11 +176,17 @@ changing the drive; preserve them and repeat recovery inspection.
 | Process stopped/paused | Restart one instance or choose Resume. Later unconfirmed changes remain unprotected. |
 | Bot/access/privacy/copying failure | Repair credentials, permissions and private-channel/content settings. |
 | Missing document, wrong size, invalid key/capsule | Keep sources; select the correct key/point or another original. Never mark success manually. |
-| Disk/database failure | Repair storage/access while retaining journal/catalog, then retry. |
+| MongoDB connection failure or timeout | Leave the server running for automatic retry; preserve the journal and keys. |
+| Disk failure, database permissions/configuration or lost ownership | Repair storage/access while retaining journal/catalog; restart after restoring database ownership, then retry. |
 
 During bot sign-in, Telegram can redirect a fresh connection to another data center. TGDrive retries authorization once after that handoff, within the 30-second sign-in deadline. If setup still fails, choose **Verify and start backup** again; for an existing backup, Retry/Resume the same operation. Message publication retries remain controlled by the saved operation journal. An unresolved numeric channel ID reports which channel needs its ID or bot access corrected.
 
 **Activity and report → Download report** gives progress and actionable failures without tokens/keys. Names and IDs may still be private; review before sharing. Never share raw private state or keys.
+
+Server logs record the exception class and safe backup error code for failed
+operations. Raw provider messages and credentials are not copied into these
+diagnostics. An unexpected error stops new backup work until it is investigated;
+it does not erase or replace the last confirmed restore point.
 
 The full MongoDB archive's revision can differ from the channel capsule's revision; they are distinct restore points. Keep both keys. In the JSON, `key` and `mongodb_backup_key` match the recorded `restore_point`; `next_backup_key` and `next_mongodb_backup_key` describe the next generation. Preserve the whole export and older pairs. If pending work captured an older MongoDB key, restore that key or verify **Backup settings** again to capture a fresh snapshot.
 

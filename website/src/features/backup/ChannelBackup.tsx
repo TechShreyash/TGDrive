@@ -71,7 +71,7 @@ const PHASE_LABEL: Record<ReplicaPhase, string> = {
     idle: "Ready to sync",
     syncing: "Copying to the backup channel",
     paused: "Paused",
-    waiting: "Waiting for Telegram",
+    waiting: "Waiting to retry",
     error: "Needs attention",
     protected: "Backup confirmed",
     recovering: "Preparing the recovered drive",
@@ -612,7 +612,7 @@ export default function ChannelBackup({
                         <div className="channel-backup-feedback">
                             <ErrorNotice message={state.error.detail} />
                             {state.error.action && <p>{state.error.action}</p>}
-                            {state.error.retry_at && (
+                            {Boolean(state.error.retry_at) && (
                                 <p>
                                     Next retry:{" "}
                                     {retryTime(state.error.retry_at)}

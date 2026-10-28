@@ -15,8 +15,11 @@ import re
 import stat
 from pathlib import Path
 
+from pymongo.errors import PyMongoError
+
 from tgdrive.recovery.mongo_backup import MAGIC, MAX_EXPANDED
 from tgdrive.settings.managed_settings import SettingsProblem
+from tgdrive.storage.mongo import DatabaseUnavailable
 
 
 def _check_pending_key(service, configured, key):
@@ -144,6 +147,9 @@ async def mirror_mongodb(
             try:
                 await service.snapshot_now(store)
             except asyncio.CancelledError:
+                raise
+            except PyMongoError, DatabaseUnavailable:
+                # Keep transient outages distinct from ownership/permission failures.
                 raise
             except Exception as error:
                 from tgdrive.replication.replica_transport import ReplicaTransportError

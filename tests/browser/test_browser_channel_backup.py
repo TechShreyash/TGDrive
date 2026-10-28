@@ -114,17 +114,22 @@ def test_channel_backup_setup_progress_pause_errors_and_private_exports(
             "Restore the bot's administrator permissions, then retry.", exact=True
         )
     ).to_be_visible()
+    expect(section.locator(".channel-backup-feedback")).not_to_contain_text("0")
     section.get_by_role("alert").scroll_into_view_if_needed()
     capture(page, f"channel-backup-error-{theme}-{width}.png")
     section.get_by_role("button", name="Retry", exact=True).click()
     expect(section.locator(".channel-backup-phase")).to_contain_text("Copying")
     scenario(page, server, "waiting")
-    expect(section.locator(".channel-backup-phase")).to_contain_text(
-        "Waiting for Telegram"
-    )
+    expect(section.locator(".channel-backup-phase")).to_contain_text("Waiting to retry")
     expect(section.get_by_text("Next retry:", exact=False)).to_contain_text("2026")
     section.locator(".channel-backup-phase").scroll_into_view_if_needed()
     capture(page, f"channel-backup-waiting-{theme}-{width}.png")
+    scenario(page, server, "waiting-mongodb")
+    expect(section.locator(".channel-backup-phase")).to_contain_text("Waiting to retry")
+    expect(section.get_by_role("alert")).to_contain_text(
+        "The backup database is temporarily unavailable."
+    )
+    expect(section.get_by_text("Next retry:", exact=False)).to_contain_text("2026")
     scenario(page, server, "protected")
     expect(section.locator(".channel-backup-phase")).to_contain_text("Backup confirmed")
     expect(section.locator(".channel-backup-confirmation")).to_contain_text(

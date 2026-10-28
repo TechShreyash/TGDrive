@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import logging
 import math
 import secrets
 import shutil
@@ -30,6 +31,7 @@ from tgdrive.settings.managed_settings import SettingsProblem
 from tgdrive.storage.store import DriveStore
 
 HEALTH_CHECK_INTERVAL_SECONDS = 60 * 60
+logger = logging.getLogger(__name__)
 
 
 def now():
@@ -278,58 +280,102 @@ class ChannelReplica:
                     except asyncio.CancelledError:
                         raise
                     except Exception as error:
-                        retryable = bool(getattr(error, "retryable", False))
-                        delay = max(5, float(getattr(error, "retry_after", None) or 30))
-                        detail = (
-                            str(error)
-                            if isinstance(error, (SettingsProblem, ValueError))
-                            or hasattr(error, "code")
-                            else "Telegram backup operation could not be confirmed."
-                        )
-                        if (
-                            getattr(error, "code", None) == "REPLICA_FLOOD_WAIT"
-                            and not recovery
-                            and self.journal.get("job") is None
-                            and self.journal.get("restore_point")
-                        ):
-                            detail = "Routine backup health check delayed. " + detail
-                        operation = getattr(error, "operation", None)
-                        if operation:
-                            detail += f" Operation: {operation}."
-                        if retryable:
-                            detail += f" Retry in {math.ceil(delay)} seconds."
-                        # Never echo arbitrary credential-bearing provider exceptions.
-                        detail = detail[:400]
-                        phase = self.journal.get("status", {}).get("phase")
-                        self.update(
-                            phase=(
-                                phase
-                                if phase in {"paused", "disabled"}
-                                else "waiting"
-                                if retryable
-                                else "error"
-                            ),
-                            error={
-                                "code": getattr(error, "code", "REPLICA_FAILED"),
-                                "detail": detail,
-                                "action": (
-                                    "Leave TGDrive running. Backup will retry after "
-                                    "the displayed deadline; channel permissions "
-                                    "do not need changing for this cooldown."
-                                    if getattr(error, "code", None)
-                                    == "REPLICA_FLOOD_WAIT"
-                                    else "Check channel access, bot permissions and "
-                                    "the source file. Retry after correcting "
-                                    "the problem. "
-                                    "The last confirmed restore point is retained."
-                                ),
-                                "retry_at": time.time() + delay if retryable else 0,
-                            },
-                        )
-                        self.report("error", detail)
+                        self._record_failure(error)
             self._wake.clear()
             with suppress(TimeoutError):
                 await asyncio.wait_for(self._wake.wait(), timeout=10)
+
+    def _record_failure(self, error):
+        from pymongo.errors import ConnectionFailure, PyMongoError
+
+        from tgdrive.replication.replica_transport import ReplicaTransportError
+        from tgdrive.storage.mongo import DatabaseUnavailable
+
+        failure_type = type(error).__name__
+        database_error = isinstance(error, (PyMongoError, DatabaseUnavailable))
+        if database_error:
+            # Ownership/fencing failures must remain stopped until explicitly repaired.
+            retryable = isinstance(error, ConnectionFailure) or (
+                isinstance(error, PyMongoError) and error.timeout is True
+            )
+            error = ReplicaTransportError(
+                "MongoDB could not confirm the backup settings or snapshot."
+                if retryable
+                else "MongoDB access or ownership could not be confirmed for backup.",
+                "REPLICA_MONGODB_UNAVAILABLE"
+                if retryable
+                else "REPLICA_MONGODB_FAILED",
+                retryable=retryable,
+            )
+        retryable = bool(
+            getattr(error, "retryable", False) or getattr(error, "retry_after", None)
+        )
+        delay = max(5, float(getattr(error, "retry_after", None) or 30))
+        safe_error = isinstance(
+            error, (SettingsProblem, ReplicaTransportError, ValueError)
+        )
+        code = (
+            getattr(error, "code", "REPLICA_FAILED") if safe_error else "REPLICA_FAILED"
+        )
+        detail = (
+            str(error) if safe_error else "Backup operation could not be confirmed."
+        )
+        if (
+            code == "REPLICA_FLOOD_WAIT"
+            and not self.journal.get("recovery")
+            and self.journal.get("job") is None
+            and self.journal.get("restore_point")
+        ):
+            detail = "Routine backup health check delayed. " + detail
+        operation = getattr(error, "operation", None) if safe_error else None
+        if operation:
+            detail += f" Operation: {operation}."
+        if retryable:
+            detail += f" Retry in {math.ceil(delay)} seconds."
+        if database_error:
+            action = (
+                "Leave TGDrive running. Backup will retry after the displayed deadline."
+                if retryable
+                else "Check MongoDB connectivity, ownership and permissions. "
+                "Restore access and restart TGDrive before retrying."
+            ) + " The last confirmed restore point is retained."
+        elif code == "REPLICA_FLOOD_WAIT":
+            action = (
+                "Leave TGDrive running. Backup will retry after the displayed "
+                "deadline; channel permissions do not need changing for this cooldown."
+            )
+        elif code == "REPLICA_FAILED":
+            action = (
+                "Preserve the backup journal and recovery keys. Review the server "
+                "logs and retry after correcting the problem. "
+                "The last confirmed restore point is retained."
+            )
+        else:
+            action = (
+                "Check channel access, bot permissions and the source file. "
+                "Retry after correcting the problem. "
+                "The last confirmed restore point is retained."
+            )
+        # Log the exception class, never arbitrary provider text or credentials.
+        logger.warning("Independent backup failed: type=%s code=%s", failure_type, code)
+        phase = self.journal.get("status", {}).get("phase")
+        self.update(
+            phase=(
+                phase
+                if phase in {"paused", "disabled"}
+                else "waiting"
+                if retryable
+                else "error"
+            ),
+            error={
+                "code": code,
+                "detail": detail[:400],
+                "action": action,
+                "retry_at": time.time() + delay if retryable else 0,
+            },
+        )
+        self.report("error", detail[:400])
+        return error
 
     def _credentials(self):
         from tgdrive.replication.replica_settings import collect_credentials
@@ -1123,27 +1169,7 @@ class ChannelReplica:
                 try:
                     await self._sync(config, force_check=True)
                 except Exception as error:
-                    delay = getattr(error, "retry_after", None)
-                    if delay or getattr(error, "retryable", False):
-                        delay = max(5, float(delay or 30))
-                        phase = self.journal.get("status", {}).get("phase")
-                        self.update(
-                            phase=(
-                                phase if phase in {"paused", "disabled"} else "waiting"
-                            ),
-                            error={
-                                "code": getattr(error, "code", "REPLICA_WAIT"),
-                                "detail": (
-                                    "Telegram requested a wait before backup resumes."
-                                ),
-                                "action": (
-                                    "Leave TGDrive running or retry after the "
-                                    "displayed deadline."
-                                ),
-                                "retry_at": time.time() + delay,
-                            },
-                        )
-                    raise
+                    raise self._record_failure(error) from None
                 if self._mutation_config() is None:
                     return
                 if (

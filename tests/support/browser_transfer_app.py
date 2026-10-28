@@ -864,14 +864,22 @@ class FixtureReplica:
                     "action": (
                         "Restore the bot's administrator permissions, then retry."
                     ),
+                    "retry_at": 0,
                 },
             )
-        elif scenario == "waiting":
+        elif scenario in {"waiting", "waiting-mongodb"}:
+            mongodb = scenario == "waiting-mongodb"
             self.state.update(
                 phase="waiting",
                 error={
-                    "code": "FLOOD_WAIT",
-                    "detail": "Telegram asked this bot to wait.",
+                    "code": (
+                        "REPLICA_MONGODB_UNAVAILABLE" if mongodb else "FLOOD_WAIT"
+                    ),
+                    "detail": (
+                        "The backup database is temporarily unavailable."
+                        if mongodb
+                        else "Telegram asked this bot to wait."
+                    ),
                     "action": "TGDrive will retry after the displayed time.",
                     "retry_at": 1792645260,
                 },
