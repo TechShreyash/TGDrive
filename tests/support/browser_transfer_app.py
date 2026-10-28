@@ -689,6 +689,8 @@ class FixtureReplica:
         self.owner = owner
         self.control = asyncio.Lock()
         self._operation = asyncio.Lock()
+        self._temporary = tempfile.TemporaryDirectory(prefix="tgdrive-recovery-fixture-")
+        self.directory = Path(self._temporary.name)
         self.state = {
             "enabled": False,
             "configured": False,
@@ -709,13 +711,25 @@ class FixtureReplica:
             "done_bytes": 0,
             "error": None,
             "report": [],
+            "backup_file_available": False,
+            "file_restore_allowed": True,
         }
         self.destination = None
         self.catalog_only = False
         self.events = []
+        self.main_unavailable = False
+        self.access_revoked = False
         self.journal = SimpleNamespace(
             get=lambda name, default=None: {
                 "restore_point": {"revision": 7, "message_id": 9001},
+                "config": {
+                    "channel": self.state["backup_channel"],
+                    "enabled": self.state["enabled"],
+                } if self.state["configured"] else {},
+                "candidate": {
+                    "complete": self.state["recovery_candidate"]["complete"],
+                    "catalog": {"storage_channel_id": self.state["recovery_candidate"]["channel"]},
+                } if self.state.get("recovery_candidate") else None,
             }.get(name, default)
         )
 
@@ -743,7 +757,34 @@ class FixtureReplica:
         pass
 
     async def close(self):
-        pass
+        self._temporary.cleanup()
+
+    def recovery_file(self):
+        if not self.state["backup_file_available"]:
+            from tgdrive.settings.managed_settings import SettingsProblem
+
+            raise SettingsProblem("Create and confirm a backup first.", status=404)
+        return b"synthetic encrypted recovery file"
+
+    async def inspect_file(self, path, key, source=None, token=None):
+        if key != self.key() or path.read_bytes() != b"synthetic encrypted recovery file":
+            raise ValueError("Recovery key or file validation failed; nothing changed")
+        if self.access_revoked and not token:
+            raise ValueError("No recorded channel could be accessed. Supply a working replacement bot token.")
+        channel = source or (
+            -1003333333333 if self.main_unavailable else self.state["source_channel"]
+        )
+        await self.inspect_recovery(channel, token, key, None)
+        self.state["recovery_candidate"].update(
+            has_database=True,
+            source_is_backup=channel != self.state["source_channel"],
+        )
+        self.events.append({"action": "inspect_file", "channel": channel, "replacement_access": bool(token)})
+        return self.status()
+
+    async def _sync(self, config, *, force_snapshot=False):
+        self.events.append({"action": "checkpoint", "forced": force_snapshot})
+        self.scenario("protected")
 
     async def before_mutation(self):
         if self.blocked:
@@ -819,6 +860,8 @@ class FixtureReplica:
                 "bytes": 3 * 1024**2,
                 "channel": channel,
                 "complete": False,
+                "has_database": False,
+                "source_is_backup": channel != self.state["source_channel"],
             },
         )
         self.event("Recovery copy authenticated. Nothing has been activated.")
@@ -861,6 +904,12 @@ class FixtureReplica:
     def scenario(self, scenario):
         if scenario == "recovery-only":
             self.owner.recovery_only = True
+        elif scenario == "main-unavailable":
+            self.main_unavailable = True
+        elif scenario == "access-revoked":
+            self.access_revoked = True
+        elif scenario == "file-restore-disabled":
+            self.state["file_restore_allowed"] = False
         elif scenario == "error":
             self.state.update(
                 phase="error",
@@ -905,6 +954,7 @@ class FixtureReplica:
                 done_parts=4,
                 done_bytes=3 * 1024**2,
                 last_success_at="2026-10-22T05:00:00Z",
+                backup_file_available=True,
             )
         elif scenario == "recovery-ready":
             self.state["recovery_candidate"].update(

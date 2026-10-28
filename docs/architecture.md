@@ -570,6 +570,15 @@ protection adds verified backup locations to the same file and suppresses the
 separate standalone backups. One recovery key unlocks new files independently
 of the website password; older-format readers retain their original keys.
 
+The unified key is a private MongoDB `settings` record named `recovery-key`, bound
+to the drive, and mirrored in the local replica journal. Initial creation uses a
+fenced insert-if-absent. Startup persists and verifies it off the event loop,
+before backup workers begin; later calls use the verified cached key.
+Reopening the same MongoDB without the old data directory recovers that key.
+Conflicting keys or drive identities stop new protection rather than overwrite a
+key; browsing remains available while the protection error needs repair.
+The legacy `MONGODB_BACKUP_KEY` remains available for older archives.
+
 Browser and Telegram user-account sessions are omitted. Recovery imports safe
 durable records and saved settings, rebases catalog locations to verified media,
 and turns unfinished jobs into canceled history. Source-channel mutation
@@ -627,8 +636,11 @@ deadline is still saved and **Resume** cannot bypass it. Destructive Telegram
 operations recheck backup controls after waiting and after checkpoint
 verification, so a concurrent pause keeps them blocked.
 
-Confirmed local recovery files remain available for download. Local staging
-enforces the free-space reserve; older remote recovery points are not purged.
+The latest confirmed local recovery file remains available for download. Cleanup
+removes older known confirmed files only after their replacement is durably
+confirmed; it preserves retry ciphertext and never purges remote restore points.
+Cleanup failure does not invalidate the new backup. Local staging enforces the
+free-space reserve; interrupted or older untracked files can still require review.
 See the [operator guide](backup-recovery.md#interruptions-and-reports) for retry,
 credential replacement and key custody.
 

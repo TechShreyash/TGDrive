@@ -129,6 +129,47 @@ async def test_runtime_starts_once_and_stops_components(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("conflict", [False, True])
+async def test_runtime_persists_recovery_key_before_workers_without_blocking_browsing(
+    tmp_path, monkeypatch, conflict,
+):
+    import threading
+
+    from tgdrive.replication.replica import ChannelReplica
+    from tgdrive.settings.managed_settings import SettingsProblem
+
+    store = DriveStore.create(tmp_path / "drive.json")
+    pool = FakePool()
+    runtime = Runtime(settings(tmp_path), pool=pool)
+    backup = FakeBackup(store)
+    runtime.backup = backup
+    runtime.remote = FakeRemote()
+    caller = threading.get_ident()
+    calls = []
+
+    def persist(replica):
+        assert replica.runtime.store is store
+        assert not backup.started and not pool.started
+        assert threading.get_ident() != caller
+        calls.append(True)
+        if conflict:
+            raise SettingsProblem("Recovery key conflict", code="RECOVERY_KEY_CONFLICT", status=409)
+        return "a1" * 32
+
+    monkeypatch.setattr(ChannelReplica, "key", persist)
+    monkeypatch.setattr(runtime_module, "build_bot_mode_client", lambda _settings: None)
+    try:
+        await runtime.start()
+        assert calls == [True]
+        assert runtime.ready and backup.started and pool.started
+        assert runtime.store.list_directory("/") == {}
+        if conflict:
+            assert runtime.replica.status()["error"]["code"] == "RECOVERY_KEY_CONFLICT"
+    finally:
+        await runtime.stop()
+
+
+@pytest.mark.asyncio
 async def test_telegram_outage_keeps_local_metadata_available(tmp_path: Path) -> None:
     pool = FakePool(fail_start=True)
     config = settings(tmp_path)

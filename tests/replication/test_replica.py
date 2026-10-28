@@ -369,6 +369,39 @@ async def test_v2_restore_point_publishes_one_self_contained_file_per_channel(
 
 
 @pytest.mark.asyncio
+async def test_v2_local_retention_waits_for_confirmation_and_preserves_pending_files(
+    tmp_path, monkeypatch,
+):
+    from tgdrive.replication.replica_state import atomic_private
+
+    configured, store, remote, replica, config = setup(tmp_path)
+    unified_capture(monkeypatch, replica, store)
+    try:
+        await replica._sync(config)
+        previous = replica.backup_file()
+        point = replica.journal.get("restore_point")
+        remote_content = remote.messages[BACKUP, point["backup_message_id"]]
+        pending = previous.parent / (("f" * 64) + ".tgdb")
+        atomic_private(pending, b"unconfirmed recovery bytes")
+        store.create_folder("/", "Next generation")
+        remote.publish_error_channel = configured.storage_channel
+        with pytest.raises(ReplicaTransportError):
+            await replica._sync(config)
+        assert previous.is_file()
+        assert replica.backup_file() == previous
+        assert pending.read_bytes() == b"unconfirmed recovery bytes"
+        remote.publish_error_channel = None
+        await replica._sync(config)
+        assert replica.backup_file() != previous
+        assert replica.backup_file().is_file()
+        assert not previous.exists()
+        assert pending.read_bytes() == b"unconfirmed recovery bytes"
+        assert remote.messages[BACKUP, point["backup_message_id"]] == remote_content
+    finally:
+        await dispose(replica, store)
+
+
+@pytest.mark.asyncio
 async def test_v2_file_rebuilds_main_from_surviving_backup_without_changing_live_drive(
     tmp_path, monkeypatch,
 ):

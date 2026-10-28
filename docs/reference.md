@@ -553,7 +553,7 @@ channel preparation and recovery limits.
 
 | Route | Request | Result |
 | --- | --- | --- |
-| `GET /api/v1/replica` | None | Configuration, phase, channel IDs, revisions, progress, retry guidance, `backup_file_available`, bounded activity and optional recovery candidate including `has_database` and `source_is_backup`. No bot tokens or key. |
+| `GET /api/v1/replica` | None | Configuration, phase, channel IDs, revisions, progress, retry guidance, `backup_file_available`, `file_restore_allowed`, bounded activity and optional recovery candidate including `has_database` and `source_is_backup`. File restore is unavailable in demo mode. No bot tokens or key. |
 | `POST /api/v1/replica/configure` | `channel_id`, write-only `bot_token`, `independent_accounts: true` | Verifies private distinct channels and a separate backup bot, saves configuration, schedules initial copying. Requires an existing catalog. |
 | `POST /api/v1/replica/action` | `action`: `sync`, `pause`, `resume`, `retry` or `disable` | Durable operation control. Resume also re-enables configured protection. |
 | `GET /api/v1/replica/key` | None | Private no-store recovery-key JSON. `key` matches the current downloadable file; legacy matching keys/restore-point references remain available for older formats. Save separately from the file. |

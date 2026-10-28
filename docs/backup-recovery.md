@@ -54,6 +54,11 @@ files still need their original key; keep those pairs together in your records.
 A login reset cannot decrypt a backup whose key is lost. A working installation
 can re-export a key it still holds.
 
+TGDrive keeps the unified key privately in MongoDB and its local recovery state.
+Reopening the surviving database on a new host keeps that key. A conflicting or
+missing historical key requires repair; TGDrive must not silently replace it.
+Your separate saved key remains necessary if both database and local state are lost.
+
 Also retain Telegram administrator access and the private deployment/database
 connection details needed to run TGDrive again. Revoked bot tokens can be replaced
 during recovery; the backup cannot restore revoked access or a hosting account.
@@ -123,6 +128,9 @@ operation rather than replacing the channel.
 
 ### Recover a lost main channel from a surviving channel
 
+Use a private installation for recovery-file restores; this action is disabled
+in demo mode, including for the demo administrator.
+
 1. Open **Backups & recovery → Restore backup**, or **Storage recovery** if the
    catalog cannot open. Select your saved file, paste its key and choose
    **Inspect backup**. Keep the browser open until inspection finishes.
@@ -172,9 +180,10 @@ paused or unconfirmed.
 
 **Activity and report → Download report** omits tokens and keys, but file names
 and channel IDs may still be private. Keep raw journals, session files and keys
-private. Retained local confirmed files support **Download backup**; monitor disk
-space because recovery staging respects the free-space reserve and does not
-purge older remote points.
+private. **Download backup** keeps the latest confirmed local file. After its
+replacement confirms, older known local copies can be removed; pending retry
+files and remote restore points remain. Monitor disk space for interrupted or
+older staging files; recovery staging respects the free-space reserve.
 
 ## Make and check a MongoDB backup
 

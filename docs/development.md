@@ -118,6 +118,15 @@ validation, production build, deployment or full repository test run was made.
 </details>
 
 <details>
+<summary>Deployed unified recovery verification — 2026-10-28</summary>
+
+| Scope | Evidence | Limits |
+| --- | --- | --- |
+| Unified recovery verification · 2026-10-28 · deployed `c9ebf7c` plus local repairs | Final focused backend group passed 460 cases across its run and one fixture rerun; 46 isolated real MongoDB cases passed, including full v2 restoration and transaction rollback. After the startup-key fix, 30 focused runtime/key/publication cases passed. Production frontend build/typecheck, 39 backup UI units and ten synthetic Chromium cases passed across focused runs. Live checks passed readiness, anonymous/visitor export denial, secret-free status, manual checkpoint creation, file/key download and decryption. The downloaded production snapshot restored matching catalog/settings/history into an isolated MongoDB without replaying unsafe work. All 159 parts in each channel verified for the latest point; three byte/checksum samples matched at an earlier point. | The final synthetic run skipped seven real Mongo cases already exercised separately. Demo mode correctly rejects restore imports; production failover or activation was not induced. Local fixes cover restore-mode reload, startup key durability, confirmed-file retention, stale safety-copy dates and explicit demo restore limits and require deployment. Telegram's verification cooldown was respected before completing the latest check. No full repository run or physical-device guarantee. |
+
+</details>
+
+<details>
 <summary>Independent backup database retry safety — 2026-10-28</summary>
 
 On `a452dae`, the offline `tests/replication` and `tests/recovery` run passed

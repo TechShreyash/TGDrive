@@ -42,6 +42,7 @@ export interface ReplicaState {
     pending_revision?: number;
     last_success_at?: string | null;
     backup_file_available?: boolean;
+    file_restore_allowed?: boolean;
     current_file?: string | null;
     total_files: number;
     done_files: number;
@@ -280,6 +281,17 @@ export default function ChannelBackup({
     }, [state?.phase]);
 
     useEffect(() => {
+        const candidate = state?.recovery_candidate;
+        if (candidate?.has_database && !candidate.complete)
+            setCatalogOnly(!candidate.source_is_backup);
+    }, [
+        state?.recovery_candidate?.channel,
+        state?.recovery_candidate?.complete,
+        state?.recovery_candidate?.has_database,
+        state?.recovery_candidate?.source_is_backup,
+    ]);
+
+    useEffect(() => {
         if (actionError) actionErrorSummary.current?.focus();
     }, [actionError]);
 
@@ -447,7 +459,7 @@ export default function ChannelBackup({
     };
     const inspectFile = async (event: FormEvent) => {
         event.preventDefault();
-        if (demoMode || busy || importPending.current) return;
+        if (fileRestoreBlocked || busy || importPending.current) return;
         setActionError("");
         let headers: Record<string, string>;
         try {
@@ -485,7 +497,6 @@ export default function ChannelBackup({
             focusResult.current = "candidate";
             setState(result);
             setLoadError("");
-            setCatalogOnly(!result.recovery_candidate?.source_is_backup);
             setConfirmation("");
             setActivationConfirmation("");
             setSourceToken("");
@@ -520,6 +531,7 @@ export default function ChannelBackup({
     };
 
     const phase = state?.phase || "disabled";
+    const fileRestoreBlocked = demoMode || state?.file_restore_allowed === false;
     const active = ACTIVE.has(phase);
     const blocked =
         demoMode || Boolean(busy) || active || phase === "restart_required";
@@ -1062,6 +1074,12 @@ export default function ChannelBackup({
                     phase !== "restart_required" && (
                         <>
                             <form className="channel-backup-form" onSubmit={inspectFile}>
+                                {state?.file_restore_allowed === false && (
+                                    <p>
+                                        Recovery-file restore is unavailable in demo mode.
+                                        Use a private installation for recovery.
+                                    </p>
+                                )}
                                 <div className="channel-backup-fields">
                                     <label>
                                         Recovery file (required)
@@ -1069,7 +1087,7 @@ export default function ChannelBackup({
                                             type="file"
                                             accept=".tgdb"
                                             required
-                                            disabled={demoMode || !!busy}
+                                            disabled={fileRestoreBlocked || !!busy}
                                             aria-describedby="recovery-file-help"
                                             onChange={(event) => {
                                                 setRecoveryFile(event.target.files?.[0] || null);
@@ -1087,7 +1105,7 @@ export default function ChannelBackup({
                                             spellCheck={false}
                                             maxLength={8192}
                                             required
-                                            disabled={demoMode || !!busy}
+                                            disabled={fileRestoreBlocked || !!busy}
                                             aria-describedby="recovery-file-help"
                                         />
                                     </label>
@@ -1112,7 +1130,7 @@ export default function ChannelBackup({
                                                 autoComplete="off"
                                                 value={source}
                                                 onChange={(event) => setSource(event.target.value)}
-                                                disabled={demoMode || !!busy}
+                                                disabled={fileRestoreBlocked || !!busy}
                                             />
                                         </label>
                                         <label>
@@ -1124,7 +1142,7 @@ export default function ChannelBackup({
                                                 onChange={(event) => setSourceToken(event.target.value)}
                                                 spellCheck={false}
                                                 maxLength={512}
-                                                disabled={demoMode || !!busy}
+                                                disabled={fileRestoreBlocked || !!busy}
                                             />
                                         </label>
                                     </div>
@@ -1132,7 +1150,7 @@ export default function ChannelBackup({
                                 <button
                                     type="submit"
                                     className="secondary-button"
-                                    disabled={demoMode || !!busy || !recoveryFile || !key.trim()}
+                                    disabled={fileRestoreBlocked || !!busy || !recoveryFile || !key.trim()}
                                 >
                                     {busy === "inspect_file" ? <Spinner /> : <RefreshCw size={16} aria-hidden="true" />}
                                     {busy === "inspect_file" ? "Checking backup…" : "Inspect backup"}

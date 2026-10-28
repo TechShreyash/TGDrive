@@ -100,6 +100,7 @@ class ChannelReplica:
         }
         result["pending_revision"] = max(0, revision - result["protected_revision"])
         result["backup_file_available"] = self.backup_file() is not None
+        result["file_restore_allowed"] = not self.settings.demo_mode
         candidate = self.journal.get("candidate")
         if candidate:
             catalog = candidate["catalog"]
@@ -126,12 +127,79 @@ class ChannelReplica:
         )
 
     def key(self):
-        value = self.journal.get("key")
-        if value is None:
-            configured = self.settings.mongodb_backup_key
-            value = configured.get_secret_value() if configured else secrets.token_hex(32)
-            self.journal.set("key", value)
-        return value
+        import re
+
+        from pymongo.errors import PyMongoError
+
+        from tgdrive.storage.mongo import DatabaseUnavailable
+
+        with self.journal.lock:
+            value = self.journal.get("key")
+            if value is not None and (
+                not isinstance(value, str) or re.fullmatch(r"[a-fA-F0-9]{64}", value) is None
+            ):
+                raise SettingsProblem("The local recovery key is invalid. Preserve it and repair recovery settings.", status=409)
+            persisted = getattr(self, "_persisted_key", None)
+            if getattr(self, "_key_persisted", False) and value is not None and value.lower() == persisted:
+                return persisted
+            backend = getattr(self.runtime, "mongo", None)
+            if backend is None:
+                if value is None:
+                    configured = self.settings.mongodb_backup_key
+                    value = configured.get_secret_value() if configured else secrets.token_hex(32)
+                    self.journal.set("key", value)
+                return value
+            try:
+                row = backend.db.settings.find_one({"_id": "recovery-key"})
+                if row is None:
+                    configured = self.settings.mongodb_backup_key
+                    selected = value or (configured.get_secret_value() if configured else secrets.token_hex(32))
+                    if value is None:
+                        latest = backend.db.backups.find_one(
+                            {"status": "confirmed", "format": "tgdrive-backup-v2"},
+                            sort=[("created_at", -1)],
+                        )
+                        if latest and latest.get("key_sha256") != hashlib.sha256(bytes.fromhex(selected)).hexdigest():
+                            raise SettingsProblem(
+                                "The unified recovery key is missing from this installation. "
+                                "Restore its saved key before creating another backup; existing files were preserved.",
+                                code="RECOVERY_KEY_MISSING", status=409,
+                            )
+                    store = getattr(self.runtime, "store", None)
+                    backend.write(
+                        backend.db.settings, "update_one", {"_id": "recovery-key"},
+                        {"$setOnInsert": {"document": {
+                            "key": selected, "drive_id": store.drive_id if store else None,
+                        }}}, upsert=True,
+                    )
+                    row = backend.db.settings.find_one({"_id": "recovery-key"})
+                document = row.get("document") if isinstance(row, dict) else None
+                if (
+                    not isinstance(document, dict)
+                    or set(document) != {"key", "drive_id"}
+                    or not isinstance(document["key"], str)
+                    or re.fullmatch(r"[a-fA-F0-9]{64}", document["key"]) is None
+                    or (document["drive_id"] is not None and not isinstance(document["drive_id"], str))
+                ):
+                    raise SettingsProblem("The saved recovery key is invalid. Preserve it and repair recovery settings.", status=409)
+                canonical = document["key"].lower()
+                store = getattr(self.runtime, "store", None)
+                if (
+                    (value is not None and value.lower() != canonical)
+                    or (store is not None and document["drive_id"] not in {None, store.drive_id})
+                ):
+                    raise SettingsProblem(
+                        "The local and database recovery keys disagree. Preserve both and restore the matching recovery key before continuing.",
+                        code="RECOVERY_KEY_CONFLICT", status=409,
+                    )
+                self.journal.set("key", canonical)
+                self._key_persisted = True
+                self._persisted_key = canonical
+                return canonical
+            except DatabaseUnavailable, PyMongoError:
+                if value is not None and (persisted is None or value.lower() == persisted):
+                    return value
+                raise
 
     def backup_file(self):
         """Return only a confirmed local file; status never initiates a download."""
@@ -541,6 +609,7 @@ class ChannelReplica:
         database=None,
         recovery_token=None,
     ):
+        previous_file = self.journal.get("backup_file")
         identity = [
             catalog,
             replica,
@@ -629,6 +698,18 @@ class ChannelReplica:
                 "backup_file": {"digest": digest, "key": key, "sha256": ciphertext_digest, "created_at": now()} if database is not None else None,
             }
         )
+        if database is not None and isinstance(previous_file, dict):
+            import re
+
+            old_digest = previous_file.get("digest")
+            if isinstance(old_digest, str) and old_digest != digest and re.fullmatch(r"[a-f0-9]{64}", old_digest):
+                root = self.directory.resolve()
+                previous_path = root / "replica-bundles" / (old_digest + ".tgdb")
+                if not previous_path.is_symlink() and previous_path.parent.resolve() == root / "replica-bundles":
+                    try:
+                        previous_path.unlink(missing_ok=True)
+                    except OSError:
+                        logger.warning("Could not remove an older confirmed local recovery file")
         return ids
 
     async def _sync(self, config, *, force_check=False, force_snapshot=False):

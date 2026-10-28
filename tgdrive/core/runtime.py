@@ -149,6 +149,11 @@ class Runtime:
                 if "database" in candidate:
                     transition.update(key=candidate["key"], mongodb_key=candidate["key"])
                 self.replica.journal.set_many(transition)
+            try:
+                await asyncio.to_thread(self.replica.key)
+            except Exception as error:
+                self.replica._record_failure(error)
+                logger.warning("Recovery key persistence needs attention: %s", type(error).__name__)
             original_lineage = getattr(self.backup, "verify_lineage", None)
 
             async def protected_lineage(store):

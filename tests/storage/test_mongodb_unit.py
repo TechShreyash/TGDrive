@@ -19,6 +19,7 @@ from tgdrive.core.logging import _redact
 from tgdrive.recovery.backup import BackupError
 from tgdrive.recovery.mongo_backup import (
     MongoProtection,
+    check_restore_destination,
     decode_snapshot,
     write_snapshot,
 )
@@ -523,3 +524,164 @@ async def test_unknown_pending_snapshot_commit_preserves_ciphertext_for_retry(
     export.assert_not_called()
     assert path.read_bytes() == ciphertext
     assert backend.db.backups.find_one({"status": "pending"}) == record
+
+
+@pytest.mark.parametrize("failure", [None, "send", "confirmation", "cleanup"])
+async def test_local_snapshot_retention_waits_for_durable_confirmation(
+    snapshot_source, tmp_path, monkeypatch, caplog, failure
+):
+    import os
+
+    service, store, backend = snapshot_source
+    directory = service.settings.resolved_cache_dir / "mongo-backups"
+    directory.mkdir()
+    paths = {}
+    for identity, status, format_name in (
+        ("previous-one", "confirmed", "tgdrive-backup-v2"),
+        ("previous-two", "confirmed", "tgdrive-backup-v2"),
+        ("retry-ciphertext", "interrupted", "tgdrive-backup-v2"),
+        ("legacy-copy", "confirmed", "mongodb-encrypted-v1"),
+    ):
+        path = directory / (identity + ".tgdb")
+        path.write_bytes(identity.encode())
+        paths[identity] = path
+        backend.db.backups.insert_one({
+            "_id": identity, "id": identity, "status": status,
+            "format": format_name, "local_path": str(path),
+        })
+    outside = tmp_path / "keep-outside.tgdb"
+    outside.write_bytes(b"outside private copy")
+    linked = directory / "linked.tgdb"
+    linked.symlink_to(outside)
+    backend.db.backups.insert_one({
+        "_id": "linked", "id": "linked", "status": "confirmed",
+        "format": "tgdrive-backup-v2", "local_path": str(linked),
+    })
+    payload = b""
+
+    async def send_document(_channel, path, **_kwargs):
+        nonlocal payload
+        assert all(paths[name].exists() for name in paths)
+        assert service.latest_history()[0]["status"] == "pending"
+        if failure == "send":
+            raise OSError("Synthetic publication failure")
+        payload = Path(path).read_bytes()
+        return SimpleNamespace(id=77)
+
+    async def get_messages(*_args, **_kwargs):
+        return SimpleNamespace(document=SimpleNamespace(file_size=len(payload)))
+
+    async def stream_media(*_args, **_kwargs):
+        yield payload
+
+    @asynccontextmanager
+    async def lease(**_kwargs):
+        yield SimpleNamespace(name="backup-bot", send_document=send_document,
+                              get_messages=get_messages, stream_media=stream_media)
+
+    service.pool.lease = lease
+    if failure == "confirmation":
+        update = backend.db.backups.update_one
+
+        def reject_confirmation(query, change, **kwargs):
+            if change.get("$set", {}).get("status") == "confirmed":
+                raise ConnectionFailure("Synthetic confirmation failure")
+            return update(query, change, **kwargs)
+
+        monkeypatch.setattr(backend.db.backups, "update_one", reject_confirmation)
+    elif failure == "cleanup":
+        unlink = os.unlink
+
+        def reject_cleanup(path, **kwargs):
+            if str(path) == "previous-one.tgdb":
+                raise PermissionError("Synthetic cleanup failure")
+            return unlink(path, **kwargs)
+
+        monkeypatch.setattr(os, "unlink", reject_cleanup)
+    if failure in {"send", "confirmation"}:
+        with pytest.raises((OSError, ConnectionFailure), match="Synthetic"):
+            await service.snapshot_now(store)
+    else:
+        assert await service.snapshot_now(store)
+    latest = service.latest_history()[0]
+    current = backend.db.backups.find_one({"id": latest["id"]})
+    assert Path(current["local_path"]).is_file()
+    assert paths["retry-ciphertext"].read_bytes() == b"retry-ciphertext"
+    assert paths["legacy-copy"].read_bytes() == b"legacy-copy"
+    assert outside.read_bytes() == b"outside private copy" and linked.is_symlink()
+    if failure is None:
+        assert not paths["previous-one"].exists() and not paths["previous-two"].exists()
+    else:
+        assert paths["previous-one"].is_file()
+    assert current["status"] == ("pending" if failure in {"send", "confirmation"} else "confirmed")
+    assert len(backend.db.backups.find({})) == 6
+    if failure == "cleanup":
+        assert service._last_error is None
+        assert "new backup remains confirmed" in caplog.text
+
+
+@pytest.mark.parametrize("with_catalog", [False, True])
+@pytest.mark.parametrize("binding", [None, "current", "different"])
+def test_pristine_restore_accepts_only_its_unmodified_recovery_key(with_catalog, binding):
+    backend = FakeMongoBackend()
+    store = MongoStore.create(backend, storage_channel=-1001234567890) if with_catalog else None
+    drive_id = store.drive_id if store else None
+    key_drive = drive_id if binding == "current" else binding
+    backend.db.settings.insert_one({
+        "_id": "recovery-key", "document": {"key": "a1" * 32, "drive_id": key_drive},
+    })
+    try:
+        if binding == "different":
+            with pytest.raises(FileExistsError, match="settings changes"):
+                check_restore_destination(backend, allow_pristine=True)
+        else:
+            check_restore_destination(backend, allow_pristine=True)
+    finally:
+        if store:
+            store.close()
+
+
+@pytest.mark.parametrize("damage", ["key", "key-type", "missing-binding", "extra-field", "extra-document-field"])
+def test_pristine_restore_rejects_malformed_recovery_key_records(damage):
+    backend = FakeMongoBackend()
+    row = {"_id": "recovery-key", "document": {"key": "a1" * 32, "drive_id": None}}
+    if damage == "key":
+        row["document"]["key"] = "invalid"
+    elif damage == "key-type":
+        row["document"]["key"] = 42
+    elif damage == "missing-binding":
+        row["document"].pop("drive_id")
+    elif damage == "extra-field":
+        row["changed"] = True
+    else:
+        row["document"]["changed"] = True
+    backend.db.settings.insert_one(row)
+    with pytest.raises(FileExistsError, match="settings changes"):
+        check_restore_destination(backend, allow_pristine=True)
+
+
+@pytest.mark.parametrize("enabled", [False, True])
+def test_database_status_reports_active_independent_checkpoint_without_recursion(snapshot_source, enabled):
+    service, store, _backend = snapshot_source
+    standalone = "2026-10-28T10:00:00+00:00"
+    independent = "2026-10-28T11:00:00+00:00"
+    service._last_success_at = standalone
+    service._last_error = "An older standalone snapshot failed"
+    saved = {
+        "config": {"enabled": enabled},
+        "status": {"last_success_at": independent, "protected_revision": store.revision - 1,
+                   "error": {"detail": "The independent copy is waiting for Telegram"}},
+        "key": "a1" * 32,
+    }
+    service.replica = SimpleNamespace(
+        journal=SimpleNamespace(get=lambda name, default=None: saved.get(name, default)),
+        status=Mock(side_effect=AssertionError("Status must not recursively load backup history")),
+    )
+    result = service.protection_status(store)
+    assert result["last_success_at"] == (independent if enabled else standalone)
+    assert result["backup_error"] == (
+        "The independent copy is waiting for Telegram" if enabled else service._last_error
+    )
+    assert result["state"] == "protected"
+    assert result["metadata_revision"] == result["protected_revision"] == store.revision
+    service.replica.status.assert_not_called()

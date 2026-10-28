@@ -82,6 +82,16 @@ def test_status_and_reports_never_expose_private_replica_credentials(owner):
     assert response.headers["cache-control"] == "no-store"
 
 
+def test_file_restore_policy_is_explicit_in_saved_status(owner):
+    client, _, replica = owner
+    login(client)
+    assert client.get("/api/v1/replica").json()["file_restore_allowed"] is True
+    replica.settings.demo_mode = True
+    response = client.get("/api/v1/replica")
+    assert response.status_code == 200
+    assert response.json()["file_restore_allowed"] is False
+
+
 def test_recovery_blocks_file_mutations_but_keeps_owner_controls_available(owner):
     client, _, replica = owner
     replica.journal.set("recovery", {"target": -100222333444})
