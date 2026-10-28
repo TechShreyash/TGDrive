@@ -396,7 +396,9 @@ async def test_bulk_backup_failure_preserves_each_item_and_retry_hides_it(
         manager._ensure_replica.assert_awaited_once()
         assert all(job.status is TransferStatus.ERROR for job in jobs)
         assert len(manager.store.list_trash()) == 2
-        assert all(row["state"] == "failed" for row in manager.store.pending_deletions())
+        assert all(
+            row["state"] == "failed" for row in manager.store.pending_deletions()
+        )
 
         async def protect_retry():
             intent = next(

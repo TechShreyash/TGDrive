@@ -443,7 +443,6 @@ export default function ActionDialog({
                             </button>
                             <button
                                 className="secondary-button"
-                                disabled={busy}
                                 onClick={() =>
                                     void run(async () => {
                                         if (!navigator.clipboard)
@@ -462,7 +461,6 @@ export default function ActionDialog({
                             </button>
                             <button
                                 className="primary-button"
-                                disabled={busy}
                                 onClick={() =>
                                     void run(async () => {
                                         if (!navigator.clipboard)

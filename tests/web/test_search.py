@@ -101,7 +101,10 @@ def search_implementation(store, implementation):
     reader._closed = False
     with store._transaction() as db:
         reader._committed = {
-            "nodes": {row["id"]: dict(row) for row in db.execute("SELECT * FROM nodes")}
+            "nodes": {
+                row["id"]: dict(row) for row in db.execute("SELECT * FROM nodes")
+            },
+            "deletions": {},
         }
     return reader
 

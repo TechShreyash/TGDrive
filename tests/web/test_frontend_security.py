@@ -79,11 +79,19 @@ def test_frontend_dependencies_are_locked() -> None:
         assert entry["version"] == vendored["version"]
         assert entry["integrity"] == vendored["integrity"] == actual_integrity
         assert hashlib.sha256(content).hexdigest() == vendored["sha256"]
-        recipe = ROOT / viewer["patch"]["recipe"]
-        assert (
-            hashlib.sha256(recipe.read_bytes()).hexdigest()
-            == viewer["patch"]["recipe_sha256"]
+        patch = viewer["patch"]
+        recipes = {
+            path: hashlib.sha256((ROOT / path).read_bytes()).hexdigest()
+            for path in patch["recipe_files_sha256"]
+        }
+        assert patch["recipe"] in recipes
+        assert recipes == patch["recipe_files_sha256"]
+        recipe_hash = (
+            hashlib.sha256(json.dumps(recipes, sort_keys=True).encode()).hexdigest()
+            if len(recipes) > 1
+            else recipes[patch["recipe"]]
         )
+        assert recipe_hash == patch["recipe_sha256"]
     for hook in ("predev", "prebuild", "pretest", "dev", "build", "test"):
         command = package["scripts"].get(hook, "")
         assert "patch-movi-player.js" not in command

@@ -282,11 +282,17 @@ def test_parts_idempotency_shares_and_catalog_deletion(store, backend):
     assert not store.authorize_file(path(item), token)
     intent = store.begin_deletion(path(item), channel_id=-100123)
     assert intent["message_ids"] == [101, 102]
+    assert store.list_trash() == {}
     with pytest.raises(ValidationError):
         store.confirm_deletion_messages(intent["id"], [103])
     store.confirm_deletion_messages(intent["id"], [101])
     reopened = MongoStore(backend)
     assert reopened.pending_deletions()[0]["pending_message_ids"] == [102]
+    assert reopened.list_trash() == {}
+    store.fail_deletion(intent["id"], "Backup temporarily unavailable")
+    assert set(store.list_trash()) == {item["id"]}
+    store.confirm_deletion_messages(intent["id"], [])
+    assert store.list_trash() == {}
     assert store.finish_deletion(intent["id"]) == [101, 102]
     assert store.finish_deletion(intent["id"]) == []
     assert store.pending_deletions() == []

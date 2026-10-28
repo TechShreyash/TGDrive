@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import time
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
@@ -67,6 +68,50 @@ async def test_catalog_delete_waits_for_backup_and_retains_original_messages(
         assert copied["trashed"]
         assert remote.messages[BACKUP, parts_in(copied)[0]["message_id"]] == b"abc"
         assert store.pending_deletions() == []
+    finally:
+        await cleanup(manager, pool, replica)
+
+
+@pytest.mark.asyncio
+async def test_bulk_delete_confirms_all_copies_before_any_catalog_removal(
+    tmp_path, monkeypatch
+):
+    configured, store, remote, replica, _ = setup(tmp_path, empty=True)
+    originals = {77: b"first", 78: b"second", 79: b"third"}
+    paths = []
+    for message_id, content in originals.items():
+        node = store.add_file("/", f"{message_id}.bin", message_id, len(content))
+        paths.append(store.resolve_id(node["id"]))
+        store.set_trashed(paths[-1], True)
+        remote.messages[configured.storage_channel, message_id] = content
+    telegram = Telegram()
+    pool = ClientPool([telegram])
+    await pool.start()
+    manager = manager_for(tmp_path, pool, store=store)
+    manager.settings.storage_channel = configured.storage_channel
+    manager._ensure_replica = AsyncMock(wraps=replica.before_mutation)
+    finish = store.finish_deletion
+
+    def checked_finish(intent_id):
+        copied = list(files_in(remote_bundle(remote, replica)["replica_catalog"]))
+        assert len(copied) == 3 and all(node["trashed"] for node in copied)
+        assert {
+            remote.messages[BACKUP, node["message_id"]] for node in copied
+        } == set(originals.values())
+        return finish(intent_id)
+
+    monkeypatch.setattr(store, "finish_deletion", checked_finish)
+    try:
+        jobs = await manager.start_deletions(paths)
+        await asyncio.gather(*(job.task for job in jobs))
+        assert all(job.status is TransferStatus.COMPLETED for job in jobs)
+        manager._ensure_replica.assert_awaited_once()
+        assert store.list_trash() == {} and store.pending_deletions() == []
+        assert telegram.deleted == []
+        assert all(
+            remote.messages[configured.storage_channel, message_id] == content
+            for message_id, content in originals.items()
+        )
     finally:
         await cleanup(manager, pool, replica)
 

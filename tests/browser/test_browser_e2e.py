@@ -3041,7 +3041,15 @@ def test_bulk_deletion_is_one_notice_with_refresh_failure_and_retry(
         expect(page.get_by_role("button", name=name, exact=True)).to_have_count(0)
     page.reload()
     expect(notice.get_by_role("status")).to_contain_text("Deleting 3 items…")
-    expect(page.get_by_role("heading", name="Trash Is Empty", exact=True)).to_be_visible()
+    expect(
+        page.get_by_role("heading", name="Trash Is Empty", exact=True)
+    ).to_be_visible()
+    page.screenshot(path=ARTIFACTS / "deletion-pending-desktop.png")
+    page.set_viewport_size({"width": 320, "height": 844})
+    expect(notice).to_contain_text("You can close this tab.")
+    assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
+    page.screenshot(path=ARTIFACTS / "deletion-pending-mobile.png")
+    page.set_viewport_size({"width": 1440, "height": 960})
     expect(page.locator(".transfer-batch")).to_have_count(0)
     records = server.control()["records"]
     ids = [key for key, record in records.items() if record.get("phase") == "deleting"]
@@ -3066,6 +3074,10 @@ def test_bulk_deletion_is_one_notice_with_refresh_failure_and_retry(
     expect(page.locator(".transfer-batch")).to_have_count(0)
     notice.get_by_text("View Failed Items (1)", exact=True).click()
     expect(notice).to_contain_text("Synthetic catalog deletion failed")
+    page.set_viewport_size({"width": 320, "height": 844})
+    assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
+    page.screenshot(path=ARTIFACTS / "deletion-failed-mobile.png")
+    page.set_viewport_size({"width": 1440, "height": 960})
     notice.get_by_role("button", name="Retry Failed deletions", exact=True).click()
     expect(notice.get_by_role("status")).to_contain_text("Deleting 1 item…")
     expect(page.get_by_role("button", name=failed_name, exact=True)).to_have_count(0)

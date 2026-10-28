@@ -573,8 +573,7 @@ export class TransferManager {
                     item.createdAt ||
                     Date.now(),
                 state:
-                    item.jobId ||
-                    (isServerImport(item) && item.remoteRequestId)
+                    item.jobId || (isServerImport(item) && item.remoteRequestId)
                         ? item.state
                         : terminal.has(item.state)
                           ? item.state
@@ -1316,7 +1315,9 @@ export class TransferManager {
                     ? "Reading torrent metadata…"
                     : "Checking source…";
             item.stage =
-                item.kind === "torrent" ? "torrent_metadata" : "checking_source";
+                item.kind === "torrent"
+                    ? "torrent_metadata"
+                    : "checking_source";
             item.error = undefined;
         }
         this.publish();

@@ -161,8 +161,9 @@ def test_chapters_are_immediate_keyboard_accessible_and_mobile_bounded(
     )
 
 
+@pytest.mark.parametrize("copy_label", ["Copy Link", "Copy Embed Link"])
 def test_share_copy_notice_is_above_native_dialog_without_stealing_focus(
-    server: Server, desktop: tuple[Any, Any]
+    server: Server, desktop: tuple[Any, Any], copy_label: str
 ) -> None:
     context, page = desktop
     context.grant_permissions(["clipboard-read", "clipboard-write"])
@@ -170,7 +171,7 @@ def test_share_copy_notice_is_above_native_dialog_without_stealing_focus(
     page.get_by_label("Actions for 資料", exact=True).click()
     page.get_by_role("button", name="Share Link", exact=True).click()
     page.get_by_role("button", name="Create Share Link", exact=True).click()
-    copy = page.get_by_role("button", name="Copy Link", exact=True)
+    copy = page.get_by_role("button", name=copy_label, exact=True)
     copy.click()
     notice = page.locator(".toast")
     expect(notice).to_be_visible()

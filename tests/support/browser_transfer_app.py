@@ -235,7 +235,9 @@ class FixtureTransfers:
             await self.release[item.id].wait()
             if item.id in self.fail_deletions:
                 self.fail_deletions.remove(item.id)
-                self.store.fail_deletion(intent["id"], "Synthetic catalog deletion failed")
+                self.store.fail_deletion(
+                    intent["id"], "Synthetic catalog deletion failed"
+                )
                 raise RuntimeError("Synthetic catalog deletion failed")
             self.store.finish_deletion(intent["id"])
             (
