@@ -58,15 +58,53 @@ def test_grid_views_preserve_selection_actions_and_bounded_thumbnails(
         expect(page.get_by_role("button", name="Grid view")).to_have_attribute(
             "aria-pressed", "true"
         )
-    page.locator(".file-grid .file-row").filter(
-        has_text="sample.png"
-    ).scroll_into_view_if_needed()
-    expect(
-        page.locator(".file-grid .file-row")
-        .filter(has_text="sample.png")
-        .locator(".file-tile-preview img")
-    ).to_be_visible()
+    # Ensure the fixture can scroll fully outside the thumbnail observer margin.
+    columns = grid.evaluate(
+        """element => {
+            const previous = element.style.gridTemplateColumns;
+            element.style.gridTemplateColumns = 'repeat(2, minmax(0, 1fr))';
+            return previous;
+        }"""
+    )
+    sample = grid.locator(".file-row").filter(has_text="sample.png")
+    sample.scroll_into_view_if_needed()
+    preview = sample.locator(".file-tile-preview")
+    image = preview.locator("img")
+    expect(image).to_be_visible()
     assert thumbnails and not originals
+    source = image.get_attribute("src")
+    item_id = sample.get_attribute("data-item-id")
+    assert source and item_id
+    request = next(
+        url
+        for url in thumbnails
+        if parse_qs(urlparse(url).query)["path"][0].endswith("/" + item_id)
+    )
+    request_count = thumbnails.count(request)
+    observer = preview.evaluate_handle(
+        """element => {
+            const observer = new IntersectionObserver(([entry]) => {
+                element.dataset.inView = String(entry.isIntersecting);
+            }, {rootMargin: '120px'});
+            observer.observe(element);
+            return observer;
+        }"""
+    )
+    grid.locator(".file-row").first.scroll_into_view_if_needed()
+    expect(preview).to_have_attribute("data-in-view", "false")
+    expect(image).to_have_attribute("src", source)
+    sample.scroll_into_view_if_needed()
+    expect(preview).to_have_attribute("data-in-view", "true")
+    preview.evaluate(
+        """() => new Promise(resolve =>
+            requestAnimationFrame(() => requestAnimationFrame(resolve))
+        )"""
+    )
+    expect(sample.locator(".thumbnail-loading")).to_have_count(0)
+    expect(image).to_have_attribute("src", source)
+    assert thumbnails.count(request) == request_count
+    observer.evaluate("observer => observer.disconnect()")
+    grid.evaluate("(element, value) => element.style.gridTemplateColumns = value", columns)
     page.get_by_role("button", name="Select", exact=True).click()
     page.get_by_role("checkbox", name="Select sample.png", exact=True).check()
     expect(page.get_by_text("1 selected", exact=True)).to_be_visible()

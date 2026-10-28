@@ -459,6 +459,8 @@ export class TransferManager {
     private progressTimer: ReturnType<typeof setTimeout> | undefined;
     private stagingTimer: ReturnType<typeof setTimeout> | undefined;
     private polling = false;
+    private pollGeneration = 0;
+    private pollController: AbortController | undefined;
     private lastPollAt = 0;
     private refreshRequested = false;
     private stagingRetries = new Map<string, number>();
@@ -722,6 +724,44 @@ export class TransferManager {
         if (this.polling) this.refreshRequested = true;
         else void this.poll();
     };
+    hasActiveWork = () =>
+        this.processing.size > 0 ||
+        this.remoteSubmitting.size > 0 ||
+        this.items.some(
+            (item) =>
+                !terminal.has(item.state) &&
+                (item.jobId ||
+                    (item.state !== "awaiting_file" &&
+                        (item.file || item.uploadId || item.remoteRequestId))),
+        ) ||
+        this.deletionJobs.some((job) => !deletionTerminal.has(job.status));
+    private scheduleNextPoll() {
+        clearTimeout(this.timer);
+        if (!this.enabled) return;
+        this.timer = setTimeout(
+            () => void this.poll(),
+            this.hasActiveWork()
+                ? JOB_POLL_INTERVAL_MS
+                : typeof document !== "undefined" &&
+                    document.visibilityState === "hidden"
+                  ? 60000
+                  : 30000,
+        );
+    }
+    private pollVisibilityChanged = (event: Event) => {
+        if (!this.enabled || this.polling) return;
+        if (
+            typeof document !== "undefined" &&
+            document.visibilityState === "hidden"
+        ) {
+            if (event.type === "visibilitychange" && !this.hasActiveWork())
+                this.scheduleNextPoll();
+            return;
+        }
+        if (Date.now() - this.lastPollAt < JOB_POLL_INTERVAL_MS) {
+            if (!this.hasActiveWork()) this.scheduleNextPoll();
+        } else void this.poll();
+    };
     private scheduleJobsRefresh() {
         if (!this.enabled || this.polling) return;
         clearTimeout(this.timer);
@@ -954,9 +994,20 @@ export class TransferManager {
     }
     setEnabled(enabled: boolean) {
         if (this.enabled === enabled) return;
+        this.pollGeneration++;
         this.enabled = enabled;
         if (!enabled) {
+            this.pollController?.abort();
+            this.pollController = undefined;
+            this.polling = false;
+            this.refreshRequested = false;
             window.removeEventListener("storage", this.deviceStorageChanged);
+            window.removeEventListener("focus", this.pollVisibilityChanged);
+            if (typeof document !== "undefined")
+                document.removeEventListener(
+                    "visibilitychange",
+                    this.pollVisibilityChanged,
+                );
             this.batchProgress.clear();
             clearTimeout(this.timer);
             clearTimeout(this.progressTimer);
@@ -969,6 +1020,12 @@ export class TransferManager {
             return;
         }
         window.addEventListener("storage", this.deviceStorageChanged);
+        window.addEventListener("focus", this.pollVisibilityChanged);
+        if (typeof document !== "undefined")
+            document.addEventListener(
+                "visibilitychange",
+                this.pollVisibilityChanged,
+            );
         this.historyStorageDirty = true;
         void this.poll();
         void this.startNext();
@@ -1164,14 +1221,17 @@ export class TransferManager {
     private async recoverRemote(key: string, originalError?: unknown) {
         const item = this.items.find((row) => row.key === key);
         if (!item?.remoteRequestId) return;
+        const generation = this.pollGeneration;
         try {
             const result = await api.remoteRequest(item.remoteRequestId);
+            if (generation !== this.pollGeneration) return;
             if (!result.id && result.data.status === "queued")
                 throw new Error(
                     "The server is still accepting this import. Retry to check it.",
                 );
             this.acceptRemote(key, result);
         } catch (error) {
+            if (generation !== this.pollGeneration) return;
             if (["cancelled", "cancelling"].includes(item.state)) return;
             this.update(key, {
                 state: "error",
@@ -1594,6 +1654,7 @@ export class TransferManager {
                 );
         } finally {
             this.updateConcurrencyTimer();
+            if (this.hasActiveWork()) this.scheduleJobsRefresh();
         }
     }
     private canMeasureDeviceUpload() {
@@ -2119,6 +2180,9 @@ export class TransferManager {
         if (!this.enabled || this.polling) return;
         clearTimeout(this.timer);
         this.polling = true;
+        const generation = this.pollGeneration;
+        const controller = new AbortController();
+        this.pollController = controller;
         this.lastPollAt = Date.now();
         for (const item of this.items
             .filter(
@@ -2138,7 +2202,8 @@ export class TransferManager {
         const deletionVersion = this.deletionVersion;
         const historyRevision = this.historyRevision;
         try {
-            const payload = await api.jobs();
+            const payload = await api.jobs(controller.signal);
+            if (generation !== this.pollGeneration) return;
             let filesChanged = false;
             const previousDeletions = new Map(
                 this.deletionJobs.map((job) => [job.id, job.status]),
@@ -2264,6 +2329,7 @@ export class TransferManager {
             if (filesChanged)
                 window.dispatchEvent(new Event("tgdrive:files-changed"));
         } catch {
+            if (generation !== this.pollGeneration) return;
             this.updateDeletionProgress(
                 this.deletionJobs.some(
                     (job) => !deletionTerminal.has(job.status),
@@ -2276,7 +2342,9 @@ export class TransferManager {
                     item.error = "Progress connection lost. Trying again…";
             this.publish(false);
         } finally {
+            if (generation !== this.pollGeneration) return;
             this.polling = false;
+            this.pollController = undefined;
             if (this.refreshRequested && this.enabled) {
                 this.refreshRequested = false;
                 void this.poll();
@@ -2284,27 +2352,7 @@ export class TransferManager {
             }
             this.refreshRequested = false;
             if (this.enabled) void this.startNext();
-            if (this.enabled)
-                this.timer = setTimeout(
-                    () => {
-                        void this.poll();
-                    },
-                    this.items.some(
-                        (item) => item.jobId && !terminal.has(item.state),
-                    ) ||
-                        this.deletionJobs.some(
-                            (job) =>
-                                ![
-                                    "completed",
-                                    "cancelled",
-                                    "error",
-                                    "failed",
-                                    "interrupted",
-                                ].includes(job.status),
-                        )
-                        ? JOB_POLL_INTERVAL_MS
-                        : 10000,
-                );
+            this.scheduleNextPoll();
         }
     }
 }

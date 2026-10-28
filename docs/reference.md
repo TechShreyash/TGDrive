@@ -1126,6 +1126,10 @@ Live job records are limited by retention/capacity. Unresolved send/cleanup
 effects are protected from ordinary eviction. Do not treat this as a permanent
 audit log. Retry retains operation identities. See [transfers](architecture.md#transfer-pipeline).
 
+`GET /api/v1/jobs` includes all retained records, including terminal results and
+`history_cleared` markers. The owner interface adapts its request cadence to
+activity and visibility; see [browser checks](performance.md#browser-progress-and-health-checks).
+
 Live job snapshots include `telegram_parts: {total, stored}`. `stored` counts
 confirmed messages; byte progress includes in-flight uploads. Sender identities
 and the recovery journal remain private.

@@ -27,6 +27,15 @@ Grid view loads nearby thumbnails as needed, checking the local generated cover
 then Telegram's small thumbnail. A missing cover can also be repaired from a
 complete original already in the server cache. The grid never downloads original
 payloads from Telegram to create a cover.
+
+Loaded pictures stay on the current grid page (up to 100 items), so scrolling
+away and back does not request them again. Unfinished offscreen requests are
+cancelled and can retry when the file scrolls back into view. Changing views,
+reopening a folder or changing file details/access can request the picture again.
+The browser checks with the server before reusing its cached picture; a **304**
+response means the saved image bytes can be reused. An available cover is served
+without regenerating it or downloading the original from Telegram.
+
 Data-saving browsers show icons. Every request checks current owner/share access,
 including cache hits and conditional responses.
 

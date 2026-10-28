@@ -26,14 +26,18 @@ export default function FileThumbnail({
         const element = target.current!;
         let controller: AbortController | null = null;
         let visible = false;
+        let loaded = false;
         const load = () => {
-            if (controller || !visible) return;
+            if (controller || !visible || loaded) return;
             const work = new AbortController();
             controller = work;
             setLoading(true);
             void fetchThumbnail(thumbnailUrl(item, auth), work.signal)
                 .then((url) => {
-                    if (!work.signal.aborted && visible) setSource(url);
+                    if (!work.signal.aborted && visible) {
+                        loaded = Boolean(url);
+                        setSource(url);
+                    }
                 })
                 .catch(() => {})
                 .finally(() => {
@@ -53,7 +57,6 @@ export default function FileThumbnail({
                     controller?.abort();
                     controller = null;
                     setLoading(false);
-                    setSource(null);
                 }
             },
             { rootMargin: "120px" },

@@ -92,6 +92,28 @@ fixture or its `/__test__` endpoints.
 Recorded evidence describes a tested snapshot, not the state of a later checkout.
 
 <details>
+<summary>Idle polling and thumbnail scroll reuse — 2026-10-28</summary>
+
+The focused Vitest run passed **168 cases across nine files** on Node **24.22.0**.
+Coverage includes idle/hidden polling intervals, active uploads and recovery,
+focus-event coalescing, cancellation and late replies across logout/login, device
+scheduling, cross-tab recovery, session expiry and bounded thumbnail responses.
+
+The production frontend build, including TypeScript checks, passed. All **three
+Chromium cases** passed at 1,440, 390 and 320 pixels wide, checking that a loaded
+thumbnail survives scrolling away and back without another thumbnail request,
+alongside selection/actions and grid/list behavior. The browser test's temporary
+layout adjustment uses DOM style properties under the existing security policy.
+
+These checks use mocked requests and a synthetic backend. No full suite, lint,
+live Telegram/MongoDB validation, throughput benchmark or deployment was performed.
+Existing viewer CommonJS and bundle-size warnings remain. See
+[browser polling policy](performance.md#browser-progress-and-health-checks) and
+[thumbnail reuse](thumbnails.md#bandwidth-and-storage).
+
+</details>
+
+<details>
 <summary>Upload responsiveness and repeated-work reductions — 2026-10-27</summary>
 
 The focused run passed **168 Python cases** across transfer journals, multipart
@@ -295,6 +317,14 @@ for committed-snapshot reuse and invalidation. Transfer tests also protect
 immediate acknowledged-offset persistence, bounded progress notifications,
 coalesced jobs refreshes and cross-tab recovery. These checks use synthetic
 state; they do not measure a deployment's network, MongoDB or disk latency.
+
+Browser health/progress polling regressions are in
+`website/src/app/statusPolling.test.ts` and
+`website/src/features/transfers/jobPolling.test.ts`; existing scheduler/recovery
+tests protect sending and retry behavior independently of progress requests.
+`tests/browser/test_browser_file_views.py` covers retaining a loaded thumbnail
+while scrolling away and back. These use mocked requests or synthetic browser
+fixtures. They require the approval described above; listing them records no pass.
 
 For URL intake changes, the focused offline checks are:
 

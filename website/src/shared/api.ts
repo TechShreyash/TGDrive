@@ -347,9 +347,10 @@ export const api = {
             undefined,
             { method: "DELETE" },
         ),
-    jobs: () =>
+    jobs: (signal?: AbortSignal) =>
         request<{ jobs: Job[] }>("/api/v1/jobs", undefined, {
             cache: "no-store",
+            signal,
         }),
     clearTransferHistory: (excludeFolders: string[] = []) =>
         request<{ cleared: number }>(

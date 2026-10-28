@@ -26,6 +26,7 @@ examples from the recorded session, not throughput benchmarks.
 - [Shared-download load and queues](#shared-download-load-and-queues)
 - [URL import intake](#url-import-intake)
 - [Device upload receipts](#device-upload-receipts)
+- [Browser progress and health checks](#browser-progress-and-health-checks)
 - [Navigation during uploads](#navigation-during-uploads)
 - [Upload pipeline and smaller splits](#upload-pipeline-and-smaller-splits)
 - [Video controls and startup](#video-controls-and-startup)
@@ -323,6 +324,32 @@ state transition without blocking reads of the last acknowledged job state.
 Bulk move, Trash and restore also share batch working copies rather than copying
 the full catalog for each item; name, ancestry and share checks still depend on
 catalog size.
+
+### Browser progress and health checks
+
+The owner interface checks server health and transfer progress in the background.
+Idle browsing uses fewer requests; upload sending, completion, retry and recovery
+keep their own scheduling. These intervals start after the preceding request
+settles, so a slow response does not create overlapping automatic requests.
+
+| Check | Work in progress | Healthy idle tab | Healthy idle hidden tab |
+| --- | --- | --- | --- |
+| Transfer jobs | 1.5 seconds | 30 seconds | 60 seconds |
+| Server readiness | 5 seconds | 30 seconds | 60 seconds |
+
+Active jobs, deletions, device receipts and remote-request recovery retain fast
+checks even when the tab is hidden. Readiness checks also stay fast while a known
+connection issue or admission pause needs to clear. Returning to the tab refreshes
+promptly, with simultaneous focus/visibility events coalesced; starting work and
+explicit refresh/retry actions do not wait for the idle interval. Browser timer
+throttling and network latency can delay these updates.
+
+Job replies still contain retained completed/failed records and history-clearing
+notices so browsers can reconcile final results. Slower idle polling means work
+started elsewhere or a new readiness warning can take up to the idle interval
+to appear. The server checks admission when work is submitted. Already accepted
+server jobs continue without the page; files still being sent from your device
+need the browser. See [transfer stages](architecture.md#transfer-pipeline).
 
 ### Navigation during uploads
 
