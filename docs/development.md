@@ -532,6 +532,10 @@ TGDRIVE_E2E=1 uv run --frozen --group e2e python -m pytest \
 # Focused explicit-refresh pending, failure and confirmation checks
 TGDRIVE_E2E=1 uv run --frozen --group e2e python -m pytest \
   tests/browser/test_browser_refresh_feedback.py
+
+# Local watch-position persistence, Continue, completion and browser isolation
+TGDRIVE_E2E=1 uv run --frozen --group e2e python -m pytest \
+  tests/browser/test_browser_player_resume.py
 ```
 
 Install Chromium/libraries inside WSL. Evidence stays in ignored `cache/browser-e2e`
@@ -543,6 +547,11 @@ For player interaction changes, include `test_browser_player_gestures.py`,
 `tests/browser/`. They use decoded media, a generated 65-second H.264/AAC gesture fixture,
 320/390 px portrait and 720 px landscape layouts, keyboard and fullscreen checks.
 Emulated touch is separate from physical-device/other-browser validation.
+
+`test_browser_player_resume.py` covers local watch positions across preview close
+and reload, explicit Continue versus normal Play, completion cleanup and separate
+browser profiles. `website/src/features/previews/video/videoWatchProgress.test.ts`
+covers invalid positions and unavailable/full browser storage.
 
 `test_browser_player_controls.py` covers measured loading feedback, held delivery
 and decoded audio, frame stalls, retries, source-byte retention and buffered

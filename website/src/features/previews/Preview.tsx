@@ -810,7 +810,8 @@ export default function Preview({
                                 />
                             ) : kind === "video" ? (
                                 <AdvancedVideo
-                                    key={attempt}
+                                    key={item.id + ":" + attempt}
+                                    fileId={item.id}
                                     src={src}
                                     name={item.name}
                                     playback={playback}

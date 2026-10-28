@@ -1,6 +1,6 @@
 import { useEffect, useReducer, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { LoaderCircle, RefreshCw } from "lucide-react";
+import { LoaderCircle, Play, RefreshCw } from "lucide-react";
 import type { MoviElement } from "movi-player/element/slim";
 import wasmUrl from "movi-player/movi.wasm?url";
 import MovTextRenderer, { isMovTextCodec } from "./MovTextRenderer";
@@ -16,6 +16,7 @@ import { installVideoPlayerPip } from "./videoPlayerPip";
 import { attachVideoGestures } from "./videoPlayerGestures";
 import { formatBytes } from "../../../shared/types";
 import { videoSourceMemoryBudgetMiB } from "./videoBufferMemory";
+import { readVideoPosition, saveVideoPosition } from "./videoWatchProgress";
 import "./AdvancedVideo.css";
 import advancedStyles from "./AdvancedVideo.css?inline";
 
@@ -259,11 +260,13 @@ const phaseCopy = {
     seeking: "Loading this part…",
 };
 export default function AdvancedVideo({
+    fileId,
     src,
     name,
     playback,
     qualityControl,
 }: {
+    fileId: string;
     src: string;
     name: string;
     playback: { current: { time: number; playing: boolean } | null };
@@ -314,6 +317,9 @@ export default function AdvancedVideo({
     const [waitSeconds, setWaitSeconds] = useState(0);
     const [showStatus, setShowStatus] = useState(false);
     const [playbackError, setPlaybackError] = useState("");
+    const [continueTime, setContinueTime] = useState(() =>
+        readVideoPosition(fileId),
+    );
     const [transfer, setTransfer] = useState<VideoBufferSnapshot | null>(null);
     const waitingForVideo = useRef(true);
     waitingForVideo.current = state.phase !== "ready";
@@ -377,6 +383,10 @@ export default function AdvancedVideo({
         let frameCallback: number | undefined;
         let frameSource: MoviElement | null = null;
         let lastPlayback: { time: number; playing: boolean } | null = null;
+        let watchStarted = false;
+        // Closing the preview can move an ended engine back to paused.
+        let finished = false;
+        let lastSavedAt = -Infinity;
         let previousTime = Number.NaN;
         let latestProgressAt = 0;
         let hasPresentedFrame = false;
@@ -469,18 +479,51 @@ export default function AdvancedVideo({
             resume.positionApplied = true;
             if (playback.current === resume.source) playback.current = null;
         };
+        const savePosition = (force = false) => {
+            // Startup seeks must not overwrite a Continue offer that was never used.
+            if (
+                !watchStarted ||
+                !lastPlayback ||
+                (resume && !resume.positionApplied)
+            )
+                return;
+            const now = performance.now();
+            if (!force && now - lastSavedAt < 5000) return;
+            saveVideoPosition(
+                fileId,
+                finished || player?.ended ? 0 : lastPlayback.time,
+            );
+            lastSavedAt = now;
+        };
+        const startWatching = () => {
+            watchStarted = true;
+            finished = false;
+            setContinueTime(null);
+        };
         const rememberPlayback = () => {
             if (
                 !usable ||
                 !player?.player ||
-                player.player.getState() === "error"
+                player.player.getState() === "error" ||
+                !Number.isFinite(player.currentTime) ||
+                player.currentTime < 0
             )
                 return;
             lastPlayback = {
                 time: videoResumeTime(player.currentTime, player.duration),
                 playing: !player.paused,
             };
+            if (!player.seeking && !player.paused) savePosition();
         };
+        const flushPosition = () => {
+            rememberPlayback();
+            savePosition(true);
+        };
+        const saveWhenHidden = () => {
+            if (document.hidden) flushPosition();
+        };
+        document.addEventListener("visibilitychange", saveWhenHidden);
+        window.addEventListener("pagehide", flushPosition);
         const updateBuffer = () => {
             if (!player || cancelled || failed) return;
             const sample = videoBufferSnapshot(player);
@@ -610,10 +653,12 @@ export default function AdvancedVideo({
         };
         const settle = (event: "pause" | "seeked" | "ended") => {
             if (cancelled || failed) return;
+            if (event === "ended") finished = true;
             clearWaiting();
             if (event !== "seeked") pendingSeek = false;
             dispatch(event);
             rememberPlayback();
+            if (!player?.seeking) savePosition(true);
         };
         void import("movi-player/element/slim")
             .then(({ MoviElement }) => {
@@ -692,6 +737,7 @@ export default function AdvancedVideo({
                 listen("canplay", () => ready("canplay"));
                 listen("playing", () => ready("playing"));
                 listen("play", () => {
+                    startWatching();
                     // A playing state is an intent; watch actual presented frames below.
                     latestProgressAt = performance.now();
                 });
@@ -700,6 +746,8 @@ export default function AdvancedVideo({
                 listen("seeking", () => waiting("seeking"));
                 listen("seeked", () => {
                     observeResumePosition();
+                    if (usable && player && player.currentTime > 0)
+                        startWatching();
                     rememberPlayback();
                     settle("seeked");
                     // A new position can be available before its audio/video refill is ready.
@@ -789,6 +837,9 @@ export default function AdvancedVideo({
             cancelled = true;
             clearWaiting();
             clearInterval(progressTimer);
+            document.removeEventListener("visibilitychange", saveWhenHidden);
+            window.removeEventListener("pagehide", flushPosition);
+            flushPosition();
             detachPresentation?.();
             detachPip?.();
             detachGestures?.();
@@ -798,7 +849,8 @@ export default function AdvancedVideo({
                 clearVideoQualityControl(player);
                 if (frameCallback !== undefined)
                     frameSource?.cancelVideoFrameCallback(frameCallback);
-                if (
+                if (finished) playback.current = null;
+                else if (
                     lastPlayback &&
                     (!player.player || player.player.getState() === "error")
                 )
@@ -830,7 +882,7 @@ export default function AdvancedVideo({
                     activePlayer.current = null;
             }
         };
-    }, [src, name, playback, attempt]);
+    }, [fileId, src, name, playback, attempt]);
     const copy = state.phase !== "ready" ? phaseCopy[state.phase] : null;
     const loadingStatus =
         playbackError || (copy && showStatus) ? (
@@ -907,6 +959,47 @@ export default function AdvancedVideo({
                 </div>
             </div>
         ) : null;
+    const continueButton =
+        continueTime !== null &&
+        state.phase === "ready" &&
+        !playbackError &&
+        continueTime < (activePlayer.current?.duration ?? 0) ? (
+            <div className="advanced-state-actions advanced-continue">
+                <button
+                    type="button"
+                    onClick={() => {
+                        const player = activePlayer.current;
+                        const core = player?.player;
+                        if (!player || !core) return;
+                        setContinueTime(null);
+                        player.focus({ preventScroll: true });
+                        // Fresh paused loads need a settled seek before first play.
+                        const onSeeked = () => {
+                            if (activePlayer.current === player)
+                                void player.play().catch(() => {});
+                        };
+                        core.once("seeked", onSeeked);
+                        void core.seek(
+                            videoResumeTime(continueTime, player.duration),
+                        ).catch(() => {
+                            core.off("seeked", onSeeked);
+                            if (activePlayer.current === player)
+                                setContinueTime(continueTime);
+                        });
+                    }}
+                >
+                    <Play size={16} aria-hidden="true" /> Continue from{" "}
+                    {Math.floor(continueTime / 60)}:
+                    {String(Math.floor(continueTime % 60)).padStart(2, "0")}
+                </button>
+            </div>
+        ) : null;
+    const overlays = (
+        <>
+            {loadingStatus}
+            {continueButton}
+        </>
+    );
     return (
         <div className="advanced-video" data-phase={state.phase}>
             <div
@@ -915,8 +1008,8 @@ export default function AdvancedVideo({
                 aria-busy={state.phase !== "ready" && !playbackError}
             />
             {statusSurface
-                ? createPortal(loadingStatus, statusSurface)
-                : loadingStatus}
+                ? createPortal(overlays, statusSurface)
+                : overlays}
         </div>
     );
 }

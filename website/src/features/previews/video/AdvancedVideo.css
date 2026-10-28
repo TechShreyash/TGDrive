@@ -81,6 +81,14 @@
     opacity: 0.6;
     cursor: default;
 }
+.advanced-continue {
+    position: absolute;
+    inset: auto 16px 102px;
+    z-index: 2;
+    justify-content: flex-start;
+    margin: 0;
+    font-variant-numeric: tabular-nums;
+}
 .advanced-state-buffering {
     inset: auto 16px 102px;
     padding: 0;

@@ -418,6 +418,20 @@ Closing the preview releases its browser buffer. Reopening requests the file
 again; authorized requests reuse the server's cached chunks while available.
 Protected originals use `no-store`, so browser disk caching is not promised.
 
+Reopen a video preview and choose **Continue from…** to resume its saved position.
+Opening alone does not start playback; the usual **Play** button starts from the
+beginning. Progress is saved on this site's browser profile, so different devices
+and browsers can watch independently even with the same TGDrive login. People
+sharing one browser profile share its saved positions. Finishing a video clears
+its position.
+
+Saved positions survive closing the preview and reloading, but clearing this
+site's browser data removes them; private browsing may discard them when closed.
+If local storage is unavailable or full, playback still works but progress may
+not be saved. An abrupt browser/device shutdown can lose the most recent seconds.
+This applies to the enhanced preview player; standalone stream links use the
+browser's native player.
+
 When a non-video preview waits, it can show **Checking file**, **Waiting for
 Telegram capacity**, or **Receiving file**. Any wait estimate is approximate;
 the underlying queue counts Telegram operations, not people. Image and audio

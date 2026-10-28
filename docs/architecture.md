@@ -518,6 +518,17 @@ player handles loading/errors, local styles, tracks, chapters and source changes
 its buffered time estimates differ from server cache coverage. Neither extra
 bots nor a cache guarantees codec/device playback speed.
 
+The enhanced preview stores watch positions as numeric seconds in browser
+`localStorage`, under `tgdrive.video.position.v1:<file-id>`. Stable catalog IDs
+preserve positions across renames, moves and quality changes; keys never contain
+stream URLs or authorization tokens. Nothing is sent to the server or synchronized
+through the login. Writes are throttled to five seconds during playback and
+flushed on pause, settled seeks, hidden/pagehide events and preview cleanup.
+Completion removes the record; opening and closing an unused Continue offer
+preserves it. Invalid or out-of-range positions do not produce a Continue offer,
+and storage failures do not block playback. See the
+[watch-position behavior and browser-storage limits](usage.md#open-preview-and-download).
+
 ## Database safety copies and security
 
 Background backups read consistent durable collections, compress/encrypt with
