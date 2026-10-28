@@ -160,6 +160,7 @@ class TransferManager:
         self._semaphore = asyncio.Semaphore(settings.max_concurrent_transfers)
         self._torrent_slots = asyncio.Semaphore(settings.max_concurrent_transfers)
         self._pending_staging: dict[str, int] = {}
+        self._archive_cleanup_pending: set[str] = set()
 
     async def _resolve_upload_destination(
         self, record: TransferRecord, path: str
@@ -365,6 +366,16 @@ class TransferManager:
         if info.size is not None and info.size > limit:
             raise RemoteTooLarge(limit, info.size)
         return info
+
+    async def start_archive(self, *, paths, destination, name, allow_public_exposure=False):
+        from tgdrive.transfers.archives import start_archive
+
+        return await start_archive(self, paths, destination, name, allow_public_exposure=allow_public_exposure)
+
+    async def start_extraction(self, *, path, destination, folder_name, allow_public_exposure=False):
+        from tgdrive.transfers.archives import start_extraction
+
+        return await start_extraction(self, path, destination, folder_name, allow_public_exposure=allow_public_exposure)
 
     @_journalled
     async def start_torrent(self, *, source: str, destination: str) -> TransferRecord:
@@ -961,7 +972,7 @@ class TransferManager:
             for row in self.registry.list()
             if row.status is TransferStatus.ERROR
             and row.context.get("restart_retryable") is True
-            and row.context.get("kind") in {"upload", "remote", "torrent", "delete"}
+            and row.context.get("kind") in {"upload", "remote", "torrent", "delete", "archive", "extract"}
             and not row.context.get("cancel_requested")
         ]
         if (
@@ -993,6 +1004,13 @@ class TransferManager:
                 "or retry this transfer instead of cancelling it."
             )
         record = await self.registry.cancel(job_id)
+        if record.context.get("kind") in {"archive", "extract"}:
+            from tgdrive.transfers.archives import cancel_children, discard_stage
+
+            if record.status is TransferStatus.CANCELLED:
+                await cancel_children(self, record)
+                discard_stage(self, record)
+            return record
         if record.context.get("source_kind") == "torrent":
             if record.status is TransferStatus.CANCELLED:
                 await self._cancel_torrent_children(record)
@@ -1018,6 +1036,10 @@ class TransferManager:
                 await asyncio.to_thread(discard)
             if hasattr(self, "uploads"):
                 await asyncio.to_thread(self.uploads.release, record.id)
+        if record.context.get("source_kind") == "archive":
+            from tgdrive.transfers.archives import discard_stage
+
+            discard_stage(self, record)
         return record
 
     @_journalled
@@ -1033,6 +1055,11 @@ class TransferManager:
 
     async def _resume(self, record: TransferRecord) -> None:
         context = record.context
+        if context.get("source_kind") in {"archive", "extract"}:
+            from tgdrive.transfers.archives import spawn_archive
+
+            spawn_archive(self, record)
+            return
         if context.get("kind") == "torrent":
             task = self.registry.spawn(record.id, self._torrent_pipeline)
             task.add_done_callback(lambda _: self._discard_torrent_stage(record))

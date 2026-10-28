@@ -335,6 +335,7 @@ Do not run an older app against an incompatible database format. Restore a compa
 | Connection changes pending | Restart to apply them. |
 | Backup fails/decryption fails | Matching key, intact archive, posting access, disk and retry time |
 | Upload cannot resume | Reselect its original in the existing transfer; missing staging may require re-upload. |
+| ZIP job fails | Read its error in Transfers, free temporary server storage if needed, then retry the existing job. Unsupported or damaged ZIPs need a corrected source. Earlier committed outputs remain; see [archive workflow and limits](usage.md#create-and-extract-zip-archives). |
 | Video/download slow or fails | Check [performance](performance.md), connections and the Telegram document; unsupported codecs need original download. |
 | Browser slow, server download fast | Check [HTTP delivery](#http-delivery-and-proxy-configuration). |
 | Preload incomplete | Check effective cache tier/free space; full coverage includes integrity overhead. |

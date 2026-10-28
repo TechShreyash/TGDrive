@@ -955,7 +955,12 @@ export default function App() {
     }, [location.previewId, directory.contents, loading, view]);
     const closeDialog = () => {
         if (dialog?.type !== "preview") {
-            if (dialog && !["url", "torrent", "prepare"].includes(dialog.type))
+            if (
+                dialog &&
+                !["url", "torrent", "prepare", "archive", "extract"].includes(
+                    dialog.type,
+                )
+            )
                 reloadMetadata();
             setDialog(null);
             return;
@@ -1071,7 +1076,7 @@ export default function App() {
                 folder ? undefined : item.jobId,
                 destination,
                 !folder &&
-                    item.kind !== "torrent" &&
+                    !["torrent", "extract"].includes(item.kind || "") &&
                     item.state === "completed",
             );
             if (!target.available || !target.folder_path) {

@@ -18,7 +18,9 @@ import { transfers } from "../transfers/transfers";
 import { Modal, ErrorNotice, Spinner } from "../../shared/components";
 import { embedUrl } from "../shares/embedLinks";
 import "./ActionDialog.css";
+import ArchiveDialog, { type ArchiveDialogState } from "./ArchiveDialog";
 export type ActionDialogState =
+    | ArchiveDialogState
     | { type: "folder" }
     | { type: "rename"; item: DriveItem }
     | { type: "url" }
@@ -87,6 +89,15 @@ export default function ActionDialog({
             setBusy(false);
         }
     };
+    if (dialog.type === "archive" || dialog.type === "extract")
+        return (
+            <ArchiveDialog
+                dialog={dialog}
+                destination={destination}
+                onClose={onClose}
+                onNotice={onNotice}
+            />
+        );
     if (dialog.type === "download-link" || dialog.type === "prepare")
         return (
             <Modal

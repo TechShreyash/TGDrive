@@ -1,5 +1,6 @@
 import { sampleProgress, type ProgressSample } from "./progress";
 import type { TransferBatch } from "./transferBatches";
+import { isArchiveTransfer } from "./transferTasks";
 
 export type BatchProgressMeters = ReadonlyMap<string, ProgressSample>;
 
@@ -22,7 +23,8 @@ export class BatchProgressTracker {
             if (
                 !batch.pending ||
                 batch.items.some((item) =>
-                    ["remote", "torrent", "delete"].includes(item.kind || ""),
+                    ["remote", "torrent", "delete"].includes(item.kind || "") ||
+                    isArchiveTransfer(item),
                 )
             )
                 continue;

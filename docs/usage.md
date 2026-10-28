@@ -25,6 +25,7 @@ Prefer a visual introduction? [Open the gallery and walkthrough videos](showcase
   - [Starred files and folders](#starred-files-and-folders)
   - [Search](#search)
 - [Open, preview, and download](#open-preview-and-download)
+- [Create and extract ZIP archives](#create-and-extract-zip-archives)
 - [Preload a file for smoother playback and downloads](#preload-a-file-for-smoother-playback-and-downloads)
   - [Parallel and resumed downloads](#parallel-and-resumed-downloads)
 - [Share and revoke](#share-and-revoke)
@@ -367,6 +368,37 @@ Search finds names within the current page, not document contents:
 previous folder. Switching pages clears the query. **/** or **Ctrl/Cmd+K** focuses
 search outside an editing field. On phones, the search icon opens it; Close
 Search/Escape collapses an empty field.
+
+## Create and extract ZIP archives
+
+To download several items together, choose **Select**, select the files or
+folders, then choose **Create ZIP**. Enter a ZIP filename and start the job.
+TGDrive saves the ZIP as a normal file in the destination shown in the dialog;
+download it from its item menu when the job finishes. A folder's item menu also
+offers **Create ZIP**. Folder structure and empty folders are preserved, and
+originals stay in place.
+
+To unpack an uploaded ZIP, open its item menu and choose **Extract ZIP**. Choose
+the current folder or a new folder, enter the new folder's name when needed,
+then start extraction. Existing names are kept: outputs use available names
+instead of replacing existing items. The original ZIP is kept.
+
+Follow progress, retry failures or cancel in **Transfers**. Once accepted, archive
+work can continue with the tab closed while TGDrive, MongoDB and Telegram remain
+available. Archive creation downloads source bytes to the server and uploads the
+result to Telegram; extraction also uploads its output files. Both need temporary
+server disk space and consume Telegram bandwidth. A ZIP stored inside a publicly
+shared folder, or files extracted there, inherits that folder's public access;
+review the warning before continuing.
+
+ZIP is the supported format. Encrypted archives, unsafe paths, links, duplicate
+paths and ZIPs containing empty regular files are rejected. TGDrive cannot upload
+zero-byte files to Telegram. Empty folders are supported. Cancellation or failure
+can leave files and folders already created; retry the existing job to continue
+rather than starting another extraction. Preserve the server's cache directory
+across restarts. If temporary archive data has been removed, the error may ask
+you to cancel and start again; earlier committed outputs remain. See the
+[archive API and exact limits](reference.md#zip-archive-jobs).
 
 ## Open, preview, and download
 

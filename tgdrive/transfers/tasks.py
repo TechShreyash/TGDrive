@@ -30,7 +30,7 @@ _DEFAULT_CANCEL_GRACE_SECONDS = 10.0
 _SHUTDOWN_DRAIN_SECONDS = 5.0
 _PROGRESS_JOURNAL_SECONDS = 0.5
 _PROGRESS_STALE_SECONDS = 15.0
-_BYTE_PHASES = frozenset({"saving", "downloading", "uploading", "torrent_uploading"})
+_BYTE_PHASES = frozenset({"saving", "downloading", "uploading", "torrent_uploading", "archiving", "extracting"})
 _ERROR_UNSET = object()
 
 
@@ -198,7 +198,7 @@ class TransferRecord:
 
     @property
     def history_hidden(self) -> bool:
-        return bool(self.committed.context.get("torrent_parent_id")) or (
+        return bool(self.committed.context.get("torrent_parent_id") or self.committed.context.get("archive_parent_id")) or (
             self.terminal and bool(self.committed.context.get("history_cleared"))
         )
 
@@ -580,6 +580,13 @@ class TransferRegistry:
     def _retained(self, record: TransferRecord) -> bool:
         record = record.committed
         context = record.context
+        archive_parent = self._records.get(context.get("archive_parent_id"))
+        if (
+            archive_parent is not None
+            and context.get("archive_file_index") not in archive_parent.committed.context.get("archive_completed", [])
+            and archive_parent.status not in {TransferStatus.COMPLETED, TransferStatus.CANCELLED}
+        ):
+            return True
         parent = self._records.get(context.get("torrent_parent_id"))
         if (
             parent is not None
@@ -608,6 +615,8 @@ class TransferRegistry:
             "upload",
             "remote",
             "torrent",
+            "archive",
+            "extract",
             "delete",
         } and record.status not in {TransferStatus.COMPLETED, TransferStatus.CANCELLED}:
             return True
@@ -646,6 +655,7 @@ class TransferRegistry:
             and not record.history_hidden
             and record.context.get("kind") != "delete"
             and not record.context.get("torrent_parent_id")
+            and not record.context.get("archive_parent_id")
             else None
         )
         if self._mongo is not None:

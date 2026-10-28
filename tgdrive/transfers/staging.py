@@ -34,13 +34,13 @@ def staging_usage(manager, *, receipts=None, exclude=None):
                 remaining += max(0, item["total_size"] - item["offset"])
     registry = getattr(manager, "registry", None)
     jobs = registry.staging_records() if registry is not None else ()
-    owners = {job.id for job in jobs if job.context.get("kind") == "torrent"}
+    owners = {job.id for job in jobs if job.context.get("kind") in {"torrent", "extract"}}
     for job in jobs:
         if job.id in seen or job.id == exclude:
             continue
         seen.add(job.id)
         context = job.context
-        if context.get("torrent_parent_id") in owners:
+        if context.get("torrent_parent_id") in owners or context.get("archive_parent_id") in owners:
             continue
         raw_path = context.get("local_path")
         written = 0
@@ -50,14 +50,16 @@ def staging_usage(manager, *, receipts=None, exclude=None):
         active = not job.terminal or (job.task is not None and not job.task.done())
         directory = context.get("staging_directory")
         if directory:
-            if active:
-                written = context.get("staging_written", 0)
+            if Path(directory).exists():
+                written = max(written, context.get("staging_written", 0))
+                # Retain the journaled claim through failed jobs and asynchronous
+                # cleanup, without walking every staged file on every admission.
+                size = max(written, context.get("staging_size", 0))
             else:
-                for path in Path(directory).rglob("*"):
-                    with contextlib.suppress(FileNotFoundError):
-                        if not path.is_symlink() and path.is_file():
-                            written += path.stat().st_size
-        size = max(written, context.get("staging_size", 0)) if active else written
+                written = 0
+                size = context.get("staging_size", 0) if active else 0
+        else:
+            size = max(written, context.get("staging_size", 0)) if active else written
         reserved += size
         if active:
             received = max(written, context.get("staging_written", 0))

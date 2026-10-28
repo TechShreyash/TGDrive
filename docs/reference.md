@@ -36,6 +36,7 @@ on demand. For everyday workflows, start with [Using TGDrive](usage.md) or the
   - [Move and bulk actions](#move-and-bulk-actions)
   - [Performance, cache inventory and preparation](#performance-cache-inventory-and-preparation)
   - [Resumable browser receipts](#resumable-browser-receipts)
+  - [ZIP archive jobs](#zip-archive-jobs)
   - [Previews and media](#previews-and-media)
   - [Jobs](#jobs)
   - [Transfer history](#transfer-history)
@@ -912,6 +913,57 @@ The preparation queue and ordinary media queues have separate bounds.
 Cancelling/clearing a preparation leaves originals intact and does not abort
 shared work belonging to other authorized subscribers. See
 [cache behavior](performance.md#prepare-a-file-before-sharing).
+
+</details>
+
+### ZIP archive jobs
+
+Archive routes require the owner session; public share links cannot start jobs.
+See the [user workflow](usage.md#create-and-extract-zip-archives).
+
+| Route | JSON request | Result |
+| --- | --- | --- |
+| `POST /api/v1/archives` | `paths`: selected file/folder paths, `destination`: existing folder path, `name`: ZIP filename | Accepted job identity and snapshot: `{id, job}`. |
+| `POST /api/v1/archives/extract` | `path`: ZIP file path, `destination`: existing folder path, `folder_name`: new folder name or `null` to extract here | Accepted job identity and snapshot: `{id, job}`. |
+
+Both accept `allow_public_exposure`, default `false`, to acknowledge a publicly
+shared destination. Poll and control the returned identity through the existing
+[job routes](#jobs). Job kinds are `archive` and `extract`; progress reports bytes
+for the current phase. Created ZIPs use the ordinary file download route.
+
+<details>
+<summary>Formats, storage and recovery boundaries</summary>
+
+- ZIP creation stores entries without recompression. This prioritizes predictable
+  resource use and bundles already compressed media without adding compression
+  settings. Folder names and relative structure are retained.
+- Extraction accepts stored or Deflate-compressed ZIPs; split-volume ZIPs are
+  unsupported. A job accepts up to 1,000 entries, including implicit folders,
+  with at most 64 relative path components, 4,096 path characters, an 8 MiB ZIP
+  directory and a 4 MiB expanded extraction manifest. Extraction validates paths
+  and metadata before creating output folders or files.
+  Absolute/traversal paths, encrypted entries, symlinks/special files, duplicate
+  paths and empty regular files are rejected. Empty directories are retained.
+- Temporary workspace shares `STAGING_BUDGET_BYTES` and `MIN_FREE_BYTES` with
+  uploads and imports. Creation reserves the ZIP bytes plus headers; extraction
+  needs space for the source ZIP and its expanded files together. Defaults are
+  16 GiB of shared staging and a 1 GiB free-disk reserve. Normal logical-file
+  upload limits and catalog depth/item limits still apply.
+- Source files are read from Telegram, including multipart files, using bounded
+  reads directly into the ZIP writer. Extraction verifies every file's declared
+  size and CRC before creating catalog outputs. Outputs use the normal upload,
+  catalog and protection pipeline. Existing files are never overwritten.
+- Accepted jobs are server-owned. Retry/restart reuse persisted job identities;
+  cancellation does not roll back files already committed to the drive. Preserve
+  `CACHE_DIR` across restarts. ZIP creation can regenerate missing bytes before
+  its upload plan is recorded; later missing ZIP bytes or uncommitted extracted
+  files require cancellation and a new job. Completed children and catalogued
+  outputs can finalize without staged bytes. Deleting or trashing a source before
+  staging, or the destination before commit, can block further work.
+- Failed jobs retain staged bytes and their storage reservation for retry.
+  Cancel an unwanted failed job to release that space. Completed/cancelled jobs
+  remove temporary workspace after their internal upload workers finish cleanup;
+  files already committed to the drive remain.
 
 </details>
 

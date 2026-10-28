@@ -164,7 +164,7 @@ class PartLease:
         emitted = 0
         count = 0
         whole_part = selected.start == 0 and selected.length == self.part["size"]
-        digest = hashlib.sha256() if whole_part else None
+        digest = hashlib.sha256() if whole_part and "sha256" in self.part else None
         try:
             async for chunk in iterator:
                 if count >= plan.part_count:

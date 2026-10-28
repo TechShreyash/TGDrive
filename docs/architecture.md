@@ -413,6 +413,28 @@ and drops completed-intent message references. **Original Telegram messages rema
 for every file age and retry. Reconciliation, lineage and independent-backup
 barriers still apply; different selected items complete independently.
 
+### ZIP archive jobs
+
+Archive creation and extraction run through the transfer registry rather than
+holding an HTTP request open. Creation reads source files from Telegram directly
+into the ZIP writer with bounded memory. Extraction stages and verifies the ZIP
+and its expanded files before publishing outputs. Created ZIPs and extracted
+files enter the existing upload pipeline, keeping multipart transport, catalog
+identities and backup handling in
+one place. The browser queues work and displays progress; it does not hold the
+source bytes or need to remain open after acceptance.
+
+Extraction uses one visible parent job with internal upload children. Completed
+children stay retained until their parent records progress, so retry reconciles
+existing uploads instead of deliberately sending them again.
+
+Workspace admission shares the upload staging budget and disk reserve. ZIP paths
+and entry metadata are checked before extraction publishes output. Existing items
+are kept when names collide. Persisted job state allows retry without deliberately
+recreating completed outputs; cancellation and failures can retain earlier
+committed files and folders. [Archive limits and API](reference.md#zip-archive-jobs)
+are the canonical contract.
+
 ### Finished history
 
 Resolved jobs stay in a paged history, separate from temporary browser popups.

@@ -12,7 +12,11 @@ import type {
     TransferLocation,
     FolderUploadMetadata,
 } from "../../shared/types";
-import { isServerImport, transferTaskId } from "./transferTasks";
+import {
+    isArchiveTransfer,
+    isServerImport,
+    transferTaskId,
+} from "./transferTasks";
 import { sampleProgress, type ProgressSample } from "./progress";
 import { BatchProgressTracker } from "./batchProgress";
 import { summarizeBatches } from "./transferBatches";
@@ -371,6 +375,31 @@ export function fromJob(job: Job, previousKind?: string): Partial<Transfer> {
                                     : job.status === "queued"
                                       ? "Queued for Telegram"
                                       : "Uploading to Telegram";
+    if (isArchiveTransfer(job)) {
+        if (state === "error")
+            phase =
+                job.kind === "archive"
+                    ? "ZIP creation failed"
+                    : "Extraction failed";
+        else if (state === "completed")
+            phase =
+                job.kind === "archive"
+                    ? "ZIP available in your drive"
+                    : "Extracted files available in your drive";
+        else if (state === "uploading") {
+            if (job.status === "queued") phase = "Queued on server";
+            else if (job.phase === "archiving")
+                phase = "Creating ZIP on the server";
+            else if (job.phase === "extracting")
+                phase = "Extracting files on the server";
+            else if (job.phase === "downloading")
+                phase = "Reading ZIP from your drive";
+            else if (job.phase === "verifying")
+                phase = "Checking ZIP before saving";
+            else if (job.phase === "uploading" && job.kind === "extract")
+                phase = "Saving extracted files to Telegram";
+        }
+    }
     if (
         state === "uploading" &&
         (previousKind === "torrent" || job.kind === "torrent")
@@ -413,7 +442,9 @@ export function fromJob(job: Job, previousKind?: string): Partial<Transfer> {
     return {
         state,
         phase,
-        ...(job.kind === "torrent" || previousKind === "torrent"
+        ...(job.kind === "torrent" ||
+        previousKind === "torrent" ||
+        isArchiveTransfer(job)
             ? {
                   size: job.total,
                   ...(job.name ? { name: job.name, batchName: job.name } : {}),

@@ -97,6 +97,35 @@ fixture or its `/__test__` endpoints.
 Recorded evidence describes a tested snapshot, not the state of a later checkout.
 
 <details>
+<summary>ZIP creation and extraction — 2026-10-28</summary>
+
+Across focused offline runs, **33 archive service cases** and **24 archive API
+cases** passed. These exercise unsafe paths/types, Unicode and duplicate names,
+bounded ZIP metadata and expansion, empty folders, CRC verification before
+catalog writes, multipart reads, source moves/checksums, storage reservations,
+cancellation/draining, ambiguous Telegram dispatch, retry after publication and
+demo write-policy propagation into folder-preparation workers.
+API checks cover owner/share isolation, inherited public-folder consent, demo
+restrictions, invalid destinations, request bounds and restart admission pauses.
+
+The first focused frontend run passed **70 cases across eight files**. After a
+destination/size update fix, the final archive transfer regression run passed
+**four cases**, and TypeScript plus the production build passed on Node
+**24.22.0**. Existing viewer CommonJS and bundle-size warnings remain.
+
+All **eight new Chromium cases** passed across focused runs: selection and
+single-item actions, extraction here/into a new folder, inline errors, public
+consent, progress/cancellation, and completed-output navigation. Dialog/layout
+checks cover 1,440, 390 and 320 pixel viewports, including dark desktop extraction.
+Screenshots were visually inspected. Browser archive responses and job progress
+are synthetic; service tests use a fake Telegram transport and local catalog
+fixtures. These results do not establish live Telegram/MongoDB behavior,
+physical-device performance or deployment readiness. No full suite, lint or
+throughput benchmark was run for this feature.
+
+</details>
+
+<details>
 <summary>Torrent and magnet imports — 2026-10-28</summary>
 
 Focused validation passed **76 Python tests**: 19 engine cases and 57 integration,
@@ -365,6 +394,19 @@ tests protect sending and retry behavior independently of progress requests.
 `tests/browser/test_browser_file_views.py` covers retaining a loaded thumbnail
 while scrolling away and back. These use mocked requests or synthetic browser
 fixtures. They require the approval described above; listing them records no pass.
+
+For ZIP work, use the archive service/API and UI checks after approval:
+
+```bash
+uv run --frozen --all-groups python -m pytest -q \
+  tests/transfers/test_archives.py tests/web/test_archives.py
+cd website
+npx vitest run src/features/files/archiveApi.test.ts src/features/transfers/archiveJobs.test.ts
+npm run build
+cd ..
+TGDRIVE_E2E=1 uv run --frozen --group e2e python -m pytest -q \
+  tests/browser/test_browser_archives.py
+```
 
 For URL intake changes, the focused offline checks are:
 

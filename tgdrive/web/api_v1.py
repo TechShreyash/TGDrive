@@ -422,7 +422,7 @@ def register_routes(
             queue = estimate(record.id) if callable(estimate) else None
         else:
             queue = queues.get(record.id)
-        return record.as_dict() | {
+        result = record.as_dict() | {
             "name": record.context.get("name", "Transfer"),
             "kind": record.context.get(
                 "source_kind", record.context.get("kind", "upload")
@@ -431,6 +431,16 @@ def register_routes(
             "destination": record.context.get("destination", "/"),
             "history_cleared": record.history_hidden,
         }
+        if result["kind"] in {"archive", "extract"}:
+            result["location"] = locate_transfer(get_store(request), result)
+        return result
+
+    from tgdrive.web.archive_api import register_archive_routes
+
+    register_archive_routes(
+        app, require_admin=require_admin, get_store=get_store,
+        get_manager=get_manager, job_snapshot=job_snapshot,
+    )
 
     @app.get("/api/v1/jobs", dependencies=admin)
     async def jobs(request: Request, response: Response) -> dict[str, Any]:
@@ -439,6 +449,7 @@ def register_routes(
             record
             for record in get_manager(request).registry.list()
             if not record.context.get("torrent_parent_id")
+            and not record.context.get("archive_parent_id")
         ]
         estimate = getattr(get_runtime(request).pool, "queue_estimates", None)
         queues = (

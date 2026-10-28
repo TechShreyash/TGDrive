@@ -4,6 +4,10 @@ export function isServerImport(item: Pick<Transfer, "kind">): boolean {
     return item.kind === "remote" || item.kind === "torrent";
 }
 
+export function isArchiveTransfer(item: Pick<Transfer, "kind">): boolean {
+    return item.kind === "archive" || item.kind === "extract";
+}
+
 /** Folder selections are one task; ordinary files each keep their own identity. */
 export function isFolderTransfer(item: Transfer): boolean {
     return Boolean(item.folderUpload);

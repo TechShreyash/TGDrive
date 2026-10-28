@@ -20,6 +20,8 @@ import {
     ArrowUp,
     ArrowDown,
     SquareCheck,
+    Archive,
+    FolderArchive,
 } from "lucide-react";
 import type { ActionDialogState } from "./ActionDialog";
 import {
@@ -37,6 +39,7 @@ import { FileIcon, Spinner } from "../../shared/components";
 import SortMenu, { type FileSort } from "./SortMenu";
 import "./FileBrowser.css";
 import FileThumbnail from "./FileThumbnail";
+import { isZipArchive } from "./archiveApi";
 import { COMPACT_LAYOUT_QUERY } from "../../shared/responsive";
 import {
     defaultSortOrder,
@@ -523,6 +526,27 @@ export default function FileBrowser({
                                 </>
                             ) : (
                                 <>
+                                    <button
+                                        className="text-button file-bulk-action"
+                                        disabled={
+                                            !chosen.length ||
+                                            directory.read_only ||
+                                            chosen.some(
+                                                (item) => item.read_only,
+                                            )
+                                        }
+                                        aria-label="Create ZIP"
+                                        title="Create ZIP"
+                                        onClick={() =>
+                                            showDialog({
+                                                type: "archive",
+                                                items: chosen,
+                                            })
+                                        }
+                                    >
+                                        <Archive size={16} aria-hidden="true" />{" "}
+                                        <span>Create ZIP</span>
+                                    </button>
                                     <button
                                         className="text-button file-bulk-action"
                                         disabled={!chosen.length}
@@ -1340,6 +1364,58 @@ export default function FileBrowser({
                                                                                 : "Add to Starred"}
                                                                         </button>
                                                                     )}
+                                                                    {isZipArchive(
+                                                                        item,
+                                                                    ) && (
+                                                                        <button
+                                                                            disabled={
+                                                                                item.read_only ||
+                                                                                directory.read_only
+                                                                            }
+                                                                            onClick={() =>
+                                                                                showDialog(
+                                                                                    {
+                                                                                        type: "extract",
+                                                                                        item,
+                                                                                    },
+                                                                                )
+                                                                            }
+                                                                        >
+                                                                            <FolderArchive
+                                                                                size={
+                                                                                    16
+                                                                                }
+                                                                                aria-hidden="true"
+                                                                            />{" "}
+                                                                            Extract
+                                                                            ZIP
+                                                                        </button>
+                                                                    )}
+                                                                    <button
+                                                                        disabled={
+                                                                            item.read_only ||
+                                                                            directory.read_only
+                                                                        }
+                                                                        onClick={() =>
+                                                                            showDialog(
+                                                                                {
+                                                                                    type: "archive",
+                                                                                    items: [
+                                                                                        item,
+                                                                                    ],
+                                                                                },
+                                                                            )
+                                                                        }
+                                                                    >
+                                                                        <Archive
+                                                                            size={
+                                                                                16
+                                                                            }
+                                                                            aria-hidden="true"
+                                                                        />{" "}
+                                                                        Create
+                                                                        ZIP
+                                                                    </button>
                                                                     <button
                                                                         onClick={() =>
                                                                             showDialog(
