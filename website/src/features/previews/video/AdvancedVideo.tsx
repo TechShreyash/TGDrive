@@ -759,11 +759,12 @@ export default function AdvancedVideo({
                 player.setAttribute("subtitlepicker", "");
                 player.setAttribute("playsinline", "");
                 player.setAttribute("preload", "metadata");
+                // A poster would bypass Movi's paused opening-frame decode.
                 player.setAttribute("theme", "dark");
                 player.setAttribute("themecolor", "#647dff");
                 player.setAttribute("fastseek", "keys gestures");
                 // Enable the native chapter timeline once real metadata is available.
-                // Frame extraction stays disabled: neither thumb nor storyboard is set.
+                // Seek-preview extraction stays disabled: neither thumb nor storyboard is set.
                 player.setAttribute("controlslist", "notimeline nospinner");
                 player.setAttribute(
                     "aria-label",

@@ -21,6 +21,45 @@ pytestmark = pytest.mark.e2e
 pytest_plugins = ("tests.browser.test_browser_e2e",)
 
 
+def test_video_opening_frame_is_painted_without_starting_playback(
+    server: Server, desktop: tuple[Any, Any]
+) -> None:
+    _, page = desktop
+    login(page, server.url)
+    page.get_by_role("button", name="Preview samples", exact=True).dblclick()
+    thumbnails: list[str] = []
+    page.on(
+        "request",
+        lambda request: thumbnails.append(request.url)
+        if "/api/v1/thumbnail?" in request.url
+        else None,
+    )
+    page.get_by_role("button", name="movtext-subtitles.mp4", exact=True).dblclick()
+    player = preview_dialog(page).locator("movi-player")
+    # The fixture starts with a color test pattern; inspect the video canvas,
+    # not metadata readiness or the play button drawn over a black surface.
+    page.wait_for_function(
+        """()=>{
+          const player=document.querySelector('movi-player');
+          const source=player?.getCanvas();
+          if (!source?.width||!source.height||!player.paused||player.seeking
+              ||player.currentTime>=0.1) return false;
+          const sample=document.createElement('canvas');
+          sample.width=sample.height=16;
+          const context=sample.getContext('2d');
+          context.drawImage(source,0,0,16,16);
+          const pixels=context.getImageData(0,0,16,16).data;
+          return pixels.some((value,index)=>index%4!==3&&value>32);
+        }""",
+        timeout=30000,
+    )
+    assert player.evaluate("element=>element.paused&&element.currentTime<0.1")
+    assert thumbnails == []
+    expect(player.locator(".movi-poster-overlay")).to_be_hidden()
+    player.locator("button.movi-play-pause").click()
+    page.wait_for_function("()=>document.querySelector('movi-player')?.currentTime>0.5")
+
+
 def test_video_preview_does_not_poll_or_display_a_stale_server_queue(
     server: Server, desktop: tuple[Any, Any]
 ) -> None:
@@ -235,6 +274,7 @@ def test_video_quality_uses_bounded_player_settings_without_a_preview_bar(
             "()=>Math.abs(document.querySelector('movi-player').currentTime-2)<0.2"
         )
         assert player.evaluate("element=>element.paused")
+        expect(player.locator(".movi-poster-overlay")).to_be_hidden()
         expect(download).to_have_attribute("href", original_download)
         expect(dialog.locator(".preview-quality")).to_have_count(0)
         menu = _open_settings(player, touch=touch)

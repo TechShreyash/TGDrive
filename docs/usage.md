@@ -408,6 +408,10 @@ fullscreen control where supported. Non-video previews enter fullscreen with
 the toolbar visible; use the top-right icon to hide or show it. Video keeps its
 own player controls. Download the original if the device cannot decode it.
 
+Opening a video loads its metadata and decodes its opening frame while paused.
+Fetching and decoding can take time; a video that begins with black frames can
+still look black.
+
 Video playback uses available bandwidth to build about **90 seconds of buffer**,
 within a browser memory limit. Short clips can load completely. The player refills
 early so brief network dips and forward skips can use already fetched bytes;
