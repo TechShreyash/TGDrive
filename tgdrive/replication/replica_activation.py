@@ -842,7 +842,7 @@ def _apply_mongo(settings, value, backend):
                         "API_HASH": desired.api_hash.get_secret_value(),
                         "BOT_TOKENS": ",".join(candidate["credentials"]["bot_tokens"]),
                         "STRING_SESSIONS": "",
-                        "MAIN_BOT_TOKEN": None,
+                        "MAIN_BOT_TOKEN": None,  # nosec B105 - token reset
                         "ADMIN_PASSWORD_HASH": owner_hash,
                     }
                 )

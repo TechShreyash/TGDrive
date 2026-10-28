@@ -2489,6 +2489,9 @@ def test_settings_backup_status_never_claims_unconfirmed_protection(
         "Reopen an existing drive or restore an older archive", exact=True
     ).click()
     restore_form = page.locator(".drive-recovery-help .database-restore")
+    restore_form.get_by_text(
+        "Older backups: restore a database archive", exact=True
+    ).click()
     expect(restore_form.get_by_label("Database archive (required)")).to_be_visible()
     expect(restore_form.get_by_label("Archive recovery key (required)")).to_be_visible()
     expect(
