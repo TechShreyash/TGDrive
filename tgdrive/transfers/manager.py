@@ -1088,6 +1088,18 @@ class TransferManager:
                 ),
             )
         elif context.get("kind") == "delete":
+            intent = next(
+                (
+                    item
+                    for item in self.store.pending_deletions()
+                    if item["id"] == context["deletion_id"]
+                ),
+                None,
+            )
+            if intent is not None and intent["state"] == "failed":
+                await asyncio.to_thread(
+                    self.store.confirm_deletion_messages, intent["id"], []
+                )
             self.registry.spawn(record.id, lambda item: self._delete_intent(item))
         elif context.get("kind") == "upload" or (
             context.get("source_kind") == "remote"
@@ -1216,24 +1228,74 @@ class TransferManager:
 
         await upload_multipart(self, record, local_path, destination, file_name, size)
 
-    @_journalled
     async def start_deletion(self, path: str) -> TransferRecord:
-        intent = await asyncio.to_thread(
-            self.store.begin_deletion, path, channel_id=self.settings.storage_channel
-        )
-        record = await self.registry.create(
-            "deleting",
-            total=len(intent["message_ids"]),
-            transfer_id=intent["id"],
-            context=dict(
-                kind="delete", deletion_id=intent["id"], name=path.rsplit("/", 1)[-1]
-            ),
-        )
-        if not record.terminal and (record.task is None or record.task.done()):
-            self.registry.spawn(record.id, lambda item: self._delete_intent(item))
-        return record
+        return (await self.start_deletions([path]))[0]
 
-    async def _delete_intent(self, record: TransferRecord) -> None:
+    @_journalled
+    async def start_deletions(self, paths: list[str]) -> list[TransferRecord]:
+        records = []
+        protect = getattr(self, "_ensure_replica", None)
+        protection = None
+
+        async def protect_batch():
+            nonlocal protection
+            if protection is None:
+                protection = asyncio.create_task(protect())
+            await protection
+
+        try:
+            for path in paths:
+                intent = await asyncio.to_thread(
+                    self.store.begin_deletion,
+                    path,
+                    channel_id=self.settings.storage_channel,
+                )
+                try:
+                    record = await self.registry.create(
+                        "deleting",
+                        total=len(intent["message_ids"]),
+                        transfer_id=intent["id"],
+                        context=dict(
+                            kind="delete",
+                            deletion_id=intent["id"],
+                            name=path.rsplit("/", 1)[-1],
+                        ),
+                    )
+                except Exception as exc:
+                    try:
+                        self.registry.get(intent["id"])
+                    except KeyError:
+                        await asyncio.to_thread(
+                            self.store.fail_deletion, intent["id"], type(exc).__name__
+                        )
+                    raise
+                records.append(record)
+                if (
+                    intent["state"] == "failed"
+                    and not record.terminal
+                    and (record.task is None or record.task.done())
+                ):
+                    await asyncio.to_thread(
+                        self.store.confirm_deletion_messages, intent["id"], []
+                    )
+        finally:
+            # Start accepted work even if accepting a later item failed.
+            for record in records:
+                if not record.terminal and (record.task is None or record.task.done()):
+                    self.registry.spawn(
+                        record.id,
+                        lambda item: self._delete_intent(
+                            item, protect=protect_batch if protect else None
+                        ),
+                    )
+        return records
+
+    async def _delete_intent(
+        self,
+        record: TransferRecord,
+        *,
+        protect: Callable[[], Awaitable[None]] | None = None,
+    ) -> None:
         intent = next(
             (
                 item
@@ -1249,7 +1311,7 @@ class TransferManager:
             return
         try:
             await self._verify_lineage(record)
-            protect = getattr(self, "_ensure_replica", None)
+            protect = protect or getattr(self, "_ensure_replica", None)
             if protect is not None:
                 await self.registry.update(record.id, phase="checking_backup")
                 await protect()

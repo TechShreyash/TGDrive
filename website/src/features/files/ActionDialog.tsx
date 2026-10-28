@@ -258,9 +258,9 @@ export default function ActionDialog({
                     files will remain in Telegram.
                 </p>
                 <p className="muted">
-                    You cannot restore these items from Trash after deletion. If
-                    deletion fails, the item stays in Trash so you can try
-                    again.
+                    Items disappear from Trash once deletion starts and are
+                    removed in the background. You cannot restore them after
+                    deletion. Failed items reappear in Trash so you can retry.
                 </p>
                 <ErrorNotice message={error} />
                 <div className="dialog-actions">

@@ -806,8 +806,17 @@ class MongoStore(DriveStore):
     def list_trash(self, query=""):
         with self._transaction():
             result = {}
+            deleting = {
+                row["root_id"]
+                for row in self._state["deletions"].values()
+                if row["state"] == "pending"
+            }
             for node in self._state["nodes"].values():
-                if node["trashed"] and query.casefold() in node["name"].casefold():
+                if (
+                    node["trashed"]
+                    and node["id"] not in deleting
+                    and query.casefold() in node["name"].casefold()
+                ):
                     path = self._path(node["id"])
                     chain = self._resolve(path)[2]
                     if not any(row["trashed"] for row in chain[:-1]):

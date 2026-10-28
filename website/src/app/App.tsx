@@ -1131,6 +1131,19 @@ export default function App() {
                 allowPublic,
             );
             if (type === "delete") {
+                const accepted = new Set(
+                    (response.results || [])
+                        .filter((result) => result.id)
+                        .map((result) => result.path),
+                );
+                setDirectory((current) => ({
+                    ...current,
+                    contents: Object.fromEntries(
+                        Object.entries(current.contents).filter(
+                            ([, item]) => !accepted.has(itemPath(item)),
+                        ),
+                    ),
+                }));
                 const names = new Map(
                     targets.map((item) => [itemPath(item), item.name]),
                 );

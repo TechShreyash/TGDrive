@@ -103,6 +103,45 @@ def test_deletion_preflight_never_mutates_and_accepts_pending_same_root_retry():
 
 
 @pytest.mark.parametrize("backend", ["sqlite", "mongodb"])
+def test_pending_deletions_hide_from_trash_across_restart_and_reappear_on_failure(
+    backend, tmp_path
+):
+    database = tmp_path / "deletion.sqlite3"
+    mongo = FakeMongoBackend()
+    store = (
+        DriveStore.create(database)
+        if backend == "sqlite"
+        else MongoStore.create(mongo)
+    )
+    try:
+        node = store.create_folder("/", "Removal")
+        path = "/" + node["id"]
+        child = store.create_folder(path, "Child")
+        store.set_trashed(path + "/" + child["id"], True)
+        other = store.create_folder("/", "Other")
+        store.set_trashed("/" + other["id"], True)
+        store.set_trashed(path, True)
+        assert set(store.list_trash()) == {node["id"], other["id"]}
+
+        intent = store.begin_deletion(path)
+        assert set(store.list_trash()) == {other["id"]}
+        assert store.list_trash("removal") == {}
+        assert store.get_directory(path, include_trashed=True)["name"] == "Removal"
+        store.close()
+        store = DriveStore.load(database) if backend == "sqlite" else MongoStore(mongo)
+        assert set(store.list_trash()) == {other["id"]}
+
+        store.fail_deletion(intent["id"], "Backup unavailable")
+        assert set(store.list_trash("removal")) == {node["id"]}
+        store.confirm_deletion_messages(intent["id"], [])
+        assert set(store.list_trash()) == {other["id"]}
+        store.finish_deletion(intent["id"])
+        assert set(store.list_trash()) == {other["id"]}
+    finally:
+        store.close()
+
+
+@pytest.mark.parametrize("backend", ["sqlite", "mongodb"])
 @pytest.mark.parametrize("action", ["move", "trash", "restore"])
 def test_batch_failure_rolls_back_earlier_items_and_share_access(backend, action):
     store = (

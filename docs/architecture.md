@@ -427,10 +427,14 @@ parent journals completed files and owns the shared staging reservation, avoidin
 duplicate byte claims and duplicate history rows. Browser closure does not stop
 server work. See [torrent limits and recovery](reference.md#torrent-imports).
 
-Permanent deletion journals intent, then atomically removes the subtree/shares
-and drops completed-intent message references. **Original Telegram messages remain**,
-for every file age and retry. Reconciliation, lineage and independent-backup
-barriers still apply; different selected items complete independently.
+Permanent deletion journals all accepted intents before starting removal. Pending
+roots are hidden from Trash listings; failures return to the listing and retries
+hide them again. A bulk request shares one independent-backup check before any
+of its newly started jobs remove catalog rows. Each subtree/share removal stays
+atomic and independent; retries and restart recovery perform fresh checks.
+Completed intents drop their message references. **Original Telegram messages
+remain** for every file age and retry. Reconciliation and lineage checks still
+apply. See [deletion progress and retries](usage.md#trash-and-permanent-deletion).
 
 <a id="zip-archive-jobs"></a>
 

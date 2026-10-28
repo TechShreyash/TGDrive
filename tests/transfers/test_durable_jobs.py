@@ -324,6 +324,168 @@ async def test_permanent_delete_needs_no_telegram_client_and_revokes_shares(tmp_
         manager.store.close()
 
 
+async def test_bulk_deletion_protects_all_intents_once_before_removal(
+    tmp_path, monkeypatch
+):
+    pool = ClientPool([Telegram()])
+    manager = manager_for(tmp_path, pool)
+    paths = []
+    for message_id in range(77, 80):
+        item = manager.store.add_file("/", f"{message_id}.bin", message_id, 1)
+        paths.append("/" + item["id"])
+        manager.store.set_trashed(paths[-1], True)
+    entered, release = asyncio.Event(), asyncio.Event()
+    protected = False
+
+    async def protect():
+        nonlocal protected
+        assert {row["path"] for row in manager.store.pending_deletions()} == set(paths)
+        for path in paths:
+            assert manager.store.message_ids(path, include_trashed=True)
+        entered.set()
+        await release.wait()
+        protected = True
+
+    manager._ensure_replica = AsyncMock(side_effect=protect)
+    finish = manager.store.finish_deletion
+
+    def checked_finish(intent_id):
+        assert protected
+        return finish(intent_id)
+
+    monkeypatch.setattr(manager.store, "finish_deletion", checked_finish)
+    try:
+        jobs = await manager.start_deletions(paths)
+        await asyncio.wait_for(entered.wait(), 1)
+        assert len(jobs) == 3 and not any(job.terminal for job in jobs)
+        manager._ensure_replica.assert_awaited_once()
+        release.set()
+        await asyncio.gather(*(job.task for job in jobs))
+        assert all(job.status is TransferStatus.COMPLETED for job in jobs)
+        assert manager.store.pending_deletions() == []
+        assert manager.store.list_trash() == {}
+
+        item = manager.store.add_file("/", "separate.bin", 80, 1)
+        path = "/" + item["id"]
+        manager.store.set_trashed(path, True)
+        manager._ensure_replica.side_effect = None
+        separate = await manager.start_deletion(path)
+        await separate.task
+        assert manager._ensure_replica.await_count == 2
+    finally:
+        release.set()
+        await manager.close()
+        manager.registry.close()
+        manager.store.close()
+
+
+async def test_bulk_backup_failure_preserves_each_item_and_retry_hides_it(
+    tmp_path, monkeypatch
+):
+    manager = manager_for(tmp_path, ClientPool([Telegram()]))
+    release = asyncio.Event()
+    paths = []
+    for message_id in (77, 78):
+        item = manager.store.add_file("/", f"{message_id}.bin", message_id, 1)
+        paths.append("/" + item["id"])
+        manager.store.set_trashed(paths[-1], True)
+    manager._ensure_replica = AsyncMock(side_effect=RuntimeError("backup unavailable"))
+    try:
+        jobs = await manager.start_deletions(paths)
+        await asyncio.gather(*(job.task for job in jobs))
+        manager._ensure_replica.assert_awaited_once()
+        assert all(job.status is TransferStatus.ERROR for job in jobs)
+        assert len(manager.store.list_trash()) == 2
+        assert all(row["state"] == "failed" for row in manager.store.pending_deletions())
+
+        async def protect_retry():
+            intent = next(
+                row
+                for row in manager.store.pending_deletions()
+                if row["id"] == jobs[0].id
+            )
+            assert intent["state"] == "pending"
+            assert set(manager.store.list_trash()) == {paths[1].rsplit("/", 1)[-1]}
+
+        manager._ensure_replica.side_effect = protect_retry
+        spawn = manager.registry.spawn
+
+        def delay_worker(transfer_id, work):
+            async def delayed(record):
+                await release.wait()
+                await work(record)
+
+            return spawn(transfer_id, delayed)
+
+        monkeypatch.setattr(manager.registry, "spawn", delay_worker)
+        retry = await manager.retry_job(jobs[0].id)
+        assert next(
+            row for row in manager.store.pending_deletions() if row["id"] == retry.id
+        )["state"] == "pending"
+        assert set(manager.store.list_trash()) == {paths[1].rsplit("/", 1)[-1]}
+        assert manager._ensure_replica.await_count == 1
+        release.set()
+        await retry.task
+        assert retry.status is TransferStatus.COMPLETED
+        assert manager._ensure_replica.await_count == 2
+        assert jobs[1].status is TransferStatus.ERROR
+    finally:
+        release.set()
+        await manager.close()
+        manager.registry.close()
+        manager.store.close()
+
+
+async def test_bulk_acceptance_failure_keeps_accepted_deletions_running(
+    tmp_path, monkeypatch
+):
+    manager = manager_for(tmp_path, ClientPool([Telegram()]))
+    item = manager.store.add_file("/", "accepted.bin", 77, 1)
+    path = "/" + item["id"]
+    manager.store.set_trashed(path, True)
+    begin = manager.store.begin_deletion
+
+    def fail_later(selected, **kwargs):
+        if selected == "/later":
+            raise RuntimeError("catalog write unavailable")
+        return begin(selected, **kwargs)
+
+    monkeypatch.setattr(manager.store, "begin_deletion", fail_later)
+    try:
+        with pytest.raises(RuntimeError, match="catalog write unavailable"):
+            await manager.start_deletions([path, "/later"])
+        job = manager.registry.list()[0]
+        await job.task
+        assert job.status is TransferStatus.COMPLETED
+        assert manager.store.pending_deletions() == []
+        assert manager.store.list_trash() == {}
+    finally:
+        await manager.close()
+        manager.registry.close()
+        manager.store.close()
+
+
+async def test_deletion_job_capacity_failure_restores_item_to_trash(tmp_path):
+    registry = registry_for(tmp_path / "jobs.sqlite3", max_entries=1)
+    manager = manager_for(tmp_path, ClientPool([Telegram()]), registry=registry)
+    await registry.create("queued")
+    item = manager.store.add_file("/", "retained.bin", 77, 1)
+    path = "/" + item["id"]
+    manager.store.set_trashed(path, True)
+    try:
+        with pytest.raises(RuntimeError, match="too many active transfers"):
+            await manager.start_deletion(path)
+        intent = manager.store.pending_deletions()[0]
+        assert intent["state"] == "failed"
+        assert set(manager.store.list_trash()) == {item["id"]}
+        assert manager.store.message_ids(path, include_trashed=True) == [77]
+        assert len(registry.list()) == 1
+    finally:
+        await manager.close()
+        manager.registry.close()
+        manager.store.close()
+
+
 async def test_capacity_eviction_and_ttl_pruning_are_persistent(tmp_path):
     path = tmp_path / "jobs.sqlite3"
     registry = registry_for(path, max_entries=1, ttl_seconds=1)

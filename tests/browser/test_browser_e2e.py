@@ -3036,6 +3036,12 @@ def test_bulk_deletion_is_one_notice_with_refresh_failure_and_retry(
     ).click()
     notice = page.get_by_role("region", name="File Deletion", exact=True)
     expect(notice.get_by_role("status")).to_contain_text("Deleting 3 items…")
+    expect(notice).to_contain_text("You can close this tab.")
+    for name in ("Private folder", "資料", "Preview samples"):
+        expect(page.get_by_role("button", name=name, exact=True)).to_have_count(0)
+    page.reload()
+    expect(notice.get_by_role("status")).to_contain_text("Deleting 3 items…")
+    expect(page.get_by_role("heading", name="Trash Is Empty", exact=True)).to_be_visible()
     expect(page.locator(".transfer-batch")).to_have_count(0)
     records = server.control()["records"]
     ids = [key for key, record in records.items() if record.get("phase") == "deleting"]
@@ -3046,6 +3052,9 @@ def test_bulk_deletion_is_one_notice_with_refresh_failure_and_retry(
     server.control("/fail-deletion/" + ids[1], method="POST")
     server.finish(ids[2])
     expect(notice.get_by_role("status")).to_have_text("1 item could not be deleted.")
+    jobs = page.request.get(server.url + "/api/v1/jobs").json()["jobs"]
+    failed_name = next(job["name"] for job in jobs if job["id"] == ids[1])
+    expect(page.get_by_role("button", name=failed_name, exact=True)).to_be_visible()
     expect(notice.locator(".deletion-errors")).not_to_have_attribute("open", "")
     expect(page.locator(".transfer-batch")).to_have_count(0)
     page.reload()
@@ -3059,6 +3068,7 @@ def test_bulk_deletion_is_one_notice_with_refresh_failure_and_retry(
     expect(notice).to_contain_text("Synthetic catalog deletion failed")
     notice.get_by_role("button", name="Retry Failed deletions", exact=True).click()
     expect(notice.get_by_role("status")).to_contain_text("Deleting 1 item…")
+    expect(page.get_by_role("button", name=failed_name, exact=True)).to_have_count(0)
     server.finish(ids[1])
     expect(page.get_by_text("Permanently deleted 1 item.", exact=True)).to_be_visible()
     expect(notice).to_have_count(0)

@@ -47,6 +47,7 @@ examples from the recorded session, not throughput benchmarks.
 | Server → Telegram | Telegram datacenter, request latency, upload pipeline, cooldowns and server upload bandwidth |
 | Telegram → server | Network route, available Telegram accounts, request limits and missing cached bytes |
 | Server → viewer | Server upload bandwidth, proxy, viewer connection and simultaneous downloads |
+| Permanent deletion | Backup protection checks shared across the selection, plus stopping uploads into the selected folders; see [deletion progress](usage.md#trash-and-permanent-deletion) |
 | Video decoding | Container/codec support and browser/device capacity |
 
 TGDrive uses Telethon with cryptg, bounded upload pipelining and pooled downloads.

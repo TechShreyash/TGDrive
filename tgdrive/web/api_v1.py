@@ -811,8 +811,8 @@ def register_routes(
         if payload.action == "delete":
             for path in selected:
                 store.validate_deletion(path)
-            for path in selected:
-                record = await get_manager(request).start_deletion(path)
+            records = await get_manager(request).start_deletions(selected)
+            for path, record in zip(selected, records, strict=True):
                 results.append({"path": path, "id": record.id, "status": "deleting"})
         else:
 

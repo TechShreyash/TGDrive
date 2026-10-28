@@ -219,6 +219,8 @@ class FixtureTransfers:
 
     async def start_deletion(self, path: str) -> TransferRecord:
         intent = self.store.begin_deletion(path)
+        if intent["state"] == "failed":
+            self.store.confirm_deletion_messages(intent["id"], [])
         record = await self.registry.create(
             "deleting", total=len(intent["message_ids"]), transfer_id=intent["id"]
         )
@@ -233,6 +235,7 @@ class FixtureTransfers:
             await self.release[item.id].wait()
             if item.id in self.fail_deletions:
                 self.fail_deletions.remove(item.id)
+                self.store.fail_deletion(intent["id"], "Synthetic catalog deletion failed")
                 raise RuntimeError("Synthetic catalog deletion failed")
             self.store.finish_deletion(intent["id"])
             (
@@ -243,6 +246,9 @@ class FixtureTransfers:
 
         self.registry.spawn(record.id, delete)
         return record
+
+    async def start_deletions(self, paths: list[str]) -> list[TransferRecord]:
+        return [await self.start_deletion(path) for path in paths]
 
     async def retry_job(self, job_id: str) -> TransferRecord:
         record = self.registry.get(job_id)

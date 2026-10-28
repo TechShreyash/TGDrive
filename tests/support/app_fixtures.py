@@ -52,6 +52,9 @@ class FakeTransfers:
         self.registry.spawn(record.id, complete)
         return record
 
+    async def start_deletions(self, paths: list[str]):
+        return [await self.start_deletion(path) for path in paths]
+
     async def delete_telegram_messages(self, message_ids: list[int]) -> None:
         self.deleted_messages.extend(message_ids)
 

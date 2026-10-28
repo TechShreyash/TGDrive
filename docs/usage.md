@@ -665,6 +665,10 @@ folder before restoring or deleting it.
   Telegram messages remain in the storage channel. It cannot be cancelled or
   restored from Trash after completion.
 
+Accepted items disappear from Trash while deletion continues on the server,
+including after closing the tab or restarting TGDrive. Failed items reappear;
+use **Retry Failed deletions** in the Trash notice to try again.
+
 ### Why permanent deletion keeps the Telegram files
 
 > [!WARNING]
@@ -678,9 +682,9 @@ requires an authorized account.
 <details>
 <summary>Deletion progress and retries</summary>
 
-Wait for the combined completion notice on **Trash**. Items remain listed while
-jobs run; failed items can be expanded/retried. Connection/list-refresh failures
-retry automatically. Backup protection checks or upload cleanup may delay removal.
+The combined notice on **Trash** reports background progress and failures.
+Connection/list-refresh failures retry automatically. Backup protection checks or
+upload cleanup may delay completion; hiding an item does not confirm removal.
 Running/failure details stay on Trash; successful notices dismiss after six
 seconds (paused on hover/focus) and do not return after navigation/reload.
 

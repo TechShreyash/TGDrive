@@ -221,6 +221,28 @@ def test_folder_lifecycle_search_trash_and_permanent_delete(
     assert store.list_directory("/") == {}
 
 
+def test_legacy_delete_accepts_hidden_pending_intent(
+    app_client: tuple[Any, ...], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    client, store, runtime, _ = app_client
+    login(client)
+    node = store.create_folder("/", "Deleting")
+    path = "/" + node["id"]
+    store.set_trashed(path, True)
+    intent = store.begin_deletion(path)
+    assert store.list_trash() == {}
+
+    async def pending_deletion(selected_path):
+        assert selected_path == path
+        return SimpleNamespace(id=intent["id"])
+
+    monkeypatch.setattr(runtime.transfers, "start_deletion", pending_deletion)
+    response = client.post("/api/deleteFileFolder", json={"path": path})
+    assert response.status_code == 202
+    assert response.json()["id"] == intent["id"]
+    assert len(store.pending_deletions()) == 1
+
+
 def test_share_token_is_scoped_and_file_access_accepts_folder_token(
     app_client: tuple[Any, ...], monkeypatch: pytest.MonkeyPatch
 ) -> None:

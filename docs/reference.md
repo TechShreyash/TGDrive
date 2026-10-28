@@ -667,7 +667,7 @@ These are catalog/resource counts, not Telegram quota or proof of readable files
 | --- | --- | --- | --- |
 | `POST /api/getDirectory` | Owner or valid folder share | `{"path":"/","auth":null}` | `{"status":"ok","data":<directory>,"auth_home_path":null}`. |
 | `GET /api/v1/nodes` | Owner | `parent_id=/&offset=0&limit=100&sort=name` | `{"items":[...],"total":42,"offset":0}`. |
-| `GET /api/v1/trash` | Owner only | `q=report` (optional, up to 255 characters) | `{"data":{"contents":{...}}}`; actionable top-level Trash items include `parent_names` for their source folder; never includes live files. |
+| `GET /api/v1/trash` | Owner only | `q=report` (optional, up to 255 characters) | `{"data":{"contents":{...}}}`; top-level Trash items include `parent_names` for their source folder; pending deletions are hidden, failed deletions reappear; never includes live files. |
 | `GET /api/v1/search` | Owner only | `q=report&offset=0&limit=100&sort=name&order=asc` | `{"items":[...],"query":"report","has_more":false,"next_offset":null}`. |
 | `POST /api/createNewFolder` | Owner | `{"path":"/","name":"Photos"}` | `{"status":"ok"}`; refresh listing for new ID. |
 | `POST /api/renameFileFolder` | Owner | `{"path":"/<id>","name":"New name"}` | `{"status":"ok"}`. |
@@ -813,8 +813,12 @@ invalid item or database failure rolls back earlier changes, revision increments
 and share revocations. Public-exposure checks belong to that same transaction.
 Skipped move conflicts remain explicit successful results.
 
-Permanent deletion validates the whole selection before scheduling, then uses
-independently durable catalog-removal intents. Each job removes its database
+Permanent deletion validates the whole selection before scheduling, then journals
+independently durable catalog-removal intents. Accepted pending roots disappear
+from Trash listings, including `/api/getDirectory` with `/trash`; failures
+reappear for retry. One backup protection check covers the bulk request before
+its newly started jobs remove records; individual retries and restart recovery
+check protection again. Each job removes its database
 subtree and shares atomically, retaining original Telegram messages for every
 file age. Completed intents no longer retain message references. This is TGDrive's
 catalog-only deletion policy; see

@@ -49,7 +49,8 @@ export default function DeletionNotice({
                             )
                           ? "Waiting for uploads into these items to stop. "
                           : ""}
-                    Items stay in Trash until deletion finishes.
+                    Items are hidden while deletion continues in the background.
+                    You can close this tab.
                 </p>
             )}
             {progressError && <p role="alert">{progressError}</p>}
@@ -57,7 +58,7 @@ export default function DeletionNotice({
                 <details className="deletion-errors">
                     <summary>View Failed Items ({failed.length})</summary>
                     <p>
-                        These items remain in Trash. You can retry their
+                        These items are back in Trash. You can retry their
                         deletion.
                     </p>
                     <ul>

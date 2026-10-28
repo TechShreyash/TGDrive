@@ -780,20 +780,13 @@ def create_app(
         store = _store(request)
         check_path(store, payload.path, descendants=True)
         manager = _transfers(request)
-        normalized_path = "/" + payload.path.strip("/")
-        trash_paths = {
-            (
-                f"{item['path'].rstrip('/')}/{item['id']}"
-                if item["path"] != "/"
-                else f"/{item['id']}"
-            )
-            for item in store.list_trash().values()
-        }
-        if normalized_path not in trash_paths:
+        try:
+            store.validate_deletion(payload.path)
+        except (NotFoundError, RootMutationError, TrashedItemError):
             raise HTTPException(
                 status_code=409,
                 detail="Item must be in trash before permanent deletion",
-            )
+            ) from None
         record = await manager.start_deletion(payload.path)
         return JSONResponse({"status": "ok", "id": record.id}, status_code=202)
 

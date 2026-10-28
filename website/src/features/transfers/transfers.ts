@@ -851,6 +851,7 @@ export class TransferManager {
         this.deletionUpdates.set(id, ++this.deletionVersion);
         this.updateDeletionProgress();
         this.publish(false);
+        window.dispatchEvent(new Event("tgdrive:files-changed"));
         // A poll started before this retry must be followed by a fresh request.
         this.refreshJobs();
     }
@@ -2347,8 +2348,8 @@ export class TransferManager {
             if (
                 this.deletionJobs.some(
                     (job) =>
-                        job.status === "completed" &&
-                        previousDeletions.get(job.id) !== "completed",
+                        deletionTerminal.has(job.status) &&
+                        previousDeletions.get(job.id) !== job.status,
                 )
             )
                 filesChanged = true;
