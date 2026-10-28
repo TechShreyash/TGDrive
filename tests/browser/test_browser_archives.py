@@ -142,7 +142,9 @@ def test_create_zip_single_and_bulk_actions_start_server_work(server, desktop, w
     page.get_by_role("checkbox", name="Select Private folder", exact=True).check()
     page.get_by_role("checkbox", name="Select 資料", exact=True).check()
     page.get_by_role("button", name="Create ZIP", exact=True).click()
-    expect(dialog.get_by_text("2 selected files and folders", exact=True)).to_be_visible()
+    expect(
+        dialog.get_by_text("2 selected files and folders", exact=True)
+    ).to_be_visible()
     expect(dialog.get_by_label("ZIP name", exact=True)).to_have_value("Archive.zip")
     dialog.get_by_label("ZIP name", exact=True).fill("Together.zip")
     assert_dialog_layout(page, dialog)
@@ -181,7 +183,9 @@ def test_extract_zip_current_and_new_folder_keep_clear_destinations(
     for current_folder in (False, True):
         item_action(page, ZIP_NAME, "Extract ZIP")
         dialog = page.get_by_role("dialog", name="Extract ZIP", exact=True)
-        expect(dialog.get_by_role("radio", name="New folder", exact=True)).to_be_checked()
+        expect(
+            dialog.get_by_role("radio", name="New folder", exact=True)
+        ).to_be_checked()
         expect(dialog.get_by_label("New folder name", exact=True)).to_have_value(
             "Project files"
         )
@@ -224,7 +228,10 @@ def test_archive_failures_stay_inline_and_public_destination_requires_consent(
     name.fill("")
     expect(submit).to_be_disabled()
     name.fill("Shared bundle.zip")
-    archive.reject = (507, {"detail": "Not enough temporary storage. Free space and retry."})
+    archive.reject = (
+        507,
+        {"detail": "Not enough temporary storage. Free space and retry."},
+    )
     submit.click()
     expect(dialog.get_by_role("alert")).to_contain_text("Not enough temporary storage")
     expect(name).to_have_value("Shared bundle.zip")

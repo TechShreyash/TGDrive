@@ -30,7 +30,16 @@ _DEFAULT_CANCEL_GRACE_SECONDS = 10.0
 _SHUTDOWN_DRAIN_SECONDS = 5.0
 _PROGRESS_JOURNAL_SECONDS = 0.5
 _PROGRESS_STALE_SECONDS = 15.0
-_BYTE_PHASES = frozenset({"saving", "downloading", "uploading", "torrent_uploading", "archiving", "extracting"})
+_BYTE_PHASES = frozenset(
+    {
+        "saving",
+        "downloading",
+        "uploading",
+        "torrent_uploading",
+        "archiving",
+        "extracting",
+    }
+)
 _ERROR_UNSET = object()
 
 
@@ -198,9 +207,10 @@ class TransferRecord:
 
     @property
     def history_hidden(self) -> bool:
-        return bool(self.committed.context.get("torrent_parent_id") or self.committed.context.get("archive_parent_id")) or (
-            self.terminal and bool(self.committed.context.get("history_cleared"))
-        )
+        return bool(
+            self.committed.context.get("torrent_parent_id")
+            or self.committed.context.get("archive_parent_id")
+        ) or (self.terminal and bool(self.committed.context.get("history_cleared")))
 
     def as_dict(self) -> dict[str, Any]:
         if self._committed is not None:
@@ -583,8 +593,10 @@ class TransferRegistry:
         archive_parent = self._records.get(context.get("archive_parent_id"))
         if (
             archive_parent is not None
-            and context.get("archive_file_index") not in archive_parent.committed.context.get("archive_completed", [])
-            and archive_parent.status not in {TransferStatus.COMPLETED, TransferStatus.CANCELLED}
+            and context.get("archive_file_index")
+            not in archive_parent.committed.context.get("archive_completed", [])
+            and archive_parent.status
+            not in {TransferStatus.COMPLETED, TransferStatus.CANCELLED}
         ):
             return True
         parent = self._records.get(context.get("torrent_parent_id"))
@@ -592,7 +604,8 @@ class TransferRegistry:
             parent is not None
             and context.get("torrent_file_index")
             not in parent.committed.context.get("torrent_completed", [])
-            and parent.status not in {
+            and parent.status
+            not in {
                 TransferStatus.COMPLETED,
                 TransferStatus.CANCELLED,
             }

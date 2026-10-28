@@ -43,7 +43,20 @@ def write_zip(tmp_path, entries, **kwargs):
     return path
 
 
-@pytest.mark.parametrize("name", ["../escape", "/absolute", "C:/drive", "a\\escape", "a//b", "a/./b", "a/../b", " a ", "a\x00b"])
+@pytest.mark.parametrize(
+    "name",
+    [
+        "../escape",
+        "/absolute",
+        "C:/drive",
+        "a\\escape",
+        "a//b",
+        "a/./b",
+        "a/../b",
+        " a ",
+        "a\x00b",
+    ],
+)
 def test_reject_unsafe_zip_paths(tmp_path, name):
     path = write_zip(tmp_path, [(name.replace("\x00", "_"), b"payload")])
     if "\x00" in name:
@@ -52,14 +65,17 @@ def test_reject_unsafe_zip_paths(tmp_path, name):
         zip_manifest(path, 1024, 1024**2)
 
 
-@pytest.mark.parametrize("entries", [
-    [("one.txt", b"a"), ("ONE.txt", b"b")],
-    [("a", b"a"), ("a/b", b"b")],
-    [("A/b", b"a"), ("a/c", b"b")],
-    [("cafe\u0301", b"a"), ("caf\u00e9", b"b")],
-    [("empty.txt", b"")],
-    [("folder/", b"hidden bytes")],
-])
+@pytest.mark.parametrize(
+    "entries",
+    [
+        [("one.txt", b"a"), ("ONE.txt", b"b")],
+        [("a", b"a"), ("a/b", b"b")],
+        [("A/b", b"a"), ("a/c", b"b")],
+        [("cafe\u0301", b"a"), ("caf\u00e9", b"b")],
+        [("empty.txt", b"")],
+        [("folder/", b"hidden bytes")],
+    ],
+)
 def test_reject_conflicting_or_unrepresentable_entries(tmp_path, entries):
     path = write_zip(tmp_path, entries)
     with pytest.raises(ArchiveError):
@@ -84,13 +100,17 @@ def test_manifest_limits_precede_zipfile_allocation(tmp_path, monkeypatch):
     footer = data.rfind(b"PK\x05\x06")
     struct.pack_into("<HH", data, footer + 8, 1, 1)
     path.write_bytes(data)
-    monkeypatch.setattr(archives, "ZipFile", lambda *_: pytest.fail("allocated unbounded ZIP entries"))
+    monkeypatch.setattr(
+        archives, "ZipFile", lambda *_: pytest.fail("allocated unbounded ZIP entries")
+    )
     with pytest.raises(ArchiveError, match="directory"):
         zip_manifest(path, 1024, 1024**2)
 
 
 def test_manifest_preserves_empty_directories_and_bounds_output(tmp_path):
-    path = write_zip(tmp_path, [("folder/", b""), ("folder/deep/data", b"hello"), ("empty/", b"")])
+    path = write_zip(
+        tmp_path, [("folder/", b""), ("folder/deep/data", b"hello"), ("empty/", b"")]
+    )
     plan = zip_manifest(path, 1024, 1024**2)
     assert plan["size"] == 5
     assert plan["folders"] == [("empty",), ("folder",), ("folder", "deep")]
@@ -111,7 +131,7 @@ class MemoryTelegram(Account):
         if self.read_gate is not None:
             await self.read_gate.wait()
         for index in range(offset, offset + limit):
-            data = message.content[index * 1024**2:(index + 1) * 1024**2]
+            data = message.content[index * 1024**2 : (index + 1) * 1024**2]
             if not data:
                 break
             yield data
@@ -123,13 +143,17 @@ async def manager_for(tmp_path, *, store=None, ledger=None, registry=None):
     pool = ClientPool([client])
     await pool.start()
     settings = SimpleNamespace(
-        resolved_cache_dir=tmp_path / "cache", max_concurrent_transfers=1,
-        storage_channel=-100123, bot_upload_limit=4 * 1024**2,
-        upload_limit=8 * 1024**2, staging_budget_bytes=16 * 1024**2,
+        resolved_cache_dir=tmp_path / "cache",
+        max_concurrent_transfers=1,
+        storage_channel=-100123,
+        bot_upload_limit=4 * 1024**2,
+        upload_limit=8 * 1024**2,
+        staging_budget_bytes=16 * 1024**2,
         min_free_bytes=0,
     )
     manager = TransferManager(
-        settings=settings, pool=pool,
+        settings=settings,
+        pool=pool,
         store=store or DriveStore.create(tmp_path / "drive.sqlite3"),
         registry=registry or registry_for(tmp_path),
         remote=SimpleNamespace(close=AsyncMock()),
@@ -141,10 +165,15 @@ def source(manager, ledger, name, content, parent="/", *, checksum=False):
     ledger.next_id += 1
     identity = ledger.next_id
     ledger.messages[identity] = SimpleNamespace(
-        id=identity, document=SimpleNamespace(file_size=len(content)), content=content,
+        id=identity,
+        document=SimpleNamespace(file_size=len(content)),
+        content=content,
     )
     return manager.store.add_file(
-        parent, name, identity, len(content),
+        parent,
+        name,
+        identity,
+        len(content),
         sha256=hashlib.sha256(content).hexdigest() if checksum else None,
     )
 
@@ -165,21 +194,40 @@ async def test_create_zip_preserves_tree_and_reduces_overlapping_selection(tmp_p
         folder = manager.store.create_folder("/", "Project")
         folder_path = manager.store.resolve_id(folder["id"])
         manager.store.create_folder(folder_path, "Empty")
-        file = source(manager, ledger, "notes.txt", b"hello", folder_path, checksum=True)
+        file = source(
+            manager, ledger, "notes.txt", b"hello", folder_path, checksum=True
+        )
         extra = source(manager, ledger, "other.bin", b"world")
-        paths = [folder_path, manager.store.resolve_id(file["id"]), manager.store.resolve_id(extra["id"])]
+        paths = [
+            folder_path,
+            manager.store.resolve_id(file["id"]),
+            manager.store.resolve_id(extra["id"]),
+        ]
         assert len(archive_members(manager.store, paths)) == 4
         job = await manager.start_archive(paths=paths, destination="/", name="Bundle")
         await finish(job)
         assert job.status is TransferStatus.COMPLETED, job.error
-        output = next(row for row in manager.store.list_directory("/").values() if row["name"] == "Bundle.zip")
+        output = next(
+            row
+            for row in manager.store.list_directory("/").values()
+            if row["name"] == "Bundle.zip"
+        )
         output = manager.store.get_file(manager.store.resolve_id(output["id"]))
-        with ZipFile(io.BytesIO(ledger.messages[output["message_id"]].content)) as archive:
-            assert set(archive.namelist()) == {"Project/", "Project/Empty/", "Project/notes.txt", "other.bin"}
+        with ZipFile(
+            io.BytesIO(ledger.messages[output["message_id"]].content)
+        ) as archive:
+            assert set(archive.namelist()) == {
+                "Project/",
+                "Project/Empty/",
+                "Project/notes.txt",
+                "other.bin",
+            }
             assert archive.read("Project/notes.txt") == b"hello"
             assert all(row.compress_type == ZIP_STORED for row in archive.infolist())
         assert manager.store.get_file(manager.store.resolve_id(file["id"]))["size"] == 5
-        location = locate_transfer(manager.store, {"id": job.id, "kind": "archive", "status": "completed"})
+        location = locate_transfer(
+            manager.store, {"id": job.id, "kind": "archive", "status": "completed"}
+        )
         assert location["item_id"] == output["id"]
     finally:
         await dispose(manager)
@@ -191,21 +239,51 @@ async def test_extract_keeps_both_and_hides_child_jobs(tmp_path, folder_name):
     try:
         original = source(manager, ledger, "one.txt", b"original")
         manager.store.create_folder("/", "folder")
-        payload = zip_bytes([("one.txt", b"new"), ("folder/two.txt", b"two"), ("folder/empty/", b"")])
+        payload = zip_bytes(
+            [("one.txt", b"new"), ("folder/two.txt", b"two"), ("folder/empty/", b"")]
+        )
         zip_file = source(manager, ledger, "source.zip", payload, checksum=True)
-        job = await manager.start_extraction(path=manager.store.resolve_id(zip_file["id"]), destination="/", folder_name=folder_name)
+        job = await manager.start_extraction(
+            path=manager.store.resolve_id(zip_file["id"]),
+            destination="/",
+            folder_name=folder_name,
+        )
         await finish(job)
         assert job.status is TransferStatus.COMPLETED, job.error
         destination = job.context["destination"]
         rows = manager.store.list_directory(destination)
-        assert {row["name"] for row in rows.values()} >= ({"one (1).txt", "folder (1)"} if folder_name is None else {"one.txt", "folder"})
+        assert {row["name"] for row in rows.values()} >= (
+            {"one (1).txt", "folder (1)"}
+            if folder_name is None
+            else {"one.txt", "folder"}
+        )
         expected_folder = "folder (1)" if folder_name is None else "folder"
         folder = next(row for row in rows.values() if row["name"] == expected_folder)
-        assert {row["name"] for row in manager.store.list_directory(manager.store.resolve_id(folder["id"])).values()} == {"two.txt", "empty"}
-        assert manager.store.get_file(manager.store.resolve_id(original["id"]))["size"] == 8
-        children = [row for row in manager.registry.list() if row.context.get("archive_parent_id") == job.id]
+        assert {
+            row["name"]
+            for row in manager.store.list_directory(
+                manager.store.resolve_id(folder["id"])
+            ).values()
+        } == {"two.txt", "empty"}
+        assert (
+            manager.store.get_file(manager.store.resolve_id(original["id"]))["size"]
+            == 8
+        )
+        children = [
+            row
+            for row in manager.registry.list()
+            if row.context.get("archive_parent_id") == job.id
+        ]
         assert len(children) == 2 and all(child.history_hidden for child in children)
-        location = locate_transfer(manager.store, {"id": job.id, "kind": "extract", "status": "completed", "destination": destination})
+        location = locate_transfer(
+            manager.store,
+            {
+                "id": job.id,
+                "kind": "extract",
+                "status": "completed",
+                "destination": destination,
+            },
+        )
         assert location["available"] and location["folder_path"] == destination
     finally:
         await dispose(manager)
@@ -214,11 +292,17 @@ async def test_extract_keeps_both_and_hides_child_jobs(tmp_path, folder_name):
 async def test_corrupt_zip_import_changes_no_catalog_items(tmp_path):
     manager, ledger, _ = await manager_for(tmp_path)
     try:
-        content = bytearray(zip_bytes([("folder/file", b"original")], compression=ZIP_STORED))
+        content = bytearray(
+            zip_bytes([("folder/file", b"original")], compression=ZIP_STORED)
+        )
         content[content.index(b"original")] ^= 1
         item = source(manager, ledger, "broken.zip", bytes(content))
         before = manager.store.list_directory("/")
-        job = await manager.start_extraction(path=manager.store.resolve_id(item["id"]), destination="/", folder_name="Output")
+        job = await manager.start_extraction(
+            path=manager.store.resolve_id(item["id"]),
+            destination="/",
+            folder_name="Output",
+        )
         await finish(job)
         assert job.status is TransferStatus.ERROR and "CRC" in job.error
         assert manager.store.list_directory("/") == before
@@ -232,7 +316,9 @@ async def test_cancel_drains_source_read_and_removes_only_workspace(tmp_path):
     try:
         item = source(manager, ledger, "source.zip", zip_bytes([("file", b"data")]))
         client.read_gate = asyncio.Event()
-        job = await manager.start_extraction(path=manager.store.resolve_id(item["id"]), destination="/", folder_name=None)
+        job = await manager.start_extraction(
+            path=manager.store.resolve_id(item["id"]), destination="/", folder_name=None
+        )
         await asyncio.wait_for(client.read_started.wait(), 3)
         await manager.cancel_job(job.id)
         client.read_gate.set()
@@ -250,21 +336,36 @@ async def test_archive_retry_reuses_dispatched_upload_after_restart(tmp_path):
     manager, ledger, _ = await manager_for(tmp_path)
     file = source(manager, ledger, "file.txt", b"content")
     ledger.lose_once = True
-    job = await manager.start_archive(paths=[manager.store.resolve_id(file["id"])], destination="/", name="archive.zip")
+    job = await manager.start_archive(
+        paths=[manager.store.resolve_id(file["id"])],
+        destination="/",
+        name="archive.zip",
+    )
     await finish(job)
     assert job.status is TransferStatus.ERROR
     first_requests = set(ledger.requests)
     await manager.close()
     await manager.pool.stop()
     store = manager.store
-    recovered, _, _ = await manager_for(tmp_path, store=store, ledger=ledger, registry=registry_for(tmp_path))
+    recovered, _, _ = await manager_for(
+        tmp_path, store=store, ledger=ledger, registry=registry_for(tmp_path)
+    )
     try:
         await recovered.recover()
         job = recovered.registry.get(job.id)
         await finish(job)
         assert job.status is TransferStatus.COMPLETED, job.error
         assert set(ledger.requests) == first_requests
-        assert len([row for row in store.list_directory("/").values() if row["name"] == "archive.zip"]) == 1
+        assert (
+            len(
+                [
+                    row
+                    for row in store.list_directory("/").values()
+                    if row["name"] == "archive.zip"
+                ]
+            )
+            == 1
+        )
     finally:
         await dispose(recovered)
 
@@ -276,8 +377,24 @@ async def test_extract_parent_owns_child_staging_once(tmp_path):
         directory.mkdir(parents=True)
         file = directory / "0.file"
         file.write_bytes(b"abc")
-        parent = await manager.registry.create("extracting", context=dict(kind="extract", staging_size=10, staging_written=3, staging_directory=str(directory)))
-        await manager.registry.create("queued", context=dict(kind="upload", archive_parent_id=parent.id, local_path=str(file), staging_size=3))
+        parent = await manager.registry.create(
+            "extracting",
+            context=dict(
+                kind="extract",
+                staging_size=10,
+                staging_written=3,
+                staging_directory=str(directory),
+            ),
+        )
+        await manager.registry.create(
+            "queued",
+            context=dict(
+                kind="upload",
+                archive_parent_id=parent.id,
+                local_path=str(file),
+                staging_size=3,
+            ),
+        )
         assert staging_usage(manager) == (10, 7)
     finally:
         await dispose(manager)
@@ -289,15 +406,36 @@ async def test_archive_reads_multipart_sources_and_checks_their_hashes(tmp_path)
         parts, offset = [], 0
         for index, payload in enumerate([b"first", b"second"]):
             row = source(manager, ledger, f"part-{index}", payload)
-            parts.append(dict(index=index, offset=offset, size=len(payload), message_id=row["message_id"], sha256=hashlib.sha256(payload).hexdigest()))
+            parts.append(
+                dict(
+                    index=index,
+                    offset=offset,
+                    size=len(payload),
+                    message_id=row["message_id"],
+                    sha256=hashlib.sha256(payload).hexdigest(),
+                )
+            )
             offset += len(payload)
-        logical = manager.store.add_file("/", "logical.bin", parts[0]["message_id"], offset, parts=parts, sha256=hashlib.sha256(b"firstsecond").hexdigest())
-        job = await manager.start_archive(paths=[manager.store.resolve_id(logical["id"])], destination="/", name="joined.zip")
+        logical = manager.store.add_file(
+            "/",
+            "logical.bin",
+            parts[0]["message_id"],
+            offset,
+            parts=parts,
+            sha256=hashlib.sha256(b"firstsecond").hexdigest(),
+        )
+        job = await manager.start_archive(
+            paths=[manager.store.resolve_id(logical["id"])],
+            destination="/",
+            name="joined.zip",
+        )
         await finish(job)
         assert job.status is TransferStatus.COMPLETED, job.error
         result = manager.store.transfer_location(job.id, completed=True)
         output = manager.store.get_file(manager.store.resolve_id(result["item_id"]))
-        with ZipFile(io.BytesIO(ledger.messages[output["message_id"]].content)) as archive:
+        with ZipFile(
+            io.BytesIO(ledger.messages[output["message_id"]].content)
+        ) as archive:
             assert archive.read("logical.bin") == b"firstsecond"
     finally:
         await dispose(manager)
@@ -309,10 +447,17 @@ async def test_source_move_follows_identity_and_wrong_checksum_cannot_upload(tmp
         folder = manager.store.create_folder("/", "Folder")
         item = source(manager, ledger, "source.txt", b"source", checksum=True)
         members = archive_members(manager.store, [manager.store.resolve_id(item["id"])])
-        manager.store.move_many([manager.store.resolve_id(item["id"])], manager.store.resolve_id(folder["id"]))
+        manager.store.move_many(
+            [manager.store.resolve_id(item["id"])],
+            manager.store.resolve_id(folder["id"]),
+        )
         assert archives._source(manager.store, members[0])["id"] == item["id"]
         ledger.messages[item["message_id"]].content = b"change"
-        job = await manager.start_archive(paths=[manager.store.resolve_id(item["id"])], destination="/", name="bad.zip")
+        job = await manager.start_archive(
+            paths=[manager.store.resolve_id(item["id"])],
+            destination="/",
+            name="bad.zip",
+        )
         await finish(job)
         assert job.status is TransferStatus.ERROR and "checksum" in job.error
         assert not ledger.calls
@@ -320,12 +465,18 @@ async def test_source_move_follows_identity_and_wrong_checksum_cannot_upload(tmp
         await dispose(manager)
 
 
-async def test_cancel_after_ambiguous_zip_send_cleans_uncommitted_telegram_parts(tmp_path):
+async def test_cancel_after_ambiguous_zip_send_cleans_uncommitted_telegram_parts(
+    tmp_path,
+):
     manager, ledger, _ = await manager_for(tmp_path)
     try:
         item = source(manager, ledger, "source.txt", b"payload")
         ledger.lose_once = True
-        job = await manager.start_archive(paths=[manager.store.resolve_id(item["id"])], destination="/", name="cancel.zip")
+        job = await manager.start_archive(
+            paths=[manager.store.resolve_id(item["id"])],
+            destination="/",
+            name="cancel.zip",
+        )
         await finish(job)
         assert job.status is TransferStatus.ERROR and job.context["send_started"]
         assert len(ledger.messages) == 2
@@ -346,7 +497,11 @@ async def test_extract_retry_reuses_completed_child_without_staged_bytes(tmp_pat
     manager, ledger, _ = await manager_for(tmp_path)
     try:
         item = source(manager, ledger, "source.zip", zip_bytes([("file", b"data")]))
-        job = await manager.start_extraction(path=manager.store.resolve_id(item["id"]), destination="/", folder_name="Output")
+        job = await manager.start_extraction(
+            path=manager.store.resolve_id(item["id"]),
+            destination="/",
+            folder_name="Output",
+        )
         await finish(job)
         assert job.status is TransferStatus.COMPLETED, job.error
         # Model interruption after child publication, before parent completion.
@@ -384,13 +539,19 @@ async def test_resource_open_cancel_closes_handle_after_worker_drains():
     assert resource.closed
 
 
-async def test_create_rejects_oversized_directory_before_dispatch(tmp_path, monkeypatch):
+async def test_create_rejects_oversized_directory_before_dispatch(
+    tmp_path, monkeypatch
+):
     manager, ledger, _ = await manager_for(tmp_path)
     try:
         item = source(manager, ledger, "source.txt", b"data")
         monkeypatch.setattr(archives, "MAX_DIRECTORY_BYTES", 80)
         with pytest.raises(ArchiveError, match="directory limit"):
-            await manager.start_archive(paths=[manager.store.resolve_id(item["id"])], destination="/", name="out.zip")
+            await manager.start_archive(
+                paths=[manager.store.resolve_id(item["id"])],
+                destination="/",
+                name="out.zip",
+            )
         assert not manager.registry.list()
         assert not ledger.calls
     finally:
@@ -400,7 +561,9 @@ async def test_create_rejects_oversized_directory_before_dispatch(tmp_path, monk
 def test_expanded_manifest_is_bounded_before_catalog_writes(tmp_path, monkeypatch):
     path = write_zip(tmp_path, [("folder/deep/\u00e9.txt", b"payload")])
     plan = zip_manifest(path, 1024, 1024**2)
-    encoded = archives.json.dumps(plan, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+    encoded = archives.json.dumps(
+        plan, ensure_ascii=False, separators=(",", ":")
+    ).encode("utf-8")
     monkeypatch.setattr(archives, "MAX_MANIFEST_BYTES", len(encoded) - 1)
     with pytest.raises(ArchiveError, match="4 MiB job metadata"):
         zip_manifest(path, 1024, 1024**2)

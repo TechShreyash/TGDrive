@@ -77,12 +77,12 @@ def _member(file):
 
 def _available_name(name, used, *, folder=False):
     suffix = "" if folder else Path(name).suffix
-    stem = name[:-len(suffix)] if suffix else name
+    stem = name[: -len(suffix)] if suffix else name
     candidate, index = name, 1
     while _name_key(candidate) in used:
         label = f" ({index})"
-        ending = label + suffix[:255 - len(label) - 1]
-        candidate = stem[:255 - len(ending)] + ending
+        ending = label + suffix[: 255 - len(label) - 1]
+        candidate = stem[: 255 - len(ending)] + ending
         index += 1
     used.add(_name_key(candidate))
     return candidate
@@ -90,10 +90,15 @@ def _available_name(name, used, *, folder=False):
 
 def archive_members(store, paths):
     selected = sorted(set(_normalize_path(path)[1] for path in paths), key=len)
-    selected = [path for path in selected if not any(
-        path.startswith(parent.rstrip("/") + "/")
-        for parent in selected if parent != path
-    )]
+    selected = [
+        path
+        for path in selected
+        if not any(
+            path.startswith(parent.rstrip("/") + "/")
+            for parent in selected
+            if parent != path
+        )
+    ]
     if "/" in selected:
         raise ArchiveError("Select files or folders inside My Files to create a ZIP.")
     result, used = [], set()
@@ -103,10 +108,16 @@ def archive_members(store, paths):
             node = store.get_directory(path)
         except NotDirectoryError:
             node = store.get_file(path)
-        name = _available_name(node["name"], used, folder=node["type"] == "folder") if root else node["name"]
+        name = (
+            _available_name(node["name"], used, folder=node["type"] == "folder")
+            if root
+            else node["name"]
+        )
         relative = (*prefix, name)
         if len(relative) > MAX_DEPTH or len("/".join(relative)) > 4096:
-            raise ArchiveError("ZIP paths cannot exceed 64 components or 4096 characters.")
+            raise ArchiveError(
+                "ZIP paths cannot exceed 64 components or 4096 characters."
+            )
         entry = {"name": "/".join(relative), "type": node["type"], "id": node["id"]}
         if node["type"] == "file":
             entry.update(_member(node))
@@ -132,7 +143,9 @@ def _zip_directory(source):
     at = tail.rfind(b"PK\x05\x06")
     if at < 0 or len(tail) - at < 22:
         raise ArchiveError("This is not a readable ZIP archive.")
-    _, disk, cd_disk, disk_count, count, length, offset, comment = struct.unpack_from("<4s4H2LH", tail, at)
+    _, disk, cd_disk, disk_count, count, length, offset, comment = struct.unpack_from(
+        "<4s4H2LH", tail, at
+    )
     if at + 22 + comment != len(tail) or disk or cd_disk or disk_count != count:
         raise ArchiveError("Split-volume ZIP archives are unsupported.")
     end = size - tail_size + at
@@ -145,17 +158,26 @@ def _zip_directory(source):
             raise ArchiveError("Invalid or split-volume ZIP64 archive.")
         source.seek(zip64_at)
         record = struct.unpack("<4sQ2H2L4Q", source.read(56))
-        if record[0] != b"PK\x06\x06" or record[4] or record[5] or record[6] != record[7]:
+        if (
+            record[0] != b"PK\x06\x06"
+            or record[4]
+            or record[5]
+            or record[6] != record[7]
+        ):
             raise ArchiveError("Invalid ZIP64 directory.")
         count, length, offset = record[7:10]
         end = zip64_at
     if count > MAX_ENTRIES or length > MAX_DIRECTORY_BYTES or offset + length > end:
-        raise ArchiveError("ZIP archives support at most 1000 entries and an 8 MiB directory.")
+        raise ArchiveError(
+            "ZIP archives support at most 1000 entries and an 8 MiB directory."
+        )
     source.seek(offset)
     directory = source.read(length)
     position = actual = 0
     while position < len(directory):
-        if directory[position:position + 4] != b"PK\x01\x02" or position + 46 > len(directory):
+        if directory[position : position + 4] != b"PK\x01\x02" or position + 46 > len(
+            directory
+        ):
             raise ArchiveError("Invalid ZIP central directory.")
         name, extra, comment = struct.unpack_from("<3H", directory, position + 28)
         position += 46 + name + extra + comment
@@ -175,64 +197,134 @@ def zip_manifest(path, limit, budget):
             with ZipFile(source) as archive:
                 for index, entry in enumerate(archive.infolist()):
                     raw = entry.orig_filename
-                    if raw != entry.filename or "\\" in raw or raw.startswith("/") or re.match(r"^[A-Za-z]:", raw):
+                    if (
+                        raw != entry.filename
+                        or "\\" in raw
+                        or raw.startswith("/")
+                        or re.match(r"^[A-Za-z]:", raw)
+                    ):
                         raise ArchiveError("ZIP contains an unsafe entry path.")
                     parts = raw[:-1].split("/") if entry.is_dir() else raw.split("/")
                     if not parts or len(parts) > MAX_DEPTH or len(raw) > 4096:
-                        raise ArchiveError("ZIP paths cannot exceed 64 components or 4096 characters.")
+                        raise ArchiveError(
+                            "ZIP paths cannot exceed 64 components or 4096 characters."
+                        )
                     try:
                         parts = tuple(_normalize_name(part) for part in parts)
                     except InvalidNameError as exc:
-                        raise ArchiveError("ZIP contains an unsafe entry name.") from exc
+                        raise ArchiveError(
+                            "ZIP contains an unsafe entry name."
+                        ) from exc
                     key = tuple(_name_key(part) for part in parts)
                     mode = stat.S_IFMT(entry.external_attr >> 16)
-                    if mode not in {0, stat.S_IFDIR if entry.is_dir() else stat.S_IFREG}:
-                        raise ArchiveError("ZIP symlinks and special files are unsupported.")
-                    if entry.flag_bits & 1 or entry.compress_type not in {ZIP_STORED, ZIP_DEFLATED}:
-                        raise ArchiveError("Use an unencrypted ZIP with stored or Deflate compression.")
-                    if key in explicit or (not entry.is_dir() and key in folders) or key in files:
-                        raise ArchiveError("ZIP contains duplicate or conflicting entry paths.")
+                    if mode not in {
+                        0,
+                        stat.S_IFDIR if entry.is_dir() else stat.S_IFREG,
+                    }:
+                        raise ArchiveError(
+                            "ZIP symlinks and special files are unsupported."
+                        )
+                    if entry.flag_bits & 1 or entry.compress_type not in {
+                        ZIP_STORED,
+                        ZIP_DEFLATED,
+                    }:
+                        raise ArchiveError(
+                            "Use an unencrypted ZIP with stored or Deflate compression."
+                        )
+                    if (
+                        key in explicit
+                        or (not entry.is_dir() and key in folders)
+                        or key in files
+                    ):
+                        raise ArchiveError(
+                            "ZIP contains duplicate or conflicting entry paths."
+                        )
                     explicit.add(key)
                     for depth in range(1, len(parts)):
                         parent = key[:depth]
-                        if parent in files or (parent in folders and folders[parent] != parts[:depth]):
-                            raise ArchiveError("ZIP contains duplicate or conflicting folder names.")
+                        if parent in files or (
+                            parent in folders and folders[parent] != parts[:depth]
+                        ):
+                            raise ArchiveError(
+                                "ZIP contains duplicate or conflicting folder names."
+                            )
                         folders[parent] = parts[:depth]
                     if entry.is_dir():
-                        if entry.file_size or (key in folders and folders[key] != parts):
-                            raise ArchiveError("ZIP directory entries must be empty and unambiguous.")
+                        if entry.file_size or (
+                            key in folders and folders[key] != parts
+                        ):
+                            raise ArchiveError(
+                                "ZIP directory entries must be empty and unambiguous."
+                            )
                         folders[key] = parts
                         continue
                     if entry.file_size <= 0:
-                        raise ArchiveError("TGDrive cannot extract ZIP archives containing empty files.")
+                        raise ArchiveError(
+                            "TGDrive cannot extract ZIP archives "
+                            "containing empty files."
+                        )
                     if entry.file_size > limit:
-                        raise ArchiveError("An extracted file exceeds the configured upload limit.")
+                        raise ArchiveError(
+                            "An extracted file exceeds the configured upload limit."
+                        )
                     files.add(key)
                     total += entry.file_size
                     if total + Path(path).stat().st_size > budget:
-                        raise ArchiveError("ZIP and extracted files exceed the staging budget.")
-                    entries.append({"name": "/".join(parts), "size": entry.file_size, "index": index})
-                if len(entries) + len(folders) > MAX_ENTRIES or len(folders) >= MAX_ENTRIES:
-                    raise ArchiveError("A ZIP job supports at most 1000 files and folders including implicit folders.")
+                        raise ArchiveError(
+                            "ZIP and extracted files exceed the staging budget."
+                        )
+                    entries.append(
+                        {
+                            "name": "/".join(parts),
+                            "size": entry.file_size,
+                            "index": index,
+                        }
+                    )
+                if (
+                    len(entries) + len(folders) > MAX_ENTRIES
+                    or len(folders) >= MAX_ENTRIES
+                ):
+                    raise ArchiveError(
+                        "A ZIP job supports at most 1000 files and folders "
+                        "including implicit folders."
+                    )
     except (BadZipFile, EOFError, struct.error) as exc:
         raise ArchiveError("This ZIP archive is damaged or incomplete.") from exc
-    plan = {"files": entries, "folders": sorted(folders.values(), key=lambda p: (len(p), p)), "size": total}
-    if len(json.dumps(plan, ensure_ascii=False, separators=(",", ":")).encode("utf-8")) > MAX_MANIFEST_BYTES:
-        raise ArchiveError("The expanded ZIP manifest exceeds the 4 MiB job metadata limit.")
+    plan = {
+        "files": entries,
+        "folders": sorted(folders.values(), key=lambda p: (len(p), p)),
+        "size": total,
+    }
+    if (
+        len(json.dumps(plan, ensure_ascii=False, separators=(",", ":")).encode("utf-8"))
+        > MAX_MANIFEST_BYTES
+    ):
+        raise ArchiveError(
+            "The expanded ZIP manifest exceeds the 4 MiB job metadata limit."
+        )
     return plan
 
 
 def _directory(manager, record):
     directory = manager.cache_dir / "archives" / record.id
-    if not directory.resolve().is_relative_to((manager.cache_dir / "archives").resolve()):
+    if not directory.resolve().is_relative_to(
+        (manager.cache_dir / "archives").resolve()
+    ):
         raise ArchiveError("Invalid archive workspace.")
     return directory
 
 
 async def _destination(manager, record):
-    path = await manager._resolve_upload_destination(record, record.context["destination"])
-    if not record.context.get("allow_public_exposure") and public_destination(manager.store, path):
-        raise ArchiveError("The destination is now publicly shared. Start again and confirm public access.")
+    path = await manager._resolve_upload_destination(
+        record, record.context["destination"]
+    )
+    if not record.context.get("allow_public_exposure") and public_destination(
+        manager.store, path
+    ):
+        raise ArchiveError(
+            "The destination is now publicly shared. "
+            "Start again and confirm public access."
+        )
     return path
 
 
@@ -244,12 +336,22 @@ async def _bytes(manager, record, member):
 
     file = _source(manager.store, member)
     digest, length = hashlib.sha256(), 0
-    parts = file.get("parts") or [{"message_id": file["message_id"], "size": file["size"]}]
+    parts = file.get("parts") or [
+        {"message_id": file["message_id"], "size": file["size"]}
+    ]
     for part in parts:
         if part["size"] == 0:
             continue
-        lease = await PartLease(manager.pool, manager.settings.storage_channel, part, background=True, authorize=authorize).open()
-        stream = lease.read(ByteRange(0, part["size"] - 1, part["size"], is_partial=False))
+        lease = await PartLease(
+            manager.pool,
+            manager.settings.storage_channel,
+            part,
+            background=True,
+            authorize=authorize,
+        ).open()
+        stream = lease.read(
+            ByteRange(0, part["size"] - 1, part["size"], is_partial=False)
+        )
         try:
             async for chunk in stream:
                 if record.cancel_event.is_set():
@@ -264,8 +366,12 @@ async def _bytes(manager, record, member):
                 await stream.aclose()
             finally:
                 await lease.close()
-    if length != file["size"] or (file.get("sha256") and digest.hexdigest() != file["sha256"]):
-        raise ArchiveError("An archive source failed its size or checksum verification.")
+    if length != file["size"] or (
+        file.get("sha256") and digest.hexdigest() != file["sha256"]
+    ):
+        raise ArchiveError(
+            "An archive source failed its size or checksum verification."
+        )
 
 
 def _sync(file):
@@ -279,7 +385,9 @@ def _sync_path(path):
 
 
 @_journalled
-async def start_archive(manager, paths, destination, name, *, allow_public_exposure=False):
+async def start_archive(
+    manager, paths, destination, name, *, allow_public_exposure=False
+):
     name = _normalize_name(name)
     if not name.lower().endswith(".zip"):
         name = _normalize_name(name + ".zip")
@@ -287,20 +395,39 @@ async def start_archive(manager, paths, destination, name, *, allow_public_expos
         manager._check_upload_allowed()
     binding = manager.store.upload_destination(destination)
     members = await _worker(archive_members, manager.store, paths)
-    if sum(80 + len(member["name"].encode("utf-8")) for member in members) > MAX_DIRECTORY_BYTES:
+    if (
+        sum(80 + len(member["name"].encode("utf-8")) for member in members)
+        > MAX_DIRECTORY_BYTES
+    ):
         raise ArchiveError("The selected ZIP paths exceed the 8 MiB directory limit.")
     total = sum(member.get("size", 0) for member in members)
-    bound = total + sum(256 + 2 * len(member["name"].encode("utf-8")) for member in members) + 256
+    bound = (
+        total
+        + sum(256 + 2 * len(member["name"].encode("utf-8")) for member in members)
+        + 256
+    )
     if bound > manager.settings.upload_limit:
-        raise ArchiveError("The selected files and ZIP headers exceed the configured upload limit.")
+        raise ArchiveError(
+            "The selected files and ZIP headers exceed the configured upload limit."
+        )
     check_staging(manager.settings, manager, bound)
     identity = secrets.token_urlsafe(18)
-    context = dict(kind="archive", source_kind="archive", name=name, members=members,
-                   destination=binding["path"], destination_id=binding["id"],
-                   staging_size=bound, staging_written=0, allow_public_exposure=allow_public_exposure)
+    context = dict(
+        kind="archive",
+        source_kind="archive",
+        name=name,
+        members=members,
+        destination=binding["path"],
+        destination_id=binding["id"],
+        staging_size=bound,
+        staging_written=0,
+        allow_public_exposure=allow_public_exposure,
+    )
     manager._pending_staging[identity] = bound
     try:
-        record = await manager.registry.create("archiving", total=total, transfer_id=identity, context=context)
+        record = await manager.registry.create(
+            "archiving", total=total, transfer_id=identity, context=context
+        )
     finally:
         manager._pending_staging.pop(identity, None)
     spawn_archive(manager, record)
@@ -308,7 +435,9 @@ async def start_archive(manager, paths, destination, name, *, allow_public_expos
 
 
 @_journalled
-async def start_extraction(manager, path, destination, folder_name, *, allow_public_exposure=False):
+async def start_extraction(
+    manager, path, destination, folder_name, *, allow_public_exposure=False
+):
     if manager._check_upload_allowed is not None:
         manager._check_upload_allowed()
     file = manager.store.get_file(path)
@@ -319,14 +448,23 @@ async def start_extraction(manager, path, destination, folder_name, *, allow_pub
     binding = manager.store.upload_destination(destination)
     check_staging(manager.settings, manager, file["size"])
     identity = secrets.token_urlsafe(18)
-    context = dict(kind="extract", source_kind="extract", name=file["name"],
-                   archive_source=_member(file), folder_name=folder_name,
-                   destination=binding["path"], destination_id=binding["id"],
-                   staging_size=file["size"], staging_written=0,
-                   allow_public_exposure=allow_public_exposure)
+    context = dict(
+        kind="extract",
+        source_kind="extract",
+        name=file["name"],
+        archive_source=_member(file),
+        folder_name=folder_name,
+        destination=binding["path"],
+        destination_id=binding["id"],
+        staging_size=file["size"],
+        staging_written=0,
+        allow_public_exposure=allow_public_exposure,
+    )
     manager._pending_staging[identity] = file["size"]
     try:
-        record = await manager.registry.create("downloading", total=file["size"], transfer_id=identity, context=context)
+        record = await manager.registry.create(
+            "downloading", total=file["size"], transfer_id=identity, context=context
+        )
     finally:
         manager._pending_staging.pop(identity, None)
     spawn_archive(manager, record)
@@ -349,7 +487,9 @@ async def _create_zip(manager, record, directory):
     if not context.get("archive_ready"):
         async with manager._semaphore:
             context["staging_written"] = 0
-            await manager.registry.update(record.id, status=TransferStatus.RUNNING, phase="archiving", current=0)
+            await manager.registry.update(
+                record.id, status=TransferStatus.RUNNING, phase="archiving", current=0
+            )
             archive = await _open(lambda: ZipFile(path, "w", compression=ZIP_STORED))
             current = 0
             try:
@@ -357,18 +497,32 @@ async def _create_zip(manager, record, directory):
                     if record.cancel_event.is_set():
                         raise TransferCancelled("Transfer cancelled")
                     if member["type"] == "folder":
-                        manager.store.get_directory(manager.store.resolve_id(member["id"]))
+                        manager.store.get_directory(
+                            manager.store.resolve_id(member["id"])
+                        )
                         await _worker(archive.writestr, member["name"] + "/", b"")
                         continue
-                    output = await _open(lambda: archive.open(member["name"], "w", force_zip64=True))
+                    output = await _open(
+                        lambda name=member["name"]: archive.open(
+                            name, "w", force_zip64=True
+                        )
+                    )
                     stream = _bytes(manager, record, member)
                     try:
                         async for chunk in stream:
-                            check_staging(manager.settings, manager, context["staging_size"], exclude=record.id, written=context["staging_written"])
+                            check_staging(
+                                manager.settings,
+                                manager,
+                                context["staging_size"],
+                                exclude=record.id,
+                                written=context["staging_written"],
+                            )
                             await _worker(output.write, chunk)
                             current += len(chunk)
                             context["staging_written"] = archive.fp.tell()
-                            await manager.registry.update(record.id, current=current, checkpoint_progress=False)
+                            await manager.registry.update(
+                                record.id, current=current, checkpoint_progress=False
+                            )
                     finally:
                         try:
                             await stream.aclose()
@@ -377,11 +531,21 @@ async def _create_zip(manager, record, directory):
             finally:
                 await _worker(archive.close)
             await _worker(_sync_path, path)
-            context.update(archive_ready=True, size=path.stat().st_size, staging_written=path.stat().st_size)
+            context.update(
+                archive_ready=True,
+                size=path.stat().st_size,
+                staging_written=path.stat().st_size,
+            )
             await manager.registry.persist(record)
     if path.stat().st_size > manager.settings.upload_limit:
         raise ArchiveError("The ZIP exceeds the configured upload limit.")
-    await manager._upload_path(record, path, await _destination(manager, record), context["name"], context["size"])
+    await manager._upload_path(
+        record,
+        path,
+        await _destination(manager, record),
+        context["name"],
+        context["size"],
+    )
 
 
 async def _extract_files(manager, record, directory):
@@ -392,15 +556,29 @@ async def _extract_files(manager, record, directory):
     async with manager._semaphore:
         if not context.get("archive_downloaded"):
             context["staging_written"] = 0
-            await manager.registry.update(record.id, status=TransferStatus.RUNNING, phase="downloading", current=0, total=context["archive_source"]["size"])
+            await manager.registry.update(
+                record.id,
+                status=TransferStatus.RUNNING,
+                phase="downloading",
+                current=0,
+                total=context["archive_source"]["size"],
+            )
             output = await _open(source.open, "wb")
             stream = _bytes(manager, record, context["archive_source"])
             try:
                 async for chunk in stream:
-                    check_staging(manager.settings, manager, context["staging_size"], exclude=record.id, written=context["staging_written"])
+                    check_staging(
+                        manager.settings,
+                        manager,
+                        context["staging_size"],
+                        exclude=record.id,
+                        written=context["staging_written"],
+                    )
                     await _worker(output.write, chunk)
                     context["staging_written"] = output.tell()
-                    await manager.registry.update(record.id, current=output.tell(), checkpoint_progress=False)
+                    await manager.registry.update(
+                        record.id, current=output.tell(), checkpoint_progress=False
+                    )
                 await _worker(_sync, output)
             finally:
                 try:
@@ -411,12 +589,36 @@ async def _extract_files(manager, record, directory):
             await manager.registry.persist(record)
         if not context.get("archive_extracted"):
             if not source.exists():
-                raise ArchiveError("Temporary ZIP bytes are missing. Cancel this job and start again; preserve CACHE_DIR across restarts.")
-            plan = await _worker(zip_manifest, source, manager.settings.upload_limit, manager.settings.staging_budget_bytes)
+                raise ArchiveError(
+                    "Temporary ZIP bytes are missing. Cancel this job and "
+                    "start again; preserve CACHE_DIR across restarts."
+                )
+            plan = await _worker(
+                zip_manifest,
+                source,
+                manager.settings.upload_limit,
+                manager.settings.staging_budget_bytes,
+            )
             reserved = source.stat().st_size + plan["size"]
-            check_staging(manager.settings, manager, reserved, exclude=record.id, written=context["staging_written"])
-            context.update(archive_plan=plan, staging_size=reserved, staging_written=source.stat().st_size)
-            await manager.registry.update(record.id, status=TransferStatus.RUNNING, phase="extracting", current=0, total=plan["size"])
+            check_staging(
+                manager.settings,
+                manager,
+                reserved,
+                exclude=record.id,
+                written=context["staging_written"],
+            )
+            context.update(
+                archive_plan=plan,
+                staging_size=reserved,
+                staging_written=source.stat().st_size,
+            )
+            await manager.registry.update(
+                record.id,
+                status=TransferStatus.RUNNING,
+                phase="extracting",
+                current=0,
+                total=plan["size"],
+            )
             archive = await _open(ZipFile, source)
             current = 0
             try:
@@ -435,14 +637,26 @@ async def _extract_files(manager, record, directory):
                                 break
                             received += len(data)
                             if received > file["size"]:
-                                raise ArchiveError("A ZIP entry exceeded its declared size.")
-                            check_staging(manager.settings, manager, reserved, exclude=record.id, written=context["staging_written"])
+                                raise ArchiveError(
+                                    "A ZIP entry exceeded its declared size."
+                                )
+                            check_staging(
+                                manager.settings,
+                                manager,
+                                reserved,
+                                exclude=record.id,
+                                written=context["staging_written"],
+                            )
                             await _worker(output.write, data)
                             current += len(data)
                             context["staging_written"] += len(data)
-                            await manager.registry.update(record.id, current=current, checkpoint_progress=False)
+                            await manager.registry.update(
+                                record.id, current=current, checkpoint_progress=False
+                            )
                         if received != file["size"]:
-                            raise ArchiveError("A ZIP entry ended before its declared size.")
+                            raise ArchiveError(
+                                "A ZIP entry ended before its declared size."
+                            )
                         await _worker(_sync, output)
                     finally:
                         try:
@@ -451,7 +665,10 @@ async def _extract_files(manager, record, directory):
                             if output is not None:
                                 await _worker(output.close)
             except (BadZipFile, EOFError) as exc:
-                raise ArchiveError("This ZIP failed its size or CRC verification. No files were imported.") from exc
+                raise ArchiveError(
+                    "This ZIP failed its size or CRC verification. "
+                    "No files were imported."
+                ) from exc
             finally:
                 await _worker(archive.close)
             context["archive_extracted"] = True
@@ -464,13 +681,29 @@ def _prepare_folders(manager, record, destination):
     # Executor workers must explicitly restore the job's demo write policy.
     with write_policy(context.get("demo_read_only", False)), store.metadata_batch():
         if context["folder_name"] is not None:
-            tree = store.prepare_folder_tree(destination, context["folder_name"], [list(path) for path in folders], record.id + "_folders")
+            tree = store.prepare_folder_tree(
+                destination,
+                context["folder_name"],
+                [list(path) for path in folders],
+                record.id + "_folders",
+            )
             return tree["folders"]
         mapping = {"": destination}
         for index, path in enumerate(path for path in folders if len(path) == 1):
-            nested = [list(child[1:]) for child in folders if len(child) > 1 and child[0] == path[0]]
-            tree = store.prepare_folder_tree(destination, path[0], nested, f"{record.id}_folder_{index}")
-            mapping.update({"/".join((path[0], relative)) if relative else path[0]: value for relative, value in tree["folders"].items()})
+            nested = [
+                list(child[1:])
+                for child in folders
+                if len(child) > 1 and child[0] == path[0]
+            ]
+            tree = store.prepare_folder_tree(
+                destination, path[0], nested, f"{record.id}_folder_{index}"
+            )
+            mapping.update(
+                {
+                    "/".join((path[0], relative)) if relative else path[0]: value
+                    for relative, value in tree["folders"].items()
+                }
+            )
         return mapping
 
 
@@ -486,7 +719,13 @@ async def _upload_extracted(manager, record, directory):
         await manager.registry.persist(record)
     files = context["archive_plan"]["files"]
     completed = context.setdefault("archive_completed", [])
-    await manager.registry.update(record.id, phase="uploading", status=TransferStatus.RUNNING, total=context["archive_plan"]["size"], current=sum(files[i]["size"] for i in completed))
+    await manager.registry.update(
+        record.id,
+        phase="uploading",
+        status=TransferStatus.RUNNING,
+        total=context["archive_plan"]["size"],
+        current=sum(files[i]["size"] for i in completed),
+    )
     for index, file in enumerate(files):
         if index in completed:
             continue
@@ -499,15 +738,36 @@ async def _upload_extracted(manager, record, directory):
         except KeyError:
             relative, _, name = file["name"].rpartition("/")
             target = context["archive_folders"][relative]
-            target = manager.store.resolve_id(target.rsplit("/", 1)[-1]) if target != "/" else "/"
+            target = (
+                manager.store.resolve_id(target.rsplit("/", 1)[-1])
+                if target != "/"
+                else "/"
+            )
             binding = manager.store.upload_destination(target)
-            child = await manager.registry.create("queued", total=file["size"], transfer_id=identity, context=dict(
-                kind="upload", archive_parent_id=record.id, archive_file_index=index,
-                local_path=str(directory / f"{index}.file"), destination=binding["path"],
-                destination_id=binding["id"], name=name, size=file["size"],
-            ))
-        if child.status is not TransferStatus.COMPLETED and not manager._metadata_committed(child) and not Path(child.context["local_path"]).exists():
-            raise ArchiveError("Temporary extracted files are missing. Cancel this extraction and start again; preserve CACHE_DIR across restarts.")
+            child = await manager.registry.create(
+                "queued",
+                total=file["size"],
+                transfer_id=identity,
+                context=dict(
+                    kind="upload",
+                    archive_parent_id=record.id,
+                    archive_file_index=index,
+                    local_path=str(directory / f"{index}.file"),
+                    destination=binding["path"],
+                    destination_id=binding["id"],
+                    name=name,
+                    size=file["size"],
+                ),
+            )
+        if (
+            child.status is not TransferStatus.COMPLETED
+            and not manager._metadata_committed(child)
+            and not await _worker(Path(child.context["local_path"]).exists)
+        ):
+            raise ArchiveError(
+                "Temporary extracted files are missing. Cancel this extraction "
+                "and start again; preserve CACHE_DIR across restarts."
+            )
         if child.status is TransferStatus.ERROR:
             await manager.retry_job(child.id)
         elif not child.terminal and (child.task is None or child.task.done()):
@@ -518,17 +778,27 @@ async def _upload_extracted(manager, record, directory):
             current = sum(files[i]["size"] for i in completed)
             if child.phase in {"uploading", "finalizing", "backup_pending"}:
                 current += child.current
-            await manager.registry.update(record.id, current=current, checkpoint_progress=False)
+            await manager.registry.update(
+                record.id, current=current, checkpoint_progress=False
+            )
             await asyncio.wait({child.task}, timeout=0.5)
         if child.status is not TransferStatus.COMPLETED:
-            raise TransferError(child.error or "An extracted file could not be uploaded. Retry the extraction.")
+            raise TransferError(
+                child.error
+                or "An extracted file could not be uploaded. Retry the extraction."
+            )
         completed.append(index)
         context["staging_written"] = max(0, context["staging_written"] - file["size"])
         context["staging_size"] = max(0, context["staging_size"] - file["size"])
         await manager.registry.persist(record)
     if manager._ensure_backup is not None:
         await manager._ensure_backup(manager.store.revision)
-    await manager.registry.update(record.id, status=TransferStatus.COMPLETED, phase="completed", current=context["archive_plan"]["size"])
+    await manager.registry.update(
+        record.id,
+        status=TransferStatus.COMPLETED,
+        phase="completed",
+        current=context["archive_plan"]["size"],
+    )
 
 
 async def run_archive(manager, record):
@@ -540,11 +810,21 @@ async def run_archive(manager, record):
             and record.context.get("archive_ready")
             and record.context.get("multipart_plan")
         ):
-            if not committed and not record.cancel_event.is_set() and not Path(record.context["local_path"]).exists():
-                raise ArchiveError("Temporary ZIP bytes are missing. Cancel this job and start again; preserve CACHE_DIR across restarts.")
+            if (
+                not committed
+                and not record.cancel_event.is_set()
+                and not await _worker(Path(record.context["local_path"]).exists)
+            ):
+                raise ArchiveError(
+                    "Temporary ZIP bytes are missing. Cancel this job and "
+                    "start again; preserve CACHE_DIR across restarts."
+                )
             await manager._upload_path(
-                record, Path(record.context["local_path"]),
-                record.context["destination"], record.context["name"], record.context["size"],
+                record,
+                Path(record.context["local_path"]),
+                record.context["destination"],
+                record.context["name"],
+                record.context["size"],
             )
             return
         if record.cancel_event.is_set():
@@ -562,7 +842,12 @@ async def run_archive(manager, record):
             await _upload_extracted(manager, record, directory)
     except TransferCancelled:
         record.cancel_event.set()
-        await manager.registry.update(record.id, status=TransferStatus.CANCELLED, phase="cancelled", error="Transfer cancelled")
+        await manager.registry.update(
+            record.id,
+            status=TransferStatus.CANCELLED,
+            phase="cancelled",
+            error="Transfer cancelled",
+        )
     finally:
         if record.cancel_event.is_set():
             await cancel_children(manager, record)
@@ -572,7 +857,10 @@ async def run_archive(manager, record):
 async def cancel_children(manager, record):
     pending = []
     for child in manager.registry.list():
-        if child.context.get("archive_parent_id") != record.id or child.status in {TransferStatus.COMPLETED, TransferStatus.CANCELLED}:
+        if child.context.get("archive_parent_id") != record.id or child.status in {
+            TransferStatus.COMPLETED,
+            TransferStatus.CANCELLED,
+        }:
             continue
         try:
             await manager.cancel_job(child.id)
@@ -589,14 +877,21 @@ async def cancel_children(manager, record):
 def discard_stage(manager, record):
     if record.status not in {TransferStatus.COMPLETED, TransferStatus.CANCELLED}:
         return
-    if any(child.context.get("archive_parent_id") == record.id and (
-        not child.terminal or (child.task is not None and not child.task.done())
-    ) for child in manager.registry.list()):
+    if any(
+        child.context.get("archive_parent_id") == record.id
+        and (not child.terminal or (child.task is not None and not child.task.done()))
+        for child in manager.registry.list()
+    ):
         return
-    if record.id in manager._archive_cleanup_pending or not _directory(manager, record).exists():
+    if (
+        record.id in manager._archive_cleanup_pending
+        or not _directory(manager, record).exists()
+    ):
         return
     manager._archive_cleanup_pending.add(record.id)
-    cleanup = asyncio.create_task(_worker(shutil.rmtree, _directory(manager, record), True))
+    cleanup = asyncio.create_task(
+        _worker(shutil.rmtree, _directory(manager, record), True)
+    )
     manager.registry._finalizers.add(cleanup)
 
     def finished(done):

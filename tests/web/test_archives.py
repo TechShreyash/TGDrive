@@ -99,9 +99,7 @@ def test_archive_routes_confirm_inherited_public_folder_access_before_start(
     login(client)
     route = "/api/v1/archives" + ("/extract" if extract else "")
     payload = (
-        {"path": "/source"}
-        if extract
-        else {"paths": ["/source"], "name": "Bundle.zip"}
+        {"path": "/source"} if extract else {"paths": ["/source"], "name": "Bundle.zip"}
     )
     payload["destination"] = destination
     denied = client.post(route, json=payload)
@@ -132,9 +130,7 @@ def test_invalid_archive_destinations_never_start_work(
     login(client)
     route = "/api/v1/archives" + ("/extract" if extract else "")
     payload = (
-        {"path": "/source"}
-        if extract
-        else {"paths": ["/source"], "name": "Bundle.zip"}
+        {"path": "/source"} if extract else {"paths": ["/source"], "name": "Bundle.zip"}
     )
     response = client.post(route, json={**payload, "destination": destination})
     assert response.status_code == 404
@@ -151,9 +147,7 @@ def test_archive_admission_obeys_restart_pause(app_client, monkeypatch, extract)
     login(client)
     route = "/api/v1/archives" + ("/extract" if extract else "")
     payload = (
-        {"path": "/source"}
-        if extract
-        else {"paths": ["/source"], "name": "Bundle.zip"}
+        {"path": "/source"} if extract else {"paths": ["/source"], "name": "Bundle.zip"}
     )
     response = client.post(route, json=payload)
     assert response.status_code == 409
@@ -181,17 +175,21 @@ def test_demo_archive_destinations_remain_read_only(tmp_path, monkeypatch, extra
         assert calls == []
 
 
-@pytest.mark.parametrize("payload", [
-    {"paths": [], "name": "Bundle.zip"},
-    {"paths": ["/source"] * 1001, "name": "Bundle.zip"},
-    {"paths": [""], "name": "Bundle.zip"},
-    {"paths": ["/source"], "name": ""},
-    {"paths": ["/source"], "name": "x" * 256},
-    {
-        "paths": ["/source"], "name": "Bundle.zip",
-        "allow_public_exposure": "true",
-    },
-])
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {"paths": [], "name": "Bundle.zip"},
+        {"paths": ["/source"] * 1001, "name": "Bundle.zip"},
+        {"paths": [""], "name": "Bundle.zip"},
+        {"paths": ["/source"], "name": ""},
+        {"paths": ["/source"], "name": "x" * 256},
+        {
+            "paths": ["/source"],
+            "name": "Bundle.zip",
+            "allow_public_exposure": "true",
+        },
+    ],
+)
 def test_archive_request_bounds_reject_before_work(app_client, monkeypatch, payload):
     client, _, runtime, _ = app_client
     calls = capture_starts(runtime, monkeypatch)
@@ -200,10 +198,13 @@ def test_archive_request_bounds_reject_before_work(app_client, monkeypatch, payl
     assert calls == []
 
 
-@pytest.mark.parametrize("error,status", [
-    (ArchiveError("Unsupported ZIP"), 400),
-    (StorageUnavailable("Free temporary storage and retry."), 507),
-])
+@pytest.mark.parametrize(
+    "error,status",
+    [
+        (ArchiveError("Unsupported ZIP"), 400),
+        (StorageUnavailable("Free temporary storage and retry."), 507),
+    ],
+)
 def test_archive_admission_errors_remain_actionable(
     app_client, monkeypatch, error, status
 ):

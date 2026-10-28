@@ -23,7 +23,8 @@ def locate_transfer(store, job):
         return store.transfer_location(
             job.get("id"),
             job.get("destination", "/"),
-            completed=job.get("status") == "completed" and job.get("kind") not in {"torrent", "extract"},
+            completed=job.get("status") == "completed"
+            and job.get("kind") not in {"torrent", "extract"},
         )
     except TrashedItemError:
         return {"available": False, "reason": "Item is in Trash"}

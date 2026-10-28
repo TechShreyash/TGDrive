@@ -367,15 +367,27 @@ class TransferManager:
             raise RemoteTooLarge(limit, info.size)
         return info
 
-    async def start_archive(self, *, paths, destination, name, allow_public_exposure=False):
+    async def start_archive(
+        self, *, paths, destination, name, allow_public_exposure=False
+    ):
         from tgdrive.transfers.archives import start_archive
 
-        return await start_archive(self, paths, destination, name, allow_public_exposure=allow_public_exposure)
+        return await start_archive(
+            self, paths, destination, name, allow_public_exposure=allow_public_exposure
+        )
 
-    async def start_extraction(self, *, path, destination, folder_name, allow_public_exposure=False):
+    async def start_extraction(
+        self, *, path, destination, folder_name, allow_public_exposure=False
+    ):
         from tgdrive.transfers.archives import start_extraction
 
-        return await start_extraction(self, path, destination, folder_name, allow_public_exposure=allow_public_exposure)
+        return await start_extraction(
+            self,
+            path,
+            destination,
+            folder_name,
+            allow_public_exposure=allow_public_exposure,
+        )
 
     @_journalled
     async def start_torrent(self, *, source: str, destination: str) -> TransferRecord:
@@ -493,7 +505,8 @@ class TransferManager:
                     )
 
                 async def progress(current, total):
-                    # Hash verification can report zero while retained bytes occupy disk.
+                    # Hash verification can report zero while retained bytes
+                    # occupy disk.
                     context["staging_written"] = max(retained_written, current)
                     check_staging(
                         self.settings,
@@ -565,8 +578,7 @@ class TransferManager:
                     raise TransferCancelled("Transfer cancelled")
                 path = PurePosixPath(file["path"])
                 target = (
-                    tree["folders"]["/".join(path.parts[1:-1])]
-                    if tree else destination
+                    tree["folders"]["/".join(path.parts[1:-1])] if tree else destination
                 )
                 if tree:
                     target = self.store.resolve_id(target.rsplit("/", 1)[-1])
@@ -624,7 +636,7 @@ class TransferManager:
                 current=manifest["total_size"],
                 total=manifest["total_size"],
             )
-        except (TorrentCancelled, TransferCancelled):
+        except TorrentCancelled, TransferCancelled:
             record.cancel_event.set()
             await self.registry.update(
                 record.id,
@@ -972,7 +984,8 @@ class TransferManager:
             for row in self.registry.list()
             if row.status is TransferStatus.ERROR
             and row.context.get("restart_retryable") is True
-            and row.context.get("kind") in {"upload", "remote", "torrent", "delete", "archive", "extract"}
+            and row.context.get("kind")
+            in {"upload", "remote", "torrent", "delete", "archive", "extract"}
             and not row.context.get("cancel_requested")
         ]
         if (

@@ -161,8 +161,27 @@ checks cover 1,440, 390 and 320 pixel viewports, including dark desktop extracti
 Screenshots were visually inspected. Browser archive responses and job progress
 are synthetic; service tests use a fake Telegram transport and local catalog
 fixtures. These offline results do not establish physical-device performance or
-deployment readiness; the live roundtrip is recorded above. No full suite, lint or
-throughput benchmark was run for this feature.
+deployment readiness; the earlier live roundtrip is recorded above.
+
+A later focused run passed **57 archive/API cases**, **72 frontend cases across
+eight files**, TypeScript and the production build. Focused Ruff lint and format
+checks passed across **11 Python files** after formatting the archive changes,
+binding the ZIP-entry writer's loop variable and moving two filesystem checks
+off the event loop. These local repairs require deployment to reach the server.
+
+Additional live checks used tiny disposable fixtures: a **505-byte** ZIP created
+from a file and folder downloaded with exact original member bytes and extracted
+back correctly. New-folder and current-folder extraction preserved Unicode names,
+empty folders and existing items through numbered conflicts. Unsafe paths,
+empty regular files and damaged CRCs failed before creating outputs. Retrying a
+rejected job preserved its identity; active ZIP cancellation settled successfully.
+Anonymous archive requests were rejected, and completed-history **Show in Folder**
+opened the actual extracted root. The live extraction dialog fit **320 pixels**
+without horizontal overflow; desktop/mobile screenshots were inspected and no
+browser console errors were recorded. Only the disposable test folder was moved
+to recoverable Trash afterward. This follow-up did not stress large archives,
+restart the server, simulate disk pressure/outages or measure throughput. No full
+suite was run.
 
 </details>
 

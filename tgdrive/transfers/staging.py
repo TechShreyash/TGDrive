@@ -34,13 +34,18 @@ def staging_usage(manager, *, receipts=None, exclude=None):
                 remaining += max(0, item["total_size"] - item["offset"])
     registry = getattr(manager, "registry", None)
     jobs = registry.staging_records() if registry is not None else ()
-    owners = {job.id for job in jobs if job.context.get("kind") in {"torrent", "extract"}}
+    owners = {
+        job.id for job in jobs if job.context.get("kind") in {"torrent", "extract"}
+    }
     for job in jobs:
         if job.id in seen or job.id == exclude:
             continue
         seen.add(job.id)
         context = job.context
-        if context.get("torrent_parent_id") in owners or context.get("archive_parent_id") in owners:
+        if (
+            context.get("torrent_parent_id") in owners
+            or context.get("archive_parent_id") in owners
+        ):
             continue
         raw_path = context.get("local_path")
         written = 0

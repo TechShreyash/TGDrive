@@ -26,17 +26,27 @@ class ExtractArchive(BaseModel):
     allow_public_exposure: StrictBool = False
 
 
-def register_archive_routes(app, *, require_admin, get_store, get_manager, job_snapshot):
+def register_archive_routes(
+    app, *, require_admin, get_store, get_manager, job_snapshot
+):
     admin = [Depends(require_admin)]
 
     def destination(payload, request):
         store = get_store(request)
         check_path(store, payload.destination)
         binding = store.upload_destination(payload.destination)
-        if public_destination(store, binding["path"]) and not payload.allow_public_exposure:
+        if (
+            public_destination(store, binding["path"])
+            and not payload.allow_public_exposure
+        ):
             return JSONResponse(
-                {"detail": "This destination is publicly shared. Confirm to expose the created files.",
-                 "code": "PUBLIC_EXPOSURE_CONFIRMATION_REQUIRED"},
+                {
+                    "detail": (
+                        "This destination is publicly shared. "
+                        "Confirm to expose the created files."
+                    ),
+                    "code": "PUBLIC_EXPOSURE_CONFIRMATION_REQUIRED",
+                },
                 status_code=409,
             )
         return None
@@ -47,7 +57,9 @@ def register_archive_routes(app, *, require_admin, get_store, get_manager, job_s
         if warning is not None:
             return warning
         record = await get_manager(request).start_archive(
-            paths=payload.paths, destination=payload.destination, name=payload.name,
+            paths=payload.paths,
+            destination=payload.destination,
+            name=payload.name,
             allow_public_exposure=payload.allow_public_exposure,
         )
         return {"id": record.id, "job": job_snapshot(record, request)}
@@ -58,7 +70,9 @@ def register_archive_routes(app, *, require_admin, get_store, get_manager, job_s
         if warning is not None:
             return warning
         record = await get_manager(request).start_extraction(
-            path=payload.path, destination=payload.destination, folder_name=payload.folder_name,
+            path=payload.path,
+            destination=payload.destination,
+            folder_name=payload.folder_name,
             allow_public_exposure=payload.allow_public_exposure,
         )
         return {"id": record.id, "job": job_snapshot(record, request)}

@@ -438,8 +438,11 @@ def register_routes(
     from tgdrive.web.archive_api import register_archive_routes
 
     register_archive_routes(
-        app, require_admin=require_admin, get_store=get_store,
-        get_manager=get_manager, job_snapshot=job_snapshot,
+        app,
+        require_admin=require_admin,
+        get_store=get_store,
+        get_manager=get_manager,
+        job_snapshot=job_snapshot,
     )
 
     @app.get("/api/v1/jobs", dependencies=admin)
