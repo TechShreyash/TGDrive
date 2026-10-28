@@ -4,15 +4,23 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import os
 import secrets
+import tempfile
 import threading
 import time
+from contextlib import suppress
 from pathlib import Path
 from typing import Any
 
-from telethon.errors import FloodPremiumWaitError, FloodWaitError
+from telethon.errors import FloodPremiumWaitError, FloodWaitError, RPCError
 
-from tgdrive.storage.file_parts import MAX_FILE_PARTS, validate_parts, validate_sha256
+from tgdrive.storage.file_parts import (
+    MAX_FILE_PARTS,
+    MAX_POSTER_BYTES,
+    validate_parts,
+    validate_sha256,
+)
 from tgdrive.telegram.client_pool import ClientPoolNotRunning, NoClientAvailable
 from tgdrive.telegram.connection_errors import TelegramConnectionError
 from tgdrive.transfers.manager import (
@@ -21,7 +29,44 @@ from tgdrive.transfers.manager import (
     TransferError,
     _media_from_message,
 )
-from tgdrive.transfers.tasks import TransferStatus
+from tgdrive.transfers.tasks import TransferStatus, upload_effects
+
+
+def upload_image_paths(path):
+    return (
+        path.with_name(path.name + ".thumb.jpg"),
+        path.with_name(path.name + ".poster.jpg"),
+    )
+
+
+def discard_upload_images(path):
+    for image in upload_image_paths(path):
+        image.unlink(missing_ok=True)
+
+
+def _stage_image(path, content):
+    descriptor, temporary = tempfile.mkstemp(dir=path.parent, prefix=".upload-image-")
+    try:
+        with os.fdopen(descriptor, "wb") as output:
+            output.write(content)
+            output.flush()
+            os.fsync(output.fileno())
+        os.replace(temporary, path)
+    finally:
+        Path(temporary).unlink(missing_ok=True)
+
+
+def _read_image(path, maximum):
+    try:
+        if path.is_symlink() or path.stat().st_size > maximum:
+            return None
+        with path.open("rb") as source:
+            content = source.read(maximum + 1)
+        if 0 < len(content) <= maximum and content.startswith(b"\xff\xd8\xff"):
+            return content
+    except OSError:
+        pass
+    return None
 
 
 def fingerprint(
@@ -137,7 +182,23 @@ def _validate_plan(plan: Any, size: int, checksum: Any) -> None:
     except ValueError as exc:
         raise TransferError("The multipart checksum is missing") from exc
     random_ids = set()
-    for part in parts:
+    poster = plan.get("poster")
+    if poster is not None:
+        if (
+            not isinstance(poster, dict)
+            or type(poster.get("index")) is not int
+            or type(poster.get("offset")) is not int
+            or poster.get("index") != -1
+            or poster.get("offset") != 0
+            or type(poster.get("size")) is not int
+            or not 0 < poster["size"] <= MAX_POSTER_BYTES
+        ):
+            raise TransferError("The poster journal is invalid")
+        try:
+            validate_sha256(poster.get("sha256"), optional=False)
+        except ValueError as exc:
+            raise TransferError("The poster checksum is invalid") from exc
+    for part in upload_effects(plan):
         if (
             type(part.get("random_id")) is not int
             or not -(2**63) <= part["random_id"] < 2**63
@@ -235,8 +296,43 @@ async def upload_multipart(manager, record, local_path, destination, file_name, 
         plan = context["multipart_plan"]
         _validate_plan(plan, size, context.get("sha256"))
         parts = plan["parts"]
+        thumbnail_path, poster_path = upload_image_paths(local_path)
+        from tgdrive.media.generated_thumbnails import (
+            MAX_BYTES,
+            _owned_disk_call,
+            generate_video_images,
+        )
+        from tgdrive.media.thumbnail_worker import VIDEO_FORMATS
+
+        if (
+            not plan.get("images_generated")
+            and Path(file_name).suffix.lower() in VIDEO_FORMATS
+            and Path(file_name).suffix.lower() != ".avif"
+        ):
+            thumbnail, poster_bytes = await generate_video_images(local_path, file_name)
+            try:
+                if thumbnail:
+                    await _owned_disk_call(_stage_image, thumbnail_path, thumbnail)
+                if poster_bytes:
+                    await _owned_disk_call(_stage_image, poster_path, poster_bytes)
+                    plan["poster"] = dict(
+                        index=-1,
+                        offset=0,
+                        size=len(poster_bytes),
+                        sha256=hashlib.sha256(poster_bytes).hexdigest(),
+                        random_id=secrets.randbits(63),
+                        sender=None,
+                        send_started=False,
+                        message_id=None,
+                        confirmed=False,
+                    )
+            except OSError:
+                pass  # Optional image staging must not fail the original upload.
+            plan["images_generated"] = True
+            await persist()
+        thumbnail = await _owned_disk_call(_read_image, thumbnail_path, MAX_BYTES)
         # Restore persisted provider cooldowns before scheduling any new media effect.
-        for part in parts:
+        for part in upload_effects(plan):
             if part.get("sender") and part.get("retry_at", 0) > time.time():
                 await manager.pool.defer_client(part["sender"], part["retry_at"])
         if context.get("channel_retry_at", 0) > time.time():
@@ -287,7 +383,7 @@ async def upload_multipart(manager, record, local_path, destination, file_name, 
             if record.context is not context:
                 raise TransferError("The upload journal changed; retry the transfer")
 
-        async def upload_part(part):
+        async def upload_part(part, *, sidecar=False):
             cancelling = record.cancel_event.is_set() or context.get("cancel_requested")
             if part.get("confirmed") or (cancelling and part.get("deleted")):
                 return
@@ -311,7 +407,7 @@ async def upload_multipart(manager, record, local_path, destination, file_name, 
                         await manager.registry.update(record.id, error=None)
                         if part.get("sender") is None:
                             part["sender"] = client.name
-                            if part["index"] == 0:
+                            if not sidecar and part["index"] == 0:
                                 context["sender"] = client.name
                                 context["random_id"] = part["random_id"]
                             await persist()
@@ -319,7 +415,8 @@ async def upload_multipart(manager, record, local_path, destination, file_name, 
                             "send_started"
                         ):
                             return
-                        active_parts.add(part["index"])
+                        if not sidecar:
+                            active_parts.add(part["index"])
                         await report()
                         if part.get("message_id"):
                             message = await client.get_messages(
@@ -358,21 +455,39 @@ async def upload_multipart(manager, record, local_path, destination, file_name, 
                                     "send_started"
                                 ):
                                     raise TransferCancelled("Transfer cancelled")
-                                in_flight[part["index"]] = min(current, part["size"])
+                                if not sidecar:
+                                    in_flight[part["index"]] = min(
+                                        current, part["size"]
+                                    )
                                 await report()
 
                             name = (
-                                file_name
-                                if len(parts) == 1
+                                "tgdrive-poster.jpg"
+                                if sidecar
                                 else (
-                                    file_name[:180]
-                                    + f".tgdrive-part-{part['index'] + 1:04d}"
-                                    + f"-of-{len(parts):04d}"
+                                    file_name
+                                    if len(parts) == 1
+                                    else (
+                                        file_name[:180]
+                                        + f".tgdrive-part-{part['index'] + 1:04d}"
+                                        + f"-of-{len(parts):04d}"
+                                    )
                                 )
                             )
+                            image_options = {}
+                            if getattr(client, "supports_generated_thumbnails", False):
+                                if sidecar:
+                                    image_options["generate_thumbnail"] = False
+                                elif part["index"] == 0:
+                                    image_options["preview_name"] = file_name
+                                    if plan.get("images_generated"):
+                                        image_options.update(
+                                            thumbnail=thumbnail,
+                                            generate_thumbnail=False,
+                                        )
                             message = await client.send_staged(
                                 manager.settings.storage_channel,
-                                local_path,
+                                poster_path if sidecar else local_path,
                                 file_name=name,
                                 random_id=part["random_id"],
                                 progress=progress,
@@ -380,16 +495,7 @@ async def upload_multipart(manager, record, local_path, destination, file_name, 
                                 size=part["size"],
                                 expected_sha256=part["sha256"],
                                 before_dispatch=before_dispatch,
-                                **(
-                                    {"preview_name": file_name}
-                                    if getattr(
-                                        client,
-                                        "supports_generated_thumbnails",
-                                        False,
-                                    )
-                                    and part["index"] == 0
-                                    else {}
-                                ),
+                                **image_options,
                             )
                         if (
                             message is None
@@ -416,7 +522,7 @@ async def upload_multipart(manager, record, local_path, destination, file_name, 
                         if type(document_id) is int and document_id != 0:
                             part["document_id"] = document_id
                         part["message_id"] = message.id
-                        if part["index"] == 0:
+                        if not sidecar and part["index"] == 0:
                             context["remote_message_id"] = message.id
                         await persist()
                         if record.cancel_event.is_set() or context.get(
@@ -520,8 +626,25 @@ async def upload_multipart(manager, record, local_path, destination, file_name, 
             await asyncio.gather(*all_workers, return_exceptions=True)
             raise
         destination = await manager._check_destination_or_cancel(record, destination)
+        poster = plan.get("poster")
+        if poster:
+            try:
+                async with asyncio.timeout(15):
+                    await upload_part(poster, sidecar=True)
+            except (
+                OSError,
+                RPCError,
+                TransferError,
+                TelegramConnectionError,
+                ValueError,
+            ):
+                if poster.get("send_started"):
+                    raise
+                plan.pop("poster", None)
+                await persist()
+                poster = None
         if record.cancel_event.is_set() or context.get("cancel_requested"):
-            await _cleanup_parts(manager, record, parts)
+            await _cleanup_parts(manager, record, upload_effects(plan))
             cleanup = True
             raise TransferCancelled("Transfer cancelled")
         if not all(p.get("confirmed") for p in parts):
@@ -552,11 +675,36 @@ async def upload_multipart(manager, record, local_path, destination, file_name, 
             keep_both=True,
             parts=manifest,
             sha256=context["sha256"],
+            **(
+                {
+                    "poster": {
+                        key: poster[key]
+                        for key in ("message_id", "size", "sha256", "document_id")
+                        if key in poster
+                    }
+                }
+                if poster and poster.get("confirmed")
+                else {}
+            ),
         )
         context["remote_message_id"] = manifest[0]["message_id"]
         context["metadata_committed"] = True
         context["catalog_revision"] = manager.store.revision
         await persist()
+        if poster and poster.get("confirmed"):
+            from tgdrive.media.generated_thumbnails import save
+
+            content = await _owned_disk_call(_read_image, poster_path, MAX_POSTER_BYTES)
+            if content:
+                with suppress(OSError):
+                    await _owned_disk_call(
+                        save,
+                        manager.settings.resolved_cache_dir / "posters",
+                        manager.settings.storage_channel,
+                        poster["message_id"],
+                        content,
+                        maximum=MAX_POSTER_BYTES,
+                    )
         await manager._protect_committed_upload(record, size)
         cleanup = True
     except asyncio.CancelledError:
@@ -579,6 +727,7 @@ async def upload_multipart(manager, record, local_path, destination, file_name, 
     finally:
         if cleanup:
             await asyncio.to_thread(local_path.unlink, missing_ok=True)
+            await asyncio.to_thread(discard_upload_images, local_path)
             uploads = getattr(manager, "uploads", None)
             if uploads is not None:
                 await asyncio.to_thread(uploads.release, record.id)

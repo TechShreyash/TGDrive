@@ -274,14 +274,13 @@ export default function DatabaseRestore({
     };
     if (result) return <DatabaseRestoreResult error={result.error} />;
     return (
-        <section className="database-restore" aria-labelledby={`${id}-heading`}>
-            <h2 id={`${id}-heading`}>Restore a database archive</h2>
+        <details className="database-restore database-restore-legacy">
+            <summary>Older backups: restore a database archive</summary>
             <p>
-                Download the full encrypted .tgdb database archive from your
-                private Telegram channel. Only an empty, unused drive can
-                receive it; TGDrive refuses to replace existing files or work.
-                Channel recovery capsules use the separate channel recovery
-                form.
+                Use this only for an older full MongoDB archive and its matching
+                database recovery key. New recovery files use Restore backup
+                above. Only an empty, unused drive can receive this archive;
+                TGDrive refuses to replace existing files or work.
             </p>
             <p>
                 Keep the archive’s matching recovery key. Local unfinished
@@ -396,6 +395,6 @@ export default function DatabaseRestore({
                     </p>
                 )}
             </form>
-        </section>
+        </details>
     );
 }

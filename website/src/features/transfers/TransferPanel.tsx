@@ -13,6 +13,8 @@ import {
     FolderOpen,
     Clock3,
     FileUp,
+    Archive,
+    FolderArchive,
 } from "lucide-react";
 import {
     transfers,
@@ -21,6 +23,7 @@ import {
     type Transfer,
 } from "./transfers";
 import { historyStatus } from "./transferHistory";
+import { isArchiveTransfer } from "./transferTasks";
 import { deviceUploadMessage, needsDeviceUpload } from "./deviceUploadStatus";
 import {
     summarizeBatches,
@@ -180,13 +183,22 @@ export default function TransferPanel({
           ).length
         : 0;
     const pending = batches.filter((batch) => batch.pending).length;
+    const hasArchiveOperations = items.some(isArchiveTransfer);
+    const operation = hasArchiveOperations ? "transfer" : "upload";
     const heading = batches.some((batch) => batch.active > 0)
         ? pending +
-          (pending === 1 ? " upload in progress" : " uploads in progress")
+          (pending === 1
+              ? " " + operation + " in progress"
+              : " " + operation + "s in progress")
         : batches.some((batch) => batch.queued > 0)
-          ? pending + (pending === 1 ? " upload waiting" : " uploads waiting")
+          ? pending +
+            (pending === 1
+                ? " " + operation + " waiting"
+                : " " + operation + "s waiting")
           : batches.some((batch) => batch.failed || batch.awaiting)
-            ? "Uploads Need Attention"
+            ? hasArchiveOperations
+                ? "Transfers Need Attention"
+                : "Uploads Need Attention"
             : "Transfers";
     const folderPickerSupported =
         "webkitdirectory" in document.createElement("input");
@@ -290,7 +302,7 @@ export default function TransferPanel({
                             title={
                                 collapsed
                                     ? "Show Transfer Details"
-                                    : "Hide details; uploads keep running"
+                                    : "Hide details; transfers keep running"
                             }
                         >
                             {collapsed ? "Show" : "Hide"}
@@ -398,7 +410,7 @@ export default function TransferPanel({
                             id="transfer-clear"
                             className="text-button"
                             onClick={() => transfers.clearFinished()}
-                            title="Remove completed and cancelled uploads from this list"
+                            title="Remove completed and cancelled transfers from this list"
                         >
                             Clear Finished
                         </button>
@@ -406,13 +418,17 @@ export default function TransferPanel({
                 )}
             {cancelKeys !== null && (
                 <Modal
-                    title="Cancel All Uploads?"
+                    title={
+                        hasArchiveOperations
+                            ? "Cancel All Transfers?"
+                            : "Cancel All Uploads?"
+                    }
                     initialFocus="[data-keep-uploading]"
                     onClose={() => setCancelKeys(null)}
                 >
                     <p>
                         Cancel {cancelCount} unfinished{" "}
-                        {cancelCount === 1 ? "upload" : "uploads"}? Files
+                        {cancelCount === 1 ? operation : operation + "s"}? Files
                         already in your drive will be kept.
                     </p>
                     <div className="dialog-actions">
@@ -421,7 +437,9 @@ export default function TransferPanel({
                             data-keep-uploading
                             onClick={() => setCancelKeys(null)}
                         >
-                            Keep Uploading
+                            {hasArchiveOperations
+                                ? "Keep Running"
+                                : "Keep Uploading"}
                         </button>
                         <button
                             className="danger-button"
@@ -432,7 +450,9 @@ export default function TransferPanel({
                                 run(transfers.cancelAll(keys));
                             }}
                         >
-                            Cancel Uploads
+                            {hasArchiveOperations
+                                ? "Cancel Transfers"
+                                : "Cancel Uploads"}
                         </button>
                     </div>
                 </Modal>
@@ -494,6 +514,9 @@ export function CollapsedTransferSummary({
     batches: TransferBatch[];
     deviceMessage: string | null;
 }) {
+    const hasArchiveOperations = batches.some((batch) =>
+        batch.items.some(isArchiveTransfer),
+    );
     const uploading = batches.filter(
         (batch) =>
             batch.active >
@@ -515,7 +538,9 @@ export function CollapsedTransferSummary({
         batches.length > 0 &&
         batches.every((batch) => batch.cancelled === batch.count);
     const pending = [
-        uploading ? uploading + " uploading" : "",
+        uploading
+            ? uploading + (hasArchiveOperations ? " running" : " uploading")
+            : "",
         queued ? queued + " queued" : "",
         cancelling ? cancelling + " cancelling" : "",
         attention
@@ -528,11 +553,17 @@ export function CollapsedTransferSummary({
     const summary =
         pending ||
         (complete
-            ? "Uploads complete"
+            ? hasArchiveOperations
+                ? "Transfers complete"
+                : "Uploads complete"
             : cancelled
-              ? "Uploads cancelled"
+              ? hasArchiveOperations
+                  ? "Transfers cancelled"
+                  : "Uploads cancelled"
               : batches.length
-                ? "Uploads finished"
+                ? hasArchiveOperations
+                    ? "Transfers finished"
+                    : "Uploads finished"
                 : "Transfers");
     const StatusIcon = attention
         ? AlertCircle
@@ -642,7 +673,8 @@ export function BatchTransfer({
             batch.items.some(
                 (item) =>
                     !item.historyOnly &&
-                    !["remote", "delete"].includes(item.kind || ""),
+                    !["remote", "torrent", "delete"].includes(item.kind || "") &&
+                    !isArchiveTransfer(item),
             ));
     const receiptComplete = deviceStage && !batch.device.pending;
     if (!hasFolder)
@@ -1111,12 +1143,19 @@ function TransferRow({
     const received =
         deviceStage && !needsDeviceUpload(item) && item.state !== "cancelled";
     const checkingSource =
-        item.kind === "remote" &&
-        ["checking_source", "source_retry_wait"].includes(item.stage || "") &&
+        ["remote", "torrent"].includes(item.kind || "") &&
+        ["checking_source", "source_retry_wait", "torrent_metadata"].includes(
+            item.stage || "",
+        ) &&
         item.state === "uploading";
     const sourceWaiting =
         checkingSource &&
-        ["Checking source…", "Starting URL import…"].includes(item.phase) &&
+        [
+            "Checking source…",
+            "Starting URL import…",
+            "Starting torrent import…",
+            "Reading torrent metadata…",
+        ].includes(item.phase) &&
         item.serverStatus !== "queued" &&
         now - (item.startedAt || item.createdAt || now) >= 5000;
     const deviceMessage =
@@ -1132,7 +1171,7 @@ function TransferRow({
         status !== "queued" &&
         meter.fraction !== undefined;
     const needsOriginal =
-        item.kind !== "remote" &&
+        !["remote", "torrent"].includes(item.kind || "") &&
         (item.state === "awaiting_file" ||
             (item.state === "error" && !item.jobId && !item.file));
     const canLocate =
@@ -1172,6 +1211,10 @@ function TransferRow({
                     <X size={19} />
                 ) : status === "queued" ? (
                     <Clock3 size={19} />
+                ) : item.kind === "archive" ? (
+                    <Archive size={19} />
+                ) : item.kind === "extract" ? (
+                    <FolderArchive size={19} />
                 ) : (
                     <Upload size={19} />
                 )}
@@ -1458,7 +1501,11 @@ export function TransferMetrics({
             {details.eta !== undefined && (
                 <span
                     className="transfer-eta"
-                    title="Estimated upload time for this stage. Verification and publishing may take longer."
+                    title={
+                        isArchiveTransfer(item)
+                            ? "Estimated time for this stage. Saving files may take longer."
+                            : "Estimated upload time for this stage. Verification and publishing may take longer."
+                    }
                 >
                     About {formatDuration(Math.max(1, Math.ceil(details.eta)))}{" "}
                     remaining

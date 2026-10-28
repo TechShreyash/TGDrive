@@ -135,13 +135,37 @@ class Runtime:
                 return
             self.recovery_only = False
             self.replica = ChannelReplica(self.settings, self)
+            self.backup.replica = self.replica
             if self.replica.journal.get("activation"):
-                self.replica.journal.set("activation", None)
-                self.replica.journal.set("recovery", None)
-                self.replica.journal.set("candidate", None)
-                self.replica.journal.set("job", None)
-                self.replica.journal.set("config", {})
-                self.replica.update(phase="disabled", protected_revision=0, error=None)
+                candidate = self.replica.journal.get("candidate", {})
+                backup_config = candidate.get("backup_config")
+                transition = {
+                    "activation": None,
+                    "recovery": None,
+                    "candidate": None,
+                    "job": None,
+                    "config": dict(backup_config, enabled=True)
+                    if backup_config
+                    else {},
+                    "status": self.replica.journal.get("status", {})
+                    | {
+                        "phase": "idle" if backup_config else "disabled",
+                        "protected_revision": 0,
+                        "error": None,
+                    },
+                }
+                if "database" in candidate:
+                    transition.update(
+                        key=candidate["key"], mongodb_key=candidate["key"]
+                    )
+                self.replica.journal.set_many(transition)
+            try:
+                await asyncio.to_thread(self.replica.key)
+            except Exception as error:
+                self.replica._record_failure(error)
+                logger.warning(
+                    "Recovery key persistence needs attention: %s", type(error).__name__
+                )
             original_lineage = getattr(self.backup, "verify_lineage", None)
 
             async def protected_lineage(store):
@@ -315,7 +339,8 @@ class Runtime:
                                 self.store
                             ),
                         )
-                        await self.bot_mode.start()
+                if self.bot_mode is not None:
+                    await self.bot_mode.start()
                 return
             except Exception:
                 await asyncio.sleep(30)
@@ -480,7 +505,7 @@ class Runtime:
         self._validate_runtime_path(data_dir, "DATA_DIR")
         if cache_dir.is_relative_to(data_dir) or data_dir.is_relative_to(cache_dir):
             raise ValueError("CACHE_DIR and DATA_DIR must not overlap")
-        cleanup_paths = [cache_dir / name for name in ("uploads", "remote")]
+        cleanup_paths = [cache_dir / name for name in ("uploads", "remote", "torrents")]
         for cleanup_path in cleanup_paths:
             resolved = cleanup_path.resolve()
             if resolved == cache_dir or not resolved.is_relative_to(cache_dir):

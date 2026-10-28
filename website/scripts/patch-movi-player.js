@@ -2,6 +2,9 @@ import { createHash } from "node:crypto";
 import { readFile, writeFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import { resolve } from "node:path";
+import { HARDENING_PATCHES } from "./movi-player-hardening.js";
+import { DECODING_PATCHES } from "./movi-player-decoding.js";
+import { PREVIEW_CACHE_PATCHES } from "./movi-player-preview-cache.js";
 
 // Movi 0.4.1 can resume a seek on video alone on high-latency audio outputs.
 // Late audio then pulls playback back to the requested seek position. Reuse
@@ -85,22 +88,12 @@ export const GATE_BEFORE = `  async awaitPrefetchGate() {
   }`;
 export const GATE_AFTER = `  playbackAheadBytes = Infinity;
   playbackPrefetchHeld = false;
-  playbackRateSample = null;
-  playbackPeakBytesPerSecond = 0;
-  setPlaybackBufferGoal(time, duration, bitRate = 0, seeking = false) {
-    if (!(duration > 0 && this.size > 0 && Number.isFinite(time))) return;
-    const previous = this.playbackRateSample;
-    const position = this.getPosition();
-    if (seeking) this.playbackRateSample = null;
-    else if (previous) {
-      const elapsed = time - previous.time, bytes = position - previous.position;
-      if (elapsed >= 1 && elapsed <= 3 && bytes > 0)
-        this.playbackPeakBytesPerSecond = Math.max(bytes / elapsed,
-          this.playbackPeakBytesPerSecond * 0.98);
-      if (elapsed < 0 || elapsed >= 1) this.playbackRateSample = {time, position};
-    } else this.playbackRateSample = {time, position};
-    const rate = Math.max(this.size / duration, bitRate / 8,
-      this.playbackPeakBytesPerSecond);
+  setPlaybackBufferGoal(duration, bitRate = 0) {
+    if (!(Number.isFinite(duration) && duration > 0 &&
+        Number.isFinite(this.size) && this.size > 0)) return;
+    // Demux cursor jumps include paused reads and seeks, not playback demand.
+    const rate = Math.max(this.size / duration,
+      Number.isFinite(bitRate) && bitRate > 0 ? bitRate / 8 : 0);
     const ceiling = Math.min(1024 * this.maxBufferSizeMB * 1024,
       this.allocationLimitBytes ?? Infinity);
     const shortClip = duration <= 120 && this.size <= ceiling;
@@ -145,8 +138,7 @@ export const GOAL_BEFORE = `    const A2 = this.mediaInfo.duration;
     if (A2 <= 0) return 0;`;
 export const GOAL_AFTER = `    const A2 = this.mediaInfo.duration;
     if (A2 <= 0) return 0;
-    this.source.setPlaybackBufferGoal?.(this.getCurrentTime(), A2,
-      this.mediaInfo.bitRate || 0, this.stateManager.is("seeking"));`;
+    this.source.setPlaybackBufferGoal?.(A2, this.mediaInfo.bitRate || 0);`;
 export const RANGE_BEFORE = `C3 = Math.min(g2, I3 ? 8388608 : this.firstRangeBytes);`;
 export const RANGE_AFTER = `C3 = Math.min(g2, I3 ? 8388608 : this.firstRangeBytes,
         Number.isFinite(this.playbackAheadBytes)
@@ -213,7 +205,10 @@ export const TIMELINE_BEFORE = `    if (this._timelineGenerating) return;
 export const TIMELINE_AFTER = `    if (this._timelineGenerating) return;
     this.player.setPreviewsEnabled(this._thumb || !!this._storyboard);`;
 export const CHAPTER_PREVIEW_BEFORE = `const C3 = h2[A3], B3 = C3.image ? null : await this.player.getPreviewFrame(C3.start, null, true);`;
-export const CHAPTER_PREVIEW_AFTER = `const C3 = h2[A3], B3 = C3.image || !(this._thumb || this._storyboard) ? null : await this.player.getPreviewFrame(C3.start, null, true);`;
+export const CHAPTER_PREVIEW_AFTER = `const C3 = h2[A3], B3 = null;`;
+export const PREVIEW_WARM_BEFORE = `  schedulePreviewWarm(A2) {`;
+export const PREVIEW_WARM_AFTER = `  schedulePreviewWarm(A2) {
+    return; // TGDrive initializes previews only when requested by the viewer.`;
 export const EMPTY_TIMELINE_BEFORE = `        C2 && (C2.textContent = "Timeline"), g2.textContent = "Generating...";`;
 export const EMPTY_TIMELINE_AFTER = `        if (!(this._thumb || this._storyboard)) {
           if (C2) C2.textContent = "Chapters";
@@ -253,6 +248,10 @@ export const PATCHES = [
     [CHAPTER_PREVIEW_BEFORE, CHAPTER_PREVIEW_AFTER],
     [EMPTY_TIMELINE_BEFORE, EMPTY_TIMELINE_AFTER],
     [SUBTITLE_DISCONNECT_BEFORE, SUBTITLE_DISCONNECT_AFTER],
+    [PREVIEW_WARM_BEFORE, PREVIEW_WARM_AFTER],
+    ...HARDENING_PATCHES,
+    ...DECODING_PATCHES,
+    ...PREVIEW_CACHE_PATCHES,
 ];
 export const NOTICE =
     "/*! Modified by TGDrive (2026-10-20): coordinate seek resume with playable audio. See third-party/movi-player-TGDrive-patch-NOTICE.txt. */\n";
@@ -266,7 +265,7 @@ export function patchMoviSource(source, version) {
         );
     const marked = source.startsWith(NOTICE);
     let original = marked ? source.slice(NOTICE.length) : source;
-    for (const [before, after] of PATCHES)
+    for (const [before, after] of [...PATCHES].reverse())
         original = original.replace(after, before);
     if (
         digest(original) !== ORIGINAL_SHA256 ||

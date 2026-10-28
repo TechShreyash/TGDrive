@@ -2,6 +2,7 @@ import { summarizeBatches, batchCategory } from "./transferBatches";
 import type { Job } from "../../shared/types";
 import { fromJob, type Transfer } from "./transfers";
 import { api, type TransferHistoryContext } from "../../shared/api";
+import { isArchiveTransfer } from "./transferTasks";
 import type { TransferTaskHistoryPage } from "../../shared/types";
 
 export const TRANSFER_TASK_PAGE_SIZE = 20;
@@ -107,7 +108,7 @@ export function mergeHistory(
     return all
         .filter((item) => matching.has(item.key))
         .map((item) =>
-            item.state === "completed"
+            item.state === "completed" && !isArchiveTransfer(item)
                 ? { ...item, phase: "Upload completed" }
                 : item,
         );

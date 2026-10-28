@@ -243,7 +243,7 @@ export default function TransferHistory({
                 {query
                     ? "Try another name or clear the search."
                     : filter === "all"
-                      ? "Successful, failed and cancelled uploads appear here."
+                      ? "Successful, failed and cancelled transfers appear here."
                       : "Try another filter to see other finished uploads."}
             </p>
         </div>

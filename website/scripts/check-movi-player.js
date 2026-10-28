@@ -27,7 +27,7 @@ const installed = await readFile(
 let original = installed.startsWith(NOTICE)
     ? installed.slice(NOTICE.length)
     : installed;
-for (const [before, after] of PATCHES)
+for (const [before, after] of [...PATCHES].reverse())
     original = original.replace(after, before);
 
 test("the pinned bundle has exactly the reviewed source identity", () => {
@@ -62,7 +62,7 @@ function policy(rate, ceilingMiB = 128, duration = 600) {
             this.bufferSize = Math.min(size, ceilingMiB * 1024 ** 2);
         },
     });
-    source.setPlaybackBufferGoal(0, duration, rate * 8);
+    source.setPlaybackBufferGoal(duration, rate * 8);
     return source;
 }
 test("compressed read-ahead covers time across bitrates within a memory cap", () => {
@@ -180,20 +180,30 @@ test("source closure releases a held read-ahead gate", async () => {
     await source.awaitPrefetchGate();
     assert.equal(source.closed, true);
 });
-test("variable bitrate observations increase the time buffer without following seeks", () => {
+test("paused reads and seek cursor jumps do not enlarge speculative read-ahead", () => {
     const source = policy(100_000);
-    source.position = 500_000;
-    source.setPlaybackBufferGoal(1, 600, 800_000);
-    assert.equal(source.playbackAheadBytes, 45_000_000);
-    source.position = 59_000_000;
-    source.setPlaybackBufferGoal(2, 600, 800_000, true);
-    assert.equal(source.playbackRateSample, null);
-    source.setPlaybackBufferGoal(400, 600, 800_000);
-    assert.equal(source.playbackAheadBytes, 45_000_000);
+    for (const position of [500_000, 16 * 1024 ** 2, 59_000_000, 500_000]) {
+        source.position = position;
+        source.setPlaybackBufferGoal(600, 800_000);
+        assert.equal(source.playbackAheadBytes, 9_000_000);
+        assert.equal(source.bufferSize, 32 * 1024 ** 2);
+    }
+});
+test("declared container bitrate can increase the budget but invalid hints cannot", () => {
+    const source = policy(100_000);
+    source.setPlaybackBufferGoal(600, 1_600_000);
+    assert.equal(source.playbackAheadBytes, 18_000_000);
+    for (const bitRate of [NaN, Infinity, -1]) {
+        source.setPlaybackBufferGoal(600, bitRate);
+        assert.equal(source.playbackAheadBytes, 9_000_000);
+    }
 });
 test("EOF drains queued hardware frames without recreating the HEVC decoder", async () => {
     const patched = patchMoviSource(original, VERSION);
-    const start = patched.indexOf("  async flush(drain = false) {");
+    const start = patched.indexOf(
+        "  async flush(drain = false) {",
+        patched.indexOf("class MoviVideoDecoder"),
+    );
     const method = patched.slice(
         start,
         patched.indexOf("\n  reset() {", start),
@@ -322,6 +332,8 @@ test("picked subtitle URLs are revoked once across disconnect and source reset",
                 "cancelAutoAdvance",
                 "closeAllBottomMenus",
                 "closeSettingsPage",
+                "detachGlobalListeners",
+                "releaseMediaSession",
                 "resetStutterHint",
                 "resetTimeline",
                 "setPipUiTimer",
@@ -355,12 +367,17 @@ test("picked subtitle URLs are revoked once across disconnect and source reset",
 function httpSourceForTest() {
     const start = patched.indexOf("class HttpSource {");
     const end = patched.indexOf("\nasync function eA(", start);
+    const cacheStart = patched.indexOf("class LRUCache {");
+    const cacheEnd = patched.indexOf("\n}\n", cacheStart) + 2;
     assert.ok(start >= 0 && end > start);
+    assert.ok(cacheStart >= 0 && cacheEnd > cacheStart);
     return new Function(
         "fetch",
         `const crossOriginIsolated = false;
      const QA="HttpSource", EA=2097152, iA=262144000, tA=131072;
      const g = {debug(){}, info(){}, warn(){}, error(){}};
+     const oA="LRUCache";
+     ${patched.slice(cacheStart, cacheEnd)}
      ${patched.slice(start, end)}
      return HttpSource;`,
     )(async (_url, options) => {
@@ -385,7 +402,7 @@ test(
         const source = new Source("https://fixture.invalid/video", {}, 128);
         source.size = 50 * 1024 ** 2;
         source.resizeBuffer(32 * 1024 ** 2);
-        source.setPlaybackBufferGoal(0, 3600);
+        source.setPlaybackBufferGoal(3600);
         assert.equal(source.playbackAheadBytes, 2 * 1024 ** 2);
         let timer;
         try {
@@ -445,7 +462,10 @@ test("pending read demands are removed after failure and belong to their stream 
 });
 
 function drainHarness(flush) {
-    const start = patched.indexOf("  async flush(drain = false) {");
+    const start = patched.indexOf(
+        "  async flush(drain = false) {",
+        patched.indexOf("class MoviVideoDecoder"),
+    );
     const end = patched.indexOf("\n  get configuredCodec() {", start);
     const timers = new Map();
     let nextTimer = 0;
@@ -662,7 +682,7 @@ test("native chapter cards retain titles, times and seeking without decoding pre
     assert.equal(fixture.timeline._timelineGenerating, false);
 });
 
-test("timeline decoding remains opt-in for thumbnails or a storyboard", async () => {
+test("chapter image extraction belongs to the visible-card scheduler", async () => {
     for (const options of [{ _thumb: true }, { _storyboard: "fixture.vtt" }]) {
         const fixture = timelineFixture(
             [{ start: 0, title: "Opening" }],
@@ -670,9 +690,37 @@ test("timeline decoding remains opt-in for thumbnails or a storyboard", async ()
         );
         await fixture.timeline.generateTimelineStrip(fixture.panel);
         assert.deepEqual(fixture.previewChoices, [true]);
-        assert.deepEqual(fixture.frameTimes, [0]);
-        assert.equal(fixture.strip.children[0].children[0].tag, "img");
+        assert.deepEqual(fixture.frameTimes, []);
+        assert.equal(
+            fixture.strip.children[0].classList.contains(
+                "movi-timeline-noframe",
+            ),
+            true,
+        );
     }
+});
+
+test("supplied chapter artwork remains available without extracting a frame", async () => {
+    const fixture = timelineFixture(
+        [{ start: 0, title: "Opening", image: "blob:chapter-art" }],
+        { _thumb: true },
+    );
+    await fixture.timeline.generateTimelineStrip(fixture.panel);
+    assert.deepEqual(fixture.frameTimes, []);
+    assert.equal(fixture.strip.children[0].children[0].src, "blob:chapter-art");
+});
+
+test("preview initialization never warms itself without a viewer request", () => {
+    const start = patched.indexOf("  schedulePreviewWarm(A2) {");
+    const end = patched.indexOf("\n  async initPreviewPipeline()", start);
+    assert.ok(start > 0 && end > start);
+    const Preview = new Function(
+        "setTimeout",
+        `return class {${patched.slice(start, end)}}`,
+    )(() => {
+        throw new Error("speculative preview timer");
+    });
+    new Preview().schedulePreviewWarm(0);
 });
 
 test("a title-only timeline with no chapters never generates the twenty-frame strip", async () => {

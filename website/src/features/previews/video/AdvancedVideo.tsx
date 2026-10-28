@@ -1,6 +1,6 @@
 import { useEffect, useReducer, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { LoaderCircle, RefreshCw } from "lucide-react";
+import { LoaderCircle, Play, RefreshCw } from "lucide-react";
 import type { MoviElement } from "movi-player/element/slim";
 import wasmUrl from "movi-player/movi.wasm?url";
 import MovTextRenderer, { isMovTextCodec } from "./MovTextRenderer";
@@ -14,8 +14,15 @@ import {
 } from "./videoPlayerPresentation";
 import { installVideoPlayerPip } from "./videoPlayerPip";
 import { attachVideoGestures } from "./videoPlayerGestures";
+import { attachVideoPreviews } from "./videoPlayerPreviews";
 import { formatBytes } from "../../../shared/types";
 import { videoSourceMemoryBudgetMiB } from "./videoBufferMemory";
+import { guardVideoPosterSeek, loadVideoPoster } from "./videoPoster";
+import {
+    formatVideoTime,
+    readVideoPosition,
+    saveVideoPosition,
+} from "./videoWatchProgress";
 import "./AdvancedVideo.css";
 import advancedStyles from "./AdvancedVideo.css?inline";
 
@@ -158,6 +165,64 @@ export function videoIsAdvancing(
         current - previous < 2
     );
 }
+/** Pinned Movi 0.4.1 adapter: a frozen picture must also hold sound and the clock. */
+export function holdVideoForBuffering(core: unknown, now: number): void {
+    const player = core as {
+        getState: () => string;
+        getBindAV: () => boolean;
+        hasPicture: boolean;
+        isAudioOnly: () => boolean;
+        isPastVideoEnd: () => boolean;
+        isBackgrounded: boolean;
+        isPiPActive: boolean;
+        eofReached: boolean;
+        _eofFlushRequested: boolean;
+        _eofFlushSeq: number;
+        _eofFlushSettledSeq: number;
+        videoDecoder: { queueSize: number };
+        videoRenderer: {
+            getQueueSize: () => number;
+            stopPresentationLoop: () => void;
+        };
+        audioRenderer: { suspendForBuffering: () => void };
+        clock: { pause: () => void };
+        stateManager: { setState: (state: string) => void };
+        cancelBlackFrameWatchdog: () => void;
+        wasPlayingBeforeRebuffer: boolean;
+        _bufferingEntryTime: number;
+        _bufferingSelfInflicted: boolean;
+        _bufferingSupplyIsFine: boolean;
+        _soundCarryingAlone: boolean;
+    } | null;
+    if (
+        player?.getState() !== "playing" ||
+        !player.getBindAV() ||
+        !player.hasPicture ||
+        player.isAudioOnly() ||
+        player.isPastVideoEnd() ||
+        (player.isBackgrounded && !player.isPiPActive)
+    )
+        return;
+    // A fully drained video can leave a soundtrack tail with no next picture to await.
+    if (
+        player.eofReached &&
+        player._eofFlushRequested &&
+        player._eofFlushSettledSeq === player._eofFlushSeq &&
+        player.videoDecoder.queueSize === 0 &&
+        player.videoRenderer.getQueueSize() === 0
+    )
+        return;
+    player.cancelBlackFrameWatchdog();
+    player._soundCarryingAlone = false;
+    player.wasPlayingBeforeRebuffer = true;
+    player._bufferingEntryTime = now;
+    player._bufferingSelfInflicted = false;
+    player._bufferingSupplyIsFine = false;
+    player.stateManager.setState("buffering");
+    player.clock.pause();
+    player.audioRenderer.suspendForBuffering();
+    player.videoRenderer.stopPresentationLoop();
+}
 /** Saved positions can come from a longer rendition; never seek past its end. */
 export function videoResumeTime(time: number, duration?: number): number {
     const target = Number.isFinite(time) ? Math.max(0, time) : 0;
@@ -259,12 +324,16 @@ const phaseCopy = {
     seeking: "Loading this part…",
 };
 export default function AdvancedVideo({
+    fileId,
     src,
+    posterUrl,
     name,
     playback,
     qualityControl,
 }: {
+    fileId: string;
     src: string;
+    posterUrl: string;
     name: string;
     playback: { current: { time: number; playing: boolean } | null };
     qualityControl?: VideoQualityControl;
@@ -314,6 +383,9 @@ export default function AdvancedVideo({
     const [waitSeconds, setWaitSeconds] = useState(0);
     const [showStatus, setShowStatus] = useState(false);
     const [playbackError, setPlaybackError] = useState("");
+    const [continueTime, setContinueTime] = useState(() =>
+        readVideoPosition(fileId),
+    );
     const [transfer, setTransfer] = useState<VideoBufferSnapshot | null>(null);
     const waitingForVideo = useRef(true);
     waitingForVideo.current = state.phase !== "ready";
@@ -377,21 +449,33 @@ export default function AdvancedVideo({
         let frameCallback: number | undefined;
         let frameSource: MoviElement | null = null;
         let lastPlayback: { time: number; playing: boolean } | null = null;
+        let watchStarted = false;
+        let representativePoster = false;
+        let posterSource: string | null = null;
+        const posterController = new AbortController();
+        // Closing the preview can move an ended engine back to paused.
+        let finished = false;
+        let lastSavedAt = -Infinity;
         let previousTime = Number.NaN;
         let latestProgressAt = 0;
         let hasPresentedFrame = false;
         let detachPresentation: (() => void) | undefined;
         let detachPip: (() => void) | undefined;
         let detachGestures: (() => void) | undefined;
+        let detachPreviews: (() => void) | undefined;
+        let detachPosterSeek: (() => void) | undefined;
+        const expectsPicture = () => {
+            const core = player?.player;
+            if (!core?.getMediaInfo()) return true;
+            return core.getVideoTracks().some((track) => !track.isAttachedPic);
+        };
         const updateChapters = () => {
             if (!player || cancelled) return;
             const hasChapters = videoHasChapters(
                 player.player?.getChapters() || [],
                 player.duration,
             );
-            // The bundled native timeline renders chapter titles/times without
-            // extracting frames when thumb/storyboard are unset. Keep its synthetic
-            // thumbnail timeline unavailable for files with no chapter metadata.
+            // Only real chapters get a strip; their images are filled on demand.
             const controls = hasChapters ? "nospinner" : "notimeline nospinner";
             if (player.getAttribute("controlslist") !== controls)
                 player.setAttribute("controlslist", controls);
@@ -469,18 +553,52 @@ export default function AdvancedVideo({
             resume.positionApplied = true;
             if (playback.current === resume.source) playback.current = null;
         };
+        const savePosition = (force = false) => {
+            // Startup seeks must not overwrite a Continue offer that was never used.
+            if (
+                !watchStarted ||
+                !lastPlayback ||
+                (resume && !resume.positionApplied)
+            )
+                return;
+            const now = performance.now();
+            if (!force && now - lastSavedAt < 5000) return;
+            saveVideoPosition(
+                fileId,
+                finished || player?.ended ? 0 : lastPlayback.time,
+            );
+            lastSavedAt = now;
+        };
+        const startWatching = () => {
+            watchStarted = true;
+            finished = false;
+            setContinueTime(null);
+        };
         const rememberPlayback = () => {
             if (
+                ((representativePoster || posterSource) && !watchStarted) ||
                 !usable ||
                 !player?.player ||
-                player.player.getState() === "error"
+                player.player.getState() === "error" ||
+                !Number.isFinite(player.currentTime) ||
+                player.currentTime < 0
             )
                 return;
             lastPlayback = {
                 time: videoResumeTime(player.currentTime, player.duration),
                 playing: !player.paused,
             };
+            if (!player.seeking && !player.paused) savePosition();
         };
+        const flushPosition = () => {
+            rememberPlayback();
+            savePosition(true);
+        };
+        const saveWhenHidden = () => {
+            if (document.hidden) flushPosition();
+        };
+        document.addEventListener("visibilitychange", saveWhenHidden);
+        window.addEventListener("pagehide", flushPosition);
         const updateBuffer = () => {
             if (!player || cancelled || failed) return;
             const sample = videoBufferSnapshot(player);
@@ -558,7 +676,7 @@ export default function AdvancedVideo({
                 waiting(engineState === "seeking" ? "seeking" : "waiting");
                 return;
             }
-            if (event === "playing" && !hasPresentedFrame) {
+            if (event === "playing" && expectsPicture() && !hasPresentedFrame) {
                 // The engine starts its clock before the first decoded picture arrives.
                 // Preserve loading feedback until successive real frames are presented.
                 waiting("waiting");
@@ -604,19 +722,32 @@ export default function AdvancedVideo({
                         performance.now() - latestProgressAt < 500)
                 )
                     return;
+                if (
+                    pendingWait === "waiting" &&
+                    latestProgressAt > 0 &&
+                    performance.now() - latestProgressAt > 1250
+                )
+                    holdVideoForBuffering(player.player, performance.now());
                 hasPresentedFrame = false;
                 dispatch(pendingWait);
             }, 700);
         };
         const settle = (event: "pause" | "seeked" | "ended") => {
             if (cancelled || failed) return;
+            if (event === "ended") finished = true;
             clearWaiting();
             if (event !== "seeked") pendingSeek = false;
             dispatch(event);
             rememberPlayback();
+            if (!player?.seeking) savePosition(true);
         };
-        void import("movi-player/element/slim")
-            .then(({ MoviElement }) => {
+        void Promise.all([
+            import("movi-player/element/slim"),
+            playback.current
+                ? Promise.resolve(null)
+                : loadVideoPoster(posterUrl, posterController.signal),
+        ])
+            .then(([{ MoviElement }, poster]) => {
                 if (cancelled || !host.current) return;
                 installLocalStyles(MoviElement);
                 installVideoPresentation(MoviElement);
@@ -626,6 +757,7 @@ export default function AdvancedVideo({
                 detachPresentation = attachVideoPresentation(player);
                 detachPip = installVideoPlayerPip(player);
                 detachGestures = attachVideoGestures(player);
+                detachPreviews = attachVideoPreviews(player);
                 player.setAttribute("wasmurl", wasmUrl);
                 player.setAttribute("engine", "wasm");
                 player.setAttribute("sw", "auto");
@@ -649,8 +781,8 @@ export default function AdvancedVideo({
                 player.setAttribute("theme", "dark");
                 player.setAttribute("themecolor", "#647dff");
                 player.setAttribute("fastseek", "keys gestures");
-                // Enable the native chapter timeline once real metadata is available.
-                // Frame extraction stays disabled: neither thumb nor storyboard is set.
+                // Keyframes reuse the player's caches without precise frame walks.
+                player.setAttribute("thumb", "");
                 player.setAttribute("controlslist", "notimeline nospinner");
                 player.setAttribute(
                     "aria-label",
@@ -666,6 +798,13 @@ export default function AdvancedVideo({
                     };
                     // Establish the library's startup position before connection or src.
                     player.setAttribute("startat", String(resume.target));
+                } else if (poster) {
+                    posterSource = URL.createObjectURL(poster);
+                    player.setAttribute("poster", posterSource);
+                    player.setAttribute("posterfit", "contain");
+                } else {
+                    representativePoster = true;
+                    player.setAttribute("postertime", "50%");
                 }
                 const listen = (type: string, callback: EventListener) => {
                     player!.addEventListener(type, callback);
@@ -687,11 +826,17 @@ export default function AdvancedVideo({
                 // TrackManager emits this synchronously before choosing the decoder.
                 // Install the public extension in time to receive raw MP4 text packets.
                 listen("subtitletrackchange", updateSubtitleRenderer);
-                listen("loadedmetadata", () => ready("loadedmetadata"));
+                listen("loadedmetadata", () => {
+                    if (representativePoster && !detachPosterSeek)
+                        detachPosterSeek = guardVideoPosterSeek(player!);
+                    ready("loadedmetadata");
+                });
                 listen("loadeddata", () => ready("loadeddata"));
                 listen("canplay", () => ready("canplay"));
                 listen("playing", () => ready("playing"));
                 listen("play", () => {
+                    if (representativePoster) player?.removeAttribute("postertime");
+                    startWatching();
                     // A playing state is an intent; watch actual presented frames below.
                     latestProgressAt = performance.now();
                 });
@@ -700,6 +845,8 @@ export default function AdvancedVideo({
                 listen("seeking", () => waiting("seeking"));
                 listen("seeked", () => {
                     observeResumePosition();
+                    if (usable && player && player.currentTime > 0)
+                        startWatching();
                     rememberPlayback();
                     settle("seeked");
                     // A new position can be available before its audio/video refill is ready.
@@ -713,8 +860,26 @@ export default function AdvancedVideo({
                     observeResumePosition();
                     rememberPlayback();
                     updateBuffer();
+                    if (usable && !expectsPicture()) {
+                        if (
+                            videoIsAdvancing(
+                                previousTime,
+                                player.currentTime,
+                                player.paused,
+                                player.seeking,
+                            )
+                        ) {
+                            recover();
+                            pendingSeek = false;
+                            latestProgressAt = performance.now();
+                            clearWaiting();
+                            dispatch("playing");
+                        }
+                        previousTime = player.currentTime;
+                    }
                     if (
                         usable &&
+                        expectsPicture() &&
                         !player.paused &&
                         !player.seeking &&
                         player.currentTime < player.duration - 0.1 &&
@@ -784,14 +949,23 @@ export default function AdvancedVideo({
                     frameSource.requestVideoFrameCallback(presentedFrame);
                 progressTimer = window.setInterval(observeProgress, 250);
             })
-            .catch(fail);
+            .catch((event) => {
+                posterController.abort();
+                fail(event);
+            });
         return () => {
             cancelled = true;
+            posterController.abort();
             clearWaiting();
             clearInterval(progressTimer);
+            document.removeEventListener("visibilitychange", saveWhenHidden);
+            window.removeEventListener("pagehide", flushPosition);
+            flushPosition();
             detachPresentation?.();
             detachPip?.();
             detachGestures?.();
+            detachPreviews?.();
+            detachPosterSeek?.();
             if (player) {
                 restorePlayerFocus.current ||=
                     document.activeElement === player;
@@ -799,6 +973,11 @@ export default function AdvancedVideo({
                 if (frameCallback !== undefined)
                     frameSource?.cancelVideoFrameCallback(frameCallback);
                 if (
+                    finished ||
+                    ((representativePoster || posterSource) && !watchStarted)
+                )
+                    playback.current = null;
+                else if (
                     lastPlayback &&
                     (!player.player || player.player.getState() === "error")
                 )
@@ -829,8 +1008,9 @@ export default function AdvancedVideo({
                 if (activePlayer.current === player)
                     activePlayer.current = null;
             }
+            if (posterSource) URL.revokeObjectURL(posterSource);
         };
-    }, [src, name, playback, attempt]);
+    }, [fileId, src, posterUrl, name, playback, attempt]);
     const copy = state.phase !== "ready" ? phaseCopy[state.phase] : null;
     const loadingStatus =
         playbackError || (copy && showStatus) ? (
@@ -907,6 +1087,48 @@ export default function AdvancedVideo({
                 </div>
             </div>
         ) : null;
+    const continueButton =
+        continueTime !== null &&
+        state.ready &&
+        !playbackError &&
+        continueTime < (activePlayer.current?.duration ?? 0) ? (
+            <div className="advanced-state-actions advanced-continue">
+                <button
+                    type="button"
+                    onClick={() => {
+                        const player = activePlayer.current;
+                        const core = player?.player;
+                        if (!player || !core) return;
+                        setContinueTime(null);
+                        player.focus({ preventScroll: true });
+                        // Fresh paused loads need a settled seek before first play.
+                        const onSeeked = () => {
+                            if (activePlayer.current === player)
+                                void player.play().catch(() => {});
+                        };
+                        core.once("seeked", onSeeked);
+                        void core
+                            .seek(
+                                videoResumeTime(continueTime, player.duration),
+                            )
+                            .catch(() => {
+                                core.off("seeked", onSeeked);
+                                if (activePlayer.current === player)
+                                    setContinueTime(continueTime);
+                            });
+                    }}
+                >
+                    <Play size={16} aria-hidden="true" /> Continue from{" "}
+                    {formatVideoTime(continueTime)}
+                </button>
+            </div>
+        ) : null;
+    const overlays = (
+        <>
+            {loadingStatus}
+            {continueButton}
+        </>
+    );
     return (
         <div className="advanced-video" data-phase={state.phase}>
             <div
@@ -914,9 +1136,7 @@ export default function AdvancedVideo({
                 className="advanced-player-host"
                 aria-busy={state.phase !== "ready" && !playbackError}
             />
-            {statusSurface
-                ? createPortal(loadingStatus, statusSurface)
-                : loadingStatus}
+            {statusSurface ? createPortal(overlays, statusSurface) : overlays}
         </div>
     );
 }

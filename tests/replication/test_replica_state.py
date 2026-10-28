@@ -394,6 +394,13 @@ async def test_capsule_publication_rolls_back_point_and_keys_as_one_generation(
     try:
         configured.mongodb_backup_key = SecretStr("b2" * 32)
         await replica._sync(config)
+        # Deliberate rotation must keep both durable copies of the key aligned.
+        backend.write(
+            backend.db.settings,
+            "update_one",
+            {"_id": "recovery-key"},
+            {"$set": {"document": {"key": "c3" * 32, "drive_id": store.drive_id}}},
+        )
         replica.journal.set("key", "c3" * 32)
         configured.mongodb_backup_key = SecretStr("d4" * 32)
         previous = replica.recovery_kit()

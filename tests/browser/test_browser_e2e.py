@@ -429,7 +429,7 @@ def test_resumable_multiple_files_navigation_and_mobile_layout(
     login(page, server.url)
     expect(page.get_by_role("heading", name="My Files", exact=True)).to_be_visible()
     upload(page, ["first.txt", "second.txt"])
-    started = server.wait_started(2)
+    started = {item["name"]: item["id"] for item in server.wait_started(2)}
     expect(row(page, "first.txt")).to_have_attribute("data-status", "uploading")
     expect(row(page, "second.txt")).to_have_attribute("data-status", "uploading")
     page.get_by_role("button", name="Hide Transfer Details", exact=True).click()
@@ -454,14 +454,14 @@ def test_resumable_multiple_files_navigation_and_mobile_layout(
     ).to_be_visible()
     expect(page.locator(".transfer-center")).to_have_count(0)
     page.set_viewport_size({"width": 1440, "height": 900})
-    server.finish(started[0]["id"])
+    server.finish(started["first.txt"])
     expect(row(page, "first.txt")).to_have_attribute("data-status", "completed")
     clear = page.get_by_role("button", name="Clear Finished", exact=True)
     expect(clear).to_be_enabled()
     clear.click()
     expect(row(page, "first.txt")).to_have_count(0)
     expect(row(page, "second.txt")).to_be_visible()
-    server.finish(started[1]["id"])
+    server.finish(started["second.txt"])
     expect(row(page, "second.txt")).to_have_attribute("data-status", "completed")
     expect(clear).to_be_enabled()
     clear.click()
@@ -648,7 +648,11 @@ def test_queued_deletion_is_not_reported_complete_early(
         "The original files will remain in Telegram."
     )
     expect(page.get_by_role("dialog")).to_contain_text(
-        "You cannot restore these items from Trash after deletion."
+        "Items disappear from Trash once deletion starts and are removed "
+        "in the background."
+    )
+    expect(page.get_by_role("dialog")).to_contain_text(
+        "You cannot restore them after deletion."
     )
     page.get_by_role("dialog").get_by_role(
         "button", name="Delete Permanently", exact=True
@@ -657,13 +661,15 @@ def test_queued_deletion_is_not_reported_complete_early(
     expect(
         page.get_by_role("region", name="File Deletion").get_by_role("status")
     ).to_have_text("Deleting 1 item…")
-    expect(
-        page.get_by_role("button", name="Private folder", exact=True)
-    ).to_be_visible()
+    expect(page.get_by_role("button", name="Private folder", exact=True)).to_have_count(
+        0
+    )
+    expect(page.get_by_text("Permanently deleted 1 item.", exact=True)).to_have_count(0)
     page.locator(".drive-nav").get_by_role("link", name="My Files", exact=True).click()
     expect(page.get_by_role("region", name="File Deletion")).to_have_count(0)
     page.get_by_role("link", name="Trash", exact=True).click()
     expect(page.get_by_role("region", name="File Deletion")).to_be_visible()
+    expect(page.get_by_role("heading", name="Trash Is Empty")).to_be_visible()
     records = server.control()["records"]
     deletion_id = next(
         key for key, value in records.items() if value["phase"] == "deleting"
@@ -678,7 +684,11 @@ def test_queued_deletion_is_not_reported_complete_early(
             route.continue_()
 
     page.route("**/api/v1/trash*", trash_refresh)
-    server.finish(deletion_id)
+    with page.expect_response(
+        lambda response: "/api/v1/trash" in response.url and response.status == 200
+    ):
+        server.finish(deletion_id)
+    expect(page.get_by_role("region", name="File Deletion")).to_have_count(0)
     expect(page.get_by_role("heading", name="Trash Is Empty")).to_be_visible(
         timeout=10000
     )
@@ -753,7 +763,7 @@ def test_keyboard_dialog_focus_and_unicode_search(
     expect(menu.get_by_role("button", name="Upload Folder", exact=True)).to_be_focused()
     page.keyboard.press("End")
     expect(
-        menu.get_by_role("button", name="Upload from URL", exact=True)
+        menu.get_by_role("button", name="Import torrent", exact=True)
     ).to_be_focused()
     page.keyboard.press("Home")
     expect(menu.get_by_role("button", name="Upload Files", exact=True)).to_be_focused()
@@ -786,7 +796,7 @@ def test_keyboard_dialog_focus_and_unicode_search(
     expect(menu.get_by_role("button", name="Upload Files", exact=True)).to_be_focused()
     page.keyboard.press("ArrowUp")
     expect(
-        menu.get_by_role("button", name="Upload from URL", exact=True)
+        menu.get_by_role("button", name="Import torrent", exact=True)
     ).to_be_focused()
     page.keyboard.press("Escape")
     expect(menu).to_have_count(0)
@@ -2468,8 +2478,20 @@ def test_settings_backup_status_never_claims_unconfirmed_protection(
     assert recovery["protected_revision"] >= recovery["metadata_revision"]
     expect(status).to_have_text("Saved to MongoDB", timeout=8000)
     assert server.control("/backup")["calls"] == baseline_calls + 2
-    page.get_by_text("Recover on a New Installation", exact=True).click()
+    restore = page.get_by_role("region", name="Backups & recovery", exact=True)
+    restore.get_by_text("Restore backup", exact=True).click()
+    expect(restore.get_by_label("Recovery file (required)", exact=True)).to_be_visible()
+    expect(restore.get_by_label("Recovery key (required)", exact=True)).to_be_visible()
+    expect(
+        restore.get_by_role("button", name="Inspect backup", exact=True)
+    ).to_be_disabled()
+    page.get_by_text(
+        "Reopen an existing drive or restore an older archive", exact=True
+    ).click()
     restore_form = page.locator(".drive-recovery-help .database-restore")
+    restore_form.get_by_text(
+        "Older backups: restore a database archive", exact=True
+    ).click()
     expect(restore_form.get_by_label("Database archive (required)")).to_be_visible()
     expect(restore_form.get_by_label("Archive recovery key (required)")).to_be_visible()
     expect(
@@ -3036,6 +3058,20 @@ def test_bulk_deletion_is_one_notice_with_refresh_failure_and_retry(
     ).click()
     notice = page.get_by_role("region", name="File Deletion", exact=True)
     expect(notice.get_by_role("status")).to_contain_text("Deleting 3 items…")
+    expect(notice).to_contain_text("You can close this tab.")
+    for name in ("Private folder", "資料", "Preview samples"):
+        expect(page.get_by_role("button", name=name, exact=True)).to_have_count(0)
+    page.reload()
+    expect(notice.get_by_role("status")).to_contain_text("Deleting 3 items…")
+    expect(
+        page.get_by_role("heading", name="Trash Is Empty", exact=True)
+    ).to_be_visible()
+    page.screenshot(path=ARTIFACTS / "deletion-pending-desktop.png")
+    page.set_viewport_size({"width": 320, "height": 844})
+    expect(notice).to_contain_text("You can close this tab.")
+    assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
+    page.screenshot(path=ARTIFACTS / "deletion-pending-mobile.png")
+    page.set_viewport_size({"width": 1440, "height": 960})
     expect(page.locator(".transfer-batch")).to_have_count(0)
     records = server.control()["records"]
     ids = [key for key, record in records.items() if record.get("phase") == "deleting"]
@@ -3046,6 +3082,9 @@ def test_bulk_deletion_is_one_notice_with_refresh_failure_and_retry(
     server.control("/fail-deletion/" + ids[1], method="POST")
     server.finish(ids[2])
     expect(notice.get_by_role("status")).to_have_text("1 item could not be deleted.")
+    jobs = page.request.get(server.url + "/api/v1/jobs").json()["jobs"]
+    failed_name = next(job["name"] for job in jobs if job["id"] == ids[1])
+    expect(page.get_by_role("button", name=failed_name, exact=True)).to_be_visible()
     expect(notice.locator(".deletion-errors")).not_to_have_attribute("open", "")
     expect(page.locator(".transfer-batch")).to_have_count(0)
     page.reload()
@@ -3057,8 +3096,13 @@ def test_bulk_deletion_is_one_notice_with_refresh_failure_and_retry(
     expect(page.locator(".transfer-batch")).to_have_count(0)
     notice.get_by_text("View Failed Items (1)", exact=True).click()
     expect(notice).to_contain_text("Synthetic catalog deletion failed")
+    page.set_viewport_size({"width": 320, "height": 844})
+    assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
+    page.screenshot(path=ARTIFACTS / "deletion-failed-mobile.png")
+    page.set_viewport_size({"width": 1440, "height": 960})
     notice.get_by_role("button", name="Retry Failed deletions", exact=True).click()
     expect(notice.get_by_role("status")).to_contain_text("Deleting 1 item…")
+    expect(page.get_by_role("button", name=failed_name, exact=True)).to_have_count(0)
     server.finish(ids[1])
     expect(page.get_by_text("Permanently deleted 1 item.", exact=True)).to_be_visible()
     expect(notice).to_have_count(0)

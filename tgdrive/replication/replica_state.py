@@ -10,6 +10,7 @@ import sqlite3
 import threading
 from pathlib import Path
 
+from bson import json_util
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
 from tgdrive.recovery.backup import decode_catalog_snapshot
@@ -79,7 +80,13 @@ class ReplicaJournal:
             row = self.db.execute(
                 "SELECT value FROM state WHERE key=?", (key,)
             ).fetchone()
-            return json.loads(row[0]) if row else copy.deepcopy(default)
+            return (
+                json_util.loads(
+                    row[0], json_options=json_util.JSONOptions(tz_aware=True)
+                )
+                if row
+                else copy.deepcopy(default)
+            )
 
     def set(self, key, value):
         self.set_many({key: value})
@@ -87,7 +94,15 @@ class ReplicaJournal:
     def set_many(self, values):
         """Commit related state together, including explicit null values."""
         rows = [
-            (key, json.dumps(value, allow_nan=False, ensure_ascii=False))
+            (
+                key,
+                json.dumps(
+                    value,
+                    default=json_util.default,
+                    allow_nan=False,
+                    ensure_ascii=False,
+                ),
+            )
             for key, value in values.items()
         ]
         with self.lock, self.db:
@@ -145,9 +160,10 @@ def files_in(catalog):
 
 
 def parts_in(node):
-    return node.get("parts") or [
+    parts = node.get("parts") or [
         {"message_id": node["message_id"], "size": node["size"]}
     ]
+    return [*parts, node["poster"]] if node.get("poster") else parts
 
 
 def validate_catalog(catalog):
@@ -162,10 +178,13 @@ def remap_catalog(catalog, channel, mapping):
         node["message_id"] = mapping[str(old_anchor)]
         for part in node.get("parts", []):
             part["message_id"] = mapping[str(part["message_id"])]
+        if node.get("poster"):
+            node["poster"]["message_id"] = mapping[str(node["poster"]["message_id"])]
     # Old jobs/deletion receipts are tied to their old channel. They must never
     # replay into a recovered channel with coincidentally matching message IDs.
     result["operations"] = []
     result["deletions"] = []
+    result.pop("folder_preparations", None)
     result["storage_channel_id"] = channel
     result["backed_up_revision"] = result["revision"]
     validate_catalog(result)
@@ -173,6 +192,10 @@ def remap_catalog(catalog, channel, mapping):
 
 
 def encode_bundle(payload, key):
+    if "database" in payload:
+        from tgdrive.recovery.recovery_file import encode_recovery_file
+
+        return encode_recovery_file(payload, key)
     raw = json.dumps(payload, allow_nan=False, ensure_ascii=False).encode()
     if len(raw) > MAX_BUNDLE - 1024:
         raise ValueError("The recovery bundle exceeds the 64 MiB limit")
@@ -182,6 +205,11 @@ def encode_bundle(payload, key):
 
 def decode_bundle(content, key):
     """Authenticate and validate a complete, internally equivalent channel pair."""
+    from tgdrive.recovery.recovery_file import MAGIC as RECOVERY_MAGIC
+    from tgdrive.recovery.recovery_file import decode_recovery_file
+
+    if isinstance(content, bytes) and content.startswith(RECOVERY_MAGIC):
+        return decode_recovery_file(content, key)
     import re
 
     from tgdrive.storage.store import _validate_timestamp

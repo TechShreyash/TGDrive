@@ -365,6 +365,8 @@ describe("deletion progress", () => {
         );
         const manager = managerForTest();
         const statuses: string[] = [];
+        const changed = vi.fn();
+        window.addEventListener("tgdrive:files-changed", changed);
         manager.subscribe(() =>
             statuses.push(manager.deletionSnapshot().jobs[0]?.status),
         );
@@ -377,8 +379,10 @@ describe("deletion progress", () => {
             );
             manager.refreshJobs();
             await vi.waitFor(() => expect(polls).toBe(2));
+            changed.mockClear();
             await manager.retryDeletion("deletion");
             expect(manager.deletionSnapshot().jobs[0].status).toBe("queued");
+            expect(changed).toHaveBeenCalledOnce();
             statuses.length = 0;
             resolveOld(Response.json({ jobs: [deletion("error")] }));
             await vi.waitFor(() =>
@@ -388,6 +392,7 @@ describe("deletion progress", () => {
             expect(statuses).not.toContain("error");
         } finally {
             manager.setEnabled(false);
+            window.removeEventListener("tgdrive:files-changed", changed);
         }
     });
 
@@ -2302,43 +2307,47 @@ describe("deletion operation tracking", () => {
             manager.setEnabled(false);
         }
     });
-    it("refreshes files when a tracked deletion actually completes", async () => {
-        let completed = false;
-        vi.stubGlobal(
-            "fetch",
-            vi.fn(async () =>
-                Response.json({
-                    jobs: [
-                        {
-                            id: "delete-1",
-                            kind: "delete",
-                            status: completed ? "completed" : "running",
-                            phase: "deleting",
-                            current: 0,
-                            total: 10,
-                            name: "First",
-                        },
-                    ],
-                }),
-            ),
-        );
-        const changed = vi.fn();
-        window.addEventListener("tgdrive:files-changed", changed);
-        const manager = managerForTest();
-        try {
-            manager.setEnabled(true);
-            await vi.waitFor(() =>
-                expect(manager.deletionSnapshot().jobs).toHaveLength(1),
+    it.each(["completed", "error", "failed", "interrupted", "cancelled"])(
+        "refreshes files when a tracked deletion becomes %s",
+        async (terminalStatus) => {
+            let status = "running";
+            vi.stubGlobal(
+                "fetch",
+                vi.fn(async () =>
+                    Response.json({
+                        jobs: [
+                            {
+                                id: "delete-1",
+                                kind: "delete",
+                                status,
+                                phase: "deleting",
+                                current: 0,
+                                total: 10,
+                                name: "First",
+                            },
+                        ],
+                    }),
+                ),
             );
-            expect(changed).not.toHaveBeenCalled();
-            completed = true;
-            manager.refreshJobs();
-            await vi.waitFor(() => expect(changed).toHaveBeenCalledOnce());
-            expect(manager.snapshot()).toEqual([]);
-        } finally {
-            manager.setEnabled(false);
-        }
-    });
+            const changed = vi.fn();
+            window.addEventListener("tgdrive:files-changed", changed);
+            const manager = managerForTest();
+            try {
+                manager.setEnabled(true);
+                await vi.waitFor(() =>
+                    expect(manager.deletionSnapshot().jobs).toHaveLength(1),
+                );
+                expect(changed).not.toHaveBeenCalled();
+                status = terminalStatus;
+                manager.refreshJobs();
+                await vi.waitFor(() => expect(changed).toHaveBeenCalledOnce());
+                expect(manager.snapshot()).toEqual([]);
+            } finally {
+                manager.setEnabled(false);
+                window.removeEventListener("tgdrive:files-changed", changed);
+            }
+        },
+    );
 });
 
 describe("connection restart admission", () => {

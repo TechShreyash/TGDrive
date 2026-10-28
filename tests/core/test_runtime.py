@@ -129,6 +129,51 @@ async def test_runtime_starts_once_and_stops_components(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("conflict", [False, True])
+async def test_runtime_persists_recovery_key_before_workers_without_blocking_browsing(
+    tmp_path,
+    monkeypatch,
+    conflict,
+):
+    import threading
+
+    from tgdrive.replication.replica import ChannelReplica
+    from tgdrive.settings.managed_settings import SettingsProblem
+
+    store = DriveStore.create(tmp_path / "drive.json")
+    pool = FakePool()
+    runtime = Runtime(settings(tmp_path), pool=pool)
+    backup = FakeBackup(store)
+    runtime.backup = backup
+    runtime.remote = FakeRemote()
+    caller = threading.get_ident()
+    calls = []
+
+    def persist(replica):
+        assert replica.runtime.store is store
+        assert not backup.started and not pool.started
+        assert threading.get_ident() != caller
+        calls.append(True)
+        if conflict:
+            raise SettingsProblem(
+                "Recovery key conflict", code="RECOVERY_KEY_CONFLICT", status=409
+            )
+        return "a1" * 32
+
+    monkeypatch.setattr(ChannelReplica, "key", persist)
+    monkeypatch.setattr(runtime_module, "build_bot_mode_client", lambda _settings: None)
+    try:
+        await runtime.start()
+        assert calls == [True]
+        assert runtime.ready and backup.started and pool.started
+        assert runtime.store.list_directory("/") == {}
+        if conflict:
+            assert runtime.replica.status()["error"]["code"] == "RECOVERY_KEY_CONFLICT"
+    finally:
+        await runtime.stop()
+
+
+@pytest.mark.asyncio
 async def test_telegram_outage_keeps_local_metadata_available(tmp_path: Path) -> None:
     pool = FakePool(fail_start=True)
     config = settings(tmp_path)
@@ -285,3 +330,37 @@ async def test_bot_mode_shares_channel_send_pacing_and_flood_cooldown(
         assert client.defer == pool.defer_channel
     finally:
         await runtime.stop()
+
+
+@pytest.mark.asyncio
+async def test_bot_reconnect_retries_failed_start_without_registering_twice(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    pool = FakePool()
+    pool.pace_send = AsyncMock()
+    pool.defer_channel = AsyncMock()
+    client = Mock(
+        start=AsyncMock(side_effect=[ConnectionError("temporary outage"), None])
+    )
+    factory = Mock(return_value=client)
+    runtime = Runtime(settings(tmp_path), pool=pool)
+    runtime.ready = True
+    runtime.backup = Mock(backup=AsyncMock())
+    runtime._verify_storage_channel = AsyncMock()
+    sleep = AsyncMock()
+    monkeypatch.setattr(runtime_module, "build_bot_mode_client", factory)
+    monkeypatch.setattr(runtime_module.asyncio, "sleep", sleep)
+
+    try:
+        await runtime._reconnect()
+
+        assert runtime.bot_mode is not None
+        assert runtime.bot_mode._started
+        assert client.start.await_count == 2
+        client.register_bot.assert_called_once_with(runtime.bot_mode)
+        factory.assert_called_once_with(runtime.settings)
+        sleep.assert_awaited_once_with(30)
+    finally:
+        runtime.ready = False
+        await runtime.remote.close()
+        runtime.registry.close()

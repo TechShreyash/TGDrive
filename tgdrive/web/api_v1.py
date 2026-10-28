@@ -210,7 +210,39 @@ def register_routes(
             raise HTTPException(503, "Drive backup is not available yet")
         store = get_store(request)
         try:
-            await service.snapshot_now(store)
+            replica = getattr(runtime, "replica", None)
+            if replica is not None:
+                async with replica.control, replica._operation:
+                    config = replica.journal.get("config", {})
+                    if replica.blocked:
+                        raise HTTPException(
+                            409, "Finish channel recovery before creating a new backup"
+                        )
+                    if config.get("enabled"):
+                        if replica.journal.get("status", {}).get("phase") == "paused":
+                            raise HTTPException(
+                                409,
+                                "Resume the independent backup "
+                                "before creating a new restore point",
+                            )
+                        required = store.revision
+                        for _ in range(2):
+                            try:
+                                await replica._sync(config, force_snapshot=True)
+                            except Exception as error:
+                                raise replica._record_failure(error) from None
+                            if replica.status()["protected_revision"] >= required:
+                                break
+                        else:
+                            raise HTTPException(
+                                503, "The requested backup revision is still pending"
+                            )
+                    else:
+                        await service.snapshot_now(store)
+            else:
+                await service.snapshot_now(store)
+        except HTTPException:
+            raise
         except RecoveryConflict:
             raise
         except Exception:
@@ -422,8 +454,8 @@ def register_routes(
             queue = estimate(record.id) if callable(estimate) else None
         else:
             queue = queues.get(record.id)
-        return record.as_dict() | {
-            "name": record.context.get("name", "Transfer"),
+        result = record.as_dict() | {
+            "name": record.context.get("name") or "Transfer",
             "kind": record.context.get(
                 "source_kind", record.context.get("kind", "upload")
             ),
@@ -431,11 +463,29 @@ def register_routes(
             "destination": record.context.get("destination", "/"),
             "history_cleared": record.history_hidden,
         }
+        if result["kind"] in {"archive", "extract"}:
+            result["location"] = locate_transfer(get_store(request), result)
+        return result
+
+    from tgdrive.web.archive_api import register_archive_routes
+
+    register_archive_routes(
+        app,
+        require_admin=require_admin,
+        get_store=get_store,
+        get_manager=get_manager,
+        job_snapshot=job_snapshot,
+    )
 
     @app.get("/api/v1/jobs", dependencies=admin)
     async def jobs(request: Request, response: Response) -> dict[str, Any]:
         response.headers["Cache-Control"] = "no-store"
-        records = get_manager(request).registry.list()
+        records = [
+            record
+            for record in get_manager(request).registry.list()
+            if not record.context.get("torrent_parent_id")
+            and not record.context.get("archive_parent_id")
+        ]
         estimate = getattr(get_runtime(request).pool, "queue_estimates", None)
         queues = (
             estimate(record.id for record in records) if callable(estimate) else None
@@ -793,8 +843,8 @@ def register_routes(
         if payload.action == "delete":
             for path in selected:
                 store.validate_deletion(path)
-            for path in selected:
-                record = await get_manager(request).start_deletion(path)
+            records = await get_manager(request).start_deletions(selected)
+            for path, record in zip(selected, records, strict=True):
                 results.append({"path": path, "id": record.id, "status": "deleting"})
         else:
 

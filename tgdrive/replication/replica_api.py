@@ -3,6 +3,9 @@
 from __future__ import annotations
 
 import json
+import re
+import secrets
+import shutil
 
 from fastapi import Depends, HTTPException, Request, Response
 from pydantic import Field, SecretStr, StrictBool
@@ -106,6 +109,97 @@ def register_replica_routes(app, settings, require_admin, get_runtime):
                 ),
             },
         )
+
+    @app.get("/api/v1/replica/file", dependencies=admin)
+    async def backup_file(request: Request):
+        current = service(request)
+        return Response(
+            current.recovery_file(),
+            media_type="application/octet-stream",
+            headers={
+                "Cache-Control": "no-store",
+                "X-Content-Type-Options": "nosniff",
+                "Content-Disposition": 'attachment; filename="tgdrive-backup.tgdb"',
+            },
+        )
+
+    @app.post("/api/v1/replica/import", dependencies=admin)
+    async def import_file(request: Request):
+        from tgdrive.recovery.restore_api import _finish
+        from tgdrive.replication.replica_state import MAX_BUNDLE
+
+        if settings.demo_mode:
+            raise HTTPException(403, "Backup restore is disabled in demo mode")
+        if (
+            request.headers.get("content-type", "").split(";", 1)[0]
+            != "application/octet-stream"
+        ):
+            raise HTTPException(
+                415, "Upload the recovery file as application/octet-stream"
+            )
+        keys = request.headers.getlist("x-tgdrive-recovery-key")
+        if len(keys) != 1 or re.fullmatch(r"[a-fA-F0-9]{64}", keys[0]) is None:
+            raise HTTPException(422, "Enter the recovery key saved with this file")
+        source_values = request.headers.getlist("x-tgdrive-source-channel")
+        token_values = request.headers.getlist("x-tgdrive-bot-token")
+        if len(source_values) > 1 or len(token_values) > 1:
+            raise HTTPException(422, "Supply only one channel and bot token")
+        source = None
+        if source_values:
+            if re.fullmatch(r"-[1-9][0-9]{0,18}", source_values[0]) is None:
+                raise HTTPException(
+                    422, "Enter the surviving channel's negative numeric ID"
+                )
+            source = int(source_values[0])
+            if source < -(1 << 63):
+                raise HTTPException(422, "The surviving channel ID is invalid")
+        token = token_values[0] if token_values else None
+        if (
+            token is not None
+            and re.fullmatch(r"[1-9][0-9]{4,14}:[A-Za-z0-9_-]{20,}", token) is None
+        ):
+            raise HTTPException(422, "Enter a valid replacement bot token")
+        current = service(request)
+        async with current.control:
+            if current._operation.locked() or current.blocked:
+                raise HTTPException(
+                    409,
+                    "Pause or finish the existing recovery before opening another file",
+                )
+            async with current._operation:
+                path = current.directory / (".replica-import-" + secrets.token_hex(16))
+                try:
+                    with path.open("xb") as target:
+                        path.chmod(0o600)
+                        size = 0
+                        async for part in request.stream():
+                            size += len(part)
+                            if size > MAX_BUNDLE:
+                                raise HTTPException(
+                                    413, "Recovery file exceeds the 64 MiB limit"
+                                )
+                            if (
+                                shutil.disk_usage(current.directory).free
+                                < len(part) + settings.min_free_bytes
+                            ):
+                                raise HTTPException(
+                                    507,
+                                    "Not enough temporary space "
+                                    "to open the recovery file",
+                                )
+                            await _finish(target.write, part)
+                    await require_admin(request)
+                    return await invoke(
+                        current.inspect_file(path, keys[0], source, token)
+                    )
+                except OSError:
+                    raise HTTPException(
+                        507,
+                        "The recovery file could not be staged. "
+                        "Check temporary space and permissions.",
+                    ) from None
+                finally:
+                    path.unlink(missing_ok=True)
 
     @app.get("/api/v1/replica/report", dependencies=admin)
     async def report(request: Request):

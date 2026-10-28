@@ -1,5 +1,6 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
+    holdVideoForBuffering,
     initialVideoLoadState,
     unavailableVideoCodec,
     videoLoadTransition,
@@ -9,6 +10,87 @@ import {
     videoBufferSnapshot,
     type VideoLoadState,
 } from "./AdvancedVideo";
+
+describe("coordinated picture buffering", () => {
+    function engine(state = "playing") {
+        return {
+            getState: () => state,
+            getBindAV: () => true,
+            hasPicture: true,
+            isAudioOnly: () => false,
+            isPastVideoEnd: () => false,
+            isBackgrounded: false,
+            isPiPActive: false,
+            eofReached: false,
+            _eofFlushRequested: true,
+            _eofFlushSeq: 1,
+            _eofFlushSettledSeq: 1,
+            videoDecoder: { queueSize: 0 },
+            videoRenderer: {
+                getQueueSize: () => 0,
+                stopPresentationLoop: vi.fn(),
+            },
+            audioRenderer: { suspendForBuffering: vi.fn() },
+            clock: { pause: vi.fn() },
+            stateManager: { setState: vi.fn() },
+            cancelBlackFrameWatchdog: vi.fn(),
+            wasPlayingBeforeRebuffer: false,
+            _bufferingEntryTime: 0,
+            _bufferingSelfInflicted: true,
+            _bufferingSupplyIsFine: true,
+            _soundCarryingAlone: true,
+        };
+    }
+    it("holds scheduled audio and the clock while retaining refill and play intent", () => {
+        const player = engine();
+        holdVideoForBuffering(player, 2000);
+        expect(player.stateManager.setState).toHaveBeenCalledWith("buffering");
+        expect(player.clock.pause).toHaveBeenCalledOnce();
+        expect(player.audioRenderer.suspendForBuffering).toHaveBeenCalledOnce();
+        expect(player.videoRenderer.stopPresentationLoop).toHaveBeenCalledOnce();
+        expect(player.cancelBlackFrameWatchdog).toHaveBeenCalledOnce();
+        expect(player.wasPlayingBeforeRebuffer).toBe(true);
+        expect(player._bufferingEntryTime).toBe(2000);
+        expect(player._soundCarryingAlone).toBe(false);
+        expect(player._bufferingSelfInflicted).toBe(false);
+        expect(player._bufferingSupplyIsFine).toBe(false);
+    });
+    it.each(["paused", "seeking", "buffering", "ended", "error"])(
+        "does not change %s playback intent",
+        (state) => {
+            const player = engine(state);
+            holdVideoForBuffering(player, 2000);
+            expect(player.clock.pause).not.toHaveBeenCalled();
+            expect(player.wasPlayingBeforeRebuffer).toBe(false);
+        },
+    );
+    it("leaves hidden audio, audio-only playback and completed pictures alone", () => {
+        for (const overrides of [
+            { isBackgrounded: true },
+            { getBindAV: () => false },
+            { hasPicture: false },
+            { isAudioOnly: () => true },
+            { isPastVideoEnd: () => true },
+            { eofReached: true },
+        ]) {
+            const player = { ...engine(), ...overrides };
+            holdVideoForBuffering(player, 2000);
+            expect(player.clock.pause).not.toHaveBeenCalled();
+        }
+    });
+    it("still holds a frozen PiP picture or EOF with pictures left to decode", () => {
+        for (const overrides of [
+            { isBackgrounded: true, isPiPActive: true },
+            { eofReached: true, videoDecoder: { queueSize: 2 } },
+            { eofReached: true, _eofFlushSettledSeq: 0 },
+            { eofReached: true, _eofFlushRequested: false },
+        ]) {
+            const player = { ...engine(), ...overrides };
+            holdVideoForBuffering(player, 2000);
+            expect(player.clock.pause).toHaveBeenCalledOnce();
+        }
+    });
+});
 
 describe("stale buffering recovery", () => {
     it("accepts advancing playback, but not paused clocks or seek jumps", () => {

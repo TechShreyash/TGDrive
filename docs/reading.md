@@ -2,145 +2,109 @@
 
 [Docs home](README.md) · [All previews](usage.md#open-preview-and-download)
 
-Open a supported file from **My Files** or a shared folder. **Download** keeps the
-original available if previewing fails.
-
-**Contents**
-
-- [Choose a format](#choose-a-format)
-- [Bandwidth and compatibility](#bandwidth-and-compatibility)
-- [Reader limits](#reader-limits)
-- [Running the reader](#running-the-reader)
+Open a PDF, EPUB, CBZ or CBR from **My Files** or a shared folder. Use the toolbar
+to navigate and adjust the display; EPUB/comics also offer **Reading options**.
+If a preview fails,
+**Download** retrieves the unchanged original for another reader.
 
 ## Choose a format
 
 | Format | Controls | How it loads |
 | --- | --- | --- |
-| PDF, up to 256 MiB | Scroll, zoom, fit, selectable text | Sections of the file as needed. |
-| EPUB | Chapters, text size/font, image-page fit, right-to-left | Book details, the selected chapter and images. |
-| CBZ / CBR | Pages, fit, right-to-left | The selected image; some RAR archives also need earlier compressed data. |
+| PDF, up to 256 MiB | Scroll, zoom, Fit width, Fit page, selectable text | Sections of the file as needed |
+| EPUB | Chapters, text size/font, image-page fit, right-to-left | Book details, selected chapter and images |
+| CBZ / CBR | Pages, fit, right-to-left | Selected image; solid RAR may also need earlier compressed data |
 
-EPUB/comics remember your place in this browser for up to 50 books. Use
-**Reading options** to change EPUB text size and font style, or
-comic fit and reading direction. EPUB text uses a narrower serif column by
-default; text preferences are saved in this browser. Generated resource filenames
-appear as readable cover, illustration or section labels.
+EPUB and comics remember your place for up to 50 books **in this browser**.
+EPUB text preferences are saved here too. Internal book links navigate to their
+target chapter or position. Resource filenames appear as readable cover,
+illustration or section labels.
 
-EPUB internal references follow named anchors within a chapter or into another
-chapter, including targets attached to links and images.
+For manga or image-only EPUB chapters, choose **Fit width** for readable panels
+or **Fit page** for a whole page. **Right to left** reverses arrow-key navigation;
+it does not reorder the book. Prose EPUBs use a narrower serif column by default.
 
-Choose **Enter Fullscreen** where supported. Arrow keys navigate while focused;
-right-to-left mode reverses them. Escape or browser Back closes the reader.
+Arrow keys navigate while focused. **Enter Fullscreen** is available where the
+browser supports it; Escape or browser Back closes the reader.
 
-Image-based manga works in EPUB and CBZ. Image-only EPUB chapters use the page-fit
-controls instead of the prose column. Choose **Fit width** for readable panels or
-**Fit page** for a whole page, and enable **Right to left** for reversed arrow-key
-navigation. The archive/spine order stays unchanged.
-
-<details>
-<summary>See the PDF, EPUB and comic readers</summary>
-
-![PDF reader with page navigation and zoom controls](assets/pdf-reader.png)
-
-[EPUB and comic screenshots](showcase.md#read-and-preview) ·
-[Watch the preview and reader walkthrough](assets/readers-and-preview.mp4)
-
-</details>
+[PDF, EPUB and comic screenshots](showcase.md#read-and-preview).
 
 ## Bandwidth and compatibility
 
-Readers use the authorized range cache without automatically preloading the whole
-book. Small files may fit in one fetched block; solid RAR can require earlier
-entries. Byte savings vary.
+Readers fetch requested sections through TGDrive's authorized cache rather than
+automatically preloading the whole book. Small books can fit in one fetched
+block; solid RAR and complex PDFs may need more data before displaying a page.
+There is no fixed startup-byte or speed guarantee.
 
-Pages keep their original image bytes: TGDrive does not upscale, transcode or
-recompress them. Some colour pages or spreads are much larger than the average.
-Raster pages are limited to **16 million pixels** and **32,768 pixels per edge**.
-Oversized or unreadable image headers produce a preview error; download the
-unchanged original to open it in another reader.
-The reader shows received image bytes after the server has prepared the selected
-resource. If a server or proxy compresses the response, progress shows received
-bytes without a total; the **64 MiB** image limit still applies after HTTP
-decompression. The reader retries temporary image download failures up to three
-attempts (2/4-second waits, or a longer server retry hint up to 30 seconds), and
-reports permanent errors without repeatedly requesting them. Leaving the page
-cancels that browser's download/retries. EPUB images start loading near the
-viewport; offscreen image blobs are released
-while placeholders preserve scroll space. Returning to an image revalidates its
-private browser cache entry.
+Pages keep their original image bytes. TGDrive does not upscale, transcode or
+recompress them. Oversized or malformed images show a preview error; the original
+remains downloadable. Images load near the visible EPUB page, and offscreen
+image data is released while placeholders preserve scroll position.
 
-The server reuses extracted original pages and parsed chapters/indexes in a
-**64 MiB**, 16-result memory cache for up to **five minutes**. Requests for the same
-result wait for one extraction. Cache eviction or restart requires parsing again;
-source ranges can still be reused from the normal range cache. Browser responses
-are private and revalidated, allowing an unchanged authorized page to return 304
-without sending its image again. Every request, including cache hits and 304s,
-checks current access and source identity. Results are never publicly cached.
+| File or feature | Compatibility |
+| --- | --- |
+| Password-protected PDF | Asks for its password; used only in PDF.js memory and discarded when closed |
+| EPUB | Passive text, tables and raster images in TGDrive's theme |
+| Publisher styling or interactive EPUB | Exact fixed layouts, scripts/styles, remote resources, SVG illustrations and interactive features are unsupported |
+| Encrypted/DRM EPUB | Unsupported, including encrypted font metadata |
+| Comics | PNG/JPEG/GIF/WebP/AVIF pages when the browser can decode them; password-protected archives are unsupported |
 
-PDF, EPUB and comics share the application-themed toolbar and page/chapter
-navigation; PDF keeps zoom/text selection and EPUB keeps text preferences. PDF.js
-loads shared image resource payloads only when used by a rendered page, instead of
-eagerly loading every image in a shared dictionary. Visible pages render before
-nearby-page overscan starts. A PDF can still require distant metadata, fonts,
-shared masks, or large images before its first page appears; there is no promise
-of a fixed number of startup bytes. All PDF rendering happens in the browser,
-without server-side page conversion.
+PDF rendering happens in your browser. Fonts, character maps, color profiles and
+image decoders come from TGDrive itself. Visible pages render before nearby
+pages; shared PDF images are loaded only when a rendered page needs them.
 
-Password-protected PDFs ask for their document password in the reader. The value
-is used in memory by PDF.js and is not saved; closing the preview discards it.
-Matching fonts, character maps, color profiles and image decoders are served by
-TGDrive itself, without an external asset CDN.
-
-EPUB supports passive text, tables and raster images in TGDrive's theme.
-Publisher scripts/styles, remote resources, exact fixed layouts, SVG illustrations,
-interactive features and DRM/encryption (including encrypted font metadata) are
-unsupported. Comics accept PNG/JPEG/GIF/WebP/AVIF when the browser can decode them;
-password-protected archives are unsupported.
+Image progress counts received bytes after server preparation. Compressed HTTP
+responses may show no total; the image limit still applies after decompression.
+Temporary image failures get up to three attempts, with 2/4-second waits or a
+server retry hint up to 30 seconds. Permanent errors stop retries. Leaving the
+page cancels that browser's download and retries.
 
 <details>
-<summary>Reader limits and container dependencies</summary>
+<summary>Technical limits, caching and server dependencies</summary>
 
 ## Reader limits
 
-EPUB chapters containing images and at most 80 characters of surrounding text
-use the illustrated-page layout. More complex publisher layouts can differ.
+EPUB chapters with images and at most 80 surrounding text characters use the
+illustrated-page layout. More complex publisher layouts can differ.
 
-PDF.js retains a source buffer up to the **256 MiB** file limit. HTTP requests are
-split into at most **1 MiB** ranges, with at most **two** reader requests active.
-Combined active response buffers normally stay within **64 MiB**. A larger
-PDF.js metadata request may run alone, bounded by the accepted source size;
-queued requests hold descriptors rather than response buffers. Buffer claims are
-released after each success/failure. Reading more than 64 MiB over time does not
-close the document. Canvas/page/text budgets still apply; complex PDFs can be
-slow or exceed device memory. These are bounds, not a fixed RAM reservation.
+PDF.js retains a source buffer up to the **256 MiB** file limit. HTTP requests use
+at most **1 MiB** ranges with **two** reader requests active. Combined active
+response buffers normally stay within **64 MiB**; a larger metadata request runs
+alone, bounded by source size. Queued requests hold descriptors, not response
+buffers. Success/failure releases claims. Reading more than 64 MiB over time does
+not close the document. Canvas/page/text budgets also apply; these limits do not
+guarantee a complex PDF will fit every device's memory.
 
 | Bound | Limit |
 | --- | --- |
 | Index/chapter/thumbnail operation | 32 MiB fetched; aligned 1 MiB reads and a four-block parser cache |
-| One selected original raster image | 64 MiB encoded image; up to 96 MiB source reads, without loading unrelated ZIP entries |
-| Raster dimensions | 16 million pixels and 32,768 pixels per edge, including declared animation frames; checked before image bytes leave the parser |
+| One selected original raster image | 64 MiB encoded image; up to 96 MiB source reads without loading unrelated ZIP entries |
+| Raster dimensions | 16 million pixels and 32,768 pixels per edge, including declared animation frames; checked before bytes leave the parser |
 | Archive | 10,000 entries; 2 MiB ZIP directory; stored/deflate ZIP methods |
-| EPUB / entries | 5,000 spine entries; 2 MiB/text entry; 16 MiB thumbnail-source image (independent of the 64 MiB reader page limit) |
-| Parser work | Two simultaneous operations, 16 pending requests, 45-second parser timeout; 55-second total route deadline including coalesced waits |
-| Linux container parser process | 384 MiB address space, 10 CPU-seconds on every supported host |
+| EPUB / entries | 5,000 spine entries; 2 MiB/text entry; 16 MiB thumbnail-source image, separate from the 64 MiB reader-page limit |
+| Parser work | Two simultaneous operations, 16 pending requests, 45-second parser timeout; 55-second total route deadline including shared-result waits |
+| Linux container parser process | 384 MiB address space and 10 CPU-seconds on every supported host |
 
-Raster image bytes cross the parser boundary as bounded binary output, avoiding
-base64 expansion. This does not change the image delivered to the browser. CBR
-may need earlier compressed bytes and can exhaust its read budget before a page.
-Unsafe/duplicate names and extreme compression ratios fail. Busy readers receive
-retry guidance. Budgets apply per operation; cached content may be reused.
-Raster checks read format headers without decoding or resizing. JPEG dimensions
-must appear within the first 1 MiB; excessive or malformed header structure is
-rejected. The pixel limit is about 61 MiB for one RGBA frame, not a total browser
-memory guarantee: animation, decoder, GPU and other reader resources add overhead.
-Authorization is rechecked during reads. Revocation stops later reads through
-that link, while independent links remain valid; delivered bytes cannot be recalled.
+The server caches extracted pages and parsed chapters/indexes for up to **five
+minutes**, bounded to **64 MiB and 16 results**. Concurrent requests for the same
+result share one extraction. Eviction/restart requires parsing again; normal
+source-range cache data can still be reused. Private browser entries are
+revalidated; **304** reuses unchanged bytes. Every request rechecks current access
+and source identity, including cache hits and 304s. Revocation stops later reads
+through that link; it cannot recall delivered bytes or revoke independent links.
+
+Raster bytes cross the parser boundary as bounded binary output without base64
+expansion. Header checks do not decode or resize images. JPEG dimensions must
+appear within the first 1 MiB; excessive/malformed headers are rejected. The
+pixel limit is about 61 MiB for one RGBA frame, with decoder, GPU and animation
+memory additional. Unsafe/duplicate archive names and extreme compression ratios
+fail. Solid CBR may exhaust its read budget before a page; busy readers receive
+retry guidance. Budgets apply per operation and allow cached-data reuse.
 
 ## Running the reader
 
-The TGDrive image includes CBR's native libarchive runtime; no host library
-installation is needed. If CBR parsing fails, download the original for a
-dedicated reader. The bounded parser process is not an OS security sandbox;
-keep the deployment image updated.
+Docker includes CBR's native libarchive runtime; no host installation is needed.
+The bounded parser is not an OS security sandbox: keep the deployment image
+updated. If it cannot parse a book, download the original for a dedicated reader.
 
 </details>

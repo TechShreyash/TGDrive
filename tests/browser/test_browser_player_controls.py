@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import base64
 import hashlib
 import re
 import shutil
@@ -244,7 +245,7 @@ def test_seek_audio_exceptions_do_not_deadlock(
     assert page.evaluate("window.exceptionSeeks") == 1
 
 
-def test_frozen_picture_shows_measured_delivery_and_recovers_on_real_frames(
+def test_frozen_picture_holds_audio_and_recovers_on_real_frames(
     server: Server, desktop: tuple[Any, Any]
 ) -> None:
     _, page = desktop
@@ -270,12 +271,24 @@ def test_frozen_picture_shows_measured_delivery_and_recovers_on_real_frames(
     assert player.evaluate(
         "el=>el.getVideoPlaybackQuality().totalVideoFrames===window.frozenFrameCount"
     )
-    assert player.evaluate("el=>!el.paused")
+    page.wait_for_function(
+        "()=>document.querySelector('movi-player')?.player.getState()==='buffering'"
+    )
+    held = player.evaluate(
+        "el=>({time:el.currentTime,audio:el.player.audioRenderer.getAudioClock()})"
+    )
+    page.wait_for_timeout(300)
+    assert player.evaluate("el=>!el.paused"), "Buffering must preserve play intent"
+    assert abs(player.evaluate("el=>el.currentTime") - held["time"]) < 0.1
+    assert (
+        abs(
+            player.evaluate("el=>el.player.audioRenderer.getAudioClock()")
+            - held["audio"]
+        )
+        < 0.1
+    )
     expect(page.locator(".advanced-player-host")).to_have_attribute("aria-busy", "true")
-    page.screenshot(path=ARTIFACTS / "video-measured-wait.png", full_page=False)
-    page.set_viewport_size({"width": 390, "height": 844})
-    page.screenshot(path=ARTIFACTS / "video-measured-wait-mobile.png", full_page=False)
-    player.evaluate("el=>el.player.videoRenderer.startPresentationLoop()")
+    # The existing refill path must restart presentation and sound together.
     expect(status).to_have_count(0, timeout=5000)
     assert player.evaluate(
         "el=>el.getVideoPlaybackQuality().totalVideoFrames>window.frozenFrameCount"
@@ -382,12 +395,23 @@ def test_time_buffer_survives_network_loss_and_ten_second_skips(
     payload = media.read_bytes()
     _serve_media(page, payload, "video/mp4")
     login(page, server.url)
+    # Isolate playback read-ahead from the separate representative-poster seek.
+    poster = page.evaluate(
+        "()=>document.createElement('canvas').toDataURL('image/jpeg').split(',')[1]"
+    )
+    page.route(
+        "**/api/v1/poster?*",
+        lambda route: route.fulfill(
+            body=base64.b64decode(poster), content_type="image/jpeg"
+        ),
+    )
     page.get_by_role("button", name="Preview samples", exact=True).dblclick()
     page.get_by_role("button", name="movtext-subtitles.mp4", exact=True).dblclick()
     player = page.locator("movi-player")
     page.wait_for_function(
         "()=>document.querySelector('movi-player')?.duration>170", timeout=30000
     )
+    assert player.get_attribute("postertime") is None
     player.locator("button.movi-play-pause").click()
     page.wait_for_function(
         """()=>{

@@ -1,8 +1,10 @@
 import type { Transfer } from "./transfers";
+import { isArchiveTransfer, isServerImport } from "./transferTasks";
 
 function isDeviceTransfer(item: Transfer): boolean {
     return (
-        item.kind !== "remote" &&
+        !isServerImport(item) &&
+        !isArchiveTransfer(item) &&
         item.kind !== "delete" &&
         !item.historyOnly &&
         item.initiatedHere === true

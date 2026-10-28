@@ -7,6 +7,7 @@ import hashlib
 import json
 import os
 import secrets
+from datetime import UTC, datetime
 from types import SimpleNamespace
 
 import pytest
@@ -356,3 +357,182 @@ def test_live_mongo_same_channel_database_recovery_preserves_share_secret(deploy
         reopened.authorize_file(node_path(row.item), token) for token in row.tokens
     )
     reopened.close()
+
+
+@pytest.mark.parametrize("interrupted", [False, True])
+def test_live_mongo_unified_file_restores_durable_state_without_replaying_work(
+    deployment, monkeypatch, interrupted
+):
+    from argon2 import PasswordHasher
+    from bson import Binary
+    from pymongo.synchronous.collection import Collection
+
+    from tgdrive.recovery.mongo_backup import COLLECTIONS
+    from tgdrive.recovery.recovery_file import capture_database, snapshot_catalog
+    from tgdrive.replication.replica_settings import credentials_from_snapshot
+    from tgdrive.replication.replica_state import decode_bundle, encode_bundle
+
+    row = deployment
+    backend = row.backend
+    # The legacy fixture's minimal job is replaced with a real journal record.
+    backend.write(backend.db.jobs, "delete_one", {"_id": "old-running-job"})
+    backend.write(
+        backend.db.jobs,
+        "insert_one",
+        {
+            "_id": "interrupted-v2-upload",
+            "data": {
+                "id": "interrupted-v2-upload",
+                "phase": "uploading",
+                "status": "running",
+                "current": 3,
+                "total": 6,
+                "created_at": 1000.0,
+                "updated_at": 1001.0,
+                "context": {
+                    "kind": "upload",
+                    "name": "split.bin",
+                    "local_path": "/old/upload.part",
+                },
+            },
+        },
+    )
+    extra = {
+        "_id": "extra-saved-policy",
+        "document": {
+            "at": datetime(2026, 10, 28, tzinfo=UTC),
+            "value": Binary(b"durable", subtype=128),
+        },
+    }
+    backend.write(backend.db.settings, "insert_one", extra)
+    backend.write(backend.db.sessions, "insert_one", {"_id": "old-browser-session"})
+    backend.write(
+        backend.db.bot_folders,
+        "insert_one",
+        {"_id": "saved-bot-folder", "node_id": "root"},
+    )
+    before = {name: list(backend.db[name].find({})) for name in COLLECTIONS}
+    database = capture_database(backend)
+    original = snapshot_catalog(database)
+    payload = {
+        "database": database,
+        "catalog": original,
+        "replica_catalog": remap_catalog(
+            original, -100555666, {"101": 2101, "102": 2102}
+        ),
+        "credentials": credentials_from_snapshot(row.settings, database),
+        "created_at": "2026-10-28T10:00:00Z",
+        "recovery_token": BACKUP_BOT,
+    }
+    restored_file = decode_bundle(
+        encode_bundle(payload, row.candidate["key"]), row.candidate["key"]
+    )
+    candidate = copy.deepcopy(row.candidate)
+    candidate.update(
+        database=restored_file["database"],
+        backup_config={"channel": -100555666, "token": BACKUP_BOT},
+    )
+    candidate["credentials"] = dict(restored_file["credentials"], bot_tokens=[NEW_BOT])
+    prepare_activation(row.settings, candidate)
+    active = effective_settings(row.settings)
+    original_replace = Collection.replace_one
+    fail_once = interrupted
+
+    def interrupt(collection, query, replacement, **kwargs):
+        nonlocal fail_once
+        result = original_replace(collection, query, replacement, **kwargs)
+        if (
+            fail_once
+            and collection.database.name == backend.db.name
+            and collection.name == "catalog"
+            and replacement.get("replica_activation_id")
+        ):
+            fail_once = False
+            raise RuntimeError("synthetic unified transaction interruption")
+        return result
+
+    monkeypatch.setattr(Collection, "replace_one", interrupt)
+    if interrupted:
+        with pytest.raises(RuntimeError, match="unified transaction interruption"):
+            apply_activation(active, backend)
+        assert {name: list(backend.db[name].find({})) for name in COLLECTIONS} == before
+    assert apply_activation(active, backend)
+    reopened = MongoStore(backend)
+    assert reopened.export() == candidate["catalog"]
+    assert all(
+        reopened.authorize_file(node_path(row.item), token) for token in row.tokens
+    )
+    reopened.close()
+    assert backend.db.settings.find_one({"_id": extra["_id"]}) == extra
+    assert backend.db.bot_folders.find_one({"_id": "saved-bot-folder"})
+    assert not any(
+        backend.db[name].count_documents({})
+        for name in (
+            "sessions",
+            "identities",
+            "operations",
+            "deletions",
+            "preparations",
+            "receipts",
+            "backups",
+        )
+    )
+    history = list(backend.db.jobs.find({}))
+    assert len(history) == 1 and history[0]["archived"] is True
+    assert (
+        history[0]["status"] == "cancelled"
+        and history[0]["summary"]["name"] == "split.bin"
+    )
+    assert "data" not in history[0] and "context" not in history[0]["summary"]
+    bootstrap = backend.db.settings.find_one({"_id": "bootstrap"})["document"]
+    assert bootstrap["MONGODB_BACKUP_KEY"] == candidate["key"]
+    assert bootstrap["STORAGE_CHANNEL"] == NEW and bootstrap["BOT_TOKENS"] == NEW_BOT
+    assert PasswordHasher().verify(
+        bootstrap["ADMIN_PASSWORD_HASH"], "synthetic recovery owner password"
+    )
+    assert not apply_activation(active, backend)
+
+
+def test_live_mongo_unified_key_survives_losing_local_journal(deployment):
+    from tgdrive.replication.replica import ChannelReplica
+
+    row = deployment
+    store = MongoStore(row.backend)
+    original = store.export()
+    settings_before = {
+        entry["_id"]: entry for entry in row.backend.db.settings.find({})
+    }
+    legacy_key = row.settings.mongodb_backup_key.get_secret_value()
+    unified_key = "a1" * 32
+    assert unified_key != legacy_key
+    runtime = SimpleNamespace(mongo=row.backend, store=store)
+    first = ChannelReplica(row.settings, runtime)
+    restored = None
+    try:
+        first.journal.set("key", unified_key)
+        assert first.key() == unified_key
+        assert row.backend.db.settings.find_one({"_id": "recovery-key"}) == {
+            "_id": "recovery-key",
+            "document": {"key": unified_key, "drive_id": store.drive_id},
+        }
+        reinstalled = row.settings.model_copy(
+            update={
+                "data_dir": row.settings.resolved_data_dir.parent / "reinstalled-data",
+            }
+        )
+        restored = ChannelReplica(reinstalled, runtime)
+        assert restored.journal.get("key") is None
+        assert restored.key() == unified_key
+        assert restored.journal.get("key") == unified_key
+        assert reinstalled.mongodb_backup_key.get_secret_value() == legacy_key
+        assert row.settings.mongodb_backup_key.get_secret_value() == legacy_key
+        assert store.export() == original
+        assert {
+            entry["_id"]: entry
+            for entry in row.backend.db.settings.find({"_id": {"$ne": "recovery-key"}})
+        } == settings_before
+    finally:
+        first.journal.close()
+        if restored is not None:
+            restored.journal.close()
+        store.close()

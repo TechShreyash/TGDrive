@@ -30,8 +30,25 @@ _DEFAULT_CANCEL_GRACE_SECONDS = 10.0
 _SHUTDOWN_DRAIN_SECONDS = 5.0
 _PROGRESS_JOURNAL_SECONDS = 0.5
 _PROGRESS_STALE_SECONDS = 15.0
-_BYTE_PHASES = frozenset({"saving", "downloading", "uploading"})
+_BYTE_PHASES = frozenset(
+    {
+        "saving",
+        "downloading",
+        "uploading",
+        "torrent_uploading",
+        "archiving",
+        "extracting",
+    }
+)
 _ERROR_UNSET = object()
+
+
+def upload_effects(plan):
+    """Original messages and optional poster share upload retry/cleanup ownership."""
+    if not isinstance(plan, dict) or not isinstance(plan.get("parts"), list):
+        return []
+    poster = plan.get("poster")
+    return plan["parts"] + ([poster] if isinstance(poster, dict) else [])
 
 
 def _journalled(operation):
@@ -198,7 +215,10 @@ class TransferRecord:
 
     @property
     def history_hidden(self) -> bool:
-        return self.terminal and bool(self.committed.context.get("history_cleared"))
+        return bool(
+            self.committed.context.get("torrent_parent_id")
+            or self.committed.context.get("archive_parent_id")
+        ) or (self.terminal and bool(self.committed.context.get("history_cleared")))
 
     def as_dict(self) -> dict[str, Any]:
         if self._committed is not None:
@@ -282,6 +302,14 @@ class TransferRecord:
             result["folder_upload"] = {
                 key: copy.deepcopy(folder_upload[key]) for key in folder_fields
             }
+        if self.context.get("source_kind") == "torrent":
+            result["name"] = self.context.get("name", "Torrent import")
+            manifest = self.context.get("torrent_manifest")
+            if isinstance(manifest, dict):
+                result["torrent_files"] = {
+                    "total": len(manifest["files"]),
+                    "completed": len(self.context.get("torrent_completed", [])),
+                }
         return result
 
 
@@ -486,7 +514,9 @@ class TransferRegistry:
         plan = record.context.get("multipart_plan")
         if isinstance(plan, dict) and isinstance(plan.get("parts"), list):
             deadlines.extend(
-                part.get("retry_at") for part in plan["parts"] if isinstance(part, dict)
+                part.get("retry_at")
+                for part in upload_effects(plan)
+                if isinstance(part, dict)
             )
         retry_at = max(
             (
@@ -508,7 +538,9 @@ class TransferRegistry:
             return
         kind = record.context.get("kind")
         kind = (
-            kind if kind in {"upload", "remote", "delete", "receiving"} else "transfer"
+            kind
+            if kind in {"upload", "remote", "torrent", "delete", "receiving"}
+            else "transfer"
         )
         now = time.time()
         if current[2] and not previous[2]:
@@ -565,15 +597,37 @@ class TransferRegistry:
                 record.total,
             )
 
-    @staticmethod
-    def _retained(record: TransferRecord) -> bool:
+    def _retained(self, record: TransferRecord) -> bool:
         record = record.committed
         context = record.context
+        archive_parent = self._records.get(context.get("archive_parent_id"))
+        if (
+            archive_parent is not None
+            and context.get("archive_file_index")
+            not in archive_parent.committed.context.get("archive_completed", [])
+            and archive_parent.status
+            not in {TransferStatus.COMPLETED, TransferStatus.CANCELLED}
+        ):
+            return True
+        parent = self._records.get(context.get("torrent_parent_id"))
+        if (
+            parent is not None
+            and context.get("torrent_file_index")
+            not in parent.committed.context.get("torrent_completed", [])
+            and parent.status
+            not in {
+                TransferStatus.COMPLETED,
+                TransferStatus.CANCELLED,
+            }
+        ):
+            return True
         deadlines = [context.get("retry_at"), context.get("channel_retry_at")]
         plan = context.get("multipart_plan")
         if isinstance(plan, dict) and isinstance(plan.get("parts"), list):
             deadlines.extend(
-                part.get("retry_at") for part in plan["parts"] if isinstance(part, dict)
+                part.get("retry_at")
+                for part in upload_effects(plan)
+                if isinstance(part, dict)
             )
         if any(
             type(deadline) in (int, float)
@@ -585,11 +639,18 @@ class TransferRegistry:
         if record.context.get("kind") in {
             "upload",
             "remote",
+            "torrent",
+            "archive",
+            "extract",
             "delete",
         } and record.status not in {TransferStatus.COMPLETED, TransferStatus.CANCELLED}:
             return True
         source = record.context.get("local_path")
-        return bool(source and Path(source).exists())
+        directory = record.context.get("staging_directory")
+        return bool(
+            (source and Path(source).exists())
+            or (directory and Path(directory).exists())
+        )
 
     @staticmethod
     def history_snapshot(
@@ -598,7 +659,7 @@ class TransferRegistry:
         """Public summary without source URLs, credentials or payload context."""
         record = record.committed
         summary = record.as_dict() | {
-            "name": record.context.get("name", "Transfer"),
+            "name": record.context.get("name") or "Transfer",
             "kind": record.context.get(
                 "source_kind", record.context.get("kind", "upload")
             ),
@@ -618,6 +679,8 @@ class TransferRegistry:
             if record.terminal
             and not record.history_hidden
             and record.context.get("kind") != "delete"
+            and not record.context.get("torrent_parent_id")
+            and not record.context.get("archive_parent_id")
             else None
         )
         if self._mongo is not None:

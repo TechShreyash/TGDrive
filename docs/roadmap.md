@@ -12,10 +12,14 @@ illustrative and do not certify the validation still listed below.
 
 | Available | Learn more |
 | --- | --- |
-| File/folder uploads, multipart storage, Trash and history | [User guide](usage.md) |
-| Previews, readers and scoped sharing | [Readers](reading.md) · [Sharing](usage.md#share-and-revoke) |
-| Monitoring and multiple Telegram accounts | [Performance](performance.md) · [Configuration](configuration.md) |
-| MongoDB persistence, encrypted database backups and optional channel protection | [Recovery](operations.md) · [Channel protection](backup-recovery.md) |
+| Resumable file/folder uploads, automatic splitting, Trash and transfer history | [Uploads](usage.md#upload-files-or-folders) · [Transfers](usage.md#transfer-history) |
+| Direct URLs, torrent/magnet imports with nested folders, and Telegram bot uploads | [URLs](usage.md#import-from-a-url) · [Torrents](usage.md#import-a-torrent-or-magnet-link) · [Bot](usage.md#optional-telegram-bot-interface) |
+| Background ZIP creation and ZIP/7z/RAR/TAR/compressed-file extraction | [Archives](usage.md#create-zips-and-extract-archives) |
+| Video Continue with browser-local positions, track/subtitle menus, chapters and seek previews | [Player](usage.md#open-preview-and-download) |
+| Photos, PDFs, text, EPUB ebooks and CBZ/CBR comics | [Previews](usage.md#open-preview-and-download) · [Readers](reading.md) |
+| Scoped read-only share links and embeddable file/folder viewers | [Sharing](usage.md#share-and-revoke) · [Embeds](usage.md#embed-a-file-or-folder-in-a-website) |
+| Preloads, monitoring and multiple Telegram accounts | [Performance](performance.md) · [Configuration](configuration.md) |
+| MongoDB persistence, one recovery file/key pair, database restore and optional independent-channel recovery | [Backup & recovery](backup-recovery.md) |
 
 Available features still have [configured limits](configuration.md) and are not
 certified for every device or network.
@@ -27,6 +31,7 @@ archive if offering custom source assets). Publication is a separate maintainer
 action. Remaining live validation:
 
 - [ ] Fresh laptop and hosted installs, persistent volumes, stop/start and recovery.
+- [ ] Live unified-file recovery: lost MongoDB, replacement main channel, revoked bot access, legacy backups and interrupted activation.
 - [ ] Coolify DNS/TLS, trusted forwarding and isolation of the direct app port.
 - [ ] Prolonged multi-account outages and interrupted Telegram sends.
 - [ ] Actual Premium speed, broader devices/codecs, ARM and hosting platforms.
@@ -40,7 +45,7 @@ action. Remaining live validation:
 | Bot imports | Do not use the web queue's full durable job model. |
 | History | Compaction must preserve unresolved effects and retry identities. |
 | Large folders | Listings sort/materialize before slicing; database cursor pagination remains work. |
-| Direct API clients | Some request mappings are process-local and error formats vary; use documented v2 flows. |
+| Direct API clients | Some request mappings are process-local and error formats vary; follow the [documented API contracts](reference.md#http-api). |
 | Storage channel changes | Require verified channel recovery; editing an ID does not move files. |
 
 See [Troubleshooting](operations.md#troubleshooting) for current recovery actions.

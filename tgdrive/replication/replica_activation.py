@@ -2,7 +2,8 @@
 
 Preparation never replaces a running catalog. Apply must run after the data-dir
 and Mongo owner locks, before opening catalog/jobs/upload handles. The existing
-MongoDB sessions and the replica journal are retained; sessions are never imported.
+MongoDB state and the replica journal are preserved before replacement; restored
+sessions are never activated.
 """
 
 from __future__ import annotations
@@ -14,11 +15,13 @@ import os
 import re
 import secrets
 import stat
+import unicodedata
 
+from bson import json_util
 from pydantic import SecretStr
 
 from tgdrive.core.config import Settings
-from tgdrive.recovery.backup import decode_catalog_snapshot
+from tgdrive.recovery.mongo_backup import MAX_EXPANDED
 from tgdrive.replication.replica_state import MAX_BUNDLE, atomic_private, read_private
 from tgdrive.settings.managed_settings import (
     MAX_CLIENTS,
@@ -51,13 +54,24 @@ class ActivationError(SettingsProblem):
 
 
 def _raw(value):
-    return json.dumps(
+    return json_util.dumps(
         value,
         sort_keys=True,
         separators=(",", ":"),
         ensure_ascii=False,
         allow_nan=False,
     ).encode()
+
+
+def _object(pairs):
+    result = {}
+    for key, value in pairs:
+        if key in result:
+            raise ValueError("Duplicate activation field")
+        result[key] = value
+    return json_util.object_hook(
+        result, json_options=json_util.JSONOptions(tz_aware=True)
+    )
 
 
 def _digest(value):
@@ -242,17 +256,114 @@ def _candidate(settings, candidate):
         _document(dict(credentials, bot_tokens=[token]), 1)
         if not isinstance(key, str) or not re.fullmatch(r"[0-9a-fA-F]{64}", key):
             raise ValueError
-        return {
+        result = {
             "catalog": catalog,
             "credentials": credentials,
             "complete": True,
             "token": token,
             "key": key.lower(),
         }
+        if "database" in candidate:
+            result["database"] = _database(candidate["database"], catalog)
+            result["credentials"]["mongodb_backup_key"] = key.lower()
+        if "backup_config" in candidate:
+            config = candidate["backup_config"]
+            if (
+                not isinstance(config, dict)
+                or set(config) != {"channel", "token"}
+                or type(config["channel"]) is not int
+                or not -(1 << 63) <= config["channel"] < 0
+                or config["channel"] == catalog["storage_channel_id"]
+                or not isinstance(config["token"], str)
+                or re.fullmatch(r"[1-9][0-9]{4,14}:[A-Za-z0-9_-]{20,}", config["token"])
+                is None
+            ):
+                raise ValueError
+            result["backup_config"] = copy.deepcopy(config)
+        return result
     except Exception:
         raise ActivationError(
             "Recovery activation data is invalid; nothing changed."
         ) from None
+
+
+def _database(records, catalog):
+    from tgdrive.recovery.recovery_file import sanitize_database, snapshot_catalog
+    from tgdrive.replication.replica_state import files_in, parts_in, remap_catalog
+
+    records = sanitize_database(records)
+    source = snapshot_catalog(records)
+    if (source["drive_id"], source["revision"]) != (
+        catalog["drive_id"],
+        catalog["revision"],
+    ):
+        raise ValueError(
+            "Recovery database and catalog describe different restore points"
+        )
+    originals = {node["id"]: node for node in files_in(source)}
+    restored = {node["id"]: node for node in files_in(catalog)}
+    if set(originals) != set(restored):
+        raise ValueError("Recovery database and catalog contain different files")
+    mapping = {}
+    for identity, node in originals.items():
+        for before, after in zip(
+            parts_in(node), parts_in(restored[identity]), strict=True
+        ):
+            message, replacement = str(before["message_id"]), after["message_id"]
+            if message in mapping and mapping[message] != replacement:
+                raise ValueError("Conflicting recovery database location")
+            mapping[message] = replacement
+    if len(set(mapping.values())) != len(mapping):
+        raise ValueError("Duplicate recovery database destination")
+    expected = remap_catalog(source, catalog["storage_channel_id"], mapping)
+    expected.pop("folder_preparations", None)
+    if expected != catalog:
+        raise ValueError("Recovery database and catalog contain different metadata")
+    for name in (
+        "sessions",
+        "identities",
+        "operations",
+        "deletions",
+        "preparations",
+        "receipts",
+        "backups",
+    ):
+        records[name] = []
+    records["jobs"] = _history(records["jobs"])
+    return records
+
+
+def _history(rows):
+    from tgdrive.transfers.tasks import TransferRegistry, TransferStatus
+
+    history = []
+    registry = TransferRegistry()
+    for row in rows:
+        if row.get("archived") is True:
+            if not isinstance(row.get("summary"), dict):
+                raise ValueError("Invalid archived transfer history")
+            history.append(copy.deepcopy(row))
+            continue
+        registry._load_record(row["_id"], copy.deepcopy(row["data"]))
+        record = registry.get(row["_id"])
+        if record.history_hidden or record.context.get("kind") == "delete":
+            continue
+        if record.status not in {TransferStatus.COMPLETED, TransferStatus.CANCELLED}:
+            record.status = TransferStatus.CANCELLED
+            record.phase = "cancelled"
+            record.finished_at = record.updated_at
+        summary = registry.history_snapshot(record, retained=False)
+        history.append(
+            {
+                "_id": record.id,
+                "archived": True,
+                "created_at": record.created_at,
+                "status": record.status.value,
+                "search_name": unicodedata.normalize("NFC", summary["name"]).casefold(),
+                "summary": summary,
+            }
+        )
+    return history
 
 
 def _mongo_empty(backend, session):
@@ -342,7 +453,8 @@ def _load(settings):
     if not path.exists() and not path.is_symlink():
         return None
     try:
-        value = decode_catalog_snapshot(read_private(path))
+        content = read_private(path, maximum=MAX_EXPANDED)
+        value = json_util.loads(content, object_pairs_hook=_object)
         if (
             not isinstance(value, dict)
             or set(value)
@@ -360,6 +472,8 @@ def _load(settings):
             or value["version"] != 1
             or value["phase"] not in _PHASES
         ):
+            raise ValueError
+        if "database" not in value["candidate"] and len(content) > MAX_BUNDLE:
             raise ValueError
         checked = _candidate(settings, value["candidate"])
         if checked != value["candidate"] or value["backend"] != "mongodb":
@@ -388,8 +502,10 @@ def _load(settings):
 
 def _write(settings, value):
     content = _raw(value)
-    if len(content) > MAX_BUNDLE:
-        raise ActivationError("Recovery activation exceeds the 64 MiB limit.")
+    maximum = MAX_EXPANDED if "database" in value["candidate"] else MAX_BUNDLE
+    if len(content) > maximum:
+        limit = "1 GiB" if "database" in value["candidate"] else "64 MiB"
+        raise ActivationError(f"Recovery activation exceeds the {limit} limit.")
     atomic_private(_manifest_path(settings), content)
 
 
@@ -505,12 +621,10 @@ def _archive_dir(directory, identity):
     return archive
 
 
-def _preserve_mongo(backend, archive):
-    from bson import json_util
-
+def _preserve_mongo(backend, archive, *, maximum=MAX_BUNDLE):
     destination = archive / "mongodb-before.json"
     if destination.exists() or destination.is_symlink():
-        read_private(destination)
+        read_private(destination, maximum=maximum)
         return
     temporary = archive / (".mongodb-preserve-" + secrets.token_hex(12))
 
@@ -524,9 +638,9 @@ def _preserve_mongo(backend, archive):
             def write(content):
                 nonlocal total
                 total += len(content)
-                if total > MAX_BUNDLE:
+                if total > maximum:
                     raise ActivationError(
-                        "MongoDB preservation exceeds the 64 MiB recovery limit."
+                        "MongoDB preservation exceeds the safe recovery limit."
                     )
                 target.write(content)
 
@@ -562,7 +676,11 @@ def _preserve(settings, value, backend):
     bootstrap = directory / "replica-bootstrap.json"
     if bootstrap.exists() or bootstrap.is_symlink():
         _copy_file(bootstrap, archive / bootstrap.name)
-    _preserve_mongo(backend, archive)
+    _preserve_mongo(
+        backend,
+        archive,
+        maximum=MAX_EXPANDED if "database" in value["candidate"] else MAX_BUNDLE,
+    )
     return archive
 
 
@@ -583,6 +701,7 @@ def _mongo_nodes(catalog):
                 "size",
                 "parts",
                 "sha256",
+                "poster",
             )
             if key in node
         }
@@ -599,6 +718,16 @@ def _apply_mongo(settings, value, backend):
     candidate = value["candidate"]
     desired = _document(candidate["credentials"], value["settings_revision"] + 1)
     connection_document = json.loads(desired.private_bytes())
+    database = candidate.get("database")
+    owner_hash = None
+    if database is not None:
+        from argon2 import PasswordHasher
+
+        owner_hash = (
+            settings.admin_password_hash.get_secret_value()
+            if settings.admin_password_hash
+            else PasswordHasher().hash(settings.admin_password.get_secret_value())
+        )
 
     def replace(session):
         backend.fence(session)
@@ -643,8 +772,17 @@ def _apply_mongo(settings, value, backend):
         )
         if settings_digest != value["settings_sha256"]:
             raise ActivationError("Connection settings changed; nothing was replaced.")
+        if database is not None:
+            for name in ("settings", "sessions", "identities"):
+                backend.db[name].delete_many({}, session=session)
+            if database["settings"]:
+                backend.db.settings.insert_many(database["settings"], session=session)
         for name in (*_MONGO_DOMAIN, "jobs", "receipts", "bot_folders", "backups"):
             backend.db[name].delete_many({}, session=session)
+        if database is not None:
+            for name in ("jobs", "bot_folders"):
+                if database[name]:
+                    backend.db[name].insert_many(database[name], session=session)
         nodes = _mongo_nodes(candidate["catalog"])
         backend.db.nodes.insert_many(nodes, session=session)
         shares = [
@@ -684,6 +822,8 @@ def _apply_mongo(settings, value, backend):
                 session=session,
             )
         bootstrap = backend.db.settings.find_one({"_id": "bootstrap"}, session=session)
+        if database is not None and bootstrap is None:
+            bootstrap = {"_id": "bootstrap", "document": {}}
         if bootstrap:
             bootstrap["document"].update(
                 {
@@ -695,8 +835,20 @@ def _apply_mongo(settings, value, backend):
                 bootstrap["document"]["MONGODB_BACKUP_KEY"] = candidate["credentials"][
                     "mongodb_backup_key"
                 ]
+            if database is not None:
+                bootstrap["document"].update(
+                    {
+                        "API_ID": desired.api_id,
+                        "API_HASH": desired.api_hash.get_secret_value(),
+                        "BOT_TOKENS": ",".join(candidate["credentials"]["bot_tokens"]),
+                        "STRING_SESSIONS": "",
+                        "MAIN_BOT_TOKEN": None,  # nosec B105 - token reset
+                        "ADMIN_PASSWORD_HASH": owner_hash,
+                    }
+                )
+                bootstrap["document"].pop("ADMIN_PASSWORD", None)
             backend.db.settings.replace_one(
-                {"_id": "bootstrap"}, bootstrap, session=session
+                {"_id": "bootstrap"}, bootstrap, upsert=True, session=session
             )
 
     backend.transaction(replace)

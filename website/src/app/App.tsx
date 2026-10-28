@@ -31,6 +31,7 @@ import {
     X,
     Plug,
     Globe,
+    Magnet,
     ShieldCheck,
     ShieldAlert,
     Menu,
@@ -84,6 +85,7 @@ import DatabaseRestore, {
 } from "../features/backup/DatabaseRestore";
 import BotModeSettings from "../features/settings/BotModeSettings";
 import { useManualRefresh } from "../shared/useManualRefresh";
+import { startStatusPolling } from "./statusPolling";
 function getLocation() {
     const url = new URL(window.location.href);
     const path = url.searchParams.get("path") || "/";
@@ -577,37 +579,19 @@ export default function App() {
             setTelegramWarning("");
             return;
         }
-        let disposed = false;
-        let timer: ReturnType<typeof setTimeout>;
-        const refreshAdmission = async () => {
-            try {
-                const status = await api.status();
-                if (!disposed) {
-                    setAdmissionPaused(
-                        Boolean(
-                            status.admission_paused || status.restart_required,
-                        ),
-                    );
-                    setTelegramWarning(
-                        status.telegram_issues?.[0]?.detail ||
-                            (status.telegram_ready === false &&
-                            !status.demo &&
-                            !status.recovery_only
-                                ? "No usable Telegram account is connected. Open Connections and Refresh to check bot tokens, Premium sessions and channel permissions. Existing files and saved upload progress are preserved."
-                                : ""),
-                    );
-                }
-            } catch {
-                // Keep the last known admission state until the status service recovers.
-            } finally {
-                if (!disposed) timer = setTimeout(refreshAdmission, 5000);
-            }
-        };
-        void refreshAdmission();
-        return () => {
-            disposed = true;
-            clearTimeout(timer);
-        };
+        return startStatusPolling((status) => {
+            setAdmissionPaused(
+                Boolean(status.admission_paused || status.restart_required),
+            );
+            setTelegramWarning(
+                status.telegram_issues?.[0]?.detail ||
+                    (status.telegram_ready === false &&
+                    !status.demo &&
+                    !status.recovery_only
+                        ? "No usable Telegram account is connected. Open Connections and Refresh to check bot tokens, Premium sessions and channel permissions. Existing files and saved upload progress are preserved."
+                        : ""),
+            );
+        });
     }, [authenticated, isPublic, databaseRestore.phase]);
     useEffect(() => {
         const saved = (event: Event) => {
@@ -971,7 +955,12 @@ export default function App() {
     }, [location.previewId, directory.contents, loading, view]);
     const closeDialog = () => {
         if (dialog?.type !== "preview") {
-            if (dialog && !["url", "prepare"].includes(dialog.type))
+            if (
+                dialog &&
+                !["url", "torrent", "prepare", "archive", "extract"].includes(
+                    dialog.type,
+                )
+            )
                 reloadMetadata();
             setDialog(null);
             return;
@@ -1086,7 +1075,9 @@ export default function App() {
             const target = await api.transferLocation(
                 folder ? undefined : item.jobId,
                 destination,
-                !folder && item.state === "completed",
+                !folder &&
+                    !["torrent", "extract"].includes(item.kind || "") &&
+                    item.state === "completed",
             );
             if (!target.available || !target.folder_path) {
                 notify(
@@ -1140,6 +1131,19 @@ export default function App() {
                 allowPublic,
             );
             if (type === "delete") {
+                const accepted = new Set(
+                    (response.results || [])
+                        .filter((result) => result.id)
+                        .map((result) => result.path),
+                );
+                setDirectory((current) => ({
+                    ...current,
+                    contents: Object.fromEntries(
+                        Object.entries(current.contents).filter(
+                            ([, item]) => !accepted.has(itemPath(item)),
+                        ),
+                    ),
+                }));
                 const names = new Map(
                     targets.map((item) => [itemPath(item), item.name]),
                 );
@@ -2234,6 +2238,14 @@ export default function App() {
                             }}
                         >
                             <Globe size={18} /> Upload from URL
+                        </button>
+                        <button
+                            onClick={() => {
+                                setDialog({ type: "torrent" });
+                                setNewOpen(false);
+                            }}
+                        >
+                            <Magnet size={18} /> Import torrent
                         </button>
                     </div>
                 </>

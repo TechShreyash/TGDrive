@@ -1,0 +1,20 @@
+.archive-source,
+.archive-location {
+    overflow-wrap: anywhere;
+}
+.archive-source {
+    font-weight: 600;
+}
+.archive-destination-options {
+    margin: 16px 0;
+    padding: 0;
+    border: 0;
+}
+.archive-destination-options legend {
+    margin-bottom: 8px;
+    font-weight: 600;
+}
+.archive-destination-options .check-field {
+    margin-block: 0;
+    min-height: 44px;
+}

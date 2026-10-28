@@ -245,8 +245,8 @@ export default function StorageView({
                 </p>
                 <p className="backup-safety-note">
                     Your catalog is saved in MongoDB; files stay in Telegram.
-                    Encrypted database backups run separately. Unfinished
-                    uploads still need their local files.
+                    Encrypted recovery files are created in the background.
+                    Unfinished uploads still need their local files.
                 </p>
                 <ErrorNotice
                     message={
@@ -268,20 +268,6 @@ export default function StorageView({
                 >
                     Backup &amp; recovery guide
                 </a>
-                {recovery?.backup_key_configured &&
-                    (demoMode ? (
-                        <button type="button" className="text-button" disabled>
-                            Save Recovery Key
-                        </button>
-                    ) : (
-                        <a
-                            className="text-button"
-                            href="/api/v1/backup/recovery-key"
-                            download
-                        >
-                            Save Recovery Key
-                        </a>
-                    ))}
             </section>
             <ChannelBackup demoMode={demoMode} onNotice={onNotice} />
             <section
@@ -431,11 +417,13 @@ export default function StorageView({
                 </section>
             )}
             <details className="drive-recovery-help">
-                <summary>Recover on a New Installation</summary>
+                <summary>
+                    Reopen an existing drive or restore an older archive
+                </summary>
                 <p>
                     Use the same MongoDB connection to reopen this drive on a
-                    new installation. A catalog restore is only needed if the
-                    database itself is lost.
+                    new installation. If MongoDB was lost, use Restore backup
+                    above with your saved recovery file and key.
                 </p>
                 <DatabaseRestore
                     demoMode={demoMode}

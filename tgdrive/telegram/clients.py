@@ -761,6 +761,8 @@ class Client:
         expected_sha256: str | None = None,
         before_dispatch: Callable[[], Awaitable[None]] | None = None,
         preview_name: str | None = None,
+        thumbnail: bytes | None = None,
+        generate_thumbnail: bool = True,
     ) -> TelegramMessage:
         length = (
             (await asyncio.to_thread(path.stat)).st_size - offset
@@ -769,7 +771,9 @@ class Client:
         )
         from tgdrive.media.generated_thumbnails import generate, save
 
-        cover = await generate(path, preview_name or file_name) if offset == 0 else None
+        cover = thumbnail
+        if cover is None and generate_thumbnail and offset == 0:
+            cover = await generate(path, preview_name or file_name)
         with FileWindow(path, offset, length, name=file_name) as source:
             uploaded = await self._upload_parts(
                 source, length=length, file_name=file_name, progress=progress

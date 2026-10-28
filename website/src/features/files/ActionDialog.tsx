@@ -18,10 +18,13 @@ import { transfers } from "../transfers/transfers";
 import { Modal, ErrorNotice, Spinner } from "../../shared/components";
 import { embedUrl } from "../shares/embedLinks";
 import "./ActionDialog.css";
+import ArchiveDialog, { type ArchiveDialogState } from "./ArchiveDialog";
 export type ActionDialogState =
+    | ArchiveDialogState
     | { type: "folder" }
     | { type: "rename"; item: DriveItem }
     | { type: "url" }
+    | { type: "torrent" }
     | { type: "share"; item: DriveItem }
     | { type: "move"; items: DriveItem[] }
     | { type: "delete"; items: DriveItem[] }
@@ -86,6 +89,15 @@ export default function ActionDialog({
             setBusy(false);
         }
     };
+    if (dialog.type === "archive" || dialog.type === "extract")
+        return (
+            <ArchiveDialog
+                dialog={dialog}
+                destination={destination}
+                onClose={onClose}
+                onNotice={onNotice}
+            />
+        );
     if (dialog.type === "download-link" || dialog.type === "prepare")
         return (
             <Modal
@@ -246,9 +258,9 @@ export default function ActionDialog({
                     files will remain in Telegram.
                 </p>
                 <p className="muted">
-                    You cannot restore these items from Trash after deletion. If
-                    deletion fails, the item stays in Trash so you can try
-                    again.
+                    Items disappear from Trash once deletion starts and are
+                    removed in the background. You cannot restore them after
+                    deletion. Failed items reappear in Trash so you can retry.
                 </p>
                 <ErrorNotice message={error} />
                 <div className="dialog-actions">
@@ -431,7 +443,6 @@ export default function ActionDialog({
                             </button>
                             <button
                                 className="secondary-button"
-                                disabled={busy}
                                 onClick={() =>
                                     void run(async () => {
                                         if (!navigator.clipboard)
@@ -450,7 +461,6 @@ export default function ActionDialog({
                             </button>
                             <button
                                 className="primary-button"
-                                disabled={busy}
                                 onClick={() =>
                                     void run(async () => {
                                         if (!navigator.clipboard)
@@ -473,6 +483,7 @@ export default function ActionDialog({
         );
     const isFolder = dialog.type === "folder";
     const isRename = dialog.type === "rename";
+    const isTorrent = dialog.type === "torrent";
     return (
         <Modal
             title={
@@ -480,7 +491,9 @@ export default function ActionDialog({
                     ? "New Folder"
                     : isRename
                       ? "Rename"
-                      : "Upload from URL"
+                      : isTorrent
+                        ? "Import torrent"
+                        : "Upload from URL"
             }
             onClose={close}
         >
@@ -499,6 +512,12 @@ export default function ActionDialog({
                             );
                             onNotice("Name updated.");
                             onChanged();
+                        } else if (isTorrent) {
+                            transfers.startTorrent(url, destination, requestId);
+                            onNotice(
+                                "Starting torrent import. Follow progress in Transfers.",
+                            );
+                            onClose();
                         } else {
                             transfers.startRemote(
                                 url,
@@ -550,16 +569,29 @@ export default function ActionDialog({
                 ) : (
                     <>
                         <p className="muted">
-                            Import a direct HTTP or HTTPS file link. The server
-                            downloads it and uploads the original bytes to
-                            Telegram.
+                            {isTorrent
+                                ? "Paste a magnet link or a public .torrent URL. Every file is imported, with folders kept intact."
+                                : "Import a direct HTTP or HTTPS file link. The server downloads it and uploads the original bytes to Telegram."}
                         </p>
-                        <label htmlFor="remote-url">Direct File URL</label>
+                        <label htmlFor="remote-url">
+                            {isTorrent
+                                ? "Magnet link or torrent URL"
+                                : "Direct File URL"}
+                        </label>
                         <input
                             id="remote-url"
-                            type="url"
+                            type={isTorrent ? "text" : "url"}
                             required
-                            placeholder="https://example.com/file.zip"
+                            autoComplete="off"
+                            spellCheck={false}
+                            aria-describedby={
+                                isTorrent ? "torrent-import-hint" : undefined
+                            }
+                            placeholder={
+                                isTorrent
+                                    ? "magnet:?xt=urn:btih:…"
+                                    : "https://example.com/file.zip"
+                            }
                             value={url}
                             onChange={(event) => {
                                 setUrl(event.target.value);
@@ -568,22 +600,30 @@ export default function ActionDialog({
                                 );
                             }}
                         />
-                        <label className="check-field">
-                            <input
-                                type="checkbox"
-                                checked={compat}
-                                onChange={(event) =>
-                                    setCompat(event.target.checked)
-                                }
-                            />
-                            <span>
-                                Compatibility Mode
-                                <small>
-                                    Use one connection. Unsupported sources fall
-                                    back automatically.
-                                </small>
-                            </span>
-                        </label>
+                        {isTorrent ? (
+                            <p id="torrent-import-hint" className="muted">
+                                Saves to the current folder. You can close this
+                                tab after the import starts; TGDrive must stay
+                                running.
+                            </p>
+                        ) : (
+                            <label className="check-field">
+                                <input
+                                    type="checkbox"
+                                    checked={compat}
+                                    onChange={(event) =>
+                                        setCompat(event.target.checked)
+                                    }
+                                />
+                                <span>
+                                    Compatibility Mode
+                                    <small>
+                                        Use one connection. Unsupported sources
+                                        fall back automatically.
+                                    </small>
+                                </span>
+                            </label>
+                        )}
                     </>
                 )}
                 <ErrorNotice message={error} />

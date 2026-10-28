@@ -347,9 +347,10 @@ export const api = {
             undefined,
             { method: "DELETE" },
         ),
-    jobs: () =>
+    jobs: (signal?: AbortSignal) =>
         request<{ jobs: Job[] }>("/api/v1/jobs", undefined, {
             cache: "no-store",
+            signal,
         }),
     clearTransferHistory: (excludeFolders: string[] = []) =>
         request<{ cleared: number }>(
@@ -409,6 +410,12 @@ export const api = {
             url,
             path,
             singleThreaded,
+            client_request_id,
+        }),
+    torrent: (url: string, path: string, client_request_id: string) =>
+        request<{ id: string }>("/api/startTorrentDownload", {
+            url,
+            path,
             client_request_id,
         }),
     remoteRequest: (client_request_id: string) =>

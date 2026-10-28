@@ -2,9 +2,9 @@
 
 [Docs home](README.md) · [Configuration](configuration.md) · [Performance policies](performance.md)
 
-Use the website's measurements to find what is slowing down before changing
-limits or buying a larger server. Cache, server resources and Telegram clients
-solve different problems; increasing the wrong one can make queues longer.
+Use this guide when uploads, playback or shared downloads are slow. Find the
+busy stage first, then change one setting or resource. Cache, server capacity and
+Telegram accounts help at different stages; higher limits can lengthen queues.
 
 **Contents**
 
@@ -17,23 +17,20 @@ solve different problems; increasing the wrong one can make queues longer.
 
 ## Start with the website stats
 
-1. Identify the slow stage in **Transfers**: sending from your device,
-   downloading from a URL, waiting for Telegram, uploading to Telegram or
-   publishing. A full device progress bar does not mean Telegram work is done.
+1. Find the slow stage in **Transfers**: device intake, URL downloading, Telegram
+   waiting/uploading or publishing. A full device bar still needs server confirmation.
 2. Open **Monitor → Performance** while the problem is happening. Compare
    server resources, network traffic, Telegram activity and queue waits over
    the same interval. Long averages can hide short bursts; missing samples are
    not zero activity.
-3. Open the same file again, or compare its uncached and already cached parts.
-   A slow first access followed by a fast repeat points toward the Telegram
-   path or cache coverage. If both are slow, inspect server-to-viewer delivery
-   and the viewer's device too.
+3. Open the same file again. A slow first access followed by a fast cached repeat
+   points toward Telegram or cache coverage. If both are slow, also inspect
+   server-to-viewer delivery and the viewer's device.
 4. Open **Monitor → Preloads** to inspect actual retained coverage. For upload
    space problems, also check **Management → Storage & Backups → Temporary
    Storage**. Keep unfinished upload files; they are not disposable cache.
-5. Change one setting or resource, repeat the same workload and keep the change
-   only if measured results improve. Do not increase concurrency during a
-   Telegram cooldown.
+5. Change one thing and repeat the same workload. Keep it only if results improve.
+   Respect Telegram cooldowns before trying more concurrent work.
 
 | Website measurement | How to read it |
 | --- | --- |
@@ -50,49 +47,35 @@ totals together**. For history, measurement scopes and retention, see
 
 ## How cache helps
 
-TGDrive's server cache retains file bytes already fetched from Telegram:
+The server retains bytes fetched from Telegram in RAM or verified disk cache.
+Later authorized readers, including share-link viewers, can reuse them. Readers
+needing the same missing blocks can also share an in-progress fetch.
 
-1. A read can reuse retained bytes from RAM or verified disk cache.
-2. Missing blocks are fetched from Telegram. Overlapping readers can share
-   work already in progress instead of fetching the same blocks separately.
-3. Retained blocks can serve later authorized reads of that same stored file
-   and representation, including reads through share links.
+For example, if a **1 GiB original stays fully cached**, three downloads can avoid
+refetching that payload from Telegram. The server still sends about **3 GiB** to
+viewers plus overhead. This illustrates the data path; it is not a measured speed.
 
-For example, if a **1 GiB file is fully cached and stays cached**, three people
-downloading that original can reuse the cached bytes. TGDrive can avoid another
-Telegram payload download for each person, while the server still sends about
-3 GiB to the viewers, plus network overhead. This is an illustration, not a
-throughput measurement or a guarantee that the file remains cached.
-
-This is reuse of the **same stored content and byte ranges**, not duplicate-file
-detection. Separately uploaded copies or different quality representations do
-not automatically share a cache entry. Authorization and metadata checks still
-apply; caching avoids repeated file-payload downloads, not every Telegram request.
+Reuse follows the same stored file, quality representation and byte ranges.
+Separately uploaded copies do not automatically share cache. Authorization and
+metadata checks still apply, so even cached access can make Telegram requests.
 
 ### Cache capacity and preloading
 
-- More available RAM can keep more frequently reused bytes in memory. More disk
-  capacity can keep a larger collection of cached files or parts.
-- More cache capacity can let you preload larger files or retain more prepared
-  files. It does not automatically increase **Concurrent preloads** or Telegram
-  request capacity. Background preparation shares capacity with real viewers
-  and uploads.
-- Hardware upgrades do not automatically raise **Configuration → Cache settings**
-  budgets. Raise them deliberately while leaving space for the app, active
-  streams, unfinished uploads and other processes. The effective RAM budget can
-  be lower than the configured value when memory is tight.
-- A whole-file preload must fit either the effective RAM tier or disk tier,
-  including overhead and competing reservations. Their budgets are not added
-  together; both tiers can hold copies of the same bytes.
-- Ordinary access may leave only part of a file cached; automatic playback
-  warming can prepare more, but does not always prepare the whole file. For a
-  file you expect many people to open, choose **Preload file**, then wait for
-  **Ready** and full coverage in **Monitor → Preloads** before sharing.
+- RAM retains frequently reused bytes; disk can hold a larger collection. More
+  capacity does not increase **Concurrent preloads** or Telegram request limits.
+  Background preparation still shares resources with viewers and uploads.
+- Hardware upgrades do not raise **Configuration → Cache settings** budgets.
+  Leave room for the app, active streams, unfinished uploads and other processes;
+  memory pressure can reduce the effective RAM budget.
+- A whole-file preload must fit either the effective RAM cache or disk cache,
+  including overhead/reservations. Adding their budgets overstates capacity:
+  both may hold the same bytes.
+- Ordinary playback may cache only part of a file. Before a busy share, choose
+  **Preload file** and wait for **Ready** with full coverage in **Monitor → Preloads**.
 
-Cached data can expire, be evicted, disappear with disk loss or fail an integrity
-check. Missing bytes then need Telegram again. Cache is not a backup and does not
-keep a sleeping host available. See [cache defaults and retention](performance.md#cache-limits)
-and [preloading a shared file](performance.md#prepare-a-file-before-sharing).
+Expiry, capacity pressure, disk loss or a failed integrity check can remove
+cached data; missing bytes need Telegram again. Cache is not a backup and does
+not keep a sleeping host available. [Cache defaults and retention](performance.md#cache-limits).
 
 ## Find the bottleneck
 
@@ -127,10 +110,9 @@ workers against the same drive is not the supported way to use a larger server.
 
 ## Bots and request concurrency
 
-Additional healthy bots can provide more Telegram account capacity for cold
-downloads and uploads. They help when that capacity is the bottleneck; they do
-not multiply server bandwidth or eliminate shared channel/provider limits.
-Repeated reads served from cache need less Telegram payload capacity already.
+Healthy bots can add Telegram capacity for cold downloads and uploads. They do
+not increase server bandwidth or eliminate channel/provider limits. Cached reads
+already need less Telegram payload capacity.
 
 These controls affect different layers:
 
@@ -144,11 +126,9 @@ These controls affect different layers:
 | Requests per second | TGDrive's pacing ceiling, not a rate promised by Telegram. |
 | Maximum queued operations | How much work can wait; a larger queue does not add processing capacity. |
 
-With fewer bots, increasing an appropriate per-account limit can allow more
-work at once, but can also increase contention and provider waits under sustained
-load. A higher configured value is not evidence of higher throughput. TGDrive
-reduces effective request capacity/pacing after flood feedback and gradually
-recovers it after successful work.
+Increasing per-account limits can allow more work but also more contention/waits.
+TGDrive reduces effective request capacity/pacing after flood feedback and
+gradually recovers it after successful work.
 
 Start at the defaults, confirm server headroom, then change one control and watch
 throughput, waits and queue growth over a representative interval. If waits grow
@@ -156,12 +136,10 @@ without useful throughput gains, undo the increase. Add or change clients throug
 the [connection maintenance workflow](usage.md#settings-and-connections), including
 its pending-work and restart requirements.
 
-Telegram documents a required wait before repeating an action after
-[`FLOOD_WAIT_X`](https://core.telegram.org/api/errors), and enforces
-[administrator and bot limits](https://core.telegram.org/method/channels.editAdmin).
-Respect those limits and TGDrive's saved retry deadlines; repeatedly restarting
-or rotating identities is not a way to bypass them. TGDrive uses Telethon/MTProto,
-so hosted HTTP Bot API broadcast limits are not its media-request capacity.
+Respect saved retry deadlines and Telegram's
+[`FLOOD_WAIT_X`](https://core.telegram.org/api/errors) / [account limits](https://core.telegram.org/method/channels.editAdmin).
+Restarting or rotating identities does not bypass them. TGDrive uses
+Telethon/MTProto; hosted HTTP Bot API broadcast limits are a different system.
 
 For current control defaults and bounds, use
 [Transfer limits](configuration.md#transfer-limits). For scheduling details, use

@@ -15,8 +15,11 @@ import re
 import stat
 from pathlib import Path
 
+from pymongo.errors import PyMongoError
+
 from tgdrive.recovery.mongo_backup import MAGIC, MAX_EXPANDED
 from tgdrive.settings.managed_settings import SettingsProblem
+from tgdrive.storage.mongo import DatabaseUnavailable
 
 
 def _check_pending_key(service, configured, key):
@@ -36,6 +39,8 @@ def _check_pending_key(service, configured, key):
     )
     if pending is None:
         return
+    if pending.get("format") == "tgdrive-backup-v2":
+        return  # MongoProtection completes this file under its own unified key.
     path = Path(pending["local_path"])
     if not path.exists():
         return  # Existing MongoProtection will mark this interrupted safely.
@@ -142,8 +147,11 @@ async def mirror_mongodb(
         for _ in range(2):
             await asyncio.to_thread(_check_pending_key, service, configured, key)
             try:
-                await service.snapshot_now(store)
+                await service.snapshot_now(store, legacy=True)
             except asyncio.CancelledError:
+                raise
+            except PyMongoError, DatabaseUnavailable:
+                # Keep transient outages distinct from ownership/permission failures.
                 raise
             except Exception as error:
                 from tgdrive.replication.replica_transport import ReplicaTransportError

@@ -2,17 +2,11 @@
 
 [Docs home](README.md) · [Setup](setup.md) · [Development](development.md)
 
-TGDrive **2.1.0** uses MongoDB and a dedicated private Telegram channel.
-MongoDB is required on laptops and servers; local recovery journals do not
-replace it. Use Docker Compose for all deployments.
+For maintainers publishing **2.0.0** and later releases. For installation, use
+[Setup](setup.md); cloning is sufficient and custom ZIP assets are optional.
 
-The public source includes the [visual walkthroughs](showcase.md) and their
-[media assets](assets/README.md). Keep those files in the release allowlist when
-replacing captures.
-
-For cloning or optional source downloads, use [Get the source](setup.md#get-the-source).
-The procedures below describe preparing a versioned release and optionally
-building a downloadable archive. Cloning is sufficient to install TGDrive.
+Follow [contributor approval rules](../AGENTS.md): get authorization for checks
+and for each specific push. Building an artifact does not publish it.
 
 **Contents**
 
@@ -30,19 +24,17 @@ building a downloadable archive. Cloning is sufficient to install TGDrive.
 | Coolify server | `compose.yaml` selected explicitly | [Coolify](setup.md#coolify) |
 | Server with an HTTPS proxy you manage | `compose.yaml` plus `compose.server.yaml` | [Server Compose](setup.md#docker-compose-on-a-server) |
 
-Follow [Setup](setup.md) for credentials, permissions and first initialization.
-Restarts and reinstalls must reuse the database, deployment identity, secrets
-and persistent storage. See [Operations](operations.md) for recovery.
+Fresh installs need a MongoDB replica set and dedicated private Telegram channel.
+Restarts/reinstalls reuse the database, identity, secrets and persistent storage;
+local journals do not replace MongoDB. See [Setup](setup.md) and [Operations](operations.md).
 
 ## Version every published update
 
-Every update published to `main` gets a new semantic version and a matching
-GitHub release, starting with **2.0.0** and tag **`v2.0.0`**. Development commits
-can accumulate on `dev` for one upcoming release; they do not each need a tag.
-`main` receives stable updates after release review and required checks. `dev`
-contains ongoing development and may be unstable; do not use it for a stable
-deployment. Prefer a published tag to reproduce an exact release.
-See the [release CI checks](development.md#when-github-checks-run) for `main`.
+Every update published to `main` gets a new semantic version, immutable annotated
+tag and matching GitHub release, starting with **2.0.0 / `v2.0.0`**. Development
+commits can accumulate on `dev` for one release. Promote stable updates to `main`
+after review and [required CI checks](development.md#when-github-checks-run).
+Use a published tag to reproduce a release; `dev` may be unstable.
 
 | Change | Next version after `2.0.0` |
 | --- | --- |
@@ -68,18 +60,15 @@ immutable: fix a release with a new version instead of moving its tag.
 User-facing GitHub documentation links point to `main`; release download links
 pin the corresponding tag. Reserve `dev` links for contributor instructions.
 
-The matching GitHub release must link its PR and exact commit (and the comparison
-with the previous tag for later releases) and explain upgrade requirements and
-known limits. Git users can clone the tag; no ZIP is required. If custom source
-assets are offered, attach the ZIP and SHA-256 file from that revision together.
-Follow the checks below before publishing. Creating a PR or tag does not publish
-custom assets, and repository approval rules still apply to checks and pushes.
+The GitHub release must link its PR, exact commit and (after the first release)
+comparison with the previous tag, and explain upgrade requirements and known
+limits. If offering custom source assets, attach the ZIP and SHA-256 file from
+that revision together. Creating a PR or tag does not publish those assets.
 
 ## Prepare the source release
 
-Prepare a clean, reviewed commit and its matching tag. If distributing a custom
-source ZIP, build and validate it from the same revision. Resolve local work
-without resetting or discarding changes. Building an artifact does not publish it.
+Start from a clean, reviewed revision without discarding local work. Build custom
+ZIPs from that same revision; tag the final merged `main` commit after checks.
 
 <details>
 <summary>Maintainer checklist: build, validate and publish</summary>
@@ -88,7 +77,7 @@ Run these from the release checkout, with the development prerequisites from
 [Development](development.md).
 
 - [ ] Choose the release version using the policy above and synchronize all
-   version metadata. The current release target is `2.1.0`. Review the user
+   version metadata. These examples use `2.2.0`. Review the user
    guides against the implemented settings and defaults.
 - [ ] In **Actions → CI → Run workflow**, select the release branch and suite
    **`all`** against the exact release commit. Review quality/security,
@@ -99,13 +88,13 @@ Run these from the release checkout, with the development prerequisites from
 
 ```bash
 python3 scripts/build_release.py
-(cd dist && sha256sum --check tgdrive-2.1.0.zip.sha256)
-python3 -m zipfile -t dist/tgdrive-2.1.0.zip
+(cd dist && sha256sum --check tgdrive-2.2.0.zip.sha256)
+python3 -m zipfile -t dist/tgdrive-2.2.0.zip
 ```
 
-The builder includes reviewed source, public documentation and a file-hash
-manifest. Runtime data, credentials, caches and installed dependencies are
-excluded. Review the generated manifest and archive before distribution.
+The builder includes source, public docs/media and a file-hash manifest. It
+excludes runtime state, credentials, cache and installed dependencies. Review the
+archive and manifest; retain [showcase assets](assets/README.md) in `PUBLIC_DOCS`.
 
 - [ ] For custom source assets, extract into a clean directory. Repeat dependency installation,
    frontend build, relevant tests and Docker build from the extraction using
@@ -115,16 +104,16 @@ excluded. Review the generated manifest and archive before distribution.
    release revision, or the extracted archive if distributing one. Record the
    commit, commands, environment and results (and checksum for an archive).
 - [ ] After those checks, create the annotated tag on the final merged `main`
-   commit. For `2.1.0` (substitute the chosen version for later releases):
+   commit. For this release (substitute the next version for later ones):
 
 ```bash
 git switch main
 git pull --ff-only origin main
-python3 scripts/build_release.py --check-version --tag v2.1.0
-git tag -a v2.1.0 -m "Release TGDrive 2.1.0"
+python3 scripts/build_release.py --check-version --tag v2.2.0
+git tag -a v2.2.0 -m "Release TGDrive 2.2.0"
 ```
 
-- [ ] With approval for the specific tag push, push `v2.1.0` to `origin` and
+- [ ] With approval for the specific tag push, push `v2.2.0` to `origin` and
    create its GitHub release. Attach matching ZIP and `.sha256` files together
    only if offering custom source assets.
    Tag-push CI also checks that the tag matches the metadata. Coolify users must
@@ -135,39 +124,38 @@ git tag -a v2.1.0 -m "Release TGDrive 2.1.0"
 
 ## Verify a downloaded source archive
 
-If custom assets are offered for **2.1.0**, download **tgdrive-2.1.0.zip** and
-**tgdrive-2.1.0.zip.sha256** into the same folder. These commands verify
-the custom release assets; the development ZIP from GitHub does not have this
-companion checksum. Open a terminal in that download folder.
+If the release offers custom assets, download **tgdrive-2.2.0.zip** and
+**tgdrive-2.2.0.zip.sha256** into one folder and open a terminal there. Substitute
+the actual version. GitHub's generated source ZIP has no companion checksum.
 
 **Windows PowerShell:**
 
 ```powershell
-$expectedHash = (Get-Content .\tgdrive-2.1.0.zip.sha256 -Raw).Split(' ')[0]
-if ((Get-FileHash .\tgdrive-2.1.0.zip -Algorithm SHA256).Hash -ne $expectedHash) {
+$expectedHash = (Get-Content .\tgdrive-2.2.0.zip.sha256 -Raw).Split(' ')[0]
+if ((Get-FileHash .\tgdrive-2.2.0.zip -Algorithm SHA256).Hash -ne $expectedHash) {
     throw 'Checksum mismatch. Download the release files again.'
 }
-Expand-Archive .\tgdrive-2.1.0.zip -DestinationPath .
-Set-Location .\tgdrive-2.1.0
+Expand-Archive .\tgdrive-2.2.0.zip -DestinationPath .
+Set-Location .\tgdrive-2.2.0
 ```
 
 **macOS Terminal:**
 
 ```bash
-shasum -a 256 -c tgdrive-2.1.0.zip.sha256
+shasum -a 256 -c tgdrive-2.2.0.zip.sha256
 ```
 
 **Linux/WSL terminal:**
 
 ```bash
-sha256sum --check tgdrive-2.1.0.zip.sha256
+sha256sum --check tgdrive-2.2.0.zip.sha256
 ```
 
 On macOS/Linux/WSL, continue **only after the checksum reports OK**, then extract:
 
 ```bash
-unzip tgdrive-2.1.0.zip
-cd tgdrive-2.1.0
+unzip tgdrive-2.2.0.zip
+cd tgdrive-2.2.0
 ```
 
 Your file manager can extract the ZIP if `unzip` is unavailable.

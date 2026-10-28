@@ -1,4 +1,5 @@
 import AdvancedVideo from "./video/AdvancedVideo";
+import { videoPosterUrl } from "./video/videoPoster";
 import "./Preview.css";
 import "./Reader.css";
 import { readBoundedResponse, PreviewLimitError } from "./previewIO";
@@ -810,8 +811,10 @@ export default function Preview({
                                 />
                             ) : kind === "video" ? (
                                 <AdvancedVideo
-                                    key={attempt}
+                                    key={item.id + ":" + attempt}
+                                    fileId={item.id}
                                     src={src}
+                                    posterUrl={videoPosterUrl(path, auth)}
                                     name={item.name}
                                     playback={playback}
                                     qualityControl={

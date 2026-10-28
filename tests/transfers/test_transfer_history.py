@@ -86,6 +86,38 @@ async def test_history_survives_prune_and_reopen_without_private_context(tmp_pat
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("persistent", [False, True])
+@pytest.mark.parametrize("name", [None, ""])
+async def test_new_transfer_archives_expired_unnamed_url_job(
+    tmp_path, persistent, name
+):
+    registry = registry_for(
+        tmp_path / "jobs.sqlite3" if persistent else None, ttl_seconds=1
+    )
+    try:
+        previous = await registry.create(
+            "checking_source", context={"kind": "remote", "name": name}
+        )
+        await registry.update(previous.id, status=TransferStatus.CANCELLED)
+        previous.updated_at = time.time() - 2
+        await registry.persist(previous)
+
+        current = await registry.create(
+            "torrent_metadata", context={"kind": "torrent", "name": "Torrent import"}
+        )
+
+        assert registry.get(current.id) is current
+        with pytest.raises(TransferNotFound):
+            registry.get(previous.id)
+        archived = await registry.history(status="cancelled")
+        assert archived["jobs"][0]["name"] == "Transfer"
+        assert archived["jobs"][0]["id"] == previous.id
+        assert archived["jobs"][0]["retained"] is False
+    finally:
+        registry.close()
+
+
+@pytest.mark.asyncio
 async def test_name_search_filters_before_cursor_pagination_across_archives(tmp_path):
     registry = registry_for(tmp_path / "search.sqlite3", ttl_seconds=1)
     for index in range(75):

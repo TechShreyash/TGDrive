@@ -53,6 +53,7 @@ from tgdrive.core.security import (
     demo_admin_session_key,
     verify_password,
 )
+from tgdrive.media.posters import load_poster
 from tgdrive.media.previews import describe_media, describe_preview
 from tgdrive.media.streaming import (
     TelegramFileNotFound,
@@ -68,6 +69,7 @@ from tgdrive.storage.demo_files import (
     check_transfer,
     request_policy,
 )
+from tgdrive.storage.file_parts import MAX_POSTER_BYTES
 from tgdrive.storage.mongo import DatabaseUnavailable
 from tgdrive.storage.store import DriveStore
 from tgdrive.telegram.client_pool import (
@@ -109,6 +111,7 @@ from tgdrive.web.schemas import (
     RemoteInspectRequest,
     RemoteStartRequest,
     RenameRequest,
+    TorrentStartRequest,
     TransferCancelRequest,
     TransferLookupRequest,
     TransferRequest,
@@ -174,6 +177,7 @@ async def require_admin(request: Request) -> None:
         )
         secret_export = path in {
             "/api/v1/replica/key",
+            "/api/v1/replica/file",
             "/api/v1/backup/recovery-key",
         }
         if secret_export or (
@@ -228,6 +232,9 @@ async def require_admin(request: Request) -> None:
                 "/api/logout",
                 "/api/getDirectory",
                 "/api/v1/backup/restore",
+                "/api/v1/replica/import",
+                "/api/v1/replica/recover",
+                "/api/v1/replica/action",
             }
             or request.url.path == "/api/v1/settings"
             or request.url.path.startswith("/api/v1/settings/premium-login/")
@@ -256,7 +263,13 @@ async def require_admin(request: Request) -> None:
     if (
         request.method in {"GET", "HEAD", "OPTIONS"}
         or path in read_posts
-        or path == "/api/v1/backup/restore"
+        or path
+        in {
+            "/api/v1/backup/restore",
+            "/api/v1/replica/import",
+            "/api/v1/replica/recover",
+            "/api/v1/replica/action",
+        }
     ):
         return
     if path == "/api/cancelUpload" or path.endswith("/cancel"):
@@ -397,6 +410,7 @@ def create_app(
                     await connection_manager.close()
                 await _app.state.thumbnail_rebuild.close()
                 await _app.state.thumbnails.close()
+                await _app.state.posters.close()
                 await app_runtime.stop()
         finally:
             sessions.close()
@@ -414,6 +428,7 @@ def create_app(
     app.state.sessions = sessions
     app.state.login_limiter = limiter
     app.state.thumbnails = ThumbnailCache()
+    app.state.posters = ThumbnailCache(max_image_bytes=MAX_POSTER_BYTES)
     from tgdrive.media.generated_thumbnails import CachedThumbnailRepair
 
     app.state.thumbnail_repair = CachedThumbnailRepair(
@@ -513,6 +528,15 @@ def create_app(
         else:
             code = 502
         return _json_error(str(exc), code)
+
+    from tgdrive.transfers.torrent import TorrentError
+    from tgdrive.transfers.torrent import available as torrent_available
+
+    @app.exception_handler(TorrentError)
+    async def torrent_error_handler(
+        _request: Request, exc: TorrentError
+    ) -> JSONResponse:
+        return _json_error(str(exc), 400 if torrent_available() else 503)
 
     @app.exception_handler(TransferNotFound)
     @app.exception_handler(RequestIdNotFound)
@@ -773,20 +797,13 @@ def create_app(
         store = _store(request)
         check_path(store, payload.path, descendants=True)
         manager = _transfers(request)
-        normalized_path = "/" + payload.path.strip("/")
-        trash_paths = {
-            (
-                f"{item['path'].rstrip('/')}/{item['id']}"
-                if item["path"] != "/"
-                else f"/{item['id']}"
-            )
-            for item in store.list_trash().values()
-        }
-        if normalized_path not in trash_paths:
+        try:
+            store.validate_deletion(payload.path)
+        except NotFoundError, RootMutationError, TrashedItemError:
             raise HTTPException(
                 status_code=409,
                 detail="Item must be in trash before permanent deletion",
-            )
+            ) from None
         record = await manager.start_deletion(payload.path)
         return JSONResponse({"status": "ok", "id": record.id}, status_code=202)
 
@@ -937,6 +954,34 @@ def create_app(
             raise
         if entry:
             starts.bind(entry, record)
+        return {"status": "ok", "id": record.id}
+
+    @app.post("/api/startTorrentDownload")
+    async def start_torrent(
+        payload: TorrentStartRequest,
+        request: Request,
+        _admin: Admin,
+    ) -> dict[str, Any]:
+        check_path(_store(request), payload.path)
+        entry: TransferStart | None = None
+        if payload.client_request_id:
+            entry, created = starts.claim(
+                payload.client_request_id, ("torrent", payload.path, payload.url)
+            )
+            if not created:
+                snapshot = entry.snapshot()
+                return {"status": "ok", "id": snapshot["id"], "data": snapshot}
+        try:
+            manager = _transfers(request)
+            record = await manager.start_torrent(
+                source=payload.url, destination=payload.path
+            )
+        except Exception as exc:
+            if entry:
+                starts.fail(entry, str(exc) or type(exc).__name__)
+            raise
+        if entry and starts.bind(entry, record):
+            await manager.cancel_job(record.id)
         return {"status": "ok", "id": record.id}
 
     @app.post("/api/getTransferByRequest")
@@ -1232,6 +1277,61 @@ def create_app(
         return Response(
             thumbnail.content, media_type=thumbnail.media_type, headers=headers
         )
+
+    @app.get("/api/v1/poster")
+    async def file_poster(
+        request: Request,
+        path: Annotated[str, Query(min_length=1, max_length=4096)],
+        auth: Annotated[str | None, Query(max_length=512)] = None,
+    ) -> Response:
+        path, file_data = authorized_file(request, path, auth)
+        headers = {"Cache-Control": "private, no-cache", "Vary": "Cookie"}
+
+        async def authorize():
+            _, current = await asyncio.to_thread(authorized_file, request, path, auth)
+            if any(
+                current.get(key) != file_data.get(key)
+                for key in ("message_id", "size", "parts", "poster")
+            ):
+                raise HTTPException(409, "File changed; refresh the directory")
+
+        poster = file_data.get("poster")
+        if poster is None:
+            await authorize()
+            return Response(status_code=204, headers=headers)
+        key = (
+            settings.storage_channel,
+            poster["message_id"],
+            poster["size"],
+            poster["sha256"],
+            poster.get("document_id"),
+        )
+
+        async def load():
+            return await load_poster(
+                pool=_runtime(request).pool,
+                channel_id=settings.storage_channel,
+                poster=poster,
+                directory=settings.resolved_cache_dir / "posters",
+                authorize=authorize,
+            )
+
+        try:
+            image = await app.state.posters.get(key, load)
+        except ThumbnailBusy:
+            await authorize()
+            return JSONResponse(
+                {"code": "POSTER_BUSY", "detail": "Poster temporarily unavailable"},
+                status_code=503,
+                headers={**headers, "Retry-After": "5"},
+            )
+        await authorize()
+        if image is None:
+            return Response(status_code=204, headers=headers)
+        headers["ETag"] = image.etag
+        if request.headers.get("if-none-match") == image.etag:
+            return Response(status_code=304, headers=headers)
+        return Response(image.content, media_type="image/jpeg", headers=headers)
 
     @app.get("/api/v1/media")
     async def file_media(

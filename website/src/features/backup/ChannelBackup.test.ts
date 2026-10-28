@@ -1,8 +1,11 @@
 import { describe, expect, it } from "vitest";
 import {
+    MAX_RECOVERY_FILE_BYTES,
     parseChannelId,
+    recoveryFileKey,
     retryTime,
     validateBackupToken,
+    validateRecoveryFile,
 } from "./ChannelBackup";
 
 describe("channel identifiers stay exact before a backup destination is sent", () => {
@@ -24,6 +27,47 @@ describe("channel identifiers stay exact before a backup destination is sent", (
             "negative numeric channel ID",
         );
     });
+});
+
+describe("saved recovery files", () => {
+    it("accepts the encrypted backup filename at the transport limit", () => {
+        expect(() =>
+            validateRecoveryFile({
+                name: "tgdrive-backup.TGDB",
+                size: MAX_RECOVERY_FILE_BYTES,
+            }),
+        ).not.toThrow();
+    });
+    it.each([
+        { name: "backup.json", size: 1024 },
+        { name: "backup.tgdb", size: 0 },
+        { name: "backup.tgdb", size: MAX_RECOVERY_FILE_BYTES + 1 },
+    ])(
+        "rejects unsupported or incomplete files before upload: $name/$size",
+        (file) => {
+            expect(() => validateRecoveryFile(file)).toThrow();
+        },
+    );
+    it("accepts a copied key or the exported key JSON", () => {
+        const key = "a1".repeat(32);
+        expect(recoveryFileKey(" " + key + " ")).toBe(key);
+        expect(
+            recoveryFileKey(
+                JSON.stringify({
+                    key,
+                    mongodb_backup_key: "b2".repeat(32),
+                }),
+            ),
+        ).toBe(key);
+    });
+    it.each(["", "password", "{", "null", "[]", "{}", '{"key":123}'])(
+        "rejects an invalid recovery key without exposing its contents: %s",
+        (value) => {
+            expect(() => recoveryFileKey(value)).toThrow(
+                "Paste your saved recovery key or recovery-key JSON.",
+            );
+        },
+    );
 });
 describe("backup bot credentials", () => {
     it("accepts a complete token copied with surrounding whitespace", () => {

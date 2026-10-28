@@ -2,291 +2,266 @@
 
 [Docs home](README.md) · [Operations](operations.md)
 
-**Must read before using TGDrive: [New-user guide and FAQs](new-user-guide.md).**
-A second channel can help if one copy is lost, but both copies still use
-Telegram. Recovery is manual and needs a surviving copy with its matching keys.
+To recover your drive, you need **a `tgdrive-backup.tgdb` recovery file, its
+matching key, and access to a Telegram channel recorded in that file**.
+The file restores saved database data; Telegram supplies the original file bytes.
 
 > [!IMPORTANT]
-> Save matching keys outside the server, wait for a **confirmed restore point**, and test recovery before relying on it. **Never replace an existing drive with an empty database as a repair.**
+> Wait for a confirmed backup. Keep the recovery file outside the server and its
+> key separately, preferably in a password manager. Keep irreplaceable originals
+> outside Telegram too. Never replace a working drive with an empty database as a repair.
 
-**Contents**
+[Save a backup](#keep-the-mongodb-recovery-kit-outside-the-server) ·
+[Add a backup channel](#set-up-an-independent-backup-channel) ·
+[Recover an older backup](#older-backups)
 
-- [Choose the right MongoDB recovery route](#choose-the-right-mongodb-recovery-route)
-- [Set up an independent backup channel](#set-up-an-independent-backup-channel)
-  - [Prepare the Telegram accounts and channels](#prepare-the-telegram-accounts-and-channels)
-  - [Enable and confirm the first copy](#enable-and-confirm-the-first-copy)
-  - [What this copy retains](#what-this-copy-retains)
-  - [Rebuild a lost backup from the surviving main channel](#rebuild-a-lost-backup-from-the-surviving-main-channel)
-  - [Recover a lost main channel from a surviving channel](#recover-a-lost-main-channel-from-a-surviving-channel)
-  - [Recover only the database when the surviving channel is healthy](#recover-only-the-database-when-the-surviving-channel-is-healthy)
-  - [Interruptions and reports](#interruptions-and-reports)
-- [Keep the MongoDB recovery kit outside the server](#keep-the-mongodb-recovery-kit-outside-the-server)
-- [Make and check a MongoDB backup](#make-and-check-a-mongodb-backup)
-- [What the encrypted MongoDB archive contains](#what-the-encrypted-mongodb-archive-contains)
-  - [Reopen the existing MongoDB drive](#reopen-the-existing-mongodb-drive)
-  - [Restore a lost database from Telegram](#restore-a-lost-database-from-telegram)
-- [Verify your recovery kit periodically](#verify-your-recovery-kit-periodically)
+<a id="choose-the-right-mongodb-recovery-route"></a>
 
-| Protection | Recovers | Limits |
-| --- | --- | --- |
-| Encrypted MongoDB archive | Catalog, part mappings, settings and shares | Cannot recreate deleted Telegram file bytes |
-| Optional independent channel | Completed documents/parts and matching recovery catalogs | Only confirmed copies; both channels still depend on Telegram |
-| Original files saved outside Telegram | Files you can upload again | Check that the copies open correctly |
+## Choose a recovery route
 
-Large files need every stored part and the catalog that joins them together.
-Unfinished uploads also need their staged bytes or original device files;
-the backups below do not contain those unfinished bytes.
-
-<details>
-<summary>Find Storage & Backups in the interface</summary>
-
-![Storage & Backups showing saved catalog and temporary storage status](assets/storage-backups.png)
-
-The [administration gallery](showcase.md#connections-and-backups) shows the
-website's entry points. These captures do not demonstrate a completed backup or
-recovery; follow the confirmation and recovery steps below.
-
-</details>
-
-## Choose the right MongoDB recovery route
-
-| Situation | Route |
+| Situation | Action |
 | --- | --- |
-| Restart, update or redeploy | Keep MongoDB, secrets and volumes; no restore or initialization. |
-| Server or managed hosting expires | [Keep the drive and move hosts](operations.md#when-a-hosting-plan-expires); preserve the catalog, Telegram access and recovery kit. |
-| Machine/app folder lost, MongoDB survives | [Reopen the existing drive](#reopen-the-existing-mongodb-drive). |
-| MongoDB lost or deliberate rollback | [Restore a `.tgdb` archive](#restore-a-lost-database-from-telegram) into an empty database. |
-| Main Telegram channel lost | [Recover from an independent channel](#recover-a-lost-main-channel-from-a-surviving-channel). |
-| Both channels inaccessible, or no matching key | Use surviving MongoDB, another usable backup/key pair or external originals. |
+| Restart, update or redeploy | Preserve MongoDB, private configuration and volumes; no restore. |
+| App/machine lost, MongoDB survives | [Reopen the existing drive](#reopen-the-existing-mongodb-drive). |
+| MongoDB lost | [Restore the saved database](#restore-a-lost-database-from-telegram) using a surviving channel and an empty replacement database. |
+| Main channel lost | [Rebuild an empty main channel](#recover-a-lost-main-channel-from-a-surviving-channel) from the surviving independent backup. |
+| Backup channel lost, main survives | [Replace the backup channel](#rebuild-a-lost-backup-from-the-surviving-main-channel) and wait for confirmation. |
+| Both channels lost or inaccessible | The recovery file cannot recreate missing media. Use another surviving copy or external originals. |
+
+Without an independent channel, the same recovery-file format restores database
+data, but it still depends on the original main channel. Large files need every
+recorded part. A **restore point** is the saved state at the time of the backup;
+later changes are absent.
+
+<a id="keep-the-mongodb-recovery-kit-outside-the-server"></a>
+
+## Save your recovery file and key
+
+1. Open **Tools & settings → Storage & Backups** and choose **Back Up Now**.
+2. Wait for **Backup confirmed**, or the completed **Last Telegram Safety Copy**
+   when no independent channel is configured. **Saved to MongoDB** alone does not
+   mean a Telegram backup has completed.
+3. Under **Backups & recovery**, choose **Download backup** and **Save recovery
+   key**. Keep the recovery file off-server and the key separately. The restore
+   form accepts the 64-character key or the contents of the exported key JSON.
+4. Download an updated file after changes you need to recover, and after replacing
+   either channel. Keep the previous usable file until the replacement is saved.
+
+**Your login password cannot replace the recovery key.** Changing that password
+does not change the key or invalidate backups. Save the key once while unchanged;
+if you deliberately rotate it, retain the matching keys for older files.
+A working installation can re-export a key it still holds.
+
+TGDrive keeps the unified key privately in MongoDB and its local recovery state.
+Reopening the surviving database on a new host keeps that key. A conflicting or
+missing historical key requires repair; TGDrive must not silently replace it.
+Your separate saved key remains necessary if both database and local state are lost.
+
+Also retain Telegram administrator access and the private deployment/database
+connection details needed to run TGDrive again. Revoked bot tokens can be replaced
+during recovery; the backup cannot restore revoked access or a hosting account.
 
 ## Set up an independent backup channel
 
-Enable this optional feature under **Tools & settings → Storage & Backups → Independent backup channel**. Normal work continues during synchronization; an upload is not independently protected until its restore point is confirmed.
+An independent channel keeps a second copy of completed files. Uploads continue
+while copying; each upload is independently protected only after its restore
+point confirms. Both copies still depend on Telegram.
 
 ### Prepare the Telegram accounts and channels
 
-1. Create a private broadcast backup channel and dedicated BotFather bot using a **separate Telegram account**. Keep independent recovery access to it.
-2. Give the backup bot administrator access to **both channels**, with **Post Messages**, **Edit Messages** and **Delete Messages**. Use a different bot from every main storage bot; a new token does not change identity.
-3. Keep both channels private, auto-delete **Off**, and **Restrict Saving Content** off where it blocks copying. Keep main bots' [standard permissions](setup.md#2-prepare-telegram).
-4. Change files through TGDrive. Do not edit/delete referenced documents, alter recovery pins or post unrelated content in these channels.
+1. Create a private broadcast backup channel and dedicated BotFather bot using a
+   **separate Telegram account**. Keep independent access to that account.
+2. Add the backup bot as an administrator in **both channels**, with posting,
+   editing, deletion and pinning access. It must be a different bot from every
+   main storage bot; rotating a token does not change bot identity.
+3. Keep both channels private, auto-delete **Off**, and content protection off
+   where it prevents copying. Keep main bots' [standard permissions](setup.md#2-prepare-telegram).
+4. Let TGDrive manage the channel documents. Do not delete referenced messages,
+   change recovery pins or post unrelated content.
 
-Prepare accounts and permissions in Telegram. TGDrive checks channel state and bot access, but cannot prove human ownership; the separate-account acknowledgment is your responsibility. Extra bots do not remove rate limits.
+TGDrive checks access and channel settings, but cannot prove separate human ownership.
 
 ### Enable and confirm the first copy
 
-- [ ] Choose **Set up backup channel**; enter its negative numeric ID and backup bot token. Confirm the separate-account preparation, then **Verify and start backup**.
-- [ ] Save `tgdrive-channel-recovery-key.json` with **Save recovery key**. Keep it outside Telegram and the server.
-- [ ] Let synchronization finish. You can close the tab; the server continues. **Pause** preserves progress; **Resume** continues confirmed work.
-- [ ] Wait for **Backup confirmed**, check the revision, and save the key JSON **again**. Its `restore_point` records capsule message IDs in both channels; export again when keeping a newer point.
+- [ ] Choose **Set up backup channel**, enter its negative numeric ID and bot
+  token, confirm the separate-account preparation, then **Verify and start backup**.
+- [ ] Leave TGDrive running until **Backup confirmed**. The browser can close;
+  the server continues. **100% bytes is not confirmation**: file parts and the
+  recovery file must also verify.
+- [ ] Download the confirmed recovery file and save its key outside the server.
 
-**100% bytes is not confirmation.** Destination documents and matching encrypted recovery metadata must verify in both channels. Later changes can remain pending.
+First setup starts immediately. Later changes are grouped for up to 60 seconds
+so nearby upload completions share a recovery file.
+**Back Up Now**, **Sync now** and protection before permanent removal request a
+backup without that batching wait. Telegram cooldowns and copying/verification
+can still delay completion.
 
-Copies run sequentially and reuse Telegram document references; original file
-bytes are not downloaded and reuploaded through TGDrive. Telegram can still
-require a cooldown. Leave TGDrive running until the displayed retry deadline;
-new activity entries include the wait duration and the failed operation when
-available. A cooldown alone does not call for changing bot permissions.
-
-After confirmation, a healthy unchanged backup gets a routine health check
-hourly, rather than starting another file-copy run. The check verifies channel
-access, the saved recovery capsule and its pin. Changes to files, folders or
-saved settings can need a new recovery snapshot even without another upload;
-confirmed document mappings are reused. Browser status refreshes read saved
-progress and do not initiate Telegram logins or copies.
-
-<details>
-<summary>Retries, restarts and private bot sessions</summary>
-
-Retry/Resume verifies already copied documents before confirming a restore point.
-Missing or changed parts prevent confirmation. Saved retry deadlines and confirmed
-copies survive restart; restarting or choosing Resume does not bypass a Telegram
-cooldown. Pause and Disable remain effective if a request finishes or fails later.
-
-The backup bot reuses private session files under `DATA_DIR/sessions`. Preserve
-them across restarts and keep them private like bot tokens. Changing the bot
-token or API credentials, losing a session or having it revoked can require
-authorization again, subject to Telegram's waits. An idle health-check wait
-preserves the last confirmed restore point.
-
-See [backup pacing and verification](architecture.md#independent-backup-pacing-and-verification)
-for exact timing, batching and deletion-barrier rules.
-
-</details>
+Copying happens within Telegram, without downloading and reuploading the media.
+Each restore point saves an encrypted recovery file in both channels; separate
+hourly database backups pause while this protection is enabled.
+See [pacing and verification](architecture.md#independent-backup-pacing-and-verification).
 
 ### What this copy retains
 
-The copy includes completed documents and an AES-256-GCM encrypted `tgdrive-replica.tgdb` capsule: catalogs, remapped part locations, recovery credentials and supported settings/connections. It is separate from a full MongoDB archive; **do not interchange their files or keys**. Document bytes are not separately encrypted by TGDrive.
+The recovery file contains the saved database and both channels' file locations.
+Original media remains in Telegram; encryption of the recovery file does not
+encrypt the originals.
 
-| Recovery data | Main channel | Independent backup channel |
-| --- | --- | --- |
-| Encrypted channel recovery capsule | Saved | Saved and pinned |
-| Full encrypted MongoDB archive | Current archive created or reused | Same confirmed archive copied and verified before **Backup confirmed** |
-| Portable catalog | Included in channel recovery data | Included in the encrypted recovery capsule |
-
-Snapshots cover their confirmed revision. A failed setup does not establish a confirmed copy in the new backup channel. Save the recovery-key JSON outside the server and Telegram after confirmation.
-
-Old documents/capsules remain: this is not a deletion mirror. Older recovery points can restore removed records and revoked shares. Review sharing after recovery. Pausing backup can also hold permanent catalog removal until protection resumes or is explicitly disabled; ordinary browsing, uploads and metadata changes continue. See [deletion behavior](usage.md#why-permanent-deletion-keeps-the-telegram-files).
+Previous remote files and recovery points remain available: this is not a
+remote deletion mirror. Older backups can restore removed records or revoked
+shares. Review sharing after restoration.
 
 ### Rebuild a lost backup from the surviving main channel
 
-Preserve the working main channel/catalog. Create an empty private backup channel on the independent account and grant the backup bot access to both channels. Choose **Backup settings → Replace backup channel**, verify the new destination, wait for confirmation and save an updated key export. Replacement leaves the old remote channel/capsules intact.
+Keep the working main channel and database. Create an empty private backup channel
+on the independent account, grant the backup bot access to both channels, then
+choose **Backup settings → Replace backup channel**. Wait for confirmation and
+download the updated recovery file. The previous remote channel is not erased.
 
-For permission/network trouble, repair access and Retry/Resume the existing operation instead. Disabling automatic backup stops new protection; it does not confirm pending changes or erase existing copies.
+For temporary permission/network trouble, repair access and resume the existing
+operation rather than replacing the channel.
 
 ### Recover a lost main channel from a surviving channel
 
-**Only files in the selected confirmed restore point can be recovered.** Keep the source, saved key JSON and persistent `DATA_DIR` intact. Recovery pauses file mutations until activation or explicit cancellation.
+Use a private installation for recovery-file restores; this action is disabled
+in demo mode, including for the demo administrator.
 
-1. Open **Independent backup channel → Recover a channel or catalog**, or the authenticated **Storage recovery** screen if the catalog cannot open.
-2. Enter the surviving channel ID, a backup bot token with access, and the JSON's 64-character **`key` value**, not the whole JSON. Leave the key empty only for a verified plain catalog checkpoint.
-3. Leave **Checkpoint message ID** empty to try the latest pinned capsule. If the original main channel's ordinary checkpoint owns the pin, enter `restore_point.source_message_id` from the export. Use `backup_message_id` for that recorded backup-channel point.
-4. Choose **Inspect recovery copy** and check its source, revision, files and bytes. Inspection does not activate a drive; a catalog cannot replace missing source documents.
-5. Create an **empty private main channel**. Add the surviving backup bot and a separate main storage bot as administrators. Enter its ID/main bot token, repeat the destination ID, then **Copy to new main channel**. The source stays unchanged.
-6. Wait for all parts and recovery metadata to verify. Repair errors and resume **the same operation** after reload/restart; preserve its server-side candidate and journal.
-7. At **Recovered drive verified**, repeat the channel ID and choose **Activate recovered drive**. Copying alone does not switch drives. Restart the service/container when instructed; browser refresh is insufficient. The former catalog/configuration remain for review.
-8. Check representative images, videos, PDFs, split downloads, Starred items, shares and Connections. Restore optional bots/sessions as needed, configure a separate independent backup, confirm it and export the current key/restore point.
+1. Open **Backups & recovery → Restore backup**, or **Storage recovery** if the
+   catalog cannot open. Select your saved file, paste its key and choose
+   **Inspect backup**. Keep the browser open until inspection finishes.
+2. TGDrive tries the channels and bot access recorded in the file. If access has
+   changed, open **Channel access changed?**, enter a working replacement bot
+   token and optionally identify the surviving channel. Grant that bot the
+   required access in Telegram first.
+3. Create an **empty private main channel**. Add the surviving bot and a separate
+   main storage bot as administrators. In the recovery form, leave database-only
+   recovery unchecked, enter the new channel ID/main bot token and repeat the
+   channel ID to confirm, then choose **Copy to new main channel**.
+4. Wait for every recorded part and the recovered data to verify. If MongoDB was
+   lost too, use a reachable empty or untouched automatically initialized
+   replacement database; the same file supplies its saved data.
+5. At **Recovered drive verified**, repeat the destination ID and choose
+   **Activate recovered drive**. TGDrive switches only after verification and
+   explicit activation. Restart the service/container when instructed; refreshing
+   the browser is insufficient.
+6. Check files, split downloads, shares and Connections. The surviving backup's
+   documents remain intact and its valid backup configuration is retained.
+   Reconnect optional Telegram account sessions as needed, then save the updated
+   confirmed recovery file.
+
+The server can continue copying with the browser closed. Preserve `DATA_DIR` and
+resume the **same operation** after interruptions; do not change destinations or
+clear the journal to bypass an error.
 
 ### Recover only the database when the surviving channel is healthy
 
-After inspecting a capsule, choose **Restore the database only on this surviving channel**. Supply a main bot distinct from the backup bot and repeat the surviving channel ID.
+After inspecting the file, choose **Restore the database only on this surviving
+channel**. A replacement main bot token is optional if the saved access still
+works. Repeat the displayed channel ID, then **Verify and prepare database
+restore** and activate only after verification. Restart when instructed.
 
-TGDrive verifies referenced parts/sizes. Activation is still explicit and requires a service restart. The surviving channel becomes main; configure a separate backup afterwards. Use this only when the channel and required documents remain accessible.
+The selected channel becomes main. To keep a surviving backup channel in its
+backup role after losing main, use the replacement-main flow above instead.
 
 ### Interruptions and reports
 
-Retry/Resume the **existing operation** after repairing the underlying problem. Preserve `DATA_DIR`, its journal, bootstrap and activation files across redeployments. Never run competing instances, delete that state or change destinations to bypass an error.
+**Pause** preserves progress; **Resume** and **Retry** reuse confirmed copies.
+Telegram waits survive restart and cannot be bypassed with extra bots or manual
+Sync. Temporary MongoDB connection failures retry while the server runs;
+permissions, invalid settings or lost ownership need repair. Missing documents,
+wrong sizes or an invalid key block confirmation and leave the last confirmed
+restore point intact. Permanent removal can remain blocked while protection is
+paused or unconfirmed.
 
-Activation requires a complete current-format private record, including the
-pre-recovery key baseline. Incomplete or older records are rejected without
-changing the drive; preserve them and repeat recovery inspection.
+**Activity and report → Download report** omits tokens and keys, but file names
+and channel IDs may still be private. Keep raw journals, session files and keys
+private. **Download backup** keeps the latest confirmed local file. After its
+replacement confirms, older known local copies can be removed; pending retry
+files and remote restore points remain. Monitor disk space for interrupted or
+older staging files; recovery staging respects the free-space reserve.
 
-<details>
-<summary>Failure handling, key rotation and local recovery state</summary>
+<a id="make-and-check-a-mongodb-backup"></a>
 
-| Problem | Action |
+## Automatic database backups
+
+Use [Save the recovery file and key](#keep-the-mongodb-recovery-kit-outside-the-server).
+Without independent channel protection, automatic safety copies normally run
+hourly (`MONGODB_BACKUP_SECONDS`). Failures leave the live database intact; repair
+the displayed error and retry. Ordinary uploads do not wait for these snapshots.
+
+<a id="what-the-encrypted-mongodb-archive-contains"></a>
+
+## What the recovery file contains
+
+New recovery files use one format for database and channel recovery:
+
+| Included | Excluded or made inactive |
 | --- | --- |
-| FloodWait/network/uncertain send | Observe the retry deadline; resume confirmed work. More bots do not bypass waits. |
-| Process stopped/paused | Restart one instance or choose Resume. Later unconfirmed changes remain unprotected. |
-| Bot/access/privacy/copying failure | Repair credentials, permissions and private-channel/content settings. |
-| Missing document, wrong size, invalid key/capsule | Keep sources; select the correct key/point or another original. Never mark success manually. |
-| Disk/database failure | Repair storage/access while retaining journal/catalog, then retry. |
+| Catalog, shares and recorded channel/part locations | Original Telegram media and unfinished local upload bytes |
+| Saved settings, bot access and recovery credentials | Logged-in Telegram account sessions and browser sessions |
+| Saved history and application records safe to restore | Unfinished jobs and in-progress changes are not replayed against the recovered channel |
 
-During bot sign-in, Telegram can redirect a fresh connection to another data center. TGDrive retries authorization once after that handoff, within the 30-second sign-in deadline. If setup still fails, choose **Verify and start backup** again; for an existing backup, Retry/Resume the same operation. Message publication retries remain controlled by the saved operation journal. An unresolved numeric channel ID reports which channel needs its ID or bot access corrected.
+Restored unfinished jobs become canceled history. Optional Telegram account
+connections require sign-in again. The file does not restore MongoDB hosting,
+network permissions, disposable caches or telemetry counters. Recheck old share
+permissions after recovery.
 
-**Activity and report → Download report** gives progress and actionable failures without tokens/keys. Names and IDs may still be private; review before sharing. Never share raw private state or keys.
-
-The full MongoDB archive's revision can differ from the channel capsule's revision; they are distinct restore points. Keep both keys. In the JSON, `key` and `mongodb_backup_key` match the recorded `restore_point`; `next_backup_key` and `next_mongodb_backup_key` describe the next generation. Preserve the whole export and older pairs. If pending work captured an older MongoDB key, restore that key or verify **Backup settings** again to capture a fresh snapshot.
-
-The local journal commits each confirmed restore point and its matching keys in
-one transaction. If publication is interrupted, the export retains the prior
-complete pair or the new complete pair; it cannot combine generations. Preserve
-the journal across restarts and save an updated export after confirmation.
-
-Private `DATA_DIR/replica-bootstrap.json` retains owner recovery credentials/password hash. It does **not** provide offline login: MongoDB must be reachable with valid permissions, or startup may fail. A missing/corrupt catalog with reachable MongoDB can permit owner web recovery.
-
-Staged capsules and previous archives are retained. Monitor disk space; staging stops before the configured free-space reserve. Keep useful points off-server and rehearse recovery to a separate test destination.
-
-</details>
-
-## Keep the MongoDB recovery kit outside the server
-
-Keep these private and accessible even if TGDrive, Coolify and MongoDB are down:
-
-- [ ] A confirmed `.tgdb` archive or access to its Telegram channel.
-- [ ] Its matching **`tgdrive-recovery-key.env`**, exported via **Storage & Backups → Save Recovery Key**.
-- [ ] MongoDB URI/database name, owner login, original deployment secrets/configuration and Telegram administrator access.
-
-The `.env` export contains `MONGODB_BACKUP_KEY=` and a 64-character hexadecimal value. Store it separately from archives: anyone with both can read backed-up credentials/catalog. Your login password cannot decrypt an archive.
-
-Container setup may generate this key in `DATA_DIR/deployment-secrets.json`; it still needs an independent copy. Do not regenerate it during redeployment. After rotation, keep old keys with old archives; the export action saves only the current MongoDB key.
-
-## Make and check a MongoDB backup
-
-1. In **Storage & Backups**, choose **Back Up Now**.
-2. Wait for **Last Telegram Safety Copy** confirmation. “Saved to MongoDB” alone is not a Telegram backup.
-3. Save the matching key separately; optionally download the confirmed `.tgdb` document for an off-server copy.
-4. Rehearse restoration into a separate empty database. Stop production while checking the restored installation; keep one active instance per drive.
-
-Automatic snapshots normally run hourly (`MONGODB_BACKUP_SECONDS`). Failures leave the live database intact; check the displayed error/retry time, posting access, key and temporary disk. See [configuration](reference.md#persistence-and-initialization).
-
-## What the encrypted MongoDB archive contains
-
-| Included | Excluded |
-| --- | --- |
-| Catalog and ordered Telegram part mappings | Original Telegram file bytes |
-| Shares, settings, Telegram/owner credentials | MongoDB URI/name and machine paths |
-| Transfer, preparation, deletion and recovery records | Unfinished upload bytes, disposable caches and telemetry counters |
-
-<details>
-<summary>Archive verification and encryption limits</summary>
-
-Snapshots are compressed app records, limited to 1 GiB expanded; unrelated MongoDB collections are excluded. AES-256-GCM authenticates the archive. TGDrive downloads the uploaded ciphertext and checks SHA-256 before confirming; restore checks authentication, format and completeness before writing.
-
-The recorded revision comes from the catalog inside the exported snapshot.
-Changes committed afterwards belong to a later archive. Failed exports are
-removed; cancellation waits for the export worker before removing an archive
-that has not entered the pending-backup journal. An uncertain journal commit
-retains the ciphertext for reconciliation. Hard stops can still leave local
-files behind; this cleanup does not sweep older untracked archives.
-
-Restore validation holds the archive, expanded content and parsed records in
-memory. Peak memory can substantially exceed the archive's file size; leave
-headroom when restoring a large catalog and rehearse it on the intended host.
-
-This encryption covers database archives, not original Telegram payloads or local upload/cache bytes. A catalog cannot recreate a deleted Telegram part.
-
-</details>
+The encrypted file is authenticated with AES-256-GCM, limited to **64 MiB
+encrypted** and **1 GiB expanded**. TGDrive verifies the recovery file and
+referenced media before confirmation or activation.
+See [formats, limits and API contracts](reference.md#independent-channel-backup-and-recovery).
 
 ### Reopen the existing MongoDB drive
 
-Follow the [reinstall instructions](operations.md#reopen-after-losing-the-local-installation): reuse the existing database and original secrets, preserve volumes, and deploy. Check Connections, files, split downloads and unfinished work. Missing staged bytes still require the original source.
+If MongoDB survives, follow [reinstallation](operations.md#reopen-after-losing-the-local-installation)
+using the existing database and private configuration. Do not restore over it
+merely because the app was reinstalled. Missing staged uploads still need their
+original source files.
 
 ### Restore a lost database from Telegram
 
-Use a confirmed `.tgdb` archive, its matching key and the matching TGDrive
-version or source commit. Restore into a **new empty MongoDB database with
-transaction support**. Changes after the snapshot will be absent; **older shares
-may reappear**. Use a private deployment with demo mode off; archive restore is
-disabled in demo mode, including for the demo administrator.
+Prepare a private deployment with a reachable empty MongoDB database with
+transaction support. Use the recovery file and key with **Restore backup**, then
+follow [database-only recovery](#recover-only-the-database-when-the-surviving-channel-is-healthy)
+if the main channel survives, or [replacement-main recovery](#recover-a-lost-main-channel-from-a-surviving-channel)
+if it does not. A previously used unrelated database is not a recovery target.
+Keep the old data/file/key until restoration is verified.
 
-1. Download the confirmed database `.tgdb` archive from your private Telegram
-   channel and find its matching 64-character key in the saved recovery-key file.
-   This is different from an independent channel recovery capsule/key.
-2. Prepare a **new empty MongoDB database with transaction support** and configure
-   a deployment using the normal [required environment values](setup.md#3-configure-your-drive).
-   Preserve the original channel and credentials. Deploy and sign in; automatic
-   first setup needs no terminal command. Do not upload files or change settings
-   in this temporary empty drive.
-3. Open **Storage & Backups → Recover on a New Installation → Restore database
-   archive**. The same form is available on the owner **Storage recovery** screen
-   when the catalog is missing. Select the archive, enter its matching key and
-   type `RESTORE` to confirm. Keep the browser open until the upload and result
-   finish.
-4. After success, restart/redeploy the application using Docker or Coolify's
-   controls, then sign in again. Restored browser sessions are revoked. Saved
-   backup credentials/settings apply after restart, subject to explicit
-   deployment overrides; see [reinstalling](operations.md#reopen-after-losing-the-local-installation).
-5. Check folders, representative downloads, split files, Connections and
-   **restored share permissions**. Keep the old database/archive/key until
-   verified, then make a fresh confirmed backup and export its key.
+## Older backups
 
 <details>
-<summary>Restore limits and failure handling</summary>
+<summary>Existing database archives, channel capsules and their separate keys</summary>
 
-The website accepts archives up to 1 GiB and restores only an empty destination
-or the untouched catalog created by automatic first setup; it does not merge or
-overwrite a used drive. Invalid keys/damaged archives fail before stopping normal
-work. The archive is authenticated and the destination checked again inside the
-restore transaction. A failure after the service pauses can require a restart;
-the website reports that explicitly. Temporary uploaded ciphertext is removed
-after the attempt. Local unfinished upload bytes are not in the archive.
+Existing backups remain readable with their original keys. During an upgrade,
+an already journaled old-format operation finishes in that format; you may
+briefly see the former database archive plus `tgdrive-replica.tgdb` pair. New
+restore points use the unified file. Do not delete old files or keys during
+migration.
+
+For a pinned older channel capsule, open **Restore backup → Older backups:
+recover from a channel**. Supply its surviving channel, working bot token and
+original key. Leave **Checkpoint message ID** empty to try the latest pin, or
+enter the recorded message ID. A verified plain catalog checkpoint alone can
+omit the key; it does not include the complete database.
+
+For an older full encrypted MongoDB archive, open **Older backups: restore a
+database archive**, under **Reopen an existing drive or restore an older archive**
+in Storage & Backups, or directly on Storage recovery. Use the original archive
+and its matching `MONGODB_BACKUP_KEY` from the saved `.env` key export, type
+`RESTORE` and keep the browser open until the result. This legacy route accepts
+up to 1 GiB and requires an empty or untouched automatically initialized database.
+Restart after success; browser sessions are revoked.
+
+Old channel and MongoDB keys can differ, and their recorded revisions can differ.
+Legacy key exports retain those distinctions; never substitute a new key for an
+old file's matching key. Review restored shares and credentials before resuming.
 
 </details>
 
 ## Verify your recovery kit periodically
 
-Use the same version or source commit and a separate empty database to confirm
-the archive decrypts, the catalog opens and Telegram files remain readable.
-A filename alone is not evidence. Keep unfinished-upload originals until completion.
-
-See [exact archive/API boundaries](reference.md#security-and-privacy) and [operational troubleshooting](operations.md#troubleshooting).
+Rehearse with the same TGDrive version or source commit in a separate recovery
+destination. Confirm the key opens the file, the recorded channel is accessible,
+and representative files and split downloads work. Stop production while
+checking a restored installation; keep one active instance per drive. A filename
+or screenshot alone is not evidence of successful recovery.

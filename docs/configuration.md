@@ -2,32 +2,20 @@
 
 [Docs home](README.md) · [Setup](setup.md) · [Performance diagnostics](performance.md)
 
-Use **Configuration** to change cache, transfer and timezone settings. Saved
+Open **Configuration** to change cache, transfer and timezone settings. Saved
 changes persist across restarts and apply to new work immediately. Start with
-the defaults, change one setting at a time and compare the same workload.
+the defaults; change one setting at a time.
 
 Memory and disk budgets are ceilings, not space allocated in advance. Work
 still needs actual free resources.
 
-[See the configuration screens](showcase.md#configure-your-drive) for a visual
-tour. Use the defaults and limits below when configuring your installation.
-
-**Contents**
-
-- [Change, discard or restore](#change-discard-or-restore)
-- [Cache settings](#cache-settings)
-- [Transfer limits](#transfer-limits)
-  - [Parallel uploads](#parallel-uploads)
-  - [Upload splitting](#upload-splitting)
-  - [URL downloads](#url-downloads)
-  - [Upload size and available disk space](#upload-size-and-available-disk-space)
-  - [Advanced Telegram limits](#advanced-telegram-limits)
-- [Timezone](#timezone)
-- [A modest server and a larger server](#a-modest-server-and-a-larger-server)
-- [Deployment-only settings](#deployment-only-settings)
-- [Public demo mode](#public-demo-mode)
-  - [Keep sample files available](#keep-sample-files-available)
-  - [Return to a private deployment](#return-to-a-private-deployment)
+| I want to… | Setting |
+| --- | --- |
+| Adjust memory, disk use or preloading | [Cache settings](#cache-settings) |
+| Upload larger files or change transfer concurrency | [Transfer limits](#transfer-limits) |
+| Change displayed dates | [Timezone](#timezone) |
+| Change credentials or hosting behavior | [Deployment-only settings](#deployment-only-settings) |
+| Run a shared demo with locked settings | [Public demo mode](#public-demo-mode) |
 
 ## Change, discard or restore
 
@@ -110,9 +98,8 @@ Waiting sources may receive data slowly while connection and storage limits
 permit; expired links can still fail. See [URL intake](performance.md#url-import-intake)
 for queue behavior and retries.
 
-For a startup override, set `REMOTE_DOWNLOAD_CONCURRENCY` in the private `.env`
-or hosting environment, then recreate/redeploy. A saved dashboard value takes
-precedence; see [deployment settings](#deployment-only-settings).
+For a startup default, use `REMOTE_DOWNLOAD_CONCURRENCY` in
+[deployment settings](#deployment-only-settings). A saved dashboard value takes precedence.
 
 ### Upload size and available disk space
 
@@ -135,6 +122,12 @@ A full-speed unknown-length URL import reserves its admitted maximum. If that
 prevents admission, use a source that reports its file size or lower the file limit.
 Waiting URL sources reserve smaller windows; see
 [URL storage policy](performance.md#url-import-intake).
+
+Torrent imports reserve the entire torrent against the same temporary budget
+before downloading file contents. Each file must fit the file maximum; the
+combined torrent must fit the temporary budget and actual free space. The URL
+download concurrency setting controls HTTP imports, not torrent peer traffic.
+See [torrent limits](reference.md#torrent-imports).
 
 Space is rechecked during receipt, but other disk users can still fill it.
 Browser disk-full failures retain the confirmed resume position; URL retrieval
@@ -170,13 +163,10 @@ installation; stored timestamps remain UTC.
 
 ## A modest server and a larger server
 
-Start with the defaults. On a small/shared server, consider one preload and one
-upload per bot. More RAM or disk does not automatically increase the configured
-cache budgets, and larger queues do not add processing capacity.
-
-Use the [load and capacity guide](performance-tuning.md) to read website stats,
-diagnose queues and choose cache, server or bot capacity for your workload.
-Change one limit at a time and compare the same workload before keeping it.
+On a small/shared server, consider one preload and one upload per bot. Added RAM
+or disk does not increase configured cache budgets; larger queues do not add
+processing capacity. Use the [load and capacity guide](performance-tuning.md)
+before raising limits, and compare the same workload after each change.
 
 ## Deployment-only settings
 
@@ -196,9 +186,12 @@ See [startup and recovery boundaries](architecture.md#lifecycle).
 
 ## Public demo mode
 
-Set `DEMO_MODE=true` in the demo deployment's environment, then recreate the
-Compose container or redeploy through Coolify. It defaults to `false`.
-Configure the demo's accounts, limits and backups before enabling it.
+Use a **separate database, Telegram channel and credentials** for a public demo.
+Visitors share one drive and can permanently delete files outside **Demo Files**.
+Demo mode does not isolate visitors, reset content or add quotas.
+
+Configure accounts, limits and backups first. Then set `DEMO_MODE=true` in the
+deployment environment and recreate/redeploy; the default is `false`.
 
 Use the same login form with either of these passwords:
 
@@ -207,19 +200,9 @@ Use the same login form with either of these passwords:
 | Existing `ADMIN_PASSWORD` or `ADMIN_PASSWORD_HASH` | Visitor access: settings/management stay read-only; files outside Demo Files remain editable. |
 | Separate `DEMO_ADMIN_PASSWORD` or `DEMO_ADMIN_PASSWORD_HASH` | Administrator access to settings, backups and sample files, except database archive restoration. Keep this password private. |
 
-The administrator password is optional and only works while `DEMO_MODE=true`.
-If omitted, every web login remains restricted. Use a different password of at
-least 12 characters, or supply an existing compatible Argon2id hash. See
-[password storage and reset](operations.md#forgotten-login-password). Hashes take
-precedence over their corresponding plaintext values. Both demo administrator
-variables are deployment-only; they are not restored from the database.
-
-Database archive restoration is disabled for every login while demo mode is on.
-Use a separate private deployment for a restore or recovery rehearsal; see
-[database recovery](backup-recovery.md#restore-a-lost-database-from-telegram).
-
-Plaintext environment passwords are supported; hashes are optional. For example,
-keep your existing visitor password and add a private full-access password:
+The optional administrator password works only in demo mode. Without it, all
+web logins are restricted. Keep your existing visitor password and add a
+**different private password of at least 12 characters**:
 
 ```dotenv
 DEMO_MODE=true
@@ -227,31 +210,26 @@ DEMO_ADMIN_PASSWORD=<your-different-private-password>
 DEMO_ADMIN_PASSWORD_HASH=
 ```
 
-Replace the placeholder, then recreate/redeploy. Keep the matching `_HASH`
-variable empty when using plaintext. A hash lets deployment configuration store
-a one-way Argon2id fingerprint instead of the actual password; at login, always
-enter the password you chose. See [password storage and reset](operations.md#forgotten-login-password).
+Replace the placeholder and recreate/redeploy. A compatible Argon2id hash is
+optional; a populated `_HASH` always overrides plaintext. To use plaintext in
+Coolify, clear the hash variable's **Value**, save and redeploy if deletion is
+unavailable. Always sign in with the password, not its hash.
+[Password storage and reset](operations.md#forgotten-login-password).
 
-Coolify may prevent deleting a variable declared by Compose. To switch to a
-plaintext password, clear the corresponding hash variable's **Value**, save it
-and redeploy. A populated hash always takes precedence over plaintext.
+Both demo administrator variables are deployment-only and are not restored from
+the database. Log out and use the other password to switch access. Both login
+types use the configured session lifetime, **24 hours** by default.
 
-“Visitor” access describes permissions, not a separate account or an automatic
-content reset. Both login types use the configured session lifetime (24 hours
-by default). Logging out and using the other password switches access.
+Visitors can inspect Configuration and Management status but cannot change
+settings/accounts, start Premium login, refresh connections, manage backups or
+download recovery keys. These restrictions apply to direct API requests too;
+credentials remain private. If configuration fails to load, **Try Again** appears
+before controls; file features remain accessible.
 
-Restricted visitors can open every **Configuration** and **Management** page
-and inspect the current values and status, but cannot change settings, add/remove accounts,
-start Premium login, refresh Telegram connections, or run backup/recovery
-management actions. Recovery-key downloads are also disabled; credentials
-remain private. The server rejects these requests even when sent outside the UI.
-If deployment configuration cannot load, these pages offer **Try Again** before
-showing controls; file features remain accessible.
-
-Uploads, URL imports, browsing, organizing, previews, downloads, sharing and
-manual preloads keep their normal behavior and limits. Automatic backups and
-other configured background work continue while TGDrive runs. Demo mode does
-not bypass login: give visitors the demo deployment's password separately.
+Normal file features and background work continue with their usual limits.
+Visitors still need the demo password to sign in. Database archive restoration
+is disabled for **every login** in demo mode; use a separate private deployment
+for [recovery](backup-recovery.md#restore-a-lost-database-from-telegram).
 
 ### Keep sample files available
 
@@ -270,11 +248,8 @@ If another file or folder already uses the name **Demo Files**,
 [return to a private deployment safely](#return-to-a-private-deployment), rename
 that item, then enable demo mode again. Existing content is preserved.
 
-Use a separate MongoDB database, Telegram storage channel and credentials for
-the public demo. Visitors share one drive and can change or permanently delete
-files outside the protected sample folder, so use disposable content there.
-Demo mode does not isolate visitors, reset content or add quotas. Closing a visitor's browser follows
-the [usual transfer rules](usage.md#what-upload-progress-means).
+Use disposable content outside the protected folder. Closing a visitor's browser
+follows the [usual transfer rules](usage.md#what-upload-progress-means).
 
 ### Return to a private deployment
 

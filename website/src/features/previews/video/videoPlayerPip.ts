@@ -1,5 +1,6 @@
 import pipStyles from "./videoPlayerPip.css?inline";
 import subtitleStyles from "./MovTextRenderer.css?inline";
+import { formatVideoTime } from "./videoWatchProgress";
 
 type PipWindow = Window & typeof globalThis;
 type PipOptions = { width?: number; height?: number };
@@ -15,12 +16,6 @@ type PipPlayer = HTMLElement & {
     ended: boolean;
     muted: boolean;
 };
-
-function timeLabel(seconds: number) {
-    const rounded = Math.floor(Math.max(0, seconds));
-    const minutes = Math.floor(rounded / 60);
-    return minutes + ":" + String(rounded % 60).padStart(2, "0");
-}
 
 function attachPipControls(player: PipPlayer, pip: PipWindow): () => void {
     const doc = pip.document;
@@ -70,7 +65,7 @@ function attachPipControls(player: PipPlayer, pip: PipWindow): () => void {
             position.setAttribute("aria-valuenow", String(time));
             position.setAttribute(
                 "aria-valuetext",
-                timeLabel(time) + " of " + timeLabel(duration),
+                formatVideoTime(time) + " of " + formatVideoTime(duration),
             );
             position.setAttribute("aria-disabled", String(duration <= 0));
         }

@@ -5,9 +5,11 @@ from __future__ import annotations
 import copy
 import json
 import threading
+from datetime import UTC, datetime
 from types import SimpleNamespace
 
 import pytest
+from bson import Binary, json_util
 from pydantic import SecretStr
 
 from tests.support.mongo_fixtures import Collection as MongoCollection
@@ -385,6 +387,8 @@ class Backend:
                     "deletions",
                     "preparations",
                     "settings",
+                    "sessions",
+                    "identities",
                     "jobs",
                     "receipts",
                     "bot_folders",
@@ -832,3 +836,135 @@ def test_full_historical_connection_list_is_archived_without_auto_enabling_it(se
     assert (
         len(manifest["candidate"]["credentials"]["managed_document"]["clients"]) == 50
     )
+
+
+def database_snapshot(settings):
+    from tgdrive.recovery.mongo_backup import COLLECTIONS
+
+    backend = for_settings(settings)
+    records = {name: copy.deepcopy(backend.data.get(name, [])) for name in COLLECTIONS}
+    records["jobs"] = [
+        {
+            "_id": "interrupted-upload",
+            "data": {
+                "id": "interrupted-upload",
+                "phase": "uploading",
+                "status": "running",
+                "current": 3,
+                "total": 42,
+                "error": None,
+                "created_at": 1000.0,
+                "updated_at": 1001.0,
+                "context": {
+                    "kind": "upload",
+                    "name": "original.bin",
+                    "destination": "/",
+                    "local_path": "/old-host/private.upload",
+                    "multipart_plan": {"parts": [{"message_id": 123}]},
+                },
+            },
+        },
+    ]
+    records["sessions"] = [{"_id": "old-browser-cookie"}]
+    records["identities"] = [{"_id": "old-login-identity"}]
+    records["bot_folders"] = [{"_id": "saved-folder", "node_id": "root"}]
+    records["settings"].append(
+        {
+            "_id": "extra-saved-policy",
+            "document": {
+                "at": datetime(2026, 10, 28, tzinfo=UTC),
+                "value": Binary(b"saved", subtype=128),
+            },
+        }
+    )
+    return records
+
+
+@pytest.mark.parametrize("interrupted", [False, True])
+def test_unified_file_restores_database_settings_and_history_safely(
+    settings, interrupted
+):
+    from argon2 import PasswordHasher
+
+    before = catalog(settings)
+    value = candidate(before)
+    value["database"] = database_snapshot(settings)
+    value["backup_config"] = {"channel": OLD, "token": BACKUP_BOT}
+    backend = for_settings(settings)
+    backend.data["sessions"] = [{"_id": "current-browser-cookie"}]
+    prepare_activation(settings, value)
+    manifest = json_util.loads(
+        read_private(settings.resolved_data_dir / MANIFEST),
+        json_options=json_util.JSONOptions(tz_aware=True),
+    )
+    normalized = manifest["candidate"]
+    assert normalized["backup_config"] == value["backup_config"]
+    assert normalized["credentials"]["mongodb_backup_key"] == value["key"]
+    assert normalized["database"]["settings"][-1] == value["database"]["settings"][-1]
+    assert normalized["database"]["sessions"] == []
+    pending = effective_settings(settings)
+    assert pending.mongodb_backup_key.get_secret_value() == value["key"]
+    if interrupted:
+        backend.fail_insert = True
+        with pytest.raises(RuntimeError, match="transaction interruption"):
+            _apply(pending)
+        assert installed(settings) == before
+        assert not backend.db.settings.find_one({"_id": "extra-saved-policy"})
+        assert backend.data["sessions"] == [{"_id": "current-browser-cookie"}]
+    assert _apply(pending)
+    assert installed(settings) == normalized["catalog"]
+    assert (
+        backend.db.settings.find_one({"_id": "extra-saved-policy"})
+        == value["database"]["settings"][-1]
+    )
+    assert backend.data["bot_folders"] == value["database"]["bot_folders"]
+    assert backend.data["sessions"] == [] and backend.data["identities"] == []
+    assert backend.data["operations"] == [] and backend.data["receipts"] == []
+    assert backend.data["deletions"] == [] and backend.data["preparations"] == []
+    assert backend.data["backups"] == []
+    history = backend.data["jobs"]
+    assert len(history) == 1 and history[0]["archived"] is True
+    assert history[0]["status"] == "cancelled"
+    assert history[0]["summary"]["name"] == "original.bin"
+    assert history[0]["summary"]["retained"] is False
+    assert "data" not in history[0] and "context" not in history[0]["summary"]
+    bootstrap = backend.db.settings.find_one({"_id": "bootstrap"})["document"]
+    assert PasswordHasher().verify(
+        bootstrap["ADMIN_PASSWORD_HASH"], "test activation password"
+    )
+    assert bootstrap["STORAGE_CHANNEL"] == NEW
+    assert bootstrap["BOT_TOKENS"] == NEW_BOT and bootstrap["STRING_SESSIONS"] == ""
+    assert bootstrap["MONGODB_BACKUP_KEY"] == value["key"]
+    assert not _apply(pending)
+
+
+def test_unified_file_recovers_a_missing_mongodb_catalog(settings):
+    value = candidate(catalog(settings))
+    value["database"] = database_snapshot(settings)
+    backend = for_settings(settings)
+    backend.data = {name: [] for name in backend.data}
+    prepare_activation(settings, value)
+    assert _apply(effective_settings(settings))
+    assert installed(settings)["storage_channel_id"] == NEW
+    assert backend.db.settings.find_one({"_id": "extra-saved-policy"})
+
+
+@pytest.mark.parametrize("change", ["revision", "file", "backup-channel"])
+def test_unified_file_rejects_mismatched_database_or_backup_before_activation(
+    settings, change
+):
+    before = catalog(settings)
+    value = candidate(before)
+    value["database"] = database_snapshot(settings)
+    if change == "revision":
+        value["database"]["catalog"][0]["revision"] += 1
+    elif change == "file":
+        next(row for row in value["database"]["nodes"] if row["kind"] == "file")[
+            "size"
+        ] += 1
+    else:
+        value["backup_config"] = {"channel": NEW, "token": BACKUP_BOT}
+    with pytest.raises(ActivationError):
+        prepare_activation(settings, value)
+    assert installed(settings) == before
+    assert not (settings.resolved_data_dir / MANIFEST).exists()

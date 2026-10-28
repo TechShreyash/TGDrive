@@ -297,7 +297,9 @@ describe("adaptive device scheduling integration", () => {
     });
 
     it("discards background byte and timer samples and starts a fresh visible window", async () => {
-        const visibility = { visibilityState: "visible" };
+        const visibility = Object.assign(new EventTarget(), {
+            visibilityState: "visible",
+        });
         vi.stubGlobal("document", visibility);
         const upload = await runningUploads();
         await upload.flow(4, () => 64 * 1024);

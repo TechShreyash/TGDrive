@@ -37,14 +37,14 @@ LABEL org.opencontainers.image.title="TGDrive" \
     org.opencontainers.image.description="Self-hosted Telegram-backed personal file drive" \
     org.opencontainers.image.source="https://github.com/TechShreyash/TGDrive" \
     org.opencontainers.image.licenses="MIT" \
-    org.opencontainers.image.version="2.1.0"
+    org.opencontainers.image.version="2.2.0"
 
 WORKDIR /app
 
 # Distrust the compromised emSign G3 chain in Python/MongoDB system TLS too.
 # https://github.com/astral-sh/uv/security/advisories/GHSA-hq85-5cpj-mr62
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends libarchive13t64 ffmpeg poppler-utils \
+    && apt-get install -y --no-install-recommends libarchive13t64 ffmpeg poppler-utils aria2 \
     && sed -i 's|^mozilla/emSign_ECC_Root_CA_-_G3.crt$|!mozilla/emSign_ECC_Root_CA_-_G3.crt|' /etc/ca-certificates.conf \
     && update-ca-certificates \
     && rm -rf /var/lib/apt/lists/*
