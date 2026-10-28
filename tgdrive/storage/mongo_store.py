@@ -237,7 +237,7 @@ class MongoStore(DriveStore):
 
     @classmethod
     def validate_snapshot_records(cls, records):
-        """Validate archived domain records without opening or changing a database."""
+        """Validate archived records and return their portable catalog without I/O."""
         catalogs = records["catalog"]
         if len(catalogs) != 1 or catalogs[0].get("_id") != "catalog":
             raise CorruptStoreError("Archive catalog metadata is invalid")
@@ -261,6 +261,7 @@ class MongoStore(DriveStore):
         if any(row["id"] != row["_id"] for row in records["nodes"]):
             raise CorruptStoreError("Archive node identity is invalid")
         view._validate_state()
+        return view._export()
 
     @property
     def storage_path(self):

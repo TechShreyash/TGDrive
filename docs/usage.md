@@ -784,10 +784,10 @@ The web password/storage channel are installation settings.
 not completion of unfinished uploads.
 
 - **Temporary storage** is server disk reserved for unfinished uploads, not a Telegram storage limit.
-- **Back up now** makes a complete encrypted database copy in your private channel.
-  Automatic copies normally run hourly.
-- **Save recovery key** downloads the key needed to restore those copies.
-  Store it separately.
+- **Back up now** creates one encrypted recovery file. Automatic copies normally
+  run hourly without an independent channel; independent protection batches changes.
+- **Backups & recovery → Download backup** saves the confirmed recovery file.
+  **Save recovery key** exports its matching key; store it separately.
 
 Reconnect the same MongoDB after losing the local installation. For database
 loss, follow [backup and recovery](backup-recovery.md).

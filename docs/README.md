@@ -27,7 +27,7 @@ visual tour of the file browser, transfers, previews, sharing and administration
 | Change settings or look up cache and transfer policies | [Configuration](configuration.md) · [Performance policies](performance.md) |
 | Diagnose load, queues or cache needs before upgrading | [Load and capacity guide](performance-tuning.md) |
 | Restart, upgrade or fix a problem | [Operations](operations.md) |
-| Protect files or recover a drive | [Backup & recovery](backup-recovery.md) |
+| Save one recovery file or recover a drive | [Backup & recovery](backup-recovery.md) |
 
 Keep originals until **Completed**. **You can close this tab** means the server
 has accepted the files; TGDrive must keep running to finish processing them.

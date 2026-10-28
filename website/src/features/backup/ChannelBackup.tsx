@@ -41,6 +41,7 @@ export interface ReplicaState {
     protected_revision: number;
     pending_revision?: number;
     last_success_at?: string | null;
+    backup_file_available?: boolean;
     current_file?: string | null;
     total_files: number;
     done_files: number;
@@ -61,13 +62,15 @@ export interface ReplicaState {
         bytes: number;
         channel: number;
         complete: boolean;
+        has_database?: boolean;
+        source_is_backup?: boolean;
     } | null;
 }
 
 type ReplicaAction = "sync" | "pause" | "resume" | "retry" | "disable";
 const ACTIVE = new Set<ReplicaPhase>(["syncing", "recovering", "waiting"]);
 const PHASE_LABEL: Record<ReplicaPhase, string> = {
-    disabled: "Not enabled",
+    disabled: "Independent channel not enabled",
     idle: "Ready to sync",
     syncing: "Copying to the backup channel",
     paused: "Paused",
@@ -99,6 +102,36 @@ export function retryTime(value: number | string | null | undefined): string {
     return formatTimestamp(value);
 }
 
+export const MAX_RECOVERY_FILE_BYTES = 64 * 1024 ** 2;
+
+export function validateRecoveryFile(file: Pick<File, "name" | "size">) {
+    if (!file.name.toLowerCase().endsWith(".tgdb"))
+        throw new Error("Choose your encrypted .tgdb recovery file.");
+    if (file.size <= 0 || file.size > MAX_RECOVERY_FILE_BYTES)
+        throw new Error("Choose a nonempty recovery file no larger than 64 MiB.");
+}
+
+export function recoveryFileKey(value: string): string {
+    let key = value.trim();
+    if (key.startsWith("{")) {
+        try {
+            const saved: unknown = JSON.parse(key);
+            key =
+                saved &&
+                typeof saved === "object" &&
+                "key" in saved &&
+                typeof saved.key === "string"
+                    ? saved.key.trim()
+                    : "";
+        } catch {
+            key = "";
+        }
+    }
+    if (!/^[a-fA-F0-9]{64}$/.test(key))
+        throw new Error("Paste your saved recovery key or recovery-key JSON.");
+    return key;
+}
+
 export default function ChannelBackup({
     recoveryOnly = false,
     demoMode = false,
@@ -123,6 +156,7 @@ export default function ChannelBackup({
     const [source, setSource] = useState("");
     const [sourceToken, setSourceToken] = useState("");
     const [key, setKey] = useState("");
+    const [recoveryFile, setRecoveryFile] = useState<File | null>(null);
     const [messageId, setMessageId] = useState("");
     const [target, setTarget] = useState("");
     const [targetToken, setTargetToken] = useState("");
@@ -133,10 +167,12 @@ export default function ChannelBackup({
     const mounted = useRef(true);
     const generation = useRef(0);
     const manualPending = useRef(false);
+    const importPending = useRef(false);
     const { refreshing, run } = useManualRefresh(onNotice);
     const progress = useRef<ProgressSample | undefined>(undefined);
     const restartNotified = useRef(false);
     const surface = useRef<HTMLElement>(null);
+    const actionErrorSummary = useRef<HTMLDivElement>(null);
     const focusResult = useRef<"status" | "candidate" | null>(null);
     const restartCallback = useRef(onRestartRequired);
     restartCallback.current = onRestartRequired;
@@ -215,7 +251,8 @@ export default function ChannelBackup({
     useEffect(() => {
         if (!state || state.phase === "restart_required") return;
         const active = ACTIVE.has(state.phase);
-        if (!active && (!state.configured || !state.enabled)) return;
+        if (!active && recoveryOnly && (!state.configured || !state.enabled))
+            return;
         const controller = new AbortController();
         const interval = active
             ? recoveryOnly || state.phase === "recovering"
@@ -241,6 +278,10 @@ export default function ChannelBackup({
             restartCallback.current?.();
         }
     }, [state?.phase]);
+
+    useEffect(() => {
+        if (actionError) actionErrorSummary.current?.focus();
+    }, [actionError]);
 
     useEffect(() => {
         if (busy || !focusResult.current) return;
@@ -360,7 +401,10 @@ export default function ChannelBackup({
                         "The checkpoint message ID must be a positive whole number.",
                     );
             }
-            const mainBot = copy ? validateBackupToken(targetToken) : undefined;
+            const mainBot =
+                copy && (!catalogOnly || targetToken.trim())
+                    ? validateBackupToken(targetToken)
+                    : undefined;
             const destination = copy
                 ? catalogOnly
                     ? sourceChannel
@@ -399,6 +443,58 @@ export default function ChannelBackup({
             );
         } catch (cause) {
             setActionError(errorMessage(cause));
+        }
+    };
+    const inspectFile = async (event: FormEvent) => {
+        event.preventDefault();
+        if (demoMode || busy || importPending.current) return;
+        setActionError("");
+        let headers: Record<string, string>;
+        try {
+            if (!recoveryFile) throw new Error("Choose your recovery file.");
+            validateRecoveryFile(recoveryFile);
+            headers = {
+                "Content-Type": "application/octet-stream",
+                "X-TGDrive-Recovery-Key": recoveryFileKey(key),
+            };
+            if (source.trim())
+                headers["X-TGDrive-Source-Channel"] = String(
+                    parseChannelId(source),
+                );
+            if (sourceToken.trim())
+                headers["X-TGDrive-Bot-Token"] = validateBackupToken(sourceToken);
+        } catch (cause) {
+            setActionError(errorMessage(cause));
+            return;
+        }
+        importPending.current = true;
+        setBusy("inspect_file");
+        try {
+            const result = await request<ReplicaState>(
+                "/api/v1/replica/import",
+                undefined,
+                {
+                    method: "POST",
+                    body: recoveryFile,
+                    headers,
+                    timeoutMs: 180000,
+                },
+            );
+            if (!mounted.current) return;
+            ++generation.current;
+            focusResult.current = "candidate";
+            setState(result);
+            setLoadError("");
+            setCatalogOnly(!result.recovery_candidate?.source_is_backup);
+            setConfirmation("");
+            setActivationConfirmation("");
+            setSourceToken("");
+            setKey("");
+        } catch (cause) {
+            if (mounted.current) setActionError(errorMessage(cause));
+        } finally {
+            importPending.current = false;
+            if (mounted.current) setBusy("");
         }
     };
     const activate = () => {
@@ -468,12 +564,12 @@ export default function ChannelBackup({
                     <h2 id="channel-backup-title" tabIndex={-1}>
                         {recoveryOnly
                             ? "Recover your drive"
-                            : "Independent backup channel"}
+                            : "Backups & recovery"}
                     </h2>
                     <p>
                         {recoveryOnly
-                            ? "Use a surviving channel and your saved recovery key to recover completed files and the catalog."
-                            : "Keep a second copy of completed files and the catalog in another private channel."}
+                            ? "Choose your recovery file and key. Keep the surviving Telegram channel intact while TGDrive prepares recovery."
+                            : "Save an encrypted recovery file and its key. Add a second channel to protect your files if a channel is lost."}
                     </p>
                 </div>
                 <button
@@ -502,6 +598,11 @@ export default function ChannelBackup({
                     >
                         {refreshing && <Spinner />} Try again
                     </button>
+                </div>
+            )}
+            {actionError && (
+                <div ref={actionErrorSummary} tabIndex={-1}>
+                    <ErrorNotice message={actionError} />
                 </div>
             )}
             {state && (
@@ -711,7 +812,6 @@ export default function ChannelBackup({
                                     {busy === "retry" ? "Retrying…" : "Retry"}
                                 </button>
                             )}
-                            {state.configured && recoveryKeyAction}
                         </div>
                     )}
                     {recoveryOnly &&
@@ -755,13 +855,40 @@ export default function ChannelBackup({
                             {recoveryKeyAction}
                         </div>
                     )}
-                    {!recoveryOnly && state.configured && (
-                        <p className="channel-backup-key-help">
-                            Save the recovery key outside Telegram. It is needed
-                            if this installation is lost. A second channel
-                            reduces risk; it cannot guarantee Telegram access.
-                        </p>
-                    )}
+                </>
+            )}
+            {!recoveryOnly && state && (
+                <>
+                    <div className="channel-backup-actions">
+                        {demoMode || !state.backup_file_available ? (
+                            <button
+                                type="button"
+                                className="secondary-button"
+                                disabled
+                            >
+                                <Download size={16} aria-hidden="true" />
+                                Download backup
+                            </button>
+                        ) : (
+                            <a
+                                className="secondary-button"
+                                href="/api/v1/replica/file"
+                                download
+                            >
+                                <Download size={16} aria-hidden="true" />
+                                Download backup
+                            </a>
+                        )}
+                        {recoveryKeyAction}
+                    </div>
+                    <p className="channel-backup-key-help">
+                        Keep the recovery file outside the server and save its
+                        key separately. Your login password does not unlock it.
+                        Download an updated file after a new confirmed backup or
+                        channel replacement.
+                        {!state.backup_file_available &&
+                            " A download is available after the first backup is confirmed."}
+                    </p>
                 </>
             )}
             {!recoveryOnly && configureOpen && (
@@ -924,119 +1051,200 @@ export default function ChannelBackup({
                 open={recoveryOpen}
                 onToggle={(event) => setRecoveryOpen(event.currentTarget.open)}
             >
-                <summary>
-                    {recoveryOnly
-                        ? "Recover from a surviving channel"
-                        : "Recover a channel or catalog"}
-                </summary>
+                <summary>Restore backup</summary>
                 <p>
                     {recoveryOnly
-                        ? "Start with a surviving private channel. Keep it unchanged until recovery is verified."
-                        : "If the backup channel is lost while the main channel still works, replace it in Backup settings. To rebuild a lost main channel, inspect a surviving recovery copy below."}
+                        ? "Restore the saved drive data using either surviving channel. The source remains intact."
+                        : "Restore MongoDB or rebuild a lost main channel from a surviving channel. If only the backup channel was lost, replace it in Backup settings."}
                 </p>
                 {!candidate?.complete &&
                     !active &&
                     phase !== "restart_required" && (
-                        <form
-                            className="channel-backup-form"
-                            onSubmit={(event) => recover(event, false)}
-                        >
-                            <div className="channel-backup-fields">
-                                <label>
-                                    Surviving channel ID
-                                    <input
-                                        inputMode="numeric"
-                                        autoComplete="off"
-                                        value={source}
-                                        onChange={(event) =>
-                                            setSource(event.target.value)
-                                        }
-                                        placeholder="-1001234567890"
-                                        required
-                                        disabled={demoMode || !!busy}
-                                    />
-                                </label>
-                                <label>
-                                    Bot token with access to the surviving
-                                    channel
-                                    <input
-                                        type="password"
-                                        autoComplete="new-password"
-                                        value={sourceToken}
-                                        onChange={(event) =>
-                                            setSourceToken(event.target.value)
-                                        }
-                                        spellCheck={false}
-                                        maxLength={512}
-                                        required
-                                        disabled={demoMode || !!busy}
-                                    />
-                                </label>
-                                <label>
-                                    Saved recovery key
-                                    <input
-                                        type="password"
-                                        autoComplete="new-password"
-                                        value={key}
-                                        onChange={(event) =>
-                                            setKey(event.target.value)
-                                        }
-                                        spellCheck={false}
-                                        maxLength={64}
-                                        disabled={demoMode || !!busy}
-                                        aria-describedby="channel-recovery-key-help"
-                                    />
-                                </label>
-                                <label>
-                                    <span>
-                                        Checkpoint message ID{" "}
-                                        <span className="channel-backup-optional">
-                                            (optional)
-                                        </span>
-                                    </span>
-                                    <input
-                                        inputMode="numeric"
-                                        autoComplete="off"
-                                        value={messageId}
-                                        onChange={(event) =>
-                                            setMessageId(event.target.value)
-                                        }
-                                        disabled={demoMode || !!busy}
-                                        aria-describedby="checkpoint-id-help"
-                                    />
-                                </label>
-                            </div>
-                            <p id="channel-recovery-key-help">
-                                Encrypted copies need the 64-character key value
-                                from your saved recovery-key JSON. Leave this
-                                empty only for a verified plain catalog
-                                checkpoint.
-                            </p>
-                            <p id="checkpoint-id-help">
-                                Leave the message ID empty to inspect the latest
-                                pinned recovery copy. Inspecting does not
-                                activate or overwrite a drive.
-                            </p>
-                            <button
-                                type="submit"
-                                className="secondary-button"
-                                disabled={
-                                    demoMode ||
-                                    !!busy ||
-                                    !source.trim() ||
-                                    !sourceToken.trim()
-                                }
-                            >
-                                {busy === "inspect" ? (
-                                    <Spinner />
-                                ) : (
-                                    <RefreshCw size={16} />
+                        <>
+                            <form className="channel-backup-form" onSubmit={inspectFile}>
+                                <div className="channel-backup-fields">
+                                    <label>
+                                        Recovery file (required)
+                                        <input
+                                            type="file"
+                                            accept=".tgdb"
+                                            required
+                                            disabled={demoMode || !!busy}
+                                            aria-describedby="recovery-file-help"
+                                            onChange={(event) => {
+                                                setRecoveryFile(event.target.files?.[0] || null);
+                                                setActionError("");
+                                            }}
+                                        />
+                                    </label>
+                                    <label>
+                                        Recovery key (required)
+                                        <input
+                                            type="password"
+                                            autoComplete="off"
+                                            value={key}
+                                            onChange={(event) => setKey(event.target.value)}
+                                            spellCheck={false}
+                                            maxLength={8192}
+                                            required
+                                            disabled={demoMode || !!busy}
+                                            aria-describedby="recovery-file-help"
+                                        />
+                                    </label>
+                                </div>
+                                <p id="recovery-file-help">
+                                    Choose your encrypted .tgdb file, up to 64 MiB. Paste the saved
+                                    recovery key or the contents of its JSON file. Your login password
+                                    is separate. Inspection does not overwrite the drive.
+                                </p>
+                                <details>
+                                    <summary>Channel access changed?</summary>
+                                    <p>
+                                        TGDrive tries the channels and credentials in the file.
+                                        If a saved token was revoked, grant a replacement bot access
+                                        to the surviving channel and enter its token here.
+                                    </p>
+                                    <div className="channel-backup-fields">
+                                        <label>
+                                            Surviving channel ID (optional)
+                                            <input
+                                                inputMode="numeric"
+                                                autoComplete="off"
+                                                value={source}
+                                                onChange={(event) => setSource(event.target.value)}
+                                                disabled={demoMode || !!busy}
+                                            />
+                                        </label>
+                                        <label>
+                                            Replacement bot token (optional)
+                                            <input
+                                                type="password"
+                                                autoComplete="new-password"
+                                                value={sourceToken}
+                                                onChange={(event) => setSourceToken(event.target.value)}
+                                                spellCheck={false}
+                                                maxLength={512}
+                                                disabled={demoMode || !!busy}
+                                            />
+                                        </label>
+                                    </div>
+                                </details>
+                                <button
+                                    type="submit"
+                                    className="secondary-button"
+                                    disabled={demoMode || !!busy || !recoveryFile || !key.trim()}
+                                >
+                                    {busy === "inspect_file" ? <Spinner /> : <RefreshCw size={16} aria-hidden="true" />}
+                                    {busy === "inspect_file" ? "Checking backup…" : "Inspect backup"}
+                                </button>
+                                {busy === "inspect_file" && (
+                                    <p role="status">Keep this page open while the file is sent and its recovery data is checked.</p>
                                 )}
-                                {busy === "inspect"
-                                    ? "Inspecting…"
-                                    : "Inspect recovery copy"}
-                            </button>
-                        </form>
+                            </form>
+                            <details className="channel-backup-details">
+                                <summary>Older backups: recover from a channel</summary>
+                                <form
+                                    className="channel-backup-form"
+                                    onSubmit={(event) => recover(event, false)}
+                                >
+                                    <div className="channel-backup-fields">
+                                        <label>
+                                            Surviving channel ID
+                                            <input
+                                                inputMode="numeric"
+                                                autoComplete="off"
+                                                value={source}
+                                                onChange={(event) =>
+                                                    setSource(event.target.value)
+                                                }
+                                                placeholder="-1001234567890"
+                                                required
+                                                disabled={demoMode || !!busy}
+                                            />
+                                        </label>
+                                        <label>
+                                            Bot token with access to the surviving
+                                            channel
+                                            <input
+                                                type="password"
+                                                autoComplete="new-password"
+                                                value={sourceToken}
+                                                onChange={(event) =>
+                                                    setSourceToken(event.target.value)
+                                                }
+                                                spellCheck={false}
+                                                maxLength={512}
+                                                required
+                                                disabled={demoMode || !!busy}
+                                            />
+                                        </label>
+                                        <label>
+                                            Saved recovery key
+                                            <input
+                                                type="password"
+                                                autoComplete="new-password"
+                                                value={key}
+                                                onChange={(event) =>
+                                                    setKey(event.target.value)
+                                                }
+                                                spellCheck={false}
+                                                maxLength={64}
+                                                disabled={demoMode || !!busy}
+                                                aria-describedby="channel-recovery-key-help"
+                                            />
+                                        </label>
+                                        <label>
+                                            <span>
+                                                Checkpoint message ID{" "}
+                                                <span className="channel-backup-optional">
+                                                    (optional)
+                                                </span>
+                                            </span>
+                                            <input
+                                                inputMode="numeric"
+                                                autoComplete="off"
+                                                value={messageId}
+                                                onChange={(event) =>
+                                                    setMessageId(event.target.value)
+                                                }
+                                                disabled={demoMode || !!busy}
+                                                aria-describedby="checkpoint-id-help"
+                                            />
+                                        </label>
+                                    </div>
+                                    <p id="channel-recovery-key-help">
+                                        Encrypted copies need the 64-character key value
+                                        from your saved recovery-key JSON. Leave this
+                                        empty only for a verified plain catalog
+                                        checkpoint.
+                                    </p>
+                                    <p id="checkpoint-id-help">
+                                        Leave the message ID empty to inspect the latest
+                                        pinned recovery copy. Inspecting does not
+                                        activate or overwrite a drive.
+                                    </p>
+                                    <button
+                                        type="submit"
+                                        className="secondary-button"
+                                        disabled={
+                                            demoMode ||
+                                            !!busy ||
+                                            !source.trim() ||
+                                            !sourceToken.trim()
+                                        }
+                                    >
+                                        {busy === "inspect" ? (
+                                            <Spinner />
+                                        ) : (
+                                            <RefreshCw size={16} />
+                                        )}
+                                        {busy === "inspect"
+                                            ? "Inspecting…"
+                                            : "Inspect recovery copy"}
+                                    </button>
+                                </form>
+                            </details>
+                        </>
                     )}
                 {candidate && (
                     <div className="channel-backup-candidate">
@@ -1047,7 +1255,7 @@ export default function ChannelBackup({
                         </h3>
                         <dl>
                             <div>
-                                <dt>Catalog revision</dt>
+                                <dt>Backup revision</dt>
                                 <dd>{candidate.revision}</dd>
                             </div>
                             <div>
@@ -1066,6 +1274,12 @@ export default function ChannelBackup({
                                 <dd>{candidate.channel}</dd>
                             </div>
                         </dl>
+                        {candidate.has_database === false && (
+                            <p>
+                                This older channel recovery copy restores the catalog and
+                                supported settings. It does not contain the complete database.
+                            </p>
+                        )}
                         {!candidate.complete &&
                             !active &&
                             phase !== "restart_required" && (
@@ -1092,8 +1306,8 @@ export default function ChannelBackup({
                                     </label>
                                     <p>
                                         {catalogOnly
-                                            ? "Files stay in this surviving channel. Add a main bot as an administrator; it must be different from the surviving backup bot. TGDrive checks every stored part before the catalog can be activated."
-                                            : "Create a new, empty private main channel in Telegram. Add the surviving backup bot and a new main bot as administrators. The main bot must be different from the surviving bot. TGDrive verifies both before copying; the source stays unchanged."}
+                                            ? "Files stay in this surviving channel, which becomes the main channel. TGDrive verifies every stored part before restoring the database. Enter a replacement main bot token only if the saved access needs to change."
+                                            : "Create an empty private main channel. Add the surviving bot and a separate main bot as administrators. TGDrive verifies their access before copying; the surviving backup files remain intact."}
                                     </p>
                                     <div className="channel-backup-fields">
                                         {!catalogOnly && (
@@ -1117,7 +1331,7 @@ export default function ChannelBackup({
                                         )}{" "}
                                         <label>
                                             {catalogOnly
-                                                ? "Main bot token for this channel"
+                                                ? "Replacement main bot token (optional)"
                                                 : "New main bot token"}
                                             <input
                                                 type="password"
@@ -1130,7 +1344,7 @@ export default function ChannelBackup({
                                                 }
                                                 spellCheck={false}
                                                 maxLength={512}
-                                                required
+                                                required={!catalogOnly}
                                                 disabled={demoMode || !!busy}
                                             />
                                         </label>
@@ -1156,7 +1370,7 @@ export default function ChannelBackup({
                                     </div>
                                     <p>
                                         {catalogOnly
-                                            ? "After activation this channel becomes the main channel. Set up an independent backup again afterwards."
+                                            ? "After activation this channel becomes the main channel. Check its independent backup status before relying on new protection."
                                             : "Copying can take time."}{" "}
                                         File changes are paused for recovery.
                                         Your existing local database and
@@ -1169,7 +1383,7 @@ export default function ChannelBackup({
                                         disabled={
                                             blocked ||
                                             (!catalogOnly && !target.trim()) ||
-                                            !targetToken.trim() ||
+                                            (!catalogOnly && !targetToken.trim()) ||
                                             (catalogOnly
                                                 ? String(candidate.channel)
                                                 : target.trim()) !==
@@ -1184,7 +1398,7 @@ export default function ChannelBackup({
                                         {busy === "recover"
                                             ? "Starting recovery…"
                                             : catalogOnly
-                                              ? "Verify catalog on this channel"
+                                              ? "Verify and prepare database restore"
                                               : "Copy to new main channel"}
                                     </button>
                                 </form>
@@ -1193,10 +1407,15 @@ export default function ChannelBackup({
                             phase === "ready_to_activate" && (
                                 <div className="channel-backup-form">
                                     <p>
-                                        All required parts and the recovered
-                                        catalog are confirmed. Activation
+                                        All required parts and the recovered{" "}
+                                        {candidate.has_database === false
+                                            ? "catalog"
+                                            : "database"}{" "}
+                                        data are confirmed. Activation
                                         switches TGDrive to this main channel; a
-                                        service restart is required.
+                                        service restart is required. Keep the
+                                        surviving channel intact and save the
+                                        updated recovery file after recovery.
                                     </p>
                                     <label>
                                         Type {candidate.channel} to activate
@@ -1238,7 +1457,6 @@ export default function ChannelBackup({
                     </div>
                 )}
             </details>
-            <ErrorNotice message={actionError} />
             {state &&
                 (report.length > 0 ||
                     state.configured ||

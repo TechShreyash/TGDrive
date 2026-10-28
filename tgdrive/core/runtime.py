@@ -135,13 +135,20 @@ class Runtime:
                 return
             self.recovery_only = False
             self.replica = ChannelReplica(self.settings, self)
+            self.backup.replica = self.replica
             if self.replica.journal.get("activation"):
-                self.replica.journal.set("activation", None)
-                self.replica.journal.set("recovery", None)
-                self.replica.journal.set("candidate", None)
-                self.replica.journal.set("job", None)
-                self.replica.journal.set("config", {})
-                self.replica.update(phase="disabled", protected_revision=0, error=None)
+                candidate = self.replica.journal.get("candidate", {})
+                backup_config = candidate.get("backup_config")
+                transition = {
+                    "activation": None, "recovery": None, "candidate": None,
+                    "job": None, "config": dict(backup_config, enabled=True) if backup_config else {},
+                    "status": self.replica.journal.get("status", {}) | {
+                        "phase": "idle" if backup_config else "disabled", "protected_revision": 0, "error": None,
+                    },
+                }
+                if "database" in candidate:
+                    transition.update(key=candidate["key"], mongodb_key=candidate["key"])
+                self.replica.journal.set_many(transition)
             original_lineage = getattr(self.backup, "verify_lineage", None)
 
             async def protected_lineage(store):

@@ -63,8 +63,8 @@ add end-to-end encryption to stored files.
   upload bot, and make file changes through TGDrive. Do not edit storage messages,
   recovery pins or channel history, or add cleanup/moderation bots.
 - **Protect the catalog and recovery material.** Preserve MongoDB, channel access,
-  private configuration and persistent volumes. Save matching recovery keys and
-  restore-point exports outside both the server and Telegram.
+  private configuration and persistent volumes. Save the confirmed recovery file and
+  its separate key outside both the server and Telegram.
 - **Know who can access your drive.** The owner password grants full shared
   access. A valid share link lets its holder read the selected file or folder.
   Use HTTPS for remote access, a unique owner password, Telegram two-step
@@ -81,7 +81,7 @@ add end-to-end encryption to stored files.
 2. Try a share link in a signed-out browser, then revoke it. Share a specific
    file or folder rather than giving someone the owner password.
 3. If using independent backups, wait for **Backup confirmed** and save the
-   matching recovery export separately. An enabled backup switch or 100% copied
+   recovery file and its separate key. An enabled backup switch or 100% copied
    bytes alone is not confirmation. Follow the
    [recovery-kit guidance](backup-recovery.md#verify-your-recovery-kit-periodically)
    before relying on it.
@@ -232,7 +232,7 @@ does not scan uploads for malware, so only open downloads you trust.
 
 No. TGDrive can optionally maintain a recovery copy in a second channel using a
 separately controlled Telegram account and backup bot. Configure it explicitly,
-wait for **Backup confirmed**, and save the matching recovery-key export outside
+wait for **Backup confirmed**, and save the recovery file and matching key outside
 Telegram and the server. Newer changes can still be pending.
 
 Recovery needs an accessible copy, a confirmed backup you can restore and its

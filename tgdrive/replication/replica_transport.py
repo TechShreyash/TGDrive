@@ -26,6 +26,7 @@ from telethon import TelegramClient, functions, types, utils
 from telethon.errors import NetworkMigrateError, PhoneMigrateError, UserMigrateError
 
 CAPSULE_NAME = "tgdrive-replica.tgdb"
+BACKUP_NAME = "tgdrive-backup.tgdb"
 MAX_CAPSULE_BYTES = 64 * 1024 * 1024
 MAX_VERIFY_BATCH = 32
 _BLOCK = 512 * 1024
@@ -688,7 +689,8 @@ class ReplicaTransport:
             for row in getattr(document, "attributes", ())
             if isinstance(row, types.DocumentAttributeFilename)
         ]
-        if names != [filename]:
+        allowed = (filename,) if isinstance(filename, str) else filename
+        if names not in ([name] for name in allowed):
             raise ReplicaTransportError(
                 "The selected message has a different document type. Choose a "
                 "confirmed TGDrive recovery checkpoint.",
@@ -872,7 +874,7 @@ class ReplicaTransport:
     ) -> int:
         """Download a confirmed replica capsule by ID or latest pinned message."""
         return await self._download(
-            channel, message_id, destination, filename=CAPSULE_NAME
+            channel, message_id, destination, filename=(BACKUP_NAME, CAPSULE_NAME)
         )
 
     async def download_catalog(
@@ -892,13 +894,17 @@ class ReplicaTransport:
     async def publish(
         self, channel: int, path: Path, *, random_id: int, caption: str, pin: bool
     ) -> int:
+        from tgdrive.recovery.recovery_file import MAGIC as RECOVERY_MAGIC
+
+        with path.open("rb") as source:
+            unified = source.read(len(RECOVERY_MAGIC)) == RECOVERY_MAGIC
         return await self._publish(
             channel,
             path,
             random_id=random_id,
             caption=caption,
             pin=pin,
-            filename=CAPSULE_NAME,
+            filename=BACKUP_NAME if unified else CAPSULE_NAME,
         )
 
     async def publish_catalog(

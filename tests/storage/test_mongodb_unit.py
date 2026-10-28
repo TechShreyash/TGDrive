@@ -14,6 +14,7 @@ from pydantic import SecretStr
 from pymongo.errors import ConnectionFailure
 
 from tests.support.mongo_fixtures import FakeMongoBackend
+from tests.support.recovery_fixtures import settings as recovery_settings
 from tgdrive.core.logging import _redact
 from tgdrive.recovery.backup import BackupError
 from tgdrive.recovery.mongo_backup import (
@@ -21,6 +22,7 @@ from tgdrive.recovery.mongo_backup import (
     decode_snapshot,
     write_snapshot,
 )
+from tgdrive.recovery.recovery_file import write_recovery_snapshot
 from tgdrive.settings.managed_settings import SettingsProblem
 from tgdrive.storage.mongo import DatabaseUnavailable
 from tgdrive.storage.mongo_store import MongoStore
@@ -130,7 +132,7 @@ async def test_encrypted_snapshot_checks_live_channel_before_staging_or_send(
         side_effect=SettingsProblem("The storage channel is public.")
     )
     write = Mock()
-    monkeypatch.setattr("tgdrive.recovery.mongo_backup.write_snapshot", write)
+    monkeypatch.setattr("tgdrive.recovery.mongo_backup.write_recovery_snapshot", write)
     with pytest.raises(SettingsProblem, match="channel is public"):
         if forced:
             await service.backup(store, force=True)
@@ -150,10 +152,8 @@ def snapshot_source(tmp_path):
         start_session=Mock(side_effect=lambda **_kwargs: nullcontext(object()))
     )
     store = MongoStore.create(backend, storage_channel=-1001234567890)
-    settings = SimpleNamespace(
-        storage_channel=store.storage_channel_id,
-        resolved_cache_dir=tmp_path,
-        mongodb_backup_key=SecretStr("a1" * 32),
+    settings = recovery_settings(tmp_path).model_copy(
+        update={"cache_dir": tmp_path, "mongodb_backup_key": SecretStr("a1" * 32)},
     )
     pool = SimpleNamespace(lease=Mock(side_effect=RuntimeError("Publication paused")))
     yield MongoProtection(settings, pool, backend), store, backend
@@ -167,12 +167,12 @@ async def test_snapshot_record_uses_exported_revision_when_catalog_advances(
     exported_revision = store.revision
 
     def export_then_advance(*args):
-        result = write_snapshot(*args)
+        result = write_recovery_snapshot(*args)
         store.create_folder("/", "Arrived after the snapshot")
         return result
 
     monkeypatch.setattr(
-        "tgdrive.recovery.mongo_backup.write_snapshot", export_then_advance
+        "tgdrive.recovery.mongo_backup.write_recovery_snapshot", export_then_advance
     )
     with pytest.raises(RuntimeError, match="Publication paused"):
         await service.snapshot_now(store)
@@ -192,6 +192,31 @@ async def test_snapshot_record_uses_exported_revision_when_catalog_advances(
     assert observed["status"] == "pending"
     assert "_id" not in observed and "local_path" not in observed
     assert service._last_success_at is None
+
+
+async def test_legacy_journal_work_still_creates_original_archive_format(snapshot_source):
+    service, store, backend = snapshot_source
+    with pytest.raises(RuntimeError, match="Publication paused"):
+        await service.snapshot_now(store, legacy=True)
+    row = backend.db.backups.find_one({"status": "pending"})
+    assert row["format"] == "mongodb-encrypted-v1"
+    assert Path(row["local_path"]).read_bytes().startswith(b"TGDRIVE-MONGO-1\n")
+    assert decode_snapshot(Path(row["local_path"]), bytes.fromhex("a1" * 32))["catalog"]
+
+
+async def test_standalone_v2_uses_unified_replica_key_and_preserves_pending_key_binding(snapshot_source):
+    service, store, backend = snapshot_source
+    key = "b2" * 32
+    service.replica = SimpleNamespace(key=lambda: key)
+    with pytest.raises(RuntimeError, match="Publication paused"):
+        await service.snapshot_now(store)
+    row = backend.db.backups.find_one({"status": "pending"})
+    assert row["format"] == "tgdrive-backup-v2"
+    assert decode_snapshot(Path(row["local_path"]), bytes.fromhex(key))["catalog"]
+    service.replica.key = lambda: "c3" * 32
+    with pytest.raises(BackupError, match="different key"):
+        await service.snapshot_now(store)
+    assert backend.db.backups.find_one({"status": "pending"}) == row
 
 
 async def test_backup_observation_reloads_on_restore_and_history_stays_fresh(
@@ -325,7 +350,7 @@ async def test_backup_observation_confirms_only_after_verified_publication_and_c
         assert observed["status"] == record["status"] == "confirmed"
         assert observed["message_id"] == 77
         assert service._last_success_at == observed["confirmed_at"]
-        assert not Path(record["local_path"]).exists()
+        assert Path(record["local_path"]).is_file()
         service._observe_backup(
             dict(
                 record,
@@ -440,12 +465,12 @@ async def test_cancelled_snapshot_drains_export_before_removing_unadmitted_file(
     entered, release = threading.Event(), threading.Event()
 
     def held_export(*args):
-        result = write_snapshot(*args)
+        result = write_recovery_snapshot(*args)
         entered.set()
         assert release.wait(3), "The event loop could not release the export"
         return result
 
-    monkeypatch.setattr("tgdrive.recovery.mongo_backup.write_snapshot", held_export)
+    monkeypatch.setattr("tgdrive.recovery.mongo_backup.write_recovery_snapshot", held_export)
     task = asyncio.create_task(service.snapshot_now(store))
     try:
         assert await asyncio.to_thread(entered.wait, 2)
@@ -492,7 +517,7 @@ async def test_unknown_pending_snapshot_commit_preserves_ciphertext_for_retry(
     ciphertext = path.read_bytes()
     assert hashlib.sha256(ciphertext).hexdigest() == record["sha256"]
     export = Mock(side_effect=AssertionError("A pending snapshot must be reused"))
-    monkeypatch.setattr("tgdrive.recovery.mongo_backup.write_snapshot", export)
+    monkeypatch.setattr("tgdrive.recovery.mongo_backup.write_recovery_snapshot", export)
     with pytest.raises(RuntimeError, match="Publication paused"):
         await service.snapshot_now(store)
     export.assert_not_called()

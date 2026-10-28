@@ -74,6 +74,10 @@ class ApiBodyGuardMiddleware:
             from tgdrive.recovery.mongo_backup import MAX_EXPANDED
 
             body_limit = MAX_EXPANDED
+        elif path == "/api/v1/replica/import" and scope.get("method") == "POST":
+            from tgdrive.replication.replica_state import MAX_BUNDLE
+
+            body_limit = MAX_BUNDLE
         elif (
             path == "/api/v1/transfers/history/tasks" and scope.get("method") == "POST"
         ):

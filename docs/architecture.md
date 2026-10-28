@@ -562,13 +562,26 @@ and storage failures do not block playback. See the
 
 ## Database safety copies and security
 
-Background backups read consistent durable collections, compress/encrypt with
-AES-256-GCM, journal the encrypted source identity, and verify received ciphertext
-before confirmation. Restore requires the matching key and an empty or untouched
-automatically initialized database; it revokes browser sessions. Archives omit
-original Telegram media and staged payloads. See [recovery](operations.md#encrypted-telegram-backups),
-[independent channel protection](backup-recovery.md) and
-[security](reference.md#security-and-privacy).
+New backups use one compressed AES-256-GCM `tgdrive-backup.tgdb` recovery file.
+It contains one consistent MongoDB snapshot and source/backup message mappings;
+the portable catalog is derived from that captured snapshot, not a later live
+read. Standalone hourly backups record only main-channel locations. Independent
+protection adds verified backup locations to the same file and suppresses the
+separate standalone backups. One recovery key unlocks new files independently
+of the website password; older-format readers retain their original keys.
+
+Browser and Telegram user-account sessions are omitted. Recovery imports safe
+durable records and saved settings, rebases catalog locations to verified media,
+and turns unfinished jobs into canceled history. Source-channel mutation
+receipts, pending deletions/preparations and unsafe work never replay into the
+replacement channel. Explicit activation uses the existing fenced comparison
+before committing the recovered state, and requires a service restart. The
+surviving channel's documents remain intact.
+
+Recovery bytes are verified before confirmation; media and recovered mappings
+must verify before activation. V2 files are bounded to 64 MiB encrypted and
+1 GiB expanded. They omit original Telegram media and staged payloads. See
+[recovery steps](backup-recovery.md) and [security](reference.md#security-and-privacy).
 
 ### Independent backup pacing and verification
 
@@ -578,15 +591,18 @@ upload tuning. For setup, status meanings and recovery actions, use the
 
 | Policy | Behavior |
 | --- | --- |
+| Changed checkpoints | Coalesce new revisions/settings into bounded 60-second windows after confirmation. Initial setup, explicit backup/sync and destructive-operation barriers do not wait for this window. Copy/verification time and provider cooldowns still apply. |
 | Operation pacing | One-second gap between explicit Telegram metadata reads, sends and verification calls. Each FloodWait doubles it, up to four seconds. A confirmed checkpoint resets it to one second. |
 | Retry verification | Recheck confirmed destination documents in batches of at most 32 parts, with a fresh channel inspection and grouped message read per batch. |
-| Idle checks | Recheck healthy unchanged checkpoints after one hour. Catalog, file or recovery-setting changes do not wait for that interval. |
+| Idle checks | Recheck healthy unchanged checkpoints after one hour. Changed data follows the shorter checkpoint batching policy. |
 
 Replacement connections share the current pacer. A process restart resets its gap
 to one second, but persisted Telegram retry deadlines must still expire before
 work resumes. Telegram can require longer waits than the configured gaps.
-Recovery bundles are sent separately and downloaded for checksum verification;
-their internal chunk transfers retain Telethon's normal behavior.
+Each new point sends one recovery file to each channel and downloads it for
+checksum verification; its internal chunk transfers retain Telethon's normal
+behavior. Existing old-format pending jobs finish with their original file/key
+identities rather than replacing bytes under a saved send identity.
 
 Missing, wrong-channel, protected or changed-size documents block confirmation.
 Only input peer references are cached within a connection; channel privacy,
@@ -601,7 +617,7 @@ Authorization-probe failures preserve Telegram's wait without starting another
 sign-in. Idle health-check waits retain the confirmed restore point and are
 identified separately in activity messages.
 
-Explicit **Sync** requests an earlier check but cannot bypass a saved deadline.
+Explicit **Sync now** requests an earlier check but cannot bypass a saved deadline.
 A failed check's saved retry time governs the next attempt. Destructive Telegram
 operations need a fresh checkpoint check; the hourly idle check does not satisfy
 that barrier. Browser status refresh remains read-only.
@@ -610,6 +626,11 @@ that barrier. Browser status refresh remains read-only.
 deadline is still saved and **Resume** cannot bypass it. Destructive Telegram
 operations recheck backup controls after waiting and after checkpoint
 verification, so a concurrent pause keeps them blocked.
+
+Confirmed local recovery files remain available for download. Local staging
+enforces the free-space reserve; older remote recovery points are not purged.
+See the [operator guide](backup-recovery.md#interruptions-and-reports) for retry,
+credential replacement and key custody.
 
 ### Shared-link identity and re-copying
 

@@ -14,6 +14,8 @@ from contextlib import suppress
 from datetime import UTC, datetime
 from functools import partial
 
+from bson import json_util
+
 from pydantic import SecretStr
 
 from tgdrive.replication.replica_state import (
@@ -31,6 +33,7 @@ from tgdrive.settings.managed_settings import SettingsProblem
 from tgdrive.storage.store import DriveStore
 
 HEALTH_CHECK_INTERVAL_SECONDS = 60 * 60
+BACKUP_BATCH_SECONDS = 60
 logger = logging.getLogger(__name__)
 
 
@@ -96,6 +99,7 @@ class ChannelReplica:
             "restore_point": self.journal.get("restore_point"),
         }
         result["pending_revision"] = max(0, revision - result["protected_revision"])
+        result["backup_file_available"] = self.backup_file() is not None
         candidate = self.journal.get("candidate")
         if candidate:
             catalog = candidate["catalog"]
@@ -106,6 +110,8 @@ class ChannelReplica:
                 "files": len(files),
                 "bytes": sum(f["size"] for f in files),
                 "complete": bool(candidate.get("complete")),
+                "has_database": "database" in candidate,
+                "source_is_backup": bool(candidate.get("source_is_backup")),
             }
         return result
 
@@ -122,9 +128,44 @@ class ChannelReplica:
     def key(self):
         value = self.journal.get("key")
         if value is None:
-            value = secrets.token_hex(32)
+            configured = self.settings.mongodb_backup_key
+            value = configured.get_secret_value() if configured else secrets.token_hex(32)
             self.journal.set("key", value)
         return value
+
+    def backup_file(self):
+        """Return only a confirmed local file; status never initiates a download."""
+        import re
+
+        choices = []
+        saved = self.journal.get("backup_file")
+        if saved and re.fullmatch(r"[a-f0-9]{64}", saved.get("digest", "")):
+            path = self.directory / "replica-bundles" / (saved["digest"] + ".tgdb")
+            if path.is_file():
+                choices.append((saved.get("created_at", "1970-01-01T00:00:00+00:00"), path))
+        service = getattr(self.runtime, "backup", None)
+        latest = getattr(service, "latest_history", lambda: [])()
+        if latest and latest[0].get("status") == "confirmed":
+            identity = latest[0].get("id", "")
+            if re.fullmatch(r"[A-Za-z0-9_-]{1,128}", identity):
+                path = self.settings.resolved_cache_dir / "mongo-backups" / (identity + ".tgdb")
+                if path.is_file():
+                    choices.append((latest[0]["created_at"], path))
+        return max(choices, key=lambda choice: datetime.fromisoformat(choice[0]))[1] if choices else None
+
+    def recovery_file(self):
+        path = self.backup_file()
+        if path is None:
+            raise SettingsProblem("Create and confirm a backup before downloading its recovery file.", status=404)
+        content = read_private(path)
+        saved = self.journal.get("backup_file", {})
+        if path.parent == self.directory / "replica-bundles":
+            expected = saved.get("sha256")
+        else:
+            expected = self.runtime.backup.latest_history()[0].get("sha256")
+        if not expected or hashlib.sha256(content).hexdigest() != expected:
+            raise SettingsProblem("The saved recovery file changed. Create a fresh confirmed backup before downloading.", status=409)
+        return content
 
     async def configure(self, channel, token, independent):
         if not independent or channel == self.settings.storage_channel or channel >= 0:
@@ -276,7 +317,15 @@ class ChannelReplica:
                         if recovery:
                             await self._recover_copy(recovery)
                         elif getattr(self.runtime, "store", None) is not None:
-                            await self._sync(config)
+                            # Coalesce busy upload queues without starving protection.
+                            changed = state.get("protected_revision") != self.runtime.store.revision
+                            if (
+                                self.journal.get("job") is not None
+                                or state.get("error")
+                                or not changed
+                                or time.time() >= state.get("checked_at", 0) + BACKUP_BATCH_SECONDS
+                            ):
+                                await self._sync(config)
                     except asyncio.CancelledError:
                         raise
                     except Exception as error:
@@ -382,6 +431,18 @@ class ChannelReplica:
 
         return collect_credentials(self.settings, self.runtime)
 
+    def _capture(self):
+        from tgdrive.recovery.recovery_file import capture_database, snapshot_catalog
+        from tgdrive.replication.replica_settings import credentials_from_snapshot
+
+        database = capture_database(self.runtime.mongo)
+        credentials = credentials_from_snapshot(self.settings, database)
+        return {
+            "catalog": snapshot_catalog(database),
+            "credentials": credentials,
+            "database": database,
+        }
+
     async def _copy_catalog(self, transport, catalog, destination):
         from tgdrive.replication.replica_transport import MAX_VERIFY_BATCH
 
@@ -477,32 +538,39 @@ class ChannelReplica:
         key,
         *,
         pin_source=False,
+        database=None,
+        recovery_token=None,
     ):
+        identity = [
+            catalog,
+            replica,
+            credentials,
+            hashlib.sha256(key.encode()).hexdigest(),
+        ]
+        if database is not None:
+            identity.extend([database, recovery_token])
         digest = hashlib.sha256(
-            json.dumps(
-                [
-                    catalog,
-                    replica,
-                    credentials,
-                    hashlib.sha256(key.encode()).hexdigest(),
-                ],
+            json_util.dumps(
+                identity,
                 sort_keys=True,
             ).encode()
         ).hexdigest()
         path = self.directory / "replica-bundles" / (digest + ".tgdb")
         if not path.exists():
-            content = encode_bundle(
-                {
-                    "format": "tgdrive-replica",
-                    "version": 1,
-                    "complete": True,
-                    "created_at": now(),
-                    "catalog": catalog,
-                    "replica_catalog": replica,
-                    "credentials": credentials,
-                },
-                key,
-            )
+            payload = {
+                "format": "tgdrive-replica",
+                "version": 1,
+                "complete": True,
+                "created_at": now(),
+                "catalog": catalog,
+                "replica_catalog": replica,
+                "credentials": credentials,
+            }
+            if database is not None:
+                payload["database"] = database
+                if recovery_token:
+                    payload["recovery_token"] = recovery_token
+            content = encode_bundle(payload, key)
             if (
                 shutil.disk_usage(self.directory).free
                 < len(content) + self.settings.min_free_bytes
@@ -518,6 +586,7 @@ class ChannelReplica:
             staged["catalog"] != catalog
             or staged["replica_catalog"] != replica
             or staged["credentials"] != credentials
+            or staged.get("database") != database
         ):
             raise ValueError(
                 "The staged recovery bundle does not match this restore point"
@@ -533,7 +602,7 @@ class ChannelReplica:
                     channel,
                     path,
                     random_id=random_id,
-                    caption="TGDrive independent recovery bundle v1",
+                    caption="TGDrive encrypted recovery backup" if database is not None else "TGDrive independent recovery bundle v1",
                     pin=pin,
                 )
                 self.journal.confirm(identity, message)
@@ -550,17 +619,19 @@ class ChannelReplica:
                     "revision": catalog["revision"],
                     "created_at": now(),
                     "bundle_size": path.stat().st_size,
+                    "format_version": staged["version"],
                 },
                 "credentials_digest": hashlib.sha256(
                     json.dumps(credentials, sort_keys=True).encode()
                 ).hexdigest(),
                 "restore_point_key": key,
                 "restore_point_mongodb_key": credentials.get("mongodb_backup_key"),
+                "backup_file": {"digest": digest, "key": key, "sha256": ciphertext_digest, "created_at": now()} if database is not None else None,
             }
         )
         return ids
 
-    async def _sync(self, config, *, force_check=False):
+    async def _sync(self, config, *, force_check=False, force_snapshot=False):
         store = self.runtime.store
         state = self.journal.get("status", {})
         error = state.get("error") or {}
@@ -583,6 +654,7 @@ class ChannelReplica:
             same_credentials
             and state.get("protected_revision") == store.revision
             and bool(point.get("backup_message_id"))
+            and not force_snapshot
         )
         if (
             check_only
@@ -609,7 +681,8 @@ class ChannelReplica:
                 status=409,
             )
         if job is None and not check_only:
-            catalog = await asyncio.to_thread(store.export)
+            job = await asyncio.to_thread(self._capture)
+            catalog = job["catalog"]
             if self.journal.get("status", {}).get("phase") in {"paused", "disabled"}:
                 return
             if catalog.get("storage_channel_id") not in {
@@ -619,7 +692,6 @@ class ChannelReplica:
                 raise ValueError("Catalog and source channel do not match")
             catalog["storage_channel_id"] = self.settings.storage_channel
             validate_catalog(catalog)
-            job = {"catalog": catalog, "credentials": current_credentials}
             self.journal.set("job", job)
         if check_only:
             # The recorded checkpoint is still confirmed while its health is
@@ -661,19 +733,18 @@ class ChannelReplica:
                 return
             if self.journal.get("status", {}).get("phase") in {"paused", "disabled"}:
                 return
-            from tgdrive.replication.replica_mongo import mirror_mongodb
+            archive = None
+            if "database" not in job:
+                # Finish already journaled v1 work with its original format and key.
+                from tgdrive.replication.replica_mongo import mirror_mongodb
 
-            self.update(current_file="Preparing the database safety copy")
-            archive = await mirror_mongodb(
-                self,
-                transport,
-                source_channel=self.settings.storage_channel,
-                destination_channel=config["channel"],
-                revision=catalog["revision"],
-                settings_fingerprint=hashlib.sha256(
-                    json.dumps(job["credentials"], sort_keys=True).encode()
-                ).hexdigest(),
-            )
+                archive = await mirror_mongodb(
+                    self, transport, source_channel=self.settings.storage_channel,
+                    destination_channel=config["channel"], revision=catalog["revision"],
+                    settings_fingerprint=hashlib.sha256(
+                        json.dumps(job["credentials"], sort_keys=True).encode()
+                    ).hexdigest(),
+                )
             if self.journal.get("status", {}).get("phase") in {"paused", "disabled"}:
                 return
             credentials = dict(job["credentials"])
@@ -688,6 +759,8 @@ class ChannelReplica:
                 replica,
                 credentials,
                 self.key(),
+                database=job.get("database"),
+                recovery_token=config["token"],
             )
             self.journal.set(
                 "credentials_digest",
@@ -760,7 +833,7 @@ class ChannelReplica:
                     (
                         bundle[name]
                         for name in ("replica_catalog", "catalog")
-                        if bundle[name].get("storage_channel_id") == source
+                        if bundle.get(name) is not None and bundle[name].get("storage_channel_id") == source
                     ),
                     None,
                 )
@@ -793,6 +866,11 @@ class ChannelReplica:
                     },
                 },
             )
+            if "database" in bundle:
+                candidate = self.journal.get("candidate")
+                candidate["database"] = bundle["database"]
+                candidate["source_is_backup"] = source != bundle["catalog"]["storage_channel_id"]
+                self.journal.set("candidate", candidate)
             self.update(phase="paused", error=None)
             self.report(
                 "info",
@@ -803,6 +881,97 @@ class ChannelReplica:
             path.unlink(missing_ok=True)
             await transport.close()
         return self.status()
+
+    def _recovery_transport(self, token, credentials=None):
+        updates = {"bot_tokens_csv": SecretStr("")}
+        if credentials:
+            updates.update(api_id=credentials["api_id"], api_hash=SecretStr(credentials["api_hash"]))
+        return self.factory(self.settings.model_copy(update=updates), token)
+
+    async def inspect_file(self, path, key, source=None, token=None):
+        """Authenticate a saved file before probing its recorded channels."""
+        from tgdrive.replication.replica_transport import ReplicaTransportError
+
+        retry_at = (self.journal.get("status", {}).get("error") or {}).get("retry_at", 0)
+        if retry_at > time.time():
+            raise SettingsProblem("Telegram is waiting before recovery can retry. Wait for the displayed retry time.", status=409)
+        bundle = await asyncio.to_thread(lambda: decode_bundle(read_private(path), key))
+        catalogs = [bundle["catalog"]]
+        if bundle.get("replica_catalog") is not None:
+            catalogs.append(bundle["replica_catalog"])
+        if source is not None:
+            catalogs = [catalog for catalog in catalogs if catalog["storage_channel_id"] == source]
+            if not catalogs:
+                raise SettingsProblem("The selected channel is not recorded in this recovery file.")
+        current = getattr(self.runtime, "store", None)
+        if current is not None and current.drive_id != bundle["catalog"]["drive_id"]:
+            if current.export()["root"]["children"]:
+                raise SettingsProblem("This file belongs to another drive. Restore into an empty installation.", status=409)
+            from tgdrive.recovery.mongo_backup import check_restore_destination
+
+            await asyncio.to_thread(check_restore_destination, self.runtime.mongo, allow_pristine=True)
+        tokens = [token] if token else list(dict.fromkeys(
+            [bundle.get("recovery_token"), *bundle["credentials"]["bot_tokens"]]
+        ))
+        selected = None
+        for catalog in catalogs:
+            for access in tokens:
+                if not access:
+                    continue
+                transport = self._recovery_transport(access, bundle["credentials"])
+                try:
+                    await transport.start()
+                    await transport.inspect(catalog["storage_channel_id"])
+                    selected = catalog, access
+                except ReplicaTransportError as error:
+                    if getattr(error, "retry_after", None) or getattr(error, "code", None) == "REPLICA_FLOOD_WAIT":
+                        raise self._record_failure(error) from None
+                finally:
+                    await transport.close()
+                if selected:
+                    break
+            if selected:
+                break
+        if selected is None:
+            raise SettingsProblem(
+                "No recorded channel could be accessed. Supply a surviving channel and a working bot token with administrator access.",
+                code="RECOVERY_ACCESS_REQUIRED",
+            )
+        catalog, access = selected
+        candidate = {
+            "catalog": catalog, "credentials": bundle["credentials"],
+            "token": access, "key": key.strip(), "complete": False,
+            "source_is_backup": catalog["storage_channel_id"] != bundle["catalog"]["storage_channel_id"],
+            "inspection": {"source_channel": catalog["storage_channel_id"], "revision": catalog["revision"], "created_at": now()},
+        }
+        if "database" in bundle:
+            candidate["database"] = bundle["database"]
+        backup = bundle.get("replica_catalog")
+        backup_token = bundle.get("recovery_token")
+        if backup is not None and backup_token and backup["storage_channel_id"] != catalog["storage_channel_id"]:
+            transport = self._recovery_transport(backup_token, bundle["credentials"])
+            try:
+                await transport.start()
+                await transport.inspect(backup["storage_channel_id"])
+                candidate["backup_config"] = {"channel": backup["storage_channel_id"], "token": backup_token}
+                self._remember_mapping(catalog, backup)
+            except ReplicaTransportError as error:
+                if error.retry_after:
+                    raise self._record_failure(error) from None
+            finally:
+                await transport.close()
+        self.journal.set("candidate", candidate)
+        self.update(phase="paused", error=None)
+        self.report("info", "Recovery file opened. Review the restore destination; live data is unchanged.")
+        return self.status()
+
+    def _remember_mapping(self, source, destination):
+        originals = {node["id"]: node for node in files_in(source)}
+        for node in files_in(destination):
+            for old, new in zip(parts_in(originals[node["id"]]), parts_in(node), strict=True):
+                identity = f"{source['drive_id']}:{source['storage_channel_id']}:{destination['storage_channel_id']}:{old['message_id']}:{old['size']}"
+                self.journal.intent(identity, old["size"])
+                self.journal.confirm(identity, new["message_id"])
 
     async def recover_to(
         self, target, target_token, confirmation, *, catalog_only=False
@@ -820,14 +989,34 @@ class ChannelReplica:
             raise SettingsProblem(
                 "Database-only recovery must use the inspected surviving channel."
             )
-        if (
-            not target_token
-            or target_token.split(":")[0] == candidate["token"].split(":")[0]
+        if catalog_only and not target_token:
+            from tgdrive.replication.replica_transport import ReplicaTransportError
+
+            for saved_token in dict.fromkeys([*candidate["credentials"]["bot_tokens"], candidate["token"]]):
+                backup = candidate.get("backup_config")
+                if backup and saved_token.split(":")[0] == backup["token"].split(":")[0]:
+                    continue
+                probe = self._recovery_transport(saved_token, candidate["credentials"])
+                try:
+                    await probe.start()
+                    await probe.inspect(source)
+                    target_token = saved_token
+                    break
+                except ReplicaTransportError as error:
+                    if error.retry_after:
+                        raise self._record_failure(error) from None
+                finally:
+                    await probe.close()
+        if not target_token or (
+            not catalog_only and target_token.split(":")[0] == candidate["token"].split(":")[0]
         ):
             raise SettingsProblem("Supply a new main bot distinct from the backup bot.")
+        saved_backup = candidate.get("backup_config")
+        if saved_backup and saved_backup["token"].split(":")[0] == target_token.split(":")[0]:
+            raise SettingsProblem("Enter a separate main bot token to keep the surviving backup independent.")
         registry = getattr(self.runtime, "registry", None)
         if registry and any(
-            r.committed.status in {"queued", "running"} for r in registry.list()
+            r.committed.status in {"queued", "running", "cancelling"} for r in registry.list()
         ):
             raise SettingsProblem(
                 "Cancel or finish all transfers before recovery. Their existing "
@@ -855,7 +1044,7 @@ class ChannelReplica:
             return
         candidate = self.journal.get("candidate")
         source = candidate["catalog"]["storage_channel_id"]
-        transport = self.factory(self.settings, candidate["token"])
+        transport = self._recovery_transport(candidate["token"], candidate["credentials"])
         try:
             await transport.start()
             await transport.inspect(source)
@@ -883,10 +1072,7 @@ class ChannelReplica:
                     )
                 self.journal.set("recovery_destination", reservation)
             # Separately authenticate the replacement main bot before copying.
-            probe_settings = self.settings.model_copy(
-                update={"bot_tokens_csv": SecretStr("")}
-            )
-            probe = self.factory(probe_settings, recovery["target_token"])
+            probe = self._recovery_transport(recovery["target_token"], candidate["credentials"])
             try:
                 await probe.start()
                 await probe.inspect(recovery["target"])
@@ -939,6 +1125,9 @@ class ChannelReplica:
             credentials = dict(
                 candidate["credentials"], bot_tokens=[recovery["target_token"]]
             )
+            database = candidate.get("database")
+            if database is not None:
+                credentials["mongodb_backup_key"] = candidate["key"]
             archive = credentials.get("mongodb_archive")
             if archive and not recovery.get("catalog_only"):
                 source_id = (
@@ -981,7 +1170,19 @@ class ChannelReplica:
                 or self.journal.get("recovery") is None
             ):
                 return
-            if not recovery.get("catalog_only"):
+            if database is not None and not recovery.get("catalog_only"):
+                from tgdrive.recovery.recovery_file import rebase_database
+
+                rebased = await asyncio.to_thread(rebase_database, database, restored)
+                await self._publish(
+                    transport, recovery["target"], source, restored, candidate["catalog"],
+                    credentials, candidate["key"], database=rebased,
+                    recovery_token=candidate["token"], pin_source=True,
+                )
+                # Reuse the surviving backup's verified documents after activation.
+                self._remember_mapping(restored, candidate["catalog"])
+                candidate["backup_config"] = {"channel": source, "token": candidate["token"]}
+            elif not recovery.get("catalog_only"):
                 await self._publish(
                     transport,
                     source,
@@ -996,7 +1197,8 @@ class ChannelReplica:
                 or self.journal.get("recovery") is None
             ):
                 return
-            await self._publish_primary_catalog(transport, restored)
+            if database is None:
+                await self._publish_primary_catalog(transport, restored)
             if (
                 self.journal.get("status", {}).get("phase") in {"paused", "disabled"}
                 or self.journal.get("recovery") is None
@@ -1016,6 +1218,8 @@ class ChannelReplica:
                     }
                 )
             candidate.update(catalog=restored, credentials=credentials, complete=True)
+            if candidate.get("backup_config", {}).get("channel") == restored["storage_channel_id"]:
+                candidate.pop("backup_config")
             self.journal.set("candidate", candidate)
             self.update(phase="ready_to_activate", current_file="", error=None)
             self.report(
@@ -1045,6 +1249,23 @@ class ChannelReplica:
         return self.status()
 
     def recovery_kit(self):
+        path = self.backup_file()
+        if path is not None:
+            saved = self.journal.get("backup_file", {})
+            if path.parent == self.directory / "replica-bundles":
+                key = saved["key"]
+            else:
+                latest = self.runtime.backup.latest_history()[0]
+                key = self.key() if latest.get("format") == "tgdrive-backup-v2" else (
+                    self.settings.mongodb_backup_key.get_secret_value()
+                    if self.settings.mongodb_backup_key else None
+                )
+                if key is None or latest.get("key_sha256") != hashlib.sha256(bytes.fromhex(key)).hexdigest():
+                    raise SettingsProblem("The saved file uses an older recovery key. Preserve its matching key or create a new confirmed backup.", status=409)
+            return {
+                "format": "tgdrive-recovery-key-v2", "key": key,
+                "instructions": "Keep this recovery key outside the server, separately from your recovery file. Your login password does not replace it.",
+            }
         candidate = self.journal.get("candidate")
         if candidate and not candidate.get("complete"):
             key, point = candidate["key"], candidate.get("inspection")
@@ -1093,6 +1314,11 @@ class ChannelReplica:
                     bundle["catalog"] == candidate["catalog"]
                     and bundle["replica_catalog"] == restored
                 )
+                if "database" in candidate:
+                    matched = matched or (
+                        bundle["catalog"] == restored
+                        and bundle["replica_catalog"] == candidate["catalog"]
+                    )
             if not matched:
                 raise ValueError(
                     "The replacement channel pin changed outside this recovery. "

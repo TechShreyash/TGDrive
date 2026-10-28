@@ -27,7 +27,7 @@ through links you can set to expire or revoke.
 - **Share files and folders with a link.** Give others read-only access, choose an expiry and revoke access when needed. [Embed a file viewer or folder browser](docs/usage.md#embed-a-file-or-folder-in-a-website) in your website using the same link access.
 - **Prepare files for smoother access.** Preload before watching or sharing. While file data stays cached, repeat visits and shared-link viewers can reuse it without downloading it from Telegram again.
 - **Follow transfers and server activity.** Track progress, search transfer history, and monitor server resources, traffic, Telegram activity and cache use.
-- **Backups and recovery.** Save encrypted backups of your file list, folders and settings, and optionally copy completed files to a separate Telegram channel.
+- **Backups and recovery.** Keep one encrypted recovery file and its separate key. Restore saved database data, or rebuild a lost channel from an optional independent copy.
 
 [Explore features and workflows in the user guide →](docs/usage.md)
 

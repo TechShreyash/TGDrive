@@ -210,7 +210,31 @@ def register_routes(
             raise HTTPException(503, "Drive backup is not available yet")
         store = get_store(request)
         try:
-            await service.snapshot_now(store)
+            replica = getattr(runtime, "replica", None)
+            if replica is not None:
+                async with replica.control, replica._operation:
+                    config = replica.journal.get("config", {})
+                    if replica.blocked:
+                        raise HTTPException(409, "Finish channel recovery before creating a new backup")
+                    if config.get("enabled"):
+                        if replica.journal.get("status", {}).get("phase") == "paused":
+                            raise HTTPException(409, "Resume the independent backup before creating a new restore point")
+                        required = store.revision
+                        for _ in range(2):
+                            try:
+                                await replica._sync(config, force_snapshot=True)
+                            except Exception as error:
+                                raise replica._record_failure(error) from None
+                            if replica.status()["protected_revision"] >= required:
+                                break
+                        else:
+                            raise HTTPException(503, "The requested backup revision is still pending")
+                    else:
+                        await service.snapshot_now(store)
+            else:
+                await service.snapshot_now(store)
+        except HTTPException:
+            raise
         except RecoveryConflict:
             raise
         except Exception:

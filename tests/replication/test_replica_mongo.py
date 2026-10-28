@@ -26,7 +26,8 @@ class Snapshot:
         self.rows = []
         self.configured, self.store, self.remote = configured, store, remote
 
-    async def snapshot_now(self, store):
+    async def snapshot_now(self, store, *, legacy=False):
+        assert legacy
         self.count += 1
         self.remote.messages[self.configured.storage_channel, 900] = (
             b"encrypted full MongoDB database"
@@ -301,7 +302,7 @@ async def test_snapshot_database_errors_reach_shared_safe_failure_handling(
                 destination_channel=BACKUP,
             )
         assert raised.value is error
-        replica.runtime.backup.snapshot_now.assert_awaited_once_with(store)
+        replica.runtime.backup.snapshot_now.assert_awaited_once_with(store, legacy=True)
         failure = replica._record_failure(raised.value)
         assert failure.retryable is retryable
         assert replica.status()["phase"] == ("waiting" if retryable else "error")

@@ -97,6 +97,27 @@ fixture or its `/__test__` endpoints.
 Recorded evidence describes a tested snapshot, not the state of a later checkout.
 
 <details>
+<summary>Unified recovery files — 2026-10-28</summary>
+
+The focused Python run covered `tests/replication`, `tests/recovery`,
+`tests/storage/test_mongodb_unit.py` and `tests/core/test_runtime.py`. It provided
+407 passing cases initially; after correcting failures, the 21 affected and new
+regression cases passed. Two final cases passed for malformed encrypted content
+and the standalone writer's free-space reserve. Passing cases were reused rather
+than rerunning the complete group after each change.
+
+Coverage includes consistent database/channel snapshots, legacy retries,
+replacement credentials, main-channel rebuilding, safe activation, one-checkpoint
+manual backups and matching file/key exports. The frontend typecheck and all 28
+backup UI unit cases passed.
+
+These are local checks with synthetic Telegram/database fixtures. Five opt-in
+live MongoDB activation cases were skipped. No live Telegram recovery, browser
+validation, production build, deployment or full repository test run was made.
+
+</details>
+
+<details>
 <summary>Independent backup database retry safety — 2026-10-28</summary>
 
 On `a452dae`, the offline `tests/replication` and `tests/recovery` run passed

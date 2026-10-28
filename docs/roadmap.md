@@ -15,7 +15,7 @@ illustrative and do not certify the validation still listed below.
 | File/folder uploads, multipart storage, Trash and history | [User guide](usage.md) |
 | Previews, readers and scoped sharing | [Readers](reading.md) · [Sharing](usage.md#share-and-revoke) |
 | Monitoring and multiple Telegram accounts | [Performance](performance.md) · [Configuration](configuration.md) |
-| MongoDB persistence, encrypted database backups and optional channel protection | [Recovery](operations.md) · [Channel protection](backup-recovery.md) |
+| MongoDB persistence, one encrypted recovery file and optional channel protection | [Backup & recovery](backup-recovery.md) |
 
 Available features still have [configured limits](configuration.md) and are not
 certified for every device or network.
@@ -27,6 +27,7 @@ archive if offering custom source assets). Publication is a separate maintainer
 action. Remaining live validation:
 
 - [ ] Fresh laptop and hosted installs, persistent volumes, stop/start and recovery.
+- [ ] Live unified-file recovery: lost MongoDB, replacement main channel, revoked bot access, legacy backups and interrupted activation.
 - [ ] Coolify DNS/TLS, trusted forwarding and isolation of the direct app port.
 - [ ] Prolonged multi-account outages and interrupted Telegram sends.
 - [ ] Actual Premium speed, broader devices/codecs, ARM and hosting platforms.

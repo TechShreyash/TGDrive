@@ -143,7 +143,7 @@ preserve its private configuration so you can reconnect safely.
 
 ### Save these somewhere separate
 
-Keep database access/name, owner login, private deployment configuration, Telegram access and the matching [backup keys and confirmed archives](backup-recovery.md). Back up both volumes if unfinished work must survive losing the machine. Keys decrypt their matching archives; they do not contain file bytes.
+Keep database access/name, owner login, private deployment configuration, Telegram access and your [confirmed recovery file and matching key](backup-recovery.md). Back up both volumes if unfinished work must survive losing the machine. The recovery file contains database data and channel locations, not original media bytes.
 
 ## When a hosting plan expires
 
@@ -196,11 +196,19 @@ For hosting, use [Coolify](setup.md#coolify) or [server Compose](setup.md#docker
 
 ## Encrypted Telegram backups
 
-Use [Backup & recovery](backup-recovery.md) to set up independent file copies, save matching keys and rehearse recovery. Live MongoDB and confirmed Telegram backups are separate.
+Save one encrypted recovery file and its separate key through
+**Storage & Backups → Backups & recovery**. The same file restores lost database
+data or rebuilds a lost main channel from an independent surviving backup.
+Follow [Backup & recovery](backup-recovery.md) for setup and recovery steps.
+Live MongoDB and confirmed Telegram backups are separate.
 
 ## Emergency database restore
 
-[Restore a lost database from Telegram](backup-recovery.md#restore-a-lost-database-from-telegram) requires a confirmed archive, matching key and empty destination database. A normal reinstall reopens the existing database instead.
+[Restore a lost database](backup-recovery.md#restore-a-lost-database-from-telegram)
+using the confirmed recovery file, its matching key, a surviving recorded channel
+and a reachable empty replacement database. A normal reinstall reopens the
+existing database instead. Keep the surviving channel intact while recovery is
+verified, and switch only through explicit activation.
 
 ## Connection changes
 
@@ -308,6 +316,11 @@ avoid restoring old credentials and signing secrets together.
 If you also lost access to the server, recover the hosting/deployment account
 first. TGDrive cannot reset a Telegram, MongoDB or hosting provider account.
 See [password and session storage](reference.md#owner-authentication).
+
+Login password resets do not replace the independent recovery key or unlock an
+encrypted backup. Keep it separately with your
+[recovery kit](backup-recovery.md#keep-the-mongodb-recovery-kit-outside-the-server).
+Older files still require their original key after deliberate key rotation.
 
 ## Upgrade and rollback
 

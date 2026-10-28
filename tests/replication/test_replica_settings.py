@@ -26,7 +26,7 @@ def mongo_backend(tmp_path, monkeypatch):
     return register_test_backend(monkeypatch, settings(tmp_path))
 
 
-def test_settings_snapshot_keeps_managed_labels_sessions_and_safe_preferences(
+def test_settings_snapshot_keeps_labels_and_preferences_without_account_sessions(
     tmp_path, mongo_backend
 ):
     configured = settings(tmp_path)
@@ -52,10 +52,8 @@ def test_settings_snapshot_keeps_managed_labels_sessions_and_safe_preferences(
     credentials = collect_credentials(configured, SimpleNamespace(mongo=mongo_backend))
     validate_recovery_settings(credentials)
     assert credentials["managed_document"]["clients"][0]["label"] == "Primary storage"
-    assert (
-        credentials["managed_document"]["clients"][1]["credential"]
-        == "syntheticPremiumSession"
-    )
+    assert all(client["kind"] == "bot" for client in credentials["managed_document"]["clients"])
+    assert "syntheticPremiumSession" not in str(credentials)
     assert (
         credentials["preferences"]["performance-preferences.json"]["timezone"] == "UTC"
     )

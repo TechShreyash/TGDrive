@@ -376,6 +376,20 @@ def test_invalid_archive_preserves_running_drive(owner_api, monkeypatch):
     assert backend.db.catalog.rows[0]["drive_id"] == "new-drive"
 
 
+def test_unified_recovery_file_requires_verified_recovery_flow(owner_api):
+    from tgdrive.recovery.recovery_file import MAGIC
+
+    client, app, runtime, backend = owner_api
+    sign_in(client, app)
+    response = client.post(api.RESTORE_PATH, content=MAGIC + b"ciphertext", headers=headers())
+    assert response.status_code == 422
+    assert response.json()["code"] == "RECOVERY_FILE_REQUIRES_UNIFIED_RESTORE"
+    assert "Restore backup" in response.json()["detail"]
+    api.decode_snapshot.assert_not_called()
+    runtime.stop.assert_not_awaited()
+    assert backend.db.catalog.rows[0]["drive_id"] == "new-drive"
+
+
 def test_owner_restore_imports_archive_and_requires_restart(owner_api):
     client, app, runtime, backend = owner_api
     token = sign_in(client, app)

@@ -286,8 +286,8 @@ internally. An existing compatible Argon2id hash may instead be supplied in
 | --- | --- | --- |
 | `MONGODB_URI` | Required | Secret URI beginning mongodb:// or mongodb+srv://. Missing/invalid configuration or failed database access rejects startup; no local database fallback. |
 | `MONGODB_DATABASE` | tgdrive | 1–63 ASCII letters/digits, underscores or hyphens; dedicated to one drive. |
-| `MONGODB_BACKUP_KEY` | None | Secret 64-hex-character AES-256 key. Keep a separate recovery copy. |
-| `MONGODB_BACKUP_SECONDS` | 3600 | Integer 60–604800 seconds between successful automatic safety copies. |
+| `MONGODB_BACKUP_KEY` | None | Initial secret 64-hex-character AES-256 recovery key, independent of the login password. Unified files retain an existing journal key; preserve matching keys for older generations. |
+| `MONGODB_BACKUP_SECONDS` | 3600 | Integer 60–604800 seconds between successful automatic standalone safety copies. Separate standalone publication pauses while independent channel protection is enabled. |
 | `DATA_DIR` | data | Persistent generated keys, Telegram sessions, helper locks, recovery/activation state and media cache. MongoDB holds the live catalog and durable job/receipt records. |
 | `CACHE_DIR` | cache | Persistent unfinished upload payloads and encrypted temporary database backup files. Keep unfinished bytes. |
 | `LOG_LEVEL` | INFO | DEBUG, INFO, WARNING, ERROR or CRITICAL. |
@@ -302,6 +302,12 @@ Standard Compose enables `TGDRIVE_AUTO_SECRETS=true`. Missing
 drive and saved as mode 0600 in `DATA_DIR/deployment-secrets.json`. Explicit
 values and existing MongoDB bootstrap settings take precedence. Existing drives
 with missing keys fail rather than silently receiving replacement keys.
+
+Unified v2 backups retain the recovery key already recorded in the replica
+journal, including after independent protection is disabled. Changing the login
+password or this environment value does not re-encrypt existing files. Use
+**Save recovery key** for the key matching the downloadable recovery file;
+legacy MongoDB archives can still require their original separate key.
 
 The storage_channel_id binding is a nonzero signed 64-bit integer. Switching
 channels cannot silently reinterpret message IDs. Use a MongoDB replica set;
@@ -469,7 +475,7 @@ permanent third-party API compatibility.
 | `POST /api/logout` | Cookie if present | `{}` | `200 {"status":"ok"}`; revokes an active owner session and clears the cookie. Missing/invalid/expired/revoked cookies do not trigger a session database write. |
 | `GET /api/v1/session` | Public | None | `{"authenticated":true}` or false. |
 | `GET /api/v1/status` | Owner | None | Connection, capacity, committed revision, backend, latest locally observed encrypted snapshot record and client health. The backup observation reloads at startup and updates during publication; this polling endpoint does not query backup history. |
-| `POST /api/v1/backup` | Owner | `{}` | `{"recovery":{...}}` after an encrypted MongoDB safety copy is verified; `503` if not confirmed. |
+| `POST /api/v1/backup` | Owner | `{}` | Creates a confirmed unified recovery file; runs the independent checkpoint when enabled, otherwise a standalone main-channel snapshot. Returns recovery status; `503` if not confirmed. |
 | GET /api/v1/backup/recovery-key | Owner | None | Private no-store download of the backup decryption key. |
 | `POST /api/v1/backup/restore` | Owner, disabled in demo | Raw `.tgdb` bytes, `Content-Type: application/octet-stream`, `X-TGDrive-Recovery-Key: <64 hex characters>`, `X-TGDrive-Confirm: RESTORE` | Authenticates and restores a full archive into an empty or untouched automatically created drive; returns `restart_required: true`. |
 | `GET /health/live` | Public | None | `200 {"status":"ok"}` if HTTP can answer. |
@@ -487,7 +493,8 @@ With `DEMO_MODE=true`, restricted visitor requests that mutate `/api/v1/settings
 or its subroutes, `/api/v1/replica` or its subroutes, and `POST /api/v1/backup`
 return `403` with `code: "DEMO_MODE_READ_ONLY"`. This includes connection refresh
 and Premium login/cancellation. `GET /api/v1/backup/recovery-key` and
-`GET /api/v1/replica/key` return the same denial to prevent secret export.
+`GET /api/v1/replica/key` and `GET /api/v1/replica/file` return the same denial
+to prevent secret export.
 Status/settings reads and the secret-free replica report remain available under
 normal authentication. The status field `demo` identifies a synthetic test
 runtime; it is separate from the deployment's `demo_mode` flag. Authenticated
@@ -513,9 +520,10 @@ backup_key_configured and optional error/backup_error. Here protected means the
 catalog is committed in MongoDB. An independent safety-copy failure does not
 make an acknowledged catalog write uncommitted.
 
-POST /api/v1/backup explicitly takes a complete encrypted snapshot. Ordinary
-uploads do not call or wait for it. The recovery-key download is owner-only
-and absent from ordinary status/configuration.
+POST /api/v1/backup explicitly requests a complete encrypted recovery point,
+bypassing the independent worker's batching delay but respecting provider retry
+deadlines. Ordinary uploads do not call or wait for it. Recovery file/key
+downloads are owner-only and absent from ordinary status/configuration.
 
 Archive restore accepts at most 1 GiB of ciphertext and 1 GiB expanded data.
 It validates the archive before pausing work, then rechecks the destination
@@ -538,19 +546,22 @@ Client health distinguishes configured accounts from healthy started accounts.
 <details>
 <summary>Channel copy, recovery and activation endpoints</summary>
 
-This optional feature is configured by the owner through Storage & Backups rather
-than by placing bot tokens in URLs. See the [operator guide](backup-recovery.md#set-up-an-independent-backup-channel)
-for channel preparation, private permissions, key custody and recovery drills.
+The recovery-file routes also work without a second channel. Optional independent
+protection is configured through Storage & Backups; credentials are never put in
+URLs. See the [operator guide](backup-recovery.md) for the file/key workflow,
+channel preparation and recovery limits.
 
 | Route | Request | Result |
 | --- | --- | --- |
-| `GET /api/v1/replica` | None | Current configuration state, phase, source/backup channel IDs, catalog/protected revisions, file/part/byte progress, retry guidance, bounded activity and optional recovery candidate. No bot tokens or key. |
+| `GET /api/v1/replica` | None | Configuration, phase, channel IDs, revisions, progress, retry guidance, `backup_file_available`, bounded activity and optional recovery candidate including `has_database` and `source_is_backup`. No bot tokens or key. |
 | `POST /api/v1/replica/configure` | `channel_id`, write-only `bot_token`, `independent_accounts: true` | Verifies private distinct channels and a separate backup bot, saves configuration, schedules initial copying. Requires an existing catalog. |
 | `POST /api/v1/replica/action` | `action`: `sync`, `pause`, `resume`, `retry` or `disable` | Durable operation control. Resume also re-enables configured protection. |
-| `GET /api/v1/replica/key` | None | Private no-store attachment `tgdrive-channel-recovery-key.json`: key plus known restore-point message IDs. Save outside Telegram/server. |
+| `GET /api/v1/replica/key` | None | Private no-store recovery-key JSON. `key` matches the current downloadable file; legacy matching keys/restore-point references remain available for older formats. Save separately from the file. |
+| `GET /api/v1/replica/file` | None | Private no-store `tgdrive-backup.tgdb` download of retained confirmed local ciphertext; `404` until a confirmed file is available. Status reads do not download from Telegram. |
+| `POST /api/v1/replica/import` | Raw file bytes; `Content-Type: application/octet-stream`, `X-TGDrive-Recovery-Key: <64 hex characters>`; optional `X-TGDrive-Source-Channel` and `X-TGDrive-Bot-Token` | Authenticates and stages the recovery file, tries recorded channels/access and returns a candidate. Overrides repair revoked credentials or select a survivor. Inspection does not activate a drive. Disabled in demo mode. |
 | `GET /api/v1/replica/report` | None | Secret-free owner status/report attachment; file/channel names and IDs may still be private. |
-| `POST /api/v1/replica/recover` | `source_channel`, write-only `bot_token`, 64-hex `key`, optional positive `message_id` | Downloads/authenticates a surviving recovery capsule and records a candidate for inspection. |
-| `POST /api/v1/replica/recover` | `target_channel`, write-only `target_bot_token`, matching typed `confirm_channel`, optional `catalog_only: true` | Uses the inspected server-side candidate to copy into an empty private destination, or verify an existing surviving catalog without copying files. |
+| `POST /api/v1/replica/recover` | `source_channel`, write-only `bot_token`, 64-hex `key`, optional positive `message_id` | Compatibility path: downloads/authenticates a pinned recovery copy and records a candidate. |
+| `POST /api/v1/replica/recover` | `target_channel`, write-only `target_bot_token`, matching typed `confirm_channel`, optional `catalog_only: true` | Copies the inspected candidate into an empty private destination, or verifies the surviving channel for database-only restoration. A database-only request may omit the target token to reuse verified source access. |
 | `POST /api/v1/replica/recover` | `activate: true`, `confirm_channel` matching the pending candidate's destination channel ID | Explicitly activates a completed candidate; service restart is required. Missing/wrong confirmation or incomplete candidates cannot be activated. |
 
 Database connection failures and timeouts report
@@ -566,20 +577,41 @@ catalog cannot open; it must not enable ordinary file mutations against a missin
 catalog. Channel IDs are negative integers; source and copy destinations must be
 different, except an explicitly requested database-only restore.
 
-The independent channel capsule `tgdrive-replica.tgdb` is an authenticated
-AES-256-GCM document bounded to 64 MiB. It contains paired portable catalogs,
-recovery credentials, the managed connection document and all three saved policy
-records (performance, uploads and bot destination). Missing settings, a corrupt
-key, malformed paired catalogs or missing file parts prevents confirmation.
-Original payload bytes and the complete MongoDB archive are stored separately.
-Ordinary encrypted MongoDB backups and independent-channel
-capsules use different formats and recovery keys.
+New `tgdrive-backup.tgdb` files use `TGDRIVE-BACKUP-2` framing, compressed BSON JSON
+and authenticated AES-256-GCM encryption. They hold one database snapshot,
+recovery credentials and channel mappings; portable catalogs are derived from
+the captured data. A standalone file records main only. Independent protection
+adds verified backup mappings to the same artifact. Limits are 64 MiB ciphertext
+and 1 GiB expanded data; uploads reject excess data while staging and enforce
+the free-space reserve. The import route is outside the ordinary 64 KiB JSON
+body limit. Duplicate key/channel/token headers, invalid keys or mappings,
+unavailable source documents and wrong sizes block restoration.
+
+The independent worker coalesces changed revisions/settings within 60-second
+checkpoint windows. Initial setup, explicit backup/sync and destructive-operation
+barriers do not wait for that window; none bypasses saved Telegram waits.
+Healthy unchanged points get hourly checks. Browser polling remains read-only.
+
+Full database state is staged with the candidate and validated again during
+fenced activation. Restored browser sessions are empty; Telegram user-account
+sessions are excluded. Unfinished jobs become canceled history and unsafe
+source-channel mutation work is not replayed. Recovery retains the surviving
+backup documents and valid independent configuration while rebasing locations to
+the verified target. It requires an accessible matching database or an empty
+replacement, not access to the previous MongoDB host.
+
+Legacy `tgdrive-replica.tgdb` capsules and `TGDRIVE-MONGO-1` archives remain
+readable with their original keys. Pending old-format jobs finish with their
+original send identities; they can briefly produce the former two-file pair.
+Legacy archives retain their 1 GiB upload/expanded limits and the separate
+`/api/v1/backup/restore` compatibility path.
 
 The local `DATA_DIR/channel-backup.sqlite3` journal persists random operation IDs,
 confirmed message mappings, configuration and recovery state. Preserve the full
 persistent data directory through restarts. Status is confirmed-part progress,
-not speculative queued bytes. Old remote copied messages and capsules are
-retained; changing the configured destination is not a command to erase them.
+not speculative queued bytes. Confirmed local ciphertext supports downloading
+the file. Old remote documents and recovery points are retained; changing the
+configured destination does not erase them.
 
 </details>
 
@@ -1584,9 +1616,10 @@ belong in [the roadmap](roadmap.md), not in this implemented API reference.
   identity encoding, no inherited environment proxy, bounded time/bytes/disk.
   `ALLOW_PRIVATE_REMOTE_URLS` explicitly broadens reachability. Signed source URLs
   may persist in private jobs.
-- **Backups/deletion:** complete MongoDB archives use AES-256-GCM before disk or
-  Telegram storage and need their matching key. They exclude unsent staging and
-  cannot recreate missing Telegram originals. Permanent deletion removes catalog
+- **Backups/deletion:** recovery files use AES-256-GCM before disk or Telegram
+  storage and need their matching key, independently of login passwords. New
+  files exclude logged-in browser/Telegram account sessions and unsent staging;
+  they cannot recreate missing Telegram originals. Permanent deletion removes catalog
   references; it does not erase originals, caches, old backups or recipients'
   copies. Old backups may restore removed records.
 

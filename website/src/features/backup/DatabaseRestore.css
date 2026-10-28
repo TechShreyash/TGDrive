@@ -56,3 +56,9 @@
 .database-restore-result li + li {
     margin-top: 8px;
 }
+.database-restore-legacy > summary {
+    cursor: pointer;
+    padding-block: 12px;
+    font-weight: 600;
+}
+

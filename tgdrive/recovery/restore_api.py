@@ -160,6 +160,16 @@ def register_restore_routes(app, settings, *, require_admin, get_runtime):
                                 413, "MongoDB archive exceeds the 1 GiB limit"
                             )
                         await _finish(target.write, part)
+                from tgdrive.recovery.recovery_file import MAGIC as RECOVERY_MAGIC
+
+                with path.open("rb") as staged:
+                    if staged.read(len(RECOVERY_MAGIC)) == RECOVERY_MAGIC:
+                        raise RestoreError(
+                            422,
+                            "Use Storage & Backups → Restore backup for this recovery "
+                            "file so channel access and file locations are verified.",
+                            "RECOVERY_FILE_REQUIRES_UNIFIED_RESTORE",
+                        )
                 data = await _finish(
                     decode_snapshot, path, bytes.fromhex(key_values[0])
                 )

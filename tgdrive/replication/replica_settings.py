@@ -46,6 +46,9 @@ def collect_credentials(settings, runtime):
             api_hash=settings.api_hash,
             clients=initial_clients(settings),
         )
+    document = document.model_copy(
+        update={"clients": [client for client in document.clients if client.kind == "bot"]}
+    )
     credentials["managed_document"] = json.loads(document.private_bytes())
     backend = runtime.mongo
     preferences = {}
@@ -70,6 +73,54 @@ def collect_credentials(settings, runtime):
         credentials["mongodb_backup_key"] = key.get_secret_value()
     if len(json.dumps(credentials, allow_nan=False).encode()) > MAX_SETTINGS_TOTAL:
         raise ValueError("Saved recovery settings exceed the bounded size limit")
+    return credentials
+
+
+def credentials_from_snapshot(settings, records):
+    """Use the same captured database generation as the recovery catalog."""
+    rows = {row["_id"]: row["document"] for row in records["settings"]}
+    raw = rows.get("telegram")
+    document = (
+        ManagedDocument.model_validate(raw)
+        if raw is not None
+        else ManagedDocument(
+            revision=max(1, settings.managed_revision),
+            api_id=settings.api_id,
+            api_hash=settings.api_hash,
+            clients=initial_clients(settings),
+        )
+    )
+    # Account sessions are live account access, not necessary drive recovery data.
+    document = document.model_copy(
+        update={"clients": [client for client in document.clients if client.kind == "bot"]}
+    )
+    document = ManagedDocument.model_validate(json.loads(document.private_bytes()))
+    credentials = {
+        "api_id": settings.api_id,
+        "api_hash": settings.api_hash.get_secret_value(),
+        "session_secret": settings.session_secret.get_secret_value(),
+        "bot_tokens": [
+            client.credential.get_secret_value()
+            for client in document.clients
+            if client.enabled
+        ],
+        "managed_document": json.loads(document.private_bytes()),
+        "preferences": {},
+    }
+    defaults = {
+        "performance-preferences.json": PerformanceSettings(settings, None).value.model_dump(),
+        "transfer-preferences.json": {
+            "uploads_per_bot": getattr(settings, "telegram_uploads_per_bot", 1)
+        },
+        "bot-preferences.json": BotUploadPreferences().model_dump(),
+    }
+    for filename, model in POLICIES.items():
+        value = defaults[filename] | rows.get(filename.removesuffix(".json"), {})
+        credentials["preferences"][filename] = model.model_validate(value).model_dump()
+    key = getattr(settings, "mongodb_backup_key", None)
+    if key is not None:
+        credentials["mongodb_backup_key"] = key.get_secret_value()
+    validate_recovery_settings(credentials)
     return credentials
 
 

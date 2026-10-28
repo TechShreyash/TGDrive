@@ -224,6 +224,8 @@ def setup(tmp_path, *, multipart=False, empty=False):
         store=store, mongo=for_directory(configured.resolved_data_dir)
     )
     replica = ChannelReplica(configured, runtime, transport_factory=remote.factory)
+    # Shared callers exercise legacy journals; v2 tests replace this capture.
+    replica._capture = lambda: {"catalog": store.export(), "credentials": replica._credentials()}
     config = {"channel": BACKUP, "token": TOKEN, "enabled": True}
     replica.journal.set("config", config)
     return configured, store, remote, replica, config
@@ -234,8 +236,239 @@ async def dispose(replica, store):
     store.close()
 
 
+@pytest.mark.asyncio
+async def test_recovery_file_export_uses_latest_confirmed_file_and_matching_key(tmp_path):
+    import hashlib
+
+    from tgdrive.replication.replica_state import atomic_private
+    from tgdrive.settings.managed_settings import SettingsProblem
+
+    configured, store, _, replica, _ = setup(tmp_path)
+    primary_key = "ab" * 32
+    replica.journal.set("key", primary_key)
+    configured.mongodb_backup_key = SecretStr("cd" * 32)
+    old_digest = "a" * 64
+    old_path = replica.directory / "replica-bundles" / (old_digest + ".tgdb")
+    atomic_private(old_path, b"older independent file")
+    replica.journal.set("backup_file", {
+        "digest": old_digest, "key": primary_key,
+        "sha256": hashlib.sha256(b"older independent file").hexdigest(),
+        "created_at": "2026-01-01T00:00:00+00:00",
+    })
+    latest = {
+        "id": "current-file", "format": "tgdrive-backup-v2", "status": "confirmed",
+        "created_at": "2026-02-01T00:00:00+00:00",
+        "sha256": hashlib.sha256(b"newer standalone file").hexdigest(),
+        "key_sha256": hashlib.sha256(bytes.fromhex(primary_key)).hexdigest(),
+    }
+    path = configured.resolved_cache_dir / "mongo-backups" / "current-file.tgdb"
+    atomic_private(path, b"newer standalone file")
+    replica.runtime.backup = SimpleNamespace(latest_history=lambda: [latest])
+    try:
+        assert replica.backup_file() == path
+        assert replica.recovery_file() == b"newer standalone file"
+        assert replica.recovery_kit()["key"] == primary_key
+        latest["key_sha256"] = "0" * 64
+        with pytest.raises(SettingsProblem, match="older recovery key"):
+            replica.recovery_kit()
+        atomic_private(path, b"damaged")
+        with pytest.raises(SettingsProblem, match="saved recovery file changed"):
+            replica.recovery_file()
+    finally:
+        await dispose(replica, store)
+
+
+@pytest.mark.asyncio
+async def test_file_inspection_keeps_saved_provider_wait_before_new_requests(tmp_path):
+    from tgdrive.settings.managed_settings import SettingsProblem
+
+    _, store, remote, replica, _ = setup(tmp_path)
+    deadline = time.time() + 120
+    replica.update(phase="waiting", error={"retry_at": deadline})
+    try:
+        with pytest.raises(SettingsProblem, match="retry time"):
+            await replica.inspect_file(tmp_path / "not-read.tgdb", "a1" * 32)
+        assert not remote.instances
+        assert replica.status()["error"]["retry_at"] == deadline
+    finally:
+        await dispose(replica, store)
+
+
 def remote_bundle(remote, replica, channel=BACKUP):
     return decode_bundle(remote.messages[channel, remote.pins[channel]], replica.key())
+
+
+def unified_capture(monkeypatch, replica, store):
+    from tgdrive.recovery.mongo_backup import COLLECTIONS
+    from tgdrive.recovery.recovery_file import snapshot_catalog
+    from tgdrive.replication.replica_activation import _mongo_nodes
+    from tgdrive.replication.replica_settings import credentials_from_snapshot
+
+    def capture():
+        catalog = store.export()
+        records = {name: [] for name in COLLECTIONS}
+        records["catalog"] = [{
+            "_id": "catalog", "schema_version": catalog["schema_version"],
+            "drive_id": catalog["drive_id"], "revision": catalog["revision"],
+            "backed_up_revision": catalog["backed_up_revision"],
+            "storage_channel_id": catalog["storage_channel_id"], "generation": 1,
+        }]
+        records["nodes"] = _mongo_nodes(catalog)
+        records["shares"] = [dict(row, _id=row["id"]) for row in catalog.get("shares", [])]
+        for name, portable, identity in (
+            ("operations", "operations", "operation_id"),
+            ("deletions", "deletions", "id"),
+            ("preparations", "folder_preparations", "request_id"),
+        ):
+            records[name] = [dict(row, _id=row[identity]) for row in catalog.get(portable, [])]
+        return {
+            "catalog": snapshot_catalog(records), "database": records,
+            "credentials": credentials_from_snapshot(replica.settings, records),
+        }
+
+    monkeypatch.setattr(replica, "_capture", capture)
+
+
+@pytest.mark.asyncio
+async def test_v2_restore_point_publishes_one_self_contained_file_per_channel(
+    tmp_path, monkeypatch,
+):
+    from tgdrive.recovery.recovery_file import snapshot_catalog
+
+    configured, store, remote, replica, config = setup(tmp_path)
+    unified_capture(monkeypatch, replica, store)
+    mirror = AsyncMock(side_effect=AssertionError("v2 must not create another archive"))
+    monkeypatch.setattr("tgdrive.replication.replica_mongo.mirror_mongodb", mirror)
+    before = store.export()
+    try:
+        await replica._sync(config)
+        published = [call for call in remote.calls if call[0] == "publish"]
+        assert len(published) == 2
+        assert {call[1] for call in published} == {configured.storage_channel, BACKUP}
+        mirror.assert_not_awaited()
+        point = replica.journal.get("restore_point")
+        assert point["format_version"] == 2
+        original = remote.messages[configured.storage_channel, point["source_message_id"]]
+        assert original == remote.messages[BACKUP, point["backup_message_id"]]
+        decoded = decode_bundle(original, replica.key())
+        assert decoded["version"] == 2
+        assert snapshot_catalog(decoded["database"]) == (
+            before | {"backed_up_revision": before["revision"]}
+        )
+        assert decoded["recovery_token"] == TOKEN
+        assert replica.backup_file().read_bytes() == original
+        assert store.export() == before
+        assert replica.status()["phase"] == "protected"
+        store.create_folder("/", "Next restore point")
+        await replica._sync(config)
+        assert len([call for call in remote.calls if call[0] == "publish"]) == 4
+        assert len([call for call in remote.calls if call[0] == "copy"]) == 1
+        mirror.assert_not_awaited()
+    finally:
+        await dispose(replica, store)
+
+
+@pytest.mark.asyncio
+async def test_v2_file_rebuilds_main_from_surviving_backup_without_changing_live_drive(
+    tmp_path, monkeypatch,
+):
+    configured, store, remote, replica, config = setup(tmp_path)
+    unified_capture(monkeypatch, replica, store)
+    monkeypatch.setattr(replica, "start", lambda: None)
+    before = store.export()
+    try:
+        await replica._sync(config)
+        saved = replica.backup_file()
+        protected = {key: value for key, value in remote.messages.items() if key[0] == BACKUP}
+        remote.unavailable.add(configured.storage_channel)
+        inspect_channel = Transport.inspect
+
+        async def independent_access(self, channel, **kwargs):
+            if self.token in configured.bot_tokens and channel == BACKUP:
+                raise ReplicaTransportError("Main bot cannot access backup", "REPLICA_ACCESS")
+            return await inspect_channel(self, channel, **kwargs)
+
+        monkeypatch.setattr(Transport, "inspect", independent_access)
+        await replica.inspect_file(saved, replica.key())
+        inspected = replica.journal.get("candidate")
+        assert inspected["source_is_backup"]
+        assert inspected["catalog"]["storage_channel_id"] == BACKUP
+        assert "database" in inspected and not inspected["complete"]
+        target_token = "345678:" + "z" * 30
+        await replica.recover_to(REPLACEMENT, target_token, str(REPLACEMENT))
+        await replica._recover_copy(replica.journal.get("recovery"))
+        recovered = replica.journal.get("candidate")
+        assert recovered["complete"]
+        assert recovered["catalog"]["storage_channel_id"] == REPLACEMENT
+        assert recovered["backup_config"] == {"channel": BACKUP, "token": TOKEN}
+        assert replica.status()["phase"] == "ready_to_activate"
+        for key, value in protected.items():
+            assert remote.messages[key] == value
+        assert store.export() == before
+        updated = decode_bundle(replica.backup_file().read_bytes(), replica.key())
+        assert updated["catalog"] == recovered["catalog"]
+        assert updated["replica_catalog"] == inspected["catalog"]
+        assert updated["credentials"]["bot_tokens"] == [target_token]
+    finally:
+        await dispose(replica, store)
+
+
+@pytest.mark.asyncio
+async def test_v2_import_accepts_fresh_access_when_saved_bot_tokens_are_revoked(
+    tmp_path, monkeypatch,
+):
+    from tgdrive.settings.managed_settings import SettingsProblem
+
+    configured, store, _remote, replica, config = setup(tmp_path)
+    unified_capture(monkeypatch, replica, store)
+    fresh_token = "456789:" + "q" * 30
+    try:
+        await replica._sync(config)
+        saved = replica.backup_file()
+        start = Transport.start
+
+        async def reject_revoked(self):
+            if self.token in {TOKEN, *configured.bot_tokens}:
+                raise ReplicaTransportError("Token revoked", "REPLICA_CREDENTIALS")
+            await start(self)
+
+        monkeypatch.setattr(Transport, "start", reject_revoked)
+        with pytest.raises(SettingsProblem) as error:
+            await replica.inspect_file(saved, replica.key(), source=BACKUP)
+        assert error.value.code == "RECOVERY_ACCESS_REQUIRED"
+        assert replica.journal.get("candidate") is None
+        await replica.inspect_file(saved, replica.key(), source=BACKUP, token=fresh_token)
+        candidate = replica.journal.get("candidate")
+        assert candidate["token"] == fresh_token
+        assert candidate["catalog"]["storage_channel_id"] == BACKUP
+        assert not candidate["complete"]
+    finally:
+        await dispose(replica, store)
+
+
+@pytest.mark.asyncio
+async def test_v2_database_only_restore_reuses_verified_main_bot_without_extra_token(
+    tmp_path, monkeypatch,
+):
+    configured, store, remote, replica, config = setup(tmp_path)
+    unified_capture(monkeypatch, replica, store)
+    monkeypatch.setattr(replica, "start", lambda: None)
+    try:
+        await replica._sync(config)
+        await replica.inspect_file(replica.backup_file(), replica.key(), source=configured.storage_channel)
+        copies = len([call for call in remote.calls if call[0] == "copy"])
+        await replica.recover_to(
+            configured.storage_channel, "", str(configured.storage_channel), catalog_only=True,
+        )
+        await replica._recover_copy(replica.journal.get("recovery"))
+        candidate = replica.journal.get("candidate")
+        assert candidate["complete"] and "database" in candidate
+        assert candidate["credentials"]["bot_tokens"] == list(configured.bot_tokens)
+        assert candidate["backup_config"] == {"channel": BACKUP, "token": TOKEN}
+        assert len([call for call in remote.calls if call[0] == "copy"]) == copies
+        assert replica.status()["phase"] == "ready_to_activate"
+    finally:
+        await dispose(replica, store)
 
 
 @pytest.mark.asyncio
@@ -914,7 +1147,7 @@ async def test_pause_during_local_snapshot_does_not_restart_telegram_work(
     _, store, remote, replica, config = setup(tmp_path)
     entered, release = asyncio.Event(), asyncio.Event()
     original_thread = asyncio.to_thread
-    selected = replica._credentials if stage == "credentials" else store.export
+    selected = replica._credentials if stage == "credentials" else replica._capture
 
     async def blocked_snapshot(function, *args, **kwargs):
         if function == selected:

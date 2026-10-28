@@ -214,7 +214,8 @@ listed in `TELEGRAM_ADMIN_IDS` can send it files. Add further storage bots throu
 The defaults use database `tgdrive` and allow local HTTP cookies. Session and
 backup keys are generated once and preserved in persistent storage; leave
 `SESSION_SECRET` and `MONGODB_BACKUP_KEY` unset for a new installation. Never replace
-an existing drive's keys. Save the exported recovery key after your first login.
+an existing drive's keys. Save your recovery file and separate key after the
+first confirmed backup.
 
 Keep `.env` private. Single-quote values containing `$`, including password
 hashes. Do not shell-source the file. For hashed passwords, explicit keys and all
@@ -274,7 +275,7 @@ You can quit Docker Desktop after stopping TGDrive; keep its saved volumes.
 
 1. Sign in at [http://127.0.0.1:8000](http://127.0.0.1:8000) with your web password.
 2. Open **Connections → Refresh** and check your bot.
-3. Open **Storage & Backups → Save recovery key** and store the downloaded key
+3. Open **Storage & Backups → Backups & recovery → Save recovery key** and store the downloaded key
    somewhere separate from this installation.
 
 Before importing your library:
@@ -395,7 +396,7 @@ build**, **available at runtime**, then save. [Environment guide](https://coolif
    its internal port: `https://drive.example.com:8000`. Visitors use normal HTTPS.
 3. **Deploy** and wait for `app` to become healthy. If deployment fails, inspect
    the deployment and application logs.
-4. Open your domain, sign in and save **Storage & Backups → Save recovery key**
+4. Open your domain, sign in and save **Storage & Backups → Backups & recovery → Save recovery key**
    somewhere separate from the server.
 
 The included Compose file creates persistent volumes at **`/app/data`** and
@@ -435,7 +436,7 @@ docker compose -f compose.yaml -f compose.server.yaml ps
    never use `*` as a workaround. Follow
    [HTTPS/proxy checks](operations.md#https-and-private-configuration).
 6. Verify the public domain, Connections and a small upload/download.
-   Save the recovery key separately and confirm a database backup.
+   Confirm a backup and save the recovery file and its separate key.
 
 The server file keeps secure cookies on, publishes loopback only and defaults
 to `unless-stopped` restart. Keep project name/volumes and use the same
@@ -466,7 +467,8 @@ After the first upload/download works:
 ## Optional independent channel protection
 
 After the drive works, add a separate private channel and backup bot through
-**Storage & Backups → Independent backup channel**. Save its recovery key outside
-Telegram and wait for a confirmed restore point.
+**Storage & Backups → Backups & recovery → Set up backup channel**. Wait for a
+confirmed restore point, then save the recovery file and its separate key outside
+Telegram.
 Follow [backup-channel setup](backup-recovery.md#set-up-an-independent-backup-channel)
 for permissions, copying, recovery and same-provider limits.

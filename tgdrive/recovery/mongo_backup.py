@@ -16,6 +16,7 @@ from bson import json_util
 from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 
 from tgdrive.recovery.backup import BackupError, RecoveryConflict
+from tgdrive.recovery.recovery_file import write_recovery_snapshot
 from tgdrive.storage.mongo_store import MongoStore
 from tgdrive.storage.store import ROOT_ID, SCHEMA_VERSION
 
@@ -119,6 +120,13 @@ def decode_snapshot(path: Path, key: bytes):
     if path.stat().st_size > MAX_EXPANDED:
         raise BackupError("Encrypted backup is too large")
     data = path.read_bytes()
+    from tgdrive.recovery.recovery_file import MAGIC as RECOVERY_MAGIC, decode_recovery_file
+
+    if data.startswith(RECOVERY_MAGIC):
+        try:
+            return decode_recovery_file(data, key.hex())["database"]
+        except ValueError:
+            raise BackupError("Backup authentication or validation failed; nothing restored") from None
     if not data.startswith(MAGIC) or len(data) < len(MAGIC) + 12 + 16:
         raise BackupError("This is not a TGDrive MongoDB backup")
     nonce = data[len(MAGIC) : len(MAGIC) + 12]
@@ -368,24 +376,36 @@ class MongoProtection:
             return await self.snapshot_now(store)
         return False
 
-    async def snapshot_now(self, store):
+    async def snapshot_now(self, store, *, legacy=False):
         async with self._lock:
             await self.verify_lineage(store)
             backend = self.backend
-            key = backup_key(self.settings)
             pending = await asyncio.to_thread(
                 backend.db.backups.find_one,
                 {"status": "pending"},
                 sort=[("created_at", 1)],
+            )
+            legacy_key = (
+                pending.get("format") != "tgdrive-backup-v2"
+                if pending is not None else legacy
+            )
+            replica = getattr(self, "replica", None)
+            key = (
+                bytes.fromhex(replica.key())
+                if replica is not None and not legacy_key
+                else backup_key(self.settings)
             )
             if pending is None:
                 identity = secrets.token_urlsafe(16)
                 directory = self.settings.resolved_cache_dir / "mongo-backups"
                 directory.mkdir(mode=0o700, parents=True, exist_ok=True)
                 path = directory / (identity + ".tgdb")
-                export = asyncio.create_task(
-                    asyncio.to_thread(write_snapshot, backend, path, key)
+                writer = (
+                    (write_snapshot, backend, path, key)
+                    if legacy else
+                    (write_recovery_snapshot, backend, path, key, self.settings)
                 )
+                export = asyncio.create_task(asyncio.to_thread(*writer))
                 try:
                     revision, counts, digest = await asyncio.shield(export)
                 except asyncio.CancelledError:
@@ -414,13 +434,20 @@ class MongoProtection:
                     "channel_id": self.settings.storage_channel,
                     "retry_at": 0,
                     "counts": counts,
-                    "format": "mongodb-encrypted-v1",
+                    "format": "mongodb-encrypted-v1" if legacy else "tgdrive-backup-v2",
+                    "key_sha256": hashlib.sha256(key).hexdigest(),
                 }
                 await asyncio.to_thread(backend.db.backups.insert_one, row)
                 pending = row
             self._observe_backup(pending)
             if pending["channel_id"] != self.settings.storage_channel:
                 raise BackupError("Pending backup belongs to another channel")
+            fingerprint = pending.get("key_sha256")
+            if fingerprint is not None and fingerprint != hashlib.sha256(key).hexdigest():
+                raise BackupError(
+                    "The pending recovery file uses a different key. Preserve the "
+                    "file and restore its original recovery key before retrying."
+                )
             remaining = pending.get("retry_at", 0) - time.time()
             if remaining > 0:
                 raise BackupError(
@@ -457,9 +484,13 @@ class MongoProtection:
                     message = await client.send_document(
                         self.settings.storage_channel,
                         str(path),
-                        file_name="tgdrive-" + pending["id"] + ".tgdb",
+                        file_name=(
+                            "tgdrive-backup.tgdb"
+                            if pending["format"] == "tgdrive-backup-v2"
+                            else "tgdrive-" + pending["id"] + ".tgdb"
+                        ),
                         random_id=pending["random_id"],
-                        caption="TGDrive encrypted MongoDB backup · "
+                        caption="TGDrive encrypted recovery file · "
                         + pending["created_at"],
                     )
                     identity = getattr(message, "id", None)
@@ -498,7 +529,8 @@ class MongoProtection:
                 )
                 pending.update(confirmed)
                 self._observe_backup(pending)
-                path.unlink(missing_ok=True)
+                if pending["format"] != "tgdrive-backup-v2":
+                    path.unlink(missing_ok=True)
                 self._last_error = None
                 return True
             except Exception as exc:
@@ -561,6 +593,10 @@ class MongoProtection:
             except TimeoutError:
                 pass
             try:
+                replica = getattr(self, "replica", None)
+                if replica is not None and replica.status().get("enabled"):
+                    delay = self.settings.mongodb_backup_seconds
+                    continue
                 await self.snapshot_now(store)
                 delay = self.settings.mongodb_backup_seconds
             except asyncio.CancelledError:

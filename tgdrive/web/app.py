@@ -175,6 +175,7 @@ async def require_admin(request: Request) -> None:
         )
         secret_export = path in {
             "/api/v1/replica/key",
+            "/api/v1/replica/file",
             "/api/v1/backup/recovery-key",
         }
         if secret_export or (
@@ -229,6 +230,9 @@ async def require_admin(request: Request) -> None:
                 "/api/logout",
                 "/api/getDirectory",
                 "/api/v1/backup/restore",
+                "/api/v1/replica/import",
+                "/api/v1/replica/recover",
+                "/api/v1/replica/action",
             }
             or request.url.path == "/api/v1/settings"
             or request.url.path.startswith("/api/v1/settings/premium-login/")
@@ -257,7 +261,12 @@ async def require_admin(request: Request) -> None:
     if (
         request.method in {"GET", "HEAD", "OPTIONS"}
         or path in read_posts
-        or path == "/api/v1/backup/restore"
+        or path in {
+            "/api/v1/backup/restore",
+            "/api/v1/replica/import",
+            "/api/v1/replica/recover",
+            "/api/v1/replica/action",
+        }
     ):
         return
     if path == "/api/cancelUpload" or path.endswith("/cancel"):
