@@ -40,9 +40,26 @@ jobs:
         name: Quality and security
         runs-on: ubuntu-latest
         timeout-minutes: 20
+        outputs:
+            container_required: ${{ steps.container_changes.outputs.required }}
         steps:
             - name: Check out repository
               uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+              with:
+                  fetch-depth: 2
+
+            - name: Detect dependency and container configuration changes
+              id: container_changes
+              if: github.event_name == 'pull_request'
+              run: |
+                  if git diff --quiet HEAD^1 HEAD -- \
+                    Dockerfile .dockerignore .python-version pyproject.toml uv.lock \
+                    website/package.json website/package-lock.json website/vendor \
+                    .github/workflows/ci.yml; then
+                    echo "required=false" >> "$GITHUB_OUTPUT"
+                  else
+                    echo "required=true" >> "$GITHUB_OUTPUT"
+                  fi
 
             - name: Set up Python
               uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
@@ -220,7 +237,9 @@ jobs:
 
     container:
         name: Container build
-        if: github.event_name == 'workflow_dispatch' && (inputs.suite == 'container' || inputs.suite == 'release' || inputs.suite == 'all')
+        if: >-
+            (github.event_name == 'pull_request' && needs.quality.outputs.container_required == 'true') ||
+            (github.event_name == 'workflow_dispatch' && (inputs.suite == 'container' || inputs.suite == 'release' || inputs.suite == 'all'))
         runs-on: ubuntu-latest
         timeout-minutes: 25
         needs:
@@ -232,6 +251,7 @@ jobs:
               uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
             - name: Set up QEMU for ARM64 verification
+              if: github.event_name == 'workflow_dispatch'
               uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1 # v4.4.0
               with:
                   platforms: arm64
@@ -240,6 +260,7 @@ jobs:
               uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
 
             - name: Build AMD64 and ARM64 release layouts
+              if: github.event_name == 'workflow_dispatch'
               uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
               with:
                   context: .

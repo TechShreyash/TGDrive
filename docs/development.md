@@ -339,7 +339,7 @@ The [CI workflow](../.github/workflows/ci.yml) keeps routine pushes focused:
 | Trigger | Checks |
 | --- | --- |
 | Push to `main` or `dev` | Quality/security, frontend and backend tests with isolated MongoDB and coverage |
-| Pull request | Core checks, plus production-frontend Chromium tests |
+| Pull request | Core checks and production-frontend Chromium tests; Docker/runtime dependency changes also build and smoke-check the AMD64 container |
 | Manual run | Core checks, plus the selected additional suite |
 
 All Python jobs use **3.14.8**, the sole supported runtime pinned in
@@ -354,7 +354,11 @@ Release pull requests should pass `Quality and security`, `Frontend behavior`,
 `Backend tests` and `Chromium end-to-end` before merging into `main`.
 Repository branch protection is currently disabled; maintainers follow this
 release process without GitHub enforcing a merge gate.
-Manual container and source-release checks are separate from the merge gate.
+PRs that change `Dockerfile`, `.dockerignore`, `.python-version`, Python or
+frontend manifests/locks, `website/vendor/` or the CI workflow also need a passing
+`Container build`. This checks the locked install and bundled assets in the
+AMD64 image; source-only changes do not trigger it. Full AMD64/ARM64 container
+and source-release checks remain manual release checks.
 
 In **Actions → CI → Run workflow**, select the branch and additional suite:
 
@@ -410,6 +414,29 @@ Exact libraries live in [pyproject.toml](../pyproject.toml), [uv.lock](../uv.loc
 and [Dockerfile](../Dockerfile). Do not replace locks with unconstrained installs.
 Updates need affected integration checks. CI uses Python 3.14.8 only;
 configuration alone is not executed evidence.
+
+### Dependabot updates
+
+[Dependabot](../.github/dependabot.yml) schedules routine update checks against
+`dev` on Mondays between 04:00 and 04:45 Asia/Kolkata. Minor and patch updates are
+grouped per ecosystem; other major updates stay separate for review. Each of the
+four ecosystems allows at most two open routine PRs targeting `dev`, eight in
+total. Grouping reduces review work; it does not establish compatibility or
+merge updates automatically.
+
+Docker Python stays at the baseline above so its image matches the project and
+CI pins; same-version digest updates remain eligible. Docker Node and
+`@types/node` stay below 25. Change these constraints together with the runtime
+pins, locks and CI when deliberately upgrading the supported versions. Dependabot
+does not track the uv image in `COPY --from`; update it manually alongside CI's
+`UV_VERSION`.
+
+GitHub reads the configuration from default `main`, so edits on `dev` take effect
+after release to `main`. Routine updates follow the versioned release process.
+[Security updates](https://docs.github.com/en/code-security/reference/supply-chain-security/dependabot-options-reference#target-branch)
+still target `main` and have separate limits; these `dev` rules do not configure
+or enable security updates. Keep repository security updates enabled, review
+their fixes promptly and carry merged fixes back to `dev`.
 
 ## Code conventions
 
