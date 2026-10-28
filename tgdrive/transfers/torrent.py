@@ -23,12 +23,14 @@ import aiohttp
 from tgdrive.core.errors import InvalidNameError
 from tgdrive.storage.store import _normalize_name
 from tgdrive.transfers.remote import RemoteClient, address_is_forbidden
+from tgdrive.transfers.uploads import ResumableUploads
 
 MAX_METADATA_BYTES = 8 * 1024 * 1024
 MAX_FILES = 10_000
 METADATA_TIMEOUT = 120
 STALL_TIMEOUT = 300
 _METADATA_DIRECTORY = ".tgdrive-torrent"
+_worker = ResumableUploads._owned_worker
 
 
 class TorrentError(ValueError):
@@ -95,7 +97,9 @@ def _decode(data: bytes):
                     if not isinstance(key, bytes) or (
                         previous is not None and key <= previous
                     ):
-                        raise TorrentError("Invalid or duplicate torrent dictionary key.")
+                        raise TorrentError(
+                            "Invalid or duplicate torrent dictionary key."
+                        )
                     previous = key
                     result[key] = read(depth + 1)
             offset += 1
@@ -139,7 +143,7 @@ def _name(value) -> str:
         if _normalize_name(name) != name or name.endswith((".", " ")):
             raise ValueError
         return name
-    except (InvalidNameError, ValueError):
+    except InvalidNameError, ValueError:
         raise TorrentError(
             "Torrent contains an unsafe or unsupported file name."
         ) from None
@@ -183,9 +187,7 @@ def _manifest(metadata: dict) -> TorrentManifest:
         size = entry.get(b"length")
         if type(size) is not int or size <= 0:
             raise TorrentError("TGDrive cannot import torrents containing empty files.")
-        raw_parts = (
-            entry.get(b"path.utf-8", entry.get(b"path")) if is_folder else []
-        )
+        raw_parts = entry.get(b"path.utf-8", entry.get(b"path")) if is_folder else []
         if not isinstance(raw_parts, list) or (is_folder and not raw_parts):
             raise TorrentError("Invalid torrent file path.")
         parts = (name, *(_name(part) for part in raw_parts))
@@ -224,9 +226,7 @@ def _magnet(source: str) -> tuple[str, list[str]]:
         raw = value[9:]
         try:
             digest = (
-                bytes.fromhex(raw)
-                if len(raw) == 40
-                else base64.b32decode(raw.upper())
+                bytes.fromhex(raw) if len(raw) == 40 else base64.b32decode(raw.upper())
             )
         except ValueError:
             continue
@@ -286,9 +286,7 @@ async def _udp_trackers(values: list[str]) -> list[str]:
                 answers = await asyncio.get_running_loop().getaddrinfo(
                     parsed.hostname, port, family=socket.AF_INET, type=socket.SOCK_DGRAM
                 )
-            if not answers or any(
-                address_is_forbidden(item[4][0]) for item in answers
-            ):
+            if not answers or any(address_is_forbidden(item[4][0]) for item in answers):
                 raise TorrentError("Torrent trackers must use public IP addresses.")
             address = str(ipaddress.ip_address(answers[0][4][0]))
             pinned = urlunsplit(
@@ -298,7 +296,7 @@ async def _udp_trackers(values: list[str]) -> list[str]:
                 result.append(pinned)
         except TorrentError:
             raise
-        except (ValueError, OSError, TimeoutError):
+        except ValueError, OSError, TimeoutError:
             continue
     return result
 
@@ -336,21 +334,38 @@ class _Aria2:
         self.url = f"http://127.0.0.1:{port}/jsonrpc"
         self.process = await asyncio.create_subprocess_exec(
             executable,
-            "--no-conf=true", "--no-netrc=true", "--enable-rpc=true",
-            "--rpc-listen-all=false", "--rpc-allow-origin-all=false",
-            f"--rpc-listen-port={port}", f"--rpc-secret={self.secret}",
-            "--rpc-max-request-size=16M", "--rpc-save-upload-metadata=false",
-            f"--dir={self.directory}", "--file-allocation=none",
-            "--auto-file-renaming=false", "--allow-overwrite=false",
-            "--check-integrity=true", "--seed-time=0", "--bt-enable-lpd=false",
-            "--enable-dht=true", "--enable-dht6=false", "--disable-ipv6=true",
+            "--no-conf=true",
+            "--no-netrc=true",
+            "--enable-rpc=true",
+            "--rpc-listen-all=false",
+            "--rpc-allow-origin-all=false",
+            f"--rpc-listen-port={port}",
+            f"--rpc-secret={self.secret}",
+            "--rpc-max-request-size=16M",
+            "--rpc-save-upload-metadata=false",
+            f"--dir={self.directory}",
+            "--file-allocation=none",
+            "--auto-file-renaming=false",
+            "--allow-overwrite=false",
+            "--check-integrity=true",
+            "--seed-time=0",
+            "--bt-enable-lpd=false",
+            "--enable-dht=true",
+            "--enable-dht6=false",
+            "--disable-ipv6=true",
             "--dht-entry-point=router.bittorrent.com:6881",
             f"--dht-file-path={self.directory / 'dht.dat'}",
-            "--listen-port=49152-65535", "--dht-listen-port=49152-65535",
-            "--bt-exclude-tracker=*", f"--bt-stop-timeout={STALL_TIMEOUT}",
-            "--max-concurrent-downloads=1", "--follow-torrent=false",
-            "--follow-metalink=false", "--quiet=true", "--download-result=hide",
-            stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL,
+            "--listen-port=49152-65535",
+            "--dht-listen-port=49152-65535",
+            "--bt-exclude-tracker=*",
+            f"--bt-stop-timeout={STALL_TIMEOUT}",
+            "--max-concurrent-downloads=1",
+            "--follow-torrent=false",
+            "--follow-metalink=false",
+            "--quiet=true",
+            "--download-result=hide",
+            stdout=asyncio.subprocess.DEVNULL,
+            stderr=asyncio.subprocess.DEVNULL,
         )
         self.session = aiohttp.ClientSession(
             timeout=aiohttp.ClientTimeout(total=5), trust_env=False
@@ -384,10 +399,15 @@ class _Aria2:
             await self.session.close()
 
     async def call(self, method, *params):
-        async with self.session.post(self.url, json={
-            "jsonrpc": "2.0", "id": 1, "method": f"aria2.{method}",
-            "params": [f"token:{self.secret}", *params],
-        }) as response:
+        async with self.session.post(
+            self.url,
+            json={
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": f"aria2.{method}",
+                "params": [f"token:{self.secret}", *params],
+            },
+        ) as response:
             response.raise_for_status()
             result = await response.json()
         if "error" in result:
@@ -408,7 +428,9 @@ class _Aria2:
             if state["status"] == "complete":
                 return
             if state["status"] in {"error", "removed"}:
-                raise TorrentError("Torrent download failed. Check available peers and retry.")
+                raise TorrentError(
+                    "Torrent download failed. Check available peers and retry."
+                )
             if time.monotonic() - changed > STALL_TIMEOUT:
                 raise TorrentError(
                     "Torrent made no progress for 5 minutes. Check peers and retry."
@@ -428,9 +450,7 @@ async def download_torrent(
     """Validate metadata and reserve staging before any payload is downloaded."""
     if cancel_event.is_set():
         raise TorrentCancelled("Torrent import cancelled.")
-    worker = asyncio.create_task(
-        _download(source, output_dir, remote, progress, admit)
-    )
+    worker = asyncio.create_task(_download(source, output_dir, remote, progress, admit))
     cancelled = asyncio.create_task(cancel_event.wait())
     try:
         await asyncio.wait((worker, cancelled), return_when=asyncio.FIRST_COMPLETED)
@@ -460,10 +480,15 @@ async def _download(source, output_dir, remote, progress, admit):
             elif source.lower().startswith("magnet:"):
                 magnet, raw_trackers = _magnet(source)
                 trackers = await _udp_trackers(raw_trackers)
-                gid = await engine.call("addUri", [magnet], {
-                    "bt-metadata-only": "true", "bt-save-metadata": "true",
-                    "bt-tracker": ",".join(trackers),
-                })
+                gid = await engine.call(
+                    "addUri",
+                    [magnet],
+                    {
+                        "bt-metadata-only": "true",
+                        "bt-save-metadata": "true",
+                        "bt-tracker": ",".join(trackers),
+                    },
+                )
                 try:
                     async with asyncio.timeout(METADATA_TIMEOUT):
                         await engine.wait(gid)
@@ -472,15 +497,20 @@ async def _download(source, output_dir, remote, progress, admit):
                         "No torrent metadata arrived within 2 minutes. "
                         "Check peers and retry."
                     ) from None
-                sources = list(metadata_dir.glob("*.torrent"))
+                sources = await _worker(lambda: list(metadata_dir.glob("*.torrent")))
                 if len(sources) != 1:
-                    raise TorrentError("The magnet link did not provide torrent metadata.")
+                    raise TorrentError(
+                        "The magnet link did not provide torrent metadata."
+                    )
                 metadata_path = sources[0]
                 await engine.call("removeDownloadResult", gid)
             else:
                 result = await remote.download(
-                    source, metadata_dir, filename="source.torrent",
-                    max_bytes=MAX_METADATA_BYTES, single_threaded=True,
+                    source,
+                    metadata_dir,
+                    filename="source.torrent",
+                    max_bytes=MAX_METADATA_BYTES,
+                    single_threaded=True,
                 )
                 metadata_path = result.path
                 trackers = []
@@ -488,9 +518,14 @@ async def _download(source, output_dir, remote, progress, admit):
                 raise TorrentError("Torrent metadata exceeds the 8 MiB limit.")
             metadata = _decode(metadata_path.read_bytes())
             manifest = _manifest(metadata)
-            trackers = list(dict.fromkeys([
-                *trackers, *await _udp_trackers(_tracker_urls(metadata)),
-            ]))[:32]
+            trackers = list(
+                dict.fromkeys(
+                    [
+                        *trackers,
+                        *await _udp_trackers(_tracker_urls(metadata)),
+                    ]
+                )
+            )[:32]
             if metadata[b"info"].get(b"private") and not trackers:
                 raise TorrentError(
                     "Private torrents require a public UDP tracker; "
@@ -505,41 +540,60 @@ async def _download(source, output_dir, remote, progress, admit):
                 cached_metadata[b"announce-list"] = [
                     [value.encode()] for value in trackers
                 ]
-            cached.parent.mkdir(exist_ok=True)
-            with tempfile.NamedTemporaryFile(dir=cached.parent, delete=False) as saved:
-                saved_path = Path(saved.name)
+
+            def save_metadata():
+                cached.parent.mkdir(exist_ok=True)
+                with tempfile.NamedTemporaryFile(
+                    dir=cached.parent, delete=False
+                ) as saved:
+                    saved_path = Path(saved.name)
+                    try:
+                        saved.write(_encode(cached_metadata))
+                        saved.flush()
+                        os.fsync(saved.fileno())
+                    except BaseException:
+                        saved_path.unlink(missing_ok=True)
+                        raise
                 try:
-                    saved.write(_encode(cached_metadata))
-                    saved.flush()
-                    os.fsync(saved.fileno())
-                except BaseException:
+                    os.replace(saved_path, cached)
+                finally:
                     saved_path.unlink(missing_ok=True)
-                    raise
-            try:
-                os.replace(saved_path, cached)
-            finally:
-                saved_path.unlink(missing_ok=True)
-            gid = await engine.call("addTorrent", base64.b64encode(sanitized).decode(), [], {
-                "dir": str(output_dir.resolve()), "pause": "true",
-                "bt-metadata-only": "false", "bt-save-metadata": "false",
-                "bt-tracker": ",".join(trackers),
-            })
+
+            await _worker(save_metadata)
+            gid = await engine.call(
+                "addTorrent",
+                base64.b64encode(sanitized).decode(),
+                [],
+                {
+                    "dir": str(output_dir.resolve()),
+                    "pause": "true",
+                    "bt-metadata-only": "false",
+                    "bt-save-metadata": "false",
+                    "bt-tracker": ",".join(trackers),
+                },
+            )
             actual = await engine.call("getFiles", gid)
             expected = {
                 str((output_dir / item.path).resolve()): item.size
                 for item in manifest.files
             }
             if {item["path"]: int(item["length"]) for item in actual} != expected:
-                raise TorrentError("The downloader changed torrent paths; import stopped safely.")
+                raise TorrentError(
+                    "The downloader changed torrent paths; import stopped safely."
+                )
             for item in manifest.files:
                 path = output_dir / item.path
                 if any(part.is_symlink() for part in (path, *path.parents)):
-                    raise TorrentError("Torrent staging contains an unsafe symbolic link.")
+                    raise TorrentError(
+                        "Torrent staging contains an unsafe symbolic link."
+                    )
             await engine.call("unpause", gid)
 
             async def received(current, total):
                 if shutil.disk_usage(output_dir).free < remote.min_free_bytes:
-                    raise TorrentError("Temporary storage is full. Free disk space and retry.")
+                    raise TorrentError(
+                        "Temporary storage is full. Free disk space and retry."
+                    )
                 await progress(current, total)
 
             await engine.wait(gid, progress=received)
@@ -550,5 +604,7 @@ async def _download(source, output_dir, remote, progress, admit):
                     or not path.is_file()
                     or path.stat().st_size != item.size
                 ):
-                    raise TorrentError("Torrent payload is incomplete. Retry the import.")
+                    raise TorrentError(
+                        "Torrent payload is incomplete. Retry the import."
+                    )
             return manifest

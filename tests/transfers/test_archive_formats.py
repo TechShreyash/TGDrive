@@ -316,7 +316,7 @@ def test_rar_rejects_volume_and_encryption_flags(tmp_path):
         RAR5[:16] + b"\x01" + RAR5[17:],
     ]:
         path.write_bytes(data)
-        with pytest.raises(WorkerError, match="split-volume|Encrypted|Split-volume"):
+        with pytest.raises(WorkerError, match=r"split-volume|Encrypted|Split-volume"):
             rar_header(path)
 
 

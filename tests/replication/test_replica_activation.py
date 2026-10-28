@@ -842,18 +842,23 @@ def database_snapshot(settings):
     from tgdrive.recovery.mongo_backup import COLLECTIONS
 
     backend = for_settings(settings)
-    records = {
-        name: copy.deepcopy(backend.data.get(name, [])) for name in COLLECTIONS
-    }
+    records = {name: copy.deepcopy(backend.data.get(name, [])) for name in COLLECTIONS}
     records["jobs"] = [
         {
             "_id": "interrupted-upload",
             "data": {
-                "id": "interrupted-upload", "phase": "uploading", "status": "running",
-                "current": 3, "total": 42, "error": None,
-                "created_at": 1000.0, "updated_at": 1001.0,
+                "id": "interrupted-upload",
+                "phase": "uploading",
+                "status": "running",
+                "current": 3,
+                "total": 42,
+                "error": None,
+                "created_at": 1000.0,
+                "updated_at": 1001.0,
                 "context": {
-                    "kind": "upload", "name": "original.bin", "destination": "/",
+                    "kind": "upload",
+                    "name": "original.bin",
+                    "destination": "/",
                     "local_path": "/old-host/private.upload",
                     "multipart_plan": {"parts": [{"message_id": 123}]},
                 },
@@ -863,15 +868,22 @@ def database_snapshot(settings):
     records["sessions"] = [{"_id": "old-browser-cookie"}]
     records["identities"] = [{"_id": "old-login-identity"}]
     records["bot_folders"] = [{"_id": "saved-folder", "node_id": "root"}]
-    records["settings"].append({
-        "_id": "extra-saved-policy",
-        "document": {"at": datetime(2026, 10, 28, tzinfo=UTC), "value": Binary(b"saved", subtype=128)},
-    })
+    records["settings"].append(
+        {
+            "_id": "extra-saved-policy",
+            "document": {
+                "at": datetime(2026, 10, 28, tzinfo=UTC),
+                "value": Binary(b"saved", subtype=128),
+            },
+        }
+    )
     return records
 
 
 @pytest.mark.parametrize("interrupted", [False, True])
-def test_unified_file_restores_database_settings_and_history_safely(settings, interrupted):
+def test_unified_file_restores_database_settings_and_history_safely(
+    settings, interrupted
+):
     from argon2 import PasswordHasher
 
     before = catalog(settings)
@@ -901,7 +913,10 @@ def test_unified_file_restores_database_settings_and_history_safely(settings, in
         assert backend.data["sessions"] == [{"_id": "current-browser-cookie"}]
     assert _apply(pending)
     assert installed(settings) == normalized["catalog"]
-    assert backend.db.settings.find_one({"_id": "extra-saved-policy"}) == value["database"]["settings"][-1]
+    assert (
+        backend.db.settings.find_one({"_id": "extra-saved-policy"})
+        == value["database"]["settings"][-1]
+    )
     assert backend.data["bot_folders"] == value["database"]["bot_folders"]
     assert backend.data["sessions"] == [] and backend.data["identities"] == []
     assert backend.data["operations"] == [] and backend.data["receipts"] == []
@@ -914,7 +929,9 @@ def test_unified_file_restores_database_settings_and_history_safely(settings, in
     assert history[0]["summary"]["retained"] is False
     assert "data" not in history[0] and "context" not in history[0]["summary"]
     bootstrap = backend.db.settings.find_one({"_id": "bootstrap"})["document"]
-    assert PasswordHasher().verify(bootstrap["ADMIN_PASSWORD_HASH"], "test activation password")
+    assert PasswordHasher().verify(
+        bootstrap["ADMIN_PASSWORD_HASH"], "test activation password"
+    )
     assert bootstrap["STORAGE_CHANNEL"] == NEW
     assert bootstrap["BOT_TOKENS"] == NEW_BOT and bootstrap["STRING_SESSIONS"] == ""
     assert bootstrap["MONGODB_BACKUP_KEY"] == value["key"]
@@ -933,14 +950,18 @@ def test_unified_file_recovers_a_missing_mongodb_catalog(settings):
 
 
 @pytest.mark.parametrize("change", ["revision", "file", "backup-channel"])
-def test_unified_file_rejects_mismatched_database_or_backup_before_activation(settings, change):
+def test_unified_file_rejects_mismatched_database_or_backup_before_activation(
+    settings, change
+):
     before = catalog(settings)
     value = candidate(before)
     value["database"] = database_snapshot(settings)
     if change == "revision":
         value["database"]["catalog"][0]["revision"] += 1
     elif change == "file":
-        next(row for row in value["database"]["nodes"] if row["kind"] == "file")["size"] += 1
+        next(row for row in value["database"]["nodes"] if row["kind"] == "file")[
+            "size"
+        ] += 1
     else:
         value["backup_config"] = {"channel": NEW, "token": BACKUP_BOT}
     with pytest.raises(ActivationError):

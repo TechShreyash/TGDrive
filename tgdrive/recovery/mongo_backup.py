@@ -125,13 +125,16 @@ def decode_snapshot(path: Path, key: bytes):
     if path.stat().st_size > MAX_EXPANDED:
         raise BackupError("Encrypted backup is too large")
     data = path.read_bytes()
-    from tgdrive.recovery.recovery_file import MAGIC as RECOVERY_MAGIC, decode_recovery_file
+    from tgdrive.recovery.recovery_file import MAGIC as RECOVERY_MAGIC
+    from tgdrive.recovery.recovery_file import decode_recovery_file
 
     if data.startswith(RECOVERY_MAGIC):
         try:
             return decode_recovery_file(data, key.hex())["database"]
         except ValueError:
-            raise BackupError("Backup authentication or validation failed; nothing restored") from None
+            raise BackupError(
+                "Backup authentication or validation failed; nothing restored"
+            ) from None
     if not data.startswith(MAGIC) or len(data) < len(MAGIC) + 12 + 16:
         raise BackupError("This is not a TGDrive MongoDB backup")
     nonce = data[len(MAGIC) : len(MAGIC) + 12]
@@ -384,9 +387,13 @@ class MongoProtection:
         journal = getattr(getattr(self, "replica", None), "journal", None)
         if journal is not None and journal.get("config", {}).get("enabled"):
             independent = journal.get("status", {})
-            result["last_success_at"] = independent.get("last_success_at") or self._last_success_at
+            result["last_success_at"] = (
+                independent.get("last_success_at") or self._last_success_at
+            )
             result["backup_error"] = (independent.get("error") or {}).get("detail")
-            result["backup_key_configured"] = bool(journal.get("key")) or result["backup_key_configured"]
+            result["backup_key_configured"] = (
+                bool(journal.get("key")) or result["backup_key_configured"]
+            )
         if error:
             result["error"] = error
         return result
@@ -418,16 +425,24 @@ class MongoProtection:
             )
             try:
                 previous_files = await asyncio.to_thread(
-                    lambda: list(backend.db.backups.find({
-                        "status": "confirmed", "format": "tgdrive-backup-v2",
-                    }))
+                    lambda: list(
+                        backend.db.backups.find(
+                            {
+                                "status": "confirmed",
+                                "format": "tgdrive-backup-v2",
+                            }
+                        )
+                    )
                 )
             except Exception:
                 previous_files = []
-                logger.warning("Could not list older confirmed local recovery files for cleanup")
+                logger.warning(
+                    "Could not list older confirmed local recovery files for cleanup"
+                )
             legacy_key = (
                 pending.get("format") != "tgdrive-backup-v2"
-                if pending is not None else legacy
+                if pending is not None
+                else legacy
             )
             replica = getattr(self, "replica", None)
             key = (
@@ -442,8 +457,8 @@ class MongoProtection:
                 path = directory / (identity + ".tgdb")
                 writer = (
                     (write_snapshot, backend, path, key)
-                    if legacy else
-                    (write_recovery_snapshot, backend, path, key, self.settings)
+                    if legacy
+                    else (write_recovery_snapshot, backend, path, key, self.settings)
                 )
                 export = asyncio.create_task(asyncio.to_thread(*writer))
                 try:
@@ -483,7 +498,10 @@ class MongoProtection:
             if pending["channel_id"] != self.settings.storage_channel:
                 raise BackupError("Pending backup belongs to another channel")
             fingerprint = pending.get("key_sha256")
-            if fingerprint is not None and fingerprint != hashlib.sha256(key).hexdigest():
+            if (
+                fingerprint is not None
+                and fingerprint != hashlib.sha256(key).hexdigest()
+            ):
                 raise BackupError(
                     "The pending recovery file uses a different key. Preserve the "
                     "file and restore its original recovery key before retrying."
@@ -572,7 +590,9 @@ class MongoProtection:
                 if pending["format"] != "tgdrive-backup-v2":
                     path.unlink(missing_ok=True)
                 else:
-                    await asyncio.to_thread(self._prune_confirmed_files, previous_files, pending["id"])
+                    await asyncio.to_thread(
+                        self._prune_confirmed_files, previous_files, pending["id"]
+                    )
                 self._last_error = None
                 return True
             except Exception as exc:
@@ -597,7 +617,9 @@ class MongoProtection:
         directory = self.settings.resolved_cache_dir / "mongo-backups"
         try:
             resolved = directory.resolve()
-            descriptor = os.open(directory, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+            descriptor = os.open(
+                directory, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
+            )
             try:
                 for row in rows:
                     identity = row.get("id")
@@ -611,10 +633,15 @@ class MongoProtection:
                         continue
                     filename = identity + ".tgdb"
                     path = directory / filename
-                    if row.get("local_path") != str(path) or path.resolve().parent != resolved:
+                    if (
+                        row.get("local_path") != str(path)
+                        or path.resolve().parent != resolved
+                    ):
                         continue
                     try:
-                        info = os.stat(filename, dir_fd=descriptor, follow_symlinks=False)
+                        info = os.stat(
+                            filename, dir_fd=descriptor, follow_symlinks=False
+                        )
                     except FileNotFoundError:
                         continue
                     if stat.S_ISREG(info.st_mode):
@@ -622,7 +649,10 @@ class MongoProtection:
             finally:
                 os.close(descriptor)
         except Exception:
-            logger.warning("Could not remove an older confirmed local recovery file; the new backup remains confirmed")
+            logger.warning(
+                "Could not remove an older confirmed local recovery file; "
+                "the new backup remains confirmed"
+            )
 
     def start(self, store):
         if self._task is None:

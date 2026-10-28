@@ -367,7 +367,8 @@ async def generate_video_images(
     small = content[VIDEO_IMAGES_HEADER.size : small_end]
     poster = content[small_end:]
     if any(
-        image and not (image.startswith(b"\xff\xd8\xff") and image.endswith(b"\xff\xd9"))
+        image
+        and not (image.startswith(b"\xff\xd8\xff") and image.endswith(b"\xff\xd9"))
         for image in (small, poster)
     ):
         return None, None

@@ -69,7 +69,9 @@ def _object(pairs):
         if key in result:
             raise ValueError("Duplicate activation field")
         result[key] = value
-    return json_util.object_hook(result, json_options=json_util.JSONOptions(tz_aware=True))
+    return json_util.object_hook(
+        result, json_options=json_util.JSONOptions(tz_aware=True)
+    )
 
 
 def _digest(value):
@@ -273,7 +275,8 @@ def _candidate(settings, candidate):
                 or not -(1 << 63) <= config["channel"] < 0
                 or config["channel"] == catalog["storage_channel_id"]
                 or not isinstance(config["token"], str)
-                or re.fullmatch(r"[1-9][0-9]{4,14}:[A-Za-z0-9_-]{20,}", config["token"]) is None
+                or re.fullmatch(r"[1-9][0-9]{4,14}:[A-Za-z0-9_-]{20,}", config["token"])
+                is None
             ):
                 raise ValueError
             result["backup_config"] = copy.deepcopy(config)
@@ -291,16 +294,21 @@ def _database(records, catalog):
     records = sanitize_database(records)
     source = snapshot_catalog(records)
     if (source["drive_id"], source["revision"]) != (
-        catalog["drive_id"], catalog["revision"]
+        catalog["drive_id"],
+        catalog["revision"],
     ):
-        raise ValueError("Recovery database and catalog describe different restore points")
+        raise ValueError(
+            "Recovery database and catalog describe different restore points"
+        )
     originals = {node["id"]: node for node in files_in(source)}
     restored = {node["id"]: node for node in files_in(catalog)}
     if set(originals) != set(restored):
         raise ValueError("Recovery database and catalog contain different files")
     mapping = {}
     for identity, node in originals.items():
-        for before, after in zip(parts_in(node), parts_in(restored[identity]), strict=True):
+        for before, after in zip(
+            parts_in(node), parts_in(restored[identity]), strict=True
+        ):
             message, replacement = str(before["message_id"]), after["message_id"]
             if message in mapping and mapping[message] != replacement:
                 raise ValueError("Conflicting recovery database location")
@@ -311,7 +319,15 @@ def _database(records, catalog):
     expected.pop("folder_preparations", None)
     if expected != catalog:
         raise ValueError("Recovery database and catalog contain different metadata")
-    for name in ("sessions", "identities", "operations", "deletions", "preparations", "receipts", "backups"):
+    for name in (
+        "sessions",
+        "identities",
+        "operations",
+        "deletions",
+        "preparations",
+        "receipts",
+        "backups",
+    ):
         records[name] = []
     records["jobs"] = _history(records["jobs"])
     return records
@@ -337,14 +353,16 @@ def _history(rows):
             record.phase = "cancelled"
             record.finished_at = record.updated_at
         summary = registry.history_snapshot(record, retained=False)
-        history.append({
-            "_id": record.id,
-            "archived": True,
-            "created_at": record.created_at,
-            "status": record.status.value,
-            "search_name": unicodedata.normalize("NFC", summary["name"]).casefold(),
-            "summary": summary,
-        })
+        history.append(
+            {
+                "_id": record.id,
+                "archived": True,
+                "created_at": record.created_at,
+                "status": record.status.value,
+                "search_name": unicodedata.normalize("NFC", summary["name"]).casefold(),
+                "summary": summary,
+            }
+        )
     return history
 
 
@@ -659,7 +677,8 @@ def _preserve(settings, value, backend):
     if bootstrap.exists() or bootstrap.is_symlink():
         _copy_file(bootstrap, archive / bootstrap.name)
     _preserve_mongo(
-        backend, archive,
+        backend,
+        archive,
         maximum=MAX_EXPANDED if "database" in value["candidate"] else MAX_BUNDLE,
     )
     return archive
@@ -817,14 +836,16 @@ def _apply_mongo(settings, value, backend):
                     "mongodb_backup_key"
                 ]
             if database is not None:
-                bootstrap["document"].update({
-                    "API_ID": desired.api_id,
-                    "API_HASH": desired.api_hash.get_secret_value(),
-                    "BOT_TOKENS": ",".join(candidate["credentials"]["bot_tokens"]),
-                    "STRING_SESSIONS": "",
-                    "MAIN_BOT_TOKEN": None,
-                    "ADMIN_PASSWORD_HASH": owner_hash,
-                })
+                bootstrap["document"].update(
+                    {
+                        "API_ID": desired.api_id,
+                        "API_HASH": desired.api_hash.get_secret_value(),
+                        "BOT_TOKENS": ",".join(candidate["credentials"]["bot_tokens"]),
+                        "STRING_SESSIONS": "",
+                        "MAIN_BOT_TOKEN": None,
+                        "ADMIN_PASSWORD_HASH": owner_hash,
+                    }
+                )
                 bootstrap["document"].pop("ADMIN_PASSWORD", None)
             backend.db.settings.replace_one(
                 {"_id": "bootstrap"}, bootstrap, upsert=True, session=session

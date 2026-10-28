@@ -12,6 +12,7 @@ import shutil
 import stat
 import struct
 import sys
+from contextlib import suppress
 from pathlib import Path
 from zipfile import ZIP_BZIP2, ZIP_DEFLATED, ZIP_LZMA, ZIP_STORED, BadZipFile, ZipFile
 
@@ -233,7 +234,8 @@ def zip_manifest(path, limit, budget):
                         ZIP_LZMA,
                     }:
                         raise ArchiveError(
-                            "Use an unencrypted ZIP with Stored, Deflate, BZIP2 or LZMA compression."
+                            "Use an unencrypted ZIP with Stored, Deflate, "
+                            "BZIP2 or LZMA compression."
                         )
                     if (
                         key in explicit
@@ -605,10 +607,8 @@ async def _extract_files(manager, record, directory):
 @_journalled
 async def _stop_decoder(process, cancelled=None):
     if process.returncode is None:
-        try:
+        with suppress(ProcessLookupError):
             process.kill()
-        except ProcessLookupError:
-            pass
     await process.wait()
     if cancelled is not None:
         cancelled.cancel()
@@ -698,7 +698,7 @@ async def _decode_archive(manager, record, source, directory):
     environment = {
         "PATH": os.defpath,
         "LANG": "C.UTF-8",
-        "PYTHONPATH": str(Path(__file__).resolve().parents[2]),
+        "PYTHONPATH": str(await _worker(lambda: Path(__file__).resolve().parents[2])),
     }
     if os.environ.get("LIBARCHIVE"):
         environment["LIBARCHIVE"] = os.environ["LIBARCHIVE"]
@@ -749,7 +749,8 @@ async def _decode_archive(manager, record, source, directory):
             if not line or len(line) > MAX_MANIFEST_BYTES + 128:
                 raise ArchiveError(
                     "The archive processor stopped or exceeded its resource limits "
-                    "(512 MiB memory / 600 CPU seconds). Try a smaller archive or dictionary."
+                    "(512 MiB memory / 600 CPU seconds). "
+                    "Try a smaller archive or dictionary."
                 )
             message = json.loads(line)
             if "error" in message:

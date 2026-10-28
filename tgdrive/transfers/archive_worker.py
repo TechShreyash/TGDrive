@@ -156,7 +156,8 @@ class Manifest:
             or len(self.explicit) > MAX_ENTRIES
         ):
             raise WorkerError(
-                "An archive supports at most 1000 files and folders including implicit folders."
+                "An archive supports at most 1000 files and folders "
+                "including implicit folders."
             )
         if self.size > self.budget:
             raise WorkerError("Archive and extracted files exceed the staging budget.")
@@ -240,9 +241,9 @@ def compressed_source(path, compression, maximum):
         bounded = BoundedStream(stream, maximum)
         try:
             yield bounded
-        except Exception:
+        except Exception as error:
             if bounded.failure:
-                raise bounded.failure
+                raise bounded.failure from error
             raise
         bounded.drain()
 
@@ -348,15 +349,17 @@ def extract(request):
     @contextmanager
     def reader():
         if container in {"tar", "raw"}:
-            with compressed_source(
-                source,
-                compression,
-                budget + (TAR_METADATA_BYTES if container == "tar" else 0),
-            ) as stream:
-                with libarchive.stream_reader(
+            with (
+                compressed_source(
+                    source,
+                    compression,
+                    budget + (TAR_METADATA_BYTES if container == "tar" else 0),
+                ) as stream,
+                libarchive.stream_reader(
                     stream, format_name=container, filter_name="none", block_size=BLOCK
-                ) as archive:
-                    yield archive, stream
+                ) as archive,
+            ):
+                yield archive, stream
         else:
             with libarchive.file_reader(
                 str(source),
@@ -417,8 +420,8 @@ def run():
         message = str(error)
         if not isinstance(error, WorkerError):
             message = (
-                "Archive integrity/CRC verification failed, or the archive is damaged, encrypted or unsupported. "
-                + message
+                "Archive integrity/CRC verification failed, or the archive is "
+                "damaged, encrypted or unsupported. " + message
             )
         send({"error": message[:500]})
 

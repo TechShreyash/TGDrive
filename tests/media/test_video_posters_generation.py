@@ -19,9 +19,7 @@ POSTER = b"\xff\xd8\xfflarge\xff\xd9"
 
 def pair(small=THUMBNAIL, poster=POSTER, *, magic=worker.VIDEO_IMAGES_MAGIC):
     return (
-        worker.VIDEO_IMAGES_HEADER.pack(magic, len(small), len(poster))
-        + small
-        + poster
+        worker.VIDEO_IMAGES_HEADER.pack(magic, len(small), len(poster)) + small + poster
     )
 
 
@@ -74,7 +72,9 @@ async def test_native_video_images_are_bounded_and_do_not_upscale(
     assert path.read_bytes() == original
 
 
-def test_thumbnail_uses_the_same_decoded_picture_without_reading_video_again(monkeypatch):
+def test_thumbnail_uses_the_same_decoded_picture_without_reading_video_again(
+    monkeypatch,
+):
     calls = []
 
     def run(command, **kwargs):
@@ -133,9 +133,7 @@ async def test_parent_accepts_only_complete_bounded_image_pairs(
 ):
     generate = AsyncMock(return_value=payload)
     monkeypatch.setattr(covers, "_generate", generate)
-    assert (
-        await covers.generate_video_images(Path("clip.mp4"), "clip.mp4") == expected
-    )
+    assert await covers.generate_video_images(Path("clip.mp4"), "clip.mp4") == expected
     assert generate.call_args.kwargs["images"] is True
 
 

@@ -124,7 +124,7 @@ jobs:
 
     tests:
         name: Backend tests
-        runs-on: ubuntu-latest
+        runs-on: ubuntu-24.04
         timeout-minutes: 20
         steps:
             - name: Check out repository
@@ -154,6 +154,7 @@ jobs:
               run: npm ci --prefix website && npm run build --prefix website
 
             - name: Start isolated MongoDB replica set
+              id: mongo
               run: |
                   docker run -d --name tgdrive-test-mongo -p 127.0.0.1:27017:27017 \
                     mongo:8.0@sha256:4a4ab5d4834207389e0d7270fac988e21ffedccecba77991a552f755df229907 --replSet tgdrive-test --bind_ip_all
@@ -174,6 +175,12 @@ jobs:
                   done
                   docker exec tgdrive-test-mongo mongosh --quiet --eval \
                     'if (!db.hello().isWritablePrimary) { quit(1); }'
+
+            - name: Show isolated MongoDB startup failure
+              if: failure() && steps.mongo.outcome == 'failure'
+              run: |
+                  docker inspect tgdrive-test-mongo --format '{{json .State}}' || true
+                  docker logs tgdrive-test-mongo || true
 
             - name: Run tests with coverage
               env:

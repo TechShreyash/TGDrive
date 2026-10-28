@@ -47,7 +47,9 @@ def collect_credentials(settings, runtime):
             clients=initial_clients(settings),
         )
     document = document.model_copy(
-        update={"clients": [client for client in document.clients if client.kind == "bot"]}
+        update={
+            "clients": [client for client in document.clients if client.kind == "bot"]
+        }
     )
     credentials["managed_document"] = json.loads(document.private_bytes())
     backend = runtime.mongo
@@ -92,7 +94,9 @@ def credentials_from_snapshot(settings, records):
     )
     # Account sessions are live account access, not necessary drive recovery data.
     document = document.model_copy(
-        update={"clients": [client for client in document.clients if client.kind == "bot"]}
+        update={
+            "clients": [client for client in document.clients if client.kind == "bot"]
+        }
     )
     document = ManagedDocument.model_validate(json.loads(document.private_bytes()))
     credentials = {
@@ -108,7 +112,9 @@ def credentials_from_snapshot(settings, records):
         "preferences": {},
     }
     defaults = {
-        "performance-preferences.json": PerformanceSettings(settings, None).value.model_dump(),
+        "performance-preferences.json": PerformanceSettings(
+            settings, None
+        ).value.model_dump(),
         "transfer-preferences.json": {
             "uploads_per_bot": getattr(settings, "telegram_uploads_per_bot", 1)
         },

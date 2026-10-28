@@ -52,7 +52,9 @@ def test_settings_snapshot_keeps_labels_and_preferences_without_account_sessions
     credentials = collect_credentials(configured, SimpleNamespace(mongo=mongo_backend))
     validate_recovery_settings(credentials)
     assert credentials["managed_document"]["clients"][0]["label"] == "Primary storage"
-    assert all(client["kind"] == "bot" for client in credentials["managed_document"]["clients"])
+    assert all(
+        client["kind"] == "bot" for client in credentials["managed_document"]["clients"]
+    )
     assert "syntheticPremiumSession" not in str(credentials)
     assert (
         credentials["preferences"]["performance-preferences.json"]["timezone"] == "UTC"

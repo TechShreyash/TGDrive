@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import base64
 import hashlib
 import re
 import shutil
@@ -390,12 +391,23 @@ def test_time_buffer_survives_network_loss_and_ten_second_skips(
     payload = media.read_bytes()
     _serve_media(page, payload, "video/mp4")
     login(page, server.url)
+    # Isolate playback read-ahead from the separate representative-poster seek.
+    poster = page.evaluate(
+        "()=>document.createElement('canvas').toDataURL('image/jpeg').split(',')[1]"
+    )
+    page.route(
+        "**/api/v1/poster?*",
+        lambda route: route.fulfill(
+            body=base64.b64decode(poster), content_type="image/jpeg"
+        ),
+    )
     page.get_by_role("button", name="Preview samples", exact=True).dblclick()
     page.get_by_role("button", name="movtext-subtitles.mp4", exact=True).dblclick()
     player = page.locator("movi-player")
     page.wait_for_function(
         "()=>document.querySelector('movi-player')?.duration>170", timeout=30000
     )
+    assert player.get_attribute("postertime") is None
     player.locator("button.movi-play-pause").click()
     page.wait_for_function(
         """()=>{

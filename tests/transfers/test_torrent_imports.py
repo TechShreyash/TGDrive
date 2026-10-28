@@ -71,9 +71,10 @@ async def test_nested_torrent_keeps_existing_folder_and_shows_one_task(
         assert tree["root"]["id"] != existing["id"]
         assert manager.store.list_directory("/" + existing["id"]) == {}
         assert record.context["destination"] == tree["folders"][""]
-        assert [item["name"] for item in manager.store.list_directory(
-            tree["folders"]["Disc"]
-        ).values()] == ["song.bin"]
+        assert [
+            item["name"]
+            for item in manager.store.list_directory(tree["folders"]["Disc"]).values()
+        ] == ["song.bin"]
         assert len(ledger.messages) == 2
         assert calls == [SOURCE]
         assert record.as_dict()["torrent_files"] == {"total": 2, "completed": 2}
@@ -189,7 +190,9 @@ async def test_cancelling_torrent_download_stops_and_removes_its_stage(
 async def test_cancelled_parent_preserves_error_child_and_its_storage_claim(tmp_path):
     manager, _ = await manager_for(tmp_path)
     try:
-        parent = await manager.registry.create("torrent_metadata", context={"kind": "torrent"})
+        parent = await manager.registry.create(
+            "torrent_metadata", context={"kind": "torrent"}
+        )
         directory = manager.cache_dir / "torrents" / parent.id
         directory.mkdir(parents=True)
         staged = directory / "retained.bin"
@@ -198,8 +201,10 @@ async def test_cancelled_parent_preserves_error_child_and_its_storage_claim(tmp_
         child = await manager.registry.create(
             "cleanup_pending",
             context=dict(
-                kind="upload", torrent_parent_id=parent.id,
-                local_path=str(staged), send_started=True,
+                kind="upload",
+                torrent_parent_id=parent.id,
+                local_path=str(staged),
+                send_started=True,
             ),
         )
         await manager.registry.update(child.id, status=TransferStatus.ERROR)
@@ -237,8 +242,11 @@ async def test_torrent_resume_counts_retained_allocation_during_zero_hash_progre
         manifest = TorrentManifest(
             "retained.bin", (TorrentFile("retained.bin", 8192),), 8192, False
         )
-        parent = next(job for job in manager.registry.list()
-                      if job.context.get("kind") == "torrent")
+        parent = next(
+            job
+            for job in manager.registry.list()
+            if job.context.get("kind") == "torrent"
+        )
         assert parent.context.get("staging_written", 0) == 0
         await admit(manifest)
         assert parent.context["staging_written"] == allocated
@@ -272,7 +280,9 @@ async def test_busy_torrent_slots_keep_next_queued_and_allow_local_uploads(
     monkeypatch.setattr("tgdrive.transfers.torrent.available", lambda: True)
 
     async def download(source, directory, *, progress, admit, **_):
-        manifest = TorrentManifest("torrent.bin", (TorrentFile("torrent.bin", 3),), 3, False)
+        manifest = TorrentManifest(
+            "torrent.bin", (TorrentFile("torrent.bin", 3),), 3, False
+        )
         await admit(manifest)
         downloads.append(directory)
         if len(downloads) == 2:
@@ -285,8 +295,10 @@ async def test_busy_torrent_slots_keep_next_queued_and_allow_local_uploads(
 
     monkeypatch.setattr("tgdrive.transfers.torrent.download_torrent", download)
     try:
-        torrents = [await manager.start_torrent(source=SOURCE, destination="/")
-                    for _ in range(3)]
+        torrents = [
+            await manager.start_torrent(source=SOURCE, destination="/")
+            for _ in range(3)
+        ]
         await asyncio.wait_for(entered.wait(), 2)
         local = manager.cache_dir / "device.upload"
         local.write_bytes(b"abc")

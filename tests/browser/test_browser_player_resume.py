@@ -53,9 +53,9 @@ def test_continue_survives_close_and_reload_without_seeking_automatically(
     assert player.evaluate("el=>el.paused&&el.currentTime<0.1")
     # Opening and closing an unwatched preview must preserve its existing offer.
     dialog.get_by_role("button", name="Close Preview", exact=True).click()
-    assert page.evaluate("key=>Number(localStorage.getItem(key))", key) == pytest.approx(
-        1.5, abs=0.1
-    )
+    assert page.evaluate(
+        "key=>Number(localStorage.getItem(key))", key
+    ) == pytest.approx(1.5, abs=0.1)
     _open_video(page)
     page.reload()
     dialog = preview_dialog(page)
@@ -103,7 +103,9 @@ def test_native_play_starts_at_beginning_and_completion_clears_position(
     )
     page.wait_for_function("key=>localStorage.getItem(key)===null", arg=key)
     # Replacing a completed engine must not restore and re-save its final time.
-    player.evaluate("el=>{window.finishedPlayer=el;el.dispatchEvent(new Event('error'))}")
+    player.evaluate(
+        "el=>{window.finishedPlayer=el;el.dispatchEvent(new Event('error'))}"
+    )
     dialog.get_by_role("button", name="Try again", exact=True).click()
     page.wait_for_function(
         "()=>{const el=document.querySelector('movi-player');"

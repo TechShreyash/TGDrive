@@ -81,8 +81,11 @@ class ReplicaJournal:
                 "SELECT value FROM state WHERE key=?", (key,)
             ).fetchone()
             return (
-                json_util.loads(row[0], json_options=json_util.JSONOptions(tz_aware=True))
-                if row else copy.deepcopy(default)
+                json_util.loads(
+                    row[0], json_options=json_util.JSONOptions(tz_aware=True)
+                )
+                if row
+                else copy.deepcopy(default)
             )
 
     def set(self, key, value):
@@ -94,7 +97,10 @@ class ReplicaJournal:
             (
                 key,
                 json.dumps(
-                    value, default=json_util.default, allow_nan=False, ensure_ascii=False
+                    value,
+                    default=json_util.default,
+                    allow_nan=False,
+                    ensure_ascii=False,
                 ),
             )
             for key, value in values.items()
@@ -199,7 +205,8 @@ def encode_bundle(payload, key):
 
 def decode_bundle(content, key):
     """Authenticate and validate a complete, internally equivalent channel pair."""
-    from tgdrive.recovery.recovery_file import MAGIC as RECOVERY_MAGIC, decode_recovery_file
+    from tgdrive.recovery.recovery_file import MAGIC as RECOVERY_MAGIC
+    from tgdrive.recovery.recovery_file import decode_recovery_file
 
     if isinstance(content, bytes) and content.startswith(RECOVERY_MAGIC):
         return decode_recovery_file(content, key)

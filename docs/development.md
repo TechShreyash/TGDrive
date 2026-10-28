@@ -345,6 +345,9 @@ The [CI workflow](../.github/workflows/ci.yml) keeps routine pushes focused:
 
 All Python jobs use **3.14.8**, the sole supported runtime pinned in
 `.python-version` and the Docker image. There is no older-version test matrix.
+The backend job uses Ubuntu 24.04, the last verified baseline for its pinned
+MongoDB container. A startup failure records the container state and logs before
+stopping; application tests require a writable isolated replica set.
 
 Pushes confined to Markdown, `docs/` or `LICENSE` skip automatic CI. Every pull
 request runs CI, including documentation-only changes, so required merge checks

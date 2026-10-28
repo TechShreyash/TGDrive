@@ -77,9 +77,7 @@ def test_video_stored_poster_is_sharp_and_released_when_preview_closes(
     page.wait_for_function("()=>document.querySelector('movi-player')?.currentTime>0.5")
     expect(poster).to_be_hidden()
     dialog.get_by_role("button", name="Close Preview", exact=True).click()
-    page.wait_for_function(
-        "url=>window.releasedVideoPosters.includes(url)", arg=source
-    )
+    page.wait_for_function("url=>window.releasedVideoPosters.includes(url)", arg=source)
 
 
 def test_video_missing_poster_decodes_representative_frame_without_watching(
@@ -218,14 +216,18 @@ def test_representative_seek_yields_to_early_user_intent(
             return !player.paused&&player.currentTime>=1.5&&player.currentTime<2.2;
         }""")
     else:
-        player.evaluate("async element=>{await element.pause();await element.player.seek(2)}")
+        player.evaluate(
+            "async element=>{await element.pause();await element.player.seek(2)}"
+        )
         page.wait_for_function("""()=>{
             const player=document.querySelector('movi-player');
             return player.paused&&!player.seeking&&Math.abs(player.currentTime-2)<0.1;
         }""")
     page.evaluate("window.releasePosterFlush()")
     if action == "seek":
-        assert player.evaluate("element=>element.paused&&Math.abs(element.currentTime-2)<0.1")
+        assert player.evaluate(
+            "element=>element.paused&&Math.abs(element.currentTime-2)<0.1"
+        )
     else:
         assert player.evaluate("element=>!element.paused")
 

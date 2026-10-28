@@ -18,7 +18,9 @@ from tgdrive.media import generated_thumbnails
 THUMBNAIL = b"\xff\xd8\xffsmall\xff\xd9"
 
 
-@pytest.mark.parametrize("thumbnail", [THUMBNAIL, None], ids=["video", "poster-sidecar"])
+@pytest.mark.parametrize(
+    "thumbnail", [THUMBNAIL, None], ids=["video", "poster-sidecar"]
+)
 async def test_transport_does_not_regenerate_an_explicit_image(
     tmp_path, monkeypatch, thumbnail
 ):
@@ -53,8 +55,9 @@ async def test_transport_does_not_regenerate_an_explicit_image(
         [("thumbnail.jpg", THUMBNAIL)] if thumbnail else []
     )
     assert bool(native.requests[-1].media.thumb) is bool(thumbnail)
-    assert generated_thumbnails.read(
-        client._thumbnail_directory, CHANNEL, result.id
-    ) == thumbnail
+    assert (
+        generated_thumbnails.read(client._thumbnail_directory, CHANNEL, result.id)
+        == thumbnail
+    )
     generate.assert_not_awaited()
     assert path.read_bytes() == b"abc"

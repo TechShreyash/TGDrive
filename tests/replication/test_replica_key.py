@@ -29,7 +29,9 @@ def replicas(tmp_path):
     def create(name="first", *, local_key=None, drive_id=DRIVE):
         configured = settings(tmp_path / name)
         configured.mongodb_backup_key = SecretStr(LEGACY_KEY)
-        runtime = SimpleNamespace(mongo=backend, store=SimpleNamespace(drive_id=drive_id))
+        runtime = SimpleNamespace(
+            mongo=backend, store=SimpleNamespace(drive_id=drive_id)
+        )
         replica = ChannelReplica(configured, runtime)
         if local_key is not None:
             replica.journal.set("key", local_key)
@@ -82,7 +84,10 @@ def test_cached_key_rechecks_a_changed_local_key(replicas):
     assert caught.value.code == "RECOVERY_KEY_CONFLICT"
     assert backend.db.settings.find_one({"_id": "recovery-key"}) == saved_key()
 
-    backend.db.settings.update_one({"_id": "recovery-key"}, {"$set": {"document": saved_key(LEGACY_KEY)["document"]}})
+    backend.db.settings.update_one(
+        {"_id": "recovery-key"},
+        {"$set": {"document": saved_key(LEGACY_KEY)["document"]}},
+    )
     assert replica.key() == LEGACY_KEY
 
 
@@ -91,13 +96,21 @@ def test_changed_local_key_is_not_trusted_during_database_outage(replicas, monke
     replica = create(local_key=KEY)
     assert replica.key() == KEY
     replica.journal.set("key", LEGACY_KEY)
-    monkeypatch.setattr(backend.db.settings, "find_one", Mock(side_effect=DatabaseUnavailable("unavailable")))
+    monkeypatch.setattr(
+        backend.db.settings,
+        "find_one",
+        Mock(side_effect=DatabaseUnavailable("unavailable")),
+    )
     with pytest.raises(DatabaseUnavailable):
         replica.key()
 
 
-@pytest.mark.parametrize("local_key,drive_id", [(LEGACY_KEY, DRIVE), (None, "different-drive")])
-def test_conflicting_keys_or_drive_are_preserved_for_explicit_repair(replicas, local_key, drive_id):
+@pytest.mark.parametrize(
+    "local_key,drive_id", [(LEGACY_KEY, DRIVE), (None, "different-drive")]
+)
+def test_conflicting_keys_or_drive_are_preserved_for_explicit_repair(
+    replicas, local_key, drive_id
+):
     create, backend = replicas
     backend.db.settings.insert_one(saved_key())
     replica = create(local_key=local_key, drive_id=drive_id)
@@ -109,7 +122,9 @@ def test_conflicting_keys_or_drive_are_preserved_for_explicit_repair(replicas, l
 
 
 @pytest.mark.parametrize("local_key", [None, LEGACY_KEY])
-def test_atomic_creation_uses_winner_without_overwriting_existing_local_key(replicas, monkeypatch, local_key):
+def test_atomic_creation_uses_winner_without_overwriting_existing_local_key(
+    replicas, monkeypatch, local_key
+):
     create, backend = replicas
     replica = create(local_key=local_key)
     write = backend.write
@@ -130,8 +145,12 @@ def test_atomic_creation_uses_winner_without_overwriting_existing_local_key(repl
     assert backend.db.settings.find_one({"_id": "recovery-key"}) == saved_key()
 
 
-@pytest.mark.parametrize("error", [DatabaseUnavailable("unavailable"), ConnectionFailure("unavailable")])
-def test_database_outage_keeps_local_key_but_never_generates_a_replacement(replicas, monkeypatch, error):
+@pytest.mark.parametrize(
+    "error", [DatabaseUnavailable("unavailable"), ConnectionFailure("unavailable")]
+)
+def test_database_outage_keeps_local_key_but_never_generates_a_replacement(
+    replicas, monkeypatch, error
+):
     create, backend = replicas
     existing = create(local_key=KEY)
     missing = create("missing")
@@ -145,11 +164,15 @@ def test_database_outage_keeps_local_key_but_never_generates_a_replacement(repli
 
 def test_missing_migrated_key_cannot_silently_change_confirmed_file_password(replicas):
     create, backend = replicas
-    backend.db.backups.insert_one({
-        "_id": "confirmed", "status": "confirmed", "format": "tgdrive-backup-v2",
-        "created_at": "2026-10-28T00:00:00+00:00",
-        "key_sha256": hashlib.sha256(bytes.fromhex(KEY)).hexdigest(),
-    })
+    backend.db.backups.insert_one(
+        {
+            "_id": "confirmed",
+            "status": "confirmed",
+            "format": "tgdrive-backup-v2",
+            "created_at": "2026-10-28T00:00:00+00:00",
+            "key_sha256": hashlib.sha256(bytes.fromhex(KEY)).hexdigest(),
+        }
+    )
     replica = create()
     with pytest.raises(SettingsProblem) as caught:
         replica.key()
@@ -158,7 +181,10 @@ def test_missing_migrated_key_cannot_silently_change_confirmed_file_password(rep
     assert backend.db.settings.find_one({"_id": "recovery-key"}) is None
 
 
-@pytest.mark.parametrize("document", [None, {"key": "invalid", "drive_id": DRIVE}, {"key": KEY, "drive_id": []}])
+@pytest.mark.parametrize(
+    "document",
+    [None, {"key": "invalid", "drive_id": DRIVE}, {"key": KEY, "drive_id": []}],
+)
 def test_malformed_canonical_key_is_not_replaced(replicas, document):
     create, backend = replicas
     backend.db.settings.insert_one({"_id": "recovery-key", "document": document})

@@ -30,7 +30,8 @@ def sanitize_database(records):
         document = row.get("document", {})
         if row.get("_id") == "telegram":
             document["clients"] = [
-                client for client in document.get("clients", [])
+                client
+                for client in document.get("clients", [])
                 if client.get("kind") != "user"
             ]
         if row.get("_id") == "bootstrap":
@@ -69,7 +70,10 @@ def capture_database(backend):
         }
     records = sanitize_database(records)
     snapshot_catalog(records)
-    if len(json.dumps(records, default=json_util.default, allow_nan=False).encode()) > MAX_EXPANDED:
+    if (
+        len(json.dumps(records, default=json_util.default, allow_nan=False).encode())
+        > MAX_EXPANDED
+    ):
         raise ValueError("Recovery database exceeds the 1 GiB expanded limit")
     return records
 
@@ -82,11 +86,14 @@ def rebase_database(records, catalog):
     result["nodes"] = _mongo_nodes(catalog)
     result["shares"] = [dict(row, _id=row["id"]) for row in catalog.get("shares", [])]
     metadata = result["catalog"][0]
-    metadata.update({
-        "drive_id": catalog["drive_id"], "revision": catalog["revision"],
-        "backed_up_revision": catalog["revision"],
-        "storage_channel_id": catalog["storage_channel_id"],
-    })
+    metadata.update(
+        {
+            "drive_id": catalog["drive_id"],
+            "revision": catalog["revision"],
+            "backed_up_revision": catalog["revision"],
+            "storage_channel_id": catalog["storage_channel_id"],
+        }
+    )
     metadata.pop("replica_activation_id", None)
     if snapshot_catalog(result) != catalog:
         raise ValueError("Rebased database and recovery catalog do not match")
@@ -97,8 +104,12 @@ def _credentials(value):
     from tgdrive.replication.replica_settings import validate_recovery_settings
 
     required = {
-        "api_id", "api_hash", "session_secret", "bot_tokens",
-        "managed_document", "preferences",
+        "api_id",
+        "api_hash",
+        "session_secret",
+        "bot_tokens",
+        "managed_document",
+        "preferences",
     }
     if (
         not isinstance(value, dict)
@@ -124,9 +135,14 @@ def _credentials(value):
     if (
         not isinstance(tokens, list)
         or not 1 <= len(tokens) <= 256
-        or any(not isinstance(token, str) or not _TOKEN.fullmatch(token) for token in tokens)
+        or any(
+            not isinstance(token, str) or not _TOKEN.fullmatch(token)
+            for token in tokens
+        )
         or len({token.split(":", 1)[0] for token in tokens}) != len(tokens)
-        or any(client["kind"] == "user" for client in value["managed_document"]["clients"])
+        or any(
+            client["kind"] == "user" for client in value["managed_document"]["clients"]
+        )
     ):
         raise ValueError("Invalid recovery bot credentials")
 
@@ -167,7 +183,10 @@ def encode_recovery_file(payload, key):
     """Encode a normalized bundle; the database contains the sole catalog copy."""
     from tgdrive.storage.store import _validate_timestamp
 
-    if not isinstance(key, str) or re.fullmatch(r"[a-fA-F0-9]{64}", key.strip()) is None:
+    if (
+        not isinstance(key, str)
+        or re.fullmatch(r"[a-fA-F0-9]{64}", key.strip()) is None
+    ):
         raise ValueError("Invalid recovery key")
     _validate_timestamp(payload["created_at"])
     database = sanitize_database(payload["database"])
@@ -176,11 +195,15 @@ def encode_recovery_file(payload, key):
     if type(channel) is not int or not -(1 << 63) <= channel < 0:
         raise ValueError("Invalid source channel")
     if original != payload["catalog"]:
-        raise ValueError("Database and recovery catalog describe different restore points")
+        raise ValueError(
+            "Database and recovery catalog describe different restore points"
+        )
     _credentials(payload["credentials"])
     value = {
-        "format": "tgdrive-backup", "version": 2,
-        "created_at": payload["created_at"], "complete": True,
+        "format": "tgdrive-backup",
+        "version": 2,
+        "created_at": payload["created_at"],
+        "complete": True,
         "database": database,
         "replica": _mapping(original, payload.get("replica_catalog")),
         "credentials": payload["credentials"],
@@ -199,8 +222,12 @@ def encode_recovery_file(payload, key):
     if len(raw) > MAX_EXPANDED:
         raise ValueError("Recovery file exceeds the 1 GiB expanded limit")
     nonce = secrets.token_bytes(12)
-    encrypted = MAGIC + nonce + AESGCM(bytes.fromhex(key.strip())).encrypt(
-        nonce, zlib.compress(raw, level=6), MAGIC
+    encrypted = (
+        MAGIC
+        + nonce
+        + AESGCM(bytes.fromhex(key.strip())).encrypt(
+            nonce, zlib.compress(raw, level=6), MAGIC
+        )
     )
     if len(encrypted) > MAX_FILE_BYTES:
         raise ValueError("Encrypted recovery file exceeds the 64 MiB limit")
@@ -213,7 +240,9 @@ def _object(pairs):
         if key in result:
             raise ValueError("Duplicate recovery field")
         result[key] = value
-    value = json_util.object_hook(result, json_options=json_util.JSONOptions(tz_aware=True))
+    value = json_util.object_hook(
+        result, json_options=json_util.JSONOptions(tz_aware=True)
+    )
     if isinstance(value, float) and not math.isfinite(value):
         raise ValueError("Non-finite recovery number")
     return value
@@ -239,14 +268,29 @@ def decode_recovery_file(content, key):
             raise ValueError
         offset = len(MAGIC)
         compressed = AESGCM(bytes.fromhex(key.strip())).decrypt(
-            content[offset:offset + 12], content[offset + 12:], MAGIC
+            content[offset : offset + 12], content[offset + 12 :], MAGIC
         )
         decoder = zlib.decompressobj()
         raw = decoder.decompress(compressed, MAX_EXPANDED + 1)
-        if len(raw) > MAX_EXPANDED or not decoder.eof or decoder.unused_data or decoder.unconsumed_tail:
+        if (
+            len(raw) > MAX_EXPANDED
+            or not decoder.eof
+            or decoder.unused_data
+            or decoder.unconsumed_tail
+        ):
             raise ValueError
-        value = json_util.loads(raw, object_pairs_hook=_object, parse_constant=_constant)
-        required = {"format", "version", "created_at", "complete", "database", "replica", "credentials"}
+        value = json_util.loads(
+            raw, object_pairs_hook=_object, parse_constant=_constant
+        )
+        required = {
+            "format",
+            "version",
+            "created_at",
+            "complete",
+            "database",
+            "replica",
+            "credentials",
+        }
         if (
             not isinstance(value, dict)
             or not required <= set(value)
@@ -272,8 +316,10 @@ def decode_recovery_file(content, key):
                 raise ValueError
             mapping = replica["messages"]
             if not isinstance(mapping, dict) or any(
-                not isinstance(source, str) or re.fullmatch(r"[1-9][0-9]*", source) is None
-                or type(target) is not int or not 0 < target < 2**31
+                not isinstance(source, str)
+                or re.fullmatch(r"[1-9][0-9]*", source) is None
+                or type(target) is not int
+                or not 0 < target < 2**31
                 for source, target in mapping.items()
             ):
                 raise ValueError
@@ -282,36 +328,54 @@ def decode_recovery_file(content, key):
                 raise ValueError
             replica = restored
         result = {
-            "format": "tgdrive-replica", "version": 2, "complete": True,
-            "created_at": value["created_at"], "catalog": original,
-            "replica_catalog": replica, "credentials": value["credentials"],
+            "format": "tgdrive-replica",
+            "version": 2,
+            "complete": True,
+            "created_at": value["created_at"],
+            "catalog": original,
+            "replica_catalog": replica,
+            "credentials": value["credentials"],
             "database": database,
         }
         if "recovery_token" in value:
             token = value["recovery_token"]
-            if not isinstance(token, str) or len(token) > 256 or not _TOKEN.fullmatch(token):
+            if (
+                not isinstance(token, str)
+                or len(token) > 256
+                or not _TOKEN.fullmatch(token)
+            ):
                 raise ValueError
             result["recovery_token"] = token
         return result
     except Exception:
-        raise ValueError("Recovery key or file validation failed; nothing changed") from None
+        raise ValueError(
+            "Recovery key or file validation failed; nothing changed"
+        ) from None
 
 
 def write_recovery_snapshot(backend, path, key, settings):
     from tgdrive.recovery.backup import BackupError
+    from tgdrive.recovery.mongo_backup import file_checksum
     from tgdrive.replication.replica_settings import credentials_from_snapshot
     from tgdrive.replication.replica_state import atomic_private
-    from tgdrive.recovery.mongo_backup import file_checksum
 
     database = capture_database(backend)
     catalog = snapshot_catalog(database)
     payload = {
-        "catalog": catalog, "replica_catalog": None, "database": database,
+        "catalog": catalog,
+        "replica_catalog": None,
+        "database": database,
         "credentials": credentials_from_snapshot(settings, database),
         "created_at": datetime.now(UTC).isoformat(timespec="seconds"),
     }
     content = encode_recovery_file(payload, key.hex())
     if shutil.disk_usage(path.parent).free < len(content) + settings.min_free_bytes:
-        raise BackupError("Not enough temporary space to stage a recovery file; free space and retry")
+        raise BackupError(
+            "Not enough temporary space to stage a recovery file; free space and retry"
+        )
     atomic_private(path, content)
-    return catalog["revision"], {name: len(rows) for name, rows in database.items()}, file_checksum(path)
+    return (
+        catalog["revision"],
+        {name: len(rows) for name, rows in database.items()},
+        file_checksum(path),
+    )

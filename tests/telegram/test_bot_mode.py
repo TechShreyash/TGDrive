@@ -407,7 +407,7 @@ async def test_bot_preserves_saved_media_after_lost_commit_acknowledgement(
 @pytest.mark.asyncio
 @pytest.mark.parametrize("same_message", [False, True])
 async def test_bot_repeated_file_forwards_and_same_message_replay(bot, same_message):
-    for incoming_id in ((1, 1, 1) if same_message else (1, 2, 3)):
+    for incoming_id in (1, 1, 1) if same_message else (1, 2, 3):
         message = FakeMessage(
             1,
             copied=SimpleNamespace(
@@ -444,7 +444,9 @@ async def test_bot_operation_identity_survives_token_rotation_and_bot_replacemen
     configured = bot.settings.model_copy(
         update={"main_bot_token": SecretStr(bot_id + ":" + "z" * 30)}
     )
-    replacement = root_mode(client=FakeBotClient(), settings=configured, store=bot.store)
+    replacement = root_mode(
+        client=FakeBotClient(), settings=configured, store=bot.store
+    )
     copied = SimpleNamespace(
         id=80 if same_account else 81,
         document=SimpleNamespace(file_name="report.txt", file_size=3),
@@ -466,7 +468,9 @@ async def test_bot_legacy_replay_reuses_only_matching_stored_media(
     bot, same_media, trashed
 ):
     legacy_operation_id = hashlib.sha256(b"bot:1:1").hexdigest()
-    item = bot.store.add_file("/", "report.txt", 90, 3, operation_id=legacy_operation_id)
+    item = bot.store.add_file(
+        "/", "report.txt", 90, 3, operation_id=legacy_operation_id
+    )
     if trashed:
         bot.store.set_trashed("/" + item["id"], True)
     message = FakeMessage(

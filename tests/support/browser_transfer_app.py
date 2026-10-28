@@ -691,7 +691,9 @@ class FixtureReplica:
         self.owner = owner
         self.control = asyncio.Lock()
         self._operation = asyncio.Lock()
-        self._temporary = tempfile.TemporaryDirectory(prefix="tgdrive-recovery-fixture-")
+        self._temporary = tempfile.TemporaryDirectory(
+            prefix="tgdrive-recovery-fixture-"
+        )
         self.directory = Path(self._temporary.name)
         self.state = {
             "enabled": False,
@@ -727,11 +729,19 @@ class FixtureReplica:
                 "config": {
                     "channel": self.state["backup_channel"],
                     "enabled": self.state["enabled"],
-                } if self.state["configured"] else {},
+                }
+                if self.state["configured"]
+                else {},
                 "candidate": {
                     "complete": self.state["recovery_candidate"]["complete"],
-                    "catalog": {"storage_channel_id": self.state["recovery_candidate"]["channel"]},
-                } if self.state.get("recovery_candidate") else None,
+                    "catalog": {
+                        "storage_channel_id": self.state["recovery_candidate"][
+                            "channel"
+                        ]
+                    },
+                }
+                if self.state.get("recovery_candidate")
+                else None,
             }.get(name, default)
         )
 
@@ -769,10 +779,16 @@ class FixtureReplica:
         return b"synthetic encrypted recovery file"
 
     async def inspect_file(self, path, key, source=None, token=None):
-        if key != self.key() or path.read_bytes() != b"synthetic encrypted recovery file":
+        if (
+            key != self.key()
+            or path.read_bytes() != b"synthetic encrypted recovery file"
+        ):
             raise ValueError("Recovery key or file validation failed; nothing changed")
         if self.access_revoked and not token:
-            raise ValueError("No recorded channel could be accessed. Supply a working replacement bot token.")
+            raise ValueError(
+                "No recorded channel could be accessed. "
+                "Supply a working replacement bot token."
+            )
         channel = source or (
             -1003333333333 if self.main_unavailable else self.state["source_channel"]
         )
@@ -781,7 +797,13 @@ class FixtureReplica:
             has_database=True,
             source_is_backup=channel != self.state["source_channel"],
         )
-        self.events.append({"action": "inspect_file", "channel": channel, "replacement_access": bool(token)})
+        self.events.append(
+            {
+                "action": "inspect_file",
+                "channel": channel,
+                "replacement_access": bool(token),
+            }
+        )
         return self.status()
 
     async def _sync(self, config, *, force_snapshot=False):

@@ -49,8 +49,12 @@ def test_torrent_children_are_hidden_from_public_job_and_history_lists(app_clien
 
     runtime.transfers.start_torrent = AsyncMock(side_effect=create)
     login(client)
-    response = client.post("/api/startTorrentDownload", json={"url": SOURCE, "path": "/"})
+    response = client.post(
+        "/api/startTorrentDownload", json={"url": SOURCE, "path": "/"}
+    )
     identity = response.json()["id"]
-    assert [job["id"] for job in client.get("/api/v1/jobs").json()["jobs"]] == [identity]
+    assert [job["id"] for job in client.get("/api/v1/jobs").json()["jobs"]] == [
+        identity
+    ]
     history = client.get("/api/v1/transfers/history").json()
     assert [job["id"] for job in history["jobs"]] == [identity]

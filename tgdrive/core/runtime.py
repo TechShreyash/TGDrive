@@ -140,20 +140,32 @@ class Runtime:
                 candidate = self.replica.journal.get("candidate", {})
                 backup_config = candidate.get("backup_config")
                 transition = {
-                    "activation": None, "recovery": None, "candidate": None,
-                    "job": None, "config": dict(backup_config, enabled=True) if backup_config else {},
-                    "status": self.replica.journal.get("status", {}) | {
-                        "phase": "idle" if backup_config else "disabled", "protected_revision": 0, "error": None,
+                    "activation": None,
+                    "recovery": None,
+                    "candidate": None,
+                    "job": None,
+                    "config": dict(backup_config, enabled=True)
+                    if backup_config
+                    else {},
+                    "status": self.replica.journal.get("status", {})
+                    | {
+                        "phase": "idle" if backup_config else "disabled",
+                        "protected_revision": 0,
+                        "error": None,
                     },
                 }
                 if "database" in candidate:
-                    transition.update(key=candidate["key"], mongodb_key=candidate["key"])
+                    transition.update(
+                        key=candidate["key"], mongodb_key=candidate["key"]
+                    )
                 self.replica.journal.set_many(transition)
             try:
                 await asyncio.to_thread(self.replica.key)
             except Exception as error:
                 self.replica._record_failure(error)
-                logger.warning("Recovery key persistence needs attention: %s", type(error).__name__)
+                logger.warning(
+                    "Recovery key persistence needs attention: %s", type(error).__name__
+                )
             original_lineage = getattr(self.backup, "verify_lineage", None)
 
             async def protected_lineage(store):

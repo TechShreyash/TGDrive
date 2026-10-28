@@ -195,7 +195,9 @@ async def test_snapshot_record_uses_exported_revision_when_catalog_advances(
     assert service._last_success_at is None
 
 
-async def test_legacy_journal_work_still_creates_original_archive_format(snapshot_source):
+async def test_legacy_journal_work_still_creates_original_archive_format(
+    snapshot_source,
+):
     service, store, backend = snapshot_source
     with pytest.raises(RuntimeError, match="Publication paused"):
         await service.snapshot_now(store, legacy=True)
@@ -205,7 +207,9 @@ async def test_legacy_journal_work_still_creates_original_archive_format(snapsho
     assert decode_snapshot(Path(row["local_path"]), bytes.fromhex("a1" * 32))["catalog"]
 
 
-async def test_standalone_v2_uses_unified_replica_key_and_preserves_pending_key_binding(snapshot_source):
+async def test_standalone_v2_uses_unified_replica_key_and_preserves_pending_key_binding(
+    snapshot_source,
+):
     service, store, backend = snapshot_source
     key = "b2" * 32
     service.replica = SimpleNamespace(key=lambda: key)
@@ -471,7 +475,9 @@ async def test_cancelled_snapshot_drains_export_before_removing_unadmitted_file(
         assert release.wait(3), "The event loop could not release the export"
         return result
 
-    monkeypatch.setattr("tgdrive.recovery.mongo_backup.write_recovery_snapshot", held_export)
+    monkeypatch.setattr(
+        "tgdrive.recovery.mongo_backup.write_recovery_snapshot", held_export
+    )
     task = asyncio.create_task(service.snapshot_now(store))
     try:
         assert await asyncio.to_thread(entered.wait, 2)
@@ -545,18 +551,28 @@ async def test_local_snapshot_retention_waits_for_durable_confirmation(
         path = directory / (identity + ".tgdb")
         path.write_bytes(identity.encode())
         paths[identity] = path
-        backend.db.backups.insert_one({
-            "_id": identity, "id": identity, "status": status,
-            "format": format_name, "local_path": str(path),
-        })
+        backend.db.backups.insert_one(
+            {
+                "_id": identity,
+                "id": identity,
+                "status": status,
+                "format": format_name,
+                "local_path": str(path),
+            }
+        )
     outside = tmp_path / "keep-outside.tgdb"
     outside.write_bytes(b"outside private copy")
     linked = directory / "linked.tgdb"
     linked.symlink_to(outside)
-    backend.db.backups.insert_one({
-        "_id": "linked", "id": "linked", "status": "confirmed",
-        "format": "tgdrive-backup-v2", "local_path": str(linked),
-    })
+    backend.db.backups.insert_one(
+        {
+            "_id": "linked",
+            "id": "linked",
+            "status": "confirmed",
+            "format": "tgdrive-backup-v2",
+            "local_path": str(linked),
+        }
+    )
     payload = b""
 
     async def send_document(_channel, path, **_kwargs):
@@ -576,8 +592,12 @@ async def test_local_snapshot_retention_waits_for_durable_confirmation(
 
     @asynccontextmanager
     async def lease(**_kwargs):
-        yield SimpleNamespace(name="backup-bot", send_document=send_document,
-                              get_messages=get_messages, stream_media=stream_media)
+        yield SimpleNamespace(
+            name="backup-bot",
+            send_document=send_document,
+            get_messages=get_messages,
+            stream_media=stream_media,
+        )
 
     service.pool.lease = lease
     if failure == "confirmation":
@@ -613,7 +633,9 @@ async def test_local_snapshot_retention_waits_for_durable_confirmation(
         assert not paths["previous-one"].exists() and not paths["previous-two"].exists()
     else:
         assert paths["previous-one"].is_file()
-    assert current["status"] == ("pending" if failure in {"send", "confirmation"} else "confirmed")
+    assert current["status"] == (
+        "pending" if failure in {"send", "confirmation"} else "confirmed"
+    )
     assert len(backend.db.backups.find({})) == 6
     if failure == "cleanup":
         assert service._last_error is None
@@ -622,14 +644,23 @@ async def test_local_snapshot_retention_waits_for_durable_confirmation(
 
 @pytest.mark.parametrize("with_catalog", [False, True])
 @pytest.mark.parametrize("binding", [None, "current", "different"])
-def test_pristine_restore_accepts_only_its_unmodified_recovery_key(with_catalog, binding):
+def test_pristine_restore_accepts_only_its_unmodified_recovery_key(
+    with_catalog, binding
+):
     backend = FakeMongoBackend()
-    store = MongoStore.create(backend, storage_channel=-1001234567890) if with_catalog else None
+    store = (
+        MongoStore.create(backend, storage_channel=-1001234567890)
+        if with_catalog
+        else None
+    )
     drive_id = store.drive_id if store else None
     key_drive = drive_id if binding == "current" else binding
-    backend.db.settings.insert_one({
-        "_id": "recovery-key", "document": {"key": "a1" * 32, "drive_id": key_drive},
-    })
+    backend.db.settings.insert_one(
+        {
+            "_id": "recovery-key",
+            "document": {"key": "a1" * 32, "drive_id": key_drive},
+        }
+    )
     try:
         if binding == "different":
             with pytest.raises(FileExistsError, match="settings changes"):
@@ -641,7 +672,10 @@ def test_pristine_restore_accepts_only_its_unmodified_recovery_key(with_catalog,
             store.close()
 
 
-@pytest.mark.parametrize("damage", ["key", "key-type", "missing-binding", "extra-field", "extra-document-field"])
+@pytest.mark.parametrize(
+    "damage",
+    ["key", "key-type", "missing-binding", "extra-field", "extra-document-field"],
+)
 def test_pristine_restore_rejects_malformed_recovery_key_records(damage):
     backend = FakeMongoBackend()
     row = {"_id": "recovery-key", "document": {"key": "a1" * 32, "drive_id": None}}
@@ -661,7 +695,9 @@ def test_pristine_restore_rejects_malformed_recovery_key_records(damage):
 
 
 @pytest.mark.parametrize("enabled", [False, True])
-def test_database_status_reports_active_independent_checkpoint_without_recursion(snapshot_source, enabled):
+def test_database_status_reports_active_independent_checkpoint_without_recursion(
+    snapshot_source, enabled
+):
     service, store, _backend = snapshot_source
     standalone = "2026-10-28T10:00:00+00:00"
     independent = "2026-10-28T11:00:00+00:00"
@@ -669,18 +705,29 @@ def test_database_status_reports_active_independent_checkpoint_without_recursion
     service._last_error = "An older standalone snapshot failed"
     saved = {
         "config": {"enabled": enabled},
-        "status": {"last_success_at": independent, "protected_revision": store.revision - 1,
-                   "error": {"detail": "The independent copy is waiting for Telegram"}},
+        "status": {
+            "last_success_at": independent,
+            "protected_revision": store.revision - 1,
+            "error": {"detail": "The independent copy is waiting for Telegram"},
+        },
         "key": "a1" * 32,
     }
     service.replica = SimpleNamespace(
-        journal=SimpleNamespace(get=lambda name, default=None: saved.get(name, default)),
-        status=Mock(side_effect=AssertionError("Status must not recursively load backup history")),
+        journal=SimpleNamespace(
+            get=lambda name, default=None: saved.get(name, default)
+        ),
+        status=Mock(
+            side_effect=AssertionError(
+                "Status must not recursively load backup history"
+            )
+        ),
     )
     result = service.protection_status(store)
     assert result["last_success_at"] == (independent if enabled else standalone)
     assert result["backup_error"] == (
-        "The independent copy is waiting for Telegram" if enabled else service._last_error
+        "The independent copy is waiting for Telegram"
+        if enabled
+        else service._last_error
     )
     assert result["state"] == "protected"
     assert result["metadata_revision"] == result["protected_revision"] == store.revision

@@ -30,7 +30,7 @@ def test_container_detection_compares_the_whole_pr(
 
     def git(*args: str) -> None:
         subprocess.run(  # noqa: S603 - fixed Git commands in an isolated repository
-            [
+            [  # noqa: S607 - standard Git executable in an isolated repository
                 "git",
                 "-c",
                 "user.name=CI test",
@@ -62,8 +62,8 @@ def test_container_detection_compares_the_whole_pr(
     git("merge", "--no-ff", "dependency", "-m", "Synthetic PR merge")
 
     output = tmp_path / "output.txt"
-    subprocess.run(  # noqa: S603, S607 - trusted workflow script and synthetic repository
-        ["bash", "-e", "-c", script],
+    subprocess.run(  # noqa: S603 - trusted workflow script and synthetic repository
+        ["bash", "-e", "-c", script],  # noqa: S607 - standard Bash executable
         cwd=tmp_path,
         env={**os.environ, "GITHUB_OUTPUT": str(output)},
         check=True,

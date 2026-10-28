@@ -26,10 +26,12 @@ def metadata(files=None, **extra):
 
 
 def test_nested_folder_manifest_retains_relative_paths():
-    source = metadata([
-        {b"length": 4, b"path": [b"one.txt"]},
-        {b"length": 5, b"path": [b"nested", b"two.txt"]},
-    ])
+    source = metadata(
+        [
+            {b"length": 4, b"path": [b"one.txt"]},
+            {b"length": 5, b"path": [b"nested", b"two.txt"]},
+        ]
+    )
     manifest = torrent._manifest(torrent._decode(torrent._encode(source)))
 
     assert manifest.name == "Collection"
@@ -41,33 +43,43 @@ def test_nested_folder_manifest_retains_relative_paths():
     )
 
 
-@pytest.mark.parametrize("files", [
-    [{b"length": 4, b"path": [b"..", b"escaped"]}],
-    [{b"length": 4, b"path": [b"/absolute"]}],
-    [{b"length": 4, b"path": [b"nested\\escape"]}],
-    [{b"length": 4, b"path": [b"link"], b"attr": b"l"}],
-    [{b"length": 0, b"path": [b"empty"]}],
+@pytest.mark.parametrize(
+    "files",
     [
-        {b"length": 4, b"path": [b"same"]},
-        {b"length": 4, b"path": [b"SAME"]},
+        [{b"length": 4, b"path": [b"..", b"escaped"]}],
+        [{b"length": 4, b"path": [b"/absolute"]}],
+        [{b"length": 4, b"path": [b"nested\\escape"]}],
+        [{b"length": 4, b"path": [b"link"], b"attr": b"l"}],
+        [{b"length": 0, b"path": [b"empty"]}],
+        [
+            {b"length": 4, b"path": [b"same"]},
+            {b"length": 4, b"path": [b"SAME"]},
+        ],
+        [
+            {b"length": 4, b"path": [b"same"]},
+            {b"length": 4, b"path": [b"same", b"child"]},
+        ],
+        [
+            {b"length": 4, b"path": [b"Folder", b"one"]},
+            {b"length": 4, b"path": [b"folder", b"two"]},
+        ],
     ],
-    [
-        {b"length": 4, b"path": [b"same"]},
-        {b"length": 4, b"path": [b"same", b"child"]},
-    ],
-    [
-        {b"length": 4, b"path": [b"Folder", b"one"]},
-        {b"length": 4, b"path": [b"folder", b"two"]},
-    ],
-])
+)
 def test_rejects_unsafe_or_unuploadable_files_before_download(files):
     with pytest.raises(torrent.TorrentError):
         torrent._manifest(metadata(files))
 
 
-@pytest.mark.parametrize("source", [
-    b"degarbage", b"d1:ai1e1:ai2ee", b"d1:ai01ee", b"d1:al", b"d1:a99999:xe",
-])
+@pytest.mark.parametrize(
+    "source",
+    [
+        b"degarbage",
+        b"d1:ai1e1:ai2ee",
+        b"d1:ai01ee",
+        b"d1:al",
+        b"d1:a99999:xe",
+    ],
+)
 def test_rejects_malformed_bencode(source):
     with pytest.raises(torrent.TorrentError):
         torrent._decode(source)
@@ -75,7 +87,8 @@ def test_rejects_malformed_bencode(source):
 
 def test_magnet_keeps_only_infohash_and_reports_trackers_separately():
     source = (
-        "magnet:?xt=urn:btih:" + "ab" * 20
+        "magnet:?xt=urn:btih:"
+        + "ab" * 20
         + "&tr=udp%3A%2F%2Ftracker.example%3A80%2Fannounce"
         + "&xs=http%3A%2F%2F127.0.0.1%2Fsecret&ws=http%3A%2F%2Flocalhost%2F"
     )
@@ -89,9 +102,12 @@ async def test_udp_tracker_pins_dns_and_rejects_private_addresses(monkeypatch):
     resolver = AsyncMock(return_value=[(2, 2, 17, "", ("93.184.216.34", 80))])
     monkeypatch.setattr(asyncio.get_running_loop(), "getaddrinfo", resolver)
 
-    assert await torrent._udp_trackers([
-        "https://tracker.example/announce", "udp://tracker.example:80/announce",
-    ]) == ["udp://93.184.216.34:80/announce"]
+    assert await torrent._udp_trackers(
+        [
+            "https://tracker.example/announce",
+            "udp://tracker.example:80/announce",
+        ]
+    ) == ["udp://93.184.216.34:80/announce"]
 
     resolver.return_value = [(2, 2, 17, "", ("127.0.0.1", 80))]
     with pytest.raises(torrent.TorrentError, match="public"):
@@ -109,10 +125,16 @@ async def test_cancellation_drains_worker_before_return(monkeypatch, tmp_path):
             stopped.set()
 
     monkeypatch.setattr(torrent, "_download", blocked)
-    task = asyncio.create_task(torrent.download_torrent(
-        "magnet:?xt=urn:btih:" + "ab" * 20, tmp_path,
-        remote=None, cancel_event=cancel, progress=AsyncMock(), admit=AsyncMock(),
-    ))
+    task = asyncio.create_task(
+        torrent.download_torrent(
+            "magnet:?xt=urn:btih:" + "ab" * 20,
+            tmp_path,
+            remote=None,
+            cancel_event=cancel,
+            progress=AsyncMock(),
+            admit=AsyncMock(),
+        )
+    )
     await started.wait()
     cancel.set()
 
@@ -145,7 +167,9 @@ async def test_validates_and_admits_before_unpausing_payload(monkeypatch, tmp_pa
                 assert params[2]["pause"] == "true"
                 return "gid"
             if method == "getFiles":
-                return [{"path": str((tmp_path / "Collection").resolve()), "length": "4"}]
+                return [
+                    {"path": str((tmp_path / "Collection").resolve()), "length": "4"}
+                ]
 
         async def wait(self, _gid, *, progress):
             (tmp_path / "Collection").write_bytes(b"data")
@@ -164,8 +188,12 @@ async def test_validates_and_admits_before_unpausing_payload(monkeypatch, tmp_pa
     monkeypatch.setattr(torrent, "_Aria2", Engine)
     remote = SimpleNamespace(download=AsyncMock(side_effect=download), min_free_bytes=0)
     manifest = await torrent.download_torrent(
-        "https://files.example/source.torrent", tmp_path,
-        remote=remote, cancel_event=asyncio.Event(), progress=AsyncMock(), admit=admit,
+        "https://files.example/source.torrent",
+        tmp_path,
+        remote=remote,
+        cancel_event=asyncio.Event(),
+        progress=AsyncMock(),
+        admit=admit,
     )
 
     assert manifest.total_size == 4
@@ -173,8 +201,12 @@ async def test_validates_and_admits_before_unpausing_payload(monkeypatch, tmp_pa
     assert not Path(metadata_dir).exists()
 
     retried = await torrent.download_torrent(
-        "https://files.example/expired.torrent", tmp_path,
-        remote=remote, cancel_event=asyncio.Event(), progress=AsyncMock(), admit=AsyncMock(),
+        "https://files.example/expired.torrent",
+        tmp_path,
+        remote=remote,
+        cancel_event=asyncio.Event(),
+        progress=AsyncMock(),
+        admit=AsyncMock(),
     )
     assert retried.info_hash == manifest.info_hash
     remote.download.assert_awaited_once()

@@ -215,10 +215,16 @@ def register_routes(
                 async with replica.control, replica._operation:
                     config = replica.journal.get("config", {})
                     if replica.blocked:
-                        raise HTTPException(409, "Finish channel recovery before creating a new backup")
+                        raise HTTPException(
+                            409, "Finish channel recovery before creating a new backup"
+                        )
                     if config.get("enabled"):
                         if replica.journal.get("status", {}).get("phase") == "paused":
-                            raise HTTPException(409, "Resume the independent backup before creating a new restore point")
+                            raise HTTPException(
+                                409,
+                                "Resume the independent backup "
+                                "before creating a new restore point",
+                            )
                         required = store.revision
                         for _ in range(2):
                             try:
@@ -228,7 +234,9 @@ def register_routes(
                             if replica.status()["protected_revision"] >= required:
                                 break
                         else:
-                            raise HTTPException(503, "The requested backup revision is still pending")
+                            raise HTTPException(
+                                503, "The requested backup revision is still pending"
+                            )
                     else:
                         await service.snapshot_now(store)
             else:

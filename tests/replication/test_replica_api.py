@@ -1,7 +1,7 @@
 """Recovery remains owner-only and reachable when the live catalog is missing."""
 
-import json
 import hashlib
+import json
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
@@ -257,14 +257,24 @@ def test_recovery_file_import_accepts_binary_body_larger_than_json_limit(owner):
     observed = {}
 
     async def inspect(path, saved_key, source, token):
-        observed.update(content=path.read_bytes(), key=saved_key, source=source, token=token, path=path)
+        observed.update(
+            content=path.read_bytes(),
+            key=saved_key,
+            source=source,
+            token=token,
+            path=path,
+        )
         return {"phase": "paused", "recovery_candidate": {"complete": False}}
 
     replica.inspect_file = AsyncMock(side_effect=inspect)
     login(client)
     response = client.post(
-        "/api/v1/replica/import", content=content,
-        headers={"Content-Type": "application/octet-stream", "X-TGDrive-Recovery-Key": key},
+        "/api/v1/replica/import",
+        content=content,
+        headers={
+            "Content-Type": "application/octet-stream",
+            "X-TGDrive-Recovery-Key": key,
+        },
     )
     assert response.status_code == 200
     assert response.json()["phase"] == "paused"
@@ -279,10 +289,13 @@ def test_recovery_file_import_accepts_replacement_channel_credentials(owner):
     replica.inspect_file = AsyncMock(return_value={"phase": "paused"})
     login(client)
     response = client.post(
-        "/api/v1/replica/import", content=b"ciphertext",
+        "/api/v1/replica/import",
+        content=b"ciphertext",
         headers={
-            "Content-Type": "application/octet-stream", "X-TGDrive-Recovery-Key": "a1" * 32,
-            "X-TGDrive-Source-Channel": "-1001234567890", "X-TGDrive-Bot-Token": TOKEN,
+            "Content-Type": "application/octet-stream",
+            "X-TGDrive-Recovery-Key": "a1" * 32,
+            "X-TGDrive-Source-Channel": "-1001234567890",
+            "X-TGDrive-Bot-Token": TOKEN,
         },
     )
     assert response.status_code == 200
@@ -291,20 +304,48 @@ def test_recovery_file_import_accepts_replacement_channel_credentials(owner):
     assert not args[0].exists()
 
 
-@pytest.mark.parametrize("headers,status", [
-    ({"Content-Type": "application/json", "X-TGDrive-Recovery-Key": "a1" * 32}, 415),
-    ({"Content-Type": "application/octet-stream", "X-TGDrive-Recovery-Key": "private-key-must-not-echo"}, 422),
-    ({"Content-Type": "application/octet-stream"}, 422),
-    ({"Content-Type": "application/octet-stream", "X-TGDrive-Recovery-Key": "a1" * 32,
-      "X-TGDrive-Source-Channel": "private-channel-must-not-echo"}, 422),
-    ({"Content-Type": "application/octet-stream", "X-TGDrive-Recovery-Key": "a1" * 32,
-      "X-TGDrive-Bot-Token": "private-token-must-not-echo"}, 422),
-])
-def test_recovery_file_import_rejects_invalid_headers_without_echoing_secrets(owner, headers, status):
+@pytest.mark.parametrize(
+    "headers,status",
+    [
+        (
+            {"Content-Type": "application/json", "X-TGDrive-Recovery-Key": "a1" * 32},
+            415,
+        ),
+        (
+            {
+                "Content-Type": "application/octet-stream",
+                "X-TGDrive-Recovery-Key": "private-key-must-not-echo",
+            },
+            422,
+        ),
+        ({"Content-Type": "application/octet-stream"}, 422),
+        (
+            {
+                "Content-Type": "application/octet-stream",
+                "X-TGDrive-Recovery-Key": "a1" * 32,
+                "X-TGDrive-Source-Channel": "private-channel-must-not-echo",
+            },
+            422,
+        ),
+        (
+            {
+                "Content-Type": "application/octet-stream",
+                "X-TGDrive-Recovery-Key": "a1" * 32,
+                "X-TGDrive-Bot-Token": "private-token-must-not-echo",
+            },
+            422,
+        ),
+    ],
+)
+def test_recovery_file_import_rejects_invalid_headers_without_echoing_secrets(
+    owner, headers, status
+):
     client, _, replica = owner
     replica.inspect_file = AsyncMock()
     login(client)
-    response = client.post("/api/v1/replica/import", content=b"ciphertext", headers=headers)
+    response = client.post(
+        "/api/v1/replica/import", content=b"ciphertext", headers=headers
+    )
     assert response.status_code == status
     assert "private-" not in response.text
     assert not list(replica.directory.glob(".replica-import-*"))
@@ -314,48 +355,78 @@ def test_recovery_file_import_rejects_invalid_headers_without_echoing_secrets(ow
 def test_recovery_file_import_requires_authentication_and_same_origin(owner):
     client, _, replica = owner
     replica.inspect_file = AsyncMock()
-    headers = {"Content-Type": "application/octet-stream", "X-TGDrive-Recovery-Key": "a1" * 32}
-    assert client.post("/api/v1/replica/import", content=b"x" * 70000, headers=headers).status_code == 401
+    headers = {
+        "Content-Type": "application/octet-stream",
+        "X-TGDrive-Recovery-Key": "a1" * 32,
+    }
+    assert (
+        client.post(
+            "/api/v1/replica/import", content=b"x" * 70000, headers=headers
+        ).status_code
+        == 401
+    )
     login(client)
     response = client.post(
-        "/api/v1/replica/import", content=b"ciphertext",
+        "/api/v1/replica/import",
+        content=b"ciphertext",
         headers=headers | {"Origin": "https://foreign.example"},
     )
     assert response.status_code == 403
     replica.inspect_file.assert_not_awaited()
 
 
-def test_recovery_file_import_body_limit_applies_with_and_without_content_length(owner, monkeypatch):
+def test_recovery_file_import_body_limit_applies_with_and_without_content_length(
+    owner, monkeypatch
+):
     client, _, replica = owner
     replica.inspect_file = AsyncMock()
     login(client)
     monkeypatch.setattr("tgdrive.replication.replica_state.MAX_BUNDLE", 128)
-    headers = {"Content-Type": "application/octet-stream", "X-TGDrive-Recovery-Key": "a1" * 32}
+    headers = {
+        "Content-Type": "application/octet-stream",
+        "X-TGDrive-Recovery-Key": "a1" * 32,
+    }
     response = client.post(
-        "/api/v1/replica/import", content=b"ciphertext",
+        "/api/v1/replica/import",
+        content=b"ciphertext",
         headers=headers | {"Content-Length": "129"},
     )
     assert response.status_code == 413
     response = client.post(
-        "/api/v1/replica/import", content=iter([b"x" * 65, b"x" * 64]), headers=headers,
+        "/api/v1/replica/import",
+        content=iter([b"x" * 65, b"x" * 64]),
+        headers=headers,
     )
     assert response.status_code == 413
     assert not list(replica.directory.glob(".replica-import-*"))
     replica.inspect_file.assert_not_awaited()
 
 
-def test_recovery_file_import_remains_available_during_recovery_and_connection_repair(owner):
+def test_recovery_file_import_remains_available_during_recovery_and_connection_repair(
+    owner,
+):
     client, runtime, replica = owner
     runtime.backup = SimpleNamespace(recovery_required=True)
-    runtime.connection_manager = SimpleNamespace(restart_required=True, close=AsyncMock())
+    runtime.connection_manager = SimpleNamespace(
+        restart_required=True, close=AsyncMock()
+    )
     replica.inspect_file = AsyncMock(return_value={"phase": "paused"})
     login(client)
     response = client.post(
-        "/api/v1/replica/import", content=b"ciphertext",
-        headers={"Content-Type": "application/octet-stream", "X-TGDrive-Recovery-Key": "a1" * 32},
+        "/api/v1/replica/import",
+        content=b"ciphertext",
+        headers={
+            "Content-Type": "application/octet-stream",
+            "X-TGDrive-Recovery-Key": "a1" * 32,
+        },
     )
     assert response.status_code == 200
-    assert client.post("/api/createNewFolder", json={"path": "/", "name": "unsafe"}).status_code == 409
+    assert (
+        client.post(
+            "/api/createNewFolder", json={"path": "/", "name": "unsafe"}
+        ).status_code
+        == 409
+    )
 
 
 def test_recovery_file_download_is_private_and_not_cached(owner):
@@ -366,17 +437,27 @@ def test_recovery_file_download_is_private_and_not_cached(owner):
     digest = hashlib.sha256(content).hexdigest()
     path = replica.directory / "replica-bundles" / (digest + ".tgdb")
     atomic_private(path, content)
-    replica.journal.set("backup_file", {
-        "digest": digest, "sha256": digest, "key": "a1" * 32,
-        "created_at": "2026-10-28T12:00:00+00:00",
-    })
+    replica.journal.set(
+        "backup_file",
+        {
+            "digest": digest,
+            "sha256": digest,
+            "key": "a1" * 32,
+            "created_at": "2026-10-28T12:00:00+00:00",
+        },
+    )
     assert client.get("/api/v1/replica/file").status_code == 401
     login(client)
     response = client.get("/api/v1/replica/file")
-    assert response.status_code == 200 and response.content == b"encrypted recovery file"
+    assert (
+        response.status_code == 200 and response.content == b"encrypted recovery file"
+    )
     assert response.headers["cache-control"] == "no-store"
     assert response.headers["content-type"] == "application/octet-stream"
-    assert response.headers["content-disposition"] == 'attachment; filename="tgdrive-backup.tgdb"'
+    assert (
+        response.headers["content-disposition"]
+        == 'attachment; filename="tgdrive-backup.tgdb"'
+    )
 
 
 def test_recovery_file_download_and_import_are_denied_in_read_only_demo(owner):
@@ -386,8 +467,12 @@ def test_recovery_file_download_and_import_are_denied_in_read_only_demo(owner):
     replica.settings.demo_mode = True
     assert client.get("/api/v1/replica/file").status_code == 403
     response = client.post(
-        "/api/v1/replica/import", content=b"ciphertext",
-        headers={"Content-Type": "application/octet-stream", "X-TGDrive-Recovery-Key": "a1" * 32},
+        "/api/v1/replica/import",
+        content=b"ciphertext",
+        headers={
+            "Content-Type": "application/octet-stream",
+            "X-TGDrive-Recovery-Key": "a1" * 32,
+        },
     )
     assert response.status_code == 403
     replica.inspect_file.assert_not_awaited()
@@ -396,7 +481,8 @@ def test_recovery_file_download_and_import_are_denied_in_read_only_demo(owner):
 def test_back_up_now_uses_one_independent_recovery_checkpoint(owner):
     client, runtime, replica = owner
     runtime.backup = SimpleNamespace(
-        ensure_revision=AsyncMock(), snapshot_now=AsyncMock(),
+        ensure_revision=AsyncMock(),
+        snapshot_now=AsyncMock(),
         protection_status=lambda _store: {"state": "protected"},
     )
     config = {"channel": -100222333444, "token": TOKEN, "enabled": True}
@@ -413,16 +499,29 @@ def test_back_up_now_uses_one_independent_recovery_checkpoint(owner):
     runtime.backup.snapshot_now.assert_not_awaited()
 
 
-@pytest.mark.parametrize("condition,status", [("paused", 409), ("recovering", 409), ("source-unavailable", 503)])
-def test_back_up_now_does_not_fall_back_when_independent_protection_cannot_run(owner, condition, status):
+@pytest.mark.parametrize(
+    "condition,status",
+    [("paused", 409), ("recovering", 409), ("source-unavailable", 503)],
+)
+def test_back_up_now_does_not_fall_back_when_independent_protection_cannot_run(
+    owner, condition, status
+):
     from tgdrive.replication.replica_transport import ReplicaTransportError
 
     client, runtime, replica = owner
-    runtime.backup = SimpleNamespace(ensure_revision=AsyncMock(), snapshot_now=AsyncMock())
-    replica.journal.set("config", {"channel": -100222333444, "token": TOKEN, "enabled": True})
-    replica._sync = AsyncMock(side_effect=ReplicaTransportError(
-        "The source channel cannot be verified", "REPLICA_CHANNEL_UNAVAILABLE", retryable=True,
-    ))
+    runtime.backup = SimpleNamespace(
+        ensure_revision=AsyncMock(), snapshot_now=AsyncMock()
+    )
+    replica.journal.set(
+        "config", {"channel": -100222333444, "token": TOKEN, "enabled": True}
+    )
+    replica._sync = AsyncMock(
+        side_effect=ReplicaTransportError(
+            "The source channel cannot be verified",
+            "REPLICA_CHANNEL_UNAVAILABLE",
+            retryable=True,
+        )
+    )
     if condition == "paused":
         replica.update(phase="paused")
     elif condition == "recovering":
@@ -436,5 +535,10 @@ def test_back_up_now_does_not_fall_back_when_independent_protection_cannot_run(o
     if condition != "source-unavailable":
         replica._sync.assert_not_awaited()
     if condition == "recovering":
-        assert client.post("/api/createNewFolder", json={"path": "/", "name": "unsafe"}).status_code == 409
+        assert (
+            client.post(
+                "/api/createNewFolder", json={"path": "/", "name": "unsafe"}
+            ).status_code
+            == 409
+        )
         assert runtime.store.export() == before

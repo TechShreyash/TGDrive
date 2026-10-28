@@ -131,7 +131,9 @@ async def test_runtime_starts_once_and_stops_components(
 @pytest.mark.asyncio
 @pytest.mark.parametrize("conflict", [False, True])
 async def test_runtime_persists_recovery_key_before_workers_without_blocking_browsing(
-    tmp_path, monkeypatch, conflict,
+    tmp_path,
+    monkeypatch,
+    conflict,
 ):
     import threading
 
@@ -153,7 +155,9 @@ async def test_runtime_persists_recovery_key_before_workers_without_blocking_bro
         assert threading.get_ident() != caller
         calls.append(True)
         if conflict:
-            raise SettingsProblem("Recovery key conflict", code="RECOVERY_KEY_CONFLICT", status=409)
+            raise SettingsProblem(
+                "Recovery key conflict", code="RECOVERY_KEY_CONFLICT", status=409
+            )
         return "a1" * 32
 
     monkeypatch.setattr(ChannelReplica, "key", persist)

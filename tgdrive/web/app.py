@@ -263,7 +263,8 @@ async def require_admin(request: Request) -> None:
     if (
         request.method in {"GET", "HEAD", "OPTIONS"}
         or path in read_posts
-        or path in {
+        or path
+        in {
             "/api/v1/backup/restore",
             "/api/v1/replica/import",
             "/api/v1/replica/recover",
@@ -528,10 +529,13 @@ def create_app(
             code = 502
         return _json_error(str(exc), code)
 
-    from tgdrive.transfers.torrent import TorrentError, available as torrent_available
+    from tgdrive.transfers.torrent import TorrentError
+    from tgdrive.transfers.torrent import available as torrent_available
 
     @app.exception_handler(TorrentError)
-    async def torrent_error_handler(_request: Request, exc: TorrentError) -> JSONResponse:
+    async def torrent_error_handler(
+        _request: Request, exc: TorrentError
+    ) -> JSONResponse:
         return _json_error(str(exc), 400 if torrent_available() else 503)
 
     @app.exception_handler(TransferNotFound)
@@ -795,7 +799,7 @@ def create_app(
         manager = _transfers(request)
         try:
             store.validate_deletion(payload.path)
-        except (NotFoundError, RootMutationError, TrashedItemError):
+        except NotFoundError, RootMutationError, TrashedItemError:
             raise HTTPException(
                 status_code=409,
                 detail="Item must be in trash before permanent deletion",

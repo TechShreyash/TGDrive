@@ -104,7 +104,9 @@ def test_grid_views_preserve_selection_actions_and_bounded_thumbnails(
     expect(image).to_have_attribute("src", source)
     assert thumbnails.count(request) == request_count
     observer.evaluate("observer => observer.disconnect()")
-    grid.evaluate("(element, value) => element.style.gridTemplateColumns = value", columns)
+    grid.evaluate(
+        "(element, value) => element.style.gridTemplateColumns = value", columns
+    )
     page.get_by_role("button", name="Select", exact=True).click()
     page.get_by_role("checkbox", name="Select sample.png", exact=True).check()
     expect(page.get_by_text("1 selected", exact=True)).to_be_visible()

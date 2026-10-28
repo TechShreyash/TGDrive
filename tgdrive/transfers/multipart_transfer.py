@@ -9,6 +9,7 @@ import secrets
 import tempfile
 import threading
 import time
+from contextlib import suppress
 from pathlib import Path
 from typing import Any
 
@@ -308,9 +309,7 @@ async def upload_multipart(manager, record, local_path, destination, file_name, 
             and Path(file_name).suffix.lower() in VIDEO_FORMATS
             and Path(file_name).suffix.lower() != ".avif"
         ):
-            thumbnail, poster_bytes = await generate_video_images(
-                local_path, file_name
-            )
+            thumbnail, poster_bytes = await generate_video_images(local_path, file_name)
             try:
                 if thumbnail:
                     await _owned_disk_call(_stage_image, thumbnail_path, thumbnail)
@@ -457,7 +456,9 @@ async def upload_multipart(manager, record, local_path, destination, file_name, 
                                 ):
                                     raise TransferCancelled("Transfer cancelled")
                                 if not sidecar:
-                                    in_flight[part["index"]] = min(current, part["size"])
+                                    in_flight[part["index"]] = min(
+                                        current, part["size"]
+                                    )
                                 await report()
 
                             name = (
@@ -675,11 +676,13 @@ async def upload_multipart(manager, record, local_path, destination, file_name, 
             parts=manifest,
             sha256=context["sha256"],
             **(
-                {"poster": {
-                    key: poster[key]
-                    for key in ("message_id", "size", "sha256", "document_id")
-                    if key in poster
-                }}
+                {
+                    "poster": {
+                        key: poster[key]
+                        for key in ("message_id", "size", "sha256", "document_id")
+                        if key in poster
+                    }
+                }
                 if poster and poster.get("confirmed")
                 else {}
             ),
@@ -691,11 +694,9 @@ async def upload_multipart(manager, record, local_path, destination, file_name, 
         if poster and poster.get("confirmed"):
             from tgdrive.media.generated_thumbnails import save
 
-            content = await _owned_disk_call(
-                _read_image, poster_path, MAX_POSTER_BYTES
-            )
+            content = await _owned_disk_call(_read_image, poster_path, MAX_POSTER_BYTES)
             if content:
-                try:
+                with suppress(OSError):
                     await _owned_disk_call(
                         save,
                         manager.settings.resolved_cache_dir / "posters",
@@ -704,8 +705,6 @@ async def upload_multipart(manager, record, local_path, destination, file_name, 
                         content,
                         maximum=MAX_POSTER_BYTES,
                     )
-                except OSError:
-                    pass
         await manager._protect_committed_upload(record, size)
         cleanup = True
     except asyncio.CancelledError:

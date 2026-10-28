@@ -381,7 +381,9 @@ def test_unified_recovery_file_requires_verified_recovery_flow(owner_api):
 
     client, app, runtime, backend = owner_api
     sign_in(client, app)
-    response = client.post(api.RESTORE_PATH, content=MAGIC + b"ciphertext", headers=headers())
+    response = client.post(
+        api.RESTORE_PATH, content=MAGIC + b"ciphertext", headers=headers()
+    )
     assert response.status_code == 422
     assert response.json()["code"] == "RECOVERY_FILE_REQUIRES_UNIFIED_RESTORE"
     assert "Restore backup" in response.json()["detail"]
