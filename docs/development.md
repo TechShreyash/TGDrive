@@ -97,7 +97,7 @@ fixture or its `/__test__` endpoints.
 Recorded evidence describes a tested snapshot, not the state of a later checkout.
 
 <details>
-<summary>Unnamed URL history admission regression — 2026-10-28</summary>
+<summary>Live imports and unnamed URL history fix — 2026-10-28</summary>
 
 Live deployment checks reproduced an HTTP 500 when new transfer admission tried
 to archive an older URL job whose name was null. History summaries and job
@@ -114,9 +114,26 @@ A real local aria2 **1.37.0** smoke check passed subprocess startup, authenticat
 RPC and shutdown. A fresh local magnet import also retrieved the **362,017-byte**
 WebTorrent Leaves fixture from peers in **11.57 seconds**, with a matching SHA-256.
 This is one local swarm observation, not a throughput guarantee.
-Successful deployed torrent ingestion, Telegram upload and
-download integrity remain blocked pending deployment of the admission fix.
-No production settings or existing files were changed for these checks.
+
+After deploying `46ffce7`, the following real peer/Telegram roundtrips passed:
+
+| Path | Verified result |
+| --- | --- |
+| Magnet import | The 362,017-byte EPUB completed; its full downloaded SHA-256 matched the source. |
+| Torrent URL and folder import | All 11 Sintel filenames and sizes matched the 129,302,391-byte manifest. All ten non-video files matched source SHA-256 hashes. The video HEAD and two 65,536-byte head/tail ranges returned correct lengths, range headers and source bytes. |
+| Device upload | The 8,389,120-byte file matched its full downloaded SHA-256. Receipt inspection retained the 8 MiB resume offset, a stale offset returned 409, and repeated completion returned the same job. Ordinary uploading progressed while two torrent metadata jobs occupied download slots. |
+| Direct URL import | The 1,101-byte license downloaded from Telegram matched its public source. |
+| ZIP creation and extraction | The 363,456-byte ZIP had the expected entries, valid CRCs and matching member hashes; both extracted files also matched their originals. |
+
+The imported EPUB rendered and changed chapters; the imported video played.
+Finished-history search showed one task for the folder torrent, and **Show in
+Folder** opened its imported root. Desktop and phone-width layouts were inspected.
+Cancellation settled both test jobs; their staging was removed and no aria2
+processes remained. Existing files and production settings were preserved.
+
+These observations do not establish universal throughput. No live server restart
+during transfer, outage, disk-pressure test, physical-phone check or full-video
+SHA-256 was performed. The video integrity check sampled its head and tail.
 
 </details>
 
@@ -143,8 +160,8 @@ consent, progress/cancellation, and completed-output navigation. Dialog/layout
 checks cover 1,440, 390 and 320 pixel viewports, including dark desktop extraction.
 Screenshots were visually inspected. Browser archive responses and job progress
 are synthetic; service tests use a fake Telegram transport and local catalog
-fixtures. These results do not establish live Telegram/MongoDB behavior,
-physical-device performance or deployment readiness. No full suite, lint or
+fixtures. These offline results do not establish physical-device performance or
+deployment readiness; the live roundtrip is recorded above. No full suite, lint or
 throughput benchmark was run for this feature.
 
 </details>
