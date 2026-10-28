@@ -285,3 +285,37 @@ async def test_bot_mode_shares_channel_send_pacing_and_flood_cooldown(
         assert client.defer == pool.defer_channel
     finally:
         await runtime.stop()
+
+
+@pytest.mark.asyncio
+async def test_bot_reconnect_retries_failed_start_without_registering_twice(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    pool = FakePool()
+    pool.pace_send = AsyncMock()
+    pool.defer_channel = AsyncMock()
+    client = Mock(
+        start=AsyncMock(side_effect=[ConnectionError("temporary outage"), None])
+    )
+    factory = Mock(return_value=client)
+    runtime = Runtime(settings(tmp_path), pool=pool)
+    runtime.ready = True
+    runtime.backup = Mock(backup=AsyncMock())
+    runtime._verify_storage_channel = AsyncMock()
+    sleep = AsyncMock()
+    monkeypatch.setattr(runtime_module, "build_bot_mode_client", factory)
+    monkeypatch.setattr(runtime_module.asyncio, "sleep", sleep)
+
+    try:
+        await runtime._reconnect()
+
+        assert runtime.bot_mode is not None
+        assert runtime.bot_mode._started
+        assert client.start.await_count == 2
+        client.register_bot.assert_called_once_with(runtime.bot_mode)
+        factory.assert_called_once_with(runtime.settings)
+        sleep.assert_awaited_once_with(30)
+    finally:
+        runtime.ready = False
+        await runtime.remote.close()
+        runtime.registry.close()

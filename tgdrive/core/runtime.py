@@ -315,7 +315,8 @@ class Runtime:
                                 self.store
                             ),
                         )
-                        await self.bot_mode.start()
+                if self.bot_mode is not None:
+                    await self.bot_mode.start()
                 return
             except Exception:
                 await asyncio.sleep(30)

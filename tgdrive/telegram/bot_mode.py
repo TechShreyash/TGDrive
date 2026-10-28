@@ -167,8 +167,16 @@ class BotMode:
         source_chat = getattr(
             getattr(message, "native", None), "chat_id", message.from_user.id
         )
+        bot_id = self.settings.main_bot_token_value.split(":", 1)[0]
+        operation_id = hashlib.sha256(
+            f"bot:{bot_id}:{source_chat}:{message.id}".encode()
+        ).hexdigest()
+        legacy_operation_id = hashlib.sha256(
+            f"bot:{source_chat}:{message.id}".encode()
+        ).hexdigest()
         copied: Message | None = None
         status: Message | None = None
+        metadata_started = False
         try:
             if self.before_write is not None:
                 check = self.before_write()
@@ -187,31 +195,45 @@ class BotMode:
             if media is None:
                 raise RuntimeError("copied message contains no media")
             filename = self._media_name(media, copied)
+            if await asyncio.to_thread(
+                self.store.has_file_operation,
+                legacy_operation_id,
+                message_id=copied.id,
+            ):
+                operation_id = legacy_operation_id
             if self.before_write is not None:
                 check = self.before_write()
                 if inspect.isawaitable(check):
                     await check
+            metadata_started = True
             item = await asyncio.to_thread(
                 self.store.add_file,
                 path,
                 filename,
                 copied.id,
                 getattr(media, "file_size", 0) or 0,
-                operation_id=hashlib.sha256(
-                    f"bot:{source_chat}:{message.id}".encode()
-                ).hexdigest(),
+                operation_id=operation_id,
                 keep_both=True,
             )
         except Exception as error:
             rolled_back = copied is None
-            if copied is not None:
+            # A failed acknowledgement can follow a successful catalog commit.
+            if copied is not None and not metadata_started:
                 try:
                     if self.before_delete is not None:
                         await self.before_delete()
-                    await self.client.delete_messages(
-                        self.settings.storage_channel, copied.id
-                    )
-                    rolled_back = True
+                    if not (
+                        await asyncio.to_thread(
+                            self.store.has_file_operation, operation_id
+                        )
+                        or await asyncio.to_thread(
+                            self.store.has_file_operation, legacy_operation_id
+                        )
+                    ):
+                        await self.client.delete_messages(
+                            self.settings.storage_channel, copied.id
+                        )
+                        rolled_back = True
                 except Exception:
                     logger.exception("Failed to roll back copied bot-mode media")
             logger.exception("Bot-mode upload failed")

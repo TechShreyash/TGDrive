@@ -782,6 +782,14 @@ destination setting applies to every administrator's next file without restart.
 Existing imports keep their destination; moving/deleting it pauses new imports
 until an available folder is chosen.
 
+Sending or forwarding the same file again saves another copy. TGDrive does not
+compare file contents; name conflicts keep both, for example `report.pdf`,
+`report (1).pdf`, then `report (2).pdf`.
+
+If the bot says **Upload could not be confirmed**, check the drive before
+resending. TGDrive keeps the Telegram copy when the catalog write outcome is
+uncertain; the file may already be saved.
+
 **/start**, **/help** explain uploads; **/current_folder** shows the destination;
 **/set_folder** links to its website setting (normal owner login, no token).
 The website address is remembered on save; optional `PUBLIC_URL` supplies it

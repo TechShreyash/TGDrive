@@ -408,9 +408,18 @@ class MongoStore(DriveStore):
             self._state["metadata"]["storage_channel_id"] = channel_id
             self._bump()
 
-    def has_file_operation(self, operation_id):
+    def has_file_operation(self, operation_id, *, message_id=None):
         _validate_id(operation_id)
-        return operation_id in self._state["operations"]
+        if message_id is not None:
+            message_id = _strict_int(message_id, "message_id", 1)
+        with self._transaction():
+            operation = self._state["operations"].get(operation_id)
+            if operation is None:
+                return False
+            return message_id is None or (
+                self._state["nodes"].get(operation["node_id"], {}).get("message_id")
+                == message_id
+            )
 
     def _resolve(self, path):
         parts, path = _normalize_path(path)

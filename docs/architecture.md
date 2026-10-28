@@ -123,6 +123,9 @@ MongoDB authority before further work.
 
 The cloud lease renews in the background and is checked inside writes.
 Recovery of unfinished uploads still requires their local staged bytes.
+When startup defers Telegram recovery, the reconnect loop retries failed storage
+and bot startup after 30 seconds. It reuses the bot instance without registering
+duplicate message handlers.
 Automatic initialization runs only under the ownership lock and refuses saved
 drive records or recovery state. The catalog, channel binding and initial
 connection settings commit in one transaction. Those initial connections are
@@ -389,6 +392,21 @@ See [deviceUploadConcurrency.ts](../website/src/features/transfers/deviceUploadC
 | Database persistence fails | Retain staged bytes and remote identities for retry |
 | URL retrieval interrupted | May fetch again from byte zero; live byte progress is advisory, while reservations and lifecycle changes are journaled |
 | Bot-mode ingestion | Separate path without the browser queue's full durability contract |
+
+Bot imports copy an allowed private-chat attachment into the storage channel,
+then record its message ID, name and size in MongoDB. Their operation identity
+includes the bot account, source chat and incoming message ID: token rotation for
+the same account preserves it; replacing the bot account uses a separate identity.
+Older operation identities are reused only when their stored message ID matches
+the copied media. Reprocessing the same message reuses its identity; a new forward
+is a separate import with [keep-both naming](usage.md#optional-telegram-bot-interface).
+
+Once catalog writing starts, errors preserve the Telegram copy because a lost
+acknowledgement can follow a successful commit. Earlier failures delete the copy
+only when neither the current nor legacy operation is recorded and the protection
+check allows deletion. Failed lookups also preserve it. An uncertain import may
+leave an unlisted copy in the channel; bot imports have no automatic durable
+reconciliation, so the owner must check the drive before resending.
 
 URL starts return a job before source I/O. A separate scheduler grants full-speed
 source slots and paces bounded waiting connections; validated ranges share an

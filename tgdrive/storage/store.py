@@ -1064,14 +1064,20 @@ class DriveStore:
             )
             self._bump(db)
 
-    def has_file_operation(self, operation_id: str) -> bool:
-        """Include tombstones so cleanup never deletes an already committed upload."""
+    def has_file_operation(
+        self, operation_id: str, *, message_id: int | None = None
+    ) -> bool:
+        """Include tombstones by default; a message filter matches existing files."""
         _validate_id(operation_id)
+        if message_id is not None:
+            message_id = _strict_int(message_id, "message_id", 1)
         with self._transaction() as db:
             return (
                 db.execute(
-                    "SELECT 1 FROM file_operations WHERE operation_id=?",
-                    (operation_id,),
+                    "SELECT 1 FROM file_operations LEFT JOIN nodes ON "
+                    "nodes.id=file_operations.node_id WHERE operation_id=? "
+                    "AND (? IS NULL OR nodes.message_id=?)",
+                    (operation_id, message_id, message_id),
                 ).fetchone()
                 is not None
             )
