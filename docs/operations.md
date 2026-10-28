@@ -5,32 +5,16 @@
 > [!IMPORTANT]
 > Keep **one app instance and one worker per drive**. Preserve the database, secrets and persistent volumes across restarts and updates.
 
-**Contents**
-
-- [Run and monitor](#run-and-monitor)
-  - [Read useful logs](#read-useful-logs)
-- [After a shutdown, crash or network loss](#after-a-shutdown-crash-or-network-loss)
-- [If someone changed the Telegram channel](#if-someone-changed-the-telegram-channel)
-- [What is saved where](#what-is-saved-where)
-- [When a hosting plan expires](#when-a-hosting-plan-expires)
-- [Reopen after losing the local installation](#reopen-after-losing-the-local-installation)
-- [Encrypted Telegram backups](#encrypted-telegram-backups)
-- [Emergency database restore](#emergency-database-restore)
-- [Connection changes](#connection-changes)
-  - [Revoked tokens, removed sessions and lost channel access](#revoked-tokens-removed-sessions-and-lost-channel-access)
-- [HTTPS and private configuration](#https-and-private-configuration)
-  - [Can TGDrive run over HTTP?](#can-tgdrive-run-over-http)
-- [Forgotten login password](#forgotten-login-password)
-- [Upgrade and rollback](#upgrade-and-rollback)
-- [Troubleshooting](#troubleshooting)
-- [Disposable media cache and preloads](#disposable-media-cache-and-preloads)
-  - [Tune a busy installation](#tune-a-busy-installation)
-- [HTTP delivery and proxy configuration](#http-delivery-and-proxy-configuration)
+| I need to… | Start here |
+| --- | --- |
+| Start, stop or inspect the app | [Run and monitor](#run-and-monitor) · [Logs](#read-useful-logs) |
+| Recover interrupted work | [After a shutdown or network loss](#after-a-shutdown-crash-or-network-loss) |
+| Move or reinstall | [Hosting ends](#when-a-hosting-plan-expires) · [Reopen the drive](#reopen-after-losing-the-local-installation) |
+| Fix lost access | [Connections](#connection-changes) · [Password reset](#forgotten-login-password) |
+| Update the app | [Upgrade and rollback](#upgrade-and-rollback) |
+| Diagnose an error | [Troubleshooting](#troubleshooting) · [Backup & recovery](backup-recovery.md) |
 
 ## Run and monitor
-
-[Preloads and Performance screenshots](showcase.md#preload-and-monitor) show
-where to inspect cache coverage, traffic and server resources in the website.
 
 Run these from the installation folder.
 
@@ -41,23 +25,26 @@ Run these from the installation folder.
 | Restart | `docker compose restart app` |
 | Recent logs | `docker compose logs --tail=100 app` |
 
-Server deployments add `-f compose.yaml -f compose.server.yaml` after `docker compose` in every command. Coolify provides Stop, Restart, Logs and Redeploy controls. Keep Docker Desktop/the Docker daemon running while TGDrive is in use.
+Server deployments add `-f compose.yaml -f compose.server.yaml` after
+`docker compose` in every command. In Coolify, use Stop, Restart, Logs and Redeploy.
+Keep Docker running while TGDrive is in use.
 
-Check **Connections** for Telegram health, **Storage & Backups** for database/disk/backups, and [performance controls](performance.md) for caches, queues and cooldowns. Queue times are estimates. `/health/ready` reports readiness, not a full file or public-domain check.
+Check **Connections** for Telegram access, **Storage & Backups** for database,
+disk and backups, and **Performance** for queues, caches and cooldowns.
+Queue times are estimates. `/health/ready` does not test a full file or public domain.
 
-An always-on server can keep file access, sharing and
-[background work](hosting.md#local-computer-or-server) available while your laptop
-is off. TGDrive must keep running and connected to MongoDB and Telegram; closing
-the browser does not stop accepted server jobs.
+Accepted server jobs continue with the browser closed while TGDrive, MongoDB and
+Telegram stay available. A server can keep them running while your laptop is off.
 
 ### Read useful logs
 
-Keep `LOG_LEVEL=INFO` for normal operation. Logs show startup/shutdown, accepted
-device uploads and transfer starts/completion/cancellation. Match the same `id`
-across events (`job_id` links receipt acceptance to its server job) to follow one
-file without logging its name, destination or source
-URL. Byte callbacks, successful polling and routine Telegram update messages do
-not produce normal-operation entries.
+Keep `LOG_LEVEL=INFO` for normal use. Match `id`/`job_id` across log events to
+follow a transfer. For failures, also read the error and suggested repair in
+**Transfers**. Normal entries omit filenames, destinations and source URLs;
+routine byte updates and successful polling are quiet.
+
+<details>
+<summary>Transfer events and timing fields</summary>
 
 | Event or field | What it tells you |
 | --- | --- |
@@ -68,12 +55,13 @@ not produce normal-operation entries.
 | `Transfer retry scheduled` or `Transfer waiting` | The cooldown or unavailable Telegram client, automatic retry policy and suggested action. Unchanged waits are not repeated. |
 | `Transfer failed` | Job ID, phase, exception type, stable failure category and suggested repair. Inspect the user-facing error in Transfers. |
 
-Provider warnings/errors remain visible. For a reproduced problem, temporarily
-set `LOG_LEVEL=DEBUG` in private configuration and recreate/redeploy the app.
-DEBUG adds phase transitions, exception tracebacks and provider diagnostics;
-return to INFO afterwards. Raw HTTP access logs stay disabled because query
-strings can contain share credentials. Logs go to the container/process output,
-with conservative credential redaction; review diagnostic logs before sharing.
+</details>
+
+For a reproduced problem, temporarily set `LOG_LEVEL=DEBUG` and recreate/redeploy.
+It adds phase changes, tracebacks and provider details; return to INFO afterwards.
+Provider warnings/errors remain visible at INFO. Logs go to the process/container
+output. Raw HTTP access logs stay disabled because URLs can contain share
+credentials. **Review logs before sharing**, even with automatic redaction.
 
 <details>
 <summary>Restart policy</summary>
@@ -98,12 +86,15 @@ Start the **same deployment**, then check **Transfers**, **Connections** and **S
 | Backup/channel copy | Check its status. Only the last confirmed restore point is protected. |
 | Full disk | Free unrelated space or disposable cache; keep staged uploads and journals. |
 
-Browser receipts normally expire after 24 hours of inactivity; longer interruptions can require a fresh upload. Restart cannot recover deleted payloads, missing keys or revoked credentials.
+Unfinished upload sessions normally expire after 24 hours of inactivity;
+longer interruptions can require a fresh upload. Restart cannot recover deleted
+file bytes, missing keys or revoked credentials.
 
 <details>
 <summary>Ownership leases and unavailable MongoDB</summary>
 
-After an unclean stop, stop the old app, wait about a minute, then restart once. Never delete internal ownership records or disable single-instance protection.
+After an unclean stop, stop the old app, wait about a minute, then restart once.
+Never delete internal ownership records or disable single-instance protection.
 
 Unreachable MongoDB or insufficient permissions rejects startup and owner login.
 Restore database access first: local recovery configuration provides no offline
@@ -143,16 +134,19 @@ preserve its private configuration so you can reconnect safely.
 
 ### Save these somewhere separate
 
-Keep database access/name, owner login, private deployment configuration, Telegram access and your [confirmed recovery file and matching key](backup-recovery.md). Back up both volumes if unfinished work must survive losing the machine. The recovery file contains database data and channel locations, not original media bytes.
+Keep database access/name, owner login, private configuration, Telegram access,
+and your [confirmed recovery file and separate key](backup-recovery.md).
+Back up both volumes if unfinished work must survive losing the machine.
+The recovery file contains database data and channel locations, not original media.
 
 ## When a hosting plan expires
 
-**Your drive stays yours.** Server or managed-plan expiry does not itself delete
-completed Telegram files or prevent running TGDrive elsewhere. Reopening the same
-catalog with access to its Telegram documents does not require re-uploading them.
+Before server access ends, save what the replacement installation needs.
+Completed files can reopen elsewhere without re-uploading if their catalog and
+Telegram documents remain accessible.
 
 1. Keep your MongoDB database accessible. If it is on the expiring server, move
-   it or save a confirmed encrypted archive and matching key before access ends.
+   it or save a confirmed recovery file and its matching key before access ends.
    If the database is lost, [restore a confirmed backup](backup-recovery.md#restore-a-lost-database-from-telegram);
    only data captured in that restore point returns.
 2. Preserve Telegram channel/bot access, private deployment configuration,
@@ -161,10 +155,9 @@ catalog with access to its Telegram documents does not require re-uploading them
    [reopen the existing drive](#reopen-after-losing-the-local-installation).
    **Do not initialize a new catalog over it.**
 
-Hosting expiry interrupts sharing and background work until the app is reachable
-again. Unfinished uploads still need staged server bytes or their originals;
-disposable caches/preloads can be rebuilt. Missing Telegram originals, a lost
-catalog or missing recovery keys cannot be repaired by changing hosts alone.
+Sharing and background work stop until the app is reachable again. Unfinished
+uploads need staged bytes or originals; caches can be rebuilt. Moving hosts
+alone cannot repair missing Telegram files, a lost catalog or missing keys.
 
 See [Keep control of your drive](hosting.md#keep-control-of-your-drive) for managed
 hosting access and ownership.
@@ -212,14 +205,18 @@ verified, and switch only through explicit activation.
 
 ## Connection changes
 
-Manage accounts in **Connections**, then restart. Keep an enabled bot with channel permissions. Changing channel ID does not move files; a different drive needs its own database.
+Manage accounts in **Connections**, then restart. Keep an enabled bot with
+channel permissions. **Changing channel ID does not move files**; a different
+drive needs its own database.
 
 `MAIN_BOT_TOKEN` separately controls the Telegram chat interface. If a bot serves
 both storage and chat uploads and its token changes, update its saved token in
 **Connections** and `MAIN_BOT_TOKEN` in the deployment, then restart/redeploy.
 Changing the deployment variable alone does not replace saved storage credentials.
 
-Finish/cancel unfinished or failed transfers before changing account identities, enabled states or API credentials. While work is pending, credential repair must replace only the token/session for the **same account**, leaving those other settings unchanged. TGDrive verifies its identity.
+Finish or cancel unfinished/failed transfers before changing accounts, enabled
+states or API credentials. With work pending, repair only the token/session for
+the **same account**; TGDrive verifies its identity.
 
 ### Revoked tokens, removed sessions and lost channel access
 
@@ -241,29 +238,26 @@ The independent backup bot has separate credentials and permissions; check its [
 
 ## HTTPS and private configuration
 
-For public access, use an HTTPS reverse proxy, `COOKIE_SECURE=true`, a private app port and trusted-proxy settings limited to your actual proxy. Preserve authorization/cache headers; avoid proxy/CDN caching of private responses or share URLs. Keep `ALLOW_PRIVATE_REMOTE_URLS=false` unless internal-network imports are intentional.
+For public access, use an HTTPS reverse proxy, `COOKIE_SECURE=true` and a private
+app port. Trust only your actual proxy's addresses. Preserve authorization/cache
+headers; do not let a proxy/CDN cache private responses or share URLs.
+Keep `ALLOW_PRIVATE_REMOTE_URLS=false` unless internal-network imports are intentional.
 
 ### Can TGDrive run over HTTP?
 
-**Yes, on localhost.** The local Compose setup serves
-`http://127.0.0.1:8000` with `COOKIE_SECURE=false`. Browsers treat localhost and
-loopback addresses as [secure contexts](https://developer.mozilla.org/en-US/docs/Web/Security/Defenses/Secure_Contexts),
-so the required browser APIs remain available.
+**On localhost:** the local Compose setup uses `http://127.0.0.1:8000` with
+`COOKIE_SECURE=false`. Browsers allow the required APIs on
+[loopback addresses](https://developer.mozilla.org/en-US/docs/Web/Security/Defenses/Secure_Contexts).
 
-**Use HTTPS when opening TGDrive from another device**, including over a LAN.
-The current frontend uses secure-context browser APIs for upload IDs, resume
-verification and media actions. An ordinary HTTP server IP or `sslip.io` address
-does not qualify; these features can fail even with `COOKIE_SECURE=false`.
-Plain HTTP also leaves passwords, sessions and file traffic unencrypted.
-The hosted Compose file sets secure cookies explicitly; a dashboard or `.env`
-value alone does not override that setting.
+**From another device, including on a LAN: use HTTPS.** Plain HTTP can break
+upload IDs, resume verification and media actions, and exposes passwords,
+sessions and traffic. `COOKIE_SECURE=false` does not fix those browser requirements.
+Hosted Compose explicitly enables secure cookies; `.env` alone cannot override it.
 
-[Coolify's generated `sslip.io` address](https://coolify.io/docs/core/networking/domains)
-uses HTTP. Automatic HTTPS certificate issuance for the shared domain can hit
-[Let's Encrypt certificate limits](https://letsencrypt.org/docs/rate-limits/).
-These limits affect **creating certificates**, rather than requests to your
-TGDrive pages or files. A valid certificate can serve HTTPS normally; use your own
-domain with a valid certificate for public TGDrive access.
+Use your own domain with a valid certificate. Coolify's generated
+[`sslip.io` address](https://coolify.io/docs/core/networking/domains) uses HTTP;
+shared-domain [certificate issuance limits](https://letsencrypt.org/docs/rate-limits/)
+can prevent HTTPS setup. They do not limit requests once a valid certificate exists.
 
 ### Protect a public deployment
 
@@ -277,7 +271,10 @@ logs before sharing. See [security boundaries](reference.md#security-and-privacy
 <details>
 <summary>Change credentials and verify public access</summary>
 
-Stop the app, update the private credential and recreate/redeploy. Use `ADMIN_PASSWORD_HASH` with `ADMIN_PASSWORD` empty, or remove a stale hash when using plaintext fallback. Verify the new login works and the old password/session fails. Ordinary restarts with unchanged credentials preserve sessions. Revoke share links separately in **Shared Links**.
+Follow [password reset](#forgotten-login-password), or set `ADMIN_PASSWORD_HASH`
+with `ADMIN_PASSWORD` empty. Verify the new login works and the old
+password/session fails. Restarts with unchanged credentials preserve sessions.
+Revoke shares separately in **Shared Links**.
 
 After exposure, rotate the affected provider credential and `SESSION_SECRET` as needed. Preserve old backup keys: rotation does not re-encrypt archives. Restores/rollbacks can reintroduce older credentials or shares.
 
@@ -328,12 +325,26 @@ Use a published release tag for a fixed version, or `main` for stable source
 updates. `dev` contains ongoing work and may be unstable. Follow
 [Get the source](setup.md#get-the-source) when choosing the next version.
 
-- [ ] Finish work, stop safely, and save a confirmed backup plus its key off-host.
-- [ ] Record the running version and source commit; review the target version's requirements.
-- [ ] **Release archive:** [verify and extract](release.md#verify-a-downloaded-source-archive) the new archive into a separate folder. Copy your private `.env` into it and retain any reviewed Compose customizations. Keep the **same Compose project name**, including any `-p` argument, so Docker reuses the existing volumes. Keep the old folder for rollback; never copy the new `.env.example` over your real configuration.
-- [ ] **Git checkout:** record `git rev-parse HEAD`. For a `main` clone, use `git switch main`, then `git pull --ff-only origin main`. For a version-pinned checkout, use `git fetch origin --tags`, then `git switch --detach v2.0.0` (choose the new published tag for later updates). Preserve local changes if Git refuses the switch or update. **Coolify:** select the chosen published release tag or `main`, retaining variables/mounts.
-- [ ] Rebuild from the updated project folder with `docker compose up -d --build` (server `-f` arguments where needed), or redeploy in Coolify. Preserve existing volumes; startup reopens the drive.
-- [ ] Start one instance; check database status, Connections and a representative file.
+1. Finish work, save a confirmed backup and its separate key off-host, then stop safely.
+2. Record the running version and source commit; review the new version's requirements.
+3. Update the source using your installation method below.
+4. Run `docker compose up -d --build`, keeping server `-f` arguments, or redeploy
+   in Coolify. Preserve volumes and start only one instance. Check database
+   status, Connections and a representative file.
+
+**Release archive:** [Verify and extract](release.md#verify-a-downloaded-source-archive)
+into a separate folder. Copy your private `.env` and reviewed Compose changes.
+Keep the **same Compose project name**, including any `-p` argument, to reuse
+existing volumes. Retain the old folder for rollback. Never replace your real
+configuration with `.env.example`.
+
+**Git checkout:** Record `git rev-parse HEAD`. On `main`, use `git switch main`,
+then `git pull --ff-only origin main`. For a pinned version, use
+`git fetch origin --tags`, then `git switch --detach v2.0.0`, substituting the
+new published tag for later releases. If Git refuses, preserve local changes
+before continuing.
+
+**Coolify:** Select the published tag or `main`, retaining private variables and mounts.
 
 Do not run an older app against an incompatible database format. Restore a compatible backup into a separate empty database for a data rollback.
 

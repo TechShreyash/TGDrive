@@ -2,40 +2,40 @@
 
 [Docs home](README.md) · [Operations](operations.md)
 
-Keep **one `tgdrive-backup.tgdb` recovery file, its matching recovery key, and
-access to a channel recorded in that file**. The file restores the drive's saved
-database data; a surviving Telegram channel supplies the actual file bytes.
+To recover your drive, you need **a `tgdrive-backup.tgdb` recovery file, its
+matching key, and access to a Telegram channel recorded in that file**.
+The file restores saved database data; Telegram supplies the original file bytes.
 
 > [!IMPORTANT]
-> Wait for a confirmed backup before relying on it. Keep the recovery file outside the server and its key separately, preferably in a password manager. Never replace a working drive with an empty database as a repair.
+> Wait for a confirmed backup. Keep the recovery file outside the server and its
+> key separately, preferably in a password manager. Keep irreplaceable originals
+> outside Telegram too. Never replace a working drive with an empty database as a repair.
 
-**Contents**
+[Save a backup](#keep-the-mongodb-recovery-kit-outside-the-server) ·
+[Add a backup channel](#set-up-an-independent-backup-channel) ·
+[Recover an older backup](#older-backups)
 
-- [Choose a recovery route](#choose-the-right-mongodb-recovery-route)
-- [Save the recovery file and key](#keep-the-mongodb-recovery-kit-outside-the-server)
-- [Set up an independent backup channel](#set-up-an-independent-backup-channel)
-- [Rebuild a lost backup channel](#rebuild-a-lost-backup-from-the-surviving-main-channel)
-- [Recover a lost main channel](#recover-a-lost-main-channel-from-a-surviving-channel)
-- [Restore a lost database](#restore-a-lost-database-from-telegram)
-- [What the recovery file contains](#what-the-encrypted-mongodb-archive-contains)
-- [Older backups](#older-backups)
+<a id="choose-the-right-mongodb-recovery-route"></a>
 
-## Choose the right MongoDB recovery route
+## Choose a recovery route
 
 | Situation | Action |
 | --- | --- |
 | Restart, update or redeploy | Preserve MongoDB, private configuration and volumes; no restore. |
 | App/machine lost, MongoDB survives | [Reopen the existing drive](#reopen-the-existing-mongodb-drive). |
-| MongoDB lost | Restore the saved recovery file using a surviving channel and an empty replacement MongoDB database. |
-| Main channel lost | Rebuild an empty replacement main channel from the surviving independent backup. |
-| Backup channel lost, main survives | Replace the backup channel and wait for copies to confirm. |
+| MongoDB lost | [Restore the saved database](#restore-a-lost-database-from-telegram) using a surviving channel and an empty replacement database. |
+| Main channel lost | [Rebuild an empty main channel](#recover-a-lost-main-channel-from-a-surviving-channel) from the surviving independent backup. |
+| Backup channel lost, main survives | [Replace the backup channel](#rebuild-a-lost-backup-from-the-surviving-main-channel) and wait for confirmation. |
 | Both channels lost or inaccessible | The recovery file cannot recreate missing media. Use another surviving copy or external originals. |
 
 Without an independent channel, the same recovery-file format restores database
 data, but it still depends on the original main channel. Large files need every
-recorded part. Changes after the file's restore point are absent.
+recorded part. A **restore point** is the saved state at the time of the backup;
+later changes are absent.
 
-## Keep the MongoDB recovery kit outside the server
+<a id="keep-the-mongodb-recovery-kit-outside-the-server"></a>
+
+## Save your recovery file and key
 
 1. Open **Tools & settings → Storage & Backups** and choose **Back Up Now**.
 2. Wait for **Backup confirmed**, or the completed **Last Telegram Safety Copy**
@@ -47,12 +47,10 @@ recorded part. Changes after the file's restore point are absent.
 4. Download an updated file after changes you need to recover, and after replacing
    either channel. Keep the previous usable file until the replacement is saved.
 
-The recovery key is independent of the login password. Changing or resetting the
-TGDrive password does not change that key or invalidate existing backups. Save
-the key once while it remains unchanged. Deliberately rotating it means older
-files still need their original key; keep those pairs together in your records.
-A login reset cannot decrypt a backup whose key is lost. A working installation
-can re-export a key it still holds.
+**Your login password cannot replace the recovery key.** Changing that password
+does not change the key or invalidate backups. Save the key once while unchanged;
+if you deliberately rotate it, retain the matching keys for older files.
+A working installation can re-export a key it still holds.
 
 TGDrive keeps the unified key privately in MongoDB and its local recovery state.
 Reopening the surviving database on a new host keeps that key. A conflicting or
@@ -65,9 +63,9 @@ during recovery; the backup cannot restore revoked access or a hosting account.
 
 ## Set up an independent backup channel
 
-An independent channel adds a second copy of completed file parts. Normal work
-continues while copying; a new upload is independently protected only after its
-restore point confirms.
+An independent channel keeps a second copy of completed files. Uploads continue
+while copying; each upload is independently protected only after its restore
+point confirms. Both copies still depend on Telegram.
 
 ### Prepare the Telegram accounts and channels
 
@@ -81,8 +79,7 @@ restore point confirms.
 4. Let TGDrive manage the channel documents. Do not delete referenced messages,
    change recovery pins or post unrelated content.
 
-TGDrive checks access and channel settings, but cannot prove separate human
-ownership. Both copies still depend on Telegram.
+TGDrive checks access and channel settings, but cannot prove separate human ownership.
 
 ### Enable and confirm the first copy
 
@@ -93,24 +90,22 @@ ownership. Both copies still depend on Telegram.
   recovery file must also verify.
 - [ ] Download the confirmed recovery file and save its key outside the server.
 
-First setup starts immediately. Later changes share bounded 60-second checkpoint
-windows so nearby upload completions need not each create a full recovery file.
+First setup starts immediately. Later changes are grouped for up to 60 seconds
+so nearby upload completions share a recovery file.
 **Back Up Now**, **Sync now** and protection before permanent removal request a
-checkpoint without waiting for that batching window. Telegram cooldowns and
-copying/verification time can still delay completion.
+backup without that batching wait. Telegram cooldowns and copying/verification
+can still delay completion.
 
-Copies reuse Telegram document references; TGDrive does not download and reupload
-the original media. Each new restore point publishes one encrypted recovery file
-in each channel. Hourly standalone database backups use that same format, with
-only the main channel recorded, and do not run separately while independent
-protection is enabled. See [pacing and verification](architecture.md#independent-backup-pacing-and-verification).
+Copying happens within Telegram, without downloading and reuploading the media.
+Each restore point saves an encrypted recovery file in both channels; separate
+hourly database backups pause while this protection is enabled.
+See [pacing and verification](architecture.md#independent-backup-pacing-and-verification).
 
 ### What this copy retains
 
-The recovery file contains a consistent database snapshot and both channels'
-file locations. It replaces the separate database-archive/catalog pair for new
-backups. Original media remains in the channels; TGDrive does not additionally
-encrypt those media bytes.
+The recovery file contains the saved database and both channels' file locations.
+Original media remains in Telegram; encryption of the recovery file does not
+encrypt the originals.
 
 Previous remote files and recovery points remain available: this is not a
 remote deletion mirror. Older backups can restore removed records or revoked
@@ -185,33 +180,36 @@ replacement confirms, older known local copies can be removed; pending retry
 files and remote restore points remain. Monitor disk space for interrupted or
 older staging files; recovery staging respects the free-space reserve.
 
-## Make and check a MongoDB backup
+<a id="make-and-check-a-mongodb-backup"></a>
+
+## Automatic database backups
 
 Use [Save the recovery file and key](#keep-the-mongodb-recovery-kit-outside-the-server).
 Without independent channel protection, automatic safety copies normally run
 hourly (`MONGODB_BACKUP_SECONDS`). Failures leave the live database intact; repair
 the displayed error and retry. Ordinary uploads do not wait for these snapshots.
 
-## What the encrypted MongoDB archive contains
+<a id="what-the-encrypted-mongodb-archive-contains"></a>
 
-New recovery files use the unified v2 format:
+## What the recovery file contains
+
+New recovery files use one format for database and channel recovery:
 
 | Included | Excluded or made inactive |
 | --- | --- |
 | Catalog, shares and recorded channel/part locations | Original Telegram media and unfinished local upload bytes |
 | Saved settings, bot access and recovery credentials | Logged-in Telegram account sessions and browser sessions |
-| Safe durable history and application records | Unsafe unfinished jobs, mutation receipts and channel-bound work are not replayed |
+| Saved history and application records safe to restore | Unfinished jobs and in-progress changes are not replayed against the recovered channel |
 
 Restored unfinished jobs become canceled history. Optional Telegram account
 connections require sign-in again. The file does not restore MongoDB hosting,
 network permissions, disposable caches or telemetry counters. Recheck old share
 permissions after recovery.
 
-AES-256-GCM authenticates the encrypted file. The v2 limits are **64 MiB encrypted**
-and **1 GiB expanded**. The snapshot and channel mappings belong to one captured
-generation; later changes wait for another restore point. Verification checks
-uploaded recovery bytes and referenced media before confirmation or activation.
-Detailed limits and API contracts are in the [reference](reference.md#independent-channel-backup-and-recovery).
+The encrypted file is authenticated with AES-256-GCM, limited to **64 MiB
+encrypted** and **1 GiB expanded**. TGDrive verifies the recovery file and
+referenced media before confirmation or activation.
+See [formats, limits and API contracts](reference.md#independent-channel-backup-and-recovery).
 
 ### Reopen the existing MongoDB drive
 

@@ -2,13 +2,11 @@
 
 [Docs home](README.md) · [Current performance guide](performance.md)
 
-This dated report reproduces a 17 MB playback failure, separating browser cache,
-server cache and delivery protocol. Results and deployment status describe
+Historical evidence for a 17 MB playback failure: delivery protocol and transient
+buffer contention both contributed. Results and deployment status describe
 **18 October 2026**; use the [performance guide](performance.md) for current guidance.
-
-> [!NOTE]
-> Live browser checks and synthetic server checks are identified separately below.
-> These results establish behavior on the tested paths, not performance on every network or device.
+Live browser and synthetic server checks are identified separately. Neither
+establishes performance on every network or device.
 
 **Contents**
 
@@ -157,23 +155,19 @@ and lease assertions are unchanged.
 
 ## Deployment and limits
 
-Normal users should follow the standard setup/update flow. The build includes
-the player, delivery and response policy fixes; no debug scripts, cache migration
-or extra proxy labels are required. Keep one service instance/worker and the
-documented persistent volume. An external proxy that replaces application
-headers needs its own configuration checked.
+For current installation and updates, follow [Setup](setup.md) and
+[Operations](operations.md#upgrade-and-rollback). At this snapshot, the source
+included the player/delivery/header fixes without requiring cache migration or
+extra proxy labels. External proxies replacing application headers still needed
+their own policy checks.
 
 For diagnostics, distinguish browser-cold/server-warm from Telegram-cold, record
 the browser protocol/cache hits and verify actual transferred bytes. Compare
 HEAD/full GET, beginning/tail ranges, resume and a seek while an older response
 is unread. A fast Python HTTP/1.1 download alone does not prove browser delivery.
 
-This does not establish arbitrary public concurrency, every ISP, Safari/Firefox
-or physical Android/iOS behavior. Network, codec and device limits remain. No Git
-changes were pushed.
-
-The live app remained on its existing image during validation; only its temporary
-domain-scoped proxy correction was applied. Source/player/Compose fixes were
-committed locally on `dev` and still require publication and normal redeployment.
-Private validation containers, copied media/cache and the SSH test tunnel were
-removed. Production health remained successful.
+These checks do not establish arbitrary concurrency, every ISP, Safari/Firefox
+or physical Android/iOS behavior. The live app kept its existing image; only the
+temporary domain proxy correction was applied. Source/player/Compose fixes were
+local `dev` commits, unpublished and undeployed at that date. Private test
+resources were removed and production health remained successful.

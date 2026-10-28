@@ -1,104 +1,75 @@
 # Screenshots and demo videos
 
-[Docs home](../README.md) · [Visual walkthroughs](../showcase.md) · [Project README](../../README.md)
+[Docs home](../README.md) · [Gallery and video chapters](../showcase.md) · [Project README](../../README.md)
 
-The screenshots and demo videos are real captures of
-[TGDrive's public demo](../usage.md#try-the-public-demo), recorded on
-**24 October 2026** using original, disposable sample files. The
-README highlights the drive, video player and mobile layout; the
-[visual guide](../showcase.md) groups the full collection by workflow.
+All current media was captured on **28 October 2026** from TGDrive's current UI.
+The collection contains **25 JPEG screenshots** and one **62-second silent tour**.
+It illustrates features, not throughput, physical-device compatibility or
+successful recovery. Some sample files show an earlier **Added** date; that is
+not the screenshot date.
 
-The video captures predate the switch to Movi's native chapter/settings UI.
-Follow the [current controls guide](../usage.md#open-preview-and-download) for
-labels and behavior; replace these captures during the next live media refresh.
+<a id="readme-banner"></a>
 
-## README banner
+## README lead image
 
-[tgdrive-v2-banner.png](tgdrive-v2-banner.png) is AI-edited promotional artwork
-based on [drive-overview.png](drive-overview.png), not an unaltered screenshot.
-
-To replace it, use current TGDrive branding and a current screenshot without
-private information. Keep the text evergreen, avoiding launch-only labels such
-as “Now available”. Reuse the filename; if its path changes, update the
-[project README](../../README.md) and `PUBLIC_DOCS` in
+The README uses [drive-overview.jpg](drive-overview.jpg), a real file-browser
+capture. Keep its lead image current and free of private information. If its
+filename changes, update the README, gallery and `PUBLIC_DOCS` in
 [build_release.py](../../scripts/build_release.py) together.
 
 ## What is included
 
-| PNG images | Coverage |
+| JPEG basenames | Coverage |
 | --- | --- |
-| `drive-overview`, `drive-list`, `drive-dark`, `mobile-drive` | Grid/list browsing, appearance and compact layout |
-| `file-actions`, `search-and-sort`, `starred-files`, `trash-restore` | Organization, search and recovery from Trash |
-| `upload-folder`, `url-import`, `upload-progress`, `upload-completed`, `transfer-history` | Upload entry points, live device progress and finished tasks |
-| `media-preview`, `video-settings`, `image-preview`, `audio-preview`, `text-preview` | Player controls and file previews |
-| `pdf-reader`, `epub-reader`, `comic-reader` | Page/chapter navigation and reading preferences |
-| `share-link`, `shared-folder`, `shared-links` | Expiry choices, recipient view and link management |
-| `preloads`, `performance-overview`, `performance-resources` | Cache coverage, traffic and server resources |
-| `cache-settings`, `transfer-settings`, `regional-settings`, `thumbnail-rebuild` | Configuration and rebuild confirmation |
-| `connections`, `storage-backups` | Safe management entry points and backup status |
+| `drive-overview`, `drive-list`, `new-menu`, `file-actions`, `mobile-drive` | Browsing, upload/import entry points, actions and emulated phone layout |
+| `torrent-import`, `create-zip`, `extract-archive`, `archive-result`, `url-import` | Import/archive dialogs and the completed Notes.zip |
+| `media-preview`, `video-continue`, `video-settings`, `image-preview`, `audio-preview` | Current player, Continue, built-in settings, images and audio |
+| `pdf-reader`, `epub-reader`, `comic-reader` | Document, ebook and comic readers |
+| `preloads`, `performance-overview`, `performance-resources` | Local demo cache coverage and illustrative resource/traffic readings |
+| `cache-settings`, `transfer-settings`, `thumbnail-rebuild` | Local demo configuration and rebuild confirmation |
+| `recovery-file` | Local demo of the unified recovery-file/key form |
 
-Most desktop images are 1536 × 695; the recipient view is 1536 × 639. Connections
-is cropped to its identifier-free 1260 × 230 top panel. The mobile image is
-390 × 843, captured with a 390 × 844 browser viewport, not a physical phone.
+The file-browser, import/archive, player and reader captures use disposable
+original samples in the public demo's **Showcase** workspace. Configuration,
+monitoring and recovery captures use a **local synthetic fixture**, labelled
+**Demo**. Its data and metrics are illustrative. The phone screenshot uses an
+emulated viewport.
 
-| Silent MP4 | Length | Recorded workflow |
-| --- | --- | --- |
-| [Organize files](organize-files.mp4) | About 3:26 | Views, search, sort, favorites, folder creation, rename and move |
-| [Upload and share](upload-and-share.mp4) | About 5:20 | Device upload, progress, history, Show in Folder, share label/expiry, copying and revocation confirmation |
-| [Previews and readers](readers-and-preview.mp4) | About 5:51 | Image/audio/text previews, PDF/EPUB/comic navigation and video playback/settings |
+## Feature tour
 
-[Find a feature by its video timestamp](../showcase.md#see-tgdrive-in-action).
+[**current-features.mp4**](current-features.mp4) is **62 seconds**, approximately
+**0.94 MiB**, encoded as H.264 at **1536 × 760 / 30 fps**. The original
+1536 × 639 app view is preserved above a caption band.
+[Chapter timestamps](../showcase.md#watch-the-feature-tour)
 
-Videos use continuous Windows Graphics Capture of the live browser, encoded as
-H.264 MP4 at 30 fps and normal speed. A large cursor overlay follows logged click
-coordinates, with click highlights and captions in a separate 96-pixel bottom
-band. The upload video joins two chapters with a two-second title card and adds
-five-second end holds; captured actions are not accelerated. Browser audio is
-not captured. Browser suggestions are masked in the organization video, and the
-browser infobar is cropped from the sharing chapter. Raw captures and interaction
-logs remain in ignored local staging. These recordings illustrate workflows,
-not transfer benchmarks, device compatibility or recovery guarantees.
+The recording uses actual browser screenshots sampled at **2 fps**, assembled
+with edited cuts and captions, plus a four-second hold of the actual extraction
+screenshot and five seconds of intro/closing stills. It is not continuous real-time
+footage; encoding at 30 fps does not add captured motion. No simulated cursor was added.
 
-The device file picker is outside the browser capture. Link generation happens
-between the upload and management chapters; the recipient view is shown in a
-screenshot. The video stops at the revocation confirmation, and the temporary
-link was revoked after recording.
-
-The folder-upload image shows the **New** menu. Directory selection could not be
-completed through the capture tool; the videos demonstrate ordinary file uploads.
-Follow the [folder-upload guide](../usage.md#upload-files-or-folders) for selection
-and confirmation. URL import, thumbnail rebuild, Telegram connections and backup
-captures show controls; they do not establish a completed import, rebuild,
-authentication or recovery. Server settings were not changed for these captures.
+| Shown | What actually happened |
+| --- | --- |
+| ZIP creation | Notes.zip was created from disposable public-demo samples; the job completed and the ZIP appeared in the drive. |
+| Torrent and extraction dialogs | Their setup/options were opened; neither operation was submitted. |
+| Continue and player settings | The sample video was played, paused and reopened; Continue was chosen. Settings show the current built-in menu. |
+| Recovery, configuration and monitoring | Local demo screens only. No recovery began, no key was exported and no thumbnail rebuild started. |
 
 ## Replace or extend a capture
 
-1. Use an isolated collection with disposable, original or redistributable files.
-   For these captures, the image, six-second video, audio, PDF, ebook and comic
-   contents were created specifically for the demonstration.
-2. Capture the feature in a useful, settled state. Keep the navigation and controls
-   legible; dismiss unrelated notifications. Use a portrait viewport for mobile
-   examples and restore the original viewport/appearance afterward.
-   Record continuously at normal speed, keep the cursor visible and pause long
-   enough to read each step. When capture omits the cursor, base any cursor overlay
-   on the actual recorded interactions. Inspect the export for missing or duplicate
-   pointers, unreadable captions and abrupt transitions before replacing it.
-3. Exclude passwords, tokens, recovery keys, phone numbers, account names, channel
-   IDs and unrelated files. Capture sharing options before a URL is generated;
-   revoke disposable demonstration links afterward. Crop management screens to
-   safe controls rather than publishing identifiers.
-4. Save the final PNG or silent MP4 here with a descriptive name. Keep raw frames,
-   browser/session data and temporary files in ignored local staging. Preserve
-   the actual image format when converting captures.
-5. Update the relevant caption and link in the [visual guide](../showcase.md),
-   then the README or canonical user guide where it helps. Add the exact path to
-   `PUBLIC_DOCS` in [build_release.py](../../scripts/build_release.py); remove
-   obsolete assets and references together.
+1. Use disposable, original or redistributable samples. Prefer an isolated
+   collection; keep recovery rehearsals and provider tests separate from a UI tour.
+2. Show the current feature in a settled, legible state. Preserve the app view;
+   restore viewport/appearance changes afterwards. Label local fixtures and
+   emulated devices, and distinguish completed actions from dialogs only.
+3. Exclude passwords, tokens, recovery keys, phone/account/channel identifiers and
+   unrelated files. Capture share options before generating a URL; revoke any
+   disposable links afterward. Keep raw frames, logs and session data in ignored staging.
+4. Save final images/video here with descriptive names and matching format
+   extensions. Disclose cuts, frame sampling, captions and overlays. Inspect
+   legibility, cropping and playback before replacing the public assets.
+5. Update captions/links in the [gallery](../showcase.md) and README. Update exact
+   paths in `PUBLIC_DOCS`; remove obsolete media and references together.
 
-The current PNGs and MP4s are stored in the repository and included in public
-source releases. Video posters link directly to the local MP4, so they also work
-in an extracted source archive. GitHub may open a file/download page instead of
-playing a repository-relative video inline; these are not uploaded GitHub video
-attachments. If a maintainer later uploads a video attachment through GitHub's
-Markdown editor, replace the link with that real attachment URL.
-
+These repository-local assets ship in public source releases. GitHub may open an
+MP4 download page instead of playing it inline. Use a GitHub attachment URL only
+after uploading the real video through its Markdown editor.

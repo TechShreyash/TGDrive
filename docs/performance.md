@@ -2,41 +2,24 @@
 
 [Docs home](README.md) · [Using TGDrive](usage.md) · [Configuration](configuration.md)
 
-Find the slow stage before changing limits. **Cold** reads fetch bytes from
-Telegram; **warm** reads reuse bytes cached on the TGDrive server. Cached files
-still need a working server and a connection to the viewer.
+For a slow drive, start with the [capacity guide](performance-tuning.md).
+This page explains the policies behind its advice: cache retention, request
+scheduling, transfer limits and measurement scopes.
 
-Use the [load and capacity guide](performance-tuning.md) to
-[read the website stats](performance-tuning.md#start-with-the-website-stats),
-[find the bottleneck](performance-tuning.md#find-the-bottleneck), choose
-[server upgrades](performance-tuning.md#what-a-server-upgrade-changes) or tune
-[bots and requests](performance-tuning.md#bots-and-request-concurrency).
-This page holds the detailed cache, scheduling and measurement policies.
+**Cold** reads fetch missing bytes from Telegram; **warm** reads reuse the server's
+cache. Both still need server-to-viewer delivery. In cache sections, **origin**
+means Telegram. **Read-ahead** fetches upcoming bytes before delivery/playback
+needs them.
 
-[See Preloads and Performance](showcase.md#preload-and-monitor) for screenshots of
-cache coverage, network traffic and server resources. Values in the captures are
-examples from the recorded session, not throughput benchmarks.
+| Topic | Read |
+| --- | --- |
+| Where time is spent | [Data path](#follow-the-data-path) · [Performance stats](#read-the-performance-page) |
+| Cached access and sharing | [Cache limits](#cache-limits) · [Read-ahead](#automatic-read-ahead) · [Preloading](#prepare-a-file-before-sharing) · [Queues](#shared-download-load-and-queues) |
+| Transfer throughput | [URL imports](#url-import-intake) · [Device intake](#device-upload-receipts) · [Telegram uploads](#upload-pipeline-and-smaller-splits) · [Archives](#archive-work) |
+| Playback and browser behavior | [Video](#video-controls-and-startup) · [Playback buffer](#browser-playback-buffer) · [Background updates](#browser-progress-and-health-checks) |
 
-**Contents**
-
-- [Follow the data path](#follow-the-data-path)
-- [Cache limits](#cache-limits)
-- [Automatic read-ahead](#automatic-read-ahead)
-- [Prepare a file before sharing](#prepare-a-file-before-sharing)
-- [Shared-download load and queues](#shared-download-load-and-queues)
-- [URL import intake](#url-import-intake)
-- [Device upload receipts](#device-upload-receipts)
-- [Browser progress and health checks](#browser-progress-and-health-checks)
-- [Navigation during uploads](#navigation-during-uploads)
-- [Upload pipeline and smaller splits](#upload-pipeline-and-smaller-splits)
-- [Archive work](#archive-work)
-- [Video controls and startup](#video-controls-and-startup)
-  - [Browser playback buffer](#browser-playback-buffer)
-- [Operator checklist](#operator-checklist)
-  - [Read the Performance page](#read-the-performance-page)
-  - [Investigate a slowdown](#investigate-a-slowdown)
-  - [Browser transport with a full cache](#browser-transport-with-a-full-cache)
-  - [Distant video seeks](#distant-video-seeks)
+[Screenshots of Preloads and Performance](showcase.md#preload-and-monitor) show the
+interface; their values are examples, not throughput benchmarks.
 
 ## Follow the data path
 
@@ -54,24 +37,19 @@ TGDrive uses Telethon with cryptg, bounded upload pipelining and pooled download
 Accounts and documents can use different datacenters; changing server region may
 change routing but cannot relocate a document or guarantee improvement.
 
-A server with stronger connectivity/resources can improve upload/download speeds
-when it removes the current bottleneck. Device uploads still depend on your
-uplink; shared downloads use server egress and each viewer's connection.
-
-For [managed hosting](hosting.md#optional-managed-hosting), plans scale server resources
-for concurrent visitors and transfers. All TGDrive features remain included;
-larger plans increase capacity without promising a fixed transfer speed.
+Upgrade the resource limiting the affected stage. Device intake still depends
+on your uplink; shared downloads use server upload bandwidth and each viewer's
+connection. [Choosing server capacity](performance-tuning.md#what-a-server-upgrade-changes).
 
 ## Cache limits
 
 For how cached bytes serve repeat viewers and shared files, see
 [how cache helps](performance-tuning.md#how-cache-helps).
 
-Tune the running instance in **Configuration → Cache settings**. Saved MongoDB
-preferences override initial environment values. Save affects the visible category;
-**Discard changes** returns to its last saved values. After changing Docker
-environment values, recreate/redeploy the container. See
-[exact settings](reference.md#performance-and-cache-settings).
+Change budgets in **Configuration → Cache settings**. Saved preferences override
+environment defaults; Docker environment edits require recreation/redeployment.
+[Save/discard controls](configuration.md#change-discard-or-restore) ·
+[Exact settings](reference.md#performance-and-cache-settings).
 
 | Budget | Default |
 | --- | --- |
@@ -171,25 +149,21 @@ cleanup cannot change a newly opened viewer's preparation.
 
 </details>
 
-Independent blocks can use different healthy bots/Premium clients and shared
-in-flight fills, while responses preserve original order. Empty or short origin
-blocks enter the bounded account retry/failover path; incomplete bytes are never
-retained as ready cache blocks. Every request must pass authorization before
-cached bytes; shared access is rechecked before future blocks. No window estimate promises buffer-free playback or recalls sent bytes.
-Reopening a preview starts a new browser transfer: file responses use private,
-non-storing HTTP cache policy. Retained server blocks can satisfy that transfer
-without another Telegram payload download; loading UI alone does not indicate a
-server-cache miss.
+Independent blocks can use different healthy clients and shared in-flight
+fetches while responses preserve order. Empty/short origin blocks use bounded
+retry/failover; incomplete blocks are never marked ready. Requests authorize
+before cache access and recheck shared access before later blocks. Sent bytes
+cannot be recalled, and read-ahead cannot guarantee uninterrupted playback.
+
+Reopening a preview starts a new browser transfer under private, non-storing
+HTTP cache policy. Server-cached blocks can satisfy it; a loading indicator
+does not establish a server-cache miss.
 
 ## Prepare a file before sharing
 
-[Preload file](usage.md#preload-a-file-for-smoother-playback-and-downloads) requests
-the whole original through the same verified cache, including multipart files.
-It runs on the server without downloading to your device.
-
-1. Choose **My Files → file ⋯ → Preload file**.
-2. Open **Monitor → Preloads** and wait for **Ready** with full coverage.
-   Blue segments show partial coverage.
+[Preload file](usage.md#preload-a-file-for-smoother-playback-and-downloads) prepares
+the whole original on the server, including multipart files. Wait for **Ready**
+and full coverage in **Monitor → Preloads** before relying on it.
 
 Preloading starts only when the whole file fits the effective RAM or disk cache
 budget. Concurrent preparations reserve capacity and verify retained ranges
@@ -310,48 +284,34 @@ improve the device uplink or bypass a proxy. Compare device progress with HTTP
 received traffic and server load; a server-local benchmark excludes the viewer's
 route. See [transfer durability](architecture.md#transfer-pipeline).
 
-New receipts avoid redundant offset/snapshot requests. Browser payload slots are
-released after the final acknowledged chunk; up to two server completion requests
-run separately, so receipt verification does not hold the next file's device slot.
-Eligible batches rotate through those slots. Slow disk, database commits, staging
-pressure and the uplink can still limit intake.
-
-Creating an upload receipt keeps its initial file synchronization and database
-commit off the HTTP event loop, with staging reserved before it yields. See the
-[transfer pipeline](architecture.md#transfer-pipeline) for admission and retry
-boundaries.
-
-Job-state commits are awaited worker operations. A slow commit holds back its
-state transition without blocking reads of the last acknowledged job state.
-Bulk move, Trash and restore also share batch working copies rather than copying
-the full catalog for each item; name, ancestry and share checks still depend on
-catalog size.
+New receipts avoid redundant offset/snapshot requests. Payload slots are released
+after the last acknowledged chunk; at most two completion requests run separately
+so verification can overlap the next device file. Eligible batches rotate through
+slots. Slow disk, database commits, staging pressure and the uplink can still
+limit intake. [Receipt admission and durable handoff](architecture.md#transfer-pipeline)
+describe the worker, storage-reservation and commit boundaries.
 
 ### Browser progress and health checks
 
-The owner interface checks server health and transfer progress in the background.
-Idle browsing uses fewer requests; upload sending, completion, retry and recovery
-keep their own scheduling. These intervals start after the preceding request
-settles, so a slow response does not create overlapping automatic requests.
+The owner interface checks progress and health less often when idle. Each
+interval starts after the previous response, preventing overlapping automatic
+requests; upload sending, completion and retry keep their own schedules.
 
 | Check | Work in progress | Healthy idle tab | Healthy idle hidden tab |
 | --- | --- | --- | --- |
 | Transfer jobs | 1.5 seconds | 30 seconds | 60 seconds |
 | Server readiness | 5 seconds | 30 seconds | 60 seconds |
 
-Active jobs, deletions, device receipts and remote-request recovery retain fast
-checks even when the tab is hidden. Readiness checks also stay fast while a known
-connection issue or admission pause needs to clear. Returning to the tab refreshes
-promptly, with simultaneous focus/visibility events coalesced; starting work and
-explicit refresh/retry actions do not wait for the idle interval. Browser timer
-throttling and network latency can delay these updates.
+Active jobs, deletions, receipts and remote-request recovery retain fast checks
+in hidden tabs. Readiness stays fast during a known connection issue/admission
+pause. Returning to the tab refreshes promptly; simultaneous focus/visibility
+events share a request. Explicit actions do not wait for the idle interval.
+Browser throttling and network latency can delay updates.
 
-Job replies still contain retained completed/failed records and history-clearing
-notices so browsers can reconcile final results. Slower idle polling means work
-started elsewhere or a new readiness warning can take up to the idle interval
-to appear. The server checks admission when work is submitted. Already accepted
-server jobs continue without the page; files still being sent from your device
-need the browser. See [transfer stages](architecture.md#transfer-pipeline).
+Job replies retain final records/history-clearing notices for reconciliation.
+Work started elsewhere may take the idle interval to appear, but the server
+checks admission on submission. Accepted server jobs continue without the page;
+device sending still needs it. [Transfer stages](architecture.md#transfer-pipeline).
 
 ### Navigation during uploads
 
@@ -436,41 +396,31 @@ has been measured.
 
 ## Video controls and startup
 
-The local custom player keeps controls available through loading, buffering,
-seeking and errors. It supports the media's available tracks/chapters and focused
-keyboard shortcuts (**K/Space**, **M**, arrows); mobile autoplay may require tapping
-Play. Slow starts offer **Try again**; unsupported codecs retain **Download Original**.
+TGDrive's custom Movi player keeps controls available through loading, buffering,
+seeking and errors. It uses browser WebCodecs or software decoding through
+WebAssembly (WASM). A file playing in a browser's native player does not establish
+that this separate pipeline can decode it smoothly. **Try again** and
+**Download Original** remain available for slow starts or unsupported files.
+[Player controls](usage.md#open-preview-and-download).
 
 The animated waiting status shows measured bytes received and current delivery
-speed when the player's HTTP source exposes them. Received bytes include repeated
-reads and seeks, so they are not a whole-file completion percentage. The compact
-status strip keeps retry inline and omits zero-speed and explanatory paragraphs;
-advancing presented frames clear a stale wait. The timeline's source-buffer time ranges are estimates,
-separate from server cache coverage. Playback does not require a whole-file preload.
+speed when available. Bytes include repeated reads/seeks, not a whole-file
+completion percentage. The compact strip keeps retry inline and omits zero-speed
+text; advancing frames clear stale waits. Timeline ranges estimate the browser's
+buffer, separately from server cache. A whole-file preload is optional.
 
-If no presented picture advances for over 1.25 seconds, the existing wait debounce
-confirms the stall before holding scheduled audio and the media clock. The player
-continues fetching and decoding, then uses its coordinated buffer-readiness gate
-to resume. This pinned-player adapter prevents decoder recovery from releasing
-sound without pictures; it leaves intentional pauses/seeks, background audio, audio-only playback and
-completed video tails alone. Picture-in-picture still requires moving pictures.
-It does not increase network speed or make an overloaded decoder keep up.
+If no presented picture advances for over 1.25 seconds, the wait debounce confirms
+a stall before holding scheduled audio and the playback clock. Fetching/decoding
+continue until the coordinated readiness gate can resume both. Intentional
+pauses/seeks, background audio, audio-only playback and completed video tails
+remain independent; picture-in-picture still requires advancing pictures.
 
-The pinned player applies video-decoder backpressure to video-only files rather
-than reading ahead for a nonexistent audio track. This protects decoder admission;
-it does not establish smooth playback on every codec/device.
-
-TGDrive retains its custom playback pipeline for all video previews, including
-HEVC. Native browser playback support does not establish that the custom
-WebCodecs/WASM pipeline can decode and render the same file smoothly.
-
-Fast server delivery cannot make every device decode a 4K codec smoothly. A long
-wait retains retry/download actions. Cached bytes still need delivery and decoding.
-At EOF, both WebCodecs and software decoders drain pending pictures before reset.
-The software path finishes queued packets and submits end-of-input through the
-existing WASM interface, preserving delayed B-frames. Audio-only files inside
-video containers do not wait for pictures. Closing/replacing the player removes
-its document listeners and recurring UI timers as well as the playback core.
+Video-only files apply decoder backpressure rather than reading ahead for a
+nonexistent audio track. At end-of-file, both decoding paths drain pending
+pictures before reset; software decoding submits end-of-input through WASM to
+preserve delayed B-frames. Audio-only video containers do not wait for pictures.
+Closing/replacing the player removes listeners, recurring timers and playback
+resources. Cached delivery still needs a device capable of decoding the file.
 
 ### Seek and chapter previews
 

@@ -2,35 +2,18 @@
 
 [Docs home](README.md) · [API reference](reference.md#http-api) · [Performance](performance.md)
 
-Where files live, which work survives a restart, and how one drive stays consistent.
+This guide explains where data lives, how work survives interruption and how
+TGDrive prevents conflicting writes. For everyday actions, use the
+[user guide](usage.md); for a failed drive, start with [recovery steps](backup-recovery.md).
 
-For the user-facing screens around these flows, see the
-[visual walkthroughs](showcase.md).
-
-**Contents**
-
-- [The short version](#the-short-version)
-- [Components](#components)
-- [Authoritative data and identity](#authoritative-data-and-identity)
-  - [How a write becomes visible](#how-a-write-becomes-visible)
-- [Lifecycle](#lifecycle)
-- [Account identity and selection](#account-identity-and-selection)
-  - [Names and Refresh](#names-and-refresh)
-- [Connection management](#connection-management)
-- [Demo access boundaries](#demo-access-boundaries)
-- [Transfer pipeline](#transfer-pipeline)
-  - [From a browser to one drive file](#from-a-browser-to-one-drive-file)
-  - [Adaptive device upload concurrency](#adaptive-device-upload-concurrency)
-  - [Bounds and retries](#bounds-and-retries)
-  - [Cancellation and destination changes](#cancellation-and-destination-changes)
-  - [Archive jobs](#archive-jobs)
-  - [Finished history](#finished-history)
-- [Telegram transport and file responses](#telegram-transport-and-file-responses)
-- [Media and performance](#media-and-performance)
-- [Database safety copies and security](#database-safety-copies-and-security)
-  - [Independent backup pacing and verification](#independent-backup-pacing-and-verification)
-  - [Shared-link identity and re-copying](#shared-link-identity-and-re-copying)
-- [Diagnostic history](#diagnostic-history)
+| Question | Read |
+| --- | --- |
+| What stores my files and settings? | [Short version](#the-short-version) · [Catalog and identity](#authoritative-data-and-identity) |
+| What happens during startup or a restart? | [Lifecycle](#lifecycle) |
+| How are Telegram accounts managed? | [Account selection](#account-identity-and-selection) · [Connection management](#connection-management) |
+| How do uploads become saved files? | [Transfer pipeline](#transfer-pipeline) · [Retries](#bounds-and-retries) · [Cancellation](#cancellation-and-destination-changes) |
+| How are reads, history and backups handled? | [File responses](#telegram-transport-and-file-responses) · [History](#finished-history) · [Backups](#database-safety-copies-and-security) |
+| Where is the code? | [Components](#components) |
 
 ## The short version
 
@@ -39,15 +22,19 @@ flowchart LR
     Browser <-->|Files and API| Server["TGDrive server"]
     Server <-->|Original file bytes| Telegram
     Server <-->|Catalog and durable work| MongoDB
-    Server -.->|Encrypted database copies| Telegram
+    Server -.->|Encrypted recovery files| Telegram
 ```
 
-**Telegram holds file bytes; MongoDB holds the catalog, settings and durable work.**
-TGDrive also sends encrypted database copies to Telegram in the background.
+**Telegram holds file bytes; MongoDB holds the catalog, settings and saved work.**
+The catalog maps files/folders to their Telegram messages. Local persistent storage
+holds keys, sessions, unfinished upload bytes and disposable cache. Background
+backups send encrypted recovery files to Telegram; they exclude unfinished bytes.
 
 Run **one installation and one FastAPI worker per drive**. Background work runs
 inside that process without Redis or a separate task broker. Accepted server
-jobs continue without the browser while TGDrive stays running.
+jobs continue without the browser while TGDrive stays running. Here, **durable**
+means work has been recorded for recovery; resuming an upload can still need its
+local staged bytes.
 
 ## Components
 
@@ -80,21 +67,25 @@ and test layout is described in the
 ## Authoritative data and identity
 
 **MongoDB is the source of truth**, including on laptops. The in-memory catalog
-is an immutable read cache: it speeds up reads, while MongoDB keeps the saved
-state. Durable collections hold nodes and ordered parts,
+is an immutable read cache: it speeds up reads while MongoDB keeps saved state.
+Its collections hold nodes and ordered parts,
 shares, operation IDs, jobs and receipts, deletion intents, private settings and
 sessions, backup records and the runtime ownership lease.
 
 Directory responses are assembled in workers, and resource totals reuse an
 unchanged committed snapshot. See [navigation during uploads](performance.md#navigation-during-uploads)
 for browser update, polling and read-reuse policies.
+Bulk move, Trash and restore share a working copy for the batch rather than
+copying the catalog per item; name, ancestry and share checks still depend on
+catalog size.
 
 - Paths use stable item IDs: moves and renames retain identity.
 - Names are Unicode-normalized with case-insensitive sibling uniqueness.
 - Files reference one Telegram document or ordered parts with offsets, sizes
   and checksums. Public listings hide those locations.
 - Schema version 4 tracks revision/commit generation. Catalog bounds are
-  128 levels and 250,000 items.
+  128 levels and 250,000 items. The generation identifies the committed revision
+  so an older writer cannot overwrite newer state.
 
 MongoDB is required; the application has no SQLite catalog backend fallback.
 Only the current portable schema (4) is accepted for channel recovery.
@@ -122,7 +113,8 @@ MongoDB authority before further work.
 | Shutdown | Persist interrupted work, stop tasks, release resources/ownership |
 | Reinstall | Reuse the same MongoDB database and deployment identity |
 
-The cloud lease renews in the background and is checked inside writes.
+The ownership lease is a renewable lock that permits one installation to write. It
+renews in the background and is checked inside writes.
 Recovery of unfinished uploads still requires their local staged bytes.
 When startup defers Telegram recovery, the reconnect loop retries failed storage
 and bot startup after 30 seconds. It reuses the bot instance without registering
@@ -131,8 +123,8 @@ Automatic initialization runs only under the ownership lock and refuses saved
 drive records or recovery state. The catalog, channel binding and initial
 connection settings commit in one transaction. Those initial connections are
 active in the same process; first setup does not ask for another restart.
-The local channel recovery journal and portable
-catalog validation helpers are internal mechanisms, not alternate live databases.
+The local recovery journal and portable catalog validators support recovery;
+live catalog operations still require MongoDB.
 `DATA_DIR/mongodb-drive.json` remembers that a drive has been opened; losing its
 MongoDB catalog cannot then be mistaken for a first deployment on that volume.
 
@@ -143,10 +135,11 @@ revokes browser sessions; a service restart reloads saved credentials and state.
 
 ## Account identity and selection
 
-Uploads default to **one slot per bot** (**1–4** allowed); Premium clients keep
-one each. FIFO admission selects least-active eligible clients, preferring ready
-Premium slots with bot fallback. Uploads/reads share account media/request budgets,
-channel pacing and persisted FloodWait deadlines. Demand precedes queued preloads
+Upload admission is first-in, first-out and selects least-active eligible clients,
+preferring ready Premium slots with bot fallback. Uploads default to **one slot
+per bot** (**1–4** allowed); Premium clients keep one each. Uploads/reads share
+account media/request budgets, channel pacing and persisted FloodWait deadlines.
+Demand precedes queued preloads
 without preempting running work. Download requests rotate their queued blocks
 after each admission; see [shared-download scheduling](performance.md#shared-download-load-and-queues)
 and [performance controls](performance.md#upload-pipeline-and-smaller-splits).
@@ -186,10 +179,11 @@ cancel obsolete checks.
 
 ## Connection management
 
-Temporary clients verify the owner's revision-guarded candidate accounts/channel
-permissions before an atomic private-settings save. New mutations pause until
-restart. Editing needs settled jobs/receipts and valid ownership, without requiring
-a Telegram database backup.
+Temporary clients check proposed credentials and channel permissions before
+saving private settings atomically. A revision check prevents overwriting another
+owner session's changes. New mutations pause until restart. Editing requires
+settled jobs/upload receipts and valid ownership; it does not require a Telegram
+database backup.
 
 Secrets are write-only; omitted replacements keep saved values. Premium login uses
 owner-bound five-minute in-memory challenges. Codes/passwords are not stored;
@@ -226,8 +220,9 @@ Visitor steps and deployment limits live in [public demo mode](configuration.md#
 
 ## Transfer pipeline
 
-Browser receiving and Telegram dispatch run independently. Each completed receipt
-creates a durable job without waiting for its batch. Device receives start at two
+Browser receiving and Telegram dispatch run independently. An **upload receipt**
+records the device bytes the server has confirmed. Each completed receipt creates
+a durable job without waiting for its batch. Device receives start at two
 files and adapt between one and four; staging, disk headroom and the 1,000
 unfinished-receipt bound gate admission.
 
@@ -409,12 +404,10 @@ check allows deletion. Failed lookups also preserve it. An uncertain import may
 leave an unlisted copy in the channel; bot imports have no automatic durable
 reconciliation, so the owner must check the drive before resending.
 
-URL starts return a job before source I/O. A separate scheduler grants full-speed
-source slots and paces bounded waiting connections; validated ranges share an
-unpublished staging file. Promotion preserves the sequential prefix. Workers drain
-before that file can close or a fallback can truncate it. Source retrieval releases
-its slot before Telegram upload. See [URL intake](performance.md#url-import-intake)
-for scheduling, representation checks, storage claims and expiry limits.
+URL starts return a job before source I/O. Source retrieval has its own scheduler,
+staging file and storage claims, and releases its slot before Telegram upload.
+[URL intake](performance.md#url-import-intake) defines promotion, range checks,
+fallback/retry cleanup and expiry limits.
 
 Torrent imports use a durable parent job and a private `aria2c` subprocess.
 Guarded HTTP retrieval or magnet discovery yields bounded metadata; validated
@@ -457,7 +450,7 @@ with memory/CPU limits and a minimal environment. The worker streams archive
 entries, including solid 7z/RAR data, writes only numbered private staging files and
 requests storage admission before writing output. It returns a bounded manifest
 after decoding and integrity checks finish; catalog folders and normal upload
-children are created afterward. Browser closure does not stop the worker.
+children are created afterward.
 
 Workspace admission shares the upload staging budget and disk reserve. Archive paths
 and entry metadata are checked before extraction publishes output. Existing items
@@ -475,9 +468,9 @@ see [the workflow](usage.md#transfer-history).
 <details>
 <summary>Compaction, browser ownership and destination lookup</summary>
 
-Resolved upload/import jobs become eligible for compaction after
-`TRANSFER_TTL_SECONDS`; new admissions or explicit cleanup archive eligible live
-records. Job polling does not perform journal writes. Archives enter full
+After `TRANSFER_TTL_SECONDS`, resolved jobs can be compacted into smaller history
+records during new admissions or explicit cleanup. Job polling does not write
+the journal. These archived records enter full
 backups, omit private recovery context and cannot
 be retried as live jobs. Folder uploads carry one explicit identity through
 receipt, job and archive; ordinary files and URL imports retain separate task
@@ -485,17 +478,14 @@ identities. Task status and search matching are determined before pagination,
 and every member of a selected folder is returned together. Completed children
 of a running folder do not become a separate finished task.
 
-The Transfers page shows 20 finished tasks per numbered page. Browser-owned
-finished tasks consume page slots before server history; an explicit server
-offset fills the remaining slots. Folder exclusions keep a partially received
-local folder out of server-only finished counts. Grouping uses the explicit
-folder-selection metadata persisted with each current upload.
+Each numbered page holds 20 finished tasks. Browser-owned tasks take slots first;
+a server offset fills the remaining slots. Folder-selection metadata keeps
+partially received local folders out of server-only counts.
 
 Exact task totals scan archived summaries in batches on a worker, holding task
 summaries and the selected folders' members rather than every archived job.
-Numbered reads are O(history size); the indexed cursor API is also
-available. Startup does not load the full archive. Dismissing a deletion popup does
-not clear history; deletion notices stay separate.
+Numbered reads scan the history; an indexed cursor API is also available.
+Startup does not load the full archive. Deletion notices are separate from history.
 
 Manual history clearing deletes archived summaries and persists a hidden marker
 on terminal live jobs, preserving their recovery contexts, staged-byte ownership
@@ -535,19 +525,13 @@ local PDF.js uses bounded lazy ranges up to 256 MiB; SVG uses a passive image;
 video uses the local Movi/WASM player. Unsupported files retain original downloads.
 Quality choices exist only for representations actually present in Telegram.
 
-[Performance](performance.md) owns cache budgets, shared fills, adaptive read-ahead,
-preload qualification, eviction and diagnostics. Preloads are disposable
-acceleration, never catalog commits or backups. Authorization precedes cached
-bytes and is rechecked before future shared-stream blocks; revocation cannot
-recall bytes already sent.
+[Performance](performance.md) defines cache budgets, shared fetches, read-ahead,
+preloading and eviction. Cached bytes still require authorization; later stream
+blocks recheck shared access. Revocation cannot recall sent bytes.
 
-The player's compressed source buffer grows toward a time goal within a device
-memory budget; see the [browser buffer policy](performance.md#browser-playback-buffer).
-Growth preserves downloaded bytes. This source budget is not a decoder-memory
-cap. The custom
-player handles loading/errors, local styles, tracks, chapters and source changes;
-its buffered time estimates differ from server cache coverage. Neither extra
-bots nor a cache guarantees codec/device playback speed.
+The video player's [browser buffer](performance.md#browser-playback-buffer) is
+separate from server cache and decoder memory. Neither cache nor extra bots
+guarantee codec/device playback speed.
 
 The enhanced preview stores watch positions as numeric seconds in browser
 `localStorage`, under `tgdrive.video.position.v1:<file-id>`. Stable catalog IDs

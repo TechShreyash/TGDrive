@@ -2,17 +2,20 @@
 
 [Docs home](README.md) · [Settings guide](configuration.md) · [Development](development.md)
 
-Look up an exact setting, limit or request contract. Tables and examples expand
-on demand. For everyday workflows, start with [Using TGDrive](usage.md) or the
-[visual walkthroughs](showcase.md).
+Use this page to look up exact settings and API contracts. For website tasks,
+use the [user guide](usage.md); for settings you can change on screen, use
+[Configuration](configuration.md). Expand a section below when you need its details.
 
-**Contents**
-
-- [Terms used here](#terms-used-here)
-- [Configuration](#configuration)
-- [Owner administration](#owner-administration)
-- [HTTP API](#http-api)
-- [Security and privacy](#security-and-privacy)
+| I need to… | Look up |
+| --- | --- |
+| Set deployment values | [Configuration](#configuration) · [File syntax and secrets](#file-syntax-and-secret-handling) |
+| Understand an unfamiliar term | [Glossary](#terms-used-here) |
+| Write an API client | [Authentication and paths](#conventions-and-authentication) · [Errors and retries](#errors-and-retry-discipline) |
+| Upload files or folders | [Resumable uploads](#resumable-browser-receipts) · [Folder preparation](#atomic-folder-preparation) |
+| Read, share or download | [Listings](#listing-and-metadata) · [Previews](#previews-and-media) · [Shares and ranges](#shares-downloads-and-ranges) |
+| Monitor server work | [Jobs](#jobs) · [History](#transfer-history) · [Performance](#performance-cache-inventory-and-preparation) |
+| Back up or restore | [Recovery API](#independent-channel-backup-and-recovery) · [Website recovery steps](backup-recovery.md) |
+| Review access and privacy | [Security boundaries](#security-and-privacy) |
 
 <details>
 <summary>Configuration and API sections</summary>
@@ -55,6 +58,9 @@ on demand. For everyday workflows, start with [Using TGDrive](usage.md) or the
 | Catalog / metadata | Records describing your files and folders; not their contents |
 | Receipt | The server's record of upload bytes already received |
 | Staging | Temporary server disk holding unfinished upload bytes |
+| Bootstrap settings | Saved startup values used to reopen an existing drive |
+| Origin request | A request to Telegram for data not already available in cache |
+| Byte range | A requested section of a file, addressed by byte positions |
 | Manifest | The ordered list of Telegram parts making up one large file |
 | Lease / ownership | A temporary lock that keeps two installations from writing at once |
 | Share capability | A secret link/token that grants access to specific content |
@@ -64,26 +70,22 @@ on demand. For everyday workflows, start with [Using TGDrive](usage.md) or the
 
 ## Configuration
 
-1. Start with private environment variables or `.env`.
-2. Saved MongoDB settings fill missing bootstrap values.
-3. Telegram connections edited in the web app override the original Telegram
-   credential fields and apply after a restart.
+Start with `.env.example` and [Setup](setup.md). Add optional overrides only when
+needed. Names are case-insensitive; **unknown names are ignored**, so check spelling.
 
-Host environment values override `.env`. Blank optional bootstrap credentials
-can reuse saved MongoDB settings; explicit deployment values take precedence
-over a local recovery fallback. An edited Docker environment needs container
-recreation, rather than only a process restart. Saved dashboard performance
-preferences have their own precedence, described below.
+| Source | When it applies |
+| --- | --- |
+| Deployment environment / `.env` | Startup values; host environment wins over `.env` |
+| Saved MongoDB bootstrap | Fills missing startup values; explicit deployment values take precedence over local recovery fallback |
+| Saved **Connections** | Overrides original storage-account credentials after restart |
+| Saved dashboard performance preferences | Overrides matching startup defaults and applies to new work immediately |
 
-Settings are case-insensitive. Unknown names are ignored, so check for typos.
+Recreate Docker containers after changing their environment; a process restart
+alone does not load it. Recreating does not erase saved dashboard preferences.
 
-The supplied `.env.example` lists the required values for a new drive.
-Optional settings use application defaults; add an override to your private `.env`
-only when needed. Compose passes this file through `env_file`; its `environment`
-block contains bootstrap inputs and fixed container paths, cookie and proxy policy.
-Local Compose overrides the hosted cookie/proxy policy for localhost HTTP.
-Environment entries override matching values from `env_file`.
-See [Docker's environment guide](https://docs.docker.com/compose/how-tos/environment-variables/set-environment-variables/).
+Compose loads `.env` through `env_file`; its `environment` entries override matching
+values. The supplied files fix container paths, cookies and proxy policy; the local
+override permits localhost HTTP. [Docker environment details](https://docs.docker.com/compose/how-tos/environment-variables/set-environment-variables/).
 
 | Deployment flag | Default | Behavior |
 | --- | --- | --- |
@@ -132,8 +134,8 @@ do not make a configuration file safe to publish.
 
 | Variable | Required/default | Validation and behavior |
 | --- | --- | --- |
-| `API_ID` | Required unless supplied by managed settings | Positive integer Telegram application ID; the web editor bounds it to 1–2147483647. |
-| `API_HASH` | Required unless managed, secret | Exactly 32 hexadecimal characters; surrounding whitespace is removed. |
+| `API_ID` | Required unless supplied by saved settings | Positive integer Telegram application ID; the web editor bounds it to 1–2147483647. |
+| `API_HASH` | Required unless supplied by saved settings, secret | Exactly 32 hexadecimal characters; surrounding whitespace is removed. |
 | `MAIN_BOT_TOKEN` | Required by the new-drive setup, secret | One bot token for the Telegram chat interface; requires TELEGRAM_ADMIN_IDS. On initial setup, it also supplies the first storage bot when no legacy BOT_TOKENS list is provided. Tokens must match the expected numeric-ID and secret format; Telegram verifies actual validity on connection. |
 | `BOT_TOKENS` | Legacy bootstrap, secret | Existing comma-separated storage bot lists remain supported; duplicates are rejected. An explicit list is preserved rather than replaced by MAIN_BOT_TOKEN. For new deployments, use MAIN_BOT_TOKEN and add further storage bots through Connections. |
 | `STORAGE_CHANNEL` | Required | Negative integer private channel ID. Confirmed catalogs bind to this channel; changing it is not relocation and can trigger RECOVERY_REQUIRED. Use the membership/permissions from [Telegram setup](setup.md#2-prepare-telegram). |
@@ -168,15 +170,15 @@ a container does not override saved preferences. Telegram credential edits use
 the separate restart-based connection editor.
 
 **Discard changes** restores the last saved values. **Restore defaults** creates a
-category-scoped draft; Save validates and applies it. Defaults below use binary
-units: 1 GiB = 1024 MiB.
+category-scoped draft; Save validates and applies it. Units are binary:
+1 GiB = 1024 MiB. Where a default shows units, use the parenthesized integer in `.env`.
 
 | Variable | Default | Meaning and bounds |
 | --- | --- | --- |
-| `CACHE_MEMORY_BYTES` | 268435456 | RAM payload budget, 0–8 GiB (default 256 MiB). Zero disables RAM retention. Available host/container memory can lower the effective limit. RAM blocks expire after 10 idle minutes; reuse refreshes expiry. |
-| `CACHE_DISK_BYTES` | 10737418240 | Disk budget, 0–2 TiB. Zero disables disk retention. It does not reserve that amount of disk in advance. |
-| `CACHE_MIN_FREE_BYTES` | 1073741824 | Free-disk floor for cache writes, 0–2 TiB (default 1 GiB). This does not allocate space or constrain other disk users. Upload staging separately uses `MIN_FREE_BYTES`. |
-| `CACHE_TTL_SECONDS` | 86400 | Sliding disk retention, 60–2678400 seconds. Eviction or disk failure can remove bytes sooner. |
+| `CACHE_MEMORY_BYTES` | 256 MiB (`268435456`) | RAM payload budget, 0–8 GiB (default 256 MiB). Zero disables RAM retention. Available host/container memory can lower the effective limit. RAM blocks expire after 10 idle minutes; reuse refreshes expiry. |
+| `CACHE_DISK_BYTES` | 10 GiB (`10737418240`) | Disk budget, 0–2 TiB. Zero disables disk retention. It does not reserve that amount of disk in advance. |
+| `CACHE_MIN_FREE_BYTES` | 1 GiB (`1073741824`) | Free-disk floor for cache writes, 0–2 TiB (default 1 GiB). This does not allocate space or constrain other disk users. Upload staging separately uses `MIN_FREE_BYTES`. |
+| `CACHE_TTL_SECONDS` | 24 hours (`86400`) | Sliding disk retention, 60–2678400 seconds. Eviction or disk failure can remove bytes sooner. |
 | `AUTO_PRELOAD` | true | Enable extra bounded warming after delivered original audio/video playback bytes. Explicit downloads and unclassified range clients stay within requested ranges. Disabling it leaves adaptive response read-ahead and manual **Preload file** available. |
 | `PRELOAD_MAX_JOBS` | 2 | Combined manual and automatic preparation jobs, 1–8; foreground work has priority. More jobs share existing account capacity. |
 | `TELEGRAM_UPLOAD_PIPELINE` | 4 | Outstanding upload-part requests per document, 1–16. |
@@ -218,8 +220,8 @@ warming thresholds. Settings do not guarantee bandwidth or free disk.
 | `ADMIN_PASSWORD` | Empty by default, secret | Plaintext fallback when no hash is configured. At least 12 characters after trimming. If a hash is present, clear the example plaintext value. A malformed nonempty plaintext value still fails validation. |
 | `DEMO_ADMIN_PASSWORD` | Empty by default, secret | Optional different password granting full access only while `DEMO_MODE=true`. At least 12 characters after trimming. Not stored/restored in bootstrap preferences. |
 | `DEMO_ADMIN_PASSWORD_HASH` | None by default, secret | Optional Argon2id alternative to `DEMO_ADMIN_PASSWORD`, with the same validation bounds as `ADMIN_PASSWORD_HASH`. Takes precedence over demo administrator plaintext. Not stored/restored in bootstrap preferences. |
-| `SESSION_SECRET` | Required, secret | Independent random signing secret of at least 32 characters after trimming. Do not reuse an account or password credential. |
-| `SESSION_TTL_SECONDS` | 86400 | Integer 300-2592000 inclusive: absolute browser session lifetime in seconds (24 hours by default). No separate idle timeout. |
+| `SESSION_SECRET` | Auto-generated in standard Compose; otherwise required, secret | Independent random signing secret of at least 32 characters after trimming. Do not reuse an account or password credential. |
+| `SESSION_TTL_SECONDS` | 24 hours (`86400`) | Integer 300-2592000 inclusive: absolute browser session lifetime in seconds (24 hours by default). No separate idle timeout. |
 | `COOKIE_SECURE` | true | Secure cookies require HTTPS. Local Compose sets false for loopback HTTP. Disabling it does not enable full remote HTTP support; see [HTTP requirements](operations.md#can-tgdrive-run-over-http). |
 
 At least one password representation is required. The hash takes precedence
@@ -269,11 +271,8 @@ login can receive `429` with code `LOGIN_BUSY`; the website retries that respons
 up to three total attempts, waiting 1–2 seconds between tries. Incorrect passwords,
 the five-failure throttle and network errors are not automatically retried.
 
-Set `ADMIN_PASSWORD` in the private deployment environment; TGDrive hashes it
-internally. An existing compatible Argon2id hash may instead be supplied in
-`ADMIN_PASSWORD_HASH`, with `ADMIN_PASSWORD` empty. See
-[password reset](operations.md#forgotten-login-password) and
-[website archive restore](backup-recovery.md#restore-a-lost-database-from-telegram).
+For lost owner access, follow [password reset](operations.md#forgotten-login-password).
+For lost drive data, follow [backup recovery](backup-recovery.md).
 
 </details>
 
@@ -287,7 +286,7 @@ internally. An existing compatible Argon2id hash may instead be supplied in
 | `MONGODB_URI` | Required | Secret URI beginning mongodb:// or mongodb+srv://. Missing/invalid configuration or failed database access rejects startup; no local database fallback. |
 | `MONGODB_DATABASE` | tgdrive | 1–63 ASCII letters/digits, underscores or hyphens; dedicated to one drive. |
 | `MONGODB_BACKUP_KEY` | None | Initial secret 64-hex-character AES-256 recovery key, independent of the login password. Unified files retain an existing journal key; preserve matching keys for older generations. |
-| `MONGODB_BACKUP_SECONDS` | 3600 | Integer 60–604800 seconds between successful automatic standalone safety copies. Separate standalone publication pauses while independent channel protection is enabled. |
+| `MONGODB_BACKUP_SECONDS` | 1 hour (`3600`) | Integer 60–604800 seconds between successful automatic standalone safety copies. Separate standalone publication pauses while independent channel protection is enabled. |
 | `DATA_DIR` | data | Persistent generated keys, Telegram sessions, helper locks, recovery/activation state and media cache. MongoDB holds the live catalog and durable job/receipt records. |
 | `CACHE_DIR` | cache | Persistent unfinished upload payloads and encrypted temporary database backup files. Keep unfinished bytes. |
 | `LOG_LEVEL` | INFO | DEBUG, INFO, WARNING, ERROR or CRITICAL. |
@@ -328,8 +327,8 @@ empty database or the untouched catalog created by automatic first setup.
 | Variable | Default | Validation and behavior |
 | --- | --- | --- |
 | `MAX_FILE_SIZE` | Unset | Optional positive logical-file byte ceiling; the runtime upload policy supports up to 2 TiB, further bounded by staging. Files above one Telegram document's limit do not require Premium. |
-| `STAGING_BUDGET_BYTES` | 17179869184 | Positive integer, at most 2 TiB in the runtime upload policy; 16 GiB total reservation budget by default. |
-| `MIN_FREE_BYTES` | 1073741824 | Nonnegative integer; preserve 1 GiB free space by default. Browser receipt admission reserves remaining bytes; URL downloads also check free space. |
+| `STAGING_BUDGET_BYTES` | 16 GiB (`17179869184`) | Positive integer, at most 2 TiB in the runtime upload policy; 16 GiB total reservation budget by default. |
+| `MIN_FREE_BYTES` | 1 GiB (`1073741824`) | Nonnegative integer; preserve 1 GiB free space by default. Browser receipt admission reserves remaining bytes; URL downloads also check free space. |
 | `UPLOAD_SESSION_TTL_SECONDS` | 86400 | Integer at least 60; incomplete receipt idle lifetime in seconds, refreshed after each committed chunk. There is no declared upper bound in configuration. |
 | `MAX_CONCURRENT_TRANSFERS` | 2 | Integer 1–32; bounds local fingerprinting and receive work. Torrent downloads and receipt handlers each use a separate bound of this size, so slow peers do not occupy local upload-preparation slots. It does not cap Telegram uploads across bots. |
 | `TELEGRAM_UPLOADS_PER_BOT` | 1 | Integer 1–4; initial per-bot Telegram media limit. **Configuration → Transfer limits** saves an override in MongoDB and applies it immediately. Premium clients remain limited to one media upload each. |
@@ -431,16 +430,17 @@ that prevent startup are explained in container logs. See
 
 ## HTTP API
 
-The web app uses these owner-session and scoped-share endpoints.
-There are no API keys or multi-user accounts. Interactive OpenAPI pages are disabled.
+These endpoints serve the web app. Owner requests use a login cookie; shared
+requests use a token scoped to selected content. Read the conventions before
+integrating. There are no API keys, per-person accounts or interactive OpenAPI pages.
 
 ### Conventions and authentication
 
 <details>
 <summary>Cookies, ID paths, bodies and timestamps</summary>
 
-All routes are relative to the app origin. Use JSON bodies with
-`Content-Type: application/json`, except multipart uploads and chunk PATCH.
+Routes are relative to your TGDrive website address. Use JSON with
+`Content-Type: application/json` unless a route specifies raw bytes or multipart data.
 The React client uses both versioned `/api/v1` routes and application routes such
 as `/api/getDirectory`. Both are active v2 interfaces.
 
@@ -476,8 +476,8 @@ permanent third-party API compatibility.
 | `GET /api/v1/session` | Public | None | `{"authenticated":true}` or false. |
 | `GET /api/v1/status` | Owner | None | Connection, capacity, committed revision, backend, latest locally observed encrypted snapshot record and client health. The backup observation reloads at startup and updates during publication; this polling endpoint does not query backup history. |
 | `POST /api/v1/backup` | Owner | `{}` | Creates a confirmed unified recovery file; runs the independent checkpoint when enabled, otherwise a standalone main-channel snapshot. Returns recovery status; `503` if not confirmed. |
-| GET /api/v1/backup/recovery-key | Owner | None | Private no-store download of the backup decryption key. |
-| `POST /api/v1/backup/restore` | Owner, disabled in demo | Raw `.tgdb` bytes, `Content-Type: application/octet-stream`, `X-TGDrive-Recovery-Key: <64 hex characters>`, `X-TGDrive-Confirm: RESTORE` | Authenticates and restores a full archive into an empty or untouched automatically created drive; returns `restart_required: true`. |
+| `GET /api/v1/backup/recovery-key` | Owner | None | Private no-store download of the backup decryption key. |
+| `POST /api/v1/backup/restore` | Owner, disabled in demo | Legacy `TGDRIVE-MONGO-1` archive bytes, `Content-Type: application/octet-stream`, `X-TGDrive-Recovery-Key: <64 hex characters>`, `X-TGDrive-Confirm: RESTORE` | Restores a legacy full database archive into an empty or untouched automatically created drive; returns `restart_required: true`. |
 | `GET /health/live` | Public | None | `200 {"status":"ok"}` if HTTP can answer. |
 | `GET /health/ready` | Public | None | `200` if runtime/pool ready, otherwise `503`. |
 | `GET /healthz` | Public | None | Readiness alias used by Docker. |
@@ -525,7 +525,10 @@ bypassing the independent worker's batching delay but respecting provider retry
 deadlines. Ordinary uploads do not call or wait for it. Recovery file/key
 downloads are owner-only and absent from ordinary status/configuration.
 
-Archive restore accepts at most 1 GiB of ciphertext and 1 GiB expanded data.
+This legacy restore route accepts at most 1 GiB of ciphertext and 1 GiB expanded
+data. A unified `TGDRIVE-BACKUP-2` file returns `422` with
+`RECOVERY_FILE_REQUIRES_UNIFIED_RESTORE`; use the [recovery-file flow](#independent-channel-backup-and-recovery)
+to verify channel access and file mappings before activation.
 It validates the archive before pausing work, then rechecks the destination
 inside the restore transaction. Existing files, jobs, shares or saved settings
 changes reject replacement with `409 RESTORE_DESTINATION_NOT_EMPTY`. Browser
@@ -1141,13 +1144,11 @@ reflects the latest GET while the queue estimate aggregates that ID's operations
 
 **Thumbnails:** authorize before and after asynchronous reads, including cache hits
 and `304`. Responses use `Cache-Control: private, no-cache`, `Vary: Cookie` and an
-ETag. The endpoint tries a generated cover, then a small provider thumbnail;
-multipart uses the first part. If unavailable, it can render a local cover from a
-complete server-cached original up to 128 MiB, within an eight-second repair
-deadline. It never fetches original Telegram payloads for the grid. Cached misses
-are reconsidered after new data arrives for that file; positive covers remain
-reusable. Repair rechecks authorization/source identity and leaves Telegram and
-the catalog unchanged.
+ETag. Generated covers precede provider thumbnails; multipart uses the first part.
+The grid never fetches original Telegram payloads. [Cached-cover repair](thumbnails.md#existing-files-and-fallback)
+retains its size/time bounds and rechecks access/source identity without changing
+Telegram or catalog data. Positive covers are reused; new cached data allows
+previous misses to be reconsidered.
 `204 No Content` means an optional thumbnail is unavailable and the client should
 keep its file icon. Missing originals and authorization failures retain their HTTP
 errors. Temporary thumbnail failures return `503 THUMBNAIL_BUSY`, `Retry-After: 5`. See [generation limits](thumbnails.md).
@@ -1172,14 +1173,12 @@ Book raster pages are checked against the [reader dimension limits](reading.md#r
 before delivery; an oversized or malformed image returns a preview error without
 changing its original download.
 
-**PDF:** at most 256 MiB source, lazy reads with no cumulative session cap.
-At most two reader requests run together; HTTP ranges are up to 1 MiB. Active
-response buffers share a 64 MiB target; a larger request runs alone, bounded by
-source size. Pending work holds bounded descriptors. Local PDF.js disables streaming and
-full-file prefetch; closing aborts requests. Normal authorization, range cache and
-multipart mapping apply, without automatic background preparation. These are
-preview limits, not total browser-memory guarantees. A failed/limited preview
-retains original download. See [readers](reading.md) for EPUB/CBZ/CBR contracts.
+**PDF:** at most 256 MiB source, lazy authorized ranges without a cumulative
+session-byte cap or automatic whole-file preparation. Local PDF.js disables
+streaming/full-file prefetch; closing aborts requests. Normal range-cache and
+multipart mapping apply. [Reader limits](reading.md#reader-limits) define request,
+buffer and parser budgets for PDF/EPUB/CBZ/CBR; they are not total browser-memory
+guarantees. Failed previews retain original download.
 
 **Representations:** `/file?quality=<opaque-descriptor-id>` chooses an actual
 message-bound variant; it never grants access. Unknown variants return `404`.
@@ -1319,14 +1318,11 @@ in complete encrypted database backups. They have no automatic history TTL;
 Existing records are visible; history already deleted before this feature
 cannot be reconstructed.
 
-The floating panel's **Clear finished** only dismisses browser display rows.
-Dismissals survive reloads in the same browser; open tabs merge saved dismissals
-before polling/writing, with independent per-job records so simultaneous clears
-cannot replace another tab's dismissals. Server
-history and original files remain available. Browser-only queued work is
-not a durable server history record until a job exists.
-The floating panel displays this browser's uploads and URL imports; global history
-continues to show server jobs initiated on other devices.
+The floating panel's **Clear finished** dismisses browser rows, preserving server
+history and files. Per-job dismissals survive reload and merge across open tabs.
+The panel shows this browser's work; history also shows other devices' server jobs.
+Browser-only queued work becomes durable server history only after a job exists.
+[History controls](usage.md#transfer-history).
 
 Owner-only `POST /api/v1/transfers/location` accepts `transfer_id`, `destination` and `completed`. It resolves the current folder and exact saved item without mutation; missing/trashed items return `available:false`.
 
