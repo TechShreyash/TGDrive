@@ -159,6 +159,64 @@ export function videoIsAdvancing(
         current - previous < 2
     );
 }
+/** Pinned Movi 0.4.1 adapter: a frozen picture must also hold sound and the clock. */
+export function holdVideoForBuffering(core: unknown, now: number): void {
+    const player = core as {
+        getState: () => string;
+        getBindAV: () => boolean;
+        hasPicture: boolean;
+        isAudioOnly: () => boolean;
+        isPastVideoEnd: () => boolean;
+        isBackgrounded: boolean;
+        isPiPActive: boolean;
+        eofReached: boolean;
+        _eofFlushRequested: boolean;
+        _eofFlushSeq: number;
+        _eofFlushSettledSeq: number;
+        videoDecoder: { queueSize: number };
+        videoRenderer: {
+            getQueueSize: () => number;
+            stopPresentationLoop: () => void;
+        };
+        audioRenderer: { suspendForBuffering: () => void };
+        clock: { pause: () => void };
+        stateManager: { setState: (state: string) => void };
+        cancelBlackFrameWatchdog: () => void;
+        wasPlayingBeforeRebuffer: boolean;
+        _bufferingEntryTime: number;
+        _bufferingSelfInflicted: boolean;
+        _bufferingSupplyIsFine: boolean;
+        _soundCarryingAlone: boolean;
+    } | null;
+    if (
+        player?.getState() !== "playing" ||
+        !player.getBindAV() ||
+        !player.hasPicture ||
+        player.isAudioOnly() ||
+        player.isPastVideoEnd() ||
+        (player.isBackgrounded && !player.isPiPActive)
+    )
+        return;
+    // A fully drained video can leave a soundtrack tail with no next picture to await.
+    if (
+        player.eofReached &&
+        player._eofFlushRequested &&
+        player._eofFlushSettledSeq === player._eofFlushSeq &&
+        player.videoDecoder.queueSize === 0 &&
+        player.videoRenderer.getQueueSize() === 0
+    )
+        return;
+    player.cancelBlackFrameWatchdog();
+    player._soundCarryingAlone = false;
+    player.wasPlayingBeforeRebuffer = true;
+    player._bufferingEntryTime = now;
+    player._bufferingSelfInflicted = false;
+    player._bufferingSupplyIsFine = false;
+    player.stateManager.setState("buffering");
+    player.clock.pause();
+    player.audioRenderer.suspendForBuffering();
+    player.videoRenderer.stopPresentationLoop();
+}
 /** Saved positions can come from a longer rendition; never seek past its end. */
 export function videoResumeTime(time: number, duration?: number): number {
     const target = Number.isFinite(time) ? Math.max(0, time) : 0;
@@ -647,6 +705,12 @@ export default function AdvancedVideo({
                         performance.now() - latestProgressAt < 500)
                 )
                     return;
+                if (
+                    pendingWait === "waiting" &&
+                    latestProgressAt > 0 &&
+                    performance.now() - latestProgressAt > 1250
+                )
+                    holdVideoForBuffering(player.player, performance.now());
                 hasPresentedFrame = false;
                 dispatch(pendingWait);
             }, 700);

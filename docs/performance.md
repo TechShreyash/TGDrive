@@ -430,6 +430,14 @@ status strip keeps retry inline and omits zero-speed and explanatory paragraphs;
 advancing presented frames clear a stale wait. The timeline's source-buffer time ranges are estimates,
 separate from server cache coverage. Playback does not require a whole-file preload.
 
+If no presented picture advances for over 1.25 seconds, the existing wait debounce
+confirms the stall before holding scheduled audio and the media clock. The player
+continues fetching and decoding, then uses its coordinated buffer-readiness gate
+to resume. This pinned-player adapter prevents decoder recovery from releasing
+sound without pictures; it leaves intentional pauses/seeks, background audio, audio-only playback and
+completed video tails alone. Picture-in-picture still requires moving pictures.
+It does not increase network speed or make an overloaded decoder keep up.
+
 The pinned player applies video-decoder backpressure to video-only files rather
 than reading ahead for a nonexistent audio track. This protects decoder admission;
 it does not establish smooth playback on every codec/device.

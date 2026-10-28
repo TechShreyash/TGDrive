@@ -489,6 +489,10 @@ these include seek/repeat reads, not a file-completion percentage. A compact sta
 strip stays above the controls; longer waits add an inline retry action. Playback
 can start before the whole file is loaded.
 
+When the picture stalls during playback, sound and the playback clock wait while
+the player refills, then resume automatically. Background audio and a soundtrack
+that continues after the video ends are allowed to keep playing.
+
 Video previews use Movi's browser-side player. **Software decoding on this
 device** means playback can be
 limited by the device even when download speed is fast; use **Download Original**
