@@ -648,7 +648,11 @@ def test_queued_deletion_is_not_reported_complete_early(
         "The original files will remain in Telegram."
     )
     expect(page.get_by_role("dialog")).to_contain_text(
-        "You cannot restore these items from Trash after deletion."
+        "Items disappear from Trash once deletion starts and are removed "
+        "in the background."
+    )
+    expect(page.get_by_role("dialog")).to_contain_text(
+        "You cannot restore them after deletion."
     )
     page.get_by_role("dialog").get_by_role(
         "button", name="Delete Permanently", exact=True
@@ -657,13 +661,15 @@ def test_queued_deletion_is_not_reported_complete_early(
     expect(
         page.get_by_role("region", name="File Deletion").get_by_role("status")
     ).to_have_text("Deleting 1 item…")
-    expect(
-        page.get_by_role("button", name="Private folder", exact=True)
-    ).to_be_visible()
+    expect(page.get_by_role("button", name="Private folder", exact=True)).to_have_count(
+        0
+    )
+    expect(page.get_by_text("Permanently deleted 1 item.", exact=True)).to_have_count(0)
     page.locator(".drive-nav").get_by_role("link", name="My Files", exact=True).click()
     expect(page.get_by_role("region", name="File Deletion")).to_have_count(0)
     page.get_by_role("link", name="Trash", exact=True).click()
     expect(page.get_by_role("region", name="File Deletion")).to_be_visible()
+    expect(page.get_by_role("heading", name="Trash Is Empty")).to_be_visible()
     records = server.control()["records"]
     deletion_id = next(
         key for key, value in records.items() if value["phase"] == "deleting"
@@ -678,7 +684,11 @@ def test_queued_deletion_is_not_reported_complete_early(
             route.continue_()
 
     page.route("**/api/v1/trash*", trash_refresh)
-    server.finish(deletion_id)
+    with page.expect_response(
+        lambda response: "/api/v1/trash" in response.url and response.status == 200
+    ):
+        server.finish(deletion_id)
+    expect(page.get_by_role("region", name="File Deletion")).to_have_count(0)
     expect(page.get_by_role("heading", name="Trash Is Empty")).to_be_visible(
         timeout=10000
     )
@@ -2468,7 +2478,16 @@ def test_settings_backup_status_never_claims_unconfirmed_protection(
     assert recovery["protected_revision"] >= recovery["metadata_revision"]
     expect(status).to_have_text("Saved to MongoDB", timeout=8000)
     assert server.control("/backup")["calls"] == baseline_calls + 2
-    page.get_by_text("Recover on a New Installation", exact=True).click()
+    restore = page.get_by_role("region", name="Backups & recovery", exact=True)
+    restore.get_by_text("Restore backup", exact=True).click()
+    expect(restore.get_by_label("Recovery file (required)", exact=True)).to_be_visible()
+    expect(restore.get_by_label("Recovery key (required)", exact=True)).to_be_visible()
+    expect(
+        restore.get_by_role("button", name="Inspect backup", exact=True)
+    ).to_be_disabled()
+    page.get_by_text(
+        "Reopen an existing drive or restore an older archive", exact=True
+    ).click()
     restore_form = page.locator(".drive-recovery-help .database-restore")
     expect(restore_form.get_by_label("Database archive (required)")).to_be_visible()
     expect(restore_form.get_by_label("Archive recovery key (required)")).to_be_visible()

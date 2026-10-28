@@ -79,9 +79,7 @@ def images(monkeypatch):
 
 
 async def manager_for(tmp_path):
-    manager, ledger = await multipart_tests.manager_for(
-        tmp_path, ledger=PosterLedger()
-    )
+    manager, ledger = await multipart_tests.manager_for(tmp_path, ledger=PosterLedger())
     manager.settings.bot_upload_limit = 1024**2
     return manager, ledger
 
@@ -109,12 +107,15 @@ async def test_single_video_commits_two_documents_without_changing_original(
         assert ledger.options[0]["thumbnail"] == THUMBNAIL
         assert all(not row["generate_thumbnail"] for row in ledger.options)
         images.assert_awaited_once_with(source, "clip.mp4")
-        assert covers.read(
-            manager.cache_dir / "posters",
-            manager.settings.storage_channel,
-            poster["message_id"],
-            maximum=covers.MAX_POSTER_BYTES,
-        ) == POSTER
+        assert (
+            covers.read(
+                manager.cache_dir / "posters",
+                manager.settings.storage_channel,
+                poster["message_id"],
+                maximum=covers.MAX_POSTER_BYTES,
+            )
+            == POSTER
+        )
         assert not source.exists()
         assert not any(path.exists() for path in image_paths)
     finally:
@@ -142,9 +143,7 @@ async def test_lost_poster_reply_reuses_identity_and_does_not_regenerate(
         attempts = [
             row for row in ledger.options if row["file_name"] == "tgdrive-poster.jpg"
         ]
-        assert [(row["sender"], row["random_id"]) for row in attempts] == [
-            identity
-        ] * 2
+        assert [(row["sender"], row["random_id"]) for row in attempts] == [identity] * 2
         assert len(ledger.messages) == len(ledger.requests) == 2
         assert images.await_count == 1
         poster_id = multipart_tests.stored(manager)["poster"]["message_id"]

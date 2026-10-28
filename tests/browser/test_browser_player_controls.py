@@ -280,9 +280,13 @@ def test_frozen_picture_holds_audio_and_recovers_on_real_frames(
     page.wait_for_timeout(300)
     assert player.evaluate("el=>!el.paused"), "Buffering must preserve play intent"
     assert abs(player.evaluate("el=>el.currentTime") - held["time"]) < 0.1
-    assert abs(
-        player.evaluate("el=>el.player.audioRenderer.getAudioClock()") - held["audio"]
-    ) < 0.1
+    assert (
+        abs(
+            player.evaluate("el=>el.player.audioRenderer.getAudioClock()")
+            - held["audio"]
+        )
+        < 0.1
+    )
     expect(page.locator(".advanced-player-host")).to_have_attribute("aria-busy", "true")
     # The existing refill path must restart presentation and sound together.
     expect(status).to_have_count(0, timeout=5000)

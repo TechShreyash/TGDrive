@@ -109,9 +109,7 @@ def test_pending_deletions_hide_from_trash_across_restart_and_reappear_on_failur
     database = tmp_path / "deletion.sqlite3"
     mongo = FakeMongoBackend()
     store = (
-        DriveStore.create(database)
-        if backend == "sqlite"
-        else MongoStore.create(mongo)
+        DriveStore.create(database) if backend == "sqlite" else MongoStore.create(mongo)
     )
     try:
         node = store.create_folder("/", "Removal")

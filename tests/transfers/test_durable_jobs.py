@@ -421,9 +421,14 @@ async def test_bulk_backup_failure_preserves_each_item_and_retry_hides_it(
 
         monkeypatch.setattr(manager.registry, "spawn", delay_worker)
         retry = await manager.retry_job(jobs[0].id)
-        assert next(
-            row for row in manager.store.pending_deletions() if row["id"] == retry.id
-        )["state"] == "pending"
+        assert (
+            next(
+                row
+                for row in manager.store.pending_deletions()
+                if row["id"] == retry.id
+            )["state"]
+            == "pending"
+        )
         assert set(manager.store.list_trash()) == {paths[1].rsplit("/", 1)[-1]}
         assert manager._ensure_replica.await_count == 1
         release.set()

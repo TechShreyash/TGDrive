@@ -1133,7 +1133,8 @@ class ChannelReplica:
                 break
         if selected is None:
             raise SettingsProblem(
-                "No recorded channel could be accessed. Supply a surviving channel and a working bot token with administrator access.",
+                "No recorded channel could be accessed. Supply a surviving channel "
+                "and a working bot token with administrator access.",
                 code="RECOVERY_ACCESS_REQUIRED",
             )
         catalog, access = selected

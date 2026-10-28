@@ -95,9 +95,9 @@ async def test_bulk_delete_confirms_all_copies_before_any_catalog_removal(
     def checked_finish(intent_id):
         copied = list(files_in(remote_bundle(remote, replica)["replica_catalog"]))
         assert len(copied) == 3 and all(node["trashed"] for node in copied)
-        assert {
-            remote.messages[BACKUP, node["message_id"]] for node in copied
-        } == set(originals.values())
+        assert {remote.messages[BACKUP, node["message_id"]] for node in copied} == set(
+            originals.values()
+        )
         return finish(intent_id)
 
     monkeypatch.setattr(store, "finish_deletion", checked_finish)
