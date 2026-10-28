@@ -4,7 +4,7 @@ New to TGDrive? [Start with the essentials](new-user-guide.md),
 [try the demo](usage.md#try-the-public-demo), or go straight to [Setup](setup.md).
 Pick the guide for your task; you do not need to read everything.
 
-These guides cover TGDrive 2.0.0 with MongoDB. Install from stable `main` or a
+These guides cover TGDrive 2.2.0 with MongoDB. Install from stable `main` or a
 published release tag; `dev` may be unstable.
 
 | I want to… | Read |

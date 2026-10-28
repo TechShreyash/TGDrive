@@ -340,11 +340,17 @@ configuration with `.env.example`.
 
 **Git checkout:** Record `git rev-parse HEAD`. On `main`, use `git switch main`,
 then `git pull --ff-only origin main`. For a pinned version, use
-`git fetch origin --tags`, then `git switch --detach v2.0.0`, substituting the
+`git fetch origin --tags`, then `git switch --detach v2.2.0`, substituting the
 new published tag for later releases. If Git refuses, preserve local changes
 before continuing.
 
 **Coolify:** Select the published tag or `main`, retaining private variables and mounts.
+
+**Updating from 2.1.0:** No manual MongoDB migration is required. Native installs
+need `aria2c` for torrent imports; Docker includes it. Keep older backups and their
+original keys. New [unified recovery files](backup-recovery.md) and poster-aware
+snapshots need a version that supports those formats. Save a compatible backup
+before upgrading; older software may not preserve newer metadata.
 
 Do not run an older app against an incompatible database format. Restore a compatible backup into a separate empty database for a data rollback.
 

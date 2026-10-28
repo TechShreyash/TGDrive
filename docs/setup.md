@@ -57,15 +57,15 @@ and open a terminal in `TGDrive-main`.
 <details>
 <summary>Pin an installation to a fixed release</summary>
 
-Once [v2.0.0](https://github.com/TechShreyash/TGDrive/releases/tag/v2.0.0) is published,
-clone its immutable tag instead:
+To install [v2.2.0](https://github.com/TechShreyash/TGDrive/releases/tag/v2.2.0),
+clone its immutable tag:
 
 ~~~bash
-git clone --branch v2.0.0 --depth 1 https://github.com/TechShreyash/TGDrive.git
+git clone --branch v2.2.0 --depth 1 https://github.com/TechShreyash/TGDrive.git
 cd TGDrive
 ~~~
 
-Or use the [tagged source ZIP](https://github.com/TechShreyash/TGDrive/archive/refs/tags/v2.0.0.zip).
+Or use the [tagged source ZIP](https://github.com/TechShreyash/TGDrive/archive/refs/tags/v2.2.0.zip).
 For optional custom archives/checksums, see [release verification](release.md#verify-a-downloaded-source-archive).
 
 </details>
@@ -257,7 +257,7 @@ preparation above. For hosting choices, see [Hosting](hosting.md).
 on your Docker server. Its self-hosted edition is free; infrastructure costs remain.
 
 1. Create a public Git application from `https://github.com/TechShreyash/TGDrive`.
-   Select **`main`**, or **`v2.0.0`** once published to pin the release.
+   Select **`main`**, or **`v2.2.0`** to pin the release.
 2. Under **General → Build pipeline**, choose **Compose**, **Base Directory** `/`
    and **Docker Compose Location** `/compose.yaml`.
 3. Enter the [required variables](#3-configure-your-drive) in **Environment Variables**.

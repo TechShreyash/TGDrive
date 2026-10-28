@@ -696,8 +696,8 @@ These commands build a reviewable artifact; use the actual version after a bump:
 
 ```bash
 uv run --frozen python scripts/build_release.py
-(cd dist && sha256sum --check tgdrive-2.0.0.zip.sha256)
-unzip -l dist/tgdrive-2.0.0.zip
+(cd dist && sha256sum --check tgdrive-2.2.0.zip.sha256)
+unzip -l dist/tgdrive-2.2.0.zip
 ```
 
 <details>
