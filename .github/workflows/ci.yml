@@ -124,7 +124,8 @@ jobs:
 
     tests:
         name: Backend tests
-        runs-on: ubuntu-24.04
+        # shortcut: MongoDB rejects newer runner kernels; restore 24.04 before 2027-04-17.
+        runs-on: ubuntu-22.04
         timeout-minutes: 20
         steps:
             - name: Check out repository

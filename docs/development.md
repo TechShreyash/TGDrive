@@ -345,9 +345,13 @@ The [CI workflow](../.github/workflows/ci.yml) keeps routine pushes focused:
 
 All Python jobs use **3.14.8**, the sole supported runtime pinned in
 `.python-version` and the Docker image. There is no older-version test matrix.
-The backend job uses Ubuntu 24.04, the last verified baseline for its pinned
-MongoDB container. A startup failure records the container state and logs before
-stopping; application tests require a writable isolated replica set.
+The backend job temporarily uses Ubuntu 22.04 for its older kernel. The pinned
+MongoDB 8.0.34 image rejects some newer Ubuntu runner kernels; its
+[Ubuntu kernel-detection fix](https://jira.mongodb.org/browse/SERVER-131779)
+is assigned to 8.0.35. Return this job to 24.04 after verifying a compatible image,
+before [22.04 retires on 17 April 2027](https://github.com/actions/runner-images/issues/14254).
+A startup failure records the container state and logs before stopping;
+application tests require a writable isolated replica set.
 Its shell probes keep their temporary home in `/tmp`, outside the entrypoint's
 data-directory ownership pass, so short-lived shell lock files cannot abort startup.
 
