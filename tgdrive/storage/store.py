@@ -40,7 +40,7 @@ from tgdrive.core.errors import (
     ValidationError,
 )
 from tgdrive.storage.demo_files import DEMO_FILES_ID, DEMO_FILES_NAME, check_ids
-from tgdrive.storage.file_parts import validate_parts, validate_sha256
+from tgdrive.storage.file_parts import validate_parts, validate_poster, validate_sha256
 
 SCHEMA_VERSION = 4
 ROOT_ID = "root"
@@ -175,6 +175,7 @@ class _FileNode:
     share_hashes: list[str] = field(default_factory=list)
     parts: list[dict[str, Any]] | None = None
     sha256: str | None = None
+    poster: dict[str, Any] | None = None
 
     def __post_init__(self) -> None:
         self.id = _validate_id(self.id)
@@ -192,6 +193,9 @@ class _FileNode:
             self.parts = validate_parts(
                 self.parts, size=self.size, message_id=self.message_id
             )
+        self.poster = validate_poster(
+            self.poster, message_id=self.message_id, parts=self.parts
+        )
 
 
 @dataclass(slots=True)
@@ -240,7 +244,7 @@ def _parse_node(data: object, *, depth: int = 0) -> _Node:
     }
     if item_type == "file":
         expected = common_keys | {"message_id", "size"}
-        optional = {"parts", "sha256", "starred"}
+        optional = {"parts", "sha256", "starred", "poster"}
         if not expected <= set(data) or set(data) - expected - optional:
             raise ValidationError("file node has missing or unknown fields")
         if "parts" in data and not isinstance(data["parts"], list):
@@ -258,6 +262,7 @@ def _parse_node(data: object, *, depth: int = 0) -> _Node:
             share_hashes=data["share_hashes"],
             parts=data.get("parts"),
             sha256=data.get("sha256"),
+            poster=data.get("poster"),
         )
     if item_type == "folder":
         expected = common_keys | {"children"}
@@ -418,7 +423,7 @@ def _manifest_json(manifest: dict[str, Any]) -> str:
 class DriveStore:
     """SQLite metadata whose paths are presentations of stable parent IDs."""
 
-    DATABASE_VERSION = 6
+    DATABASE_VERSION = 7
     APPLICATION_ID = 0x54474456
     _DEFAULT_EXPIRY = object()
 
@@ -517,6 +522,7 @@ class DriveStore:
                     CHECK(part_count BETWEEN 1 AND 4096),
                 sha256 TEXT CHECK(sha256 IS NULL OR
                     (length(sha256)=64 AND sha256 NOT GLOB '*[^0-9a-f]*')),
+                poster TEXT CHECK(poster IS NULL OR json_valid(poster)),
                 CHECK((id='root' AND parent_id IS NULL AND kind='folder'
                        AND name='/' AND trashed=0)
                       OR (id!='root' AND parent_id IS NOT NULL)),
@@ -581,13 +587,13 @@ class DriveStore:
                     SELECT 1 FROM nodes WHERE id=NEW.parent_id AND kind='folder')
                 BEGIN SELECT RAISE(ABORT,'parent must be a folder'); END;
             PRAGMA application_id=1413956694;
-            PRAGMA user_version=6;
+            PRAGMA user_version=7;
             COMMIT;
         """)
 
     @classmethod
     def load(cls, path: str | os.PathLike[str]) -> DriveStore:
-        """Open a current-schema database without upgrading or replacing state."""
+        """Open the catalog, adding optional poster storage to a valid v6 database."""
         target = Path(path)
         if not target.is_file():
             raise FileNotFoundError(target)
@@ -604,7 +610,7 @@ class DriveStore:
             ):
                 raise CorruptStoreError("database is not a TGDrive database")
             version = connection.execute("PRAGMA user_version").fetchone()[0]
-            if version != cls.DATABASE_VERSION:
+            if version not in {6, cls.DATABASE_VERSION}:
                 raise UnsupportedSchemaError(f"unsupported database schema {version}")
             if connection.execute("PRAGMA quick_check").fetchone()[0] != "ok":
                 raise CorruptStoreError("SQLite integrity check failed")
@@ -616,6 +622,14 @@ class DriveStore:
                     raise CorruptStoreError("node name index is inconsistent")
             validated = cls._from_payload(store.export())
             validated.close()
+            if version == 6:
+                with store._transaction(write=True) as db:
+                    if db.execute("PRAGMA user_version").fetchone()[0] == 6:
+                        db.execute(
+                            "ALTER TABLE nodes ADD COLUMN poster TEXT "
+                            "CHECK(poster IS NULL OR json_valid(poster))"
+                        )
+                        db.execute("PRAGMA user_version=7")
             return store
         except (
             sqlite3.Error,
@@ -754,6 +768,8 @@ class DriveStore:
                 else:
                     messages.add(current.message_id)
                     messages.update(part["message_id"] for part in current.parts or [])
+                    if current.poster:
+                        messages.add(current.poster["message_id"])
             if messages != set(intent["message_ids"]):
                 raise ValidationError(
                     "deletion references do not match retained subtree"
@@ -805,8 +821,8 @@ class DriveStore:
                     node, parent_id = stack.pop()
                     db.execute(
                         "INSERT INTO nodes(id,parent_id,kind,name,name_key,upload_date,"
-                        "trashed,message_id,size,part_count,sha256) "
-                        "VALUES(?,?,?,?,?,?,?,?,?,?,?)",
+                        "trashed,message_id,size,part_count,sha256,poster) "
+                        "VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
                         (
                             node.id,
                             parent_id,
@@ -821,6 +837,9 @@ class DriveStore:
                             if isinstance(node, _FileNode) and node.parts
                             else 1,
                             node.sha256 if isinstance(node, _FileNode) else None,
+                            json.dumps(node.poster)
+                            if isinstance(node, _FileNode) and node.poster
+                            else None,
                         ),
                     )
                     if node.starred:
@@ -1142,6 +1161,9 @@ class DriveStore:
                     node["parts"] = parts
                 if row["sha256"] is not None:
                     node["sha256"] = row["sha256"]
+                # v6 catalogs are validated before adding the nullable column.
+                if dict(row).get("poster") is not None:
+                    node["poster"] = json.loads(row["poster"])
             else:
                 node["children"] = {}
             nodes[row["id"]] = node
@@ -1350,6 +1372,8 @@ class DriveStore:
         cls, db: sqlite3.Connection, row: sqlite3.Row, path: str
     ) -> dict[str, Any]:
         result = cls._record(row, path, message=True)
+        if row["poster"] is not None:
+            result["poster"] = json.loads(row["poster"])
         parts = [
             {
                 "index": item["part_index"],
@@ -1566,6 +1590,7 @@ class DriveStore:
         keep_both: bool = False,
         parts: list[dict[str, Any]] | None = None,
         sha256: str | None = None,
+        poster: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         name = _normalize_name(name)
         if operation_id is not None:
@@ -1599,7 +1624,11 @@ class DriveStore:
                     result = self._file_record(
                         db, existing, self._path_for_id(db, existing["id"])
                     )
-                    if result.get("parts") != parts or result.get("sha256") != sha256:
+                    if (
+                        result.get("parts") != parts
+                        or result.get("sha256") != sha256
+                        or result.get("poster") != poster
+                    ):
                         raise ValidationError(
                             "operation_id already committed different file parts"
                         )
@@ -1626,8 +1655,8 @@ class DriveStore:
             db.execute(
                 "INSERT INTO "
                 "nodes(id,parent_id,kind,name,name_key,upload_date,message_id,"
-                "size,part_count,sha256) "
-                "VALUES(?,?,?,?,?,?,?,?,?,?)",
+                "size,part_count,sha256,poster) "
+                "VALUES(?,?,?,?,?,?,?,?,?,?,?)",
                 (
                     item_id,
                     parent["id"],
@@ -1639,6 +1668,7 @@ class DriveStore:
                     size,
                     len(parts) if parts else 1,
                     sha256,
+                    json.dumps(poster) if poster else None,
                 ),
             )
             if parts:
@@ -1906,6 +1936,7 @@ class DriveStore:
         keep_both: bool = False,
         parts: list[dict[str, Any]] | None = None,
         sha256: str | None = None,
+        poster: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         if type(keep_both) is not bool:
             raise ValidationError("keep_both must be a boolean")
@@ -1914,6 +1945,7 @@ class DriveStore:
         sha256 = validate_sha256(sha256)
         if parts is not None:
             parts = validate_parts(parts, size=size, message_id=message_id)
+        poster = validate_poster(poster, message_id=message_id, parts=parts)
         return self._add(
             parent_path,
             name,
@@ -1923,6 +1955,7 @@ class DriveStore:
             keep_both,
             parts,
             sha256,
+            poster,
         )
 
     def rename(self, path: str, new_name: str) -> dict[str, Any]:
@@ -2155,6 +2188,8 @@ class DriveStore:
                 "SELECT message_id FROM nodes JOIN subtree USING(id) WHERE kind='file' "
                 "UNION SELECT p.message_id FROM file_parts p "
                 "JOIN subtree s ON p.node_id=s.id "
+                "UNION SELECT json_extract(n.poster,'$.message_id') FROM nodes n "
+                "JOIN subtree s ON n.id=s.id WHERE n.poster IS NOT NULL "
                 "ORDER BY message_id",
                 (node_id,),
             )

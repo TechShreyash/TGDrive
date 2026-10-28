@@ -53,6 +53,7 @@ from tgdrive.core.security import (
     demo_admin_session_key,
     verify_password,
 )
+from tgdrive.media.posters import load_poster
 from tgdrive.media.previews import describe_media, describe_preview
 from tgdrive.media.streaming import (
     TelegramFileNotFound,
@@ -68,6 +69,7 @@ from tgdrive.storage.demo_files import (
     check_transfer,
     request_policy,
 )
+from tgdrive.storage.file_parts import MAX_POSTER_BYTES
 from tgdrive.storage.mongo import DatabaseUnavailable
 from tgdrive.storage.store import DriveStore
 from tgdrive.telegram.client_pool import (
@@ -407,6 +409,7 @@ def create_app(
                     await connection_manager.close()
                 await _app.state.thumbnail_rebuild.close()
                 await _app.state.thumbnails.close()
+                await _app.state.posters.close()
                 await app_runtime.stop()
         finally:
             sessions.close()
@@ -424,6 +427,7 @@ def create_app(
     app.state.sessions = sessions
     app.state.login_limiter = limiter
     app.state.thumbnails = ThumbnailCache()
+    app.state.posters = ThumbnailCache(max_image_bytes=MAX_POSTER_BYTES)
     from tgdrive.media.generated_thumbnails import CachedThumbnailRepair
 
     app.state.thumbnail_repair = CachedThumbnailRepair(
@@ -1269,6 +1273,61 @@ def create_app(
         return Response(
             thumbnail.content, media_type=thumbnail.media_type, headers=headers
         )
+
+    @app.get("/api/v1/poster")
+    async def file_poster(
+        request: Request,
+        path: Annotated[str, Query(min_length=1, max_length=4096)],
+        auth: Annotated[str | None, Query(max_length=512)] = None,
+    ) -> Response:
+        path, file_data = authorized_file(request, path, auth)
+        headers = {"Cache-Control": "private, no-cache", "Vary": "Cookie"}
+
+        async def authorize():
+            _, current = await asyncio.to_thread(authorized_file, request, path, auth)
+            if any(
+                current.get(key) != file_data.get(key)
+                for key in ("message_id", "size", "parts", "poster")
+            ):
+                raise HTTPException(409, "File changed; refresh the directory")
+
+        poster = file_data.get("poster")
+        if poster is None:
+            await authorize()
+            return Response(status_code=204, headers=headers)
+        key = (
+            settings.storage_channel,
+            poster["message_id"],
+            poster["size"],
+            poster["sha256"],
+            poster.get("document_id"),
+        )
+
+        async def load():
+            return await load_poster(
+                pool=_runtime(request).pool,
+                channel_id=settings.storage_channel,
+                poster=poster,
+                directory=settings.resolved_cache_dir / "posters",
+                authorize=authorize,
+            )
+
+        try:
+            image = await app.state.posters.get(key, load)
+        except ThumbnailBusy:
+            await authorize()
+            return JSONResponse(
+                {"code": "POSTER_BUSY", "detail": "Poster temporarily unavailable"},
+                status_code=503,
+                headers={**headers, "Retry-After": "5"},
+            )
+        await authorize()
+        if image is None:
+            return Response(status_code=204, headers=headers)
+        headers["ETag"] = image.etag
+        if request.headers.get("if-none-match") == image.etag:
+            return Response(status_code=304, headers=headers)
+        return Response(image.content, media_type="image/jpeg", headers=headers)
 
     @app.get("/api/v1/media")
     async def file_media(

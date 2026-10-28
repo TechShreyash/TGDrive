@@ -17,6 +17,7 @@ import { attachVideoGestures } from "./videoPlayerGestures";
 import { attachVideoPreviews } from "./videoPlayerPreviews";
 import { formatBytes } from "../../../shared/types";
 import { videoSourceMemoryBudgetMiB } from "./videoBufferMemory";
+import { guardVideoPosterSeek, loadVideoPoster } from "./videoPoster";
 import {
     formatVideoTime,
     readVideoPosition,
@@ -325,12 +326,14 @@ const phaseCopy = {
 export default function AdvancedVideo({
     fileId,
     src,
+    posterUrl,
     name,
     playback,
     qualityControl,
 }: {
     fileId: string;
     src: string;
+    posterUrl: string;
     name: string;
     playback: { current: { time: number; playing: boolean } | null };
     qualityControl?: VideoQualityControl;
@@ -447,6 +450,9 @@ export default function AdvancedVideo({
         let frameSource: MoviElement | null = null;
         let lastPlayback: { time: number; playing: boolean } | null = null;
         let watchStarted = false;
+        let representativePoster = false;
+        let posterSource: string | null = null;
+        const posterController = new AbortController();
         // Closing the preview can move an ended engine back to paused.
         let finished = false;
         let lastSavedAt = -Infinity;
@@ -457,6 +463,7 @@ export default function AdvancedVideo({
         let detachPip: (() => void) | undefined;
         let detachGestures: (() => void) | undefined;
         let detachPreviews: (() => void) | undefined;
+        let detachPosterSeek: (() => void) | undefined;
         const expectsPicture = () => {
             const core = player?.player;
             if (!core?.getMediaInfo()) return true;
@@ -569,6 +576,7 @@ export default function AdvancedVideo({
         };
         const rememberPlayback = () => {
             if (
+                ((representativePoster || posterSource) && !watchStarted) ||
                 !usable ||
                 !player?.player ||
                 player.player.getState() === "error" ||
@@ -733,8 +741,13 @@ export default function AdvancedVideo({
             rememberPlayback();
             if (!player?.seeking) savePosition(true);
         };
-        void import("movi-player/element/slim")
-            .then(({ MoviElement }) => {
+        void Promise.all([
+            import("movi-player/element/slim"),
+            playback.current
+                ? Promise.resolve(null)
+                : loadVideoPoster(posterUrl, posterController.signal),
+        ])
+            .then(([{ MoviElement }, poster]) => {
                 if (cancelled || !host.current) return;
                 installLocalStyles(MoviElement);
                 installVideoPresentation(MoviElement);
@@ -765,7 +778,6 @@ export default function AdvancedVideo({
                 player.setAttribute("subtitlepicker", "");
                 player.setAttribute("playsinline", "");
                 player.setAttribute("preload", "metadata");
-                // A poster would bypass Movi's paused opening-frame decode.
                 player.setAttribute("theme", "dark");
                 player.setAttribute("themecolor", "#647dff");
                 player.setAttribute("fastseek", "keys gestures");
@@ -786,6 +798,13 @@ export default function AdvancedVideo({
                     };
                     // Establish the library's startup position before connection or src.
                     player.setAttribute("startat", String(resume.target));
+                } else if (poster) {
+                    posterSource = URL.createObjectURL(poster);
+                    player.setAttribute("poster", posterSource);
+                    player.setAttribute("posterfit", "contain");
+                } else {
+                    representativePoster = true;
+                    player.setAttribute("postertime", "50%");
                 }
                 const listen = (type: string, callback: EventListener) => {
                     player!.addEventListener(type, callback);
@@ -807,11 +826,16 @@ export default function AdvancedVideo({
                 // TrackManager emits this synchronously before choosing the decoder.
                 // Install the public extension in time to receive raw MP4 text packets.
                 listen("subtitletrackchange", updateSubtitleRenderer);
-                listen("loadedmetadata", () => ready("loadedmetadata"));
+                listen("loadedmetadata", () => {
+                    if (representativePoster && !detachPosterSeek)
+                        detachPosterSeek = guardVideoPosterSeek(player!);
+                    ready("loadedmetadata");
+                });
                 listen("loadeddata", () => ready("loadeddata"));
                 listen("canplay", () => ready("canplay"));
                 listen("playing", () => ready("playing"));
                 listen("play", () => {
+                    if (representativePoster) player?.removeAttribute("postertime");
                     startWatching();
                     // A playing state is an intent; watch actual presented frames below.
                     latestProgressAt = performance.now();
@@ -925,9 +949,13 @@ export default function AdvancedVideo({
                     frameSource.requestVideoFrameCallback(presentedFrame);
                 progressTimer = window.setInterval(observeProgress, 250);
             })
-            .catch(fail);
+            .catch((event) => {
+                posterController.abort();
+                fail(event);
+            });
         return () => {
             cancelled = true;
+            posterController.abort();
             clearWaiting();
             clearInterval(progressTimer);
             document.removeEventListener("visibilitychange", saveWhenHidden);
@@ -937,13 +965,18 @@ export default function AdvancedVideo({
             detachPip?.();
             detachGestures?.();
             detachPreviews?.();
+            detachPosterSeek?.();
             if (player) {
                 restorePlayerFocus.current ||=
                     document.activeElement === player;
                 clearVideoQualityControl(player);
                 if (frameCallback !== undefined)
                     frameSource?.cancelVideoFrameCallback(frameCallback);
-                if (finished) playback.current = null;
+                if (
+                    finished ||
+                    ((representativePoster || posterSource) && !watchStarted)
+                )
+                    playback.current = null;
                 else if (
                     lastPlayback &&
                     (!player.player || player.player.getState() === "error")
@@ -975,8 +1008,9 @@ export default function AdvancedVideo({
                 if (activePlayer.current === player)
                     activePlayer.current = null;
             }
+            if (posterSource) URL.revokeObjectURL(posterSource);
         };
-    }, [fileId, src, name, playback, attempt]);
+    }, [fileId, src, posterUrl, name, playback, attempt]);
     const copy = state.phase !== "ready" ? phaseCopy[state.phase] : null;
     const loadingStatus =
         playbackError || (copy && showStatus) ? (
@@ -1055,7 +1089,7 @@ export default function AdvancedVideo({
         ) : null;
     const continueButton =
         continueTime !== null &&
-        state.phase === "ready" &&
+        state.ready &&
         !playbackError &&
         continueTime < (activePlayer.current?.duration ?? 0) ? (
             <div className="advanced-state-actions advanced-continue">

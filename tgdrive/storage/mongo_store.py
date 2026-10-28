@@ -540,6 +540,8 @@ class MongoStore(DriveStore):
         result = self._record(node, path, message=True)
         if node.get("parts"):
             result["parts"] = copy.deepcopy(node["parts"])
+        if node.get("poster"):
+            result["poster"] = copy.deepcopy(node["poster"])
         return result
 
     def transfer_location(self, operation_id, destination="/", *, completed=False):
@@ -609,6 +611,7 @@ class MongoStore(DriveStore):
         keep_both=False,
         parts=None,
         sha256=None,
+        poster=None,
     ):
         name = _normalize_name(name)
         if operation_id is not None:
@@ -625,6 +628,7 @@ class MongoStore(DriveStore):
                     or node["size"] != size
                     or result.get("parts") != parts
                     or result.get("sha256") != sha256
+                    or result.get("poster") != poster
                 ):
                     raise ValidationError("Operation already committed different media")
                 return result
@@ -656,6 +660,8 @@ class MongoStore(DriveStore):
             )
             if parts:
                 row["parts"] = copy.deepcopy(parts)
+            if poster:
+                row["poster"] = copy.deepcopy(poster)
             self._state["nodes"][identity] = row
             if operation_id is not None:
                 self._state["operations"][operation_id] = {
@@ -934,6 +940,8 @@ class MongoStore(DriveStore):
             if row["kind"] == "file":
                 result.add(row["message_id"])
                 result.update(part["message_id"] for part in row.get("parts", []))
+                if row.get("poster"):
+                    result.add(row["poster"]["message_id"])
         return sorted(result)
 
     def message_ids(self, path, *, include_trashed=False):
@@ -1307,6 +1315,8 @@ class MongoStore(DriveStore):
                     value["parts"] = copy.deepcopy(row["parts"])
                 if row.get("sha256"):
                     value["sha256"] = row["sha256"]
+                if row.get("poster") is not None:
+                    value["poster"] = copy.deepcopy(row["poster"])
             else:
                 value["children"] = {}
             nodes[key] = value

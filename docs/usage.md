@@ -157,6 +157,11 @@ positions. Finishing clears the position. Clearing site data, private browsing,
 unavailable local storage or an abrupt shutdown can lose progress. Standalone
 stream links use the browser's native player instead.
 
+Videos use a sharp saved poster before playback when available. Older
+files or unavailable posters use a representative frame from halfway through
+the video; loading can take time and the picture can still be black.
+[Poster storage, fallback and limits](thumbnails.md#video-posters).
+
 Loading/buffering can reflect Telegram waits, network speed or device decoding.
 Image/audio previews retry a full Telegram queue at most twice while open; then
 use **Try Preview Again**. Other failures need manual retry. Downloads use the

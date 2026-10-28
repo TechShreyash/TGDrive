@@ -525,6 +525,15 @@ local PDF.js uses bounded lazy ranges up to 256 MiB; SVG uses a passive image;
 video uses the local Movi/WASM player. Unsupported files retain original downloads.
 Quality choices exist only for representations actually present in Telegram.
 
+Staged video uploads produce a small thumbnail and a larger poster from one
+selected picture. The poster is a separate ordinary Telegram document, tracked
+as an optional catalog reference outside the original byte parts. Its send
+identity and confirmation share the upload journal's retry/cancellation
+ownership. Catalog commit includes that reference atomically; purge and channel
+replication enumerate both originals and posters. Existing SQLite v6 utility
+catalogs are validated before an additive v7 migration; portable schema 4 reads
+older files without posters. See [poster behavior and limits](thumbnails.md#video-posters).
+
 [Performance](performance.md) defines cache budgets, shared fetches, read-ahead,
 preloading and eviction. Cached bytes still require authorization; later stream
 blocks recheck shared access. Revocation cannot recall sent bytes.

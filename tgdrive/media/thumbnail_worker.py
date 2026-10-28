@@ -6,6 +6,7 @@ from __future__ import annotations
 import math
 import os
 import secrets
+import struct
 import subprocess  # nosec B404
 import sys
 from pathlib import Path
@@ -44,6 +45,9 @@ AUDIO_FORMATS = {
 }
 OFFICE_FORMATS = {".docx", ".pptx", ".xlsx", ".odt", ".odp", ".ods"}
 MAX_BYTES = 64 * 1024
+MAX_POSTER_BYTES = 1024 * 1024
+VIDEO_IMAGES_MAGIC = b"TGDRVIMG"
+VIDEO_IMAGES_HEADER = struct.Struct("!8sII")
 # Shared libraries, HEVC reference frames and thread stacks all count toward
 # virtual address space. 512 MiB rejects ordinary UHD HEVC before scaling it.
 ADDRESS_SPACE_BYTES = 768 * 1024**2
@@ -200,9 +204,17 @@ def video_seek_time(path: Path | str, suffix: str, *, remote=False) -> str:
     return "10"
 
 
-def render(path: Path, suffix: str, *, remote_url=None, source_size=None) -> bytes:
+def render(
+    path: Path,
+    suffix: str,
+    *,
+    remote_url=None,
+    source_size=None,
+    poster=False,
+    image_data=None,
+) -> bytes:
     source_name = remote_url or str(path)
-    cover_input = None
+    cover_input = image_data
     if suffix in {".epub", ".cbz", ".cbr"} | OFFICE_FORMATS:
         try:
             cover = archive_cover(path, suffix)
@@ -286,11 +298,16 @@ def render(path: Path, suffix: str, *, remote_url=None, source_size=None) -> byt
             "-sn",
             "-dn",
             "-vf",
-            "scale=320:320:force_original_aspect_ratio=decrease",
+            (
+                "scale=w='min(iw,1920)':h='min(ih,1080)':"
+                "force_original_aspect_ratio=decrease"
+                if poster
+                else "scale=320:320:force_original_aspect_ratio=decrease"
+            ),
             "-threads",
             "1",
             "-q:v",
-            "6",
+            "3" if poster else "6",
             "-f",
             "image2pipe",
             "-c:v",
@@ -325,12 +342,27 @@ def render(path: Path, suffix: str, *, remote_url=None, source_size=None) -> byt
         data = result.stdout
         if (
             result.returncode == 0
-            and 0 < len(data) <= MAX_BYTES
+            and 0 < len(data) <= (MAX_POSTER_BYTES if poster else MAX_BYTES)
             and data.startswith(b"\xff\xd8\xff")
             and data.endswith(b"\xff\xd9")
         ):
             return data
     return b""
+
+
+def render_video_images(
+    path: Path, suffix: str, *, remote_url=None, source_size=None
+) -> tuple[bytes, bytes]:
+    if suffix not in VIDEO_FORMATS or suffix == ".avif":
+        return render(path, suffix, remote_url=remote_url, source_size=source_size), b""
+    poster = render(
+        path, suffix, remote_url=remote_url, source_size=source_size, poster=True
+    )
+    if not poster:
+        return render(path, suffix, remote_url=remote_url, source_size=source_size), b""
+    # Reuse this exact picture without reading or decoding the movie a second time.
+    thumbnail = render(Path("poster.jpg"), ".jpg", image_data=poster)
+    return thumbnail, poster
 
 
 def main():
@@ -348,6 +380,8 @@ def main():
     os.environ.clear()
     os.environ.update(PATH=os.defpath, LANG="C.UTF-8")
     mode = sys.argv[3] if len(sys.argv) > 3 else ""
+    images = len(sys.argv) > 3 and sys.argv[-1] == "images"
+    renderer = render_video_images if images else render
     if mode in {"remote", "background"} and hasattr(os, "nice"):
         os.nice(10)
     if mode == "remote":
@@ -362,16 +396,23 @@ def main():
             or url.password
         ):
             return
-        sys.stdout.buffer.write(
-            render(
-                Path("remote"),
-                sys.argv[2],
-                remote_url=sys.argv[1],
-                source_size=int(sys.argv[4]),
-            )
+        result = renderer(
+            Path("remote"),
+            sys.argv[2],
+            remote_url=sys.argv[1],
+            source_size=int(sys.argv[4]),
         )
     else:
-        sys.stdout.buffer.write(render(Path(sys.argv[1]), sys.argv[2]))
+        result = renderer(Path(sys.argv[1]), sys.argv[2])
+    if images:
+        thumbnail, poster = result
+        sys.stdout.buffer.write(
+            VIDEO_IMAGES_HEADER.pack(VIDEO_IMAGES_MAGIC, len(thumbnail), len(poster))
+            + thumbnail
+            + poster
+        )
+    else:
+        sys.stdout.buffer.write(result)
 
 
 if __name__ == "__main__":

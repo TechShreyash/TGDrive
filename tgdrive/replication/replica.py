@@ -520,7 +520,7 @@ class ChannelReplica:
         self.update(
             total_files=len(files),
             total_parts=total_parts,
-            total_bytes=sum(f["size"] for f in files),
+            total_bytes=sum(part["size"] for f in files for part in parts_in(f)),
             done_files=0,
             done_parts=0,
             done_bytes=0,

@@ -43,6 +43,14 @@ _BYTE_PHASES = frozenset(
 _ERROR_UNSET = object()
 
 
+def upload_effects(plan):
+    """Original messages and optional poster share upload retry/cleanup ownership."""
+    if not isinstance(plan, dict) or not isinstance(plan.get("parts"), list):
+        return []
+    poster = plan.get("poster")
+    return plan["parts"] + ([poster] if isinstance(poster, dict) else [])
+
+
 def _journalled(operation):
     """A disconnected caller must drain its commit before releasing the journal."""
 
@@ -506,7 +514,9 @@ class TransferRegistry:
         plan = record.context.get("multipart_plan")
         if isinstance(plan, dict) and isinstance(plan.get("parts"), list):
             deadlines.extend(
-                part.get("retry_at") for part in plan["parts"] if isinstance(part, dict)
+                part.get("retry_at")
+                for part in upload_effects(plan)
+                if isinstance(part, dict)
             )
         retry_at = max(
             (
@@ -615,7 +625,9 @@ class TransferRegistry:
         plan = context.get("multipart_plan")
         if isinstance(plan, dict) and isinstance(plan.get("parts"), list):
             deadlines.extend(
-                part.get("retry_at") for part in plan["parts"] if isinstance(part, dict)
+                part.get("retry_at")
+                for part in upload_effects(plan)
+                if isinstance(part, dict)
             )
         if any(
             type(deadline) in (int, float)

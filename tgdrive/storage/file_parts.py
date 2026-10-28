@@ -1,4 +1,4 @@
-"""Pure validation for ordered Telegram parts of one logical file."""
+"""Pure validation for logical-file parts and their optional poster sidecar."""
 
 from __future__ import annotations
 
@@ -9,6 +9,7 @@ from tgdrive.core.errors import ValidationError
 
 MAX_FILE_PARTS = 4096
 MAX_FILE_SIZE = (1 << 63) - 1
+MAX_POSTER_BYTES = 1024 * 1024
 _PART_KEYS = {"index", "offset", "size", "message_id", "sha256"}
 _OPTIONAL_KEYS = {"document_id"}
 _SHA256 = re.compile(r"[0-9a-fA-F]{64}")
@@ -20,6 +21,42 @@ def validate_sha256(value: Any, *, optional: bool = True) -> str | None:
     if not isinstance(value, str) or not _SHA256.fullmatch(value):
         raise ValidationError("sha256 must contain exactly 64 hexadecimal characters")
     return value.lower()
+
+
+def validate_poster(
+    value: Any, *, message_id: int, parts: list[dict[str, Any]] | None = None
+) -> dict[str, Any] | None:
+    if value is None:
+        return None
+    required = {"message_id", "size", "sha256"}
+    if (
+        not isinstance(value, dict)
+        or not required <= value.keys()
+        or value.keys() - required - {"document_id"}
+    ):
+        raise ValidationError("poster has missing or unknown fields")
+    if (
+        type(value["message_id"]) is not int
+        or not 0 < value["message_id"] <= MAX_FILE_SIZE
+        or type(value["size"]) is not int
+        or not 0 < value["size"] <= MAX_POSTER_BYTES
+    ):
+        raise ValidationError(
+            "poster must have a positive message id and size up to 1 MiB"
+        )
+    if value["message_id"] == message_id or any(
+        value["message_id"] == part["message_id"] for part in parts or []
+    ):
+        raise ValidationError("poster cannot reuse an original file message")
+    if "document_id" in value and (
+        type(value["document_id"]) is not int
+        or value["document_id"] == 0
+        or not -(1 << 63) <= value["document_id"] < (1 << 63)
+    ):
+        raise ValidationError(
+            "poster document_id must be a non-zero signed 64-bit integer"
+        )
+    return {**value, "sha256": validate_sha256(value["sha256"], optional=False)}
 
 
 def validate_parts(parts: Any, *, size: int, message_id: int) -> list[dict[str, Any]]:

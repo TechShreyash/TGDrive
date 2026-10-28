@@ -682,6 +682,7 @@ def _mongo_nodes(catalog):
                 "size",
                 "parts",
                 "sha256",
+                "poster",
             )
             if key in node
         }

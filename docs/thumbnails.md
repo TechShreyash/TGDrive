@@ -1,4 +1,4 @@
-# Thumbnail generation
+# Thumbnails and video posters
 
 [Docs home](README.md) · [Browse files](usage.md#browse-and-organize)
 
@@ -16,6 +16,38 @@ For a library, use [background rebuilding](#rebuild-existing-thumbnails).
 | MP3, FLAC, M4A, Ogg/Opus, WAV, AAC | Embedded artwork when available to the decoder; otherwise an icon |
 | DOCX/PPTX/XLSX, ODT/ODP/ODS | Embedded raster preview when present |
 | AVIF | Image when the installed decoder supports it |
+
+## Video posters
+
+Supported videos staged by TGDrive for device, URL or torrent uploads generate
+two JPEGs from the same selected picture: the small grid thumbnail and a poster
+up to **1920 × 1080**, preserving aspect ratio without enlarging smaller videos.
+The poster is limited to **1 MiB**. It is stored as a separate ordinary Telegram
+document, so MKVs and other document uploads do not depend on Telegram's native
+video-cover support. The original video bytes stay unchanged.
+
+The file's catalog links its video parts and poster. Posters follow files through
+renames, moves, Trash and restoration. Permanent deletion removes their catalog
+references under the [same Telegram-retention policy](usage.md#why-permanent-deletion-keeps-the-telegram-files)
+as originals. Metadata backups retain the reference, and an independent channel
+backup copies and remaps the poster with the video. Local poster cache loss only
+requires fetching the saved JPEG again, not decoding the movie again.
+Restore poster-aware backups with a TGDrive version that supports posters;
+older versions can omit or reject these optional references.
+
+The player opens paused with the stored poster. Missing/unusable posters fall
+back to a frame halfway through the video, keeping the displayed time at zero;
+**Play** starts from the beginning and **Continue from…** keeps its saved meaning.
+Seeking and decoding can take time, and the selected picture can still be black.
+Files already on Telegram, including direct bot intake, do not automatically get
+a durable poster. Thumbnail repair/rebuilding still refreshes small covers only;
+there is no automatic whole-library poster rebuild.
+
+Generation and pre-dispatch poster failures retain the normal video upload.
+Poster publication has its own durable retry identity. If a send may have reached
+Telegram, the job keeps its journal and staged data for retry or cancellation
+instead of forgetting a possibly published image. Accepted server uploads can
+finish with the browser closed; on-demand preview decoding needs the viewer open.
 
 ## Bandwidth and storage
 
@@ -85,6 +117,19 @@ Generated JPEGs have a maximum **320-pixel edge and 64 KiB size**. The separate
 entries and avoids writes below **64 MiB free disk**. It is excluded from metadata
 backups; attached Telegram covers remain the fallback. Cached bytes do not grant
 access to expired/deleted files.
+
+Video posters use a separate `CACHE_DIR/posters` cache with the same
+**128 MiB / 4,096-entry** bounds and free-space floor. A bounded RAM cache
+coalesces poster requests; each response rechecks current file/share access and
+verifies the saved image's size and SHA-256. A fresh player waits at most ten
+seconds for its optional poster lookup before trying the representative frame.
+Poster publication follows the original parts, with a **15-second attempt
+window**. Transfer byte progress counts the original file, so it can remain at
+100% while poster publication and metadata protection finish. A send that may
+have reached Telegram retains its retry journal instead of being silently skipped.
+Generating both sizes normally decodes the source video once, then derives the
+small thumbnail from that picture; unsuccessful poster generation can fall back
+to the existing small-cover renderer within its operation deadline.
 
 **Warm-cache repair:** one file at a time, with an **eight-second** copy/render
 deadline. Verified blocks are copied to a locked private temporary file rather

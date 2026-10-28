@@ -16,7 +16,7 @@ published release tag; `dev` may be unstable.
 | Restart, update, move or fix the app | [Operations](operations.md) |
 | Adjust limits or investigate slowness | [Configuration](configuration.md) · [Capacity guide](performance-tuning.md) |
 
-For specific tasks: [ebooks and comics](reading.md), [thumbnails](thumbnails.md),
+For specific tasks: [ebooks and comics](reading.md), [thumbnails and video posters](thumbnails.md),
 [archives](usage.md#create-zips-and-extract-archives),
 [torrents](usage.md#import-a-torrent-or-magnet-link),
 [embeds](usage.md#embed-a-file-or-folder-in-a-website),

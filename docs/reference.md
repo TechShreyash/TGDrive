@@ -1125,6 +1125,7 @@ Owner cookie or scoped file/folder capability required; supply `path` and option
 | GET /api/v1/preview | name, size and kind:text/pdf/video/book/unsupported. Text includes text, language, truncated and preview_bytes; PDF includes an authorized local URL; unsupported includes a reason. |
 | GET /api/v1/media | original descriptor and variants list from the actual stored message. Each descriptor has id, label, is_original, size, mime_type, width, height and duration where applicable. |
 | GET /api/v1/thumbnail | TGDrive-generated JPEG cover when cached, otherwise a provider JPEG/PNG/WebP thumbnail, at most 128 KiB; optional `If-None-Match` can return `304`. |
+| GET /api/v1/poster | Authorized `path` and optional `auth`; stored video-poster JPEG up to 1 MiB, `204` when unavailable, or conditional `304`. Fetches only the referenced image, never the original video. |
 | GET /api/v1/file-status | Authorized `path`, opaque `request_id`, optional `auth`; request-specific queue estimate, logical size, phase and retry guidance, without listing other callers. |
 
 `file-status` returns `queue`, `size`, `phase`, `code` and `retry_after`. Phase is
@@ -1141,6 +1142,17 @@ errors expose no private exception details. Status is bound to the authorized
 file, held in a bounded in-memory registry, and may be absent before the GET,
 after eviction or after restart. For overlapping GETs with the same ID, phase
 reflects the latest GET while the queue estimate aggregates that ID's operations.
+
+**Posters:** authorize before and after reads, cache hits and `304`, using
+`Cache-Control: private, no-cache`, `Vary: Cookie` and an ETag. Missing/invalid
+optional images allow the player's on-demand fallback. Temporary poster reads
+or checksum failures can return `503 POSTER_BUSY`, `Retry-After: 5`; real file,
+share and recovery errors remain distinct. [Poster policy](thumbnails.md#video-posters).
+
+Portable file records may include a `poster` object with `message_id`, `size`,
+`sha256` and optional `document_id`, all referring to an image in the file's
+storage channel. It is not an original byte part and does not change logical
+file size or part count.
 
 **Thumbnails:** authorize before and after asynchronous reads, including cache hits
 and `304`. Responses use `Cache-Control: private, no-cache`, `Vary: Cookie` and an

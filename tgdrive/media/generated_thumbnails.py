@@ -17,6 +17,13 @@ from collections import OrderedDict
 from contextlib import suppress
 from pathlib import Path
 
+from tgdrive.media.thumbnail_worker import (
+    MAX_POSTER_BYTES,
+    VIDEO_FORMATS,
+    VIDEO_IMAGES_HEADER,
+    VIDEO_IMAGES_MAGIC,
+)
+
 MAX_BYTES = 64 * 1024
 DISK_BYTES = 128 * 1024**2
 MAX_ENTRIES = 4096
@@ -310,6 +317,74 @@ async def generate(
     remote_url=None,
     source_size=None,
 ) -> bytes | None:
+    return await _generate(
+        path,
+        name,
+        raise_busy=raise_busy,
+        on_start=on_start,
+        background=background,
+        remote_url=remote_url,
+        source_size=source_size,
+    )
+
+
+async def generate_video_images(
+    path: Path,
+    name: str,
+    *,
+    raise_busy=False,
+    on_start=None,
+    background=False,
+    remote_url=None,
+    source_size=None,
+) -> tuple[bytes | None, bytes | None]:
+    """Render a video's two sizes from one picture; other files keep one cover."""
+    suffix = Path(name).suffix.lower()
+    images = suffix in VIDEO_FORMATS and suffix != ".avif"
+    content = await _generate(
+        path,
+        name,
+        raise_busy=raise_busy,
+        on_start=on_start,
+        background=background,
+        remote_url=remote_url,
+        source_size=source_size,
+        images=images,
+    )
+    if not images:
+        return content, None
+    if not content or len(content) < VIDEO_IMAGES_HEADER.size:
+        return None, None
+    magic, small_size, poster_size = VIDEO_IMAGES_HEADER.unpack_from(content)
+    if (
+        magic != VIDEO_IMAGES_MAGIC
+        or small_size > MAX_BYTES
+        or poster_size > MAX_POSTER_BYTES
+        or len(content) != VIDEO_IMAGES_HEADER.size + small_size + poster_size
+    ):
+        return None, None
+    small_end = VIDEO_IMAGES_HEADER.size + small_size
+    small = content[VIDEO_IMAGES_HEADER.size : small_end]
+    poster = content[small_end:]
+    if any(
+        image and not (image.startswith(b"\xff\xd8\xff") and image.endswith(b"\xff\xd9"))
+        for image in (small, poster)
+    ):
+        return None, None
+    return small or None, poster or None
+
+
+async def _generate(
+    path: Path,
+    name: str,
+    *,
+    raise_busy=False,
+    on_start=None,
+    background=False,
+    remote_url=None,
+    source_size=None,
+    images=False,
+) -> bytes | None:
     suffix = Path(name).suffix.lower()
     if suffix not in SUPPORTED:
         return None
@@ -339,6 +414,7 @@ async def generate(
                             if background
                             else []
                         ),
+                        *(["images"] if images else []),
                         stdout=asyncio.subprocess.PIPE,
                         stderr=asyncio.subprocess.DEVNULL,
                         start_new_session=os.name == "posix",
@@ -355,13 +431,20 @@ async def generate(
                 if on_start is not None:
                     on_start()
                 content = bytearray()
+                maximum = (
+                    VIDEO_IMAGES_HEADER.size + MAX_BYTES + MAX_POSTER_BYTES
+                    if images
+                    else MAX_BYTES
+                )
                 while block := await process.stdout.read(8192):
                     content.extend(block)
-                    if len(content) > MAX_BYTES:
+                    if len(content) > maximum:
                         return None
                 data = bytes(content)
                 await process.wait()
-                if process.returncode == 0 and data.startswith(b"\xff\xd8\xff"):
+                if process.returncode == 0 and (
+                    images or data.startswith(b"\xff\xd8\xff")
+                ):
                     return data
         except OSError, TimeoutError:
             pass
@@ -383,24 +466,28 @@ def location(directory: Path, channel: int, message: int) -> Path:
     return directory / (identity + ".jpg")
 
 
-def read(directory: Path, channel: int, message: int) -> bytes | None:
+def read(
+    directory: Path, channel: int, message: int, *, maximum=MAX_BYTES
+) -> bytes | None:
     path = location(directory, channel, message)
     try:
-        if path.is_symlink() or path.stat().st_size > MAX_BYTES:
+        if path.is_symlink() or path.stat().st_size > maximum:
             return None
         with path.open("rb") as source:
-            data = source.read(MAX_BYTES + 1)
+            data = source.read(maximum + 1)
         return (
             data
-            if 0 < len(data) <= MAX_BYTES and data.startswith(b"\xff\xd8\xff")
+            if 0 < len(data) <= maximum and data.startswith(b"\xff\xd8\xff")
             else None
         )
     except OSError:
         return None
 
 
-def save(directory: Path, channel: int, message: int, data: bytes) -> None:
-    if not 0 < len(data) <= MAX_BYTES or not data.startswith(b"\xff\xd8\xff"):
+def save(
+    directory: Path, channel: int, message: int, data: bytes, *, maximum=MAX_BYTES
+) -> None:
+    if not 0 < len(data) <= maximum or not data.startswith(b"\xff\xd8\xff"):
         return
     directory.mkdir(parents=True, exist_ok=True, mode=0o700)
     if shutil.disk_usage(directory).free < 64 * 1024**2:

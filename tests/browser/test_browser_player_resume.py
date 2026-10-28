@@ -141,7 +141,10 @@ def test_same_login_in_another_browser_profile_has_no_saved_position(
         expect(
             dialog.get_by_role("button", name="Continue from 0:01", exact=True)
         ).to_have_count(0)
-        assert player.evaluate("el=>el.paused&&el.currentTime<0.1")
+        other.wait_for_function("""()=>{
+            const player=document.querySelector('movi-player');
+            return player?.paused&&!player.seeking&&player.currentTime<0.1;
+        }""")
         assert page.evaluate(
             "key=>Number(localStorage.getItem(key))", key
         ) == pytest.approx(1.5, abs=0.1)

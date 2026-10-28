@@ -206,6 +206,7 @@ def register_restore_routes(app, settings, *, require_admin, get_runtime):
                             "premium_login_service",
                             "thumbnail_rebuild",
                             "thumbnails",
+                            "posters",
                         ):
                             resource = getattr(request.app.state, name, None)
                             if resource is not None:

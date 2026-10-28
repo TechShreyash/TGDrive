@@ -101,6 +101,7 @@ class ThumbnailCache:
         max_bytes: int = 16 * 1024**2,
         max_entries: int = 256,
         max_pending: int = 16,
+        max_image_bytes: int = THUMBNAIL_BYTES,
         timeout: float = 10,
         ttl: float = 3600,
         missing_ttl: float = 300,
@@ -108,6 +109,7 @@ class ThumbnailCache:
         self.max_bytes = max_bytes
         self.max_entries = max_entries
         self.max_pending = max_pending
+        self.max_image_bytes = max_image_bytes
         self.timeout = timeout
         self.ttl = ttl
         self.missing_ttl = missing_ttl
@@ -170,7 +172,7 @@ class ThumbnailCache:
         except TimeoutError as exc:
             raise ThumbnailBusy from exc
         # The transport and test/custom adapters both stay under the same cap.
-        if result is not None and len(result.content) > THUMBNAIL_BYTES:
+        if result is not None and len(result.content) > self.max_image_bytes:
             result = None
         if result is not None and len(result.content) > self.max_bytes:
             return result

@@ -154,9 +154,10 @@ def files_in(catalog):
 
 
 def parts_in(node):
-    return node.get("parts") or [
+    parts = node.get("parts") or [
         {"message_id": node["message_id"], "size": node["size"]}
     ]
+    return [*parts, node["poster"]] if node.get("poster") else parts
 
 
 def validate_catalog(catalog):
@@ -171,6 +172,8 @@ def remap_catalog(catalog, channel, mapping):
         node["message_id"] = mapping[str(old_anchor)]
         for part in node.get("parts", []):
             part["message_id"] = mapping[str(part["message_id"])]
+        if node.get("poster"):
+            node["poster"]["message_id"] = mapping[str(node["poster"]["message_id"])]
     # Old jobs/deletion receipts are tied to their old channel. They must never
     # replay into a recovered channel with coincidentally matching message IDs.
     result["operations"] = []

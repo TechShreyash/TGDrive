@@ -328,7 +328,7 @@ def test_present_document_identity_must_be_a_nonzero_signed_integer(store, docum
     assert not store.list_directory("/")
 
 
-@pytest.mark.parametrize("version", range(1, DriveStore.DATABASE_VERSION))
+@pytest.mark.parametrize("version", range(1, 6))
 def test_previous_database_schema_is_rejected_without_upgrade(tmp_path, version):
     database = tmp_path / "drive.sqlite3"
     source = DriveStore.create(database)

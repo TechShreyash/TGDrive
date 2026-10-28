@@ -43,6 +43,7 @@ from tgdrive.transfers.tasks import (
     TransferRegistry,
     TransferStatus,
     _journalled,
+    upload_effects,
 )
 
 logger = logging.getLogger(__name__)
@@ -107,7 +108,7 @@ async def restore_telegram_cooldowns(
         if future(deadline):
             channel_deadline = max(channel_deadline, deadline)
         plan = context.get("multipart_plan")
-        candidates = plan.get("parts", []) if isinstance(plan, dict) else [context]
+        candidates = upload_effects(plan) if isinstance(plan, dict) else [context]
         if not isinstance(candidates, list):
             continue
         for part in candidates:
@@ -1045,6 +1046,11 @@ class TransferManager:
                     target = Path(staged).resolve()
                     if target.is_relative_to(self.cache_dir):
                         target.unlink(missing_ok=True)
+                        from tgdrive.transfers.multipart_transfer import (
+                            discard_upload_images,
+                        )
+
+                        discard_upload_images(target)
 
                 await asyncio.to_thread(discard)
             if hasattr(self, "uploads"):
@@ -1212,6 +1218,9 @@ class TransferManager:
         if self._metadata_committed(record):
             await self._protect_committed_upload(record, size)
             await asyncio.to_thread(local_path.unlink, missing_ok=True)
+            from tgdrive.transfers.multipart_transfer import discard_upload_images
+
+            await asyncio.to_thread(discard_upload_images, local_path)
             uploads = getattr(self, "uploads", None)
             if uploads is not None:
                 await asyncio.to_thread(uploads.release, record.id)
