@@ -987,6 +987,31 @@ static archives. Notices record upstream's stale version label, binary/header
 recipe evidence and reproduction limits; TGDrive has not independently rebuilt
 the published decoder WASM.
 
+Movi revision `0.4.1-tgdrive.2` composes the source-window recipe with
+`movi-player-hardening.js` and `movi-player-decoding.js`; the vendor manifest
+records every recipe file's hash. Its focused Node checks exercise actual
+patched methods, including hostile track metadata, listener/observer ownership,
+cancelled thumbnail waits, audio-only readiness, software EOF/backward seeks and
+decoded/paused-packet memory admission. EOF draining uses the existing WASM ABI;
+it does not establish an independent decoder rebuild.
+
+`test_browser_player_hardening.py` covers real AAC-only MP4 playback/seeking,
+malicious MKV metadata and repeated playing-close cleanup. The preview tests in
+`test_browser_player_previews.py` check decoded image pixels, visible chapter
+work, cached-byte reuse, Object URL cleanup and stopping work when closed or
+playback is busy. Keep the existing keyboard/mobile/fullscreen chapter regression.
+These are synthetic local-origin checks; remote uncached preview latency and
+physical-device GPU/memory behaviour need separate measurements.
+
+Revision `.2` validation on 2026-10-28 passed 49 player recipe checks, 77 distinct
+focused frontend unit tests, 20 selected Chromium browser cases and 17 source
+release-packaging checks; the frontend typecheck/build also passed. Real images
+were inspected for hover and chapter previews. The cached fixture needed zero
+additional file payload reads for previews. An isolated software-decoder check
+presented all 120 B-frame fixture pictures and retained forward/backward playback
+with the new queue admission. These checks used local synthetic origins, without
+live Telegram or real GPU/mobile calibration; no independent WASM rebuild ran.
+
 </details>
 
 ### Shared-links interface

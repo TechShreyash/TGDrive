@@ -32,10 +32,12 @@ class Viewer:
     target: str
     recipe: str
     patch: str
+    revision: int = 1
+    recipe_support: tuple[str, ...] = ()
 
     @property
     def local_version(self) -> str:
-        return self.version + "-tgdrive.1"
+        return f"{self.version}-tgdrive.{self.revision}"
 
     @property
     def upstream_filename(self) -> str:
@@ -61,6 +63,11 @@ VIEWERS = (
         target="dist/element.slim.js",
         recipe="website/scripts/patch-movi-player.js",
         patch="patchMoviSource",
+        revision=2,
+        recipe_support=(
+            "website/scripts/movi-player-hardening.js",
+            "website/scripts/movi-player-decoding.js",
+        ),
     ),
     Viewer(
         name="pdfjs-dist",
@@ -251,6 +258,10 @@ def generate(root: Path, output_dir: Path, node: str, source_dir: Path | None) -
             if entry.content is not None
         }
         archive = deterministic_archive(entries)
+        recipe_files = {
+            path: sha256((root / path).read_bytes())
+            for path in (viewer.recipe, *viewer.recipe_support)
+        }
         generated[viewer.filename] = archive
         manifest["packages"][viewer.name] = {
             "upstream": {
@@ -277,7 +288,12 @@ def generate(root: Path, output_dir: Path, node: str, source_dir: Path | None) -
                 "upstream_sha256": sha256(original),
                 "vendored_sha256": sha256(patched),
                 "recipe": viewer.recipe,
-                "recipe_sha256": sha256((root / viewer.recipe).read_bytes()),
+                "recipe_sha256": (
+                    sha256(json.dumps(recipe_files, sort_keys=True).encode())
+                    if viewer.recipe_support
+                    else recipe_files[viewer.recipe]
+                ),
+                "recipe_files_sha256": recipe_files,
             },
             "files_sha256": files,
         }

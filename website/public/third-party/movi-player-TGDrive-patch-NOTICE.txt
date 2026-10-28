@@ -49,3 +49,14 @@ storyboard are explicitly enabled (2026-10-26).
 Disconnecting the native element revokes picked subtitle Blob URLs and clears
 their ownership list, including when source reset and disconnect both run
 (2026-10-26).
+
+Revision 0.4.1-tgdrive.2 (2026-10-28) escapes media track metadata in settings
+and context menus; unregisters element-owned global listeners, recurring UI
+timers and owned media-session actions on disconnect; and makes preview waits
+cancellable. Audio-only containers no longer wait for video frames. Software EOF
+drains queued packets and delayed frames through the existing decoder ABI before
+reset; seek/reset generations invalidate obsolete drains. Decoded-picture queue
+targets account for device/pixel costs, and statistics distinguish WebCodecs from
+verified hardware acceleration. Chapter cards remain immediate; TGDrive fills
+only visible chapter images. Preview initialization requires a viewer request.
+The decoder WASM and upstream licenses remain unchanged.

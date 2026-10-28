@@ -14,6 +14,7 @@ import {
 } from "./videoPlayerPresentation";
 import { installVideoPlayerPip } from "./videoPlayerPip";
 import { attachVideoGestures } from "./videoPlayerGestures";
+import { attachVideoPreviews } from "./videoPlayerPreviews";
 import { formatBytes } from "../../../shared/types";
 import { videoSourceMemoryBudgetMiB } from "./videoBufferMemory";
 import {
@@ -455,15 +456,19 @@ export default function AdvancedVideo({
         let detachPresentation: (() => void) | undefined;
         let detachPip: (() => void) | undefined;
         let detachGestures: (() => void) | undefined;
+        let detachPreviews: (() => void) | undefined;
+        const expectsPicture = () => {
+            const core = player?.player;
+            if (!core?.getMediaInfo()) return true;
+            return core.getVideoTracks().some((track) => !track.isAttachedPic);
+        };
         const updateChapters = () => {
             if (!player || cancelled) return;
             const hasChapters = videoHasChapters(
                 player.player?.getChapters() || [],
                 player.duration,
             );
-            // The bundled native timeline renders chapter titles/times without
-            // extracting frames when thumb/storyboard are unset. Keep its synthetic
-            // thumbnail timeline unavailable for files with no chapter metadata.
+            // Only real chapters get a strip; their images are filled on demand.
             const controls = hasChapters ? "nospinner" : "notimeline nospinner";
             if (player.getAttribute("controlslist") !== controls)
                 player.setAttribute("controlslist", controls);
@@ -663,7 +668,7 @@ export default function AdvancedVideo({
                 waiting(engineState === "seeking" ? "seeking" : "waiting");
                 return;
             }
-            if (event === "playing" && !hasPresentedFrame) {
+            if (event === "playing" && expectsPicture() && !hasPresentedFrame) {
                 // The engine starts its clock before the first decoded picture arrives.
                 // Preserve loading feedback until successive real frames are presented.
                 waiting("waiting");
@@ -739,6 +744,7 @@ export default function AdvancedVideo({
                 detachPresentation = attachVideoPresentation(player);
                 detachPip = installVideoPlayerPip(player);
                 detachGestures = attachVideoGestures(player);
+                detachPreviews = attachVideoPreviews(player);
                 player.setAttribute("wasmurl", wasmUrl);
                 player.setAttribute("engine", "wasm");
                 player.setAttribute("sw", "auto");
@@ -763,8 +769,8 @@ export default function AdvancedVideo({
                 player.setAttribute("theme", "dark");
                 player.setAttribute("themecolor", "#647dff");
                 player.setAttribute("fastseek", "keys gestures");
-                // Enable the native chapter timeline once real metadata is available.
-                // Seek-preview extraction stays disabled: neither thumb nor storyboard is set.
+                // Keyframes reuse the player's caches without precise frame walks.
+                player.setAttribute("thumb", "");
                 player.setAttribute("controlslist", "notimeline nospinner");
                 player.setAttribute(
                     "aria-label",
@@ -830,8 +836,26 @@ export default function AdvancedVideo({
                     observeResumePosition();
                     rememberPlayback();
                     updateBuffer();
+                    if (usable && !expectsPicture()) {
+                        if (
+                            videoIsAdvancing(
+                                previousTime,
+                                player.currentTime,
+                                player.paused,
+                                player.seeking,
+                            )
+                        ) {
+                            recover();
+                            pendingSeek = false;
+                            latestProgressAt = performance.now();
+                            clearWaiting();
+                            dispatch("playing");
+                        }
+                        previousTime = player.currentTime;
+                    }
                     if (
                         usable &&
+                        expectsPicture() &&
                         !player.paused &&
                         !player.seeking &&
                         player.currentTime < player.duration - 0.1 &&
@@ -912,6 +936,7 @@ export default function AdvancedVideo({
             detachPresentation?.();
             detachPip?.();
             detachGestures?.();
+            detachPreviews?.();
             if (player) {
                 restorePlayerFocus.current ||=
                     document.activeElement === player;
@@ -1048,13 +1073,15 @@ export default function AdvancedVideo({
                                 void player.play().catch(() => {});
                         };
                         core.once("seeked", onSeeked);
-                        void core.seek(
-                            videoResumeTime(continueTime, player.duration),
-                        ).catch(() => {
-                            core.off("seeked", onSeeked);
-                            if (activePlayer.current === player)
-                                setContinueTime(continueTime);
-                        });
+                        void core
+                            .seek(
+                                videoResumeTime(continueTime, player.duration),
+                            )
+                            .catch(() => {
+                                core.off("seeked", onSeeked);
+                                if (activePlayer.current === player)
+                                    setContinueTime(continueTime);
+                            });
                     }}
                 >
                     <Play size={16} aria-hidden="true" /> Continue from{" "}
@@ -1075,9 +1102,7 @@ export default function AdvancedVideo({
                 className="advanced-player-host"
                 aria-busy={state.phase !== "ready" && !playbackError}
             />
-            {statusSurface
-                ? createPortal(overlays, statusSurface)
-                : overlays}
+            {statusSurface ? createPortal(overlays, statusSurface) : overlays}
         </div>
     );
 }

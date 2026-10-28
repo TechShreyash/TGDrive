@@ -466,8 +466,30 @@ WebCodecs/WASM pipeline can decode and render the same file smoothly.
 
 Fast server delivery cannot make every device decode a 4K codec smoothly. A long
 wait retains retry/download actions. Cached bytes still need delivery and decoding.
-At EOF, the hardware decoder drains pending pictures; the seek reset path must
-not recreate the HEVC decoder and discard its final pictures.
+At EOF, both WebCodecs and software decoders drain pending pictures before reset.
+The software path finishes queued packets and submits end-of-input through the
+existing WASM interface, preserving delayed B-frames. Audio-only files inside
+video containers do not wait for pictures. Closing/replacing the player removes
+its document listeners and recurring UI timers as well as the playback core.
+
+### Seek and chapter previews
+
+Seek hover uses keyframe previews, with the existing cache and pacing for remote
+reads. It does not walk every intermediate frame to produce an exact-time image.
+Chapter titles and seek targets appear immediately; image extraction is limited
+to visible cards and a small neighbouring margin, one at a time. Hover takes
+priority, and chapter work waits during loading, buffering and seeking. Closing
+the chapter panel stops new chapter extraction. No synthetic twenty-image strip
+is generated for files without chapter metadata.
+
+The preview decoder initializes on demand, without automatic background warm-up.
+It borrows playback's cached head, metadata and retained source bytes before
+requesting additional ranges. An uncached frame can require several reads;
+typical windows are 2 MiB, with a 5 MiB per-read ceiling. This is not a total
+bandwidth cap. Generated images are cached by the player for revisits during
+that opening; changing source or reopening can require new reads. The isolated
+preview WASM/decoder also needs memory and CPU, so previewing high-resolution
+software-decoded files can still be slow.
 
 ### Browser playback buffer
 
@@ -496,6 +518,20 @@ GPU, WASM or transport memory. Growth preserves cached bytes, offsets and stream
 state. During growth the old and new allocations can temporarily coexist until
 garbage collection. If allocation fails, playback retains the working buffer and
 reduces its ceiling for this opening instead of retrying larger allocations.
+
+Software and lower-resolution mobile decoded-picture targets also account for
+estimated RGBA bytes, using 64 MiB on mobile/low-memory devices and 128 MiB
+otherwise, while retaining the minimum coordinated-resume cushion. The existing
+high-resolution WebCodecs calibration is preserved. These are queue targets,
+not a total tab-memory limit: codec references, WASM, audio, graphics surfaces and
+temporary copies remain separate. WebCodecs statistics do not claim verified
+hardware acceleration; the browser can decode through software internally.
+
+Pause-time demuxing also has a 16 MiB compressed-packet target, in addition to
+the packet-count limit. It stops reading more packets after that target; the
+packet that crosses it is retained. The HTTP source can still fill its separate
+read-ahead window. This avoids retaining a second large compressed copy merely
+because a high-bitrate video is paused.
 
 For longer videos, the time goal uses at most 80% of the allocated window to leave
 transport/compaction headroom. Very high bitrate files may still retain less than

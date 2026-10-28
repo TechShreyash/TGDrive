@@ -97,9 +97,9 @@ def test_chapters_are_immediate_keyboard_accessible_and_mobile_bounded(
     expect(opening).to_be_focused()
     expect(chapters).to_have_attribute("role", "region")
     expect(chapters).to_have_attribute("aria-label", "Chapters")
-    expect(chapters.locator(".movi-timeline-noframe")).to_have_count(2)
-    expect(chapters.locator("img")).to_have_count(0)
-    assert player.evaluate("element => element.__previewFrameReads") == 0
+    expect(chapters.locator(".movi-timeline-item")).to_have_count(2)
+    # Titles and keyboard targets are ready before optional visible-card previews.
+    assert player.evaluate("element => element.__previewFrameReads") <= 2
     page.screenshot(path=ARTIFACTS / "chapters-immediate-desktop.png")
     page.set_viewport_size({"width": 390, "height": 844})
     expect(chapters).to_be_visible()

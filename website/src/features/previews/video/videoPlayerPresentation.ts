@@ -2,7 +2,10 @@ import type { MoviElement } from "movi-player/element/slim";
 
 type PresentationPlayer = {
     shadowRoot: ShadowRoot | null;
-    player?: { isSoftwareDecoding?: () => boolean } | null;
+    player?: {
+        isSoftwareDecoding?: () => boolean;
+        getChapters: () => { start: number }[];
+    } | null;
     buildSettingsRoot(): void;
     syncSettingsRootState(root: ShadowRoot): void;
     updateAudioTrackMenu(): void;
@@ -487,6 +490,8 @@ export function installVideoPresentation(constructor: typeof MoviElement) {
                 ?.focus({ preventScroll: true });
     };
     prototype.generateTimelineStrip = async function (root) {
+        // The native fallback extracts twenty frames when there are no chapters.
+        if (!this.player?.getChapters().length) return;
         await generateTimeline.call(this, root);
         this.updateTimelineCurrent();
         updateNativeChoices(this);

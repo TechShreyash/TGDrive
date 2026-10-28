@@ -2,6 +2,8 @@ import { createHash } from "node:crypto";
 import { readFile, writeFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import { resolve } from "node:path";
+import { HARDENING_PATCHES } from "./movi-player-hardening.js";
+import { DECODING_PATCHES } from "./movi-player-decoding.js";
 
 // Movi 0.4.1 can resume a seek on video alone on high-latency audio outputs.
 // Late audio then pulls playback back to the requested seek position. Reuse
@@ -213,7 +215,10 @@ export const TIMELINE_BEFORE = `    if (this._timelineGenerating) return;
 export const TIMELINE_AFTER = `    if (this._timelineGenerating) return;
     this.player.setPreviewsEnabled(this._thumb || !!this._storyboard);`;
 export const CHAPTER_PREVIEW_BEFORE = `const C3 = h2[A3], B3 = C3.image ? null : await this.player.getPreviewFrame(C3.start, null, true);`;
-export const CHAPTER_PREVIEW_AFTER = `const C3 = h2[A3], B3 = C3.image || !(this._thumb || this._storyboard) ? null : await this.player.getPreviewFrame(C3.start, null, true);`;
+export const CHAPTER_PREVIEW_AFTER = `const C3 = h2[A3], B3 = null;`;
+export const PREVIEW_WARM_BEFORE = `  schedulePreviewWarm(A2) {`;
+export const PREVIEW_WARM_AFTER = `  schedulePreviewWarm(A2) {
+    return; // TGDrive initializes previews only when requested by the viewer.`;
 export const EMPTY_TIMELINE_BEFORE = `        C2 && (C2.textContent = "Timeline"), g2.textContent = "Generating...";`;
 export const EMPTY_TIMELINE_AFTER = `        if (!(this._thumb || this._storyboard)) {
           if (C2) C2.textContent = "Chapters";
@@ -253,6 +258,9 @@ export const PATCHES = [
     [CHAPTER_PREVIEW_BEFORE, CHAPTER_PREVIEW_AFTER],
     [EMPTY_TIMELINE_BEFORE, EMPTY_TIMELINE_AFTER],
     [SUBTITLE_DISCONNECT_BEFORE, SUBTITLE_DISCONNECT_AFTER],
+    [PREVIEW_WARM_BEFORE, PREVIEW_WARM_AFTER],
+    ...HARDENING_PATCHES,
+    ...DECODING_PATCHES,
 ];
 export const NOTICE =
     "/*! Modified by TGDrive (2026-10-20): coordinate seek resume with playable audio. See third-party/movi-player-TGDrive-patch-NOTICE.txt. */\n";
@@ -266,7 +274,7 @@ export function patchMoviSource(source, version) {
         );
     const marked = source.startsWith(NOTICE);
     let original = marked ? source.slice(NOTICE.length) : source;
-    for (const [before, after] of PATCHES)
+    for (const [before, after] of [...PATCHES].reverse())
         original = original.replace(after, before);
     if (
         digest(original) !== ORIGINAL_SHA256 ||

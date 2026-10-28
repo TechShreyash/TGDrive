@@ -27,7 +27,7 @@ const installed = await readFile(
 let original = installed.startsWith(NOTICE)
     ? installed.slice(NOTICE.length)
     : installed;
-for (const [before, after] of PATCHES)
+for (const [before, after] of [...PATCHES].reverse())
     original = original.replace(after, before);
 
 test("the pinned bundle has exactly the reviewed source identity", () => {
@@ -193,7 +193,10 @@ test("variable bitrate observations increase the time buffer without following s
 });
 test("EOF drains queued hardware frames without recreating the HEVC decoder", async () => {
     const patched = patchMoviSource(original, VERSION);
-    const start = patched.indexOf("  async flush(drain = false) {");
+    const start = patched.indexOf(
+        "  async flush(drain = false) {",
+        patched.indexOf("class MoviVideoDecoder"),
+    );
     const method = patched.slice(
         start,
         patched.indexOf("\n  reset() {", start),
@@ -322,6 +325,8 @@ test("picked subtitle URLs are revoked once across disconnect and source reset",
                 "cancelAutoAdvance",
                 "closeAllBottomMenus",
                 "closeSettingsPage",
+                "detachGlobalListeners",
+                "releaseMediaSession",
                 "resetStutterHint",
                 "resetTimeline",
                 "setPipUiTimer",
@@ -445,7 +450,10 @@ test("pending read demands are removed after failure and belong to their stream 
 });
 
 function drainHarness(flush) {
-    const start = patched.indexOf("  async flush(drain = false) {");
+    const start = patched.indexOf(
+        "  async flush(drain = false) {",
+        patched.indexOf("class MoviVideoDecoder"),
+    );
     const end = patched.indexOf("\n  get configuredCodec() {", start);
     const timers = new Map();
     let nextTimer = 0;
@@ -662,7 +670,7 @@ test("native chapter cards retain titles, times and seeking without decoding pre
     assert.equal(fixture.timeline._timelineGenerating, false);
 });
 
-test("timeline decoding remains opt-in for thumbnails or a storyboard", async () => {
+test("chapter image extraction belongs to the visible-card scheduler", async () => {
     for (const options of [{ _thumb: true }, { _storyboard: "fixture.vtt" }]) {
         const fixture = timelineFixture(
             [{ start: 0, title: "Opening" }],
@@ -670,9 +678,37 @@ test("timeline decoding remains opt-in for thumbnails or a storyboard", async ()
         );
         await fixture.timeline.generateTimelineStrip(fixture.panel);
         assert.deepEqual(fixture.previewChoices, [true]);
-        assert.deepEqual(fixture.frameTimes, [0]);
-        assert.equal(fixture.strip.children[0].children[0].tag, "img");
+        assert.deepEqual(fixture.frameTimes, []);
+        assert.equal(
+            fixture.strip.children[0].classList.contains(
+                "movi-timeline-noframe",
+            ),
+            true,
+        );
     }
+});
+
+test("supplied chapter artwork remains available without extracting a frame", async () => {
+    const fixture = timelineFixture(
+        [{ start: 0, title: "Opening", image: "blob:chapter-art" }],
+        { _thumb: true },
+    );
+    await fixture.timeline.generateTimelineStrip(fixture.panel);
+    assert.deepEqual(fixture.frameTimes, []);
+    assert.equal(fixture.strip.children[0].children[0].src, "blob:chapter-art");
+});
+
+test("preview initialization never warms itself without a viewer request", () => {
+    const start = patched.indexOf("  schedulePreviewWarm(A2) {");
+    const end = patched.indexOf("\n  async initPreviewPipeline()", start);
+    assert.ok(start > 0 && end > start);
+    const Preview = new Function(
+        "setTimeout",
+        `return class {${patched.slice(start, end)}}`,
+    )(() => {
+        throw new Error("speculative preview timer");
+    });
+    new Preview().schedulePreviewWarm(0);
 });
 
 test("a title-only timeline with no chapters never generates the twenty-frame strip", async () => {

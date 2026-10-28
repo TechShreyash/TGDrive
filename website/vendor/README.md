@@ -12,7 +12,8 @@ archive integrity, individual file hashes and the patch recipe identity.
 ## Update deliberately
 
 1. Review the pinned upstream URLs/integrities in `scripts/vendor_viewers.py` and
-   the recipes in `website/scripts/patch-movi-player.js` and `patch-pdf-worker.js`.
+   the recipes in `website/scripts/patch-movi-player.js`, its hardening/decoding
+   support files, and `patch-pdf-worker.js`.
 2. From the repository root, use supported Node.js 24.22:
 
    ```bash
@@ -31,6 +32,12 @@ Archive order, ownership, permissions and gzip/tar timestamps are normalized.
 The same inputs and Python/zlib runtime reproduce the same bytes; the manifest
 contains no generation timestamps or machine-specific paths. No upstream install
 or package lifecycle scripts run during generation.
+
+Movi revision `0.4.1-tgdrive.2` includes metadata escaping, complete element
+disconnect cleanup, audio-only buffering and software end-of-file corrections,
+decoded-picture memory targets, and demand-driven previews. The manifest hashes
+the main recipe and each support file. A new local revision changes the archive
+filename and lockfile integrity; the original published WASM remains unchanged.
 
 Preserve `website/public/third-party/` in runtime releases. It contains the public
 licenses and Movi decoder source/relink archive. Vendoring the JavaScript does not

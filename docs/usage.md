@@ -500,8 +500,11 @@ choices depend on the file. **Ambient mode** uses the picture's colors;
 Controls hide when idle but remain visible for keyboard focus.
 
 Use the native subtitle menu's **Add subtitle…** action for a local subtitle file;
-it stays in the browser. Chapters use embedded titles/times without extracting
-thumbnail frames from every chapter. The native player supplies track selection,
+it stays in the browser. Hover over the seek bar for a keyframe preview. Chapters
+show embedded titles/times immediately and load images for visible cards as you
+scroll. Repeated positions reuse the player's frame cache; uncached positions
+may need additional video ranges. Chapter image work pauses while playback is
+loading, buffering or seeking, and while the tab is hidden. The native player supplies track selection,
 speed, loop, HDR and picture controls when the file/browser supports them.
 
 The video timeline estimates the device's loaded ranges, separate from server

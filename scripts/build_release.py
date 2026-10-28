@@ -31,7 +31,7 @@ ROOT_FILES = (
     "website/package-lock.json",
     "website/vendor/README.md",
     "website/vendor/manifest.json",
-    "website/vendor/movi-player-0.4.1-tgdrive.1.tgz",
+    "website/vendor/movi-player-0.4.1-tgdrive.2.tgz",
     "website/vendor/pdfjs-dist-6.4.299-tgdrive.1.tgz",
     "website/public/third-party/README.txt",
     "website/public/third-party/movi-player-LICENSE.txt",

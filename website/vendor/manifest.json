@@ -10,27 +10,32 @@
                 "bytes": 51226747
             },
             "vendored": {
-                "version": "0.4.1-tgdrive.1",
-                "archive": "movi-player-0.4.1-tgdrive.1.tgz",
-                "integrity": "sha512-7TVpUAklTBPtgdxJGWh8771ZNvLt8uF6aQ8R7i7iNOu/np0gEMTVmfv0WRwKEwnTnJvBBUnA9qMaZwnSLGx2Eg==",
-                "sha256": "c927e6c472d68edf94a8f2b7070a0f7db988ac04ae2d204bf118f28862a89db9",
-                "bytes": 50950006,
-                "package_json_sha256": "8a92e89a5d2502be09d4d66d0608a7d952c04b0e6388251203bf6d6f662fdef8",
-                "package_files_sha256": "35f478fe3fbc55705df1315168b330e03cb609de9eb4311b094c982f85e57fb3",
+                "version": "0.4.1-tgdrive.2",
+                "archive": "movi-player-0.4.1-tgdrive.2.tgz",
+                "integrity": "sha512-lOdoLmDFRsfMCkDQM+HdPcWW05reiNMGu8sJEltTo5Ds9sHalBGR07k0ldPt97tyi6P4VvpPZz5aRiRwML/VsQ==",
+                "sha256": "d49eec53c89bedef8abacfa33e122270e51c6979682528a137f880022f423a8b",
+                "bytes": 50952613,
+                "package_json_sha256": "ddbff5f0422d925b2b8f459affeadbefd370db9aef6189ee714328a3b1bfa0f5",
+                "package_files_sha256": "11d5945fc90f1ba095d3dd762d6d5e601b03769242020dc9fc4f26db9d44cdf6",
                 "file_count": 477
             },
             "patch": {
                 "file": "dist/element.slim.js",
                 "upstream_sha256": "834efaa395f82503fdea3538e03c2ad83f01a7fc409ca93d93dea500affa63c7",
-                "vendored_sha256": "01f6e03d105bc78bc94ea2dbfdbf18308bad7a46cc283ceb68eb8edbbaf7bc6c",
+                "vendored_sha256": "9d51b31bdf5ad82840f7eb23c32d44a4037600a0503da647ffc620b45e697e37",
                 "recipe": "website/scripts/patch-movi-player.js",
-                "recipe_sha256": "8968027519e8ce9f1174d79ce25c6ea7e46aff26ddb89c1dcbf75b730a214dc6"
+                "recipe_sha256": "cd82c20feb32c3c42caf809cdd97e49bab56421319cc50b3d7815e15b61cd06e",
+                "recipe_files_sha256": {
+                    "website/scripts/patch-movi-player.js": "d80f5bb184d5e38634f14c63adf4cda53c12853bae5db6a3db2349de68f7bad8",
+                    "website/scripts/movi-player-hardening.js": "27d7f025d61792431e291eba823cff20eb9c6d57c0913f0315a67998168c6e1f",
+                    "website/scripts/movi-player-decoding.js": "0644dd1b08ef1f693fddea905ed50e3f4ddb2fa75fe564b896797fdc6eb802a4"
+                }
             },
             "files_sha256": {
                 "AGENTS.md": "c40bdfa0174a711557eee188c916a19ecc1aa0f3fcdc0e8d1c14a2afc870d124",
                 "LICENSE": "ea3f732c7310bc1a3bdab94e82b9ed0addb63efbdb8175611a184bf07ef9bfee",
                 "README.md": "40628cc724bdc82f87b30ed2e645eab12d46363f35362911fb35df43b1f6450e",
-                "TGDRIVE-NOTICE.txt": "80725016574853b368ff1c5e0c9fb4a02e1116d57a71f40e35974b7cf19ecebe",
+                "TGDRIVE-NOTICE.txt": "43c8f2266141f2469f71d08d197fdd39c96b4eefa80412606a909a302a207a86",
                 "custom-elements.json": "5a9bb21da664f232c311dcd31e719c85289883590ab2000f07716950b80a2412",
                 "dist/build-flags.d.ts": "14bf92986cbaf26c57e66c10c7f947282bf64b311bae07a465a2862b9451961c",
                 "dist/build-flags.d.ts.map": "c44ffca6c3169cdc104730ce397634e630d2858846b3302a8086a4ed2178a3ae",
@@ -133,7 +138,7 @@
                 "dist/element.js.map": "93b685697d776961a98c8b3eef594a78b1156dc200344e4ea8fceb242f06c847",
                 "dist/element.slim.cjs": "5d527ea8bcf27dea840e976da66fd263c485da3ee7ce8b2ae5194a1f17d93c13",
                 "dist/element.slim.global.js": "2da55c476a42fb3edd954eb31dbea5d99c0e02a3b3bda26a86c096e6ee027c1d",
-                "dist/element.slim.js": "01f6e03d105bc78bc94ea2dbfdbf18308bad7a46cc283ceb68eb8edbbaf7bc6c",
+                "dist/element.slim.js": "9d51b31bdf5ad82840f7eb23c32d44a4037600a0503da647ffc620b45e697e37",
                 "dist/events/EventEmitter.d.ts": "2956957390cf117fa99d592f014398fe39d4e3e9023deee0943e6462c62a9cad",
                 "dist/events/EventEmitter.d.ts.map": "6ee0e5ac312e83693748b6e1ac18278d5111eabd98bb9d37111a6ccf5c300a72",
                 "dist/events/EventEmitter.js": "901f806ee93712aef38937a2f1c059ea10bad48f668da3adee493a96f2825033",
@@ -503,7 +508,7 @@
                 "dist/wasm/types.d.ts.map": "0a43c91c3e10777353540af195ae0a0b902eae6772d6321402396d351d09be93",
                 "dist/wasm/types.js": "258fcbe06ad609becd20787adf17c9af42e28be495721e0363afc7217bc85044",
                 "dist/wasm/types.js.map": "11768ded6cde2b9c78182e2256a026d4faab3c8119c57b0a2c88e1e20dd4b910",
-                "package.json": "8a92e89a5d2502be09d4d66d0608a7d952c04b0e6388251203bf6d6f662fdef8"
+                "package.json": "ddbff5f0422d925b2b8f459affeadbefd370db9aef6189ee714328a3b1bfa0f5"
             }
         },
         "pdfjs-dist": {
@@ -529,7 +534,10 @@
                 "upstream_sha256": "07ceb740d746e5d9012fcf9f27d5c7dea09f7d2f5e74f5c8109e5787551a2333",
                 "vendored_sha256": "17a05acff3cc48a8196adc0ba2c9f7a31decab3a546603d21cdcde7e19681e43",
                 "recipe": "website/scripts/patch-pdf-worker.js",
-                "recipe_sha256": "c23eb6433d2c27da866dfd84de0ad3f051bc662342f98343aa3e9a614b4cdd61"
+                "recipe_sha256": "c23eb6433d2c27da866dfd84de0ad3f051bc662342f98343aa3e9a614b4cdd61",
+                "recipe_files_sha256": {
+                    "website/scripts/patch-pdf-worker.js": "c23eb6433d2c27da866dfd84de0ad3f051bc662342f98343aa3e9a614b4cdd61"
+                }
             },
             "files_sha256": {
                 "CODE_OF_CONDUCT.md": "902d5357af363426631d907e641e220b3ec89039164743f8442b3f120479b7cf",
