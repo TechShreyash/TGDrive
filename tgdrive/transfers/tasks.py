@@ -634,7 +634,7 @@ class TransferRegistry:
         """Public summary without source URLs, credentials or payload context."""
         record = record.committed
         summary = record.as_dict() | {
-            "name": record.context.get("name", "Transfer"),
+            "name": record.context.get("name") or "Transfer",
             "kind": record.context.get(
                 "source_kind", record.context.get("kind", "upload")
             ),

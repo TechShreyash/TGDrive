@@ -423,7 +423,7 @@ def register_routes(
         else:
             queue = queues.get(record.id)
         result = record.as_dict() | {
-            "name": record.context.get("name", "Transfer"),
+            "name": record.context.get("name") or "Transfer",
             "kind": record.context.get(
                 "source_kind", record.context.get("kind", "upload")
             ),

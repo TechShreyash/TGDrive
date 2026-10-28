@@ -97,6 +97,30 @@ fixture or its `/__test__` endpoints.
 Recorded evidence describes a tested snapshot, not the state of a later checkout.
 
 <details>
+<summary>Unnamed URL history admission regression — 2026-10-28</summary>
+
+Live deployment checks reproduced an HTTP 500 when new transfer admission tried
+to archive an older URL job whose name was null. History summaries and job
+snapshots now use a fallback title. The focused history/API run passed **23 Python
+cases**, including four regressions for null/empty names with in-memory and
+synthetic MongoDB persistence.
+
+Live health, owner sign-in, anonymous access rejection, folder creation and
+invalid-magnet feedback worked. Unsupported schemes and embedded URL credentials
+were rejected; foreign-origin mutation returned 403. Repeated nested-folder
+preparation returned the same tree. The torrent dialog fit a 320-pixel viewport
+without horizontal overflow; 390-pixel and desktop layouts were also inspected.
+A real local aria2 **1.37.0** smoke check passed subprocess startup, authenticated
+RPC and shutdown. A fresh local magnet import also retrieved the **362,017-byte**
+WebTorrent Leaves fixture from peers in **11.57 seconds**, with a matching SHA-256.
+This is one local swarm observation, not a throughput guarantee.
+Successful deployed torrent ingestion, Telegram upload and
+download integrity remain blocked pending deployment of the admission fix.
+No production settings or existing files were changed for these checks.
+
+</details>
+
+<details>
 <summary>ZIP creation and extraction — 2026-10-28</summary>
 
 Across focused offline runs, **33 archive service cases** and **24 archive API
