@@ -40,7 +40,13 @@ export function attachVideoPreviews(element: MoviElement): () => void {
     const panel = shadow?.querySelector<HTMLElement>(".movi-timeline-panel");
     const strip = shadow?.querySelector<HTMLElement>(".movi-timeline-strip");
     const progress = shadow?.querySelector<HTMLElement>(".movi-progress-bar");
-    if (!panel || !strip) return () => {};
+    if (!shadow || !panel || !strip) return () => {};
+    // Only the real buffer should look like loaded coverage on the seek bar.
+    const hoverStyle = new CSSStyleSheet();
+    hoverStyle.replaceSync(
+        ":host{--movi-progress-hover-color:transparent!important}",
+    );
+    shadow.adoptedStyleSheets = [...shadow.adoptedStyleSheets, hoverStyle];
 
     let disposed = false;
     let hovering = false;
@@ -189,9 +195,14 @@ export function attachVideoPreviews(element: MoviElement): () => void {
                 hoverPosition = null;
             }
             if (document.hidden || !hovering) player.player?.stopPreviewFill();
-        } else schedule();
+        } else {
+            hovering = false;
+            hoverPosition = null;
+            schedule();
+        }
     };
     const enter = () => {
+        if (player.isTimelineOpen()) return;
         hovering = true;
         clearTimer();
     };
@@ -201,6 +212,16 @@ export function attachVideoPreviews(element: MoviElement): () => void {
         schedule();
     };
     const moved = (event: MouseEvent) => {
+        // An open chapter panel hides hover previews, so idle movement must not decode them.
+        if (player.isTimelineOpen() && event.buttons === 0) {
+            event.stopImmediatePropagation();
+            hoverPosition = null;
+            if (hovering) {
+                hovering = false;
+                schedule();
+            }
+            return;
+        }
         hovering = true;
         clearTimer();
         hoverPosition = { clientX: event.clientX, clientY: event.clientY };
@@ -218,7 +239,7 @@ export function attachVideoPreviews(element: MoviElement): () => void {
     strip.addEventListener("scroll", schedule, { passive: true });
     progress?.addEventListener("pointerenter", enter);
     progress?.addEventListener("pointerleave", leave);
-    progress?.addEventListener("mousemove", moved);
+    progress?.addEventListener("mousemove", moved, true);
     for (const event of ["statechange", "loadeddata"])
         player.addEventListener(event, refresh);
     document.addEventListener("visibilitychange", refresh);
@@ -231,11 +252,14 @@ export function attachVideoPreviews(element: MoviElement): () => void {
         strip.removeEventListener("scroll", schedule);
         progress?.removeEventListener("pointerenter", enter);
         progress?.removeEventListener("pointerleave", leave);
-        progress?.removeEventListener("mousemove", moved);
+        progress?.removeEventListener("mousemove", moved, true);
         for (const event of ["statechange", "loadeddata"])
             player.removeEventListener(event, refresh);
         document.removeEventListener("visibilitychange", refresh);
         player.removeEventListener("loadstart", reset);
         player.player?.stopPreviewFill();
+        shadow.adoptedStyleSheets = shadow.adoptedStyleSheets.filter(
+            (sheet) => sheet !== hoverStyle,
+        );
     };
 }

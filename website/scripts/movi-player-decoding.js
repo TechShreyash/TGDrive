@@ -152,6 +152,14 @@ export const DECODING_PATCHES = [
     ],
     [FRAME_CAP_BEFORE, FRAME_CAP_AFTER],
     [
+        "static PAUSE_BUFFER_AUDIO_SECONDS = 180;",
+        "static PAUSE_BUFFER_AUDIO_SECONDS = 5;",
+    ],
+    [
+        "static PAUSE_BUFFER_VIDEO_FRAMES = 5400;",
+        "static PAUSE_BUFFER_VIDEO_FRAMES = 60;",
+    ],
+    [
         "if (!q2 && !W2 && this.videoDecoder.queueSize > l2 || !B4 && !this.disableAudio && this.audioDecoder.queueSize > S2)",
         "if (!q2 && !W2 && (this.videoDecoder.queueSize > l2 || (M2 || MoviPlayer._isMobileDevice && (this.trackManager.getActiveVideoTrack()?.width ?? 0) * (this.trackManager.getActiveVideoTrack()?.height ?? 0) < 8294400) && ((this.videoRenderer?.getQueueSize() ?? 0) + this.videoDecoder.queueSize) > N2) || !B4 && !this.disableAudio && this.audioDecoder.queueSize > S2)",
     ],

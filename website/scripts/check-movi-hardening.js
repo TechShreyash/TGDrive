@@ -185,6 +185,7 @@ const thumbStart = source.indexOf("class ThumbnailHttpSource");
 const selfTarget = new Target();
 selfTarget.navigator = { onLine: false };
 const Thumbnail = new Function("self", "g", "rA", "hA", "fetch", `return class {
+    spendPreviewRequestBytes() { return true; }
     ${method("waitForThumbnailWake", thumbStart)}
     ${method("async read", thumbStart)}
 }`)(selfTarget, { debug() {}, info() {}, warn() {}, error() {} }, "thumbnail", () => new AbortController(), async () => { throw new Error("transient network failure"); });

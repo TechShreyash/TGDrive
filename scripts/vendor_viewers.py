@@ -63,10 +63,11 @@ VIEWERS = (
         target="dist/element.slim.js",
         recipe="website/scripts/patch-movi-player.js",
         patch="patchMoviSource",
-        revision=2,
+        revision=3,
         recipe_support=(
             "website/scripts/movi-player-hardening.js",
             "website/scripts/movi-player-decoding.js",
+            "website/scripts/movi-player-preview-cache.js",
         ),
     ),
     Viewer(

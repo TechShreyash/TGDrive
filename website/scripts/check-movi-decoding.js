@@ -211,14 +211,24 @@ test("burst admission observes live decoded pictures while preserving audio read
     player.trackManager.getActiveVideoTrack = () => ({ width: 3840, height: 2160 });
     assert.equal(blocked.call(player, false, false, false, { _isMobileDevice: true }), false);
 });
-test("paused packet bytes stop further reads without dropping the crossing packet", async () => {
+function pausedCore() {
     const start = patched.indexOf("  pauseBufferTick = async () => {");
     const method = patched.slice(start, patched.indexOf("  async releaseWakeLock()", start));
+    const limits = {};
+    for (const name of ["MAX_PACKETS", "VIDEO_FRAMES", "AUDIO_SECONDS"]) {
+        const key = "PAUSE_BUFFER_" + name;
+        const match = patched.match(new RegExp("static " + key + " = ([\\d.e]+);"));
+        assert.ok(match, "read the actual shipped pause limit: " + key);
+        limits[key] = Number(match[1]);
+    }
     class Source {}
     const Core = new Function("MoviPlayer", "HttpSource", "g", "Je", `return class { ${method} }`)(
-        { PAUSE_BUFFER_MAX_PACKETS: 3000, PAUSE_BUFFER_VIDEO_FRAMES: 60, PAUSE_BUFFER_AUDIO_SECONDS: 180 }, Source, { debug() {}, error() {} }, "MoviPlayer",
+        limits, Source, { debug() {}, error() {} }, "MoviPlayer",
     );
-    const core = new Core();
+    return { core: new Core(), limits };
+}
+test("paused packet bytes stop further reads without dropping the crossing packet", async () => {
+    const { core } = pausedCore();
     let reads = 0, stops = 0;
     Object.assign(core, {
         pendingPrebufferPackets: [],
@@ -234,6 +244,26 @@ test("paused packet bytes stop further reads without dropping the crossing packe
     assert.equal(reads, 2);
     assert.equal(stops, 1);
     assert.equal(core.demuxInFlight, false);
+});
+test("pause demuxing stops at a resume cushion rather than minutes of packets", async () => {
+    const { core, limits } = pausedCore();
+    assert.equal(limits.PAUSE_BUFFER_AUDIO_SECONDS, 5);
+    assert.equal(limits.PAUSE_BUFFER_VIDEO_FRAMES, 60);
+    let reads = 0, stops = 0;
+    Object.assign(core, {
+        pendingPrebufferPackets: [
+            ...Array.from({ length: 60 }, () => ({ streamIndex: 0, data: new Uint8Array(1) })),
+            { streamIndex: 1, duration: 5, data: new Uint8Array(1) },
+        ],
+        stateManager: { getState: () => "paused" },
+        stopPauseBuffering: () => stops++,
+        trackManager: { getActiveVideoTrack: () => ({ id: 0 }), getActiveAudioTrack: () => ({ id: 1 }) },
+        demuxer: { readPacket: async () => { reads++; throw new Error("unneeded pause read"); } },
+    });
+    await core.pauseBufferTick();
+    assert.equal(reads, 0);
+    assert.equal(stops, 1);
+    assert.equal(core.pendingPrebufferPackets.length, 61);
 });
 test("decoder stats do not present an unverified WebCodecs backend as hardware", () => {
     const statement = DECODING_PATCHES.at(-2)[1];

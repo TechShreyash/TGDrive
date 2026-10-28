@@ -62,7 +62,7 @@ function policy(rate, ceilingMiB = 128, duration = 600) {
             this.bufferSize = Math.min(size, ceilingMiB * 1024 ** 2);
         },
     });
-    source.setPlaybackBufferGoal(0, duration, rate * 8);
+    source.setPlaybackBufferGoal(duration, rate * 8);
     return source;
 }
 test("compressed read-ahead covers time across bitrates within a memory cap", () => {
@@ -180,16 +180,23 @@ test("source closure releases a held read-ahead gate", async () => {
     await source.awaitPrefetchGate();
     assert.equal(source.closed, true);
 });
-test("variable bitrate observations increase the time buffer without following seeks", () => {
+test("paused reads and seek cursor jumps do not enlarge speculative read-ahead", () => {
     const source = policy(100_000);
-    source.position = 500_000;
-    source.setPlaybackBufferGoal(1, 600, 800_000);
-    assert.equal(source.playbackAheadBytes, 45_000_000);
-    source.position = 59_000_000;
-    source.setPlaybackBufferGoal(2, 600, 800_000, true);
-    assert.equal(source.playbackRateSample, null);
-    source.setPlaybackBufferGoal(400, 600, 800_000);
-    assert.equal(source.playbackAheadBytes, 45_000_000);
+    for (const position of [500_000, 16 * 1024 ** 2, 59_000_000, 500_000]) {
+        source.position = position;
+        source.setPlaybackBufferGoal(600, 800_000);
+        assert.equal(source.playbackAheadBytes, 9_000_000);
+        assert.equal(source.bufferSize, 32 * 1024 ** 2);
+    }
+});
+test("declared container bitrate can increase the budget but invalid hints cannot", () => {
+    const source = policy(100_000);
+    source.setPlaybackBufferGoal(600, 1_600_000);
+    assert.equal(source.playbackAheadBytes, 18_000_000);
+    for (const bitRate of [NaN, Infinity, -1]) {
+        source.setPlaybackBufferGoal(600, bitRate);
+        assert.equal(source.playbackAheadBytes, 9_000_000);
+    }
 });
 test("EOF drains queued hardware frames without recreating the HEVC decoder", async () => {
     const patched = patchMoviSource(original, VERSION);
@@ -360,12 +367,17 @@ test("picked subtitle URLs are revoked once across disconnect and source reset",
 function httpSourceForTest() {
     const start = patched.indexOf("class HttpSource {");
     const end = patched.indexOf("\nasync function eA(", start);
+    const cacheStart = patched.indexOf("class LRUCache {");
+    const cacheEnd = patched.indexOf("\n}\n", cacheStart) + 2;
     assert.ok(start >= 0 && end > start);
+    assert.ok(cacheStart >= 0 && cacheEnd > cacheStart);
     return new Function(
         "fetch",
         `const crossOriginIsolated = false;
      const QA="HttpSource", EA=2097152, iA=262144000, tA=131072;
      const g = {debug(){}, info(){}, warn(){}, error(){}};
+     const oA="LRUCache";
+     ${patched.slice(cacheStart, cacheEnd)}
      ${patched.slice(start, end)}
      return HttpSource;`,
     )(async (_url, options) => {
@@ -390,7 +402,7 @@ test(
         const source = new Source("https://fixture.invalid/video", {}, 128);
         source.size = 50 * 1024 ** 2;
         source.resizeBuffer(32 * 1024 ** 2);
-        source.setPlaybackBufferGoal(0, 3600);
+        source.setPlaybackBufferGoal(3600);
         assert.equal(source.playbackAheadBytes, 2 * 1024 ** 2);
         let timer;
         try {

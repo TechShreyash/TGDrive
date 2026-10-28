@@ -584,13 +584,20 @@ static archives. Notices record upstream's stale version label, binary/header
 recipe evidence and reproduction limits; TGDrive has not independently rebuilt
 the published decoder WASM.
 
-Movi revision `0.4.1-tgdrive.2` composes the source-window recipe with
-`movi-player-hardening.js` and `movi-player-decoding.js`; the vendor manifest
+Movi revision `0.4.1-tgdrive.3` composes the source-window recipe with
+`movi-player-hardening.js`, `movi-player-decoding.js` and
+`movi-player-preview-cache.js`; the vendor manifest
 records every recipe file's hash. Its focused Node checks exercise actual
 patched methods, including hostile track metadata, listener/observer ownership,
 cancelled thumbnail waits, audio-only readiness, software EOF/backward seeks and
 decoded/paused-packet memory admission. EOF draining uses the existing WASM ABI;
 it does not establish an independent decoder rebuild.
+
+`check-movi-preview-cache.js` exercises the actual source readers: a real preview
+range can satisfy later playback, sequential requests skip retained intervals,
+holes and partial responses never become invented media, and identity checks,
+byte/entry limits, close cleanup and the per-image requested-range budget hold.
+Reused bytes must not increase network delivery counters or throughput samples.
 
 `test_browser_player_hardening.py` covers real AAC-only MP4 playback/seeking,
 malicious MKV metadata and repeated playing-close cleanup. The preview tests in
@@ -608,6 +615,14 @@ additional file payload reads for previews. An isolated software-decoder check
 presented all 120 B-frame fixture pictures and retained forward/backward playback
 with the new queue admission. These checks used local synthetic origins, without
 live Telegram or real GPU/mobile calibration; no independent WASM rebuild ran.
+
+Revision `.3` validation on 2026-10-28 passed 65 player/cache recipe checks,
+95 video unit tests, 12 focused synthetic Chromium cases and 17 release-package
+checks; the frontend typecheck/build passed. Browser cases include hover and
+chapter pixels, keyboard opening with the pointer over the seek bar, native
+dragging, pause/resume, track changes, real buffered ranges and close cleanup.
+The build used an isolated output directory to avoid other development builds.
+No `.3` live deployment, remote bandwidth benchmark or physical-device check ran.
 
 </details>
 

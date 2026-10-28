@@ -176,7 +176,7 @@ def test_source_archive_excludes_local_state_and_private_documents(
             "website/public/third-party/pdfjs-TGDrive-patch-NOTICE.txt",
             "website/vendor/README.md",
             "website/vendor/manifest.json",
-            "website/vendor/movi-player-0.4.1-tgdrive.2.tgz",
+            "website/vendor/movi-player-0.4.1-tgdrive.3.tgz",
             "website/vendor/pdfjs-dist-6.4.299-tgdrive.1.tgz",
             "website/public/third-party/react-LICENSE.txt",
             "website/public/third-party/react-dom-LICENSE.txt",

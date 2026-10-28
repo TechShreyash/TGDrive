@@ -33,9 +33,13 @@ The same inputs and Python/zlib runtime reproduce the same bytes; the manifest
 contains no generation timestamps or machine-specific paths. No upstream install
 or package lifecycle scripts run during generation.
 
-Movi revision `0.4.1-tgdrive.2` includes metadata escaping, complete element
+Movi revision `0.4.1-tgdrive.3` includes metadata escaping, complete element
 disconnect cleanup, audio-only buffering and software end-of-file corrections,
-decoded-picture memory targets, and demand-driven previews. The manifest hashes
+decoded-picture memory targets, and demand-driven previews. Preview bytes can
+be reused by playback through a bounded cache, with a 16 MiB requested-range
+allowance per newly generated image; speculative read-ahead does not
+learn a bitrate from pause/seek cursor jumps, and pause-time packet targets keep
+only a small resume cushion. The manifest hashes
 the main recipe and each support file. A new local revision changes the archive
 filename and lockfile integrity; the original published WASM remains unchanged.
 

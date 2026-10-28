@@ -13,14 +13,14 @@
         "format": "prettier --write src",
         "format:check": "prettier --check src",
         "build": "tsc --noEmit && vite build",
-        "pretest": "node --test scripts/check-movi-player.js scripts/check-movi-hardening.js scripts/check-movi-decoding.js scripts/check-pdf-worker.js",
+        "pretest": "node --test scripts/check-movi-player.js scripts/check-movi-hardening.js scripts/check-movi-decoding.js scripts/check-movi-preview-cache.js scripts/check-pdf-worker.js",
         "test": "vitest run"
     },
     "dependencies": {
         "@mantine/core": "9.7.3",
         "@mantine/hooks": "9.7.3",
         "lucide-react": "1.58.0",
-        "movi-player": "file:vendor/movi-player-0.4.1-tgdrive.2.tgz",
+        "movi-player": "file:vendor/movi-player-0.4.1-tgdrive.3.tgz",
         "pdfjs-dist": "file:vendor/pdfjs-dist-6.4.299-tgdrive.1.tgz",
         "react": "19.3.1",
         "react-dom": "19.3.1"

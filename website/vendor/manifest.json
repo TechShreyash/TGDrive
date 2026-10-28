@@ -10,32 +10,33 @@
                 "bytes": 51226747
             },
             "vendored": {
-                "version": "0.4.1-tgdrive.2",
-                "archive": "movi-player-0.4.1-tgdrive.2.tgz",
-                "integrity": "sha512-lOdoLmDFRsfMCkDQM+HdPcWW05reiNMGu8sJEltTo5Ds9sHalBGR07k0ldPt97tyi6P4VvpPZz5aRiRwML/VsQ==",
-                "sha256": "d49eec53c89bedef8abacfa33e122270e51c6979682528a137f880022f423a8b",
-                "bytes": 50952613,
-                "package_json_sha256": "ddbff5f0422d925b2b8f459affeadbefd370db9aef6189ee714328a3b1bfa0f5",
-                "package_files_sha256": "11d5945fc90f1ba095d3dd762d6d5e601b03769242020dc9fc4f26db9d44cdf6",
+                "version": "0.4.1-tgdrive.3",
+                "archive": "movi-player-0.4.1-tgdrive.3.tgz",
+                "integrity": "sha512-1tz4TYgRN4tx0f1PyteCB/Zd5vqhxqsvOpRvqj+o1LTKWn58hfLMPmG4mf61ZHWBHeJ6P4qHqdgB85mXfbVPRA==",
+                "sha256": "716f1948e4d0317ad7d57ead6f1a77b5696c959cd5ea76607c7ca096c21c4c3c",
+                "bytes": 50953233,
+                "package_json_sha256": "d0aaa381d52ec94abb360a4ed859b3c81adf529ff44d585e56a4a814bfba7612",
+                "package_files_sha256": "92f8c498c10e801348c8b80a2a6378ae520301860fcc94fb974d9f0fe532fe31",
                 "file_count": 477
             },
             "patch": {
                 "file": "dist/element.slim.js",
                 "upstream_sha256": "834efaa395f82503fdea3538e03c2ad83f01a7fc409ca93d93dea500affa63c7",
-                "vendored_sha256": "9d51b31bdf5ad82840f7eb23c32d44a4037600a0503da647ffc620b45e697e37",
+                "vendored_sha256": "f14123275c415393e88a5cfed2c529c23c6d0a5ed66d56d8de5bd0c4ff8fb59f",
                 "recipe": "website/scripts/patch-movi-player.js",
-                "recipe_sha256": "cd82c20feb32c3c42caf809cdd97e49bab56421319cc50b3d7815e15b61cd06e",
+                "recipe_sha256": "3781efc6f280e3f303050a5d7b4d51b46e6b6efce3259fe6bffa07df32714417",
                 "recipe_files_sha256": {
-                    "website/scripts/patch-movi-player.js": "d80f5bb184d5e38634f14c63adf4cda53c12853bae5db6a3db2349de68f7bad8",
+                    "website/scripts/patch-movi-player.js": "4b37920bbb6d139c01e07064ac8e94018480f4982cf3912c0e1166d8cc0bc577",
                     "website/scripts/movi-player-hardening.js": "27d7f025d61792431e291eba823cff20eb9c6d57c0913f0315a67998168c6e1f",
-                    "website/scripts/movi-player-decoding.js": "0644dd1b08ef1f693fddea905ed50e3f4ddb2fa75fe564b896797fdc6eb802a4"
+                    "website/scripts/movi-player-decoding.js": "9cbccb99c3578bc4721d752d07979c44cdfd8326a73443fa7b5e1c22b2a3c4f7",
+                    "website/scripts/movi-player-preview-cache.js": "29f64f82e5374b1852d205ef8abea5baae91483d474461581d9f0040be0dab49"
                 }
             },
             "files_sha256": {
                 "AGENTS.md": "c40bdfa0174a711557eee188c916a19ecc1aa0f3fcdc0e8d1c14a2afc870d124",
                 "LICENSE": "ea3f732c7310bc1a3bdab94e82b9ed0addb63efbdb8175611a184bf07ef9bfee",
                 "README.md": "40628cc724bdc82f87b30ed2e645eab12d46363f35362911fb35df43b1f6450e",
-                "TGDRIVE-NOTICE.txt": "43c8f2266141f2469f71d08d197fdd39c96b4eefa80412606a909a302a207a86",
+                "TGDRIVE-NOTICE.txt": "8dc7aa25672ebecc945dc68737fa283887dd9e8da69ec99ca7a484892d84f340",
                 "custom-elements.json": "5a9bb21da664f232c311dcd31e719c85289883590ab2000f07716950b80a2412",
                 "dist/build-flags.d.ts": "14bf92986cbaf26c57e66c10c7f947282bf64b311bae07a465a2862b9451961c",
                 "dist/build-flags.d.ts.map": "c44ffca6c3169cdc104730ce397634e630d2858846b3302a8086a4ed2178a3ae",
@@ -138,7 +139,7 @@
                 "dist/element.js.map": "93b685697d776961a98c8b3eef594a78b1156dc200344e4ea8fceb242f06c847",
                 "dist/element.slim.cjs": "5d527ea8bcf27dea840e976da66fd263c485da3ee7ce8b2ae5194a1f17d93c13",
                 "dist/element.slim.global.js": "2da55c476a42fb3edd954eb31dbea5d99c0e02a3b3bda26a86c096e6ee027c1d",
-                "dist/element.slim.js": "9d51b31bdf5ad82840f7eb23c32d44a4037600a0503da647ffc620b45e697e37",
+                "dist/element.slim.js": "f14123275c415393e88a5cfed2c529c23c6d0a5ed66d56d8de5bd0c4ff8fb59f",
                 "dist/events/EventEmitter.d.ts": "2956957390cf117fa99d592f014398fe39d4e3e9023deee0943e6462c62a9cad",
                 "dist/events/EventEmitter.d.ts.map": "6ee0e5ac312e83693748b6e1ac18278d5111eabd98bb9d37111a6ccf5c300a72",
                 "dist/events/EventEmitter.js": "901f806ee93712aef38937a2f1c059ea10bad48f668da3adee493a96f2825033",
@@ -508,7 +509,7 @@
                 "dist/wasm/types.d.ts.map": "0a43c91c3e10777353540af195ae0a0b902eae6772d6321402396d351d09be93",
                 "dist/wasm/types.js": "258fcbe06ad609becd20787adf17c9af42e28be495721e0363afc7217bc85044",
                 "dist/wasm/types.js.map": "11768ded6cde2b9c78182e2256a026d4faab3c8119c57b0a2c88e1e20dd4b910",
-                "package.json": "ddbff5f0422d925b2b8f459affeadbefd370db9aef6189ee714328a3b1bfa0f5"
+                "package.json": "d0aaa381d52ec94abb360a4ed859b3c81adf529ff44d585e56a4a814bfba7612"
             }
         },
         "pdfjs-dist": {

@@ -22,10 +22,12 @@ def _chapters(player: Any) -> None:
       el.__chapterMisses = [];
       el.__chapterActive = 0;
       el.__chapterPeak = 0;
+      el.__chapterHoverCalls = 0;
       const core = el.player;
       const preview = core.getPreviewFrame.bind(core);
       core.getPreviewFrame = async (...args) => {
         el.__chapterCalls.push(args[0]);
+        if (args[2]!==false) el.__chapterHoverCalls++;
         if (!core.hasPreviewFor(args[0])) el.__chapterMisses.push(args[0]);
         el.__chapterActive++;
         el.__chapterPeak = Math.max(el.__chapterPeak, el.__chapterActive);
@@ -235,4 +237,72 @@ def test_stationary_hover_retries_after_an_in_flight_chapter_preview(
     page.wait_for_function("""()=>{const img=document.querySelector('movi-player')
       ?.shadowRoot.querySelector('.movi-thumbnail-img');
       return img?.complete&&img.naturalWidth>0}""")
+    assert _has_pixels(hover)
+
+
+def test_keyboard_chapters_ignore_hidden_hover_and_preserve_seek_dragging(
+    server: Server, desktop: tuple[Any, Any]
+) -> None:
+    _, page = desktop
+    _, player = open_video(page, server)
+    _chapters(player)
+    player.hover()
+    page.wait_for_timeout(350)
+    progress = player.locator(".movi-progress-bar")
+    box = progress.bounding_box()
+    assert box
+    progress.hover(position={"x": box["width"] * 0.3, "y": box["height"] / 2})
+    hover = player.locator(".movi-thumbnail-img")
+    expect(hover).to_be_visible(timeout=30000)
+    page.wait_for_function("""()=>{const el=document.querySelector('movi-player');
+      const img=el?.shadowRoot.querySelector('.movi-thumbnail-img');
+      return img?.complete&&img.naturalWidth>0&&!el.player.isPreviewGenerating;
+    }""")
+    assert _has_pixels(hover)
+    colors = player.evaluate("""el=>{
+      const root=el.shadowRoot;
+      return {
+        hover:getComputedStyle(root.querySelector('.movi-progress-hover')).backgroundColor,
+        buffer:getComputedStyle(root.querySelector('.movi-progress-buffer')).backgroundColor
+      };
+    }""")
+    assert colors["hover"] == "rgba(0, 0, 0, 0)"
+    assert colors["buffer"] != "rgba(0, 0, 0, 0)"
+
+    # Focus/keyboard input leaves the real pointer over the seek bar.
+    player.focus()
+    player.press("t")
+    panel = player.locator(".movi-timeline-panel")
+    expect(panel.locator(".movi-timeline-chapter")).to_have_count(24)
+    page.wait_for_function("""()=>{const imgs=document.querySelector('movi-player')
+      ?.shadowRoot.querySelectorAll('.movi-timeline-chapter img');
+      return [...(imgs||[])].filter(img=>img.complete&&img.naturalWidth).length>=2;
+    }""")
+    hover_calls = player.evaluate("el=>el.__chapterHoverCalls")
+    box = progress.bounding_box()
+    assert box
+    progress.hover(position={"x": box["width"] * 0.8, "y": box["height"] / 2})
+    page.wait_for_timeout(250)
+    assert player.evaluate("el=>el.__chapterHoverCalls") == hover_calls
+
+    # Idle movement is suppressed; a held mouse drag still reaches Movi's scrubber.
+    page.mouse.down()
+    page.mouse.move(box["x"] + box["width"] * 0.6, box["y"] + box["height"] / 2)
+    page.mouse.up()
+    page.wait_for_function("""()=>{const el=document.querySelector('movi-player');
+      return el&&!el.seeking&&Math.abs(el.currentTime-el.duration*.6)<.25;
+    }""")
+    assert player.evaluate("el=>el.paused")
+    expect(panel).to_be_visible()
+    panel.locator(".movi-timeline-close").click()
+    player.hover()
+    page.wait_for_timeout(350)
+    box = progress.bounding_box()
+    assert box
+    progress.hover(position={"x": box["width"] * 0.8, "y": box["height"] / 2})
+    expect(hover).to_be_visible(timeout=30000)
+    page.wait_for_function("""()=>{const img=document.querySelector('movi-player')
+      ?.shadowRoot.querySelector('.movi-thumbnail-img');
+      return img?.complete&&img.naturalWidth>0;
+    }""")
     assert _has_pixels(hover)

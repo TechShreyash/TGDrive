@@ -60,3 +60,11 @@ targets account for device/pixel costs, and statistics distinguish WebCodecs fro
 verified hardware acceleration. Chapter cards remain immediate; TGDrive fills
 only visible chapter images. Preview initialization requires a viewer request.
 The decoder WASM and upstream licenses remain unchanged.
+
+Revision 0.4.1-tgdrive.3 (2026-10-28) removes demux-cursor peak sampling from
+speculative read-ahead and reduces pause-time targets to a small resume cushion.
+Thumbnail byte ranges can be reused by the same playback source through a bounded
+cache without repositioning its active window. Source identity and complete byte
+coverage are required before reuse. New image operations have a bounded allowance
+for thumbnail range requests, including initialization and retries; cached reads
+remain available after the allowance is exhausted. The decoder WASM is unchanged.

@@ -428,15 +428,24 @@ Seek hover uses keyframe previews, with the existing cache and pacing for remote
 reads. It does not walk every intermediate frame to produce an exact-time image.
 Chapter titles and seek targets appear immediately; image extraction is limited
 to visible cards and a small neighbouring margin, one at a time. Hover takes
-priority, and chapter work waits during loading, buffering and seeking. Closing
+priority when its card can be shown; while Chapters is open, hidden hover work
+is suppressed. Chapter work waits during loading, buffering and seeking. Closing
 the chapter panel stops new chapter extraction. No synthetic twenty-image strip
 is generated for files without chapter metadata.
 
 The preview decoder initializes on demand, without automatic background warm-up.
 It borrows playback's cached head, metadata and retained source bytes before
-requesting additional ranges. An uncached frame can require several reads;
-typical windows are 2 MiB, with a 5 MiB per-read ceiling. This is not a total
-bandwidth cap. Generated images are cached by the player for revisits during
+requesting additional ranges. Newly downloaded preview bytes are also offered
+back to that same playback source through a separate, bounded 8 MiB cache, so
+playback can reuse complete retained ranges without moving its active window.
+This cache is additional browser memory, has no persistent storage, and clears
+when the source closes. Evicted ranges can require another download.
+An uncached frame can require several reads; typical windows are 2 MiB, with a
+5 MiB per-read ceiling. Each new image has a 16 MiB allowance for requested range
+payloads, including metadata and retries; cached bytes do not spend it. If more
+reads are needed, that image is skipped and playback remains available. This is
+not an exact wire-traffic cap or a limit on the whole viewing session.
+Generated images are cached by the player for revisits during
 that opening; changing source or reopening can require new reads. The isolated
 preview WASM/decoder also needs memory and CPU, so previewing high-resolution
 software-decoded files can still be slow.
@@ -444,11 +453,12 @@ software-decoded files can still be slow.
 ### Browser playback buffer
 
 The custom player fetches compressed bytes independently of the small decoded
-picture queue. It aims for **90 seconds ahead**, using the greater of the file's
-average byte rate, declared bitrate and observed consumption rate. Higher bitrate
-sections increase that estimate. Seeks reset sampling instead of counting the
-skipped bytes as consumption. Once filled, fetching resumes below 75% of the goal
-(roughly 67 seconds), before the playhead approaches the buffer edge.
+picture queue. Its speculative byte target represents **90 seconds at the file's
+average byte rate**, or the declared container bitrate when that is higher.
+Demuxer cursor jumps during pauses, seeks and metadata reads cannot inflate this
+target. Required demux reads can exceed it so variable-bitrate sections still
+receive the bytes they need. Once filled, speculative fetching resumes below
+75% of the byte goal.
 
 The source starts with at most **32 MiB** and grows to meet that time goal as
 bitrate information becomes available. Its memory ceiling is one-sixteenth of
@@ -477,11 +487,12 @@ not a total tab-memory limit: codec references, WASM, audio, graphics surfaces a
 temporary copies remain separate. WebCodecs statistics do not claim verified
 hardware acceleration; the browser can decode through software internally.
 
-Pause-time demuxing also has a 16 MiB compressed-packet target, in addition to
-the packet-count limit. It stops reading more packets after that target; the
-packet that crosses it is retained. The HTTP source can still fill its separate
-read-ahead window. This avoids retaining a second large compressed copy merely
-because a high-bitrate video is paused.
+Pause-time demuxing aims for a small resume cushion: five seconds of audio and
+60 video packets, subject to the existing packet count and a 16 MiB
+compressed-packet target. The packet that crosses a byte limit is retained.
+Sparse/interleaved tracks can exceed the time target before both track goals
+are satisfied. The HTTP source can still fill its separate read-ahead window;
+pausing does not discard bytes already downloaded.
 
 For longer videos, the time goal uses at most 80% of the allocated window to leave
 transport/compaction headroom. Very high bitrate files may still retain less than
@@ -494,8 +505,12 @@ Neither a request size nor the decoded frame queue is the playback buffer goal.
 Seeking inside retained source bytes reuses them while decoding from a suitable
 keyframe. A seek outside the retained window fetches its new range. Closing the
 preview cancels its source requests. This is browser memory, separate from the
-server cache and manual whole-file preloads. Timeline coverage remains an estimate
-for variable bitrate/interleaved files, not a guarantee of decoded readiness.
+server cache and manual whole-file preloads. This is a byte-based target, not a
+strict 90-second limit measured from the displayed frame. Retained packets,
+variable bitrate, required reads and in-flight responses can extend coverage.
+The grey timeline shows approximate loaded coverage; hovering shows an image
+and time without adding a second filled range that could resemble a buffer.
+Neither the grey range nor a preview image guarantees decoded readiness.
 
 ## Operator checklist
 
