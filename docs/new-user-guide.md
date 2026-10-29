@@ -68,11 +68,12 @@ encrypt files before upload and keep decryption keys separately; ordinary previe
 will be unavailable. Only open downloads you trust: TGDrive does not scan for malware.
 [Security details](reference.md#security-and-privacy).
 
-**Do I need Premium or paid hosting?**  
-No. All app features are free; hosting and database resources may cost money.
+**Is TGDrive free?**  
+Yes. All app features are free. Run it on your computer or your own server;
+server and database providers may charge for their resources.
 Premium is optional, including for automatic splitting of large files.
 [Upload limits](configuration.md#upload-size-and-available-disk-space) ·
-[Hosting choices](hosting.md).
+[Self-hosting choices](hosting.md).
 
 **Does uploading a folder keep it synchronized?**  
 No. It copies the selected files once. Later local edits do not sync; selecting

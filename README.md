@@ -54,7 +54,6 @@ have their own costs.
 | --- | --- |
 | Your computer | [Local setup](docs/setup.md) for use while your computer is on |
 | Your own server | [Server deployment](docs/setup.md#hosting-beyond-your-machine) for access while your laptop is off |
-| Help with setup and maintenance | [Optional managed hosting](docs/hosting.md#optional-managed-hosting), including a server and HTTPS address |
 
 Keep TGDrive running for website access, share links and background work.
 Keep separate copies of important files: TGDrive does not add end-to-end
@@ -73,7 +72,8 @@ encryption or guarantee permanent storage. [Privacy and backup basics](docs/new-
 ## Updates and support
 
 Follow the [updates channel](https://t.me/TechZBots) for announcements, or join the
-[support group](https://t.me/TechZBots_Support) for help and discussion.
+[support group](https://t.me/TechZBots_Support) for help with self-hosting, setup
+and discussion.
 
 ## Contribute
 

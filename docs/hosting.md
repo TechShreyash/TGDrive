@@ -1,13 +1,15 @@
-# Run TGDrive locally or on a server
+# Self-host TGDrive on your computer or server
 
 [Docs home](README.md) · [Setup](setup.md) · [Using TGDrive](usage.md)
 
 **Every TGDrive feature is free and open source** under the [MIT License](../LICENSE).
-Run it on your computer, use your own server, or pay for optional hosting and
-maintenance. Hosting buys resources and help; it does not unlock app features.
+Run it on your computer or a server you control. You maintain the installation
+and choose any infrastructure providers you need.
 
-Start with the [comparison](#local-computer-or-server), or see
-[managed hosting](#optional-managed-hosting) and [server-only plans](#server-plans-and-customization).
+Start with the [comparison](#local-computer-or-server), then follow [Setup](setup.md).
+For self-hosting or setup questions, ask in the
+[support group](https://t.me/TechZBots_Support). Keep credentials and private links
+out of public messages.
 
 ## Local computer or server
 
@@ -22,7 +24,7 @@ Both need internet access to Telegram and MongoDB.
 | Public file and folder links | Other people need a reachable address; localhost links do not work on their devices | Recipients can use the public address while the server is available |
 | Accepted uploads, URL imports, manual preloads, bot uploads and backups | Continue while your computer and TGDrive remain running | Continue while the server and TGDrive remain running |
 | Work while your laptop is asleep or off | Stops when the computer hosting TGDrive stops | Continues independently of your laptop |
-| Resources and maintenance | Your computer, connection and maintenance | Your chosen server; maintain it yourself or use optional management |
+| Resources and maintenance | Your computer, connection and maintenance | Your chosen server, connection and maintenance |
 
 For device uploads, keep the browser open until **You can close this tab** and
 keep originals until **Completed**. Manual whole-file preloads can continue
@@ -37,38 +39,9 @@ per-person permissions. Use read-only share links for selected files or folders.
 To make a computer-hosted installation reachable remotely, follow
 [HTTPS deployment setup](setup.md#hosting-beyond-your-machine) and keep it awake.
 
-## Optional managed hosting
-
-We offer **managed TGDrive hosting from ₹100/month (INR), including a server**.
-This is the total starting monthly price.
-
-| Included | What you receive |
-| --- | --- |
-| Server and TGDrive access | Full access to your server and TGDrive, with every TGDrive feature available |
-| Deployment and ongoing management | We configure and deploy TGDrive, handle server/deployment maintenance and updates, and help troubleshoot hosting problems |
-| Personal public HTTPS subdomain | Your own drive address for access from a browser on the go and for sharing links |
-| Your accounts and storage | Your Telegram account, private channel and bots; MongoDB in your own account |
-| Capacity choices | More server resources when you need to handle more simultaneous requests, viewers, uploads or downloads |
-
-Your HTTPS address is public, but your owner drive remains password-protected.
-You choose which files or folders to expose through read-only share links.
-
-There are **no additional hosting-plan caps on file size or upload/download
-counts**. App limits, available disk and the server's bandwidth allowance still
-apply. Larger plans provide more capacity for simultaneous work.
-
-[Contact TechShreyash on Telegram](https://t.me/TechShreyash) to arrange setup and
-choose resources for your workload. Confirm CPU, RAM, disk, monthly bandwidth,
-upgrade pricing and availability in your quote. The server-only prices below
-are separate from the managed offer.
-
-If you prefer to manage TGDrive yourself, you can also buy just a server from us.
-You are equally free to use your own server or another provider.
-
 ## What you prepare
 
-Create these in accounts you control. For managed setup, share only the required
-deployment credentials through the private setup conversation.
+Create these in accounts you control:
 
 | Prepare | What is needed |
 | --- | --- |
@@ -80,40 +53,16 @@ deployment credentials through the private setup conversation.
 | Owner sign-in | A private TGDrive web password, kept separately from the public demo password |
 
 Extra storage bots, Premium and a separate backup channel are optional.
-Basic managed setup does not need your Telegram account's login code/password.
 Use TGDrive's normal authorization flow if you choose Premium.
 [Bot uploads](usage.md#optional-telegram-bot-interface) ·
 [Additional bots and Premium](setup.md#additional-bots-and-premium-accounts)
 
-We use the credentials to connect your channel/database and publish your HTTPS
-address. Never post them in an issue, screenshot or repository. Credential
+Never post credentials in an issue, screenshot or repository. Credential
 changes can interrupt the drive; follow [connection maintenance](operations.md#connection-changes).
 
-At handoff, keep your server access, TGDrive login, MongoDB access and private
+Keep your server access, TGDrive login, MongoDB access and private
 deployment configuration. [Save a confirmed recovery file and its separate key](backup-recovery.md#keep-the-mongodb-recovery-kit-outside-the-server)
 outside the server.
-
-## Server plans and customization
-
-These are **temporary launch-discount prices** for a server you manage yourself,
-in INR per month. Contact us for current availability and pricing.
-
-| vCPU | RAM | Server storage | Monthly bandwidth | Price/month |
-| --- | --- | --- | --- | --- |
-| 1 | 1 GB | 32 GB | 1 TB | ₹99 |
-| 1 | 2 GB | 64 GB | 2 TB | ₹149 |
-| 2 | 4 GB | 100 GB | 5 TB | ₹249 |
-| 4 | 8 GB | 180 GB | 6 TB | ₹399 |
-| 8 | 16 GB | 350 GB | 8 TB | ₹699 |
-
-Some resource customization, such as additional RAM or storage, can be arranged.
-[Contact TechShreyash](https://t.me/TechShreyash) for availability and a quote.
-Ask how bandwidth is counted and what happens if its allowance is reached;
-unlimited upload/download counts do not mean unlimited network traffic.
-
-Managed capacity upgrades are quoted separately from this server-only table.
-For self-managed deployment, follow [Setup](setup.md); the
-[self-hosted Coolify option](setup.md#coolify) can help manage deployment.
 
 ## Capacity and practical limits
 
@@ -125,7 +74,7 @@ or Telegram clients to the bottleneck shown by your workload.
 | --- | --- |
 | CPU and RAM | How much preview, parsing and concurrent request work can fit; memory caching and background work share these resources |
 | Server disk | Unfinished uploads, caches, application files and system overhead; it is not your total Telegram library size |
-| Network and monthly bandwidth | Transfer throughput and the amount of traffic the server plan can carry |
+| Network and bandwidth allowance | Transfer throughput and the amount of traffic your connection can carry |
 | Telegram and MongoDB access | Provider availability, account cooldowns, database capacity and connection health |
 | Device and viewer connections | Your upload connection and each recipient's download connection remain part of the path |
 
@@ -147,16 +96,16 @@ and data. TGDrive does not separately encrypt Telegram files, so the operator is
 a trusted party. Encryption of the recovery file does not encrypt your originals.
 See [privacy essentials](new-user-guide.md) and [recovery limits](backup-recovery.md).
 
-Before hosting ends, preserve your database and configuration. Completed Telegram
-files can reopen on another host with the matching catalog and channel access;
+Before moving or shutting down a host, preserve your database and configuration.
+Completed Telegram files can reopen on another host with the matching catalog and channel access;
 unfinished uploads still need staged bytes or originals. Sharing and background
 work stop until TGDrive is reachable again.
-[Move or reopen your drive](operations.md#when-a-hosting-plan-expires).
+[Move or reopen your drive](operations.md#move-to-another-host).
 
 ## Help improve TGDrive
 
 Contributions, feedback, bug reports and feature requests are welcome from
-everyone, including people running it entirely themselves. Hosting is optional.
+everyone.
 [Open a GitHub issue](https://github.com/TechShreyash/TGDrive/issues) or follow the
 [development guide](development.md) and [contributor guidance](../AGENTS.md).
 Keep credentials and private links out of public reports.

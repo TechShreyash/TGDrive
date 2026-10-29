@@ -4,13 +4,13 @@ New to TGDrive? [Start with the essentials](new-user-guide.md),
 [try the demo](usage.md#try-the-public-demo), or go straight to [Setup](setup.md).
 Pick the guide for your task; you do not need to read everything.
 
-These guides cover TGDrive 2.2.0 with MongoDB. Install from stable `main` or a
+These guides cover TGDrive 2.2.1 with MongoDB. Install from stable `main` or a
 published release tag; `dev` may be unstable.
 
 | I want to… | Read |
 | --- | --- |
 | See the app first | [Screenshots and walkthroughs](showcase.md) |
-| Install on a computer or server | [Setup](setup.md) · [Hosting choices](hosting.md) |
+| Install on a computer or server | [Setup](setup.md) · [Self-hosting choices](hosting.md) |
 | Upload, browse, preview or share | [User guide](usage.md) |
 | Save a recovery file or recover a drive | [Backup & recovery](backup-recovery.md) |
 | Restart, update, move or fix the app | [Operations](operations.md) |

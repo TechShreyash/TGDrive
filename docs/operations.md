@@ -9,7 +9,7 @@
 | --- | --- |
 | Start, stop or inspect the app | [Run and monitor](#run-and-monitor) · [Logs](#read-useful-logs) |
 | Recover interrupted work | [After a shutdown or network loss](#after-a-shutdown-crash-or-network-loss) |
-| Move or reinstall | [Hosting ends](#when-a-hosting-plan-expires) · [Reopen the drive](#reopen-after-losing-the-local-installation) |
+| Move or reinstall | [Move to another host](#move-to-another-host) · [Reopen the drive](#reopen-after-losing-the-local-installation) |
 | Fix lost access | [Connections](#connection-changes) · [Password reset](#forgotten-login-password) |
 | Update the app | [Upgrade and rollback](#upgrade-and-rollback) |
 | Diagnose an error | [Troubleshooting](#troubleshooting) · [Backup & recovery](backup-recovery.md) |
@@ -139,13 +139,13 @@ and your [confirmed recovery file and separate key](backup-recovery.md).
 Back up both volumes if unfinished work must survive losing the machine.
 The recovery file contains database data and channel locations, not original media.
 
-## When a hosting plan expires
+## Move to another host
 
 Before server access ends, save what the replacement installation needs.
 Completed files can reopen elsewhere without re-uploading if their catalog and
 Telegram documents remain accessible.
 
-1. Keep your MongoDB database accessible. If it is on the expiring server, move
+1. Keep your MongoDB database accessible. If it is on the old server, move
    it or save a confirmed recovery file and its matching key before access ends.
    If the database is lost, [restore a confirmed backup](backup-recovery.md#restore-a-lost-database-from-telegram);
    only data captured in that restore point returns.
@@ -159,8 +159,8 @@ Sharing and background work stop until the app is reachable again. Unfinished
 uploads need staged bytes or originals; caches can be rebuilt. Moving hosts
 alone cannot repair missing Telegram files, a lost catalog or missing keys.
 
-See [Keep control of your drive](hosting.md#keep-control-of-your-drive) for managed
-hosting access and ownership.
+See [Keep control of your drive](hosting.md#keep-control-of-your-drive) for access
+and recovery essentials.
 
 ## Reopen after losing the local installation
 

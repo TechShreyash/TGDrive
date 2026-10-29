@@ -4,7 +4,7 @@
 
 **On your computer:** follow steps 1–5 below. **On a server:** prepare MongoDB
 and Telegram, then use [Coolify](#coolify) or [server Compose](#docker-compose-on-a-server).
-Prefer help? See [optional managed hosting](hosting.md#optional-managed-hosting).
+For self-hosting or setup help, ask in the [support group](https://t.me/TechZBots_Support).
 
 Docker Compose supplies Python, the website and preview/import tools. You do not
 need to install Python or Node separately. For a **new v2 drive**, use an empty
@@ -14,7 +14,7 @@ MongoDB database and a new private Telegram channel; v1 catalogs are not importe
 
 Local TGDrive works while your computer and Docker are running. A sleeping or
 stopped computer cannot serve transfers, backups or share links. Use a server
-for access while your computer is off. [Compare hosting options](hosting.md#local-computer-or-server).
+for access while your computer is off. [Compare self-hosting options](hosting.md#local-computer-or-server).
 
 ## Before you start
 
@@ -249,7 +249,7 @@ more speed or bypass Telegram cooldowns. A live Premium speedup has not been mea
 ## Hosting beyond your machine
 
 Server deployments need HTTPS, persistent storage and the same MongoDB/Telegram
-preparation above. For hosting choices, see [Hosting](hosting.md).
+preparation above. For deployment choices, see [Self-hosting](hosting.md).
 
 ### Coolify
 
