@@ -370,7 +370,9 @@ def initialize_if_empty(settings: Any, backend: MongoBackend) -> bool:
         raise CorruptStoreError(
             "This installation has existing drive or recovery state, but MongoDB "
             "has no catalog. Check the configured database or recover the drive; "
-            "existing state was preserved."
+            "existing state was preserved. To intentionally start a new drive, "
+            "delete mongodb-drive.json and channel-activation.json from DATA_DIR "
+            "and restart."
         )
     import json
 

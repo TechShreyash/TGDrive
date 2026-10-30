@@ -473,7 +473,7 @@ permanent third-party API compatibility.
 | `GET /api/v1/status` | Owner | None | Connection, capacity, committed revision, backend, latest locally observed encrypted snapshot record and client health. The backup observation reloads at startup and updates during publication; this polling endpoint does not query backup history. |
 | `POST /api/v1/backup` | Owner | `{}` | Creates a confirmed unified recovery file; runs the independent checkpoint when enabled, otherwise a standalone main-channel snapshot. Returns recovery status; `503` if not confirmed. |
 | `GET /health/live` | Public | None | `200 {"status":"ok"}` if HTTP can answer. |
-| `GET /health/ready` | Public | None | `200` if runtime/pool ready, otherwise `503`. |
+| `GET /health/ready` | Public | None | `200` if runtime/pool ready or `200 {"status":"recovery"}` in owner recovery, so proxies keep the recovery page reachable; otherwise `503`. |
 | `GET /healthz` | Public | None | Readiness alias used by Docker. |
 | `GET /stream?path=...&auth=...` | Public player shell | Required path, optional share token. | Player HTML; its /file requests enforce authorization. |
 | `GET /assets/...`, `GET /static/...`, `GET /third-party/...` | Public | Asset path. | Frontend/player assets, not drive payloads. |

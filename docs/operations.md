@@ -359,7 +359,8 @@ Do not run an older app against an incompatible database format. Restore a compa
 | MongoDB cannot connect | URI/password, Atlas Network Access, cluster availability and permissions |
 | Startup exits; website unavailable | Correct MongoDB configuration, authentication, network access and replica-set transaction support. A pristine database initializes automatically; existing or incomplete state requires recovery. See [setup](setup.md). |
 | Another installation owns the database | Stop the old app and let its lease expire. |
-| Catalog missing | Verify database name and use [recovery](backup-recovery.md); preserve existing state. |
+| Catalog missing | Verify database name and use [recovery](backup-recovery.md); preserve existing state. After deliberately emptying MongoDB, also clear the data volume (see [architecture](architecture.md)). |
+| Old transfer stuck after a fresh install | It is saved in this browser only. Cancel marks it cancelled when the server no longer knows it. |
 | Connection changes pending | Restart to apply them. |
 | Backup fails/decryption fails | Matching key, intact archive, posting access, disk and retry time |
 | Upload cannot resume | Reselect its original in the existing transfer; missing staging may require re-upload. |

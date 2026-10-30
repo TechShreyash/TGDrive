@@ -298,6 +298,16 @@ def test_health_and_logout_are_stable(app_client: tuple[Any, ...]) -> None:
     assert client.post("/api/logout").json() == {"status": "ok"}
 
 
+def test_recovery_mode_stays_healthy_for_proxies(app_client: tuple[Any, ...]) -> None:
+    client, _, runtime, _ = app_client
+    runtime.recovery_only = True
+    try:
+        response = client.get("/healthz")
+    finally:
+        runtime.recovery_only = False
+    assert (response.status_code, response.json()) == (200, {"status": "recovery"})
+
+
 def test_upload_remote_and_transfer_progress_endpoints(
     app_client: tuple[Any, ...],
 ) -> None:

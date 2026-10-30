@@ -128,6 +128,9 @@ The same environment and `MONGODB_URI` on another server reopens the same
 drive with its backup channel configuration and copy progress.
 `DATA_DIR/mongodb-drive.json` remembers that a drive has been opened; losing its
 MongoDB catalog cannot then be mistaken for a first deployment on that volume.
+Startup then stays in owner recovery and logs the reason. To start a new drive
+on purpose, delete `mongodb-drive.json` and `channel-activation.json` from
+`DATA_DIR` (or the whole data volume) and restart.
 
 Full archive recovery runs from the website. After authentication and archive
 validation, it pauses writers, reacquires exclusive MongoDB ownership and

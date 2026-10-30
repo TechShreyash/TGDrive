@@ -125,7 +125,7 @@ class Runtime:
                 BackupError,
                 CorruptStoreError,
                 ValueError,
-            ):
+            ) as error:
                 self.recovery_only = True
                 self.replica = ChannelReplica(self.settings, self)
                 self.replica.report(
@@ -136,8 +136,9 @@ class Runtime:
                 )
                 self.replica.start()
                 logger.warning(
-                    "Catalog unavailable: owner web recovery is available; "
-                    "file writers are stopped"
+                    "Catalog unavailable: %s Owner web recovery is available; "
+                    "file writers are stopped",
+                    error,
                 )
                 return
             self.recovery_only = False

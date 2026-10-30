@@ -1612,6 +1612,17 @@ export class TransferManager {
                     void this.poll();
                     return;
                 }
+                // The server has no such transfer (e.g. a record left in this
+                // browser from an earlier installation), so nothing is running.
+                if (error instanceof ApiError && error.status === 404) {
+                    this.update(key, {
+                        state: "cancelled",
+                        phase: "Cancelled",
+                        error: undefined,
+                        file: undefined,
+                    });
+                    return;
+                }
                 this.update(key, {
                     state: "cancelling",
                     error: errorMessage(error),

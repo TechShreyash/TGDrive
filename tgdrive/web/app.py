@@ -605,6 +605,9 @@ def create_app(
     @app.get("/healthz")
     async def health_ready(request: Request) -> JSONResponse:
         current_runtime = _runtime(request)
+        if getattr(current_runtime, "recovery_only", False):
+            # Proxies drop unhealthy containers, which would hide the recovery UI.
+            return JSONResponse(status_code=200, content={"status": "recovery"})
         ready = bool(getattr(current_runtime, "ready", False))
         pool_health = getattr(getattr(current_runtime, "pool", None), "health", None)
         if ready and callable(pool_health):

@@ -2172,6 +2172,22 @@ describe("Telegram backup protection", () => {
         expect(manager.snapshot()[0].state).toBe("uploading");
         expect(manager.snapshot()[0].error).toBeUndefined();
     });
+    it("marks a transfer the server no longer knows as cancelled", async () => {
+        vi.stubGlobal(
+            "fetch",
+            vi.fn(async () =>
+                Response.json(
+                    { detail: "Transfer not found" },
+                    { status: 404 },
+                ),
+            ),
+        );
+        const manager = managerForTest();
+        manager.addJob("stale-job", "old.mkv", "/");
+        await manager.cancel(manager.snapshot()[0].key);
+        expect(manager.snapshot()[0].state).toBe("cancelled");
+        expect(manager.snapshot()[0].error).toBeUndefined();
+    });
     it("labels a failed checkpoint as a backup retry, not an upload retry", async () => {
         vi.stubGlobal(
             "fetch",
