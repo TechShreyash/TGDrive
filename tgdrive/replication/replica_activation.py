@@ -165,8 +165,6 @@ def _checked_settings(
             "managed_client_labels": tuple(row.label for row in rows),
         }
     )
-    if restore_mongodb_key and "mongodb_backup_key" in credentials:
-        value["MONGODB_BACKUP_KEY"] = credentials["mongodb_backup_key"]
     if restoring:
         for filename, policy in credentials["preferences"].items():
             if filename == "transfer-preferences.json":
@@ -209,10 +207,7 @@ def _candidate(settings, candidate):
             "managed_document",
             "preferences",
         }
-        optional = {
-            "mongodb_backup_key",
-            "mongodb_archive",
-        }
+        optional = set()
         if (
             not isinstance(credentials, dict)
             or not required <= set(credentials)
@@ -234,8 +229,6 @@ def _candidate(settings, candidate):
             name: POLICIES[name].model_validate(policy).model_dump()
             for name, policy in extras["preferences"].items()
         }
-        if "mongodb_backup_key" in extras:
-            extras["mongodb_backup_key"] = extras["mongodb_backup_key"].lower()
         if type(credentials["api_id"]) is not int:
             raise ValueError
         if not isinstance(credentials["bot_tokens"], list) or not all(
@@ -263,7 +256,6 @@ def _candidate(settings, candidate):
         }
         if "database" in candidate:
             result["database"] = _database(candidate["database"], catalog)
-            result["credentials"]["mongodb_backup_key"] = key.lower()
         if "backup_config" in candidate:
             config = candidate["backup_config"]
             if (
@@ -425,13 +417,9 @@ def _manifest_path(settings):
     return settings.resolved_data_dir / MANIFEST
 
 
-def _mongodb_key_fingerprint(settings):
-    key = settings.mongodb_backup_key
-    return (
-        hashlib.sha256(bytes.fromhex(key.get_secret_value())).hexdigest()
-        if key is not None
-        else None
-    )
+def _mongodb_key_fingerprint(_settings):
+    # Kept for the activation manifest layout; backups now derive their key.
+    return None
 
 
 def _activation_identity(value):
@@ -826,10 +814,6 @@ def _apply_mongo(settings, value, backend):
                     "SESSION_SECRET": candidate["credentials"]["session_secret"],
                 }
             )
-            if "mongodb_backup_key" in candidate["credentials"]:
-                bootstrap["document"]["MONGODB_BACKUP_KEY"] = candidate["credentials"][
-                    "mongodb_backup_key"
-                ]
             if database is not None:
                 bootstrap["document"].update(
                     {

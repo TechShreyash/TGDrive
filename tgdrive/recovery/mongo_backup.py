@@ -11,12 +11,8 @@ import re
 import secrets
 import stat
 import time
-import zlib
 from datetime import UTC, datetime
 from pathlib import Path
-
-from bson import json_util
-from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 
 from tgdrive.recovery.backup import BackupError, RecoveryConflict
 from tgdrive.recovery.recovery_file import write_recovery_snapshot
@@ -25,7 +21,6 @@ from tgdrive.storage.store import ROOT_ID, SCHEMA_VERSION
 
 logger = logging.getLogger(__name__)
 
-MAGIC = b"TGDRIVE-MONGO-1\n"
 COLLECTIONS = (
     "catalog",
     "nodes",
@@ -45,146 +40,9 @@ MAX_EXPANDED = 1024**3
 _HISTORY_UNAVAILABLE = "Encrypted Telegram backup history is temporarily unavailable."
 
 
-def backup_key(settings):
-    value = settings.mongodb_backup_key
-    if value is None:
-        raise BackupError(
-            "Configure MONGODB_BACKUP_KEY before enabling encrypted backups"
-        )
-    try:
-        key = bytes.fromhex(value.get_secret_value())
-    except ValueError:
-        raise BackupError(
-            "MONGODB_BACKUP_KEY must contain 64 hexadecimal characters"
-        ) from None
-    if len(key) != 32:
-        raise BackupError("MONGODB_BACKUP_KEY must contain 64 hexadecimal characters")
-    return key
-
-
 def file_checksum(path):
     with Path(path).open("rb") as source:
         return hashlib.file_digest(source, "sha256").hexdigest()
-
-
-def write_snapshot(backend, path: Path, key: bytes):
-    """Return the encrypted snapshot's revision, record counts and checksum."""
-    nonce = os.urandom(12)
-    encryptor = Cipher(algorithms.AES(key), modes.GCM(nonce)).encryptor()
-    encryptor.authenticate_additional_data(MAGIC)
-    compressor = zlib.compressobj(level=6)
-    total = 0
-    counts = {}
-    revision = None
-    target = path.open("xb")
-    try:
-        with target:
-            path.chmod(0o600)
-            target.write(MAGIC + nonce)
-
-            def write(value):
-                nonlocal total
-                data = (json_util.dumps(value, separators=(",", ":")) + "\n").encode()
-                total += len(data)
-                if total > MAX_EXPANDED:
-                    raise BackupError("MongoDB backup exceeds the 1 GiB expanded limit")
-                target.write(encryptor.update(compressor.compress(data)))
-
-            with backend.client.start_session(snapshot=True) as session:
-                write(
-                    {
-                        "format": "tgdrive-mongodb",
-                        "version": 1,
-                        "created_at": datetime.now(UTC),
-                    }
-                )
-                for name in COLLECTIONS:
-                    count = 0
-                    for document in backend.db[name].find({}, session=session):
-                        write({"collection": name, "document": document})
-                        if name == "catalog" and document["_id"] == "catalog":
-                            revision = document["revision"]
-                        count += 1
-                    counts[name] = count
-            if counts["catalog"] != 1 or type(revision) is not int or revision < 1:
-                raise BackupError("MongoDB backup catalog revision is invalid")
-            write({"complete": True, "counts": counts})
-            target.write(encryptor.update(compressor.flush()))
-            target.write(encryptor.finalize())
-            target.write(encryptor.tag)
-            target.flush()
-            os.fsync(target.fileno())
-        return revision, counts, file_checksum(path)
-    except BaseException:
-        path.unlink(missing_ok=True)
-        raise
-
-
-def decode_snapshot(path: Path, key: bytes):
-    """Validate authentication, framing, bounds and completeness before restoring."""
-    if path.stat().st_size > MAX_EXPANDED:
-        raise BackupError("Encrypted backup is too large")
-    data = path.read_bytes()
-    from tgdrive.recovery.recovery_file import MAGIC as RECOVERY_MAGIC
-    from tgdrive.recovery.recovery_file import decode_recovery_file
-
-    if data.startswith(RECOVERY_MAGIC):
-        try:
-            return decode_recovery_file(data, key.hex())["database"]
-        except ValueError:
-            raise BackupError(
-                "Backup authentication or validation failed; nothing restored"
-            ) from None
-    if not data.startswith(MAGIC) or len(data) < len(MAGIC) + 12 + 16:
-        raise BackupError("This is not a TGDrive MongoDB backup")
-    nonce = data[len(MAGIC) : len(MAGIC) + 12]
-    decryptor = Cipher(algorithms.AES(key), modes.GCM(nonce, data[-16:])).decryptor()
-    decryptor.authenticate_additional_data(MAGIC)
-    try:
-        compressed = (
-            decryptor.update(data[len(MAGIC) + 12 : -16]) + decryptor.finalize()
-        )
-        decoder = zlib.decompressobj()
-        content = decoder.decompress(compressed, MAX_EXPANDED + 1)
-        if (
-            len(content) > MAX_EXPANDED
-            or not decoder.eof
-            or decoder.unconsumed_tail
-            or decoder.unused_data
-        ):
-            raise ValueError
-        records = [json_util.loads(line) for line in content.splitlines()]
-        if not records or records[0].get("format") != "tgdrive-mongodb":
-            raise ValueError
-        if records[0].get("version") != 1 or not records[-1].get("complete"):
-            raise ValueError
-        result = {name: [] for name in COLLECTIONS}
-        seen = {name: set() for name in COLLECTIONS}
-        for record in records[1:-1]:
-            name = record["collection"]
-            document = record["document"]
-            if (
-                name not in result
-                or not isinstance(document, dict)
-                or "_id" not in document
-            ):
-                raise ValueError
-            if document["_id"] in seen[name]:
-                raise ValueError
-            seen[name].add(document["_id"])
-            result[name].append(document)
-        if records[-1]["counts"] != {
-            name: len(values) for name, values in result.items()
-        }:
-            raise ValueError
-        if len(result["catalog"]) != 1 or not result["nodes"]:
-            raise ValueError
-        MongoStore.validate_snapshot_records(result)
-        return result
-    except Exception:
-        raise BackupError(
-            "Backup authentication or validation failed; nothing restored"
-        ) from None
 
 
 def _pristine_recovery_key(row, drive_id):
@@ -265,36 +123,6 @@ def check_restore_destination(backend, *, allow_pristine=False, session=None):
         if _pristine_recovery_key(row, catalog.get("drive_id")):
             continue
         raise FileExistsError("The destination contains saved settings changes")
-
-
-def restore_decoded_snapshot(backend, data, *, allow_pristine=False):
-    """Recheck destination and atomically import a previously authenticated archive."""
-    MongoStore.validate_snapshot_records(data)
-    backend.ping()
-    # Revocation is explicit: restored browser cookies must never reactivate.
-    data = {**data, "sessions": []}
-
-    def restore(session):
-        backend.fence(session)
-        check_restore_destination(
-            backend, allow_pristine=allow_pristine, session=session
-        )
-        if allow_pristine:
-            for name in COLLECTIONS:
-                backend.db[name].delete_many({}, session=session)
-        for name, values in data.items():
-            if values:
-                backend.db[name].insert_many(values, session=session)
-
-    backend.transaction(restore, allow_paused=True)
-    with backend._settings_lock:
-        backend._settings_cached = False
-        backend._settings_document = None
-    MongoStore._indexes(backend)
-
-
-def restore_snapshot(backend, path: Path, key: bytes):
-    restore_decoded_snapshot(backend, decode_snapshot(path, key))
 
 
 class MongoProtection:
@@ -381,7 +209,6 @@ class MongoProtection:
             "metadata_revision": store.revision,
             "protected_revision": store.revision if state == "protected" else 0,
             "backup_error": self._last_error,
-            "backup_key_configured": bool(self.settings.mongodb_backup_key),
             "last_success_at": self._last_success_at,
         }
         journal = getattr(getattr(self, "replica", None), "journal", None)
@@ -391,9 +218,6 @@ class MongoProtection:
                 independent.get("last_success_at") or self._last_success_at
             )
             result["backup_error"] = (independent.get("error") or {}).get("detail")
-            result["backup_key_configured"] = (
-                bool(journal.get("key")) or result["backup_key_configured"]
-            )
         if error:
             result["error"] = error
         return result
@@ -414,7 +238,7 @@ class MongoProtection:
             return await self.snapshot_now(store)
         return False
 
-    async def snapshot_now(self, store, *, legacy=False):
+    async def snapshot_now(self, store):
         async with self._lock:
             await self.verify_lineage(store)
             backend = self.backend
@@ -439,28 +263,30 @@ class MongoProtection:
                 logger.warning(
                     "Could not list older confirmed local recovery files for cleanup"
                 )
-            legacy_key = (
-                pending.get("format") != "tgdrive-backup-v2"
-                if pending is not None
-                else legacy
-            )
-            replica = getattr(self, "replica", None)
-            key = (
-                bytes.fromhex(replica.key())
-                if replica is not None and not legacy_key
-                else backup_key(self.settings)
-            )
+            from tgdrive.core import encryption
+
+            key = bytes.fromhex(encryption.backup_key())
+            if (
+                pending is not None
+                and pending.get("key_sha256") != hashlib.sha256(key).hexdigest()
+            ):
+                # A pending file from a different key is abandoned, never resent.
+                await asyncio.to_thread(
+                    backend.db.backups.update_one,
+                    {"_id": pending["_id"]},
+                    {"$set": {"status": "superseded"}},
+                )
+                pending = None
             if pending is None:
                 identity = secrets.token_urlsafe(16)
                 directory = self.settings.resolved_cache_dir / "mongo-backups"
                 directory.mkdir(mode=0o700, parents=True, exist_ok=True)
                 path = directory / (identity + ".tgdb")
-                writer = (
-                    (write_snapshot, backend, path, key)
-                    if legacy
-                    else (write_recovery_snapshot, backend, path, key, self.settings)
+                export = asyncio.create_task(
+                    asyncio.to_thread(
+                        write_recovery_snapshot, backend, path, key, self.settings
+                    )
                 )
-                export = asyncio.create_task(asyncio.to_thread(*writer))
                 try:
                     revision, counts, digest = await asyncio.shield(export)
                 except asyncio.CancelledError:
@@ -489,7 +315,7 @@ class MongoProtection:
                     "channel_id": self.settings.storage_channel,
                     "retry_at": 0,
                     "counts": counts,
-                    "format": "mongodb-encrypted-v1" if legacy else "tgdrive-backup-v2",
+                    "format": "tgdrive-backup-v2",
                     "key_sha256": hashlib.sha256(key).hexdigest(),
                 }
                 await asyncio.to_thread(backend.db.backups.insert_one, row)
@@ -497,15 +323,6 @@ class MongoProtection:
             self._observe_backup(pending)
             if pending["channel_id"] != self.settings.storage_channel:
                 raise BackupError("Pending backup belongs to another channel")
-            fingerprint = pending.get("key_sha256")
-            if (
-                fingerprint is not None
-                and fingerprint != hashlib.sha256(key).hexdigest()
-            ):
-                raise BackupError(
-                    "The pending recovery file uses a different key. Preserve the "
-                    "file and restore its original recovery key before retrying."
-                )
             remaining = pending.get("retry_at", 0) - time.time()
             if remaining > 0:
                 raise BackupError(
@@ -542,11 +359,7 @@ class MongoProtection:
                     message = await client.send_document(
                         self.settings.storage_channel,
                         str(path),
-                        file_name=(
-                            "tgdrive-backup.tgdb"
-                            if pending["format"] == "tgdrive-backup-v2"
-                            else "tgdrive-" + pending["id"] + ".tgdb"
-                        ),
+                        file_name="tgdrive-backup.tgdb",
                         random_id=pending["random_id"],
                         caption="TGDrive encrypted recovery file · "
                         + pending["created_at"],
@@ -587,12 +400,10 @@ class MongoProtection:
                 )
                 pending.update(confirmed)
                 self._observe_backup(pending)
-                if pending["format"] != "tgdrive-backup-v2":
-                    path.unlink(missing_ok=True)
-                else:
-                    await asyncio.to_thread(
-                        self._prune_confirmed_files, previous_files, pending["id"]
-                    )
+                await self._pin(pending, identity)
+                await asyncio.to_thread(
+                    self._prune_confirmed_files, previous_files, pending["id"]
+                )
                 self._last_error = None
                 return True
             except Exception as exc:
@@ -611,6 +422,17 @@ class MongoProtection:
                     "The encrypted Telegram backup will retry automatically."
                 )
                 raise
+
+    async def _pin(self, row, message_id):
+        """Pin the confirmed file so a new server can find it with only the env."""
+        try:
+            async with self.pool.lease(client_name=row["sender"]) as client:
+                await client.pin_message(self.settings.storage_channel, message_id)
+        except Exception:
+            logger.warning(
+                "Confirmed backup could not be pinned; grant the storage bot the "
+                "Edit Messages right so restore can find it automatically"
+            )
 
     def _prune_confirmed_files(self, rows, current_id):
         """Remote copies and pending ciphertext outlive local download retention."""

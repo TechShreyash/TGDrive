@@ -36,7 +36,6 @@ def sanitize_database(records):
             ]
         if row.get("_id") == "bootstrap":
             document.pop("STRING_SESSIONS", None)
-            document.pop("MONGODB_BACKUP_KEY", None)
     return result
 
 
@@ -114,7 +113,7 @@ def _credentials(value):
     if (
         not isinstance(value, dict)
         or not required <= set(value)
-        or set(value) - required - {"mongodb_backup_key"}
+        or set(value) - required
         or type(value["api_id"]) is not int
         or not 0 < value["api_id"] <= 2147483647
         or not isinstance(value["api_hash"], str)

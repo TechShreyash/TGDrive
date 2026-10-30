@@ -24,7 +24,7 @@ from telethon.errors import (
 from telethon.sessions import SQLiteSession, StringSession
 
 from tgdrive.replication.replica_transport import (
-    CAPSULE_NAME,
+    BACKUP_NAME,
     MAX_CAPSULE_BYTES,
     MAX_VERIFY_BATCH,
     ReplicaRequestPacer,
@@ -893,9 +893,9 @@ async def test_publish_verifies_remote_capsule_then_pins_backup(tmp_path):
         BACKUP, source, random_id=12, caption="TGDrive replica", pin=True
     )
     assert result == 901 and native.pins[BACKUP] == 901
-    assert native.uploads[0]["file_name"] == CAPSULE_NAME
+    assert native.uploads[0]["file_name"] == BACKUP_NAME
     assert native.downloads[0][1]["file_size"] == source.stat().st_size
-    assert native.messages[BACKUP, 901].document.attributes[0].file_name == CAPSULE_NAME
+    assert native.messages[BACKUP, 901].document.attributes[0].file_name == BACKUP_NAME
     result = await transport.publish(
         MAIN, source, random_id=13, caption="TGDrive replica", pin=False
     )
@@ -936,7 +936,7 @@ async def test_publish_rejects_large_capsule_without_upload(tmp_path):
 async def test_download_only_pinned_capsule_into_private_exclusive_path(tmp_path):
     transport, native = await started()
     native.messages[BACKUP, 901] = message(
-        901, BACKUP, document(len(native.body), CAPSULE_NAME)
+        901, BACKUP, document(len(native.body), BACKUP_NAME)
     )
     native.pins[BACKUP] = 901
     target = tmp_path / "recovery.tgdb"
@@ -953,7 +953,7 @@ async def test_download_only_pinned_capsule_into_private_exclusive_path(tmp_path
 @pytest.mark.parametrize("bad", ["name", "oversize", "truncated", "excess"])
 async def test_download_rejects_wrong_or_unbounded_capsules(tmp_path, bad):
     transport, native = await started()
-    doc = document(len(native.body), CAPSULE_NAME)
+    doc = document(len(native.body), BACKUP_NAME)
     if bad == "name":
         doc.attributes[0].file_name = "../../etc/passwd"
     elif bad == "oversize":
@@ -974,7 +974,7 @@ async def test_download_rejects_wrong_or_unbounded_capsules(tmp_path, bad):
 async def test_cancelled_download_removes_partial_file_and_can_resume(tmp_path):
     transport, native = await started()
     native.messages[BACKUP, 901] = message(
-        901, BACKUP, document(len(native.body), CAPSULE_NAME)
+        901, BACKUP, document(len(native.body), BACKUP_NAME)
     )
     native.delay_download = True
     target = tmp_path / "recovery.tgdb"
@@ -995,22 +995,6 @@ async def test_missing_pin_does_not_search_history_or_download(tmp_path):
         await transport.download(BACKUP, None, tmp_path / "recovery.tgdb")
     assert error.value.code == "REPLICA_CHECKPOINT_MISSING"
     assert not native.downloads
-
-
-@pytest.mark.asyncio
-async def test_catalog_download_reads_only_explicit_legacy_name(tmp_path):
-    transport, native = await started()
-    native.messages[MAIN, 78] = message(
-        78, MAIN, document(len(native.body), "drive.json")
-    )
-    native.pins[MAIN] = 78
-    with pytest.raises(ReplicaTransportError) as error:
-        await transport.download(MAIN, None, tmp_path / "capsule.tgdb")
-    assert error.value.code == "REPLICA_DOCUMENT_TYPE"
-    assert not native.downloads
-    assert await transport.download_catalog(MAIN, tmp_path / "catalog.json") == 78
-    assert (tmp_path / "catalog.json").read_bytes() == native.body
-    assert MAIN in native.pins and native.pins[MAIN] == 78
 
 
 @pytest.mark.asyncio
@@ -1052,24 +1036,6 @@ async def test_verify_existing_document_without_payload_download(state):
             await transport.verify(MAIN, 77, 123)
     assert native.uploads == native.downloads == []
     assert not native.receipts
-
-
-@pytest.mark.asyncio
-async def test_publish_catalog_preserves_exact_legacy_filename_and_pin(tmp_path):
-    transport, native = await started()
-    source = tmp_path / "catalog.json"
-    source.write_bytes(b'{"schema_version":4}')
-    result = await transport.publish_catalog(
-        MAIN, source, random_id=99, caption="TGDrive checkpoint v1", pin=True
-    )
-    assert native.pins[MAIN] == result
-    assert native.uploads[0]["file_name"] == "drive.json"
-    assert (
-        native.messages[MAIN, result].document.attributes[0].file_name == "drive.json"
-    )
-    target = tmp_path / "restored.json"
-    assert await transport.download_catalog(MAIN, target) == result
-    assert target.read_bytes() == source.read_bytes()
 
 
 @pytest.mark.asyncio

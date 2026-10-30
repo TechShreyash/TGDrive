@@ -31,7 +31,6 @@ def test_generated_keys_survive_restarts_and_concurrent_startup(tmp_path):
     assert all(result == results[0] for result in results)
     saved = tmp_path / "deployment-secrets.json"
     assert saved.stat().st_mode & 0o777 == 0o600
-    assert len(bytes.fromhex(results[0]["MONGODB_BACKUP_KEY"])) == 32
     assert len(results[0]["SESSION_SECRET"]) >= 32
     assert installation_secrets(tmp_path, {}, existing_drive=False) == results[0]
 
@@ -75,7 +74,6 @@ def test_existing_mongodb_bootstrap_reopens_with_only_database_configuration(
         "STORAGE_CHANNEL": -1001234567890,
         "ADMIN_PASSWORD_HASH": owner_hash,
         "SESSION_SECRET": "s" * 48,
-        "MONGODB_BACKUP_KEY": "b" * 64,
     }
     fake = SimpleNamespace(
         db=SimpleNamespace(
@@ -87,7 +85,7 @@ def test_existing_mongodb_bootstrap_reopens_with_only_database_configuration(
     monkeypatch.setenv("ENCRYPTION_KEY", "e" * 64)
     monkeypatch.setenv("DATA_DIR", str(tmp_path))
     monkeypatch.setenv("ADMIN_PASSWORD", "")
-    for key in ("SESSION_SECRET", "MONGODB_BACKUP_KEY", "ADMIN_PASSWORD_HASH"):
+    for key in ("SESSION_SECRET", "ADMIN_PASSWORD_HASH"):
         monkeypatch.setenv(key, "")
     monkeypatch.setattr(mongo, "configure", lambda *_args: fake)
     monkeypatch.setattr(
@@ -96,7 +94,6 @@ def test_existing_mongodb_bootstrap_reopens_with_only_database_configuration(
     settings = Settings(_env_file=None)
     assert settings.admin_password_hash.get_secret_value() == owner_hash
     assert settings.session_secret.get_secret_value() == bootstrap["SESSION_SECRET"]
-    assert settings.mongodb_backup_key.get_secret_value() == "b" * 64
     assert not (tmp_path / "deployment-secrets.json").exists()
 
 
@@ -119,7 +116,6 @@ def test_new_container_can_generate_keys_before_explicit_initialization(
         "ADMIN_PASSWORD": "new synthetic owner password",
         "ADMIN_PASSWORD_HASH": "",
         "SESSION_SECRET": "",
-        "MONGODB_BACKUP_KEY": "",
     }.items():
         monkeypatch.setenv(key, value)
     fake = SimpleNamespace(
@@ -135,7 +131,6 @@ def test_new_container_can_generate_keys_before_explicit_initialization(
     first = Settings(_env_file=None)
     second = Settings(_env_file=None)
     assert first.session_secret == second.session_secret
-    assert first.mongodb_backup_key == second.mongodb_backup_key
     assert first.admin_password_hash is None
     assert first.bot_tokens == (first.main_bot_token_value,)
     assert first.telegram_admin_ids == (12345,)
@@ -156,7 +151,6 @@ def test_existing_drive_marker_prevents_key_generation_for_an_empty_database(
         "ADMIN_PASSWORD": "synthetic owner password",
         "ADMIN_PASSWORD_HASH": "",
         "SESSION_SECRET": "",
-        "MONGODB_BACKUP_KEY": "",
     }.items():
         monkeypatch.setenv(key, value)
     (tmp_path / "mongodb-drive.json").write_text('{"drive_id":"saved-drive"}')
@@ -188,7 +182,6 @@ def recovery_configuration(tmp_path, monkeypatch, **overrides):
         "ADMIN_PASSWORD": "",
         "ADMIN_PASSWORD_HASH": "",
         "SESSION_SECRET": "",
-        "MONGODB_BACKUP_KEY": "",
         **overrides,
     }
     for key, value in environment.items():
@@ -344,7 +337,6 @@ def test_hosted_and_local_compose_resolve_without_real_credentials(tmp_path):
         "STORAGE_CHANNEL": "-1001234567890",
         "ADMIN_PASSWORD": "synthetic owner password",
         "SESSION_SECRET": "s" * 48,
-        "MONGODB_BACKUP_KEY": "b" * 64,
     }
     (tmp_path / ".env").write_text(
         "".join(f"{key}={value}\n" for key, value in fixture.items())

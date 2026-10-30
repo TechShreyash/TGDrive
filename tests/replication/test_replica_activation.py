@@ -537,7 +537,6 @@ def with_saved_settings(value):
                 ).model_dump(),
                 "transfer-preferences.json": {"uploads_per_bot": 3},
             },
-            "mongodb_backup_key": "e" * 64,
         }
     )
     return value
@@ -559,7 +558,6 @@ def test_recovery_restores_mongo_policies_and_keeps_previous_connections_disable
     assert pending.cache_memory_bytes == 0
     assert pending.telegram_uploads_per_bot == 3
     assert pending.string_sessions == ()
-    assert pending.mongodb_backup_key.get_secret_value() == "e" * 64
     assert _apply(pending)
     document = read_document(settings.resolved_data_dir)
     assert [row.id for row in document.clients if row.enabled] == [
@@ -596,18 +594,6 @@ def test_recovery_restores_mongo_policies_and_keeps_previous_connections_disable
 def test_mongo_activation_restores_only_saved_domain_preferences(settings, monkeypatch):
     settings, backend, value = mongo_settings(settings, monkeypatch)
     with_saved_settings(value)
-    value["credentials"]["mongodb_archive"] = {
-        "format": "mongodb-encrypted-v1",
-        "id": "archive-id",
-        "revision": 42,
-        "source_channel": OLD,
-        "source_message_id": 800,
-        "replica_channel": NEW,
-        "replica_message_id": 900,
-        "size": 1200,
-        "sha256": "a" * 64,
-        "created_at": "2026-10-22T00:00:00Z",
-    }
     prepare_activation(settings, value)
     assert apply_activation(settings, backend)
     assert backend.db.settings.find_one({"_id": "transfer-preferences"})[
@@ -620,41 +606,6 @@ def test_mongo_activation_restores_only_saved_domain_preferences(settings, monke
         == "UTC"
     )
     assert backend.data["jobs"] == [] and backend.data["receipts"] == []
-    retained = json.loads(read_private(settings.resolved_data_dir / MANIFEST))
-    assert (
-        retained["candidate"]["credentials"]["mongodb_archive"]
-        == value["credentials"]["mongodb_archive"]
-    )
-    assert (
-        effective_settings(settings).mongodb_backup_key.get_secret_value() == "e" * 64
-    )
-
-
-@pytest.mark.parametrize(
-    "current,expected",
-    [
-        ("a" * 64, "e" * 64),
-        ("e" * 64, "e" * 64),
-        ("f" * 64, "f" * 64),
-        (None, "e" * 64),
-    ],
-)
-def test_applied_mongo_key_accepts_rotation_but_retains_recovery_for_stale_key(
-    settings, monkeypatch, current, expected
-):
-    settings, backend, value = mongo_settings(settings, monkeypatch)
-    settings.mongodb_backup_key = SecretStr("a" * 64)
-    with_saved_settings(value)
-    prepare_activation(settings, value)
-    pending = effective_settings(settings)
-    assert pending.mongodb_backup_key.get_secret_value() == "e" * 64
-    assert apply_activation(pending, backend)
-    deployment = settings.model_copy(
-        update={"mongodb_backup_key": SecretStr(current) if current else None}
-    )
-    active = effective_settings(deployment)
-    assert active.mongodb_backup_key.get_secret_value() == expected
-    assert active.storage_channel == NEW
 
 
 def test_applied_manifest_rejects_missing_baseline_without_changes(
@@ -670,7 +621,6 @@ def test_applied_manifest_rejects_missing_baseline_without_changes(
     manifest = json.loads(read_private(path))
     manifest.pop("mongodb_key_before_sha256")
     module.atomic_private(path, module._raw(manifest))
-    settings.mongodb_backup_key = SecretStr("f" * 64)
     before = copy.deepcopy(backend.data)
     private_files = {
         file.relative_to(settings.resolved_data_dir): file.read_bytes()
@@ -681,7 +631,6 @@ def test_applied_manifest_rejects_missing_baseline_without_changes(
         effective_settings(settings)
     with pytest.raises(ActivationError, match="record is invalid"):
         apply_activation(settings, backend)
-    assert settings.mongodb_backup_key.get_secret_value() == "f" * 64
     assert backend.data == before
     assert {
         file.relative_to(settings.resolved_data_dir): file.read_bytes()
@@ -900,11 +849,9 @@ def test_unified_file_restores_database_settings_and_history_safely(
     )
     normalized = manifest["candidate"]
     assert normalized["backup_config"] == value["backup_config"]
-    assert normalized["credentials"]["mongodb_backup_key"] == value["key"]
     assert normalized["database"]["settings"][-1] == value["database"]["settings"][-1]
     assert normalized["database"]["sessions"] == []
     pending = effective_settings(settings)
-    assert pending.mongodb_backup_key.get_secret_value() == value["key"]
     if interrupted:
         backend.fail_insert = True
         with pytest.raises(RuntimeError, match="transaction interruption"):
@@ -935,7 +882,6 @@ def test_unified_file_restores_database_settings_and_history_safely(
     )
     assert bootstrap["STORAGE_CHANNEL"] == NEW
     assert bootstrap["BOT_TOKENS"] == NEW_BOT and bootstrap["STRING_SESSIONS"] == ""
-    assert bootstrap["MONGODB_BACKUP_KEY"] == value["key"]
     assert not _apply(pending)
 
 

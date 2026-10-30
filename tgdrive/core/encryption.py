@@ -51,33 +51,27 @@ class EncryptionKeyMismatch(RuntimeError):
     pass
 
 
+def key_record(key) -> dict:
+    return {"_id": "encryption", "document": {"fingerprint": fingerprint(key)}}
+
+
 def check_drive_key(backend, key) -> None:
-    """Bind the drive to its first key; a different key would read garbage."""
-    expected = fingerprint(key)
+    """Open only drives created with this key; older TGDrive drives are refused."""
     row = backend.db.settings.find_one({"_id": "encryption"})
-    if row is None and backend.db.nodes.find_one(
-        {
-            "$or": [
-                {"parts.nonce": {"$exists": True}},
-                {"poster.nonce": {"$exists": True}},
-            ]
-        }
-    ):
-        raise EncryptionKeyMismatch(
-            "This drive has encrypted files but no saved key check. Restore its "
-            "settings from a backup, or start with the original ENCRYPTION_KEY."
-        )
     if row is None:
-        backend.write(
-            backend.db.settings,
-            "update_one",
-            {"_id": "encryption"},
-            {"$setOnInsert": {"document": {"fingerprint": expected}}},
-            upsert=True,
+        raise EncryptionKeyMismatch(
+            "This database was created by an older TGDrive and cannot be opened. "
+            "Use a new empty MongoDB database and a new storage channel."
         )
-        row = backend.db.settings.find_one({"_id": "encryption"})
-    if row is not None and row["document"]["fingerprint"] != expected:
+    if row["document"]["fingerprint"] != fingerprint(key):
         raise EncryptionKeyMismatch(
             "ENCRYPTION_KEY does not match this drive. Restore the original key; "
             "files encrypted with it cannot be read with another key."
         )
+
+
+def backup_key() -> str:
+    """Backup-file key derived from ENCRYPTION_KEY, separate from file encryption."""
+    if _key is None:
+        raise RuntimeError("ENCRYPTION_KEY is not configured")
+    return hmac.new(_key, b"tgdrive-backup-file", hashlib.sha256).hexdigest()

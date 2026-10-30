@@ -87,7 +87,7 @@ catalog size.
   128 levels and 250,000 items. The generation identifies the committed revision
   so an older writer cannot overwrite newer state.
 
-MongoDB is required; the application has no SQLite catalog backend fallback.
+MongoDB is the only database.
 Only the current portable schema (4) is accepted for channel recovery.
 Snapshots must include their drive identity and share records. TGDrive does not
 import v1 pickle data or upgrade older catalog schemas.
@@ -394,13 +394,12 @@ Bot imports copy an allowed private-chat attachment into the storage channel,
 then record its message ID, name and size in MongoDB. Their operation identity
 includes the bot account, source chat and incoming message ID: token rotation for
 the same account preserves it; replacing the bot account uses a separate identity.
-Older operation identities are reused only when their stored message ID matches
-the copied media. Reprocessing the same message reuses its identity; a new forward
+Reprocessing the same message reuses its identity; a new forward
 is a separate import with [keep-both naming](usage.md#optional-telegram-bot-interface).
 
 Once catalog writing starts, errors preserve the Telegram copy because a lost
 acknowledgement can follow a successful commit. Earlier failures delete the copy
-only when neither the current nor legacy operation is recorded and the protection
+only when the operation is not recorded and the protection
 check allows deletion. Failed lookups also preserve it. An uncertain import may
 leave an unlisted copy in the channel; bot imports have no automatic durable
 reconciliation, so the owner must check the drive before resending.
@@ -560,22 +559,17 @@ and storage failures do not block playback. See the
 
 ## Database safety copies and security
 
-New backups use one compressed AES-256-GCM `tgdrive-backup.tgdb` recovery file.
-It contains one consistent MongoDB snapshot and source/backup message mappings;
-the portable catalog is derived from that captured snapshot, not a later live
-read. Standalone hourly backups record only main-channel locations. Independent
-protection adds verified backup locations to the same file and suppresses the
-separate standalone backups. One recovery key unlocks new files independently
-of the website password; older-format readers retain their original keys.
+Each backup is one compressed AES-256-GCM `tgdrive-backup.tgdb` file. It holds one
+consistent MongoDB snapshot and source/backup message mappings; the portable
+catalog comes from that captured snapshot, not a later live read. Its key is an
+HMAC of `ENCRYPTION_KEY`, so nothing extra is stored or downloaded. The file is
+pinned in the storage channel (and the backup channel when configured).
 
-The unified key is a private MongoDB `settings` record named `recovery-key`, bound
-to the drive, and mirrored in the local replica journal. Initial creation uses a
-fenced insert-if-absent. Startup persists and verifies it off the event loop,
-before backup workers begin; later calls use the verified cached key.
-Reopening the same MongoDB without the old data directory recovers that key.
-Conflicting keys or drive identities stop new protection rather than overwrite a
-key; browsing remains available while the protection error needs repair.
-The legacy `MONGODB_BACKUP_KEY` remains available for older archives.
+On startup with an empty MongoDB, TGDrive reads the storage channel's pin with the
+env bot tokens. A readable backup opens the recovery screen for one-click
+restore; no pin starts a new drive; a pin the key cannot open stops startup.
+A database without the `settings._id = "encryption"` record is from an older
+TGDrive and is refused.
 
 Browser and Telegram user-account sessions are omitted. Recovery imports safe
 durable records and saved settings, rebases catalog locations to verified media,
@@ -594,7 +588,7 @@ must verify before activation. V2 files are bounded to 64 MiB encrypted and
 
 The optional second-channel transport uses fixed policies, separate from normal
 upload tuning. For setup, status meanings and recovery actions, use the
-[backup guide](backup-recovery.md#enable-and-confirm-the-first-copy).
+[backup guide](backup-recovery.md#add-a-backup-channel).
 
 | Policy | Behavior |
 | --- | --- |
@@ -639,7 +633,7 @@ removes older known confirmed files only after their replacement is durably
 confirmed; it preserves retry ciphertext and never purges remote restore points.
 Cleanup failure does not invalidate the new backup. Local staging enforces the
 free-space reserve; interrupted or older untracked files can still require review.
-See the [operator guide](backup-recovery.md#interruptions-and-reports) for retry,
+See the [operator guide](backup-recovery.md#interruptions) for retry,
 credential replacement and key custody.
 
 ### Shared-link identity and re-copying

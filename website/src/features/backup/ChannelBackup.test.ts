@@ -2,7 +2,6 @@ import { describe, expect, it } from "vitest";
 import {
     MAX_RECOVERY_FILE_BYTES,
     parseChannelId,
-    recoveryFileKey,
     retryTime,
     validateBackupToken,
     validateRecoveryFile,
@@ -46,26 +45,6 @@ describe("saved recovery files", () => {
         "rejects unsupported or incomplete files before upload: $name/$size",
         (file) => {
             expect(() => validateRecoveryFile(file)).toThrow();
-        },
-    );
-    it("accepts a copied key or the exported key JSON", () => {
-        const key = "a1".repeat(32);
-        expect(recoveryFileKey(" " + key + " ")).toBe(key);
-        expect(
-            recoveryFileKey(
-                JSON.stringify({
-                    key,
-                    mongodb_backup_key: "b2".repeat(32),
-                }),
-            ),
-        ).toBe(key);
-    });
-    it.each(["", "password", "{", "null", "[]", "{}", '{"key":123}'])(
-        "rejects an invalid recovery key without exposing its contents: %s",
-        (value) => {
-            expect(() => recoveryFileKey(value)).toThrow(
-                "Paste your saved recovery key or recovery-key JSON.",
-            );
         },
     );
 });

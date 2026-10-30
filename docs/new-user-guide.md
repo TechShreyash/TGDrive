@@ -27,7 +27,7 @@ keep the database or a usable backup too.
 1. Upload a non-private sample, wait for **Completed**, then download and open it.
 2. Try a share link in a signed-out browser, then revoke it. Share selected files
    instead of giving someone your owner password.
-3. [Save a confirmed recovery file and its matching key](backup-recovery.md#keep-the-mongodb-recovery-kit-outside-the-server).
+3. [Save a confirmed recovery file and its matching key](backup-recovery.md#how-backups-work).
    Keep the file outside the server and Telegram, and the key separately.
 
 In the [public demo](usage.md#try-the-public-demo), use disposable files only:

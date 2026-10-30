@@ -10,7 +10,6 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock
 
 import pytest
-from pydantic import SecretStr
 from pymongo.errors import ConnectionFailure
 
 from tests.support.mongo_fixtures import FakeMongoBackend
@@ -20,8 +19,6 @@ from tgdrive.recovery.backup import BackupError
 from tgdrive.recovery.mongo_backup import (
     MongoProtection,
     check_restore_destination,
-    decode_snapshot,
-    write_snapshot,
 )
 from tgdrive.recovery.recovery_file import write_recovery_snapshot
 from tgdrive.settings.managed_settings import SettingsProblem
@@ -106,6 +103,13 @@ async def test_startup_read_cannot_rewind_concurrent_backup_confirmation(monkeyp
     assert service._last_success_at == confirmed["confirmed_at"]
 
 
+def decode_file(path):
+    from tgdrive.core import encryption
+    from tgdrive.recovery.recovery_file import decode_recovery_file
+
+    return decode_recovery_file(path.read_bytes(), encryption.backup_key())["database"]
+
+
 def test_mongodb_connection_credentials_are_redacted():
     uri = "mongodb+srv://fixture_user:fixture_password@cluster.invalid/?appName=test"
     result = _redact("Database failed: " + uri)
@@ -154,7 +158,7 @@ def snapshot_source(tmp_path):
     )
     store = MongoStore.create(backend, storage_channel=-1001234567890)
     settings = recovery_settings(tmp_path).model_copy(
-        update={"cache_dir": tmp_path, "mongodb_backup_key": SecretStr("a1" * 32)},
+        update={"cache_dir": tmp_path},
     )
     pool = SimpleNamespace(lease=Mock(side_effect=RuntimeError("Publication paused")))
     yield MongoProtection(settings, pool, backend), store, backend
@@ -178,11 +182,8 @@ async def test_snapshot_record_uses_exported_revision_when_catalog_advances(
     with pytest.raises(RuntimeError, match="Publication paused"):
         await service.snapshot_now(store)
     record = backend.db.backups.find_one({"status": "pending"})
-    decoded = decode_snapshot(
-        service.settings.resolved_cache_dir
-        / "mongo-backups"
-        / (record["id"] + ".tgdb"),
-        bytes.fromhex("a1" * 32),
+    decoded = decode_file(
+        service.settings.resolved_cache_dir / "mongo-backups" / (record["id"] + ".tgdb")
     )
     assert record["revision"] == decoded["catalog"][0]["revision"] == exported_revision
     assert store.revision == exported_revision + 1
@@ -195,33 +196,22 @@ async def test_snapshot_record_uses_exported_revision_when_catalog_advances(
     assert service._last_success_at is None
 
 
-async def test_legacy_journal_work_still_creates_original_archive_format(
+async def test_backup_file_uses_the_key_derived_from_encryption_key(
     snapshot_source,
 ):
     service, store, backend = snapshot_source
-    with pytest.raises(RuntimeError, match="Publication paused"):
-        await service.snapshot_now(store, legacy=True)
-    row = backend.db.backups.find_one({"status": "pending"})
-    assert row["format"] == "mongodb-encrypted-v1"
-    assert Path(row["local_path"]).read_bytes().startswith(b"TGDRIVE-MONGO-1\n")
-    assert decode_snapshot(Path(row["local_path"]), bytes.fromhex("a1" * 32))["catalog"]
-
-
-async def test_standalone_v2_uses_unified_replica_key_and_preserves_pending_key_binding(
-    snapshot_source,
-):
-    service, store, backend = snapshot_source
-    key = "b2" * 32
-    service.replica = SimpleNamespace(key=lambda: key)
     with pytest.raises(RuntimeError, match="Publication paused"):
         await service.snapshot_now(store)
     row = backend.db.backups.find_one({"status": "pending"})
     assert row["format"] == "tgdrive-backup-v2"
-    assert decode_snapshot(Path(row["local_path"]), bytes.fromhex(key))["catalog"]
-    service.replica.key = lambda: "c3" * 32
-    with pytest.raises(BackupError, match="different key"):
+    assert decode_file(Path(row["local_path"]))["catalog"]
+    # A pending file encrypted under another key is never resent.
+    backend.db.backups.update_one(
+        {"_id": row["_id"]}, {"$set": {"key_sha256": "0" * 64}}
+    )
+    with pytest.raises(RuntimeError, match="Publication paused"):
         await service.snapshot_now(store)
-    assert backend.db.backups.find_one({"status": "pending"}) == row
+    assert backend.db.backups.find_one({"_id": row["_id"]})["status"] == "superseded"
 
 
 async def test_backup_observation_reloads_on_restore_and_history_stays_fresh(
@@ -394,73 +384,6 @@ async def test_snapshot_cooldown_updates_observation_without_confirmation(
     assert observed["status"] == "pending" and observed["retry_at"] > 0
     assert service._last_success_at is None
     service.pool.defer_channel.assert_awaited_once_with(observed["retry_at"])
-
-
-@pytest.mark.parametrize(
-    "failure,expected,detail",
-    [
-        ("cursor", ConnectionFailure, "Interrupted snapshot"),
-        ("limit", BackupError, "1 GiB expanded limit"),
-        ("fsync", OSError, "Snapshot fsync failed"),
-    ],
-)
-def test_failed_snapshot_export_removes_only_its_file_and_allows_retry(
-    snapshot_source, tmp_path, monkeypatch, failure, expected, detail
-):
-    _, store, backend = snapshot_source
-    path = tmp_path / "snapshot.tgdb"
-    preserved = tmp_path / "existing.tgdb"
-    preserved.write_bytes(b"Preserve another pending archive")
-    key = bytes.fromhex("a1" * 32)
-    with monkeypatch.context() as patch:
-        if failure == "cursor":
-            find = backend.db.nodes.find
-
-            def interrupted(*args, **kwargs):
-                yield from find(*args, **kwargs)
-                raise ConnectionFailure("Interrupted snapshot")
-
-            patch.setattr(backend.db.nodes, "find", interrupted)
-        elif failure == "limit":
-            patch.setattr("tgdrive.recovery.mongo_backup.MAX_EXPANDED", 1)
-        else:
-
-            def failed_fsync(_descriptor):
-                raise OSError("Snapshot fsync failed")
-
-            patch.setattr("tgdrive.recovery.mongo_backup.os.fsync", failed_fsync)
-        with pytest.raises(expected, match=detail):
-            write_snapshot(backend, path, key)
-    assert not path.exists()
-    assert preserved.read_bytes() == b"Preserve another pending archive"
-    revision, counts, digest = write_snapshot(backend, path, key)
-    assert revision == store.revision
-    assert counts["catalog"] == 1
-    assert digest == hashlib.sha256(path.read_bytes()).hexdigest()
-    assert decode_snapshot(path, key)["catalog"][0]["revision"] == revision
-
-
-def test_snapshot_export_never_removes_an_existing_destination(
-    snapshot_source, tmp_path
-):
-    _, _, backend = snapshot_source
-    path = tmp_path / "existing.tgdb"
-    path.write_bytes(b"Preserve this archive")
-    with pytest.raises(FileExistsError):
-        write_snapshot(backend, path, bytes.fromhex("a1" * 32))
-    assert path.read_bytes() == b"Preserve this archive"
-
-
-@pytest.mark.parametrize("revision", [True, 0])
-def test_snapshot_export_rejects_invalid_catalog_revision(
-    snapshot_source, tmp_path, revision
-):
-    _, _, backend = snapshot_source
-    backend.db.catalog.update_one({"_id": "catalog"}, {"$set": {"revision": revision}})
-    path = tmp_path / "invalid.tgdb"
-    with pytest.raises(BackupError, match="catalog revision is invalid"):
-        write_snapshot(backend, path, bytes.fromhex("a1" * 32))
-    assert not path.exists()
 
 
 async def test_cancelled_snapshot_drains_export_before_removing_unadmitted_file(

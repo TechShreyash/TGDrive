@@ -10,12 +10,9 @@ import threading
 from pathlib import Path
 
 from bson import json_util
-from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
-from tgdrive.recovery.backup import decode_catalog_snapshot
 from tgdrive.storage.mongo_store import MongoStore
 
-MAGIC = b"TGDRIVE-REPLICA-1\n"
 MAX_BUNDLE = 64 * 1024**2
 
 
@@ -67,53 +64,6 @@ class ReplicaJournal:
         if self.backend is None:
             raise DatabaseUnavailable("MongoDB is required for the backup journal.")
         self.lock = threading.RLock()
-        self._import_sqlite(directory / "channel-backup.sqlite3")
-
-    def _import_sqlite(self, path: Path):
-        # shortcut: one-time import of the v2.0-v2.2 local journal; remove in 3.0.
-        if not path.is_file() or path.is_symlink():
-            return
-        import sqlite3
-
-        db = self.backend.db
-        if db.replica_state.find_one({}) or db.replica_copies.find_one({}):
-            raise ValueError(
-                "Both channel-backup.sqlite3 and MongoDB backup state exist. "
-                "Keep the MongoDB state and move the old file out of DATA_DIR."
-            )
-        source = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
-        try:
-            state = {
-                key: json_util.loads(
-                    value, json_options=json_util.JSONOptions(tz_aware=True)
-                )
-                for key, value in source.execute("SELECT key, value FROM state")
-            }
-            copies = source.execute(
-                "SELECT key, random_id, message_id, size FROM copies"
-            ).fetchall()
-        finally:
-            source.close()
-
-        def migrate(session):
-            self.backend.fence(session)
-            self._write_state(state, session)
-            if copies:
-                db.replica_copies.insert_many(
-                    [
-                        {
-                            "_id": key,
-                            "random_id": random_id,
-                            "message_id": message,
-                            "size": size,
-                        }
-                        for key, random_id, message, size in copies
-                    ],
-                    session=session,
-                )
-
-        self.backend.transaction(migrate)
-        path.rename(path.with_name(path.name + ".migrated"))
 
     def get(self, key, default=None):
         db = self.backend.db
@@ -254,154 +204,12 @@ def remap_catalog(catalog, channel, mapping):
 
 
 def encode_bundle(payload, key):
-    if "database" in payload:
-        from tgdrive.recovery.recovery_file import encode_recovery_file
+    from tgdrive.recovery.recovery_file import encode_recovery_file
 
-        return encode_recovery_file(payload, key)
-    raw = json.dumps(payload, allow_nan=False, ensure_ascii=False).encode()
-    if len(raw) > MAX_BUNDLE - 1024:
-        raise ValueError("The recovery bundle exceeds the 64 MiB limit")
-    nonce = secrets.token_bytes(12)
-    return MAGIC + nonce + AESGCM(bytes.fromhex(key)).encrypt(nonce, raw, MAGIC)
+    return encode_recovery_file(payload, key)
 
 
 def decode_bundle(content, key):
-    """Authenticate and validate a complete, internally equivalent channel pair."""
-    from tgdrive.recovery.recovery_file import MAGIC as RECOVERY_MAGIC
     from tgdrive.recovery.recovery_file import decode_recovery_file
 
-    if isinstance(content, bytes) and content.startswith(RECOVERY_MAGIC):
-        return decode_recovery_file(content, key)
-    import re
-
-    from tgdrive.storage.store import _validate_timestamp
-
-    try:
-        if (
-            not isinstance(content, bytes)
-            or len(content) > MAX_BUNDLE
-            or not content.startswith(MAGIC)
-            or not isinstance(key, str)
-            or re.fullmatch(r"[0-9a-fA-F]{64}", key.strip()) is None
-        ):
-            raise ValueError
-        offset = len(MAGIC)
-        raw = AESGCM(bytes.fromhex(key.strip())).decrypt(
-            content[offset : offset + 12], content[offset + 12 :], MAGIC
-        )
-        result = decode_catalog_snapshot(raw)
-        required = {
-            "format",
-            "version",
-            "complete",
-            "created_at",
-            "catalog",
-            "replica_catalog",
-            "credentials",
-        }
-        if not isinstance(result, dict) or set(result) != required:
-            raise ValueError
-        if (
-            result["format"] != "tgdrive-replica"
-            or type(result["version"]) is not int
-            or result["version"] != 1
-            or result["complete"] is not True
-        ):
-            raise ValueError
-        _validate_timestamp(result["created_at"])
-        credentials = result["credentials"]
-        base_fields = {
-            "api_id",
-            "api_hash",
-            "session_secret",
-            "bot_tokens",
-            "managed_document",
-            "preferences",
-        }
-        optional_fields = {
-            "mongodb_backup_key",
-            "mongodb_archive",
-        }
-        if (
-            not isinstance(credentials, dict)
-            or not base_fields <= set(credentials)
-            or set(credentials) - base_fields - optional_fields
-        ):
-            raise ValueError
-        from tgdrive.replication.replica_settings import validate_recovery_settings
-
-        validate_recovery_settings(credentials)
-        if (
-            type(credentials["api_id"]) is not int
-            or not 0 < credentials["api_id"] <= 2147483647
-            or not isinstance(credentials["api_hash"], str)
-            or re.fullmatch(r"[0-9a-fA-F]{32}", credentials["api_hash"]) is None
-        ):
-            raise ValueError
-        secret = credentials["session_secret"]
-        if (
-            not isinstance(secret, str)
-            or not 32 <= len(secret) <= 4096
-            or secret != secret.strip()
-            or secret.startswith("<")
-            or any(ord(char) < 32 or ord(char) == 127 for char in secret)
-        ):
-            raise ValueError
-        tokens = credentials["bot_tokens"]
-        if (
-            not isinstance(tokens, list)
-            or not 1 <= len(tokens) <= 256
-            or any(
-                not isinstance(token, str)
-                or len(token) > 512
-                or re.fullmatch(r"[1-9][0-9]{4,14}:[A-Za-z0-9_-]{20,}", token) is None
-                for token in tokens
-            )
-            or len({token.split(":", 1)[0] for token in tokens}) != len(tokens)
-        ):
-            raise ValueError
-        original, replica = result["catalog"], result["replica_catalog"]
-        for catalog in (original, replica):
-            validate_catalog(catalog)
-            channel = catalog.get("storage_channel_id")
-            if type(channel) is not int or not -(1 << 63) <= channel < 0:
-                raise ValueError
-        if original["storage_channel_id"] == replica["storage_channel_id"]:
-            raise ValueError
-        archive = credentials.get("mongodb_archive")
-        if archive is not None and (
-            archive["source_channel"] != original["storage_channel_id"]
-            or archive["replica_channel"] != replica["storage_channel_id"]
-            or archive["revision"] < original["revision"]
-        ):
-            raise ValueError
-        old_files = {node["id"]: node for node in files_in(original)}
-        new_files = {node["id"]: node for node in files_in(replica)}
-        if set(old_files) != set(new_files):
-            raise ValueError
-        mapping = {}
-        destinations = {}
-        for node_id, old in old_files.items():
-            before, after = parts_in(old), parts_in(new_files[node_id])
-            if len(before) != len(after):
-                raise ValueError
-            for old_part, new_part in zip(before, after, strict=True):
-                source, target = old_part["message_id"], new_part["message_id"]
-                if source in mapping and mapping[source] != target:
-                    raise ValueError
-                if target in destinations and destinations[target] != source:
-                    raise ValueError
-                mapping[source] = target
-                destinations[target] = source
-        expected = remap_catalog(
-            original,
-            replica["storage_channel_id"],
-            {str(source): target for source, target in mapping.items()},
-        )
-        if expected != replica:
-            raise ValueError
-        return result
-    except Exception:
-        raise ValueError(
-            "Recovery key or bundle validation failed; nothing changed"
-        ) from None
+    return decode_recovery_file(content, key)

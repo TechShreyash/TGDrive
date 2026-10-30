@@ -230,11 +230,6 @@ def test_owner_hash_cannot_request_excessive_login_resources(cost):
         Settings(_env_file=None, **settings_values(ADMIN_PASSWORD_HASH=encoded))
 
 
-def test_blank_optional_backup_key_is_absent():
-    settings = Settings(_env_file=None, **settings_values(MONGODB_BACKUP_KEY=""))
-    assert settings.mongodb_backup_key is None
-
-
 def test_mongodb_uri_is_required_even_with_complete_telegram_configuration(monkeypatch):
     monkeypatch.delenv("MONGODB_URI", raising=False)
     values = settings_values()

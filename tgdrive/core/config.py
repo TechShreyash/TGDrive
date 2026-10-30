@@ -64,10 +64,6 @@ class Settings(BaseSettings):
     mongodb_backup_seconds: int = Field(
         default=3600, alias="MONGODB_BACKUP_SECONDS", ge=60, le=604800
     )
-    mongodb_backup_key: SecretStr | None = Field(
-        default=None, alias="MONGODB_BACKUP_KEY"
-    )
-
     encryption_key: SecretStr = Field(alias="ENCRYPTION_KEY")
 
     @field_validator("encryption_key")
@@ -83,17 +79,6 @@ class Settings(BaseSettings):
 
         encryption.configure(raw)
         return SecretStr(raw)
-
-    @field_validator("mongodb_backup_key")
-    @classmethod
-    def valid_backup_key(cls, value):
-        if value is not None and not re.fullmatch(
-            r"[0-9a-fA-F]{64}", value.get_secret_value()
-        ):
-            raise ValueError(
-                "MONGODB_BACKUP_KEY must contain 64 hexadecimal characters"
-            )
-        return value
 
     @field_validator("mongodb_uri")
     @classmethod
@@ -352,7 +337,6 @@ class Settings(BaseSettings):
 
     @field_validator(
         "admin_password_hash",
-        "mongodb_backup_key",
         "demo_admin_password",
         "demo_admin_password_hash",
         mode="before",

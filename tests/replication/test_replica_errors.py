@@ -7,7 +7,6 @@ import json
 import time
 
 import pytest
-from pydantic import SecretStr
 from pymongo.errors import (
     ConfigurationError,
     ConnectionFailure,
@@ -55,7 +54,6 @@ async def test_database_outage_retries_same_backup_after_restart(
     tmp_path, monkeypatch, caplog, pending, error
 ):
     configured, store, remote, replica, config = setup(tmp_path)
-    configured.mongodb_backup_key = SecretStr("a1" * 32)
     runtime = replica.runtime
     collection = runtime.mongo.db.settings
     find_one = collection.find_one
@@ -73,7 +71,7 @@ async def test_database_outage_retries_same_backup_after_restart(
     try:
         await replica._sync(config)
         point = replica.journal.get("restore_point")
-        kit = replica.recovery_kit()
+        kit = replica.key()
         originals = dict(remote.messages)
         if pending:
             store.add_file("/", "next.bin", 88, 4)
@@ -97,7 +95,7 @@ async def test_database_outage_retries_same_backup_after_restart(
         assert type(error).__name__ in caplog.text
         assert state["protected_revision"] == point["revision"]
         assert replica.journal.get("restore_point") == point
-        assert replica.recovery_kit() == kit
+        assert replica.key() == kit
         assert replica.journal.get("job") == job
         assert list(replica.journal.backend.db.replica_copies.find()) == intents
         assert remote.receipts == receipts
@@ -108,7 +106,7 @@ async def test_database_outage_retries_same_backup_after_restart(
         replica = ChannelReplica(configured, runtime, transport_factory=remote.factory)
         assert replica.status()["error"]["retry_at"] == deadline
         assert replica.journal.get("job") == job
-        assert replica.recovery_kit() == kit
+        assert replica.key() == kit
         calls = list(remote.calls)
         replica.start()
         await asyncio.sleep(0.02)
@@ -128,8 +126,7 @@ async def test_database_outage_retries_same_backup_after_restart(
         assert replica.status()["error"] is None
         assert replica.status()["protected_revision"] == store.revision
         assert replica.journal.get("job") is None
-        assert replica.recovery_kit()["key"] == kit["key"]
-        assert replica.recovery_kit()["mongodb_backup_key"] == kit["mongodb_backup_key"]
+        assert replica.key() == kit
         assert all(
             remote.messages[identity] == body for identity, body in originals.items()
         )
@@ -173,7 +170,7 @@ async def test_permanent_errors_stop_without_leaking_or_replacing_backup(
 
     try:
         await replica._sync(config)
-        point, kit = replica.journal.get("restore_point"), replica.recovery_kit()
+        point, kit = replica.journal.get("restore_point"), replica.key()
         originals = dict(remote.messages)
         monkeypatch.setattr(replica.runtime.mongo.db.settings, "find_one", unavailable)
         monkeypatch.setattr(replica, "report", record_failure)
@@ -187,7 +184,7 @@ async def test_permanent_errors_stop_without_leaking_or_replacing_backup(
         assert type(error).__name__ in caplog.text
         assert replica.journal.get("restore_point") == point
         assert state["protected_revision"] == point["revision"]
-        assert replica.recovery_kit() == kit
+        assert replica.key() == kit
         assert remote.messages == originals
         replica._wake.set()
         await asyncio.sleep(0.02)

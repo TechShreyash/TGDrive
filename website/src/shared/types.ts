@@ -102,7 +102,6 @@ export interface PublicConfig {
 export interface DriveProtection {
     backend?: "mongodb";
     backup_error?: string | null;
-    backup_key_configured?: boolean;
     recovery_required?: boolean;
     code?: string;
     state: "protected" | "pending" | "error";

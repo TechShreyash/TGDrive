@@ -14,7 +14,7 @@ from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from tests.support.mongo_fixtures import FakeMongoBackend
 from tests.support.recovery_fixtures import settings as recovery_settings
 from tgdrive.recovery import recovery_file
-from tgdrive.recovery.mongo_backup import COLLECTIONS, decode_snapshot
+from tgdrive.recovery.mongo_backup import COLLECTIONS
 from tgdrive.replication.replica_settings import credentials_from_snapshot
 from tgdrive.replication.replica_state import (
     ReplicaJournal,
@@ -167,18 +167,6 @@ def test_capture_omits_logged_in_sessions_without_changing_source(source):
         len(backend.db.settings.find_one({"_id": "telegram"})["document"]["clients"])
         == 2
     )
-
-
-def test_standalone_file_restores_database_through_existing_archive_reader(
-    source, tmp_path
-):
-    value = bundle(source)
-    value["replica_catalog"] = None
-    path = tmp_path / "tgdrive-backup.tgdb"
-    path.write_bytes(encode_bundle(value, KEY))
-    decoded = decode_bundle(path.read_bytes(), KEY)
-    assert decoded["replica_catalog"] is None
-    assert decode_snapshot(path, bytes.fromhex(KEY)) == value["database"]
 
 
 def test_newer_live_catalog_cannot_be_mixed_with_captured_database(source):

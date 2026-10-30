@@ -132,9 +132,9 @@ Open `.env` in a text editor and fill in:
 | `ENCRYPTION_KEY` | 64 hex characters from `openssl rand -hex 32`. [Save a copy off the server](#save-your-encryption-key) |
 
 Keep `.env` private. Remove placeholder angle brackets, single-quote values
-containing `$`, and do not shell-source the file. Leave `SESSION_SECRET` and
-`MONGODB_BACKUP_KEY` unset for a new installation: TGDrive generates and preserves
-them. **Never replace an existing drive's keys.**
+containing `$`, and do not shell-source the file. Leave `SESSION_SECRET` unset
+for a new installation: TGDrive generates and preserves it. **Never replace an
+existing drive's keys.**
 [Optional settings and hashed passwords](reference.md#configuration).
 
 <a name="save-your-encryption-key"></a>
@@ -208,9 +208,10 @@ after Docker starts, set `TGDRIVE_RESTART_POLICY=unless-stopped` and recreate.
 2. Open **Connections → Refresh** and check your bot.
 3. Upload and download a small sample; stop/start TGDrive and confirm it still opens.
 4. Under **Storage & Backups → Backups & recovery**, choose **Back up now**.
-   After confirmation, choose **Download backup** and keep the file outside the
-   installation. Choose **Save recovery key** and keep that key separately.
-   [Recovery guide](backup-recovery.md#keep-the-mongodb-recovery-kit-outside-the-server).
+   After confirmation it is pinned in your channel. Optionally choose
+   **Download backup** for a copy outside Telegram; it opens with your
+   `ENCRYPTION_KEY`.
+   [Recovery guide](backup-recovery.md#how-backups-work).
 
 You're ready to [upload files](usage.md#upload-files-or-folders). Keep originals
 until **Completed**; interrupted browser uploads may need them again.
@@ -322,6 +323,6 @@ Start with [Using TGDrive](usage.md) for uploads, sharing and bot imports.
 Under **Storage & Backups → Backups & recovery → Set up backup channel**, add
 a separate private channel and backup bot. Wait for **Backup confirmed**, then
 save the updated recovery file and its separate key. Follow
-[backup-channel setup](backup-recovery.md#set-up-an-independent-backup-channel)
+[backup-channel setup](backup-recovery.md#add-a-backup-channel)
 for account separation, permissions and recovery limits. Both channels still
 depend on Telegram.

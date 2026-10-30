@@ -30,7 +30,6 @@ def test_settings_snapshot_keeps_labels_and_preferences_without_account_sessions
     tmp_path, mongo_backend
 ):
     configured = settings(tmp_path)
-    configured.mongodb_backup_key = SecretStr("a1" * 32)
     configured.string_sessions_csv = SecretStr("syntheticPremiumSession")
     document = ManagedDocument(
         revision=3,
@@ -62,7 +61,7 @@ def test_settings_snapshot_keeps_labels_and_preferences_without_account_sessions
     assert credentials["preferences"]["transfer-preferences.json"] == {
         "uploads_per_bot": 2
     }
-    assert credentials["mongodb_backup_key"] == "a1" * 32
+    assert "mongodb_backup_key" not in credentials
     assert "mongodb_uri" not in credentials and "DATA_DIR" not in credentials
 
 

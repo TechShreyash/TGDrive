@@ -31,7 +31,8 @@ archive if offering custom source assets). Publication is a separate maintainer
 action. Remaining live validation:
 
 - [ ] Fresh laptop and hosted installs, persistent volumes, stop/start and recovery.
-- [ ] Live unified-file recovery: lost MongoDB, replacement main channel, revoked bot access, legacy backups and interrupted activation.
+- [ ] Live recovery: empty MongoDB one-click restore, replacement main channel, revoked bot access, wrong `ENCRYPTION_KEY` and interrupted activation.
+- [ ] Live encryption: streaming/seeking encrypted parts, bot-mode encrypted import, and the encryption toggle.
 - [ ] Coolify DNS/TLS, trusted forwarding and isolation of the direct app port.
 - [ ] Prolonged multi-account outages and interrupted Telegram sends.
 - [ ] Actual Premium speed, broader devices/codecs, ARM and hosting platforms.

@@ -61,7 +61,7 @@ Never post credentials in an issue, screenshot or repository. Credential
 changes can interrupt the drive; follow [connection maintenance](operations.md#connection-changes).
 
 Keep your server access, TGDrive login, MongoDB access and private
-deployment configuration. [Save a confirmed recovery file and its separate key](backup-recovery.md#keep-the-mongodb-recovery-kit-outside-the-server)
+deployment configuration. [Save a confirmed recovery file and its separate key](backup-recovery.md#how-backups-work)
 outside the server.
 
 ## Capacity and practical limits

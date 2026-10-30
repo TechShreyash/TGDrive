@@ -32,28 +32,18 @@ def test_counter_wraps_instead_of_overflowing():
     assert len(encryption.crypt("f" * 32, 32, b"a" * 40)) == 40
 
 
-def test_drive_records_its_first_key_and_rejects_another():
+def test_drive_opens_only_with_its_own_key():
     backend = FakeMongoBackend()
-    encryption.check_drive_key(backend, KEY)
+    backend.db.settings.insert_one(encryption.key_record(KEY))
     encryption.check_drive_key(backend, KEY)
     with pytest.raises(encryption.EncryptionKeyMismatch, match="does not match"):
         encryption.check_drive_key(backend, "d" * 64)
 
 
-@pytest.mark.parametrize(
-    "node",
-    [
-        {
-            "_id": "a",
-            "parts": [{"message_id": 1}, {"message_id": 2, "nonce": "0" * 32}],
-        },
-        {"_id": "b", "poster": {"message_id": 3, "nonce": "0" * 32}},
-    ],
-)
-def test_encrypted_drive_without_key_record_is_not_rebound(node):
+def test_database_from_an_older_tgdrive_is_refused():
     backend = FakeMongoBackend()
-    backend.db.nodes.insert_one(node)
-    with pytest.raises(encryption.EncryptionKeyMismatch, match="no saved key"):
+    backend.db.nodes.insert_one({"_id": "root"})
+    with pytest.raises(encryption.EncryptionKeyMismatch, match="older TGDrive"):
         encryption.check_drive_key(backend, KEY)
     assert backend.db.settings.find_one({"_id": "encryption"}) is None
 

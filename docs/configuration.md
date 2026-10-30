@@ -31,8 +31,7 @@ Open **Configuration → Cache settings**, **Transfer limits** or **Timezone**.
 [below](#parallel-uploads).
 
 Saved dashboard values override startup environment values. Restoring defaults
-does not remove environment variables or reset files, accounts, credentials or
-recovery keys. If another session changes settings first, reload before saving.
+does not remove environment variables or reset files, accounts or credentials. If another session changes settings first, reload before saving.
 Invalid values are rejected. If applying a change fails, TGDrive attempts to
 restore the previous values and reports whether a restart is needed.
 
@@ -222,14 +221,14 @@ types use the configured session lifetime, **24 hours** by default.
 
 Visitors can inspect Configuration and Management status but cannot change
 settings/accounts, start Premium login, refresh connections, manage backups or
-download recovery keys. These restrictions apply to direct API requests too;
+download backup files. These restrictions apply to direct API requests too;
 credentials remain private. If configuration fails to load, **Try Again** appears
 before controls; file features remain accessible.
 
 Normal file features and background work continue with their usual limits.
 Visitors still need the demo password to sign in. Database archive restoration
 is disabled for **every login** in demo mode; use a separate private deployment
-for [recovery](backup-recovery.md#restore-a-lost-database-from-telegram).
+for [recovery](backup-recovery.md#restore-after-losing-mongodb).
 
 ### Keep sample files available
 

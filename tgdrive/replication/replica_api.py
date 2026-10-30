@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import re
 import secrets
@@ -96,20 +97,6 @@ def register_replica_routes(app, settings, require_admin, get_runtime):
         async with current.control:
             return await invoke(current.action(payload.action))
 
-    @app.get("/api/v1/replica/key", dependencies=admin)
-    async def key(request: Request):
-        current = service(request)
-        return Response(
-            json.dumps(current.recovery_kit()),
-            media_type="application/json",
-            headers={
-                "Cache-Control": "no-store",
-                "Content-Disposition": (
-                    'attachment; filename="tgdrive-channel-recovery-key.json"'
-                ),
-            },
-        )
-
     @app.get("/api/v1/replica/file", dependencies=admin)
     async def backup_file(request: Request):
         current = service(request)
@@ -125,7 +112,6 @@ def register_replica_routes(app, settings, require_admin, get_runtime):
 
     @app.post("/api/v1/replica/import", dependencies=admin)
     async def import_file(request: Request):
-        from tgdrive.recovery.restore_api import _finish
         from tgdrive.replication.replica_state import MAX_BUNDLE
 
         if settings.demo_mode:
@@ -137,9 +123,6 @@ def register_replica_routes(app, settings, require_admin, get_runtime):
             raise HTTPException(
                 415, "Upload the recovery file as application/octet-stream"
             )
-        keys = request.headers.getlist("x-tgdrive-recovery-key")
-        if len(keys) != 1 or re.fullmatch(r"[a-fA-F0-9]{64}", keys[0]) is None:
-            raise HTTPException(422, "Enter the recovery key saved with this file")
         source_values = request.headers.getlist("x-tgdrive-source-channel")
         token_values = request.headers.getlist("x-tgdrive-bot-token")
         if len(source_values) > 1 or len(token_values) > 1:
@@ -187,10 +170,10 @@ def register_replica_routes(app, settings, require_admin, get_runtime):
                                     "Not enough temporary space "
                                     "to open the recovery file",
                                 )
-                            await _finish(target.write, part)
+                            await asyncio.to_thread(target.write, part)
                     await require_admin(request)
                     return await invoke(
-                        current.inspect_file(path, keys[0], source, token)
+                        current.inspect_file(path, current.key(), source, token)
                     )
                 except OSError:
                     raise HTTPException(
@@ -213,6 +196,15 @@ def register_replica_routes(app, settings, require_admin, get_runtime):
                 ),
             },
         )
+
+    @app.post("/api/v1/replica/restore", dependencies=admin)
+    async def restore_discovered(request: Request):
+        """One-click restore of the backup found in the storage channel."""
+        if settings.demo_mode:
+            raise HTTPException(403, "Backup restore is disabled in demo mode")
+        current = service(request)
+        async with current.control:
+            return await invoke(current.restore_discovered())
 
     @app.post("/api/v1/replica/recover", dependencies=admin)
     async def recover(payload: RecoverReplica, request: Request):

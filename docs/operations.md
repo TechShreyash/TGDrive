@@ -107,7 +107,7 @@ recovery screen.
 
 Keep storage bots as administrators, the channel private and auto-delete off. Repair tokens, membership or permissions in Telegram, then use **Connections → Refresh** and retry; replaced credentials require a restart.
 
-Missing/replaced documents are detected when checked or accessed; cached bytes can temporarily hide damage. Make changes through TGDrive rather than editing Telegram messages or captions. Restore a [confirmed independent copy](backup-recovery.md#recover-a-lost-main-channel-from-a-surviving-channel), or upload the original as a new file. **A database backup cannot recreate missing Telegram bytes.** Do not change channel/database bindings to bypass the error.
+Missing/replaced documents are detected when checked or accessed; cached bytes can temporarily hide damage. Make changes through TGDrive rather than editing Telegram messages or captions. Restore a [confirmed independent copy](backup-recovery.md#main-channel-lost), or upload the original as a new file. **A database backup cannot recreate missing Telegram bytes.** Do not change channel/database bindings to bypass the error.
 
 <details>
 <summary>Channel checks</summary>
@@ -147,10 +147,10 @@ Telegram documents remain accessible.
 
 1. Keep your MongoDB database accessible. If it is on the old server, move
    it or save a confirmed recovery file and its matching key before access ends.
-   If the database is lost, [restore a confirmed backup](backup-recovery.md#restore-a-lost-database-from-telegram);
+   If the database is lost, [restore a confirmed backup](backup-recovery.md#restore-after-losing-mongodb);
    only data captured in that restore point returns.
 2. Preserve Telegram channel/bot access, private deployment configuration,
-   original secrets and your off-server [recovery kit](backup-recovery.md#keep-the-mongodb-recovery-kit-outside-the-server).
+   original secrets and your off-server [recovery kit](backup-recovery.md#how-backups-work).
 3. Stop the old instance, then run TGDrive on your laptop or a new server and
    [reopen the existing drive](#reopen-after-losing-the-local-installation).
    **Do not initialize a new catalog over it.**
@@ -175,7 +175,7 @@ bytes still need their originals.
    `STORAGE_CHANNEL`. Keep the original `MAIN_BOT_TOKEN` and `TELEGRAM_ADMIN_IDS`
    if configured. Older `BOT_TOKENS` configurations remain supported; do not
    replace an existing list just to reinstall. Saved Connections are reused.
-3. Remove the example password: set `ADMIN_PASSWORD=` and leave `ADMIN_PASSWORD_HASH`, `SESSION_SECRET` and `MONGODB_BACKUP_KEY` blank/omitted to reuse saved bootstrap credentials. If unavailable, supply the originals from your recovery kit; do not generate replacements.
+3. Remove the example password: set `ADMIN_PASSWORD=` and leave `ADMIN_PASSWORD_HASH` and `SESSION_SECRET` blank/omitted to reuse saved bootstrap credentials. Keep the original `ENCRYPTION_KEY`; do not generate a replacement.
 4. Set `COOKIE_SECURE=false` for local HTTP, `true` for HTTPS. Start normally:
 
    ```bash
@@ -197,7 +197,7 @@ Live MongoDB and confirmed Telegram backups are separate.
 
 ## Emergency database restore
 
-[Restore a lost database](backup-recovery.md#restore-a-lost-database-from-telegram)
+[Restore a lost database](backup-recovery.md#restore-after-losing-mongodb)
 using the confirmed recovery file, its matching key, a surviving recorded channel
 and a reachable empty replacement database. A normal reinstall reopens the
 existing database instead. Keep the surviving channel intact while recovery is
@@ -314,10 +314,7 @@ If you also lost access to the server, recover the hosting/deployment account
 first. TGDrive cannot reset a Telegram, MongoDB or hosting provider account.
 See [password and session storage](reference.md#owner-authentication).
 
-Login password resets do not replace the independent recovery key or unlock an
-encrypted backup. Keep it separately with your
-[recovery kit](backup-recovery.md#keep-the-mongodb-recovery-kit-outside-the-server).
-Older files still require their original key after deliberate key rotation.
+Login password resets do not change `ENCRYPTION_KEY` or affect backups.
 
 ## Upgrade and rollback
 
@@ -325,12 +322,12 @@ Use a published release tag for a fixed version, or `main` for stable source
 updates. `dev` contains ongoing work and may be unstable. Follow
 [Get the source](setup.md#get-the-source) when choosing the next version.
 
-1. Finish work, save a confirmed backup and its separate key off-host, then stop safely.
-   Also take a MongoDB copy with your database host's backup tool: an upgraded
-   database cannot be opened by an older TGDrive.
-   - **Upgrading from 2.0–2.2:** add `ENCRYPTION_KEY` (`openssl rand -hex 32`)
-     to `.env` or your Coolify variables before starting. TGDrive refuses to start
-     without it. Files already stored stay readable; new uploads are encrypted.
+1. Finish work, save a confirmed backup off-host, then stop safely.
+
+> [!WARNING]
+> Drives created before encryption cannot be opened by this version. Start with
+> a new empty MongoDB database, a new private storage channel and a new
+> `ENCRYPTION_KEY`, and move files over by downloading and uploading them.
 2. Record the running version and source commit; review the new version's requirements.
 3. Update the source using your installation method below.
 4. Run `docker compose up -d --build`, keeping server `-f` arguments, or redeploy
@@ -351,11 +348,7 @@ before continuing.
 
 **Coolify:** Select the published tag or `main`, retaining private variables and mounts.
 
-**Updating from 2.1.0:** No manual MongoDB migration is required. Native installs
-need `aria2c` for torrent imports; Docker includes it. Keep older backups and their
-original keys. New [unified recovery files](backup-recovery.md) and poster-aware
-snapshots need a version that supports those formats. Save a compatible backup
-before upgrading; older software may not preserve newer metadata.
+Native installs need `aria2c` for torrent imports; Docker includes it.
 
 Do not run an older app against an incompatible database format. Restore a compatible backup into a separate empty database for a data rollback.
 

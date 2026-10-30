@@ -48,7 +48,7 @@ def owner(tmp_path, monkeypatch):
 
 def test_replica_is_owner_only_and_cross_origin_mutations_are_rejected(owner):
     client, _, _ = owner
-    for path in ("", "/key", "/file", "/report"):
+    for path in ("", "/file", "/report"):
         assert client.get("/api/v1/replica" + path).status_code == 401
     login(client)
     response = client.post(
@@ -75,10 +75,7 @@ def test_status_and_reports_never_expose_private_replica_credentials(owner):
         assert response.status_code == 200
         assert TOKEN not in response.text
         assert replica.key() not in response.text
-    response = client.get("/api/v1/replica/key")
-    assert response.status_code == 200
-    assert response.json()["key"] == replica.key()
-    assert response.headers["cache-control"] == "no-store"
+    assert client.get("/api/v1/replica/key").status_code == 404
 
 
 def test_file_restore_policy_is_explicit_in_saved_status(owner):
@@ -272,12 +269,11 @@ def test_recovery_file_import_accepts_binary_body_larger_than_json_limit(owner):
         content=content,
         headers={
             "Content-Type": "application/octet-stream",
-            "X-TGDrive-Recovery-Key": key,
         },
     )
     assert response.status_code == 200
     assert response.json()["phase"] == "paused"
-    assert observed["content"] == content and observed["key"] == key
+    assert observed["content"] == content and observed["key"] == replica.key()
     assert observed["source"] is None and observed["token"] is None
     assert not observed["path"].exists()
     assert key not in response.text
@@ -292,14 +288,13 @@ def test_recovery_file_import_accepts_replacement_channel_credentials(owner):
         content=b"ciphertext",
         headers={
             "Content-Type": "application/octet-stream",
-            "X-TGDrive-Recovery-Key": "a1" * 32,
             "X-TGDrive-Source-Channel": "-1001234567890",
             "X-TGDrive-Bot-Token": TOKEN,
         },
     )
     assert response.status_code == 200
     args = replica.inspect_file.await_args.args
-    assert args[1:] == ("a1" * 32, -1001234567890, TOKEN)
+    assert args[1:] == (replica.key(), -1001234567890, TOKEN)
     assert not args[0].exists()
 
 
@@ -313,15 +308,6 @@ def test_recovery_file_import_accepts_replacement_channel_credentials(owner):
         (
             {
                 "Content-Type": "application/octet-stream",
-                "X-TGDrive-Recovery-Key": "private-key-must-not-echo",
-            },
-            422,
-        ),
-        ({"Content-Type": "application/octet-stream"}, 422),
-        (
-            {
-                "Content-Type": "application/octet-stream",
-                "X-TGDrive-Recovery-Key": "a1" * 32,
                 "X-TGDrive-Source-Channel": "private-channel-must-not-echo",
             },
             422,
@@ -329,7 +315,6 @@ def test_recovery_file_import_accepts_replacement_channel_credentials(owner):
         (
             {
                 "Content-Type": "application/octet-stream",
-                "X-TGDrive-Recovery-Key": "a1" * 32,
                 "X-TGDrive-Bot-Token": "private-token-must-not-echo",
             },
             422,
@@ -416,7 +401,6 @@ def test_recovery_file_import_remains_available_during_recovery_and_connection_r
         content=b"ciphertext",
         headers={
             "Content-Type": "application/octet-stream",
-            "X-TGDrive-Recovery-Key": "a1" * 32,
         },
     )
     assert response.status_code == 200
@@ -470,7 +454,6 @@ def test_recovery_file_download_and_import_are_denied_in_read_only_demo(owner):
         content=b"ciphertext",
         headers={
             "Content-Type": "application/octet-stream",
-            "X-TGDrive-Recovery-Key": "a1" * 32,
         },
     )
     assert response.status_code == 403

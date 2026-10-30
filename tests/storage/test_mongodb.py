@@ -15,11 +15,6 @@ import pytest
 from tests.support.mongo_fixtures import store_from_payload
 from tgdrive.core.errors import DuplicateNameError, NotFoundError, ValidationError
 from tgdrive.core.security import InvalidSession, SessionManager
-from tgdrive.recovery.mongo_backup import (
-    decode_snapshot,
-    restore_snapshot,
-    write_snapshot,
-)
 from tgdrive.storage.mongo import DatabaseUnavailable, MongoBackend, configure
 from tgdrive.storage.mongo_store import MongoStore
 from tgdrive.telegram.client_identity import IdentityCache
@@ -154,7 +149,7 @@ def test_container_keys_and_owner_survive_move_without_local_volume(
     }
     for key, value in fixture.items():
         monkeypatch.setenv(key, value)
-    for key in ("SESSION_SECRET", "MONGODB_BACKUP_KEY", "ADMIN_PASSWORD_HASH"):
+    for key in ("SESSION_SECRET", "ADMIN_PASSWORD_HASH"):
         monkeypatch.delenv(key, raising=False)
     first = Settings(_env_file=None)
     catalog = MongoStore.create(backend)
@@ -176,7 +171,6 @@ def test_container_keys_and_owner_survive_move_without_local_volume(
     monkeypatch.setenv("DATA_DIR", str(tmp_path / "second-server"))
     reopened = Settings(_env_file=None)
     assert reopened.session_secret == first.session_secret
-    assert reopened.mongodb_backup_key == first.mongodb_backup_key
     assert PasswordHasher().verify(
         reopened.admin_password_hash.get_secret_value(), fixture["ADMIN_PASSWORD"]
     )
@@ -373,49 +367,6 @@ async def test_jobs_sessions_names_and_connection_settings_use_mongodb(
     assert not (tmp_path / "telegram-settings.json").exists()
 
 
-def test_encrypted_complete_snapshot_roundtrip_and_tamper_rejection(
-    store, backend, tmp_path
-):
-    from tgdrive.recovery.backup import BackupError
-
-    item = store.add_file("/", "safe.txt", 51, 10)
-    backend.db.settings.insert_one({"_id": "private", "token": "fixture-private-token"})
-    backup = tmp_path / "snapshot.tgdb"
-    key = secrets.token_bytes(32)
-    revision, counts, digest = write_snapshot(backend, backup, key)
-    assert revision == store.revision
-    assert counts["settings"] == 1
-    assert digest == hashlib.sha256(backup.read_bytes()).hexdigest()
-    assert b"fixture-private-token" not in backup.read_bytes()
-    decoded = decode_snapshot(backup, key)
-    assert decoded["settings"][0]["token"] == "fixture-private-token"
-    with pytest.raises(BackupError):
-        decode_snapshot(backup, secrets.token_bytes(32))
-    name = "tgdrive_test_" + secrets.token_hex(8)
-    target = MongoBackend(mongo_uri(), name)
-    try:
-        target.acquire()
-        restore_snapshot(target, backup, key)
-        restored = MongoStore(target)
-        assert restored.get_file(path(item))["message_id"] == 51
-        assert (
-            target.db.settings.find_one({"_id": "private"})["token"]
-            == "fixture-private-token"
-        )
-        with pytest.raises(FileExistsError):
-            restore_snapshot(target, backup, key)
-    finally:
-        assert name.startswith("tgdrive_test_")
-        target.release()
-        target.client.drop_database(name)
-        target.client.close()
-    content = bytearray(backup.read_bytes())
-    content[-20] ^= 1
-    backup.write_bytes(content)
-    with pytest.raises(BackupError):
-        decode_snapshot(backup, key)
-
-
 def test_receipts_survive_new_instance_without_sqlite(backend, store, tmp_path):
     from tgdrive.transfers.uploads import ResumableUploads
 
@@ -503,7 +454,6 @@ def test_primary_database_commits_do_not_wait_for_telegram_backups(
 
     settings = SimpleNamespace(
         storage_channel=-1001234567890,
-        mongodb_backup_key=None,
         resolved_cache_dir=tmp_path,
         mongodb_backup_seconds=3600,
     )

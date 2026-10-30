@@ -111,11 +111,6 @@ def register_routes(
     register_management_routes(
         app, settings, require_admin=require_admin, get_runtime=get_runtime
     )
-    from tgdrive.recovery.restore_api import register_restore_routes
-
-    register_restore_routes(
-        app, settings, require_admin=require_admin, get_runtime=get_runtime
-    )
     from tgdrive.observability.performance_api import register_performance_routes
 
     register_performance_routes(
@@ -253,25 +248,6 @@ def register_routes(
                 "Backup is not confirmed yet. Check the backup status and try again.",
             ) from None
         return {"recovery": service.protection_status(store)}
-
-    @app.get("/api/v1/backup/recovery-key", dependencies=admin)
-    async def recovery_key(request: Request):
-        runtime = get_runtime(request)
-        if getattr(runtime, "mongo", None) is None or not settings.mongodb_backup_key:
-            raise HTTPException(404, "MongoDB backup recovery key is unavailable")
-        return Response(
-            "MONGODB_BACKUP_KEY="
-            + settings.mongodb_backup_key.get_secret_value()
-            + "\n",
-            media_type="text/plain",
-            headers={
-                "Content-Disposition": (
-                    'attachment; filename="tgdrive-recovery-key.env"'
-                ),
-                "Cache-Control": "no-store",
-                "X-Content-Type-Options": "nosniff",
-            },
-        )
 
     @app.get("/api/v1/search", dependencies=admin)
     async def search(

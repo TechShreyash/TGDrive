@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-import hashlib
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -462,37 +461,7 @@ async def test_bot_operation_identity_survives_token_rotation_and_bot_replacemen
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("same_media", [False, True])
-@pytest.mark.parametrize("trashed", [False, True])
-async def test_bot_legacy_replay_reuses_only_matching_stored_media(
-    bot, same_media, trashed
-):
-    legacy_operation_id = hashlib.sha256(b"bot:1:1").hexdigest()
-    item = bot.store.add_file(
-        "/", "report.txt", 90, 3, operation_id=legacy_operation_id
-    )
-    if trashed:
-        bot.store.set_trashed("/" + item["id"], True)
-    message = FakeMessage(
-        1,
-        copied=SimpleNamespace(
-            id=90 if same_media else 91,
-            document=SimpleNamespace(file_name="report.txt", file_size=3),
-        ),
-    )
-
-    await bot._file(bot.client, message)
-
-    assert len(bot.store.list_directory("/", include_trashed=True)) == (
-        1 if same_media else 2
-    )
-    assert message.status.edit_text.calls[-1][0][0].startswith("Uploaded")
-    assert bot.client.deleted == []
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("legacy", [False, True])
-async def test_bot_replay_preserves_saved_media_when_write_guard_pauses(bot, legacy):
+async def test_bot_replay_preserves_saved_media_when_write_guard_pauses(bot):
     from tgdrive.settings.managed_settings import SettingsProblem
 
     message = FakeMessage(
@@ -501,16 +470,7 @@ async def test_bot_replay_preserves_saved_media_when_write_guard_pauses(bot, leg
             id=92, document=SimpleNamespace(file_name="saved.txt", file_size=3)
         ),
     )
-    if legacy:
-        bot.store.add_file(
-            "/",
-            "saved.txt",
-            92,
-            3,
-            operation_id=hashlib.sha256(b"bot:1:1").hexdigest(),
-        )
-    else:
-        await bot._file(bot.client, message)
+    await bot._file(bot.client, message)
     checks = 0
 
     def pause():

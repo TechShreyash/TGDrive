@@ -8,7 +8,6 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
-from pydantic import SecretStr
 from pymongo.errors import ConnectionFailure
 
 from tests.replication.test_replica import BACKUP, remote_bundle, setup
@@ -181,7 +180,6 @@ async def test_mongo_settings_outage_retains_backup_and_blocks_delete_until_retr
     tmp_path, monkeypatch
 ):
     configured, store, remote, replica, config = setup(tmp_path)
-    configured.mongodb_backup_key = SecretStr("a1" * 32)
     telegram = Telegram()
     telegram.messages[77] = SimpleNamespace(id=77)
     pool = ClientPool([telegram])
@@ -200,7 +198,7 @@ async def test_mongo_settings_outage_retains_backup_and_blocks_delete_until_retr
     try:
         await replica._sync(config)
         point = replica.journal.get("restore_point")
-        kit = replica.recovery_kit()
+        kit = replica.key()
         messages = dict(remote.messages)
         receipts = dict(remote.receipts)
         monkeypatch.setattr(collection, "find_one", unavailable)
@@ -213,7 +211,7 @@ async def test_mongo_settings_outage_retains_backup_and_blocks_delete_until_retr
         intent_id = store.pending_deletions()[0]["id"]
         assert store.message_ids(path, include_trashed=True) == [77]
         assert replica.journal.get("restore_point") == point
-        assert replica.recovery_kit() == kit
+        assert replica.key() == kit
         assert replica.status()["protected_revision"] == point["revision"]
         assert remote.messages == messages and remote.receipts == receipts
         assert not telegram.deleted and 77 in telegram.messages
@@ -227,7 +225,7 @@ async def test_mongo_settings_outage_retains_backup_and_blocks_delete_until_retr
         assert retry.status is TransferStatus.ERROR
         assert replica.status()["error"]["retry_at"] == error["retry_at"]
         assert store.pending_deletions()[0]["id"] == intent_id
-        assert replica.recovery_kit() == kit
+        assert replica.key() == kit
         assert remote.messages == messages and remote.receipts == receipts
 
         replica.update(error=error | {"retry_at": time.time() - 1})

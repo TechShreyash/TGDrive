@@ -446,9 +446,8 @@ server disk, not your total Telegram storage.
 
 **Back up now** creates one encrypted recovery file. Automatic copies normally
 run hourly without an independent channel; independent protection batches changes.
-Save **Backups & recovery → Download backup** outside the server/Telegram and
-**Save recovery key** separately. Reconnect the same MongoDB after losing a local
-installation. [Backup setup and restore](backup-recovery.md).
+Each backup is pinned in your channel and opens with your `ENCRYPTION_KEY`. Reuse
+the same `.env` and MongoDB after losing a local installation. [Backup setup and restore](backup-recovery.md).
 
 <a name="optional-telegram-bot-interface"></a>
 
@@ -491,8 +490,8 @@ when saved; `PUBLIC_URL` can supply it earlier. Installations using only
 
 Browse, preview and download the protected **Demo Files** collection. Use
 **My Files** outside that collection to try uploads, organizing and sharing.
-Configuration/Management are visible with changes locked; recovery keys cannot
-be downloaded.
+Configuration/Management are visible with changes locked; backups cannot be
+downloaded.
 
 **Use disposable, non-private files only.** Other visitors can change/delete
 unprotected files. Demo mode does not automatically reset them or provide

@@ -176,9 +176,7 @@ async def require_admin(request: Request) -> None:
             for root in ("/api/v1/settings", "/api/v1/replica", "/api/v1/backup")
         )
         secret_export = path in {
-            "/api/v1/replica/key",
             "/api/v1/replica/file",
-            "/api/v1/backup/recovery-key",
         }
         if secret_export or (
             management_path and request.method not in {"GET", "HEAD", "OPTIONS"}

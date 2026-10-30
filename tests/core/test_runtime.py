@@ -37,7 +37,12 @@ def mongo_backend(monkeypatch):
     """Exercise lifecycle orchestration against an explicit database adapter."""
     backend = MagicMock()
     backend.transaction.side_effect = lambda callback: callback(None)
-    backend.db.settings.find_one.return_value = None
+    from tgdrive.core import encryption
+
+    # A current drive always carries its key check; other settings are absent.
+    backend.db.settings.find_one.side_effect = lambda query, **_: (
+        encryption.key_record("e" * 64) if query.get("_id") == "encryption" else None
+    )
     # The backup journal needs real document storage to round-trip its state.
     for name in ("replica_state", "replica_chunks", "replica_copies", "nodes"):
         setattr(backend.db, name, Collection())
@@ -45,6 +50,7 @@ def mongo_backend(monkeypatch):
         getattr(backend.db, name).find.return_value = []
     monkeypatch.setattr("tgdrive.storage.mongo.for_settings", lambda _: backend)
     monkeypatch.setattr("tgdrive.storage.mongo.initialize_if_empty", lambda *_: False)
+    monkeypatch.setattr("tgdrive.storage.mongo.database_is_empty", lambda *_: False)
     monkeypatch.setattr("tgdrive.storage.mongo.record_drive_open", lambda *_: None)
     monkeypatch.setattr(
         "tgdrive.replication.replica_activation.apply_activation", lambda *_: None
@@ -369,3 +375,46 @@ async def test_bot_reconnect_retries_failed_start_without_registering_twice(
         runtime.ready = False
         await runtime.remote.close()
         runtime.registry.close()
+
+
+@pytest.mark.asyncio
+async def test_empty_database_with_pinned_backup_opens_restore_not_a_new_drive(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from tgdrive.replication.replica import ChannelReplica
+
+    monkeypatch.setattr("tgdrive.storage.mongo.database_is_empty", lambda *_: True)
+    created = []
+    monkeypatch.setattr(
+        "tgdrive.storage.mongo.initialize_if_empty", lambda *_: created.append(1)
+    )
+
+    async def found(self):
+        return True
+
+    monkeypatch.setattr(ChannelReplica, "discover_backup", found)
+    monkeypatch.setattr(ChannelReplica, "start", lambda self: None)
+    runtime = Runtime(settings(tmp_path), pool=FakePool())
+    try:
+        await runtime.start()
+        assert runtime.recovery_only and runtime.store is None
+        assert created == []
+    finally:
+        await runtime.stop()
+
+
+@pytest.mark.asyncio
+async def test_empty_database_without_backup_creates_a_new_drive(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from tgdrive.replication.replica import ChannelReplica
+
+    monkeypatch.setattr("tgdrive.storage.mongo.database_is_empty", lambda *_: True)
+
+    async def none(self):
+        return False
+
+    monkeypatch.setattr(ChannelReplica, "discover_backup", none)
+    runtime = Runtime(settings(tmp_path), pool=FakePool())
+    assert await runtime._offer_backup_restore() is False
+    assert not getattr(runtime, "recovery_only", False)

@@ -8,7 +8,6 @@ from unittest.mock import AsyncMock, Mock
 
 import pytest
 from fastapi.testclient import TestClient
-from pydantic import SecretStr
 
 from tests.core.test_config import settings_values
 from tests.support.app_fixtures import FakeRuntime, login, make_settings
@@ -64,8 +63,7 @@ MANAGEMENT_REQUESTS = [
         },
     ),
     ("POST", "/api/v1/backup", {}),
-    ("GET", "/api/v1/replica/key", None),
-    ("GET", "/api/v1/backup/recovery-key", None),
+    ("GET", "/api/v1/replica/file", None),
 ]
 
 
@@ -145,12 +143,11 @@ def test_demo_rejects_direct_management_requests_before_any_side_effect(
     monkeypatch.setattr(
         "tgdrive.observability.performance_api.get_performance_settings", forbidden
     )
-    runtime.replica = SimpleNamespace(blocked=False, recovery_kit=forbidden)
+    runtime.replica = SimpleNamespace(blocked=False, recovery_file=forbidden)
     runtime.backup = SimpleNamespace(ensure_revision=forbidden)
     client.app.state.premium_login_service = SimpleNamespace(
         begin=forbidden, verify=forbidden, cancel=forbidden, close=AsyncMock()
     )
-    settings.mongodb_backup_key = SecretStr("b" * 64)
     runtime.mongo = object()
     login(client)
     revision = store.revision
@@ -179,8 +176,7 @@ def test_demo_rejects_direct_management_requests_before_any_side_effect(
     "method,path,payload",
     [
         ("PATCH", "/api/v1/settings/uploads", {"uploads_per_bot": 2}),
-        ("GET", "/api/v1/replica/key", None),
-        ("GET", "/api/v1/backup/recovery-key", None),
+        ("GET", "/api/v1/replica/file", None),
     ],
 )
 def test_demo_management_still_requires_authentication(
@@ -223,18 +219,16 @@ def test_demo_setting_cannot_be_changed_through_the_settings_api(demo_owner):
         ("PATCH", "/demo/api/v1/settings/uploads", {"uploads_per_bot": 2}),
         ("POST", "/demo/api/v1/replica/action", {"action": "sync"}),
         ("POST", "/demo/api/v1/backup", {}),
-        ("GET", "/demo/api/v1/replica/key", None),
-        ("GET", "/demo/api/v1/backup/recovery-key", None),
+        ("GET", "/demo/api/v1/replica/file", None),
     ],
 )
 def test_demo_guard_uses_matched_route_under_proxy_root_path(
     tmp_path, method, path, payload
 ):
-    with owner_client(tmp_path, root_path="/demo") as (client, _, runtime, settings):
+    with owner_client(tmp_path, root_path="/demo") as (client, _, runtime, _settings):
         login(client)
-        runtime.replica = SimpleNamespace(blocked=False)
+        runtime.replica = SimpleNamespace(blocked=False, recovery_file=lambda: b"")
         runtime.mongo = object()
-        settings.mongodb_backup_key = SecretStr("b" * 64)
         response = client.request(method, path, json=payload, headers=ORIGIN)
         assert response.status_code == 403, response.text
         assert response.json()["code"] == "DEMO_MODE_READ_ONLY"

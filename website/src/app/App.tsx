@@ -79,10 +79,6 @@ import FolderUpload from "../features/transfers/FolderUpload";
 import DeletionNotice from "../features/transfers/DeletionNotice";
 import SidebarLogout from "./SidebarLogout";
 import ChannelBackup from "../features/backup/ChannelBackup";
-import DatabaseRestore, {
-    DatabaseRestoreResult,
-    type DatabaseRestoreState,
-} from "../features/backup/DatabaseRestore";
 import BotModeSettings from "../features/settings/BotModeSettings";
 import { useManualRefresh } from "../shared/useManualRefresh";
 import { startStatusPolling } from "./statusPolling";
@@ -151,34 +147,7 @@ export default function App() {
         setToolsOpen(TOOL_VIEWS.includes(location.view));
     }, [location.view, location.settingsSection]);
     const [authenticated, setAuthenticated] = useState<boolean | null>(null);
-    const [databaseRestore, setDatabaseRestore] =
-        useState<DatabaseRestoreState>({ phase: "idle" });
-    const databaseRestorePhase = useRef<DatabaseRestoreState["phase"]>("idle");
     const [admissionPaused, setAdmissionPaused] = useState(false);
-    const databaseRestoreChanged = useCallback(
-        (state: DatabaseRestoreState) => {
-            databaseRestorePhase.current = state.phase;
-            setDatabaseRestore(state);
-            if (state.phase !== "idle") setAdmissionPaused(true);
-        },
-        [],
-    );
-    useEffect(() => {
-        if (databaseRestore.phase !== "restoring") return;
-        const beforeUnload = (event: BeforeUnloadEvent) => {
-            event.preventDefault();
-            event.returnValue = "";
-        };
-        window.addEventListener("beforeunload", beforeUnload);
-        return () => window.removeEventListener("beforeunload", beforeUnload);
-    }, [databaseRestore.phase]);
-    useEffect(() => {
-        if (
-            databaseRestore.phase === "restored" ||
-            databaseRestore.phase === "restart_required"
-        )
-            document.getElementById("main-content")?.focus();
-    }, [databaseRestore.phase]);
     const [telegramWarning, setTelegramWarning] = useState("");
     const [config, setConfig] = useState<{
         max_file_size: number;
@@ -573,7 +542,6 @@ export default function App() {
             .catch(() => setAuthenticated(false));
     }, [isPublic]);
     useEffect(() => {
-        if (databaseRestore.phase !== "idle") return;
         if (authenticated !== true || isPublic) {
             setAdmissionPaused(false);
             setTelegramWarning("");
@@ -592,7 +560,7 @@ export default function App() {
                         : ""),
             );
         });
-    }, [authenticated, isPublic, databaseRestore.phase]);
+    }, [authenticated, isPublic]);
     useEffect(() => {
         const saved = (event: Event) => {
             const detail = (
@@ -622,18 +590,12 @@ export default function App() {
     }, [admissionPaused]);
     useEffect(() => {
         transfers.setEnabled(
-            authenticated === true &&
-                !isPublic &&
-                !config.recovery_only &&
-                databaseRestore.phase === "idle",
+            authenticated === true && !isPublic && !config.recovery_only,
         );
         return () => transfers.setEnabled(false);
-    }, [authenticated, isPublic, config.recovery_only, databaseRestore.phase]);
+    }, [authenticated, isPublic, config.recovery_only]);
     useEffect(() => {
         const expired = () => {
-            // Restoring revokes sessions before its response arrives. Preserve
-            // the outcome and restart instructions instead of showing Login.
-            if (databaseRestorePhase.current !== "idle") return;
             endSession();
             notify("Your session expired. Log in to continue.", true);
         };
@@ -715,7 +677,6 @@ export default function App() {
     }, [refresh]);
     useEffect(() => {
         if (
-            databaseRestore.phase !== "idle" ||
             config.recovery_only ||
             (!authenticated && !isPublic) ||
             !isFiles
@@ -865,13 +826,11 @@ export default function App() {
         listingKey,
         notify,
         config.recovery_only,
-        databaseRestore.phase,
         reload,
     ]);
     useEffect(() => {
         if (
             config.recovery_only ||
-            databaseRestore.phase !== "idle" ||
             (!authenticated && !isPublic) ||
             !isFiles ||
             isSearch ||
@@ -944,7 +903,6 @@ export default function App() {
         view,
         shareRoot,
         config.recovery_only,
-        databaseRestore.phase,
         location.auth,
         metadataRefresh,
     ]);
@@ -1496,35 +1454,6 @@ export default function App() {
             )}
         </div>
     );
-    if (
-        !isPublic &&
-        (databaseRestore.phase === "restored" ||
-            databaseRestore.phase === "restart_required")
-    )
-        return (
-            <div className="channel-recovery-shell">
-                <header className="channel-recovery-topbar">
-                    <a href="/" className="brand">
-                        <BrandLogo />
-                    </a>
-                    <ThemeControl />
-                </header>
-                <main
-                    id="main-content"
-                    className="channel-recovery-main"
-                    tabIndex={-1}
-                >
-                    <h1>Storage recovery</h1>
-                    <DatabaseRestoreResult
-                        error={
-                            databaseRestore.phase === "restart_required"
-                                ? databaseRestore.message
-                                : ""
-                        }
-                    />
-                </main>
-            </div>
-        );
     if (authenticated === null && !isPublic)
         return (
             <div className="startup" role="status">
@@ -1565,8 +1494,8 @@ export default function App() {
                 <main id="main-content" className="channel-recovery-main">
                     <h1>Storage recovery</h1>
                     <p className="channel-recovery-intro">
-                        Your MongoDB catalog needs recovery. File changes are
-                        paused while you restore it.
+                        This database has no drive yet. File changes are paused
+                        until you restore a backup.
                     </p>
                     {configLoad === "ready" ? (
                         <>
@@ -1574,10 +1503,6 @@ export default function App() {
                                 recoveryOnly
                                 demoMode={demoReadOnly}
                                 onNotice={notify}
-                            />
-                            <DatabaseRestore
-                                demoMode={demoReadOnly}
-                                onRestoreStateChange={databaseRestoreChanged}
                             />
                         </>
                     ) : (
@@ -2115,9 +2040,6 @@ export default function App() {
                                             }
                                             onTrash={() =>
                                                 navigate("/trash", "trash")
-                                            }
-                                            onRestoreStateChange={
-                                                databaseRestoreChanged
                                             }
                                         />
                                     ) : view === "settings" ? (

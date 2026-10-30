@@ -48,7 +48,7 @@ def auth_client(tmp_path, **overrides):
     runtime = FakeRuntime(store)
     runtime.replica = SimpleNamespace(
         blocked=False,
-        recovery_kit=Mock(return_value={"key": "synthetic offline recovery key"}),
+        recovery_file=Mock(return_value=b"synthetic encrypted backup"),
     )
     try:
         with pytest.MonkeyPatch.context() as monkeypatch:
@@ -94,11 +94,11 @@ def test_same_login_form_grants_only_the_passwords_signed_access(
         saved = client.patch(
             "/api/v1/settings/uploads", json={"uploads_per_bot": 2}, headers=ORIGIN
         )
-        key = client.get("/api/v1/replica/key")
+        backup = client.get("/api/v1/replica/file")
         assert saved.status_code == (200 if privileged else 403)
-        assert key.status_code == (200 if privileged else 403)
+        assert backup.status_code == (200 if privileged else 403)
         assert preference_save.await_count == int(privileged)
-        assert runtime.replica.recovery_kit.call_count == int(privileged)
+        assert runtime.replica.recovery_file.call_count == int(privileged)
         assert settings.demo_mode is True
         assert client.post("/api/logout", json={}, headers=ORIGIN).status_code == 200
         assert client.get("/api/v1/session").json() == {
@@ -116,7 +116,7 @@ def test_legacy_demo_without_second_password_remains_restricted(tmp_path):
         assert sign_in(client, ADMIN).status_code == 401
         assert sign_in(client, VISITOR).status_code == 200
         assert client.get("/api/config").json()["demo_read_only"] is True
-        assert client.get("/api/v1/replica/key").status_code == 403
+        assert client.get("/api/v1/replica/file").status_code == 403
         with pytest.raises(ValueError, match="not configured"):
             client.app.state.sessions.create(demo_admin=True)
 
@@ -130,7 +130,7 @@ def test_second_password_is_inactive_outside_demo_deployments(tmp_path):
         assert config["demo_mode"] is False
         assert config["demo_read_only"] is False
         assert config["demo_admin"] is False
-        assert client.get("/api/v1/replica/key").status_code == 200
+        assert client.get("/api/v1/replica/file").status_code == 200
 
 
 @pytest.mark.parametrize("plaintext", [None, "unused private fallback password"])

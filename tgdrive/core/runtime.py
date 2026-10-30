@@ -103,6 +103,8 @@ class Runtime:
                 if getattr(self, "_activation_unavailable", False):
                     raise ActivationError("Recovery activation requires review")
                 await asyncio.to_thread(apply_activation, self.settings, self.mongo)
+                if await self._offer_backup_restore():
+                    return
                 created = await asyncio.to_thread(
                     initialize_if_empty, self.settings, self.mongo
                 )
@@ -504,6 +506,36 @@ class Runtime:
                 self.store.close()
         finally:
             self._release_owner_lock()
+
+    async def _offer_backup_restore(self) -> bool:
+        """An empty database with a pinned backup opens the restore screen.
+
+        Same env + empty MongoDB must restore the drive, not start a new one.
+        """
+        from tgdrive.replication.replica import ChannelReplica
+        from tgdrive.storage.mongo import database_is_empty
+
+        if not await asyncio.to_thread(database_is_empty, self.mongo):
+            return False
+        replica = ChannelReplica(self.settings, self)
+        candidate = replica.journal.get("candidate")
+        if candidate and candidate.get("discovered"):
+            found = True
+        else:
+            try:
+                found = await replica.discover_backup()
+            except Exception:
+                # Never initialize over a backup we could not read.
+                logger.warning("A pinned backup could not be checked; opening recovery")
+                found = True
+        if not found:
+            await replica.close()
+            return False
+        self.recovery_only = True
+        self.replica = replica
+        replica.start()
+        logger.warning("MongoDB is empty and a backup exists: opening Restore drive")
+        return True
 
     def _prepare_runtime_directories(self) -> None:
         cache_dir = self.settings.resolved_cache_dir

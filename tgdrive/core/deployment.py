@@ -5,12 +5,11 @@ from __future__ import annotations
 import fcntl
 import json
 import os
-import re
 import secrets
 import stat
 from pathlib import Path
 
-SECRET_FIELDS = ("SESSION_SECRET", "MONGODB_BACKUP_KEY")
+SECRET_FIELDS = ("SESSION_SECRET",)
 
 
 def installation_secrets(
@@ -50,8 +49,6 @@ def installation_secrets(
                 if (
                     not isinstance(saved["SESSION_SECRET"], str)
                     or len(saved["SESSION_SECRET"]) < 32
-                    or not isinstance(saved["MONGODB_BACKUP_KEY"], str)
-                    or not re.fullmatch(r"[0-9a-fA-F]{64}", saved["MONGODB_BACKUP_KEY"])
                 ):
                     raise ValueError
             except ValueError, TypeError:
@@ -72,11 +69,7 @@ def installation_secrets(
                 + "; existing keys were not regenerated"
             )
         for key in missing:
-            values[key] = (
-                secrets.token_hex(32)
-                if key == "MONGODB_BACKUP_KEY"
-                else secrets.token_urlsafe(48)
-            )
+            values[key] = secrets.token_urlsafe(48)
         temporary = directory / (".deployment-secrets-" + secrets.token_hex(16))
         descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
         try:

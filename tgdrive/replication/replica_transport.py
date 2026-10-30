@@ -25,7 +25,6 @@ from typing import Any
 from telethon import TelegramClient, functions, types, utils
 from telethon.errors import NetworkMigrateError, PhoneMigrateError, UserMigrateError
 
-CAPSULE_NAME = "tgdrive-replica.tgdb"
 BACKUP_NAME = "tgdrive-backup.tgdb"
 MAX_CAPSULE_BYTES = 64 * 1024 * 1024
 MAX_VERIFY_BATCH = 32
@@ -682,7 +681,7 @@ class ReplicaTransport:
                     )
 
     @staticmethod
-    def _capsule(document, filename: str = CAPSULE_NAME) -> int:
+    def _capsule(document, filename: str = "tgdrive-backup.tgdb") -> int:
         size = getattr(document, "size", None)
         names = [
             row.file_name
@@ -874,58 +873,17 @@ class ReplicaTransport:
     ) -> int:
         """Download a confirmed replica capsule by ID or latest pinned message."""
         return await self._download(
-            channel, message_id, destination, filename=(BACKUP_NAME, CAPSULE_NAME)
-        )
-
-    async def download_catalog(
-        self, channel: int, destination: Path, message_id: int | None = None
-    ) -> int:
-        """Read a current-format drive.json checkpoint by pin or explicit ID.
-
-        Recovery publishes this catalog after confirming its encrypted capsule.
-        The caller must validate format, drive identity, and channel binding.
-        Capsule fallback is only safe on DOCUMENT_TYPE, never after failed
-        decryption, authorization, or malformed archive errors.
-        """
-        return await self._download(
-            channel, message_id, destination, filename="drive.json"
+            channel, message_id, destination, filename=BACKUP_NAME
         )
 
     async def publish(
         self, channel: int, path: Path, *, random_id: int, caption: str, pin: bool
     ) -> int:
-        from tgdrive.recovery.recovery_file import MAGIC as RECOVERY_MAGIC
-
-        with path.open("rb") as source:
-            unified = source.read(len(RECOVERY_MAGIC)) == RECOVERY_MAGIC
         return await self._publish(
             channel,
             path,
             random_id=random_id,
             caption=caption,
             pin=pin,
-            filename=BACKUP_NAME if unified else CAPSULE_NAME,
-        )
-
-    async def publish_catalog(
-        self,
-        channel: int,
-        path: Path,
-        *,
-        random_id: int,
-        caption: str,
-        pin: bool = True,
-    ) -> int:
-        """Confirm and pin a normal SQLite drive.json checkpoint after recovery.
-
-        The caller owns the validated portable catalog and its normal checkpoint
-        marker. This does not replace the encrypted capsule retained elsewhere.
-        """
-        return await self._publish(
-            channel,
-            path,
-            random_id=random_id,
-            caption=caption,
-            pin=pin,
-            filename="drive.json",
+            filename=BACKUP_NAME,
         )

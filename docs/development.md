@@ -770,7 +770,7 @@ uv run --frozen python -m pytest tests/replication/test_replica_transport.py tes
 
 These tests use synthetic Telegram clients; they do not establish live Telegram
 rate limits or demonstrate production backup completion. Pacing and retry policy
-are documented in the [backup guide](backup-recovery.md#enable-and-confirm-the-first-copy).
+are documented in the [backup guide](backup-recovery.md#add-a-backup-channel).
 
 For the broader offline backup group, including journal rollback, pause races,
 session authorization waits, archive handoff and activation/bootstrap recovery:

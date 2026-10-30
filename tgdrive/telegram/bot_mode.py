@@ -173,9 +173,6 @@ class BotMode:
         operation_id = hashlib.sha256(
             f"bot:{bot_id}:{source_chat}:{message.id}".encode()
         ).hexdigest()
-        legacy_operation_id = hashlib.sha256(
-            f"bot:{source_chat}:{message.id}".encode()
-        ).hexdigest()
         copied: Message | None = None
         status: Message | None = None
         metadata_started = False
@@ -206,12 +203,6 @@ class BotMode:
             if media is None:
                 raise RuntimeError("copied message contains no media")
             filename = self._media_name(media, copied)
-            if await asyncio.to_thread(
-                self.store.has_file_operation,
-                legacy_operation_id,
-                message_id=copied.id,
-            ):
-                operation_id = legacy_operation_id
             if self.before_write is not None:
                 check = self.before_write()
                 if inspect.isawaitable(check):
@@ -233,13 +224,8 @@ class BotMode:
                 try:
                     if self.before_delete is not None:
                         await self.before_delete()
-                    if not (
-                        await asyncio.to_thread(
-                            self.store.has_file_operation, operation_id
-                        )
-                        or await asyncio.to_thread(
-                            self.store.has_file_operation, legacy_operation_id
-                        )
+                    if not await asyncio.to_thread(
+                        self.store.has_file_operation, operation_id
                     ):
                         await self.client.delete_messages(
                             self.settings.storage_channel, copied.id

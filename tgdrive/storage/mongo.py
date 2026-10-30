@@ -327,8 +327,17 @@ def bootstrap_values(settings: Any) -> dict[str, Any]:
     return values
 
 
+def database_is_empty(backend: MongoBackend) -> bool:
+    from tgdrive.recovery.mongo_backup import COLLECTIONS
+
+    return not any(
+        backend.db[name].find_one({}) for name in COLLECTIONS if name != "settings"
+    ) and not backend.db.settings.find_one({"_id": {"$ne": "encryption"}})
+
+
 def initialize_if_empty(settings: Any, backend: MongoBackend) -> bool:
     """Initialize a pristine MongoDB under ownership; preserve prior drive state."""
+    from tgdrive.core import encryption
     from tgdrive.core.errors import CorruptStoreError
     from tgdrive.recovery.mongo_backup import COLLECTIONS
     from tgdrive.settings.managed_settings import (
@@ -356,7 +365,6 @@ def initialize_if_empty(settings: Any, backend: MongoBackend) -> bool:
         for name in (
             "mongodb-drive.json",
             "channel-activation.json",
-            "channel-backup.sqlite3",
         )
     ):
         raise CorruptStoreError(
@@ -377,6 +385,7 @@ def initialize_if_empty(settings: Any, backend: MongoBackend) -> bool:
         storage_channel=settings.storage_channel,
         initial_settings=[
             {"_id": "bootstrap", "document": bootstrap_values(settings)},
+            encryption.key_record(settings.encryption_key),
             {
                 "_id": "telegram",
                 "revision": document.revision,

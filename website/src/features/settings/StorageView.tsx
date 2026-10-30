@@ -25,9 +25,6 @@ import {
     type RefreshNotice,
 } from "../../shared/useManualRefresh";
 import ChannelBackup from "../backup/ChannelBackup";
-import DatabaseRestore, {
-    type DatabaseRestoreState,
-} from "../backup/DatabaseRestore";
 import { transfers, uploadBackupState } from "../transfers/transfers";
 import "./StorageView.css";
 
@@ -37,14 +34,12 @@ export default function StorageView({
     onTransfers,
     onTrash,
     onNotice,
-    onRestoreStateChange,
 }: {
     config: { max_file_size: number };
     demoMode?: boolean;
     onTransfers: () => void;
     onTrash: () => void;
     onNotice?: RefreshNotice;
-    onRestoreStateChange?: (state: DatabaseRestoreState) => void;
 }) {
     const [status, setStatus] = useState<ServerStatus | null>(null);
     const [usage, setUsage] = useState<ManagementStats | null>(null);
@@ -53,7 +48,6 @@ export default function StorageView({
     const [loading, setLoading] = useState(true);
     const [backingUp, setBackingUp] = useState(false);
     const [backupError, setBackupError] = useState("");
-    const [restoringDatabase, setRestoringDatabase] = useState(false);
     const generation = useRef(0);
     const mounted = useRef(true);
     const manualPending = useRef(false);
@@ -111,14 +105,14 @@ export default function StorageView({
             await load(controller.signal);
             if (!controller.signal.aborted) timer = setTimeout(poll, 5000);
         };
-        if (!restoringDatabase) void poll();
+        void poll();
         return () => {
             mounted.current = false;
             ++generation.current;
             controller.abort();
             clearTimeout(timer);
         };
-    }, [load, restoringDatabase]);
+    }, [load]);
     const uploadItems = useSyncExternalStore(
         transfers.subscribe,
         transfers.snapshot,
@@ -153,7 +147,7 @@ export default function StorageView({
                   ? "Backing up your latest changes"
                   : "Backup Status Unavailable";
     const backUp = async () => {
-        if (demoMode || restoringDatabase) return;
+        if (demoMode) return;
         setBackingUp(true);
         setBackupError("");
         try {
@@ -167,13 +161,6 @@ export default function StorageView({
             }
         }
     };
-    const databaseRestoreState = useCallback(
-        (state: DatabaseRestoreState) => {
-            if (mounted.current) setRestoringDatabase(state.phase !== "idle");
-            onRestoreStateChange?.(state);
-        },
-        [onRestoreStateChange],
-    );
     return (
         <div className="storage-page page-body">
             {demoMode && <DemoModeNotice />}
@@ -223,7 +210,6 @@ export default function StorageView({
                         className="secondary-button"
                         disabled={
                             demoMode ||
-                            restoringDatabase ||
                             backingUp ||
                             loading ||
                             refreshAction.refreshing ||
@@ -288,7 +274,6 @@ export default function StorageView({
                         disabled={
                             loading ||
                             backingUp ||
-                            restoringDatabase ||
                             refreshAction.refreshing
                         }
                         onClick={() => void refreshStorage()}
@@ -416,28 +401,6 @@ export default function StorageView({
                     </button>
                 </section>
             )}
-            <details className="drive-recovery-help">
-                <summary>
-                    Reopen an existing drive or restore an older archive
-                </summary>
-                <p>
-                    Use the same MongoDB connection to reopen this drive on a
-                    new installation. If MongoDB was lost, use Restore backup
-                    above with your saved recovery file and key.
-                </p>
-                <DatabaseRestore
-                    demoMode={demoMode}
-                    onRestoreStateChange={databaseRestoreState}
-                />
-                <a
-                    className="inline-link"
-                    href="https://github.com/TechShreyash/TGDrive/blob/main/docs/backup-recovery.md"
-                    target="_blank"
-                    rel="noopener noreferrer"
-                >
-                    Read the Recovery Guide <ExternalLink size={13} />
-                </a>
-            </details>
         </div>
     );
 }

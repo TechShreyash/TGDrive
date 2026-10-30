@@ -118,8 +118,8 @@ Optional does not always mean that a blank value is accepted:
   reuse values saved in MongoDB, so blanks do not disable a configured interface.
   A main bot token requires TELEGRAM_ADMIN_IDS; storage still needs a working bot.
 - MAX_FILE_SIZE= means the bounded default logical-file limit.
-- With standard Compose auto-secrets enabled, blank SESSION_SECRET and
-  MONGODB_BACKUP_KEY reuse original saved keys, or generate them for a new drive.
+- With standard Compose auto-secrets enabled, a blank SESSION_SECRET reuses the
+  saved value, or is generated for a new drive. ENCRYPTION_KEY is never generated.
 
 Invalid settings fail before serving the application. Secret wrappers and
 hidden validation inputs reduce accidental disclosure in exception text; they
@@ -285,7 +285,6 @@ For lost drive data, follow [backup recovery](backup-recovery.md).
 | `MONGODB_URI` | Required | Secret URI beginning mongodb:// or mongodb+srv://. Missing/invalid configuration or failed database access rejects startup; no local database fallback. |
 | `ENCRYPTION_KEY` | Required, secret | 64 hex characters. Encrypts every document TGDrive uploads (AES-256-CTR). Never stored in MongoDB, backups or logs. The drive remembers a fingerprint; startup stops if the key differs. [Encryption](#stored-file-encryption). |
 | `MONGODB_DATABASE` | tgdrive | 1–63 ASCII letters/digits, underscores or hyphens; dedicated to one drive. |
-| `MONGODB_BACKUP_KEY` | None | Initial secret 64-hex-character AES-256 recovery key, independent of the login password. Unified files retain an existing journal key; preserve matching keys for older generations. |
 | `MONGODB_BACKUP_SECONDS` | 1 hour (`3600`) | Integer 60–604800 seconds between successful automatic standalone safety copies. Separate standalone publication pauses while independent channel protection is enabled. |
 | `DATA_DIR` | data | Persistent generated keys, Telegram sessions, helper locks, recovery/activation state and media cache. MongoDB holds the live catalog and durable job/receipt records. |
 | `CACHE_DIR` | cache | Persistent unfinished upload payloads and encrypted temporary database backup files. Keep unfinished bytes. |
@@ -296,17 +295,14 @@ root or account home, equal or nested. Compose sets /app/data and /app/cache.
 The container runs as UID/GID 10001:10001; custom bind mounts must allow that
 account to write. Do not replace missing writable volumes with disposable mounts.
 
-Standard Compose enables `TGDRIVE_AUTO_SECRETS=true`. Missing
-`SESSION_SECRET` and `MONGODB_BACKUP_KEY` values are generated once for a new
+Standard Compose enables `TGDRIVE_AUTO_SECRETS=true`. A missing
+`SESSION_SECRET` is generated once for a new
 drive and saved as mode 0600 in `DATA_DIR/deployment-secrets.json`. Explicit
 values and existing MongoDB bootstrap settings take precedence. Existing drives
 with missing keys fail rather than silently receiving replacement keys.
 
-Unified v2 backups retain the recovery key already recorded in the replica
-journal, including after independent protection is disabled. Changing the login
-password or this environment value does not re-encrypt existing files. Use
-**Save recovery key** for the key matching the downloadable recovery file;
-legacy MongoDB archives can still require their original separate key.
+Backups are encrypted with a key derived from `ENCRYPTION_KEY`; there is no
+separate recovery key to save.
 
 The storage_channel_id binding is a nonzero signed 64-bit integer. Switching
 channels cannot silently reinterpret message IDs. Use a MongoDB replica set;
@@ -476,8 +472,6 @@ permanent third-party API compatibility.
 | `GET /api/v1/session` | Public | None | `{"authenticated":true}` or false. |
 | `GET /api/v1/status` | Owner | None | Connection, capacity, committed revision, backend, latest locally observed encrypted snapshot record and client health. The backup observation reloads at startup and updates during publication; this polling endpoint does not query backup history. |
 | `POST /api/v1/backup` | Owner | `{}` | Creates a confirmed unified recovery file; runs the independent checkpoint when enabled, otherwise a standalone main-channel snapshot. Returns recovery status; `503` if not confirmed. |
-| `GET /api/v1/backup/recovery-key` | Owner | None | Private no-store download of the backup decryption key. |
-| `POST /api/v1/backup/restore` | Owner, disabled in demo | Legacy `TGDRIVE-MONGO-1` archive bytes, `Content-Type: application/octet-stream`, `X-TGDrive-Recovery-Key: <64 hex characters>`, `X-TGDrive-Confirm: RESTORE` | Restores a legacy full database archive into an empty or untouched automatically created drive; returns `restart_required: true`. |
 | `GET /health/live` | Public | None | `200 {"status":"ok"}` if HTTP can answer. |
 | `GET /health/ready` | Public | None | `200` if runtime/pool ready, otherwise `503`. |
 | `GET /healthz` | Public | None | Readiness alias used by Docker. |
@@ -492,9 +486,8 @@ admission_paused.
 With `DEMO_MODE=true`, restricted visitor requests that mutate `/api/v1/settings`
 or its subroutes, `/api/v1/replica` or its subroutes, and `POST /api/v1/backup`
 return `403` with `code: "DEMO_MODE_READ_ONLY"`. This includes connection refresh
-and Premium login/cancellation. `GET /api/v1/backup/recovery-key` and
-`GET /api/v1/replica/key` and `GET /api/v1/replica/file` return the same denial
-to prevent secret export.
+and Premium login/cancellation. `GET /api/v1/replica/file` returns the same denial
+to prevent backup export.
 Status/settings reads and the secret-free replica report remain available under
 normal authentication. The status field `demo` identifies a synthetic test
 runtime; it is separate from the deployment's `demo_mode` flag. Authenticated
@@ -516,27 +509,14 @@ enabled. Full-access retries can explicitly authorize privileged work.
 
 The compatibility-named recovery object includes state:protected|pending|error,
 backend:mongodb, metadata_revision, protected_revision, last_success_at,
-backup_key_configured and optional error/backup_error. Here protected means the
+optional error/backup_error. Here protected means the
 catalog is committed in MongoDB. An independent safety-copy failure does not
 make an acknowledged catalog write uncommitted.
 
 POST /api/v1/backup explicitly requests a complete encrypted recovery point,
 bypassing the independent worker's batching delay but respecting provider retry
-deadlines. Ordinary uploads do not call or wait for it. Recovery file/key
+deadlines. Ordinary uploads do not call or wait for it. Backup file
 downloads are owner-only and absent from ordinary status/configuration.
-
-This legacy restore route accepts at most 1 GiB of ciphertext and 1 GiB expanded
-data. A unified `TGDRIVE-BACKUP-2` file returns `422` with
-`RECOVERY_FILE_REQUIRES_UNIFIED_RESTORE`; use the [recovery-file flow](#independent-channel-backup-and-recovery)
-to verify channel access and file mappings before activation.
-It validates the archive before pausing work, then rechecks the destination
-inside the restore transaction. Existing files, jobs, shares or saved settings
-changes reject replacement with `409 RESTORE_DESTINATION_NOT_EMPTY`. Browser
-sessions are revoked after success. A failure after pausing returns
-`503 DATABASE_RESTORE_UNCONFIRMED` and requires a service restart; the website
-keeps those instructions visible. This route is available in owner recovery
-mode and is excluded from the ordinary 64 KiB JSON-body limit. See
-[website recovery steps](backup-recovery.md#restore-a-lost-database-from-telegram).
 
 The Storage & Backups page additionally accounts for unfinished transfers. Queued/active
 uploads remain pending; failed/missing-original uploads need attention.
@@ -559,11 +539,11 @@ channel preparation and recovery limits.
 | `GET /api/v1/replica` | None | Configuration, phase, channel IDs, revisions, progress, retry guidance, `backup_file_available`, `file_restore_allowed`, bounded activity and optional recovery candidate including `has_database` and `source_is_backup`. File restore is unavailable in demo mode. No bot tokens or key. |
 | `POST /api/v1/replica/configure` | `channel_id`, write-only `bot_token`, `independent_accounts: true` | Verifies private distinct channels and a separate backup bot, saves configuration, schedules initial copying. Requires an existing catalog. |
 | `POST /api/v1/replica/action` | `action`: `sync`, `pause`, `resume`, `retry` or `disable` | Durable operation control. Resume also re-enables configured protection. |
-| `GET /api/v1/replica/key` | None | Private no-store recovery-key JSON. `key` matches the current downloadable file; legacy matching keys/restore-point references remain available for older formats. Save separately from the file. |
 | `GET /api/v1/replica/file` | None | Private no-store `tgdrive-backup.tgdb` download of retained confirmed local ciphertext; `404` until a confirmed file is available. Status reads do not download from Telegram. |
-| `POST /api/v1/replica/import` | Raw file bytes; `Content-Type: application/octet-stream`, `X-TGDrive-Recovery-Key: <64 hex characters>`; optional `X-TGDrive-Source-Channel` and `X-TGDrive-Bot-Token` | Authenticates and stages the recovery file, tries recorded channels/access and returns a candidate. Overrides repair revoked credentials or select a survivor. Inspection does not activate a drive. Disabled in demo mode. |
+| `POST /api/v1/replica/import` | Raw file bytes; `Content-Type: application/octet-stream`; optional `X-TGDrive-Source-Channel` and `X-TGDrive-Bot-Token` | Authenticates and stages the recovery file, tries recorded channels/access and returns a candidate. Overrides repair revoked credentials or select a survivor. Inspection does not activate a drive. Disabled in demo mode. |
 | `GET /api/v1/replica/report` | None | Secret-free owner status/report attachment; file/channel names and IDs may still be private. |
-| `POST /api/v1/replica/recover` | `source_channel`, write-only `bot_token`, 64-hex `key`, optional positive `message_id` | Compatibility path: downloads/authenticates a pinned recovery copy and records a candidate. |
+| `POST /api/v1/replica/restore` | `{}` | One-click restore of the backup found in the storage channel at startup: verifies every part, restores and activates. Restart when asked. Disabled in demo mode. |
+| `POST /api/v1/replica/recover` | `source_channel`, write-only `bot_token` | Reads the channel's latest pinned backup with `ENCRYPTION_KEY` and records a candidate. |
 | `POST /api/v1/replica/recover` | `target_channel`, write-only `target_bot_token`, matching typed `confirm_channel`, optional `catalog_only: true` | Copies the inspected candidate into an empty private destination, or verifies the surviving channel for database-only restoration. A database-only request may omit the target token to reuse verified source access. |
 | `POST /api/v1/replica/recover` | `activate: true`, `confirm_channel` matching the pending candidate's destination channel ID | Explicitly activates a completed candidate; service restart is required. Missing/wrong confirmation or incomplete candidates cannot be activated. |
 
@@ -572,7 +552,7 @@ Database connection failures and timeouts report
 `retry_at`. Database access/configuration or ownership failures report
 `REPLICA_MONGODB_FAILED`, phase `error` and `retry_at: 0`. Neither advances the
 confirmed revision or discards the pending backup. See the
-[retry policy](backup-recovery.md#enable-and-confirm-the-first-copy).
+[retry policy](backup-recovery.md#add-a-backup-channel).
 
 All routes require owner authentication and normal same-origin mutation checks.
 A recovery-only startup exposes the authenticated recovery surface when the local
@@ -587,7 +567,7 @@ the captured data. A standalone file records main only. Independent protection
 adds verified backup mappings to the same artifact. Limits are 64 MiB ciphertext
 and 1 GiB expanded data; uploads reject excess data while staging and enforce
 the free-space reserve. The import route is outside the ordinary 64 KiB JSON
-body limit. Duplicate key/channel/token headers, invalid keys or mappings,
+body limit. Duplicate channel/token headers, a wrong `ENCRYPTION_KEY`, invalid mappings,
 unavailable source documents and wrong sizes block restoration.
 
 The independent worker coalesces changed revisions/settings within 60-second
@@ -603,18 +583,9 @@ backup documents and valid independent configuration while rebasing locations to
 the verified target. It requires an accessible matching database or an empty
 replacement, not access to the previous MongoDB host.
 
-Legacy `tgdrive-replica.tgdb` capsules and `TGDRIVE-MONGO-1` archives remain
-readable with their original keys. Pending old-format jobs finish with their
-original send identities; they can briefly produce the former two-file pair.
-Legacy archives retain their 1 GiB upload/expanded limits and the separate
-`/api/v1/backup/restore` compatibility path.
-
 The MongoDB `replica_state`, `replica_chunks` and `replica_copies` collections
 persist random operation IDs, confirmed message mappings, configuration and
-recovery state. They stay out of backup files. On first start after upgrading
-from 2.0–2.2, TGDrive imports `DATA_DIR/channel-backup.sqlite3` once and renames
-it to `channel-backup.sqlite3.migrated`; startup stops if MongoDB already holds
-backup state, so neither copy is overwritten. Status is confirmed-part progress,
+recovery state. They stay out of backup files. Status is confirmed-part progress,
 not speculative queued bytes. Confirmed local ciphertext supports downloading
 the file. Old remote documents and recovery points are retained; changing the
 configured destination does not erase them.
@@ -1580,7 +1551,7 @@ belong in [the roadmap](roadmap.md), not in this implemented API reference.
 | --- | --- |
 | Owner access | One shared drive; demo mode optionally separates visitor and full-access passwords. No built-in MFA/passkeys, public signup, teams or tenant isolation. |
 | Shared Links | Anyone with a valid scoped link can read its contents |
-| Encryption | Files TGDrive uploads to Telegram are encrypted with `ENCRYPTION_KEY`; bot-mode copies are encrypted unless that option is off. Local staging, caches and files uploaded before 2.3 are not. [Details](#stored-file-encryption) |
+| Encryption | Files TGDrive uploads to Telegram are encrypted with `ENCRYPTION_KEY`; bot-mode copies are encrypted unless that option is off. Local staging and caches are not. [Details](#stored-file-encryption) |
 | Original file safety | A database record cannot recreate a deleted Telegram file |
 | Previews | Uploaded HTML/code is not executed; no external Office service receives files |
 | Malware | TGDrive does not scan files for malware |
@@ -1599,7 +1570,7 @@ belong in [the roadmap](roadmap.md), not in this implemented API reference.
   credential and signing key can reactivate their still-unexpired cookies.
   Use a fresh signing secret when earlier sessions must stay invalid.
   Sessions have an absolute 24-hour default lifetime, with no separate idle
-  timeout. Sensitive settings and recovery-key export accept an active owner
+  timeout. Sensitive settings and backup download accept an active owner
   session without a fresh password prompt.
 - **Requests:** mutations check Origin/Fetch Metadata; private routes authenticate
   before body processing. JSON bodies are capped at 64 KiB, receipt PATCH at
@@ -1653,8 +1624,8 @@ original payloads or local staging and does not scan for malware. See
 | Telegram metadata | Random `<hex>.bin` name, `application/octet-stream`, no caption and no Telegram thumbnail. Previews come from TGDrive's local cover cache. |
 | Bot mode, encryption on (default) | The server downloads the forwarded file to `CACHE_DIR/bot-imports`, then uploads it encrypted through the normal upload queue. Slower; uses server bandwidth and disk. |
 | Bot mode, encryption off | Telegram copies the message instantly; that file stays readable to anyone with channel access. Set in **Configuration → Transfer limits → Bot uploads**. |
-| Older files | Parts without a nonce are read as plain bytes. They are not re-encrypted. |
-| Key check | MongoDB `settings._id = "encryption"` holds an HMAC fingerprint, never the key. Startup refuses a different key, and refuses to record a new fingerprint when encrypted parts already exist. |
+| Unencrypted parts | Only bot-mode copies made with encryption off. They are read as plain bytes. |
+| Key check | MongoDB `settings._id = "encryption"` holds an HMAC fingerprint, never the key. It is written when the drive is created; startup refuses a different key and any database without the record. |
 | Integrity | Complete-part reads verify the plaintext SHA-256 already stored per part. Partial range reads are not authenticated. |
 
 Local staging, media caches and generated covers stay on the server unencrypted.

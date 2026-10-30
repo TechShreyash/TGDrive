@@ -65,6 +65,8 @@ export interface ReplicaState {
         complete: boolean;
         has_database?: boolean;
         source_is_backup?: boolean;
+        discovered?: boolean;
+        created_at?: string | null;
     } | null;
 }
 
@@ -112,27 +114,6 @@ export function validateRecoveryFile(file: Pick<File, "name" | "size">) {
         throw new Error("Choose a nonempty recovery file no larger than 64 MiB.");
 }
 
-export function recoveryFileKey(value: string): string {
-    let key = value.trim();
-    if (key.startsWith("{")) {
-        try {
-            const saved: unknown = JSON.parse(key);
-            key =
-                saved &&
-                typeof saved === "object" &&
-                "key" in saved &&
-                typeof saved.key === "string"
-                    ? saved.key.trim()
-                    : "";
-        } catch {
-            key = "";
-        }
-    }
-    if (!/^[a-fA-F0-9]{64}$/.test(key))
-        throw new Error("Paste your saved recovery key or recovery-key JSON.");
-    return key;
-}
-
 export default function ChannelBackup({
     recoveryOnly = false,
     demoMode = false,
@@ -156,9 +137,7 @@ export default function ChannelBackup({
     const [recoveryOpen, setRecoveryOpen] = useState(recoveryOnly);
     const [source, setSource] = useState("");
     const [sourceToken, setSourceToken] = useState("");
-    const [key, setKey] = useState("");
     const [recoveryFile, setRecoveryFile] = useState<File | null>(null);
-    const [messageId, setMessageId] = useState("");
     const [target, setTarget] = useState("");
     const [targetToken, setTargetToken] = useState("");
     const [catalogOnly, setCatalogOnly] = useState(false);
@@ -397,22 +376,6 @@ export default function ChannelBackup({
                 !useSavedCopy || sourceToken.trim()
                     ? validateBackupToken(sourceToken)
                     : undefined;
-            const recoveryKey = key.trim();
-            if (recoveryKey && !/^[0-9a-fA-F]{64}$/.test(recoveryKey))
-                throw new Error(
-                    "Enter the 64-character hexadecimal key value from the saved recovery-key JSON.",
-                );
-            let checkpoint: number | undefined;
-            if (messageId.trim() && !useSavedCopy) {
-                checkpoint = Number(messageId.trim());
-                if (
-                    !/^[1-9]\d*$/.test(messageId.trim()) ||
-                    !Number.isSafeInteger(checkpoint)
-                )
-                    throw new Error(
-                        "The checkpoint message ID must be a positive whole number.",
-                    );
-            }
             const mainBot =
                 copy && (!catalogOnly || targetToken.trim())
                     ? validateBackupToken(targetToken)
@@ -436,8 +399,6 @@ export default function ChannelBackup({
                 {
                     source_channel: sourceChannel,
                     ...(credential ? { bot_token: credential } : {}),
-                    ...(recoveryKey ? { key: recoveryKey } : {}),
-                    ...(checkpoint ? { message_id: checkpoint } : {}),
                     ...(copy
                         ? {
                               target_channel: destination,
@@ -449,7 +410,6 @@ export default function ChannelBackup({
                 },
                 () => {
                     setSourceToken("");
-                    setKey("");
                     if (copy) setTargetToken("");
                 },
             );
@@ -467,7 +427,6 @@ export default function ChannelBackup({
             validateRecoveryFile(recoveryFile);
             headers = {
                 "Content-Type": "application/octet-stream",
-                "X-TGDrive-Recovery-Key": recoveryFileKey(key),
             };
             if (source.trim())
                 headers["X-TGDrive-Source-Channel"] = String(
@@ -500,7 +459,6 @@ export default function ChannelBackup({
             setConfirmation("");
             setActivationConfirmation("");
             setSourceToken("");
-            setKey("");
         } catch (cause) {
             if (mounted.current) setActionError(errorMessage(cause));
         } finally {
@@ -508,6 +466,8 @@ export default function ChannelBackup({
             if (mounted.current) setBusy("");
         }
     };
+    const restoreDiscovered = () =>
+        void mutate("restore", "/api/v1/replica/restore", {});
     const activate = () => {
         if (
             demoMode ||
@@ -524,7 +484,6 @@ export default function ChannelBackup({
             },
             () => {
                 setSourceToken("");
-                setKey("");
                 setActivationConfirmation("");
             },
         );
@@ -551,17 +510,6 @@ export default function ChannelBackup({
         ? Math.max(0, state.total_bytes - state.done_bytes)
         : 0;
     const report = (state?.report || []).slice(-30).reverse();
-    const recoveryKeyAction = demoMode ? (
-        <button type="button" className="text-button" disabled>
-            <Download size={16} />
-            Save recovery key
-        </button>
-    ) : (
-        <a className="text-button" href="/api/v1/replica/key" download>
-            <Download size={16} />
-            Save recovery key
-        </a>
-    );
 
     return (
         <section
@@ -580,8 +528,8 @@ export default function ChannelBackup({
                     </h2>
                     <p>
                         {recoveryOnly
-                            ? "Choose your recovery file and key. Keep the surviving Telegram channel intact while TGDrive prepares recovery."
-                            : "Save an encrypted recovery file and its key. Add a second channel to protect your files if a channel is lost."}
+                            ? "Restore your drive from the backup in your Telegram channel. Keep the channel intact while TGDrive restores it."
+                            : "Backups are encrypted with your ENCRYPTION_KEY and pinned in your channels. Add a second channel to protect your files if a channel is lost."}
                     </p>
                 </div>
                 <button
@@ -735,9 +683,9 @@ export default function ChannelBackup({
                     )}
                     {phase === "restart_required" && (
                         <p className="channel-backup-feedback">
-                            The recovered configuration is saved. Restart
-                            TGDrive to open it. Keep the surviving channel and
-                            your recovery key.
+                            The recovered drive is saved. Restart TGDrive to
+                            open it. Keep the surviving channel and your
+                            ENCRYPTION_KEY.
                         </p>
                     )}
                     {!recoveryOnly && (
@@ -862,11 +810,44 @@ export default function ChannelBackup({
                                 )}
                             </div>
                         )}
-                    {recoveryOnly && candidate && (
-                        <div className="channel-backup-actions">
-                            {recoveryKeyAction}
-                        </div>
-                    )}
+                    {recoveryOnly &&
+                        candidate?.discovered &&
+                        !candidate.complete &&
+                        !active &&
+                        phase !== "restart_required" && (
+                            <div className="channel-backup-candidate">
+                                <h3 tabIndex={-1}>Backup found</h3>
+                                <p>
+                                    Your storage channel has a backup from{" "}
+                                    <strong>
+                                        {candidate.created_at
+                                            ? formatTimestamp(candidate.created_at)
+                                            : "an earlier session"}
+                                    </strong>{" "}
+                                    with {candidate.files.toLocaleString()}{" "}
+                                    files ({formatBytes(candidate.bytes)}).
+                                    Restoring checks every file part, then
+                                    reopens your drive.
+                                </p>
+                                <div className="channel-backup-actions">
+                                    <button
+                                        type="button"
+                                        className="primary-button"
+                                        disabled={demoMode || !!busy}
+                                        onClick={restoreDiscovered}
+                                    >
+                                        {busy === "restore" ? (
+                                            <Spinner />
+                                        ) : (
+                                            <ShieldCheck size={16} />
+                                        )}
+                                        {busy === "restore"
+                                            ? "Restoring…"
+                                            : "Restore drive"}
+                                    </button>
+                                </div>
+                            </div>
+                        )}
                 </>
             )}
             {!recoveryOnly && state && (
@@ -891,13 +872,11 @@ export default function ChannelBackup({
                                 Download backup
                             </a>
                         )}
-                        {recoveryKeyAction}
                     </div>
                     <p className="channel-backup-key-help">
-                        Keep the recovery file outside the server and save its
-                        key separately. Your login password does not unlock it.
-                        Download an updated file after a new confirmed backup or
-                        channel replacement.
+                        The file is encrypted with your ENCRYPTION_KEY. Keep a
+                        copy outside the server; with the key, it restores your
+                        drive even if Telegram cannot.
                         {!state.backup_file_available &&
                             " A download is available after the first backup is confirmed."}
                     </p>
@@ -1033,7 +1012,7 @@ export default function ChannelBackup({
                         <div className="channel-backup-feedback">
                             <p>
                                 New changes will stop being copied. Keep the
-                                existing channels and recovery key; disabling
+                                existing channels and ENCRYPTION_KEY; disabling
                                 does not replace a recovery plan.
                             </p>
                             <div className="channel-backup-actions">
@@ -1095,25 +1074,10 @@ export default function ChannelBackup({
                                             }}
                                         />
                                     </label>
-                                    <label>
-                                        Recovery key (required)
-                                        <input
-                                            type="password"
-                                            autoComplete="off"
-                                            value={key}
-                                            onChange={(event) => setKey(event.target.value)}
-                                            spellCheck={false}
-                                            maxLength={8192}
-                                            required
-                                            disabled={fileRestoreBlocked || !!busy}
-                                            aria-describedby="recovery-file-help"
-                                        />
-                                    </label>
                                 </div>
                                 <p id="recovery-file-help">
-                                    Choose your encrypted .tgdb file, up to 64 MiB. Paste the saved
-                                    recovery key or the contents of its JSON file. Your login password
-                                    is separate. Inspection does not overwrite the drive.
+                                    Choose your downloaded .tgdb backup, up to 64 MiB. It opens with
+                                    this server's ENCRYPTION_KEY. Checking it does not change the drive.
                                 </p>
                                 <details>
                                     <summary>Channel access changed?</summary>
@@ -1150,7 +1114,7 @@ export default function ChannelBackup({
                                 <button
                                     type="submit"
                                     className="secondary-button"
-                                    disabled={fileRestoreBlocked || !!busy || !recoveryFile || !key.trim()}
+                                    disabled={fileRestoreBlocked || !!busy || !recoveryFile}
                                 >
                                     {busy === "inspect_file" ? <Spinner /> : <RefreshCw size={16} aria-hidden="true" />}
                                     {busy === "inspect_file" ? "Checking backup…" : "Inspect backup"}
@@ -1160,14 +1124,14 @@ export default function ChannelBackup({
                                 )}
                             </form>
                             <details className="channel-backup-details">
-                                <summary>Older backups: recover from a channel</summary>
+                                <summary>Main channel lost: restore from the backup channel</summary>
                                 <form
                                     className="channel-backup-form"
                                     onSubmit={(event) => recover(event, false)}
                                 >
                                     <div className="channel-backup-fields">
                                         <label>
-                                            Surviving channel ID
+                                            Backup channel ID
                                             <input
                                                 inputMode="numeric"
                                                 autoComplete="off"
@@ -1181,8 +1145,7 @@ export default function ChannelBackup({
                                             />
                                         </label>
                                         <label>
-                                            Bot token with access to the surviving
-                                            channel
+                                            Backup bot token
                                             <input
                                                 type="password"
                                                 autoComplete="new-password"
@@ -1196,50 +1159,11 @@ export default function ChannelBackup({
                                                 disabled={demoMode || !!busy}
                                             />
                                         </label>
-                                        <label>
-                                            Saved recovery key
-                                            <input
-                                                type="password"
-                                                autoComplete="new-password"
-                                                value={key}
-                                                onChange={(event) =>
-                                                    setKey(event.target.value)
-                                                }
-                                                spellCheck={false}
-                                                maxLength={64}
-                                                disabled={demoMode || !!busy}
-                                                aria-describedby="channel-recovery-key-help"
-                                            />
-                                        </label>
-                                        <label>
-                                            <span>
-                                                Checkpoint message ID{" "}
-                                                <span className="channel-backup-optional">
-                                                    (optional)
-                                                </span>
-                                            </span>
-                                            <input
-                                                inputMode="numeric"
-                                                autoComplete="off"
-                                                value={messageId}
-                                                onChange={(event) =>
-                                                    setMessageId(event.target.value)
-                                                }
-                                                disabled={demoMode || !!busy}
-                                                aria-describedby="checkpoint-id-help"
-                                            />
-                                        </label>
                                     </div>
-                                    <p id="channel-recovery-key-help">
-                                        Encrypted copies need the 64-character key value
-                                        from your saved recovery-key JSON. Leave this
-                                        empty only for a verified plain catalog
-                                        checkpoint.
-                                    </p>
-                                    <p id="checkpoint-id-help">
-                                        Leave the message ID empty to inspect the latest
-                                        pinned recovery copy. Inspecting does not
-                                        activate or overwrite a drive.
+                                    <p>
+                                        TGDrive reads the latest pinned backup with
+                                        this server's ENCRYPTION_KEY. Checking it does
+                                        not change the drive.
                                     </p>
                                     <button
                                         type="submit"
@@ -1257,8 +1181,8 @@ export default function ChannelBackup({
                                             <RefreshCw size={16} />
                                         )}
                                         {busy === "inspect"
-                                            ? "Inspecting…"
-                                            : "Inspect recovery copy"}
+                                            ? "Checking…"
+                                            : "Find backup"}
                                     </button>
                                 </form>
                             </details>
