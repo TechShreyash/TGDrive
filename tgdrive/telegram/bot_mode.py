@@ -47,8 +47,10 @@ class BotMode:
         before_write: Callable[[], Awaitable[None] | None] | None = None,
         before_delete: Callable[[], Awaitable[None]] | None = None,
         folder_settings: BotSettings | None = None,
+        transfers: Any = None,
     ) -> None:
         self.client = client
+        self.transfers = transfers
         self.settings = settings
         self.store = store
         self.before_write = before_write
@@ -187,6 +189,15 @@ class BotMode:
                 f"Saving your file to: {folder_name}…",
                 reply_markup=self._menu(),
             )
+            if self.transfers is not None and await self.folder_settings.encrypt():
+                item = await self._encrypted_import(message, path, operation_id)
+                await self._feedback(
+                    message,
+                    status,
+                    f"Uploaded {item['name']}\nSaved to: {folder_name}\n\n"
+                    "Send another file to save it here, or use /set_folder.",
+                )
+                return
             copied = await message.copy(
                 self.settings.storage_channel,
                 disable_notification=True,
@@ -275,6 +286,27 @@ class BotMode:
             f"Uploaded {item['name']}\nSaved to: {folder_name}\n\n"
             "Send another file to save it here, or use /set_folder.",
         )
+
+    async def _encrypted_import(self, message, path, operation_id):
+        """Download the forwarded file, then upload it encrypted like a web upload."""
+        media = self._media(message)
+        if media is None:
+            raise RuntimeError("message contains no media")
+        name = self._media_name(media, message)
+        directory = self.settings.resolved_cache_dir / "bot-imports"
+        directory.mkdir(parents=True, exist_ok=True, mode=0o700)
+        staged = directory / operation_id
+        await self.client.download_media(message, file_name=str(staged))
+        size = staged.stat().st_size
+        record = await self.transfers.enqueue_upload(
+            staged, path, name, size, transfer_id=operation_id[:32]
+        )
+        if record.task is not None:
+            await asyncio.shield(record.task)
+        if record.status.value != "completed":
+            staged.unlink(missing_ok=True)
+            raise RuntimeError(record.error or "Encrypted upload did not complete")
+        return {"name": record.context.get("name", name)}
 
     @staticmethod
     def _media(message: Message) -> Any | None:

@@ -326,6 +326,11 @@ updates. `dev` contains ongoing work and may be unstable. Follow
 [Get the source](setup.md#get-the-source) when choosing the next version.
 
 1. Finish work, save a confirmed backup and its separate key off-host, then stop safely.
+   Also take a MongoDB copy with your database host's backup tool: an upgraded
+   database cannot be opened by an older TGDrive.
+   - **Upgrading from 2.0–2.2:** add `ENCRYPTION_KEY` (`openssl rand -hex 32`)
+     to `.env` or your Coolify variables before starting. TGDrive refuses to start
+     without it. Files already stored stay readable; new uploads are encrypted.
 2. Record the running version and source commit; review the new version's requirements.
 3. Update the source using your installation method below.
 4. Run `docker compose up -d --build`, keeping server `-f` arguments, or redeploy

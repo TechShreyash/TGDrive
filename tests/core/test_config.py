@@ -15,6 +15,7 @@ def settings_values(**overrides: object) -> dict[str, object]:
         "STORAGE_CHANNEL": -1001234567890,
         "ADMIN_PASSWORD": "correct horse battery staple",
         "SESSION_SECRET": "s" * 48,
+        "ENCRYPTION_KEY": "e" * 64,
     }
     values.update(overrides)
     return values

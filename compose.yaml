@@ -22,6 +22,7 @@ services:
             TELEGRAM_ADMIN_IDS: ${TELEGRAM_ADMIN_IDS:-}
             STORAGE_CHANNEL: ${STORAGE_CHANNEL:?Set STORAGE_CHANNEL}
             ADMIN_PASSWORD: ${ADMIN_PASSWORD:-}
+            ENCRYPTION_KEY: ${ENCRYPTION_KEY:?Set ENCRYPTION_KEY (openssl rand -hex 32)}
             # Container paths and hosting policy stay fixed across deployments.
             DATA_DIR: /app/data
             CACHE_DIR: /app/cache

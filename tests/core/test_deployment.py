@@ -84,6 +84,7 @@ def test_existing_mongodb_bootstrap_reopens_with_only_database_configuration(
     )
     monkeypatch.setenv("TGDRIVE_AUTO_SECRETS", "true")
     monkeypatch.setenv("MONGODB_URI", "mongodb://synthetic.invalid")
+    monkeypatch.setenv("ENCRYPTION_KEY", "e" * 64)
     monkeypatch.setenv("DATA_DIR", str(tmp_path))
     monkeypatch.setenv("ADMIN_PASSWORD", "")
     for key in ("SESSION_SECRET", "MONGODB_BACKUP_KEY", "ADMIN_PASSWORD_HASH"):
@@ -108,6 +109,7 @@ def test_new_container_can_generate_keys_before_explicit_initialization(
     for key, value in {
         "TGDRIVE_AUTO_SECRETS": "true",
         "MONGODB_URI": "mongodb://synthetic.invalid",
+        "ENCRYPTION_KEY": "e" * 64,
         "DATA_DIR": str(tmp_path),
         "API_ID": "12345",
         "API_HASH": "a" * 32,
@@ -145,6 +147,7 @@ def test_existing_drive_marker_prevents_key_generation_for_an_empty_database(
     for key, value in {
         "TGDRIVE_AUTO_SECRETS": "true",
         "MONGODB_URI": "mongodb://synthetic.invalid",
+        "ENCRYPTION_KEY": "e" * 64,
         "DATA_DIR": str(tmp_path),
         "API_ID": "12345",
         "API_HASH": "a" * 32,
@@ -180,6 +183,7 @@ def recovery_configuration(tmp_path, monkeypatch, **overrides):
     }
     environment = {
         "MONGODB_URI": "mongodb://synthetic.invalid",
+        "ENCRYPTION_KEY": "e" * 64,
         "DATA_DIR": str(tmp_path),
         "ADMIN_PASSWORD": "",
         "ADMIN_PASSWORD_HASH": "",
@@ -200,6 +204,7 @@ def test_explicit_rotation_is_not_hidden_by_saved_mongodb_settings(
         monkeypatch,
         ADMIN_PASSWORD="replacement owner password",
         SESSION_SECRET="replacement-signing-secret-" * 3,
+        ENCRYPTION_KEY="e" * 64,
         STORAGE_CHANNEL=-1009876543210,
     )
     backend = SimpleNamespace(
@@ -331,6 +336,7 @@ def test_hosted_and_local_compose_resolve_without_real_credentials(tmp_path):
         shutil.copyfile(root / name, tmp_path / name)
     fixture = {
         "MONGODB_URI": "mongodb://synthetic.invalid",
+        "ENCRYPTION_KEY": "e" * 64,
         "API_ID": "12345",
         "API_HASH": "a" * 32,
         "MAIN_BOT_TOKEN": "123456:" + "x" * 30,
@@ -442,4 +448,5 @@ def test_environment_template_contains_only_required_bootstrap_values():
         "TELEGRAM_ADMIN_IDS",
         "STORAGE_CHANNEL",
         "ADMIN_PASSWORD",
+        "ENCRYPTION_KEY",
     }

@@ -129,12 +129,20 @@ Open `.env` in a text editor and fill in:
 | `TELEGRAM_ADMIN_IDS` | Your numeric Telegram user ID, not `@username`; comma-separate multiple users. [Find your ID](#find-your-telegram-user-id) |
 | `STORAGE_CHANNEL` | Your channel's negative numeric ID |
 | `ADMIN_PASSWORD` | A unique web password: 12 characters minimum, 15+ recommended |
+| `ENCRYPTION_KEY` | 64 hex characters from `openssl rand -hex 32`. [Save a copy off the server](#save-your-encryption-key) |
 
 Keep `.env` private. Remove placeholder angle brackets, single-quote values
 containing `$`, and do not shell-source the file. Leave `SESSION_SECRET` and
 `MONGODB_BACKUP_KEY` unset for a new installation: TGDrive generates and preserves
 them. **Never replace an existing drive's keys.**
 [Optional settings and hashed passwords](reference.md#configuration).
+
+<a name="save-your-encryption-key"></a>
+
+> [!IMPORTANT]
+> `ENCRYPTION_KEY` encrypts every file TGDrive stores in Telegram. Store a copy
+> in a password manager, outside the server. **If you lose it, no file or backup
+> can be read, and nobody can recover them.** Never change it for an existing drive.
 
 <a name="find-your-telegram-user-id"></a>
 

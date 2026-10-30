@@ -56,8 +56,9 @@ have their own costs.
 | Your own server | [Server deployment](docs/setup.md#hosting-beyond-your-machine) for access while your laptop is off |
 
 Keep TGDrive running for website access, share links and background work.
-Keep separate copies of important files: TGDrive does not add end-to-end
-encryption or guarantee permanent storage. [Privacy and backup basics](docs/new-user-guide.md).
+Files are encrypted before they reach Telegram, using a key only you hold.
+Keep separate copies of important files: TGDrive does not guarantee permanent
+storage. [Privacy and backup basics](docs/new-user-guide.md).
 
 ## Find your guide
 

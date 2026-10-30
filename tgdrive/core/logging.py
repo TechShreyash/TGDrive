@@ -12,7 +12,7 @@ _SECRET_PATTERNS: tuple[tuple[re.Pattern[str], str], ...] = (
     (re.compile(r"\b\d{5,15}:[A-Za-z0-9_-]{20,}\b"), "[REDACTED]"),
     (
         re.compile(
-            r"(?i)(mongodb[_-]?backup[_-]?key|x-tgdrive-recovery-key)"
+            r"(?i)(mongodb[_-]?backup[_-]?key|encryption[_-]?key|x-tgdrive-recovery-key)"
             r"\s*[=:]\s*[^\s,]+"
         ),
         "[REDACTED]",

@@ -52,6 +52,7 @@ class MediaClient:
         size=None,
         expected_sha256=None,
         before_dispatch=None,
+        nonce=None,
     ):
         end = offset + size if size is not None else None
         content = path.read_bytes()[offset:end]

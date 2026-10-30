@@ -130,6 +130,7 @@ export interface BotUploadSettings {
     folder_label: string;
     available: boolean;
     enabled: boolean;
+    encrypt: boolean;
     settings_url: string | null;
 }
 export interface TransferHistoryContext {
@@ -141,10 +142,14 @@ export const api = {
         request<BotUploadSettings>("/api/v1/settings/bot-mode", undefined, {
             signal,
         }),
-    saveBotUploadSettings: (folder_path: string | null) =>
+    saveBotUploadSettings: (folder_path: string | null, encrypt?: boolean) =>
         request<BotUploadSettings>(
             "/api/v1/settings/bot-mode",
-            { folder_path, site_url: window.location.origin },
+            {
+                folder_path,
+                site_url: window.location.origin,
+                ...(encrypt === undefined ? {} : { encrypt }),
+            },
             { method: "PATCH" },
         ),
     starred: (q = "", signal?: AbortSignal) =>

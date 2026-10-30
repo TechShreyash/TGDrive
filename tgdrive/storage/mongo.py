@@ -305,6 +305,7 @@ def bootstrap_values(settings: Any) -> dict[str, Any]:
         if key in {
             "MONGODB_URI",
             "MONGODB_DATABASE",
+            "ENCRYPTION_KEY",
             "DATA_DIR",
             "CACHE_DIR",
             "DEMO_MODE",

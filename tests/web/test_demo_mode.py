@@ -421,6 +421,7 @@ def test_legacy_mongo_bootstrap_cannot_supply_demo_policy(
     for key in (*document, "ADMIN_PASSWORD_HASH"):
         monkeypatch.delenv(key, raising=False)
     monkeypatch.setenv("MONGODB_URI", "mongodb://synthetic.invalid")
+    monkeypatch.setenv("ENCRYPTION_KEY", "e" * 64)
     monkeypatch.setenv("MONGODB_DATABASE", "demo_policy_test")
     monkeypatch.setenv("DATA_DIR", str(tmp_path))
     monkeypatch.setenv("TGDRIVE_AUTO_SECRETS", "false")

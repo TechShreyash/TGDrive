@@ -11,8 +11,16 @@ MAX_FILE_PARTS = 4096
 MAX_FILE_SIZE = (1 << 63) - 1
 MAX_POSTER_BYTES = 1024 * 1024
 _PART_KEYS = {"index", "offset", "size", "message_id", "sha256"}
-_OPTIONAL_KEYS = {"document_id"}
+_OPTIONAL_KEYS = {"document_id", "nonce"}
 _SHA256 = re.compile(r"[0-9a-fA-F]{64}")
+_NONCE = re.compile(r"[0-9a-f]{32}")
+
+
+def _validate_nonce(record: dict[str, Any]) -> None:
+    if "nonce" in record and (
+        not isinstance(record["nonce"], str) or not _NONCE.fullmatch(record["nonce"])
+    ):
+        raise ValidationError("nonce must contain exactly 32 lowercase hex characters")
 
 
 def validate_sha256(value: Any, *, optional: bool = True) -> str | None:
@@ -32,9 +40,10 @@ def validate_poster(
     if (
         not isinstance(value, dict)
         or not required <= value.keys()
-        or value.keys() - required - {"document_id"}
+        or value.keys() - required - _OPTIONAL_KEYS
     ):
         raise ValidationError("poster has missing or unknown fields")
+    _validate_nonce(value)
     if (
         type(value["message_id"]) is not int
         or not 0 < value["message_id"] <= MAX_FILE_SIZE
@@ -101,6 +110,7 @@ def validate_parts(parts: Any, *, size: int, message_id: int) -> list[dict[str, 
             raise ValidationError(
                 "document_id must be a non-zero signed 64-bit integer"
             )
+        _validate_nonce(part)
         if part["message_id"] in identities:
             raise ValidationError("file parts cannot repeat a Telegram message")
         identities.add(part["message_id"])

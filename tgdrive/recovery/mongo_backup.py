@@ -219,7 +219,7 @@ def check_restore_destination(backend, *, allow_pristine=False, session=None):
                 "This database contains drive records. Restore into an empty database."
             )
         if any(
-            not _pristine_recovery_key(row, None)
+            not _pristine_recovery_key(row, None) and row.get("_id") != "encryption"
             for row in backend.db.settings.find({}, session=session)
         ):
             raise FileExistsError("The destination contains saved settings changes")
@@ -258,7 +258,7 @@ def check_restore_destination(backend, *, allow_pristine=False, session=None):
         if backend.db[name].find_one({}, session=session):
             raise FileExistsError("The destination contains drive work or shared links")
     for row in backend.db.settings.find({}, session=session):
-        if row.get("_id") == "bootstrap":
+        if row.get("_id") in {"bootstrap", "encryption"}:
             continue
         if row.get("_id") == "telegram" and row.get("revision") == 1:
             continue

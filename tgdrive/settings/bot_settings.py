@@ -25,6 +25,7 @@ class BotUploadPreferences(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
     folder_path: str | None = Field(default=None, max_length=17000)
     site_url: str | None = Field(default=None, max_length=2048)
+    encrypt: bool = True
 
     @field_validator("folder_path")
     @classmethod
@@ -132,14 +133,16 @@ class BotSettings:
                 "folder_label": label,
                 "available": available,
                 "enabled": bool(self.settings.main_bot_token_value),
+                "encrypt": self.value.encrypt,
                 "settings_url": site_url + SETTINGS_LOCATION if site_url else None,
             }
 
     async def save(self, value: BotUploadPreferences):
         async with self._lock:
             await self._load()
-            if "site_url" not in value.model_fields_set:
-                value = value.model_copy(update={"site_url": self.value.site_url})
+            for name in ("site_url", "encrypt"):
+                if name not in value.model_fields_set:
+                    value = value.model_copy(update={name: getattr(self.value, name)})
             if value.folder_path is not None:
                 try:
                     await asyncio.to_thread(
@@ -157,6 +160,11 @@ class BotSettings:
                 ) from None
             self.value = value
         return await self.snapshot()
+
+    async def encrypt(self):
+        async with self._lock:
+            await self._load()
+            return self.value.encrypt
 
     async def destination(self):
         """Create the dedicated default lazily, then pin its stable folder ID."""

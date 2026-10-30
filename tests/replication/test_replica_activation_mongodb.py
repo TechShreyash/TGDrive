@@ -74,6 +74,7 @@ def deployment(tmp_path):
             STORAGE_CHANNEL=OLD,
             ADMIN_PASSWORD="synthetic recovery owner password",
             SESSION_SECRET="s" * 40,
+            ENCRYPTION_KEY="e" * 64,
             MONGODB_BACKUP_KEY="e" * 64,
         )
         store = MongoStore.create(backend)

@@ -447,3 +447,30 @@ async def test_multipart_pdf_cap_is_preview_only_and_head_never_reads_payload(do
         assert (await pool.health()).active_leases == 0
     finally:
         await pool.stop()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "selection", [None, f"bytes={CHUNK - 3}-{CHUNK + 40}", "bytes=-9", "bytes=17-17"]
+)
+async def test_encrypted_parts_stream_plaintext_for_any_range(selection):
+    from tgdrive.core import encryption
+    from tgdrive.media.ranges import parse_byte_range
+
+    encryption.configure("e" * 64)
+    contents = [bytes(range(256)) * 4097, b"second encrypted part"]
+    parts = build_parts(contents)
+    stored = []
+    for part, content in zip(parts, contents, strict=True):
+        part["nonce"] = encryption.new_nonce()
+        stored.append(encryption.crypt(part["nonce"], 0, content))
+    assert stored[0] != contents[0]
+    whole = b"".join(contents)
+    pool = ClientPool([MultipartClient(stored)])
+    await pool.start()
+    try:
+        response = await stream(pool, contents, selection, parts=parts)
+        selected = parse_byte_range(selection, len(whole))
+        assert await response_body(response) == whole[selected.start : selected.end + 1]
+    finally:
+        await pool.stop()

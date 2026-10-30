@@ -33,6 +33,7 @@ from telethon.errors import (
 )
 from telethon.sessions import StringSession
 
+from tgdrive.core import encryption
 from tgdrive.core.config import Settings
 from tgdrive.media.media_scheduler import MediaScheduler
 from tgdrive.telegram.client_identity import IdentityCache, account_identity
@@ -763,6 +764,7 @@ class Client:
         preview_name: str | None = None,
         thumbnail: bytes | None = None,
         generate_thumbnail: bool = True,
+        nonce: str | None = None,
     ) -> TelegramMessage:
         length = (
             (await asyncio.to_thread(path.stat)).st_size - offset
@@ -774,14 +776,21 @@ class Client:
         cover = thumbnail
         if cover is None and generate_thumbnail and offset == 0:
             cover = await generate(path, preview_name or file_name)
+        if nonce is not None:
+            # Telegram sees only ciphertext under a random name, with no preview.
+            file_name = secrets.token_hex(8) + ".bin"
         with FileWindow(path, offset, length, name=file_name) as source:
             uploaded = await self._upload_parts(
-                source, length=length, file_name=file_name, progress=progress
+                source,
+                length=length,
+                file_name=file_name,
+                progress=progress,
+                nonce=nonce,
             )
             if expected_sha256 is not None:
                 source.verify(expected_sha256)
         thumbnail = None
-        if cover:
+        if cover and nonce is None:
             try:
                 async with asyncio.timeout(4):
 
@@ -800,7 +809,9 @@ class Client:
         media = types.InputMediaUploadedDocument(
             file=uploaded,
             thumb=thumbnail,
-            mime_type=mimetypes.guess_type(file_name)[0] or "application/octet-stream",
+            mime_type="application/octet-stream"
+            if nonce is not None
+            else mimetypes.guess_type(file_name)[0] or "application/octet-stream",
             attributes=[types.DocumentAttributeFilename(file_name)],
             force_file=True,
         )
@@ -849,7 +860,13 @@ class Client:
         return message
 
     async def _upload_parts(
-        self, source: FileWindow, *, length: int, file_name: str, progress: Any
+        self,
+        source: FileWindow,
+        *,
+        length: int,
+        file_name: str,
+        progress: Any,
+        nonce: str | None = None,
     ) -> Any:
         """Pipeline bounded idempotent protocol parts; publish only after all ACKs."""
         part_size = 512 * 1024
@@ -916,6 +933,7 @@ class Client:
                 expected = min(part_size, length - index * part_size)
                 if len(payload) != expected:
                     raise OSError("Staged file ended before the declared upload length")
+                payload = encryption.crypt(nonce, index * part_size, payload)
                 if digest is not None:
                     digest.update(payload)
                 request = (

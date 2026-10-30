@@ -112,6 +112,11 @@ class Runtime:
                     else "Opening the existing MongoDB drive"
                 )
                 self.store = await self.backup.restore()
+                from tgdrive.core.encryption import check_drive_key
+
+                await asyncio.to_thread(
+                    check_drive_key, self.mongo, self.settings.encryption_key
+                )
                 await asyncio.to_thread(record_drive_open, self.settings, self.store)
             except (
                 ActivationError,
@@ -275,6 +280,7 @@ class Runtime:
                     folder_settings=get_bot_settings(self.settings, self),
                     before_write=self._check_bot_upload_allowed,
                     before_delete=lambda: self.backup.verify_lineage(self.store),
+                    transfers=self.transfers,
                 )
                 await self.bot_mode.start()
             self.backup.start(self.store)
@@ -338,6 +344,7 @@ class Runtime:
                             before_delete=lambda: self.backup.verify_lineage(
                                 self.store
                             ),
+                            transfers=self.transfers,
                         )
                 if self.bot_mode is not None:
                     await self.bot_mode.start()

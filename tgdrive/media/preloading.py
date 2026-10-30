@@ -14,6 +14,7 @@ import secrets
 import time
 from collections import OrderedDict
 
+from tgdrive.core import encryption
 from tgdrive.media.media_policy import MediaCachePolicy
 from tgdrive.media.media_reader import BLOCK, MediaReadCache, stream_pooled_media
 from tgdrive.storage.file_parts import validate_parts
@@ -672,8 +673,14 @@ class PreloadManager:
                     and "sha256" in part
                     else None
                 )
+                position = offset * BLOCK
                 try:
                     async for data in stream:
+                        if digest is not None:
+                            digest.update(
+                                encryption.crypt(part.get("nonce"), position, data)
+                            )
+                        position += len(data)
                         now = self._clock()
                         fill_bytes += len(data)
                         if now - previous_fill >= 0.05:
@@ -688,8 +695,6 @@ class PreloadManager:
                                 )
                             previous_fill = now
                             fill_bytes = 0
-                        if digest is not None:
-                            digest.update(data)
                         row["bytes_done"] = min(
                             row["target_bytes"], row["bytes_done"] + len(data)
                         )

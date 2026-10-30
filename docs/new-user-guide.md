@@ -61,11 +61,11 @@ other visitors can change unprotected content.
 ## Common questions
 
 **Are my files private and encrypted?**  
-TGDrive does not add end-to-end encryption to original files, staging or cache.
-Trust the hosting operator, storage-channel members and people with owner access.
-Encrypted recovery files do not encrypt the originals. For stronger confidentiality,
-encrypt files before upload and keep decryption keys separately; ordinary previews
-will be unavailable. Only open downloads you trust: TGDrive does not scan for malware.
+Yes, in Telegram. TGDrive encrypts every file it uploads with your
+`ENCRYPTION_KEY`, so channel members and Telegram see only unreadable data.
+Your server is still trusted: it holds the key, temporary uploads and caches
+unencrypted. Keep the key off the server too; losing it makes every file
+unreadable. Only open downloads you trust: TGDrive does not scan for malware.
 [Security details](reference.md#security-and-privacy).
 
 **Is TGDrive free?**  

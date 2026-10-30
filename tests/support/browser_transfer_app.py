@@ -1108,6 +1108,7 @@ settings = Settings(
     STORAGE_CHANNEL=-1001234567890,
     ADMIN_PASSWORD=PASSWORD,
     SESSION_SECRET="synthetic-browser-test-secret-" * 2,
+    ENCRYPTION_KEY="e" * 64,
     STRING_SESSIONS="",
     MAIN_BOT_TOKEN="",
     TELEGRAM_ADMIN_IDS="",

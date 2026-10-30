@@ -93,6 +93,7 @@ class Account:
         size,
         expected_sha256,
         before_dispatch,
+        nonce=None,
     ):
         state = self.ledger
         state.active[self.name] = state.active.get(self.name, 0) + 1

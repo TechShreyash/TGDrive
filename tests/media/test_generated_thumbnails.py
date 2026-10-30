@@ -169,7 +169,9 @@ async def test_native_upload_keeps_original_and_own_cover_when_thumbnail_is_opti
     published = []
 
     class Native:
-        async def upload_parts(self, source, *, length, file_name, progress):
+        async def upload_parts(
+            self, source, *, length, file_name, progress, nonce=None
+        ):
             payload = source.read()
             assert len(payload) == length
             calls.append(payload)

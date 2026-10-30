@@ -26,6 +26,7 @@ def settings(tmp_path: Path, **overrides: Any) -> Settings:
         "STORAGE_CHANNEL": -1001234567890,
         "ADMIN_PASSWORD": "correct horse battery staple",
         "SESSION_SECRET": "s" * 48,
+        "ENCRYPTION_KEY": "e" * 64,
         "STRING_SESSIONS": "session-A,session-B",
         "DATA_DIR": tmp_path / "data",
         "CACHE_DIR": tmp_path / "cache",

@@ -16,3 +16,9 @@
     font-size: 14px;
     font-weight: 500;
 }
+.bot-upload-encrypt {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-top: 16px;
+}

@@ -469,6 +469,10 @@ users share the destination; changes apply to new imports without restart.
 Moving/deleting it pauses new imports until an available folder is chosen.
 Repeated sends create copies; conflicting names are kept alongside existing ones.
 
+**Encrypt bot uploads** (on by default) makes the server download each file and
+upload it encrypted, which takes longer for large files. Turn it off for instant
+Telegram copies that stay unencrypted. [Encryption details](reference.md#stored-file-encryption).
+
 If the bot says **Upload could not be confirmed**, check the drive before
 resending: its database write may have succeeded. Bot imports lack the web
 queue's full restart/resume guarantees.

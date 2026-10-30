@@ -53,6 +53,7 @@ def settings(tmp_path, monkeypatch):
         STORAGE_CHANNEL=OLD,
         ADMIN_PASSWORD="test activation password",
         SESSION_SECRET="s" * 40,
+        ENCRYPTION_KEY="e" * 64,
         DATA_DIR=tmp_path / "data",
         CACHE_DIR=tmp_path / "cache",
     )

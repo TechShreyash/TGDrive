@@ -15,6 +15,7 @@ from typing import Any
 
 from telethon.errors import FloodPremiumWaitError, FloodWaitError, RPCError
 
+from tgdrive.core import encryption
 from tgdrive.storage.file_parts import (
     MAX_FILE_PARTS,
     MAX_POSTER_BYTES,
@@ -106,6 +107,7 @@ def fingerprint(
                     offset=offset,
                     size=length,
                     sha256=digest.hexdigest(),
+                    nonce=encryption.new_nonce(),
                     random_id=secrets.randbits(63),
                     sender=None,
                     send_started=False,
@@ -320,6 +322,7 @@ async def upload_multipart(manager, record, local_path, destination, file_name, 
                         offset=0,
                         size=len(poster_bytes),
                         sha256=hashlib.sha256(poster_bytes).hexdigest(),
+                        nonce=encryption.new_nonce(),
                         random_id=secrets.randbits(63),
                         sender=None,
                         send_started=False,
@@ -494,6 +497,7 @@ async def upload_multipart(manager, record, local_path, destination, file_name, 
                                 offset=part["offset"],
                                 size=part["size"],
                                 expected_sha256=part["sha256"],
+                                nonce=part.get("nonce"),
                                 before_dispatch=before_dispatch,
                                 **image_options,
                             )
@@ -659,6 +663,7 @@ async def upload_multipart(manager, record, local_path, destination, file_name, 
                     "message_id",
                     "sha256",
                     "document_id",
+                    "nonce",
                 )
                 if key in p
             }
@@ -679,7 +684,13 @@ async def upload_multipart(manager, record, local_path, destination, file_name, 
                 {
                     "poster": {
                         key: poster[key]
-                        for key in ("message_id", "size", "sha256", "document_id")
+                        for key in (
+                            "message_id",
+                            "size",
+                            "sha256",
+                            "document_id",
+                            "nonce",
+                        )
                         if key in poster
                     }
                 }

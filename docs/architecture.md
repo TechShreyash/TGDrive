@@ -509,6 +509,11 @@ before revealing the correct list page.
 
 ## Telegram transport and file responses
 
+Every uploaded part is encrypted in `Client._upload_parts` as it streams; reads
+decrypt in `PartLease.read`, preloading checksum and cached-source thumbnail
+repair. The read cache keeps ciphertext. See
+[stored file encryption](reference.md#stored-file-encryption).
+
 Telethon with cryptg uses MTProto, distinct from the hosted HTTP Bot API. Requests
 authenticate before origin/cache access. Logical ranges cross part boundaries;
 complete parts verify checksums, partial reads verify identity/size. Expired

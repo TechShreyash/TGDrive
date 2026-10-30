@@ -68,6 +68,22 @@ class Settings(BaseSettings):
         default=None, alias="MONGODB_BACKUP_KEY"
     )
 
+    encryption_key: SecretStr = Field(alias="ENCRYPTION_KEY")
+
+    @field_validator("encryption_key")
+    @classmethod
+    def valid_encryption_key(cls, value):
+        raw = value.get_secret_value().strip()
+        if not re.fullmatch(r"[0-9a-fA-F]{64}", raw):
+            raise ValueError(
+                "ENCRYPTION_KEY must contain 64 hexadecimal characters. "
+                "Generate one with: openssl rand -hex 32"
+            )
+        from tgdrive.core import encryption
+
+        encryption.configure(raw)
+        return SecretStr(raw)
+
     @field_validator("mongodb_backup_key")
     @classmethod
     def valid_backup_key(cls, value):

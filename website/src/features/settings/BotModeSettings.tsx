@@ -48,16 +48,18 @@ export default function BotModeSettings({
                 .getElementById("bot-mode")
                 ?.scrollIntoView({ block: "start" });
     }, [saved]);
-    const save = async (path: string | null) => {
+    const save = async (path: string | null, encrypt?: boolean) => {
         if (demoMode) return;
         setBusy(true);
         setError("");
         setNotice("");
         try {
-            setSaved(await api.saveBotUploadSettings(path));
+            setSaved(await api.saveBotUploadSettings(path, encrypt));
             setPicking(false);
             setNotice(
-                "Bot upload folder saved. Applies to the next file you send.",
+                encrypt === undefined
+                    ? "Bot upload folder saved. Applies to the next file you send."
+                    : "Bot upload encryption saved. Applies to the next file you send.",
             );
         } catch (cause) {
             setError(errorMessage(cause));
@@ -122,6 +124,26 @@ export default function BotModeSettings({
                             Default: My Files / TGDriveBotModeFiles. Created
                             automatically on the first bot upload. Changes apply
                             without restarting.
+                        </p>
+                        <label className="bot-upload-encrypt">
+                            <input
+                                type="checkbox"
+                                checked={saved.encrypt}
+                                disabled={demoMode || busy}
+                                onChange={(event) =>
+                                    void save(
+                                        saved.folder_path,
+                                        event.target.checked,
+                                    )
+                                }
+                            />
+                            <span>Encrypt bot uploads</span>
+                        </label>
+                        <p className="settings-help">
+                            On: TGDrive downloads each forwarded file and uploads
+                            it encrypted, which takes longer and uses server
+                            bandwidth. Off: Telegram copies the file instantly, but
+                            it stays readable by anyone with channel access.
                         </p>
                     </>
                 )

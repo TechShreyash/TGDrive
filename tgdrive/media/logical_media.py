@@ -10,6 +10,7 @@ from typing import Any
 
 from telethon.errors import FloodWaitError, RPCError
 
+from tgdrive.core import encryption
 from tgdrive.media.media_metadata import get_message
 from tgdrive.media.ranges import ByteRange, plan_telegram_chunks
 from tgdrive.media.streaming import TelegramFileNotFound, _media_from_message
@@ -165,10 +166,14 @@ class PartLease:
         count = 0
         whole_part = selected.start == 0 and selected.length == self.part["size"]
         digest = hashlib.sha256() if whole_part and "sha256" in self.part else None
+        nonce = self.part.get("nonce")
         try:
             async for chunk in iterator:
                 if count >= plan.part_count:
                     break
+                chunk = encryption.crypt(
+                    nonce, plan.offset + count * plan.chunk_size, chunk
+                )
                 cut_start = plan.first_part_cut if count == 0 else 0
                 cut_end = (
                     plan.last_part_cut if count == plan.part_count - 1 else len(chunk)

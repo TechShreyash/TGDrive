@@ -23,6 +23,7 @@ def settings(tmp_path: Path, **overrides: object) -> Settings:
         "STORAGE_CHANNEL": -1001234567890,
         "ADMIN_PASSWORD": "correct horse battery staple",
         "SESSION_SECRET": "s" * 48,
+        "ENCRYPTION_KEY": "e" * 64,
         "DATA_DIR": tmp_path / "data",
         "CACHE_DIR": tmp_path / "cache",
         "COOKIE_SECURE": False,
@@ -38,7 +39,7 @@ def mongo_backend(monkeypatch):
     backend.transaction.side_effect = lambda callback: callback(None)
     backend.db.settings.find_one.return_value = None
     # The backup journal needs real document storage to round-trip its state.
-    for name in ("replica_state", "replica_chunks", "replica_copies"):
+    for name in ("replica_state", "replica_chunks", "replica_copies", "nodes"):
         setattr(backend.db, name, Collection())
     for name in ("jobs", "receipts", "bot_folders"):
         getattr(backend.db, name).find.return_value = []

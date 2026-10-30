@@ -318,6 +318,7 @@ def test_restart_loads_managed_overrides_before_invalid_environment(
     register_test_backend(monkeypatch, data)
     save_document(data, document(), 0)
     monkeypatch.setenv("MONGODB_URI", "mongodb://synthetic.invalid")
+    monkeypatch.setenv("ENCRYPTION_KEY", "e" * 64)
     monkeypatch.setenv("DATA_DIR", str(data))
     monkeypatch.setenv("API_ID", "invalid-old-env")
     monkeypatch.setenv("API_HASH", "invalid-old-hash")
@@ -369,6 +370,7 @@ def test_main_token_seeds_only_before_connections_are_managed(
         "STORAGE_CHANNEL": "-1001234567890",
         "ADMIN_PASSWORD": "correct horse battery staple",
         "SESSION_SECRET": "s" * 48,
+        "ENCRYPTION_KEY": "e" * 64,
     }.items():
         monkeypatch.setenv(name, value)
 
@@ -675,6 +677,7 @@ async def test_restart_applies_enabled_rows_and_removal_cannot_resurrect_environ
     )
     save_document(data, candidate, 0)
     monkeypatch.setenv("MONGODB_URI", "mongodb://synthetic.invalid")
+    monkeypatch.setenv("ENCRYPTION_KEY", "e" * 64)
     monkeypatch.setenv("DATA_DIR", str(data))
     monkeypatch.setenv("BOT_TOKENS", TOKEN)
     monkeypatch.setenv("STORAGE_CHANNEL", "-1001234567890")

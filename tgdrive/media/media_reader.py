@@ -17,6 +17,7 @@ from typing import Any
 
 from telethon.errors import FloodPremiumWaitError, FloodWaitError, RPCError
 
+from tgdrive.core import encryption
 from tgdrive.media.media_cache import DiskMediaCache
 from tgdrive.media.media_policy import MediaCachePolicy, merge_ranges
 from tgdrive.media.media_scheduler import MediaPriorityScope
@@ -628,6 +629,7 @@ class MediaReadCache:
             raise CachedSourceUnavailable
         for part, blocks in plan:
             checksum = hashlib.sha256()
+            position = 0
             for key, expected in blocks:
                 current()
                 payload = self._pending.get(key)
@@ -638,6 +640,9 @@ class MediaReadCache:
                 current()
                 if payload is None or len(payload) != expected:
                     raise CachedSourceUnavailable
+                # The cache holds Telegram's bytes; derivatives need plaintext.
+                payload = encryption.crypt(part.get("nonce"), position, payload)
+                position += expected
                 checksum.update(payload)
                 yield payload
                 current()

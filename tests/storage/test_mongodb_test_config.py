@@ -9,6 +9,7 @@ def test_opt_in_mongo_requires_explicit_test_uri(monkeypatch, tmp_path):
     monkeypatch.chdir(tmp_path)
     monkeypatch.delenv("TGDRIVE_TEST_MONGODB_URI", raising=False)
     monkeypatch.setenv("MONGODB_URI", "mongodb://deployment.example/")
+    monkeypatch.setenv("ENCRYPTION_KEY", "e" * 64)
     (tmp_path / ".env").write_text("MONGODB_URI=mongodb://deployment.example/\n")
     with pytest.raises(pytest.UsageError, match="TGDRIVE_TEST_MONGODB_URI"):
         mongo_uri()

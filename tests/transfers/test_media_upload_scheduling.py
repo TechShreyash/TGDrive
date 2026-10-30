@@ -125,7 +125,7 @@ class Native:
         self.fail_blob = False
         self.get_input_entity = AsyncMock(return_value=types.InputPeerChannel(1, 2))
 
-    async def upload_parts(self, source, *, file_name, length, progress):
+    async def upload_parts(self, source, *, file_name, length, progress, nonce=None):
         if self.fail_blob:
             raise FloodWaitError(request=None, capture=0)
         data = bytearray()
@@ -134,7 +134,9 @@ class Native:
             if progress:
                 await progress(len(data), length)
         assert len(data) == length
-        self.uploaded.append(bytes(data))
+        from tgdrive.core import encryption
+
+        self.uploaded.append(encryption.crypt(nonce, 0, bytes(data)))
         return types.InputFileBig(123, 1, file_name)
 
     async def __call__(self, request):
@@ -177,6 +179,31 @@ async def test_window_upload_hashes_exact_bytes_and_checkpoints_before_send(tmp_
     assert calls == ["durable"]
     assert native.requests[0].random_id == 123
     assert native.requests[0].media.force_file
+
+
+async def test_encrypted_window_uploads_ciphertext_under_a_random_name(tmp_path):
+    from tgdrive.core import encryption
+
+    encryption.configure("e" * 64)
+    path = tmp_path / "staged"
+    plain = b"secret movie bytes" * 50_000
+    path.write_bytes(plain)
+    native = Native()
+    client = client_for(native)
+    nonce = encryption.new_nonce()
+    await client.send_staged(
+        -100123,
+        path,
+        file_name="holiday.mp4",
+        random_id=7,
+        expected_sha256=hashlib.sha256(plain).hexdigest(),
+        nonce=nonce,
+    )
+    uploaded = native.uploaded[0]
+    assert uploaded != plain and encryption.crypt(nonce, 0, uploaded) == plain
+    media = native.requests[0].media
+    assert media.mime_type == "application/octet-stream" and media.thumb is None
+    assert "holiday" not in media.attributes[0].file_name
 
 
 async def test_changed_window_or_failed_durable_checkpoint_cannot_publish(tmp_path):

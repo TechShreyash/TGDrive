@@ -12,7 +12,12 @@ from pymongo.errors import DuplicateKeyError
 
 
 def _value(document, key):
-    for part in key.split("."):
+    for index, part in enumerate(key.split(".")):
+        if isinstance(document, list):
+            # MongoDB matches a field inside any array element.
+            rest = ".".join(key.split(".")[index:])
+            found = [_value(row, rest) for row in document]
+            return next((value for value in found if value is not None), None)
         if not isinstance(document, dict) or part not in document:
             return None
         document = document[part]

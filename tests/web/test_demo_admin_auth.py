@@ -298,6 +298,7 @@ def test_demo_credentials_are_not_saved_or_restored_as_mongo_bootstrap(
     for key in (*bootstrap, "ADMIN_PASSWORD_HASH"):
         monkeypatch.delenv(key, raising=False)
     monkeypatch.setenv("MONGODB_URI", "mongodb://synthetic.invalid")
+    monkeypatch.setenv("ENCRYPTION_KEY", "e" * 64)
     monkeypatch.setenv("DATA_DIR", str(tmp_path))
     monkeypatch.setenv("TGDRIVE_AUTO_SECRETS", "false")
     collection.find_one.return_value = {"document": bootstrap}

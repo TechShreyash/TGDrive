@@ -31,7 +31,7 @@ async def test_transport_does_not_regenerate_an_explicit_image(
     client._thumbnail_directory = tmp_path / "thumbnails"
     uploaded = []
 
-    async def upload(source, *, length, file_name, progress):
+    async def upload(source, *, length, file_name, progress, nonce=None):
         content = source.read()
         assert len(content) == length
         uploaded.append((file_name, content))

@@ -283,6 +283,7 @@ For lost drive data, follow [backup recovery](backup-recovery.md).
 | Variable | Default | Validation and behavior |
 | --- | --- | --- |
 | `MONGODB_URI` | Required | Secret URI beginning mongodb:// or mongodb+srv://. Missing/invalid configuration or failed database access rejects startup; no local database fallback. |
+| `ENCRYPTION_KEY` | Required, secret | 64 hex characters. Encrypts every document TGDrive uploads (AES-256-CTR). Never stored in MongoDB, backups or logs. The drive remembers a fingerprint; startup stops if the key differs. [Encryption](#stored-file-encryption). |
 | `MONGODB_DATABASE` | tgdrive | 1–63 ASCII letters/digits, underscores or hyphens; dedicated to one drive. |
 | `MONGODB_BACKUP_KEY` | None | Initial secret 64-hex-character AES-256 recovery key, independent of the login password. Unified files retain an existing journal key; preserve matching keys for older generations. |
 | `MONGODB_BACKUP_SECONDS` | 1 hour (`3600`) | Integer 60–604800 seconds between successful automatic standalone safety copies. Separate standalone publication pauses while independent channel protection is enabled. |
@@ -1579,7 +1580,7 @@ belong in [the roadmap](roadmap.md), not in this implemented API reference.
 | --- | --- |
 | Owner access | One shared drive; demo mode optionally separates visitor and full-access passwords. No built-in MFA/passkeys, public signup, teams or tenant isolation. |
 | Shared Links | Anyone with a valid scoped link can read its contents |
-| Encryption | Database backups are encrypted; original files and local staging are not encrypted by TGDrive |
+| Encryption | Files TGDrive uploads to Telegram are encrypted with `ENCRYPTION_KEY`; bot-mode copies are encrypted unless that option is off. Local staging, caches and files uploaded before 2.3 are not. [Details](#stored-file-encryption) |
 | Original file safety | A database record cannot recreate a deleted Telegram file |
 | Previews | Uploaded HTML/code is not executed; no external Office service receives files |
 | Malware | TGDrive does not scan files for malware |
@@ -1640,3 +1641,24 @@ original payloads or local staging and does not scan for malware. See
 [known gaps](roadmap.md).
 
 </details>
+
+## Stored file encryption
+
+<details>
+<summary>What is encrypted, how and its limits</summary>
+
+| Item | Behavior |
+| --- | --- |
+| Uploaded parts, posters | AES-256-CTR with `ENCRYPTION_KEY` and a random 128-bit nonce per document, saved in the catalog part record. Sizes are unchanged, so range reads and seeking work. |
+| Telegram metadata | Random `<hex>.bin` name, `application/octet-stream`, no caption and no Telegram thumbnail. Previews come from TGDrive's local cover cache. |
+| Bot mode, encryption on (default) | The server downloads the forwarded file to `CACHE_DIR/bot-imports`, then uploads it encrypted through the normal upload queue. Slower; uses server bandwidth and disk. |
+| Bot mode, encryption off | Telegram copies the message instantly; that file stays readable to anyone with channel access. Set in **Configuration → Transfer limits → Bot uploads**. |
+| Older files | Parts without a nonce are read as plain bytes. They are not re-encrypted. |
+| Key check | MongoDB `settings._id = "encryption"` holds an HMAC fingerprint, never the key. Startup refuses a different key, and refuses to record a new fingerprint when encrypted parts already exist. |
+| Integrity | Complete-part reads verify the plaintext SHA-256 already stored per part. Partial range reads are not authenticated. |
+
+Local staging, media caches and generated covers stay on the server unencrypted.
+The media cache stores Telegram's ciphertext; decryption happens per read.
+
+</details>
+
