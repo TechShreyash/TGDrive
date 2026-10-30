@@ -3,11 +3,10 @@ from __future__ import annotations
 import copy
 import hashlib
 import json
-import sqlite3
-from contextlib import closing
 
 import pytest
 
+from tests.support.mongo_fixtures import new_store, store_from_payload
 from tgdrive.core.errors import (
     CorruptStoreError,
     PersistenceError,
@@ -16,7 +15,7 @@ from tgdrive.core.errors import (
 )
 from tgdrive.recovery.backup import decode_catalog_snapshot
 from tgdrive.storage.file_parts import MAX_FILE_PARTS, validate_parts, validate_sha256
-from tgdrive.storage.store import SCHEMA_VERSION, DriveStore
+from tgdrive.storage.store import SCHEMA_VERSION
 
 DATA = b"complete logical file"
 SHA = hashlib.sha256(DATA).hexdigest()
@@ -42,7 +41,7 @@ def full(item):
 
 @pytest.fixture
 def store():
-    result = DriveStore.create()
+    result = new_store()
     yield result
     result.close()
 
@@ -175,22 +174,20 @@ def test_atomic_commit_idempotency_and_public_records_do_not_expose_provider_par
     assert store.get_file(full(item))["parts"] == manifest()
 
 
-def test_part_insert_failure_rolls_back_node_operation_and_revision(store, monkeypatch):
-    original = store._insert_parts
+def test_part_commit_failure_rolls_back_node_operation_and_revision(store, monkeypatch):
     before = store.revision
+    nodes = store.backend.db.nodes
+    original = nodes.bulk_write
 
-    def fail(database, identity, parts):
-        original(database, identity, parts[:1])
-        raise PersistenceError("simulated disk failure after first part")
+    def fail(*_args, **_kwargs):
+        raise PersistenceError("simulated database failure")
 
-    monkeypatch.setattr(store, "_insert_parts", fail)
+    monkeypatch.setattr(nodes, "bulk_write", fail)
     with pytest.raises(PersistenceError):
         add(store)
     assert store.revision == before and not store.list_directory("/")
     assert not store.has_file_operation("logical-upload-operation")
-    with store._transaction() as database:
-        assert database.execute("SELECT count(*) FROM file_parts").fetchone()[0] == 0
-    monkeypatch.setattr(store, "_insert_parts", original)
+    monkeypatch.setattr(nodes, "bulk_write", original)
     assert add(store)["part_count"] == 2
 
 
@@ -204,7 +201,7 @@ def test_multipart_move_share_trash_and_recover_keep_one_logical_identity(store)
     assert store.authorize_file(file_path, token)
     store.set_trashed(file_path, True)
     store.set_trashed(file_path, False)
-    restored = DriveStore._from_payload(store.export(), revoke_shares=True)
+    restored = store_from_payload(store.export(), revoke_shares=True)
     try:
         result = restored.get_file(file_path)
         assert result["parts"] == manifest() and result["sha256"] == SHA
@@ -221,7 +218,7 @@ def test_catalog_deletion_forgets_all_parts_without_remote_confirmations(store):
     intent = store.begin_deletion(full(item), channel_id=-1001234567890)
     assert intent["message_ids"] == [101, 102]
     store.confirm_deletion_messages(intent["id"], [101])
-    recovered = DriveStore._from_payload(store.export())
+    recovered = store_from_payload(store.export())
     try:
         assert (
             recovered.get_file(full(item), include_trashed=True)["parts"] == manifest()
@@ -231,12 +228,8 @@ def test_catalog_deletion_forgets_all_parts_without_remote_confirmations(store):
         assert recovered.finish_deletion(intent["id"]) == [101, 102]
         assert recovered.pending_deletions() == []
         assert recovered.export()["deletions"][0]["message_ids"] == []
-        with recovered._transaction() as database:
-            assert (
-                database.execute("SELECT count(*) FROM file_parts").fetchone()[0] == 0
-            )
         assert recovered.has_file_operation("logical-upload-operation")
-        again = DriveStore._from_payload(recovered.export())
+        again = store_from_payload(recovered.export())
         again.close()
     finally:
         recovered.close()
@@ -251,22 +244,22 @@ def test_portable_v4_rejects_missing_delete_reference_or_changed_manifest(store)
     damaged["deletions"][0]["message_ids"] = [101]
     damaged["deletions"][0]["pending_message_ids"] = [101]
     with pytest.raises(CorruptStoreError):
-        DriveStore._from_payload(damaged)
+        store_from_payload(damaged)
     damaged = copy.deepcopy(payload)
     damaged["root"]["children"][item["id"]]["parts"][1]["offset"] += 1
     with pytest.raises(CorruptStoreError):
-        DriveStore._from_payload(damaged)
+        store_from_payload(damaged)
 
 
 def test_portable_catalog_recovery_keeps_all_part_ids_and_revokes_shares():
-    source = DriveStore.create()
+    source = new_store()
     recovered = None
     try:
         item = add(source)
         token = source.create_share(full(item))
         payload = decode_catalog_snapshot(source.backup_snapshot()[1])
         assert payload["schema_version"] == SCHEMA_VERSION
-        recovered = DriveStore._from_payload(payload, revoke_shares=True)
+        recovered = store_from_payload(payload, revoke_shares=True)
         result = recovered.get_file(full(item))
         assert result["parts"] == manifest() and result["sha256"] == SHA
         assert result["message_id"] == 101 and result["id"] == item["id"]
@@ -306,7 +299,7 @@ def test_optional_immutable_document_id_roundtrips_without_public_leak(
     parts[0]["document_id"] = document_id
     item = add(store, parts=parts)
     assert store.get_file(full(item))["parts"] == parts
-    restored = DriveStore._from_payload(store.export())
+    restored = store_from_payload(store.export())
     try:
         assert restored.get_file(full(item))["parts"] == parts
         assert "document_id" not in json.dumps(restored.list_directory("/"))
@@ -328,24 +321,9 @@ def test_present_document_identity_must_be_a_nonzero_signed_integer(store, docum
     assert not store.list_directory("/")
 
 
-@pytest.mark.parametrize("version", range(1, 6))
-def test_previous_database_schema_is_rejected_without_upgrade(tmp_path, version):
-    database = tmp_path / "drive.sqlite3"
-    source = DriveStore.create(database)
-    source.add_file("/", "current.bin", 333, 13)
-    source.close()
-    with closing(sqlite3.connect(database)) as connection:
-        connection.execute(f"PRAGMA user_version={version}")
-        connection.commit()
-    with pytest.raises(UnsupportedSchemaError, match="database schema"):
-        DriveStore.load(database)
-    with closing(sqlite3.connect(database)) as connection:
-        assert connection.execute("PRAGMA user_version").fetchone()[0] == version
-
-
 @pytest.mark.parametrize("version", range(1, SCHEMA_VERSION))
 def test_previous_portable_schema_is_rejected(store, version):
     payload = store.export()
     payload["schema_version"] = version
     with pytest.raises(UnsupportedSchemaError, match="metadata schema"):
-        DriveStore._from_payload(payload)
+        store_from_payload(payload)

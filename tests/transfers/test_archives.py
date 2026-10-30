@@ -11,10 +11,9 @@ from zipfile import ZIP_DEFLATED, ZIP_LZMA, ZIP_STORED, ZipFile, ZipInfo
 
 import pytest
 
-from tests.support.mongo_fixtures import register_test_backend
+from tests.support.mongo_fixtures import new_store, register_test_backend
 from tests.transfers.test_multipart_transfers import Account, Ledger, registry_for
 from tgdrive.storage.demo_files import DemoFilesReadOnly
-from tgdrive.storage.store import DriveStore
 from tgdrive.telegram.client_pool import ClientPool
 from tgdrive.transfers import archives
 from tgdrive.transfers.archives import ArchiveError, archive_members, zip_manifest
@@ -158,7 +157,7 @@ async def manager_for(tmp_path, *, store=None, ledger=None, registry=None):
     manager = TransferManager(
         settings=settings,
         pool=pool,
-        store=store or DriveStore.create(tmp_path / "drive.sqlite3"),
+        store=store or new_store(tmp_path / "drive"),
         registry=registry or registry_for(tmp_path),
         remote=SimpleNamespace(close=AsyncMock()),
     )

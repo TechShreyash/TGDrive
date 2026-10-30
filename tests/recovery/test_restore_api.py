@@ -15,10 +15,11 @@ from fastapi.testclient import TestClient
 
 import tgdrive.recovery.mongo_backup as archive
 import tgdrive.recovery.restore_api as api
+from tests.support.mongo_fixtures import new_store
 from tgdrive.core.errors import CorruptStoreError
 from tgdrive.core.security import SESSION_COOKIE, InvalidSession, SessionManager
 from tgdrive.recovery.backup import BackupError
-from tgdrive.storage.store import ROOT_ID, SCHEMA_VERSION, DriveStore
+from tgdrive.storage.store import ROOT_ID, SCHEMA_VERSION
 from tgdrive.web.http_guard import ApiBodyGuardMiddleware
 
 
@@ -127,7 +128,7 @@ def recovered_data():
 
 
 def current_archive_records():
-    store = DriveStore.create()
+    store = new_store()
     try:
         folder = store.create_folder("/", "Folder")
         file = store.add_file("/", "Shared.bin", 41, 3, operation_id="saved-operation")

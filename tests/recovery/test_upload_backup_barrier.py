@@ -7,10 +7,9 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from tests.support.mongo_fixtures import register_test_backend
+from tests.support.mongo_fixtures import new_store, register_test_backend, reopen_store
 from tgdrive.recovery.backup import BackupError
 from tgdrive.storage.mongo import for_directory
-from tgdrive.storage.store import DriveStore
 from tgdrive.telegram.client_pool import ClientPool
 from tgdrive.transfers.manager import BackupPending, TransferManager
 from tgdrive.transfers.tasks import TransferRegistry, TransferStatus
@@ -85,7 +84,7 @@ def manager_for(tmp_path, pool, callback, *, store=None, registry=None):
             upload_limit=4_000_000_000,
         ),
         pool=pool,
-        store=store or DriveStore.create(tmp_path / "drive.sqlite3"),
+        store=store or new_store(tmp_path / "drive"),
         registry=registry or registry_for(tmp_path),
         remote=SimpleNamespace(close=AsyncMock()),
         ensure_backup=callback,
@@ -123,7 +122,7 @@ async def test_checkpoint_wait_releases_upload_slot_and_protects_committed_media
     one = await manager.enqueue_upload(first, "/", "one.bin", first.stat().st_size)
     try:
         await asyncio.wait_for(entered.wait(), 2)
-        assert one.phase == "backup_pending"
+        assert one.phase == "finalizing"
         assert one.status == TransferStatus.RUNNING
         assert one.context["metadata_committed"]
         assert one.context["catalog_revision"] == manager.store.revision
@@ -139,7 +138,7 @@ async def test_checkpoint_wait_releases_upload_slot_and_protects_committed_media
         )
         await asyncio.wait_for(both_entered.wait(), 2)
         assert len(client.sent) == 2
-        assert two.phase == "backup_pending"
+        assert two.phase == "finalizing"
         assert first.exists() and second.exists()
         assert client.deleted == []
         release.set()
@@ -167,7 +166,7 @@ async def test_backup_error_restarts_without_staged_bytes_or_second_media_send(
     record = await manager.enqueue_upload(source, "/", "one.bin", source.stat().st_size)
     await record.task
     assert record.status == TransferStatus.ERROR
-    assert record.phase == "backup_pending"
+    assert record.phase == "finalizing"
     assert source.exists()
     assert len(client.sent) == 1
     required = record.context["catalog_revision"]
@@ -180,7 +179,7 @@ async def test_backup_error_restarts_without_staged_bytes_or_second_media_send(
         tmp_path,
         pool,
         callback,
-        store=DriveStore.load(tmp_path / "drive.sqlite3"),
+        store=reopen_store(tmp_path / "drive"),
         registry=registry_for(tmp_path),
     )
     try:
@@ -233,7 +232,7 @@ async def test_store_commit_journal_gap_is_detected_before_cancel_or_resend(
         tmp_path,
         pool,
         confirmed,
-        store=DriveStore.load(tmp_path / "drive.sqlite3"),
+        store=reopen_store(tmp_path / "drive"),
         registry=registry_for(tmp_path),
     )
     try:
@@ -275,7 +274,7 @@ async def test_checkpoint_flood_wait_retries_only_backup_and_persists_deadline(
     record = await manager.enqueue_upload(source, "/", "one.bin", source.stat().st_size)
     try:
         await asyncio.wait_for(entered.wait(), 2)
-        assert record.phase == "backup_pending"
+        assert record.phase == "finalizing"
         assert record.context["backup_retry_at"] > 0
         journal = registry_for(tmp_path)
         assert journal.get(record.id).context["backup_retry_at"] > 0
@@ -307,7 +306,7 @@ async def test_insufficient_checkpoint_keeps_staging_and_retryable_phase(
     try:
         await record.task
         assert record.status == TransferStatus.ERROR
-        assert record.phase == "backup_pending"
+        assert record.phase == "finalizing"
         assert record.context["metadata_committed"]
         assert source.exists()
         assert len(client.sent) == 1
@@ -315,7 +314,7 @@ async def test_insufficient_checkpoint_keeps_staging_and_retryable_phase(
         retried = await manager.retry_job(record.id)
         await retried.task
         assert retried.status == TransferStatus.ERROR
-        assert retried.phase == "backup_pending"
+        assert retried.phase == "finalizing"
         assert source.exists()
         assert len(client.sent) == 1
         assert client.deleted == []
@@ -355,7 +354,7 @@ async def test_shutdown_during_checkpoint_recovers_protection_without_media_rese
         tmp_path,
         pool,
         confirmed,
-        store=DriveStore.load(tmp_path / "drive.sqlite3"),
+        store=reopen_store(tmp_path / "drive"),
         registry=registry_for(tmp_path),
     )
     try:

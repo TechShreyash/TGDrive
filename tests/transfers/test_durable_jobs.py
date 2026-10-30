@@ -10,10 +10,9 @@ from unittest.mock import AsyncMock
 import pytest
 from pymongo.errors import ConnectionFailure
 
-from tests.support.mongo_fixtures import register_test_backend
+from tests.support.mongo_fixtures import new_store, register_test_backend, reopen_store
 from tgdrive.core.errors import NotFoundError
 from tgdrive.storage.mongo import DatabaseUnavailable, for_directory
-from tgdrive.storage.store import DriveStore
 from tgdrive.telegram.client_pool import ClientPool
 from tgdrive.transfers.manager import TransferManager
 from tgdrive.transfers.tasks import TransferNotFound, TransferRegistry, TransferStatus
@@ -113,8 +112,8 @@ def manager_for(tmp_path, pool, *, store=None, registry=None):
     return TransferManager(
         settings=settings,
         pool=pool,
-        store=store or DriveStore.create(tmp_path / "drive.sqlite3"),
-        registry=registry or registry_for(tmp_path / "jobs.sqlite3"),
+        store=store or new_store(tmp_path / "drive"),
+        registry=registry or registry_for(tmp_path / "jobs"),
         remote=SimpleNamespace(close=AsyncMock()),
     )
 
@@ -136,8 +135,8 @@ async def test_lost_send_response_retries_same_sender_and_random_id(tmp_path):
     recovered = manager_for(
         tmp_path,
         pool,
-        store=DriveStore.load(tmp_path / "drive.sqlite3"),
-        registry=registry_for(tmp_path / "jobs.sqlite3"),
+        store=reopen_store(tmp_path / "drive"),
+        registry=registry_for(tmp_path / "jobs"),
     )
     retry = await recovered.retry_job(job.id)
     await retry.task
@@ -172,8 +171,8 @@ async def test_retry_after_metadata_commit_does_not_duplicate_visible_file(
     recovered = manager_for(
         tmp_path,
         pool,
-        store=DriveStore.load(tmp_path / "drive.sqlite3"),
-        registry=registry_for(tmp_path / "jobs.sqlite3"),
+        store=reopen_store(tmp_path / "drive"),
+        registry=registry_for(tmp_path / "jobs"),
     )
     retry = await recovered.retry_job(job.id)
     await retry.task
@@ -202,8 +201,8 @@ async def test_shutdown_preserves_ambiguous_send_for_restart_reconciliation(tmp_
     recovered = manager_for(
         tmp_path,
         pool,
-        store=DriveStore.load(tmp_path / "drive.sqlite3"),
-        registry=registry_for(tmp_path / "jobs.sqlite3"),
+        store=reopen_store(tmp_path / "drive"),
+        registry=registry_for(tmp_path / "jobs"),
     )
     await recovered.recover()
     resumed = recovered.registry.get(job.id)
@@ -221,7 +220,7 @@ async def test_cancelled_ambiguous_send_stays_recoverable_until_remote_cleanup(
     telegram.block = True
     pool = ClientPool([telegram])
     await pool.start()
-    registry = registry_for(tmp_path / "jobs.sqlite3", cancel_grace_seconds=0.001)
+    registry = registry_for(tmp_path / "jobs", cancel_grace_seconds=0.001)
     manager = manager_for(tmp_path, pool, registry=registry)
     source = tmp_path / "receipt.part"
     source.write_bytes(b"bytes")
@@ -237,8 +236,8 @@ async def test_cancelled_ambiguous_send_stays_recoverable_until_remote_cleanup(
     recovered = manager_for(
         tmp_path,
         pool,
-        store=DriveStore.load(tmp_path / "drive.sqlite3"),
-        registry=registry_for(tmp_path / "jobs.sqlite3"),
+        store=reopen_store(tmp_path / "drive"),
+        registry=registry_for(tmp_path / "jobs"),
     )
     assert recovered.registry.get(job.id).cancel_event.is_set()
     await recovered.recover()
@@ -286,8 +285,8 @@ async def test_failed_delete_retries_as_catalog_removal_after_restart(
     recovered = manager_for(
         tmp_path,
         pool,
-        store=DriveStore.load(tmp_path / "drive.sqlite3"),
-        registry=registry_for(tmp_path / "jobs.sqlite3"),
+        store=reopen_store(tmp_path / "drive"),
+        registry=registry_for(tmp_path / "jobs"),
     )
     retried = await recovered.retry_job(job.id)
     await retried.task
@@ -473,7 +472,7 @@ async def test_bulk_acceptance_failure_keeps_accepted_deletions_running(
 
 
 async def test_deletion_job_capacity_failure_restores_item_to_trash(tmp_path):
-    registry = registry_for(tmp_path / "jobs.sqlite3", max_entries=1)
+    registry = registry_for(tmp_path / "jobs", max_entries=1)
     manager = manager_for(tmp_path, ClientPool([Telegram()]), registry=registry)
     await registry.create("queued")
     item = manager.store.add_file("/", "retained.bin", 77, 1)
@@ -494,7 +493,7 @@ async def test_deletion_job_capacity_failure_restores_item_to_trash(tmp_path):
 
 
 async def test_capacity_eviction_and_ttl_pruning_are_persistent(tmp_path):
-    path = tmp_path / "jobs.sqlite3"
+    path = tmp_path / "jobs"
     registry = registry_for(path, max_entries=1, ttl_seconds=1)
     first = await registry.create("upload")
     (await registry.update(first.id, status=TransferStatus.COMPLETED))
@@ -511,7 +510,7 @@ async def test_capacity_eviction_and_ttl_pruning_are_persistent(tmp_path):
 async def test_unresolved_jobs_and_staging_survive_ttl_and_capacity_pressure(tmp_path):
     source = tmp_path / "receipt.part"
     source.write_bytes(b"needed for reconciliation")
-    path = tmp_path / "jobs.sqlite3"
+    path = tmp_path / "jobs"
     registry = registry_for(path, max_entries=1)
     record = await registry.create("upload")
     record.context.update(kind="upload", local_path=str(source), send_started=True)
@@ -543,7 +542,7 @@ async def test_persistence_failure_rolls_back_reported_job_state(
 
 
 async def test_permanent_delete_cannot_be_cancelled(tmp_path):
-    registry = registry_for(tmp_path / "jobs.sqlite3")
+    registry = registry_for(tmp_path / "jobs")
     record = await registry.create("deleting")
     record.context.update(kind="delete", deletion_id="intent")
     (await registry.persist(record))
@@ -598,9 +597,7 @@ async def test_restart_retries_lost_network_response_without_duplicate_upload(tm
     await manager.close()
     manager.registry.close()
     manager.store.close()
-    recovered = manager_for(
-        tmp_path, pool, store=DriveStore.load(tmp_path / "drive.sqlite3")
-    )
+    recovered = manager_for(tmp_path, pool, store=reopen_store(tmp_path / "drive"))
     try:
         await recovered.recover()
         resumed = recovered.registry.get(job.id)
@@ -632,9 +629,7 @@ async def test_restart_does_not_retry_nontransient_transfer_failure(tmp_path):
     await manager.close()
     manager.registry.close()
     manager.store.close()
-    recovered = manager_for(
-        tmp_path, pool, store=DriveStore.load(tmp_path / "drive.sqlite3")
-    )
+    recovered = manager_for(tmp_path, pool, store=reopen_store(tmp_path / "drive"))
     try:
         await recovered.recover()
         resumed = recovered.registry.get(job.id)

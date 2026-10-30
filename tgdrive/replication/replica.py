@@ -29,7 +29,7 @@ from tgdrive.replication.replica_state import (
     validate_catalog,
 )
 from tgdrive.settings.managed_settings import SettingsProblem
-from tgdrive.storage.store import DriveStore
+from tgdrive.storage.mongo_store import MongoStore
 
 HEALTH_CHECK_INTERVAL_SECONDS = 60 * 60
 BACKUP_BATCH_SECONDS = 60
@@ -53,7 +53,8 @@ class ChannelReplica:
             ReplicaTransport, pacer=self._request_pacer
         )
         self.directory = settings.resolved_data_dir
-        self.journal = ReplicaJournal(self.directory)
+        self.directory.mkdir(parents=True, exist_ok=True, mode=0o700)
+        self.journal = ReplicaJournal(self.directory, getattr(runtime, "mongo", None))
         saved_mongo_key = self.journal.get("mongodb_key")
         if settings.mongodb_backup_key is None and saved_mongo_key:
             settings.mongodb_backup_key = SecretStr(saved_mongo_key)
@@ -330,9 +331,6 @@ class ChannelReplica:
                 "title": target["title"],
             }
             self.journal.set("config", config)
-            from tgdrive.replication.replica_bootstrap import save_bootstrap
-
-            await asyncio.to_thread(save_bootstrap, self.settings)
             if (
                 getattr(self.runtime, "mongo", None) is not None
                 and self.settings.mongodb_backup_key is None
@@ -1600,7 +1598,7 @@ class ChannelReplica:
             path.unlink(missing_ok=True)
 
     async def _publish_primary_catalog(self, transport, catalog):
-        raw = DriveStore._json_bytes(catalog)
+        raw = MongoStore._json_bytes(catalog)
         digest = hashlib.sha256(raw).hexdigest()
         path = self.directory / "replica-bundles" / (digest + ".json")
         if not path.exists():

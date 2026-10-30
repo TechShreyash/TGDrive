@@ -12,6 +12,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from tests.support.mongo_fixtures import store_from_payload
 from tgdrive.core.errors import DuplicateNameError, NotFoundError, ValidationError
 from tgdrive.core.security import InvalidSession, SessionManager
 from tgdrive.recovery.mongo_backup import (
@@ -681,7 +682,7 @@ def test_multiple_independent_share_links_survive_mongo_reopen_and_snapshot(
 ):
     from datetime import UTC, datetime, timedelta
 
-    from tgdrive.storage.store import DriveStore
+    from tgdrive.storage.store import MongoStore
 
     folder = store.create_folder("/", "Reading")
     target = path(folder)
@@ -697,7 +698,7 @@ def test_multiple_independent_share_links_survive_mongo_reopen_and_snapshot(
     assert reopened.authorize_directory(target, first) == target
     assert reopened.authorize_directory(target, second) == target
     assert reopened.list_shares(target)[0]["label"] == "Alex review"
-    portable = DriveStore._from_payload(reopened.export())
+    portable = store_from_payload(reopened.export())
     try:
         assert portable.authorize_directory(target, first) == target
         assert portable.authorize_directory(target, second) == target

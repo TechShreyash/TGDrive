@@ -4,7 +4,7 @@ import copy
 
 import pytest
 
-from tests.support.mongo_fixtures import FakeMongoBackend
+from tests.support.mongo_fixtures import FakeMongoBackend, new_store
 from tgdrive.core.errors import (
     NotFoundError,
     PersistenceError,
@@ -12,11 +12,10 @@ from tgdrive.core.errors import (
     TrashedItemError,
 )
 from tgdrive.storage.mongo_store import MongoStore
-from tgdrive.storage.store import DriveStore
 
 
 def test_later_mutation_failure_restores_every_prior_change_and_revision():
-    store = DriveStore.create()
+    store = new_store()
     try:
         first = store.create_folder("/", "First")
         second = store.create_folder("/", "Second")
@@ -34,7 +33,7 @@ def test_later_mutation_failure_restores_every_prior_change_and_revision():
 
 
 def test_caught_inner_error_rolls_back_savepoint_without_corrupting_outer_batch():
-    store = DriveStore.create()
+    store = new_store()
     try:
         original = store.create_folder("/", "Original")
         path = "/" + original["id"]
@@ -51,38 +50,23 @@ def test_caught_inner_error_rolls_back_savepoint_without_corrupting_outer_batch(
         store.close()
 
 
-def test_sqlite_abort_rolls_back_entire_batch_and_connection_remains_usable():
-    store = DriveStore.create()
+def test_failed_batch_rolls_back_entire_batch_and_store_remains_usable():
+    store = new_store()
     try:
         node = store.create_folder("/", "Original")
         path = "/" + node["id"]
         before = store.export()
         with pytest.raises(PersistenceError), store.metadata_batch():
             store.rename(path, "Changed")
-            with store._transaction(write=True) as db:
-                db.execute("INSERT INTO nodes(id) VALUES(?)", ("root",))
+            raise PersistenceError("simulated failure inside the batch")
         assert store.export() == before
         assert store.rename(path, "After rollback")["name"] == "After rollback"
     finally:
         store.close()
 
 
-def test_outer_read_cannot_escalate_to_nested_write():
-    store = DriveStore.create()
-    try:
-        before = store.export()
-        with (
-            pytest.raises(PersistenceError, match="cannot become writable"),
-            store._transaction(),
-        ):
-            store.create_folder("/", "Forbidden")
-        assert store.export() == before
-    finally:
-        store.close()
-
-
 def test_deletion_preflight_never_mutates_and_accepts_pending_same_root_retry():
-    store = DriveStore.create()
+    store = new_store()
     try:
         node = store.create_folder("/", "Target")
         path = "/" + node["id"]
@@ -102,15 +86,9 @@ def test_deletion_preflight_never_mutates_and_accepts_pending_same_root_retry():
         store.close()
 
 
-@pytest.mark.parametrize("backend", ["sqlite", "mongodb"])
-def test_pending_deletions_hide_from_trash_across_restart_and_reappear_on_failure(
-    backend, tmp_path
-):
-    database = tmp_path / "deletion.sqlite3"
+def test_pending_deletions_hide_from_trash_across_restart_and_reappear_on_failure():
     mongo = FakeMongoBackend()
-    store = (
-        DriveStore.create(database) if backend == "sqlite" else MongoStore.create(mongo)
-    )
+    store = MongoStore.create(mongo)
     try:
         node = store.create_folder("/", "Removal")
         path = "/" + node["id"]
@@ -126,7 +104,7 @@ def test_pending_deletions_hide_from_trash_across_restart_and_reappear_on_failur
         assert store.list_trash("removal") == {}
         assert store.get_directory(path, include_trashed=True)["name"] == "Removal"
         store.close()
-        store = DriveStore.load(database) if backend == "sqlite" else MongoStore(mongo)
+        store = MongoStore(mongo)
         assert set(store.list_trash()) == {other["id"]}
 
         store.fail_deletion(intent["id"], "Backup unavailable")
@@ -139,14 +117,9 @@ def test_pending_deletions_hide_from_trash_across_restart_and_reappear_on_failur
         store.close()
 
 
-@pytest.mark.parametrize("backend", ["sqlite", "mongodb"])
 @pytest.mark.parametrize("action", ["move", "trash", "restore"])
-def test_batch_failure_rolls_back_earlier_items_and_share_access(backend, action):
-    store = (
-        DriveStore.create()
-        if backend == "sqlite"
-        else MongoStore.create(FakeMongoBackend())
-    )
+def test_batch_failure_rolls_back_earlier_items_and_share_access(action):
+    store = new_store()
     try:
         first = store.create_folder("/", "First")
         destination = store.create_folder("/", "Destination")

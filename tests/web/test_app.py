@@ -12,8 +12,11 @@ from fastapi.testclient import TestClient
 import tgdrive.web.app as app_module
 from tests.support.app_fixtures import FakeRuntime, login, make_settings
 from tests.support.app_fixtures import app_client as app_client
-from tests.support.mongo_fixtures import FakeMongoBackend, register_test_backend
-from tgdrive.storage.store import DriveStore
+from tests.support.mongo_fixtures import (
+    FakeMongoBackend,
+    new_store,
+    register_test_backend,
+)
 from tgdrive.web.app import create_app
 
 
@@ -621,7 +624,7 @@ async def test_devices_share_owner_access_but_keep_independent_sessions(
     from tgdrive.core.security import SESSION_COOKIE
 
     settings = make_settings(tmp_path)
-    store = DriveStore.create(tmp_path / "drive.json")
+    store = new_store(tmp_path / "drive.json")
     runtime = FakeRuntime(store)
     runtime.mongo = register_test_backend(monkeypatch, settings)
     app = create_app(settings, runtime=runtime)
@@ -776,7 +779,7 @@ def test_logout_only_writes_for_active_owner_sessions(
 
 def test_local_http_owner_session_and_origin_protection(tmp_path):
     settings = make_settings(tmp_path).model_copy(update={"cookie_secure": False})
-    store = DriveStore.create(tmp_path / "drive.json")
+    store = new_store(tmp_path / "drive.json")
     app = create_app(settings, runtime=FakeRuntime(store))
     with TestClient(app, base_url="http://localhost:8000") as client:
         response = client.post(
@@ -831,7 +834,7 @@ def test_mongodb_outage_refuses_app_auth_without_leaking_provider_error(tmp_path
     from tgdrive.storage.mongo import DatabaseUnavailable
 
     settings = make_settings(tmp_path)
-    store = DriveStore.create(tmp_path / "drive.json")
+    store = new_store(tmp_path / "drive.json")
     sessions = SimpleNamespace(
         find=Mock(side_effect=ConnectionFailure("synthetic-private-database-token"))
     )
@@ -854,7 +857,7 @@ def test_owner_credential_rotation_preserves_existing_share_links(tmp_path):
     from pydantic import SecretStr
 
     settings = make_settings(tmp_path)
-    store = DriveStore.create(tmp_path / "drive.json")
+    store = new_store(tmp_path / "drive.json")
     item = store.add_file("/", "shared.pdf", 7, 100)
     path = "/" + item["id"]
     with TestClient(
@@ -890,7 +893,7 @@ def test_restarts_preserve_sessions_but_password_changes_revoke_them(tmp_path, h
                 )
             }
         )
-    store = DriveStore.create(tmp_path / "drive.json")
+    store = new_store(tmp_path / "drive.json")
     backend = FakeMongoBackend()
 
     def app(config):
@@ -928,7 +931,7 @@ def test_hashed_password_preserves_intentional_whitespace(tmp_path):
     settings = make_settings(tmp_path).model_copy(
         update={"admin_password_hash": SecretStr(PasswordHasher().hash(password))}
     )
-    store = DriveStore.create(tmp_path / "drive.json")
+    store = new_store(tmp_path / "drive.json")
     app = create_app(settings, runtime=FakeRuntime(store))
     with TestClient(app, base_url="https://testserver") as client:
         assert (
@@ -1264,7 +1267,7 @@ def test_expired_shares_listed_and_legacy_links_not_rotated(app_client, monkeypa
     assert store.authorize_file(path, token)
     assert len(store.list_shares()) == 1
     monkeypatch.setattr(
-        "tgdrive.storage.store._utc_now", lambda: "9999-01-01T00:00:00Z"
+        "tgdrive.storage.mongo_store._utc_now", lambda: "9999-01-01T00:00:00Z"
     )
     assert store.list_shares() == []
     assert len(client.get("/api/v1/shares").json()["shares"]) == 1

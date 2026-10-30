@@ -10,8 +10,8 @@ from tests.recovery.test_upload_backup_barrier import (
     staged_file,
 )
 from tests.recovery.test_upload_backup_barrier import mongo_backend as mongo_backend
+from tests.support.mongo_fixtures import reopen_store
 from tgdrive.recovery.backup import BackupError, RecoveryConflict
-from tgdrive.storage.store import DriveStore
 from tgdrive.telegram.client_pool import ClientPool
 from tgdrive.transfers.tasks import TransferStatus
 
@@ -141,7 +141,7 @@ async def test_restart_preserves_guard_deadline_and_sends_only_once(
         tmp_path,
         pool,
         AsyncMock(side_effect=lambda revision: revision),
-        store=DriveStore.load(tmp_path / "drive.sqlite3"),
+        store=reopen_store(tmp_path / "drive"),
     )
     resumed._ensure_lineage = AsyncMock()
     try:

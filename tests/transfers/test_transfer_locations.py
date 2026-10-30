@@ -1,8 +1,7 @@
 from fastapi.testclient import TestClient
 
 from tests.support.app_fixtures import FakeRuntime, login, make_settings
-from tests.support.mongo_fixtures import register_test_backend
-from tgdrive.storage.store import DriveStore
+from tests.support.mongo_fixtures import new_store, register_test_backend
 from tgdrive.transfers.transfer_locations import locate_transfer
 from tgdrive.web.app import create_app
 
@@ -52,7 +51,7 @@ def check_locations(store):
 
 
 def test_exact_locations_follow_moves_and_renames_without_matching_names(tmp_path):
-    store = DriveStore.create(tmp_path / "drive.sqlite3")
+    store = new_store(tmp_path / "drive")
     try:
         check_locations(store)
     finally:
@@ -61,7 +60,7 @@ def test_exact_locations_follow_moves_and_renames_without_matching_names(tmp_pat
 
 async def test_owner_location_api_and_history_enrichment(tmp_path, monkeypatch):
     settings = make_settings(tmp_path)
-    store = DriveStore.create(tmp_path / "drive.sqlite3")
+    store = new_store(tmp_path / "drive")
     runtime = FakeRuntime(store)
     runtime.mongo = register_test_backend(monkeypatch, settings)
     row = await runtime.transfers.registry.create(

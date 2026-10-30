@@ -11,7 +11,7 @@ from fastapi.testclient import TestClient
 from telethon import types
 
 from tests.support.app_fixtures import FakeRuntime, login, make_settings
-from tests.support.mongo_fixtures import register_test_backend
+from tests.support.mongo_fixtures import new_store, register_test_backend
 from tgdrive.media.thumbnails import (
     THUMBNAIL_BYTES,
     Thumbnail,
@@ -20,7 +20,6 @@ from tgdrive.media.thumbnails import (
     image_type,
     load_thumbnail,
 )
-from tgdrive.storage.store import DriveStore
 from tgdrive.telegram.clients import Client
 from tgdrive.web.app import create_app
 
@@ -33,7 +32,7 @@ PNG = base64.b64decode(
 @pytest.fixture
 def app_client(tmp_path, monkeypatch):
     settings = make_settings(tmp_path)
-    store = DriveStore.create(tmp_path / "drive.json")
+    store = new_store(tmp_path / "drive.json")
     runtime = FakeRuntime(store)
     runtime.mongo = register_test_backend(monkeypatch, settings)
     with TestClient(

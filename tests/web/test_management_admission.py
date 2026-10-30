@@ -10,9 +10,9 @@ from fastapi.testclient import TestClient
 
 import tgdrive.transfers.manager as transfer_module
 from tests.support.app_fixtures import FakeRuntime, make_settings
+from tests.support.mongo_fixtures import new_store
 from tests.transfers.test_transfers import make_manager
 from tgdrive.settings.managed_settings import SettingsProblem
-from tgdrive.storage.store import DriveStore
 from tgdrive.web.app import create_app
 
 
@@ -55,7 +55,7 @@ async def test_settings_saved_during_async_multipart_admission_never_create_a_jo
 
 def test_restart_required_rejects_remote_start_without_source_inspection(tmp_path):
     settings = make_settings(tmp_path)
-    store = DriveStore.create(tmp_path / "drive.json")
+    store = new_store(tmp_path / "drive.json")
     runtime = FakeRuntime(store)
     runtime.connection_manager = SimpleNamespace(
         restart_required=True, close=AsyncMock()

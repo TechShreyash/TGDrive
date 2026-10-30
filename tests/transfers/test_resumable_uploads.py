@@ -15,9 +15,8 @@ from pydantic import SecretStr
 from pymongo.errors import ConnectionFailure
 
 import tgdrive.transfers.uploads as module
-from tests.support.mongo_fixtures import register_test_backend
+from tests.support.mongo_fixtures import new_store, register_test_backend
 from tgdrive.storage.mongo import for_directory
-from tgdrive.storage.store import DriveStore
 from tgdrive.transfers.tasks import TransferRegistry, TransferStatus
 from tgdrive.transfers.uploads import CHUNK_SIZE, ResumableUploads, UploadError
 
@@ -31,7 +30,7 @@ def mongo_backend(tmp_path, monkeypatch):
 
 class Manager:
     def __init__(self, tmp_path: Path, *, backend=None):
-        self.store = DriveStore.create()
+        self.store = new_store()
         if backend is None:
             backend = for_directory(tmp_path / "data")
         self.registry = TransferRegistry(mongo=backend.db.jobs, mongo_backend=backend)

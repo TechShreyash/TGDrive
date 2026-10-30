@@ -354,12 +354,8 @@ def initialize_if_empty(settings: Any, backend: MongoBackend) -> bool:
         (directory / name).exists()
         for name in (
             "mongodb-drive.json",
-            "replica-bootstrap.json",
             "channel-activation.json",
             "channel-backup.sqlite3",
-            "telegram-settings.json",
-            "drive.sqlite3",
-            "drive.json",
         )
     ):
         raise CorruptStoreError(

@@ -9,8 +9,8 @@ from pydantic import SecretStr
 
 import tests.support.app_fixtures as fixtures
 import tests.web.test_share_update_api as share_update_fixtures
+from tests.support.mongo_fixtures import new_store, store_from_payload
 from tgdrive.core.errors import ValidationError
-from tgdrive.storage.store import DriveStore
 from tgdrive.web.share_links import token_factory
 
 app_client = fixtures.app_client
@@ -158,7 +158,6 @@ def test_uncopyable_and_expired_links_never_mint_or_replace_links(
             .isoformat(timespec="seconds")
             .replace("+00:00", "Z")
         )
-        monkeypatch.setattr("tgdrive.storage.store._utc_now", lambda: later)
         monkeypatch.setattr("tgdrive.storage.mongo_store._utc_now", lambda: later)
 
     before = store.export()
@@ -190,7 +189,7 @@ async def test_showcase_seeds_named_copyable_links_with_distinct_expiries(tmp_pa
     async def load_cache(_key, _size, loader):
         return await loader()
 
-    store = DriveStore.create()
+    store = new_store()
     settings = fixtures.make_settings(tmp_path)
     transfers = fixtures.FakeTransfers()
     runtime = SimpleNamespace(
@@ -257,7 +256,7 @@ def test_independent_links_copy_edit_revoke_and_restore(app_client):
     rows = client.get("/api/v1/shares").json()["shares"]
     assert next(r for r in rows if r["id"] == first["id"])["label"] == "Alex review"
     assert next(r for r in rows if r["id"] == second["id"])["label"] == "Design team"
-    restored = DriveStore._from_payload(store.export())
+    restored = store_from_payload(store.export())
     try:
         assert restored.authorize_file(file_path, first["auth"])
         assert restored.authorize_file(file_path, second["auth"])
@@ -331,7 +330,7 @@ def test_custom_expiry_labels_authorization_and_download_link_scope(app_client):
 
 
 def test_invalid_labels_and_legacy_rotation_are_explicit():
-    store = DriveStore.create()
+    store = new_store()
     folder = store.create_folder("/", "Share")
     path = "/" + folder["id"]
     first = store.create_share(path)

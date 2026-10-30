@@ -88,7 +88,7 @@ def test_embed_reuses_share_expiry_revocation_and_trash_rules(
 
     if unavailable == "expired":
         later = (datetime.now(UTC) + timedelta(days=8)).isoformat()
-        monkeypatch.setattr("tgdrive.storage.store._utc_now", lambda: later)
+        monkeypatch.setattr("tgdrive.storage.mongo_store._utc_now", lambda: later)
     elif unavailable == "revoked":
         store.revoke_share(store.list_shares(share_path)[0]["id"])
     else:

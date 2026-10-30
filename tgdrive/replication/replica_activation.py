@@ -32,7 +32,8 @@ from tgdrive.settings.managed_settings import (
     read_document,
 )
 from tgdrive.storage.mongo import DatabaseUnavailable
-from tgdrive.storage.store import ROOT_ID, SCHEMA_VERSION, DriveStore
+from tgdrive.storage.mongo_store import MongoStore
+from tgdrive.storage.store import ROOT_ID, SCHEMA_VERSION
 
 MANIFEST = "channel-activation.json"
 _PHASES = {"prepared", "preserved", "installing", "catalog", "configured", "applied"}
@@ -192,11 +193,8 @@ def _candidate(settings, candidate):
             or catalog["storage_channel_id"] >= 0
         ):
             raise ValueError
-        validated = DriveStore._from_payload(catalog)
-        try:
-            catalog = validated.export()
-        finally:
-            validated.close()
+        MongoStore._validate_payload(catalog)
+        catalog = copy.deepcopy(catalog)
         # Never restore source-channel mutation receipts, including preparation
         # request IDs which could accidentally replay from an old browser tab.
         catalog["operations"] = []
@@ -673,9 +671,6 @@ def _preserve(settings, value, backend):
     archive = _archive_dir(directory, value["id"])
     archive.mkdir(parents=True, exist_ok=True, mode=0o700)
     atomic_private(archive / MANIFEST, _raw(value))
-    bootstrap = directory / "replica-bootstrap.json"
-    if bootstrap.exists() or bootstrap.is_symlink():
-        _copy_file(bootstrap, archive / bootstrap.name)
     _preserve_mongo(
         backend,
         archive,

@@ -1,26 +1,24 @@
 from __future__ import annotations
 
 import copy
-import sqlite3
 import uuid
-from concurrent.futures import ThreadPoolExecutor
 
 import pytest
 from fastapi.testclient import TestClient
 
-import tgdrive.storage.store as store_module
+import tgdrive.storage.mongo_store as store_module
 from tests.support.app_fixtures import FakeRuntime, login, make_settings
+from tests.support.mongo_fixtures import new_store, reopen_store, store_from_payload
 from tgdrive.core.errors import (
     CorruptStoreError,
     DuplicateNameError,
     InvalidNameError,
     InvalidPathError,
     NotDirectoryError,
-    PersistenceError,
     TrashedItemError,
     ValidationError,
 )
-from tgdrive.storage.store import DriveStore, FolderTreeConflictError
+from tgdrive.storage.store import FolderTreeConflictError
 from tgdrive.web.app import create_app
 
 
@@ -31,8 +29,8 @@ def prepare(store, *, request_id=None, destination="/", root="Photos", folders=N
 
 
 def test_atomic_tree_returns_opaque_paths_and_recovers_lost_response(tmp_path):
-    database = tmp_path / "drive.sqlite3"
-    store = DriveStore.create(database)
+    database = tmp_path / "drive"
+    store = new_store(database)
     request_id = str(uuid.uuid4())
     folders = [["2025", "Trips"], ["2025"], ["Personal"]]
     before = store.revision
@@ -47,7 +45,7 @@ def test_atomic_tree_returns_opaque_paths_and_recovers_lost_response(tmp_path):
         assert node["name"] == (relative.rsplit("/", 1)[-1] if relative else "Photos")
     assert store.revision == before + 1
     store.close()
-    recovered = DriveStore.load(database)
+    recovered = reopen_store(database)
     assert prepare(recovered, request_id=request_id, folders=folders[::-1]) == first
     assert recovered.revision == before + 1
     # Caller mutations cannot corrupt the durable replay result.
@@ -60,7 +58,7 @@ def test_atomic_tree_returns_opaque_paths_and_recovers_lost_response(tmp_path):
 
 
 def test_fresh_root_keeps_both_without_merging_or_overwriting():
-    store = DriveStore.create()
+    store = new_store()
     original = store.create_folder("/", "PHOTOS")
     original_path = "/" + original["id"]
     store.create_folder(original_path, "Untouched")
@@ -98,7 +96,7 @@ def test_fresh_root_keeps_both_without_merging_or_overwriting():
     ],
 )
 def test_invalid_manifest_never_creates_partial_folders(folders):
-    store = DriveStore.create()
+    store = new_store()
     before = store.export()
     with pytest.raises((ValidationError, InvalidNameError, DuplicateNameError)):
         prepare(store, folders=folders)
@@ -108,7 +106,7 @@ def test_invalid_manifest_never_creates_partial_folders(folders):
 
 @pytest.mark.parametrize("destination", ["relative", "/../x", "/a//b", "/a\\b"])
 def test_invalid_destination_is_rejected_before_writing(destination):
-    store = DriveStore.create()
+    store = new_store()
     before = store.export()
     with pytest.raises(InvalidPathError):
         prepare(store, destination=destination)
@@ -117,7 +115,7 @@ def test_invalid_destination_is_rejected_before_writing(destination):
 
 
 def test_unicode_is_normalized_and_order_does_not_change_request_identity():
-    store = DriveStore.create()
+    store = new_store()
     request_id = str(uuid.uuid4())
     first = prepare(
         store,
@@ -135,7 +133,7 @@ def test_unicode_is_normalized_and_order_does_not_change_request_identity():
 
 
 def test_folder_and_absolute_depth_bounds_are_enforced_atomically(monkeypatch):
-    store = DriveStore.create()
+    store = new_store()
     first = prepare(store, folders=[[str(n)] for n in range(999)])
     assert len(first["folders"]) == 1000
     before = store.export()
@@ -152,52 +150,43 @@ def test_folder_and_absolute_depth_bounds_are_enforced_atomically(monkeypatch):
     assert store.export() == before
     with monkeypatch.context() as limited:
         limited.setattr(store_module, "MAX_TREE_ITEMS", 2)
-        with pytest.raises(ValidationError, match="item count"):
+        with pytest.raises(ValidationError, match="catalog size"):
             prepare(store)
     assert store.export() == before
     store.close()
 
 
 def test_database_failure_rolls_back_every_node_and_idempotency_record(monkeypatch):
-    store = DriveStore.create()
+    store = new_store()
     before = store.export()
-    original = store._import_folder_preparation
 
-    def fail_after_creation(db, record):
-        original(db, record)
-        raise sqlite3.OperationalError("injected commit failure")
+    def fail_commit(*_args, **_kwargs):
+        raise RuntimeError("injected commit failure")
 
-    monkeypatch.setattr(store, "_import_folder_preparation", fail_after_creation)
-    with pytest.raises(PersistenceError, match="injected"):
+    monkeypatch.setattr(store.backend.db.preparations, "bulk_write", fail_commit)
+    with pytest.raises(RuntimeError, match="injected"):
         prepare(store, folders=[["Child"], ["Child", "Nested"]])
+    monkeypatch.undo()
     assert store.export() == before
     store.close()
 
 
-def test_concurrent_duplicate_request_commits_once(tmp_path):
-    database = tmp_path / "drive.sqlite3"
-    first = DriveStore.create(database)
-    second = DriveStore.load(database)
+def test_duplicate_request_commits_once():
+    store = new_store()
     request_id = str(uuid.uuid4())
-    with ThreadPoolExecutor(max_workers=2) as executor:
-        calls = [
-            executor.submit(prepare, store, request_id=request_id, folders=[["Child"]])
-            for store in (first, second)
-        ]
-        results = [call.result() for call in calls]
-    assert results[0] == results[1]
-    assert len(first.get_directory("/")["contents"]) == 1
-    assert first.revision == 2
-    first.close()
-    second.close()
+    first = prepare(store, request_id=request_id, folders=[["Child"]])
+    assert prepare(store, request_id=request_id, folders=[["Child"]]) == first
+    assert len(store.get_directory("/")["contents"]) == 1
+    assert store.revision == 2
+    store.close()
 
 
 def test_request_id_cannot_prepare_different_tree():
-    store = DriveStore.create()
+    store = new_store()
     request_id = str(uuid.uuid4())
     prepare(store, request_id=request_id, folders=[["Child"]])
     before = store.export()
-    with pytest.raises(FolderTreeConflictError, match="different"):
+    with pytest.raises(FolderTreeConflictError, match="already used"):
         prepare(store, request_id=request_id, folders=[["Other"]])
     assert store.export() == before
     store.close()
@@ -207,7 +196,7 @@ def test_request_id_cannot_prepare_different_tree():
     "change", ["move_root", "move_child", "rename", "trash", "delete", "deleting"]
 )
 def test_changed_tree_replay_fails_without_silent_recreation(change):
-    store = DriveStore.create()
+    store = new_store()
     request_id = str(uuid.uuid4())
     tree = prepare(store, request_id=request_id, folders=[["Child"]])
     root = tree["folders"][""]
@@ -231,7 +220,7 @@ def test_changed_tree_replay_fails_without_silent_recreation(change):
         prepare(store, request_id=request_id, folders=[["Child"]])
     assert store.export() == before
     # Tombstone results remain valid metadata after nodes are removed.
-    restored = DriveStore._from_payload(store.export())
+    restored = store_from_payload(store.export())
     assert restored.export() == store.export()
     with pytest.raises(FolderTreeConflictError, match="changed"):
         prepare(restored, request_id=request_id, folders=[["Child"]])
@@ -240,17 +229,17 @@ def test_changed_tree_replay_fails_without_silent_recreation(change):
 
 
 def test_portable_checkpoint_retains_idempotent_preparation():
-    store = DriveStore.create()
+    store = new_store()
     request_id = str(uuid.uuid4())
     tree = prepare(store, request_id=request_id, folders=[["Child"]])
-    restored = DriveStore._from_payload(store.export())
+    restored = store_from_payload(store.export())
     assert prepare(restored, request_id=request_id, folders=[["Child"]]) == tree
     corrupt = copy.deepcopy(store.export())
     corrupt["folder_preparations"][0]["result"]["folders"]["Child"] = tree["folders"][
         ""
     ]
     with pytest.raises(CorruptStoreError, match="ancestry"):
-        DriveStore._from_payload(corrupt)
+        store_from_payload(corrupt)
     restored.close()
     store.close()
 
@@ -258,7 +247,7 @@ def test_portable_checkpoint_retains_idempotent_preparation():
 @pytest.fixture
 def client(tmp_path):
     settings = make_settings(tmp_path)
-    store = DriveStore.create(tmp_path / "drive.sqlite3")
+    store = new_store(tmp_path / "drive")
     runtime = FakeRuntime(store)
     app = create_app(settings, runtime=runtime)
     with TestClient(app, base_url="https://testserver") as http:
@@ -332,7 +321,7 @@ def test_tree_inherits_existing_folder_share_without_new_credentials(client):
 
 @pytest.mark.parametrize("state", ["trashed", "deleting", "file"])
 def test_new_tree_rejects_invalid_or_hidden_destination_without_writing(state):
-    store = DriveStore.create()
+    store = new_store()
     if state == "file":
         item = store.add_file("/", "file.txt", 123, 4)
     else:
@@ -349,17 +338,17 @@ def test_new_tree_rejects_invalid_or_hidden_destination_without_writing(state):
 
 @pytest.mark.parametrize("bad_path", ["/", "/a/", "/wrong/parent/child"])
 def test_portable_tree_rejects_malformed_result_paths(bad_path):
-    store = DriveStore.create()
+    store = new_store()
     prepare(store, folders=[["Child"]])
     corrupt = copy.deepcopy(store.export())
     corrupt["folder_preparations"][0]["result"]["folders"]["Child"] = bad_path
     with pytest.raises(CorruptStoreError, match="ancestry"):
-        DriveStore._from_payload(corrupt)
+        store_from_payload(corrupt)
     store.close()
 
 
 def test_existing_preparation_stays_replayable_after_files_are_uploaded():
-    store = DriveStore.create()
+    store = new_store()
     request_id = str(uuid.uuid4())
     tree = prepare(store, request_id=request_id, folders=[["Child"]])
     store.add_file(tree["folders"]["Child"], "photo.jpg", 123, 10)

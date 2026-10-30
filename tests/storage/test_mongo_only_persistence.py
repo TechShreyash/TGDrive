@@ -13,7 +13,7 @@ from tgdrive.transfers.uploads import ResumableUploads
 
 
 def test_transfer_registry_rejects_local_database_path(tmp_path):
-    path = tmp_path / "jobs.sqlite3"
+    path = tmp_path / "jobs"
     with pytest.raises(ValueError, match="requires MongoDB"):
         TransferRegistry(database_path=path)
     assert not path.exists()

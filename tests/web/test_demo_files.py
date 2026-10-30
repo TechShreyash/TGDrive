@@ -22,7 +22,7 @@ from tgdrive.storage.demo_files import (
     write_policy,
 )
 from tgdrive.storage.mongo_store import MongoStore
-from tgdrive.storage.store import ROOT_ID, DriveStore
+from tgdrive.storage.store import ROOT_ID
 from tgdrive.transfers.tasks import TransferRegistry, TransferStatus
 from tgdrive.web.share_links import token_factory
 
@@ -36,7 +36,6 @@ def path(item):
 
 @pytest.fixture(
     params=[
-        "sqlite",
         "mongo-cache",
         pytest.param(
             "mongo-live",
@@ -48,9 +47,7 @@ def path(item):
     ]
 )
 def catalog(tmp_path, request):
-    if request.param == "sqlite":
-        store = DriveStore.create(tmp_path / "catalog.sqlite3")
-    elif request.param == "mongo-live":
+    if request.param == "mongo-live":
         store = MongoStore.create(request.getfixturevalue("backend"))
     else:
         # Exercise MongoStore's actual domain methods and copy-on-write transactions;

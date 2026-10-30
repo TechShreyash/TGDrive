@@ -28,7 +28,7 @@ from tgdrive.core.errors import (
 )
 from tgdrive.core.security import safe_name
 from tgdrive.recovery.backup import BackupError
-from tgdrive.storage.store import DriveStore
+from tgdrive.storage.mongo_store import MongoStore
 from tgdrive.telegram.client_pool import ClientPool, current_upload_limit
 from tgdrive.transfers.remote import (
     REMOTE_MAX_ATTEMPTS,
@@ -138,7 +138,7 @@ class TransferManager:
         *,
         settings: Settings,
         pool: ClientPool,
-        store: DriveStore,
+        store: MongoStore,
         remote: RemoteClient,
         registry: TransferRegistry,
         ensure_backup: Callable[[int], Awaitable[int]] | None = None,
@@ -1165,11 +1165,7 @@ class TransferManager:
         await self.registry.update(
             record.id,
             status=TransferStatus.RUNNING,
-            phase=(
-                "finalizing"
-                if getattr(self.store, "backend_name", None) == "mongodb"
-                else "backup_pending"
-            ),
+            phase="finalizing",
             current=size,
             total=size,
         )

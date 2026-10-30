@@ -9,8 +9,8 @@ from types import SimpleNamespace
 import pytest
 from fastapi import UploadFile
 
+from tests.support.mongo_fixtures import new_store
 from tgdrive.core.config import Settings
-from tgdrive.storage.store import DriveStore
 from tgdrive.telegram.client_pool import ClientPool
 from tgdrive.transfers.manager import (
     TransferCancelled,
@@ -146,7 +146,7 @@ async def make_manager(tmp_path: Path, *, max_size: int = 1024):
     client = FakeTelegramClient()
     pool = ClientPool([client])
     await pool.start()
-    store = DriveStore.create(tmp_path / "drive.json")
+    store = new_store(tmp_path / "drive.json")
     manager = TransferManager(
         settings=settings,
         pool=pool,

@@ -9,9 +9,9 @@ from telethon import functions, types
 
 from tests.core.test_runtime import FakeBackup, FakePool, FakeRemote, settings
 from tests.core.test_runtime import mongo_backend as mongo_backend_fixture
+from tests.support.mongo_fixtures import new_store
 from tgdrive.core.runtime import Runtime
 from tgdrive.settings.managed_settings import SettingsProblem
-from tgdrive.storage.store import DriveStore
 from tgdrive.telegram.channel_state import storage_bot_rights_problem
 from tgdrive.telegram.clients import Client
 
@@ -136,7 +136,7 @@ async def test_channel_probe_network_error_is_safe_and_retryable(tmp_path):
 async def test_unsafe_channel_preserves_metadata_and_pauses_startup_recovery(
     tmp_path, monkeypatch
 ):
-    store = DriveStore.create(tmp_path / "drive.sqlite3")
+    store = new_store(tmp_path / "drive")
     store.create_folder("/", "Preserve")
     pool = ChannelPool(("CHANNEL_AUTO_DELETE", "Turn auto-delete off."))
     runtime = Runtime(settings(tmp_path), pool=pool)

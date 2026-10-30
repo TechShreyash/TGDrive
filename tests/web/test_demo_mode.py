@@ -12,10 +12,9 @@ from pydantic import SecretStr
 
 from tests.core.test_config import settings_values
 from tests.support.app_fixtures import FakeRuntime, login, make_settings
-from tests.support.mongo_fixtures import register_test_backend
+from tests.support.mongo_fixtures import new_store, register_test_backend
 from tgdrive.core.config import Settings
 from tgdrive.storage.mongo import bootstrap_values
-from tgdrive.storage.store import DriveStore
 from tgdrive.web.app import create_app
 
 ORIGIN = {"Origin": "https://testserver"}
@@ -73,7 +72,7 @@ MANAGEMENT_REQUESTS = [
 @contextmanager
 def owner_client(tmp_path, *, demo_mode=True, root_path=""):
     settings = make_settings(tmp_path).model_copy(update={"demo_mode": demo_mode})
-    store = DriveStore.create(tmp_path / "drive.sqlite3")
+    store = new_store(tmp_path / "drive")
     runtime = FakeRuntime(store)
     runtime.pool = SimpleNamespace(
         status=AsyncMock(return_value=()),

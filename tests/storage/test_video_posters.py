@@ -3,18 +3,19 @@
 from __future__ import annotations
 
 import copy
-import sqlite3
 from contextlib import closing
 
 import pytest
 
-from tests.support.mongo_fixtures import FakeMongoBackend
+from tests.support.mongo_fixtures import (
+    new_store,
+    store_from_payload,
+)
 from tgdrive.core.errors import CorruptStoreError, ValidationError
 from tgdrive.replication.replica_activation import _mongo_nodes
 from tgdrive.replication.replica_state import files_in, parts_in, remap_catalog
 from tgdrive.storage.file_parts import MAX_POSTER_BYTES
 from tgdrive.storage.mongo_store import MongoStore
-from tgdrive.storage.store import DriveStore
 
 POSTER = {"message_id": 201, "size": 1234, "sha256": "ab" * 32, "document_id": -9}
 PARTS = [
@@ -23,13 +24,9 @@ PARTS = [
 ]
 
 
-@pytest.fixture(params=["sqlite", "mongodb"])
-def store(request):
-    result = (
-        DriveStore.create()
-        if request.param == "sqlite"
-        else MongoStore.create(FakeMongoBackend())
-    )
+@pytest.fixture
+def store():
+    result = new_store()
     yield result
     result.close()
 
@@ -55,7 +52,7 @@ def test_poster_roundtrips_without_changing_original_parts_or_public_listing(sto
     assert add(store)["id"] == item["id"]
     with pytest.raises(ValidationError):
         add(store, {**POSTER, "message_id": 202})
-    with closing(DriveStore._from_payload(store.export())) as recovered:
+    with closing(store_from_payload(store.export())) as recovered:
         assert recovered.get_file(full(item))["poster"] == POSTER
         assert recovered.message_ids(full(item)) == [101, 102, 201]
     if isinstance(store, MongoStore):
@@ -99,13 +96,13 @@ def test_pending_purge_and_recovery_include_the_poster(store):
     intent = store.begin_deletion(full(item))
     assert intent["message_ids"] == [101, 102, 201]
     store.confirm_deletion_messages(intent["id"], [101, 102])
-    with closing(DriveStore._from_payload(store.export())) as recovered:
+    with closing(store_from_payload(store.export())) as recovered:
         assert recovered.pending_deletions()[0]["pending_message_ids"] == [201]
     damaged = store.export()
     damaged["deletions"][0]["message_ids"] = [101, 102]
     damaged["deletions"][0]["pending_message_ids"] = []
     with pytest.raises(CorruptStoreError):
-        DriveStore._from_payload(damaged)
+        store_from_payload(damaged)
     assert store.finish_deletion(intent["id"]) == [101, 102, 201]
 
 
@@ -125,23 +122,6 @@ def test_replication_maps_poster_as_a_sidecar_without_changing_file_layout(store
     assert result["size"] == 10
     assert [part["offset"] for part in result["parts"]] == [0, 4]
     assert node["poster"] == POSTER
-
-
-def test_v6_sqlite_upgrade_preserves_existing_catalog_and_allows_posters(tmp_path):
-    database = tmp_path / "drive.sqlite3"
-    with closing(DriveStore.create(database)) as original:
-        original.add_file("/", "older.bin", 1, 10)
-        before = original.export()
-    with closing(sqlite3.connect(database)) as connection:
-        connection.execute("ALTER TABLE nodes DROP COLUMN poster")
-        connection.execute("PRAGMA user_version=6")
-        connection.commit()
-    with closing(DriveStore.load(database)) as upgraded:
-        assert upgraded.export() == before
-        item = add(upgraded)
-        assert upgraded.get_file(full(item))["poster"] == POSTER
-    with closing(sqlite3.connect(database)) as connection:
-        assert connection.execute("PRAGMA user_version").fetchone()[0] == 7
 
 
 def test_channel_activation_rebuilds_poster_links_in_valid_mongo_records(store):

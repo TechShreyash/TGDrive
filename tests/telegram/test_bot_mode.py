@@ -9,12 +9,11 @@ from typing import Any
 import pytest
 from pydantic import SecretStr
 
-from tests.support.mongo_fixtures import register_test_backend
+from tests.support.mongo_fixtures import new_store, register_test_backend
 from tgdrive.core.config import Settings
 from tgdrive.settings.bot_settings import BotUploadPreferences
 from tgdrive.storage.mongo import DatabaseUnavailable
 from tgdrive.storage.mongo_store import MongoStore
-from tgdrive.storage.store import DriveStore
 from tgdrive.telegram.bot_mode import BotMode
 
 
@@ -112,7 +111,7 @@ def root_mode(**kwargs):
 
 @pytest.mark.asyncio
 async def test_photo_upload_gets_fallback_name_and_metadata(tmp_path: Path) -> None:
-    store = DriveStore.create(tmp_path / "drive.json")
+    store = new_store(tmp_path / "drive.json")
     client = FakeBotClient()
     mode = root_mode(client=client, settings=settings(tmp_path), store=store)
     copied = SimpleNamespace(
@@ -136,7 +135,7 @@ async def test_photo_upload_gets_fallback_name_and_metadata(tmp_path: Path) -> N
 async def test_bot_upload_preserves_copy_when_metadata_fails(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    store = DriveStore.create(tmp_path / "drive.json")
+    store = new_store(tmp_path / "drive.json")
     client = FakeBotClient()
     mode = root_mode(client=client, settings=settings(tmp_path), store=store)
     copied = SimpleNamespace(
@@ -159,7 +158,7 @@ async def test_bot_upload_preserves_copy_when_metadata_fails(
 
 @pytest.mark.asyncio
 async def test_bot_mode_lifecycle_is_idempotent(tmp_path: Path) -> None:
-    store = DriveStore.create(tmp_path / "drive.json")
+    store = new_store(tmp_path / "drive.json")
     client = FakeLifecycleClient()
     mode = root_mode(client=client, settings=settings(tmp_path), store=store)
 
@@ -180,7 +179,7 @@ async def test_bot_import_guard_before_copy_and_after_copy_preserves_metadata(
 ):
     from tgdrive.settings.managed_settings import SettingsProblem
 
-    store = DriveStore.create(tmp_path / "drive.sqlite3")
+    store = new_store(tmp_path / "drive")
     client = FakeBotClient()
     copied = SimpleNamespace(id=57, photo=SimpleNamespace(file_size=3))
     checks = 0
@@ -220,7 +219,7 @@ async def test_bot_import_guard_before_copy_and_after_copy_preserves_metadata(
 async def test_bot_rollback_does_not_delete_after_lineage_conflict(tmp_path):
     from tgdrive.recovery.backup import RecoveryConflict
 
-    store = DriveStore.create(tmp_path / "drive.sqlite3")
+    store = new_store(tmp_path / "drive")
     client = FakeBotClient()
     copied = SimpleNamespace(id=58)  # Invalid media causes rollback.
 
@@ -245,7 +244,7 @@ async def test_bot_rollback_does_not_delete_after_lineage_conflict(tmp_path):
 
 @pytest.mark.asyncio
 async def test_bot_active_import_counter_covers_copy_and_cancellation(tmp_path):
-    store = DriveStore.create(tmp_path / "drive.sqlite3")
+    store = new_store(tmp_path / "drive")
     client = FakeBotClient()
     mode = root_mode(client=client, settings=settings(tmp_path), store=store)
     entered = asyncio.Event()
@@ -271,7 +270,7 @@ async def test_bot_active_import_counter_covers_copy_and_cancellation(tmp_path):
 
 @pytest.fixture
 def bot(tmp_path):
-    store = DriveStore.create(tmp_path / "drive.sqlite3")
+    store = new_store(tmp_path / "drive")
     mode = root_mode(client=FakeBotClient(), settings=settings(tmp_path), store=store)
     try:
         yield mode

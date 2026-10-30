@@ -7,14 +7,13 @@ import pytest
 from fastapi.testclient import TestClient
 
 from tests.support.app_fixtures import FakeRuntime, login, make_settings
-from tests.support.mongo_fixtures import register_test_backend
+from tests.support.mongo_fixtures import new_store, register_test_backend
 from tgdrive.core.config import Settings
 from tgdrive.settings.managed_settings import SettingsProblem
 from tgdrive.settings.performance_preferences import (
     PerformancePreferences,
     PerformanceSettings,
 )
-from tgdrive.storage.store import DriveStore
 from tgdrive.web.app import create_app
 
 
@@ -96,7 +95,7 @@ async def test_policy_persists_conflicts_and_failed_write_is_not_applied(
 
 def test_owner_api_resource_policy_and_share_capability(tmp_path, mongo_backend):
     settings = make_settings(tmp_path)
-    store = DriveStore.create(tmp_path / "drive.sqlite3")
+    store = new_store(tmp_path / "drive")
     item = store.add_file("/", "hello.txt", 123, 12)["id"]
     app_runtime = FakeRuntime(store)
     app_runtime.mongo = mongo_backend
@@ -188,7 +187,7 @@ def test_valid_public_share_cannot_inspect_or_control_operator_resources(
     tmp_path, method, path, body, mongo_backend
 ):
     settings = make_settings(tmp_path)
-    store = DriveStore.create(tmp_path / "drive.sqlite3")
+    store = new_store(tmp_path / "drive")
     item = store.add_file("/", "public.txt", 123, 12)["id"]
     token = store.create_share("/" + item)
     assert store.authorize_file("/" + item, token)

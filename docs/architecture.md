@@ -123,8 +123,9 @@ Automatic initialization runs only under the ownership lock and refuses saved
 drive records or recovery state. The catalog, channel binding and initial
 connection settings commit in one transaction. Those initial connections are
 active in the same process; first setup does not ask for another restart.
-The local recovery journal and portable catalog validators support recovery;
-live catalog operations still require MongoDB.
+All drive state, including the independent backup journal, lives in MongoDB.
+The same environment and `MONGODB_URI` on another server reopens the same
+drive with its backup channel configuration and copy progress.
 `DATA_DIR/mongodb-drive.json` remembers that a drive has been opened; losing its
 MongoDB catalog cannot then be mistaken for a first deployment on that volume.
 
@@ -530,8 +531,7 @@ selected picture. The poster is a separate ordinary Telegram document, tracked
 as an optional catalog reference outside the original byte parts. Its send
 identity and confirmation share the upload journal's retry/cancellation
 ownership. Catalog commit includes that reference atomically; purge and channel
-replication enumerate both originals and posters. Existing SQLite v6 utility
-catalogs are validated before an additive v7 migration; portable schema 4 reads
+replication enumerate both originals and posters. Portable schema 4 reads
 older files without posters. See [poster behavior and limits](thumbnails.md#video-posters).
 
 [Performance](performance.md) defines cache budgets, shared fetches, read-ahead,

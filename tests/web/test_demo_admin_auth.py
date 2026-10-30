@@ -17,7 +17,11 @@ from pydantic import ValidationError
 
 from tests.core.test_config import settings_values
 from tests.support.app_fixtures import FakeRuntime, make_settings
-from tests.support.mongo_fixtures import FakeMongoBackend, register_test_backend
+from tests.support.mongo_fixtures import (
+    FakeMongoBackend,
+    new_store,
+    register_test_backend,
+)
 from tgdrive.core.config import Settings
 from tgdrive.core.security import (
     SESSION_COOKIE,
@@ -27,7 +31,6 @@ from tgdrive.core.security import (
     demo_admin_session_key,
 )
 from tgdrive.storage.mongo import bootstrap_values
-from tgdrive.storage.store import DriveStore
 from tgdrive.web.app import create_app
 
 VISITOR = "correct horse battery staple"
@@ -41,7 +44,7 @@ def auth_client(tmp_path, **overrides):
     values.update(DEMO_MODE=True, DEMO_ADMIN_PASSWORD=ADMIN)
     values.update(overrides)
     settings = Settings(_env_file=None, **values)
-    store = DriveStore.create(tmp_path / "drive.sqlite3")
+    store = new_store(tmp_path / "drive")
     runtime = FakeRuntime(store)
     runtime.replica = SimpleNamespace(
         blocked=False,

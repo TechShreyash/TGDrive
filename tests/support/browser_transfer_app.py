@@ -34,12 +34,13 @@ from telethon.errors import (
 )
 
 from tests.support.memory_mongo import FixtureMongoBackend
+from tests.support.mongo_fixtures import new_store
 from tgdrive.core.config import Settings
 from tgdrive.core.security import SESSION_COOKIE
 from tgdrive.settings.management import ConnectionManager
 from tgdrive.settings.premium_login import PremiumLoginService
 from tgdrive.storage import mongo as fixture_mongo
-from tgdrive.storage.store import DriveStore
+from tgdrive.storage.mongo_store import MongoStore
 from tgdrive.telegram.client_pool import ClientPool
 from tgdrive.telegram.clients import TelegramMessage
 from tgdrive.transfers.manager import TransferCancelled, TransferEmptyFile
@@ -159,7 +160,7 @@ class FixtureClient:
 
 
 class FixtureTransfers:
-    def __init__(self, store: DriveStore, payloads: dict[int, bytes]) -> None:
+    def __init__(self, store: MongoStore, payloads: dict[int, bytes]) -> None:
         self.registry = TransferRegistry(cancel_grace_seconds=0.2)
         self.store = store
         self.payloads = payloads
@@ -581,7 +582,7 @@ def _preview_wav() -> bytes:
 class FixtureBackup:
     """Checkpoint transport state for owner UI tests; never contacts Telegram."""
 
-    def __init__(self, store: DriveStore) -> None:
+    def __init__(self, store: MongoStore) -> None:
         self.protected_revision = store.revision
         self.error: str | None = None
         self.state_override: str | None = None
@@ -591,7 +592,7 @@ class FixtureBackup:
     def history(self) -> list[dict[str, Any]]:
         return []
 
-    def protection_status(self, store: DriveStore) -> dict[str, Any]:
+    def protection_status(self, store: MongoStore) -> dict[str, Any]:
         status = {
             "state": self.state_override
             or (
@@ -610,7 +611,7 @@ class FixtureBackup:
             status["error"] = self.error
         return status
 
-    async def ensure_revision(self, store: DriveStore, required_revision: int) -> int:
+    async def ensure_revision(self, store: MongoStore, required_revision: int) -> int:
         self.calls += 1
         await asyncio.sleep(0.05)
         self.state_override = None
@@ -622,10 +623,10 @@ class FixtureBackup:
         self.protected_revision = max(store.revision, required_revision)
         return 9000 + self.calls
 
-    async def snapshot_now(self, store: DriveStore) -> int:
+    async def snapshot_now(self, store: MongoStore) -> int:
         return await self.ensure_revision(store, store.revision)
 
-    def set_scenario(self, scenario: str, store: DriveStore) -> None:
+    def set_scenario(self, scenario: str, store: MongoStore) -> None:
         self.error = None
         self.state_override = None
         self.fail_next = False
@@ -1000,7 +1001,7 @@ class FixtureReplica:
 class FixtureRuntime:
     def __init__(self) -> None:
         self.mongo = FixtureMongoBackend()
-        self.store = DriveStore.create()
+        self.store = new_store()
         self.payloads = {101: b"public content", 102: b"private content"}
         folder = self.store.create_folder("/", "資料")
         private = self.store.create_folder("/", "Private folder")

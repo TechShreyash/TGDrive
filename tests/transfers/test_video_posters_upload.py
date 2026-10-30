@@ -10,9 +10,8 @@ from unittest.mock import AsyncMock
 import pytest
 
 import tests.transfers.test_multipart_transfers as multipart_tests
-from tests.support.mongo_fixtures import register_test_backend
+from tests.support.mongo_fixtures import register_test_backend, reopen_store
 from tgdrive.media import generated_thumbnails as covers
-from tgdrive.storage.store import DriveStore
 from tgdrive.telegram.client_pool import ClientPool
 from tgdrive.telegram.connection_errors import TelegramConnectionError
 from tgdrive.transfers import multipart_transfer
@@ -260,7 +259,7 @@ async def test_restart_replays_ambiguous_poster_from_owned_staging(tmp_path, ima
     recovered = TransferManager(
         settings=manager.settings,
         pool=pool,
-        store=DriveStore.load(tmp_path / "drive.sqlite3"),
+        store=reopen_store(tmp_path / "drive"),
         registry=multipart_tests.registry_for(tmp_path),
         remote=SimpleNamespace(close=AsyncMock()),
     )

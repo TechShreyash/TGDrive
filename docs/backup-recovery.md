@@ -149,8 +149,8 @@ in demo mode, including for the demo administrator.
    Reconnect optional Telegram account sessions as needed, then save the updated
    confirmed recovery file.
 
-The server can continue copying with the browser closed. Preserve `DATA_DIR` and
-resume the **same operation** after interruptions; do not change destinations or
+The server can continue copying with the browser closed. Progress is saved in
+MongoDB; resume the **same operation** after interruptions; do not change destinations or
 clear the journal to bypass an error.
 
 ### Recover only the database when the surviving channel is healthy

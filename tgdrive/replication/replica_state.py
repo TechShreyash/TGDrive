@@ -6,7 +6,6 @@ import copy
 import json
 import os
 import secrets
-import sqlite3
 import threading
 from pathlib import Path
 
@@ -14,7 +13,7 @@ from bson import json_util
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
 from tgdrive.recovery.backup import decode_catalog_snapshot
-from tgdrive.storage.store import DriveStore
+from tgdrive.storage.mongo_store import MongoStore
 
 MAGIC = b"TGDRIVE-REPLICA-1\n"
 MAX_BUNDLE = 64 * 1024**2
@@ -56,97 +55,161 @@ def read_private(path: Path, *, maximum=MAX_BUNDLE):
 
 
 class ReplicaJournal:
-    def __init__(self, directory: Path):
-        directory.mkdir(parents=True, exist_ok=True, mode=0o700)
-        path = directory / "channel-backup.sqlite3"
-        if path.is_symlink():
-            raise ValueError("Unsafe backup journal path")
-        self.db = sqlite3.connect(path, check_same_thread=False)
-        path.chmod(0o600)
+    """Backup-channel state and send intents, stored in MongoDB with the drive."""
+
+    # Characters per chunk document; UTF-8 stays well below MongoDB's 16 MiB limit.
+    CHUNK = 1_000_000
+
+    def __init__(self, directory: Path, backend=None):
+        from tgdrive.storage.mongo import DatabaseUnavailable, for_directory
+
+        self.backend = backend or for_directory(directory)
+        if self.backend is None:
+            raise DatabaseUnavailable("MongoDB is required for the backup journal.")
         self.lock = threading.RLock()
-        self.db.execute("PRAGMA journal_mode=WAL")
-        self.db.execute("PRAGMA synchronous=FULL")
-        self.db.executescript("""
-            CREATE TABLE IF NOT EXISTS state(key TEXT PRIMARY KEY, value TEXT NOT NULL);
-            CREATE TABLE IF NOT EXISTS copies(
-                key TEXT PRIMARY KEY, random_id INTEGER NOT NULL,
-                message_id INTEGER, size INTEGER NOT NULL
-            );
-        """)
-        self.db.commit()
+        self._import_sqlite(directory / "channel-backup.sqlite3")
+
+    def _import_sqlite(self, path: Path):
+        # shortcut: one-time import of the v2.0-v2.2 local journal; remove in 3.0.
+        if not path.is_file() or path.is_symlink():
+            return
+        import sqlite3
+
+        db = self.backend.db
+        if db.replica_state.find_one({}) or db.replica_copies.find_one({}):
+            raise ValueError(
+                "Both channel-backup.sqlite3 and MongoDB backup state exist. "
+                "Keep the MongoDB state and move the old file out of DATA_DIR."
+            )
+        source = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
+        try:
+            state = {
+                key: json_util.loads(
+                    value, json_options=json_util.JSONOptions(tz_aware=True)
+                )
+                for key, value in source.execute("SELECT key, value FROM state")
+            }
+            copies = source.execute(
+                "SELECT key, random_id, message_id, size FROM copies"
+            ).fetchall()
+        finally:
+            source.close()
+
+        def migrate(session):
+            self.backend.fence(session)
+            self._write_state(state, session)
+            if copies:
+                db.replica_copies.insert_many(
+                    [
+                        {
+                            "_id": key,
+                            "random_id": random_id,
+                            "message_id": message,
+                            "size": size,
+                        }
+                        for key, random_id, message, size in copies
+                    ],
+                    session=session,
+                )
+
+        self.backend.transaction(migrate)
+        path.rename(path.with_name(path.name + ".migrated"))
 
     def get(self, key, default=None):
-        with self.lock:
-            row = self.db.execute(
-                "SELECT value FROM state WHERE key=?", (key,)
-            ).fetchone()
-            return (
-                json_util.loads(
-                    row[0], json_options=json_util.JSONOptions(tz_aware=True)
-                )
-                if row
-                else copy.deepcopy(default)
-            )
+        db = self.backend.db
+        row = db.replica_state.find_one({"_id": key})
+        if row is None:
+            return copy.deepcopy(default)
+        chunks = db.replica_chunks.find({"key": key}).sort("index", 1)
+        raw = "".join(chunk["data"] for chunk in chunks)
+        if len(raw) != row["length"]:
+            raise ValueError("Backup journal state is incomplete")
+        return json_util.loads(raw, json_options=json_util.JSONOptions(tz_aware=True))
 
     def set(self, key, value):
         self.set_many({key: value})
 
-    def set_many(self, values):
-        """Commit related state together, including explicit null values."""
-        rows = [
-            (
-                key,
-                json.dumps(
-                    value,
-                    default=json_util.default,
-                    allow_nan=False,
-                    ensure_ascii=False,
-                ),
-            )
-            for key, value in values.items()
-        ]
-        with self.lock, self.db:
-            self.db.executemany(
-                "INSERT INTO state VALUES(?,?) ON CONFLICT(key) "
-                "DO UPDATE SET value=excluded.value",
-                rows,
+    def _write_state(self, values, session):
+        db = self.backend.db
+        for key, raw in values.items():
+            if not isinstance(raw, str):
+                raw = json.dumps(
+                    raw, default=json_util.default, allow_nan=False, ensure_ascii=False
+                )
+            db.replica_chunks.delete_many({"key": key}, session=session)
+            pieces = [raw[i : i + self.CHUNK] for i in range(0, len(raw), self.CHUNK)]
+            if pieces:
+                db.replica_chunks.insert_many(
+                    [
+                        {
+                            "_id": f"{key}\x00{index}",
+                            "key": key,
+                            "index": index,
+                            "data": data,
+                        }
+                        for index, data in enumerate(pieces)
+                    ],
+                    session=session,
+                )
+            db.replica_state.replace_one(
+                {"_id": key},
+                {"_id": key, "length": len(raw)},
+                upsert=True,
+                session=session,
             )
 
-    def intent(self, key, size):
-        with self.lock, self.db:
-            self.db.execute(
-                "INSERT OR IGNORE INTO copies VALUES(?,?,NULL,?)",
-                (key, secrets.randbelow(2**63 - 1) + 1, size),
+    def set_many(self, values):
+        """Commit related state together, including explicit null values."""
+        encoded = {
+            key: json.dumps(
+                value, default=json_util.default, allow_nan=False, ensure_ascii=False
             )
-            row = self.db.execute(
-                "SELECT random_id,message_id,size FROM copies WHERE key=?", (key,)
-            ).fetchone()
-            if row[2] != size:
+            for key, value in values.items()
+        }
+
+        def write(session):
+            self.backend.fence(session)
+            self._write_state(encoded, session)
+
+        with self.lock:
+            self.backend.transaction(write)
+
+    def intent(self, key, size):
+        db = self.backend.db
+        with self.lock:
+            row = db.replica_copies.find_one({"_id": key})
+            if row is None:
+                row = {
+                    "_id": key,
+                    "random_id": secrets.randbelow(2**63 - 1) + 1,
+                    "message_id": None,
+                    "size": size,
+                }
+                self.backend.write(db.replica_copies, "insert_one", row)
+            if row["size"] != size:
                 raise ValueError("Replica intent size changed")
-            return row[0], row[1]
+            return row["random_id"], row["message_id"]
 
     def confirm(self, key, message_id):
         if type(message_id) is not int or message_id <= 0:
             raise ValueError("Invalid replica confirmation")
-        with self.lock, self.db:
-            self.db.execute(
-                "UPDATE copies SET message_id=? WHERE key=?", (message_id, key)
+        db = self.backend.db
+        with self.lock:
+            self.backend.write(
+                db.replica_copies,
+                "update_one",
+                {"_id": key},
+                {"$set": {"message_id": message_id}},
             )
 
     def owns_publication(self, channel, message_id):
-        with self.lock:
-            return (
-                self.db.execute(
-                    "SELECT 1 FROM copies WHERE message_id=? "
-                    "AND (key LIKE ? OR key LIKE ?) LIMIT 1",
-                    (message_id, f"bundle:{channel}:%", f"primary-catalog:{channel}:%"),
-                ).fetchone()
-                is not None
-            )
+        return any(
+            row["_id"].startswith((f"bundle:{channel}:", f"primary-catalog:{channel}:"))
+            for row in self.backend.db.replica_copies.find({"message_id": message_id})
+        )
 
     def close(self):
-        with self.lock:
-            self.db.close()
+        pass
 
 
 def files_in(catalog):
@@ -167,8 +230,7 @@ def parts_in(node):
 
 
 def validate_catalog(catalog):
-    store = DriveStore._from_payload(catalog)
-    store.close()
+    MongoStore._validate_payload(catalog)
 
 
 def remap_catalog(catalog, channel, mapping):

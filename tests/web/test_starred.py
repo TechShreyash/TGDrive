@@ -3,8 +3,8 @@ from __future__ import annotations
 import pytest
 
 import tests.support.app_fixtures as fixtures
+from tests.support.mongo_fixtures import new_store, reopen_store, store_from_payload
 from tgdrive.core.errors import ValidationError
-from tgdrive.storage.store import DriveStore
 
 app_client = fixtures.app_client
 
@@ -26,7 +26,7 @@ def check_starred(store):
     store.move(target, "/" + destination["id"])
     row = store.list_starred()[file["id"]]
     assert row["name"] == "Revised.pdf" and row["parent_names"] == ["Destination"]
-    clone = DriveStore._from_payload(store.export())
+    clone = store_from_payload(store.export())
     try:
         assert set(clone.list_starred()) == {folder["id"], file["id"]}
     finally:
@@ -42,12 +42,12 @@ def check_starred(store):
 
 
 def test_starred_survives_paths_backup_and_reopen(tmp_path):
-    path = tmp_path / "drive.sqlite3"
-    store = DriveStore.create(path)
+    path = tmp_path / "drive"
+    store = new_store(path)
     check_starred(store)
     expected = store.export()
     store.close()
-    reopened = DriveStore.load(path)
+    reopened = reopen_store(path)
     assert reopened.export() == expected
     reopened.close()
 

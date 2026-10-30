@@ -7,10 +7,11 @@ from unittest.mock import AsyncMock, MagicMock, Mock
 import pytest
 
 import tgdrive.core.runtime as runtime_module
+from tests.support.mongo_fixtures import Collection, new_store
 from tgdrive.core.config import Settings
 from tgdrive.core.runtime import Runtime
 from tgdrive.storage.mongo import DatabaseUnavailable
-from tgdrive.storage.store import DriveStore
+from tgdrive.storage.mongo_store import MongoStore
 
 
 def settings(tmp_path: Path, **overrides: object) -> Settings:
@@ -36,6 +37,9 @@ def mongo_backend(monkeypatch):
     backend = MagicMock()
     backend.transaction.side_effect = lambda callback: callback(None)
     backend.db.settings.find_one.return_value = None
+    # The backup journal needs real document storage to round-trip its state.
+    for name in ("replica_state", "replica_chunks", "replica_copies"):
+        setattr(backend.db, name, Collection())
     for name in ("jobs", "receipts", "bot_folders"):
         getattr(backend.db, name).find.return_value = []
     monkeypatch.setattr("tgdrive.storage.mongo.for_settings", lambda _: backend)
@@ -76,25 +80,25 @@ class FakeRemote:
 
 
 class FakeBackup:
-    def __init__(self, store: DriveStore) -> None:
+    def __init__(self, store: MongoStore) -> None:
         self.store = store
         self.backups = 0
         self.started = False
         self.stopped = False
 
-    async def restore(self) -> DriveStore:
+    async def restore(self) -> MongoStore:
         return self.store
 
-    async def backup(self, store: DriveStore) -> bool:
+    async def backup(self, store: MongoStore) -> bool:
         self.backups += 1
         revision, _ = store.snapshot()
         store.mark_backed_up(revision)
         return True
 
-    def start(self, _store: DriveStore) -> None:
+    def start(self, _store: MongoStore) -> None:
         self.started = True
 
-    async def stop(self, _store: DriveStore) -> None:
+    async def stop(self, _store: MongoStore) -> None:
         self.stopped = True
 
 
@@ -102,7 +106,7 @@ class FakeBackup:
 async def test_runtime_starts_once_and_stops_components(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    store = DriveStore.create(tmp_path / "drive.json")
+    store = new_store(tmp_path / "drive.json")
     pool = FakePool()
     runtime = Runtime(settings(tmp_path), pool=pool)
     backup = FakeBackup(store)
@@ -140,7 +144,7 @@ async def test_runtime_persists_recovery_key_before_workers_without_blocking_bro
     from tgdrive.replication.replica import ChannelReplica
     from tgdrive.settings.managed_settings import SettingsProblem
 
-    store = DriveStore.create(tmp_path / "drive.json")
+    store = new_store(tmp_path / "drive.json")
     pool = FakePool()
     runtime = Runtime(settings(tmp_path), pool=pool)
     backup = FakeBackup(store)
@@ -177,8 +181,8 @@ async def test_runtime_persists_recovery_key_before_workers_without_blocking_bro
 async def test_telegram_outage_keeps_local_metadata_available(tmp_path: Path) -> None:
     pool = FakePool(fail_start=True)
     config = settings(tmp_path)
-    (config.resolved_data_dir / "drive.sqlite3").parent.mkdir(parents=True)
-    store = DriveStore.create(config.resolved_data_dir / "drive.sqlite3")
+    config.resolved_data_dir.mkdir(parents=True)
+    store = new_store(config.resolved_data_dir / "drive")
     runtime = Runtime(config, pool=pool)
     runtime.backup = FakeBackup(store)
     remote = FakeRemote()
@@ -275,7 +279,7 @@ def test_runtime_rejects_cleanup_symlink_outside_cache(
 async def test_bot_mode_shares_channel_send_pacing_and_flood_cooldown(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, reconnecting: bool
 ) -> None:
-    store = DriveStore.create(tmp_path / "drive.json")
+    store = new_store(tmp_path / "drive.json")
 
     class PacedPool(FakePool):
         async def pace_send(self, channel: int) -> None:

@@ -9,14 +9,13 @@ import pytest
 from fastapi.testclient import TestClient
 
 from tests.support.app_fixtures import FakeRuntime, login, make_settings
-from tests.support.mongo_fixtures import register_test_backend
+from tests.support.mongo_fixtures import new_store, register_test_backend
 from tgdrive.observability.telemetry_history import (
     RETENTION_SECONDS,
     HistoryStorage,
     TelemetryHistory,
     validate_range,
 )
-from tgdrive.storage.store import DriveStore
 from tgdrive.web.app import create_app
 
 pytestmark = pytest.mark.usefixtures("mongo_backend")
@@ -293,7 +292,7 @@ def test_history_uses_mongodb_without_creating_a_local_database(
 def test_history_api_requires_owner_bounds_results_and_hides_storage_errors(
     tmp_path, monkeypatch, mongo_backend
 ):
-    store = DriveStore.create(tmp_path / "drive.sqlite3")
+    store = new_store(tmp_path / "drive")
     runtime = FakeRuntime(store)
     runtime.mongo = mongo_backend
     app = create_app(make_settings(tmp_path), runtime=runtime)

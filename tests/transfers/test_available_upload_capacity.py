@@ -7,9 +7,9 @@ import pytest
 from fastapi.testclient import TestClient
 
 import tgdrive.core.config as config_module
-from tests.support.mongo_fixtures import register_test_backend
+from tests.support.mongo_fixtures import new_store, register_test_backend
 from tgdrive.core.config import Settings
-from tgdrive.storage.store import DriveStore
+from tgdrive.storage.mongo_store import MongoStore
 from tgdrive.telegram.client_pool import ClientPool, current_upload_limit
 from tgdrive.transfers.tasks import TransferRegistry
 from tgdrive.web.app import create_app
@@ -36,7 +36,7 @@ class Account:
 
 
 class Runtime:
-    def __init__(self, store: DriveStore, pool: ClientPool, user: Account, state: str):
+    def __init__(self, store: MongoStore, pool: ClientPool, user: Account, state: str):
         self.store = store
         self.pool = pool
         self.user = user
@@ -85,7 +85,7 @@ def test_api_logical_capacity_is_independent_of_optional_premium(
     config = settings(tmp_path)
     user = Account("premium", fail=state == "failed")
     pool = ClientPool([Account("bot")], [user], allow_partial_start=True)
-    runtime = Runtime(DriveStore.create(), pool, user, state)
+    runtime = Runtime(new_store(), pool, user, state)
     runtime.mongo = mongo_backend
     app = create_app(config, runtime=runtime)
     expected = config.upload_limit
@@ -168,7 +168,7 @@ async def test_remote_and_legacy_upload_admission_enforces_logical_ceiling(
         async def close(self) -> None:
             pass
 
-    store = DriveStore.create()
+    store = new_store()
     manager = TransferManager(
         settings=config,
         pool=pool,

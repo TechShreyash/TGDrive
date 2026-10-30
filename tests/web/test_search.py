@@ -1,21 +1,20 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
-from threading import local
 
 import pytest
 from fastapi.testclient import TestClient
 
 from tests.support.app_fixtures import FakeRuntime, make_settings
+from tests.support.mongo_fixtures import new_store
 from tgdrive.core.errors import ValidationError
-from tgdrive.storage.mongo_store import MongoStore
-from tgdrive.storage.store import MAX_SEARCH_OFFSET, DriveStore
+from tgdrive.storage.store import MAX_SEARCH_OFFSET
 from tgdrive.web.app import create_app
 
 
 @pytest.fixture
 def store():
-    result = DriveStore.create()
+    result = new_store()
     yield result
     result.close()
 
@@ -23,7 +22,7 @@ def store():
 @pytest.fixture
 def search_client(tmp_path):
     settings = make_settings(tmp_path)
-    store = DriveStore.create()
+    store = new_store()
     runtime = FakeRuntime(store)
     app = create_app(settings, runtime=runtime)
     with TestClient(app, base_url="https://testserver") as client:
@@ -91,28 +90,15 @@ def test_filename_only_search_prunes_entire_trash_branch_and_builds_human_parent
     assert hidden["id"] in store.search("report", include_trashed=True)
 
 
-def search_implementation(store, implementation):
-    if implementation == "sqlite":
-        return store
-    # Mongo search reads its consistent catalog cache. Exercise that real read
-    # path without requiring a running MongoDB service for ordering unit tests.
-    reader = object.__new__(MongoStore)
-    reader._local = local()
-    reader._closed = False
-    with store._transaction() as db:
-        reader._committed = {
-            "nodes": {
-                row["id"]: dict(row) for row in db.execute("SELECT * FROM nodes")
-            },
-            "deletions": {},
-        }
-    return reader
+def set_upload_date(store, value, identities=None):
+    """Rewrite stored timestamps directly, then reload the catalog cache."""
+    for row in store.backend.db.nodes.rows:
+        if identities is None or row["id"] in identities:
+            row["upload_date"] = value
+    store._reload()
 
 
-@pytest.mark.parametrize("implementation", ["sqlite", "mongo-cache"])
-def test_sort_and_pagination_apply_globally_with_deterministic_ties(
-    store, implementation
-):
+def test_sort_and_pagination_apply_globally_with_deterministic_ties(store):
     folder = store.create_folder("/", "z report folder")
     records = [
         store.add_file("/", name, index + 1, size)
@@ -124,13 +110,10 @@ def test_sort_and_pagination_apply_globally_with_deterministic_ties(
             ]
         )
     ]
-    with store._transaction(write=True) as db:
-        for index, row in enumerate(records):
-            timestamp = datetime(2020 + index, 1, 1, tzinfo=UTC).isoformat()
-            db.execute(
-                "UPDATE nodes SET upload_date=? WHERE id=?", (timestamp, row["id"])
-            )
-    target = search_implementation(store, implementation)
+    for index, row in enumerate(records):
+        timestamp = datetime(2020 + index, 1, 1, tzinfo=UTC).isoformat()
+        set_upload_date(store, timestamp, {row["id"]})
+    target = store
     expected = {
         ("name", None): [1, 2, 0],
         ("name", "asc"): [1, 2, 0],
@@ -154,11 +137,10 @@ def test_sort_and_pagination_apply_globally_with_deterministic_ties(
     assert target.search_page("report", offset=MAX_SEARCH_OFFSET)["items"] == []
 
 
-@pytest.mark.parametrize("implementation", ["sqlite", "mongo-cache"])
 @pytest.mark.parametrize("sort", ["name", "date", "size"])
 @pytest.mark.parametrize("order", ["asc", "desc"])
 def test_equal_search_keys_keep_stable_id_order_and_hidden_branches_stay_hidden(
-    store, implementation, sort, order
+    store, sort, order
 ):
     parents = [store.create_folder("/", name) for name in ("One", "Two", "Private")]
     records = [
@@ -166,9 +148,8 @@ def test_equal_search_keys_keep_stable_id_order_and_hidden_branches_stay_hidden(
         for index, parent in enumerate(parents)
     ]
     store.set_trashed(full(parents[2]), True)
-    with store._transaction(write=True) as db:
-        db.execute("UPDATE nodes SET upload_date='2025-01-01T00:00:00Z'")
-    target = search_implementation(store, implementation)
+    set_upload_date(store, "2025-01-01T00:00:00Z")
+    target = store
     pages = [
         target.search_page("report", sort=sort, order=order, limit=1, offset=offset)
         for offset in range(2)
@@ -179,8 +160,7 @@ def test_equal_search_keys_keep_stable_id_order_and_hidden_branches_stay_hidden(
     assert pages[0]["has_more"] and not pages[1]["has_more"]
 
 
-@pytest.mark.parametrize("implementation", ["sqlite", "mongo-cache"])
-def test_trash_lists_human_parent_names_without_hidden_children(store, implementation):
+def test_trash_lists_human_parent_names_without_hidden_children(store):
     parent = store.create_folder("/", "Books")
     nested = store.create_folder(full(parent), "Reference")
     root_file = store.add_file("/", "root-deleted.txt", 1, 10)
@@ -190,7 +170,7 @@ def test_trash_lists_human_parent_names_without_hidden_children(store, implement
     child = store.add_file(full(trashed_folder), "hidden-deleted.txt", 4, 10)
     for row in (root_file, nested_file, trashed_folder, child):
         store.set_trashed(full(row), True)
-    target = search_implementation(store, implementation)
+    target = store
     items = target.list_trash()
     assert set(items) == {root_file["id"], nested_file["id"], trashed_folder["id"]}
     assert items[root_file["id"]]["parent_names"] == []
@@ -199,28 +179,6 @@ def test_trash_lists_human_parent_names_without_hidden_children(store, implement
     assert items[trashed_folder["id"]]["parent_names"] == ["Books"]
     assert hidden["id"] not in items and child["id"] not in items
     assert list(target.list_trash("nested")) == [nested_file["id"]]
-
-
-def test_search_has_one_data_query_instead_of_per_result_ancestry_queries(
-    store, monkeypatch
-):
-    folder = store.create_folder("/", "Nested")
-    for index in range(40):
-        store.add_file(full(folder), f"Report {index:02d}.txt", index + 1, index)
-
-    def forbidden(*_args, **_kwargs):
-        raise AssertionError("Search must not resolve ancestry per result")
-
-    monkeypatch.setattr(store, "_path_for_id", forbidden)
-    monkeypatch.setattr(store, "_resolve", forbidden)
-    statements = []
-    store._db.set_trace_callback(statements.append)
-    try:
-        page = store.search_page("report", limit=10)
-    finally:
-        store._db.set_trace_callback(None)
-    assert len(page["items"]) == 10 and page["has_more"]
-    assert len(statements) == 3  # BEGIN, one recursive read, COMMIT.
 
 
 @pytest.mark.parametrize(

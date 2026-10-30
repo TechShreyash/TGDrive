@@ -3,46 +3,18 @@
 from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime, timedelta
 from threading import Barrier
-from types import SimpleNamespace
-from unittest.mock import Mock
 
 import pytest
 from fastapi.testclient import TestClient
 
 from tests.support.app_fixtures import FakeRuntime, login, make_settings
-from tgdrive.storage.mongo_store import MongoStore
-from tgdrive.storage.store import ROOT_ID, SCHEMA_VERSION, DriveStore
+from tests.support.mongo_fixtures import new_store
 from tgdrive.web.app import create_app
 
 
-@pytest.fixture(params=["sqlite", "mongo-cache"])
-def share_client(request, tmp_path, monkeypatch):
-    if request.param == "sqlite":
-        store = DriveStore.create()
-    else:
-        # Exercise MongoStore's real transaction lock and share operations;
-        # replace only cloud loading/indexes/persistence, with no network access.
-        def load(instance):
-            instance._committed = {
-                "metadata": {
-                    "schema_version": SCHEMA_VERSION,
-                    "drive_id": "share-update-test",
-                    "revision": 1,
-                    "backed_up_revision": 1,
-                    "generation": 0,
-                    "storage_channel_id": None,
-                },
-                "nodes": {ROOT_ID: MongoStore._node(ROOT_ID, None, "/", "folder")},
-                "shares": {},
-                "operations": {},
-                "deletions": {},
-                "preparations": {},
-            }
-
-        monkeypatch.setattr(MongoStore, "_reload", load)
-        monkeypatch.setattr(MongoStore, "_indexes", Mock())
-        monkeypatch.setattr(MongoStore, "_commit", Mock())
-        store = MongoStore(SimpleNamespace(check_owner=Mock()))
+@pytest.fixture
+def share_client(tmp_path):
+    store = new_store()
     runtime = FakeRuntime(store)
     try:
         app = create_app(make_settings(tmp_path), runtime=runtime)
@@ -90,7 +62,6 @@ def test_label_only_edit_preserves_expiry_and_eventual_access_denial(
         .isoformat(timespec="seconds")
         .replace("+00:00", "Z")
     )
-    monkeypatch.setattr("tgdrive.storage.store._utc_now", lambda: after_expiry)
     monkeypatch.setattr("tgdrive.storage.mongo_store._utc_now", lambda: after_expiry)
     denied = client.head("/file", params={"path": share["path"], "auth": share["auth"]})
     assert denied.status_code == 403

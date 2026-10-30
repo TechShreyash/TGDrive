@@ -67,7 +67,7 @@ def test_missing_catalog_with_saved_records_is_never_initialized(
 
 @pytest.mark.parametrize(
     "marker",
-    ["mongodb-drive.json", "replica-bootstrap.json", "channel-activation.json"],
+    ["mongodb-drive.json", "channel-activation.json", "channel-backup.sqlite3"],
 )
 def test_preserved_installation_does_not_recreate_an_empty_database(
     tmp_path, monkeypatch, backend, marker

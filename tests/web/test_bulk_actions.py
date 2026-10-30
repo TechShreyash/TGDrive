@@ -1,12 +1,10 @@
 """Bulk owner actions either commit complete metadata or leave it unchanged."""
 
-import sqlite3
-from contextlib import closing
-
 import pytest
 
 from tests.support.app_fixtures import app_client as app_client
 from tests.support.app_fixtures import login
+from tgdrive.storage.mongo import DatabaseUnavailable
 
 
 def test_move_rolls_back_earlier_item_when_later_path_is_missing(app_client):
@@ -73,7 +71,9 @@ def test_restore_rollback_preserves_trash_names_and_shares(app_client):
 
 
 @pytest.mark.parametrize("action", ["move", "trash", "restore"])
-def test_sqlite_failure_cannot_commit_only_part_of_metadata_batch(app_client, action):
+def test_storage_failure_cannot_commit_only_part_of_metadata_batch(
+    app_client, action, monkeypatch
+):
     client, store, _, _ = app_client
     first = store.add_file("/", "first.txt", 9106, 4)
     second = store.add_file("/", "second.txt", 9107, 5)
@@ -83,13 +83,11 @@ def test_sqlite_failure_cannot_commit_only_part_of_metadata_batch(app_client, ac
         for path in paths:
             store.set_trashed(path, True)
     snapshot = store.export()
-    with closing(sqlite3.connect(store.database_path)) as db:
-        db.execute(
-            f"""CREATE TRIGGER fail_second_bulk_item BEFORE UPDATE ON nodes
-            WHEN OLD.id='{second["id"]}'
-            BEGIN SELECT RAISE(ABORT,'simulated bulk storage failure'); END"""
-        )
-        db.commit()
+
+    def fail_bulk_write(*_args, **_kwargs):
+        raise DatabaseUnavailable("simulated bulk storage failure")
+
+    monkeypatch.setattr(store.backend.db.nodes, "bulk_write", fail_bulk_write)
     login(client)
 
     if action == "move":
@@ -102,7 +100,7 @@ def test_sqlite_failure_cannot_commit_only_part_of_metadata_batch(app_client, ac
             "/api/v1/nodes/bulk", json={"paths": paths, "action": action}
         )
 
-    assert response.status_code == 500
+    assert response.status_code == 503
     assert store.export() == snapshot
 
 

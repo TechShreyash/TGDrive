@@ -189,14 +189,12 @@ def recovery_configuration(tmp_path, monkeypatch, **overrides):
     }
     for key, value in environment.items():
         monkeypatch.setenv(key, str(value))
-    monkeypatch.setattr(
-        "tgdrive.replication.replica_bootstrap.load_bootstrap",
-        lambda _, **_kwargs: values,
-    )
     return values
 
 
-def test_explicit_rotation_is_not_hidden_by_local_recovery_copy(tmp_path, monkeypatch):
+def test_explicit_rotation_is_not_hidden_by_saved_mongodb_settings(
+    tmp_path, monkeypatch
+):
     bootstrap = recovery_configuration(
         tmp_path,
         monkeypatch,

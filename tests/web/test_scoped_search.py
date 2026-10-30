@@ -3,14 +3,14 @@
 from fastapi.testclient import TestClient
 
 from tests.support.app_fixtures import FakeRuntime, login, make_settings
-from tgdrive.storage.store import DriveStore
+from tests.support.mongo_fixtures import new_store
 from tgdrive.web.app import create_app
 
 
 def test_trash_search_is_owner_only_and_does_not_include_active_or_hidden_children(
     tmp_path,
 ):
-    store = DriveStore.create(tmp_path / "drive.sqlite3")
+    store = new_store(tmp_path / "drive")
     active = store.add_file("/", "résumé active.txt", 1, 10)
     source = store.create_folder("/", "書庫")
     nested_source = store.create_folder("/" + source["id"], "Reference")

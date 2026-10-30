@@ -10,9 +10,13 @@ from typing import Any
 import pytest
 from fastapi.testclient import TestClient
 
-from tests.support.mongo_fixtures import FakeMongoBackend, register_test_backend
+from tests.support.mongo_fixtures import (
+    FakeMongoBackend,
+    new_store,
+    register_test_backend,
+)
 from tgdrive.core.config import Settings
-from tgdrive.storage.store import DriveStore
+from tgdrive.storage.mongo_store import MongoStore
 from tgdrive.transfers.tasks import TransferRegistry
 from tgdrive.web.app import create_app
 
@@ -96,7 +100,7 @@ class FakeTransfers:
 
 
 class FakeRuntime:
-    def __init__(self, store: DriveStore) -> None:
+    def __init__(self, store: MongoStore) -> None:
         self.store = store
         self.mongo = FakeMongoBackend()
         self.transfers = FakeTransfers()
@@ -119,7 +123,7 @@ class FakeRuntime:
 @pytest.fixture
 def app_client(tmp_path: Path, monkeypatch):
     settings = make_settings(tmp_path)
-    store = DriveStore.create(tmp_path / "drive.json")
+    store = new_store(tmp_path / "drive.json")
     runtime = FakeRuntime(store)
     register_test_backend(monkeypatch, settings, runtime.mongo)
     app = create_app(settings, runtime=runtime)

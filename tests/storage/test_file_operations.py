@@ -2,20 +2,15 @@
 
 import pytest
 
-from tests.support.mongo_fixtures import FakeMongoBackend
+from tests.support.mongo_fixtures import FakeMongoBackend, new_store
 from tgdrive.core.errors import ValidationError
 from tgdrive.storage.mongo import DatabaseUnavailable
 from tgdrive.storage.mongo_store import MongoStore
-from tgdrive.storage.store import DriveStore
 
 
-@pytest.fixture(params=["sqlite", "mongo"])
-def store(request):
-    instance = (
-        DriveStore.create()
-        if request.param == "sqlite"
-        else MongoStore.create(FakeMongoBackend())
-    )
+@pytest.fixture
+def store():
+    instance = new_store()
     try:
         yield instance
     finally:

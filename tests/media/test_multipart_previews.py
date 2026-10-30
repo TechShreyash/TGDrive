@@ -6,7 +6,7 @@ from urllib.parse import parse_qs, urlsplit
 import pytest
 
 from tests.media.test_multipart_streaming import MultipartClient, build_parts
-from tests.support.mongo_fixtures import register_test_backend
+from tests.support.mongo_fixtures import new_store, register_test_backend
 from tgdrive.media.previews import (
     PDF_PREVIEW_BYTES,
     TEXT_PREVIEW_BYTES,
@@ -187,11 +187,10 @@ def test_http_multipart_owner_share_scope_stable_move_trash_and_revocation(
     from fastapi.testclient import TestClient
 
     from tests.support.app_fixtures import FakeRuntime, make_settings
-    from tgdrive.storage.store import DriveStore
     from tgdrive.web.app import create_app
 
     configured = make_settings(tmp_path)
-    store = DriveStore.create()
+    store = new_store()
     public = store.create_folder("/", "Shared")
     shared_path = "/" + public["id"]
     nested = store.create_folder(shared_path, "Nested")

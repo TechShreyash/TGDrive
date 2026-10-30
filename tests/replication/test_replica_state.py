@@ -5,15 +5,13 @@ from __future__ import annotations
 import copy
 import json
 import sqlite3
-import subprocess
-import sys
-import textwrap
 from types import SimpleNamespace
 
 import pytest
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from pydantic import SecretStr
 
+from tests.support.mongo_fixtures import FakeMongoBackend, new_store
 from tgdrive.replication.replica_settings import POLICIES
 from tgdrive.replication.replica_state import (
     MAGIC,
@@ -27,7 +25,6 @@ from tgdrive.replication.replica_state import (
     remap_catalog,
 )
 from tgdrive.settings.managed_settings import ManagedClient, ManagedDocument
-from tgdrive.storage.store import DriveStore
 
 MAIN = -1001234567890
 BACKUP = -1002234567890
@@ -35,7 +32,7 @@ KEY = "a1" * 32
 
 
 def payload():
-    store = DriveStore.create()
+    store = new_store()
     try:
         store.bind_storage_channel(MAIN)
         folder = store.create_folder("/", "Records")
@@ -276,44 +273,54 @@ def test_remap_does_not_mutate_original_and_requires_every_part():
     assert original == preserved
 
 
+def journal_for(tmp_path, backend):
+    return ReplicaJournal(tmp_path, backend)
+
+
 def test_journal_retains_exact_intent_and_confirmation_across_restarts(tmp_path):
-    journal = ReplicaJournal(tmp_path)
+    backend = FakeMongoBackend()
+    journal = journal_for(tmp_path, backend)
     identity, receipt = journal.intent("drive:source:target:part", 123)
     assert type(identity) is int and identity > 0 and receipt is None
     journal.set("job", {"phase": "copying", "checkpoint": 17})
     journal.confirm("drive:source:target:part", 901)
-    journal.close()
-    journal = ReplicaJournal(tmp_path)
-    try:
-        assert journal.intent("drive:source:target:part", 123) == (identity, 901)
-        assert journal.get("job") == {"phase": "copying", "checkpoint": 17}
-        with pytest.raises(ValueError, match="size changed"):
-            journal.intent("drive:source:target:part", 124)
-        assert journal.intent("drive:source:different-target:part", 123)[0] != identity
-        assert (tmp_path / "channel-backup.sqlite3").stat().st_mode & 0o777 == 0o600
-    finally:
-        journal.close()
+    # A new server with the same MongoDB sees the same journal.
+    journal = journal_for(tmp_path / "another-server", backend)
+    assert journal.intent("drive:source:target:part", 123) == (identity, 901)
+    assert journal.get("job") == {"phase": "copying", "checkpoint": 17}
+    with pytest.raises(ValueError, match="size changed"):
+        journal.intent("drive:source:target:part", 124)
+    assert journal.intent("drive:source:different-target:part", 123)[0] != identity
+    assert not list(tmp_path.glob("*.sqlite3"))
+
+
+def test_large_journal_values_are_chunked_and_round_trip(tmp_path):
+    journal = journal_for(tmp_path, FakeMongoBackend())
+    value = {"database": "x" * (ReplicaJournal.CHUNK * 2 + 5)}
+    journal.set("job", value)
+    assert journal.get("job") == value
+    assert journal.backend.db.replica_chunks.count_documents({"key": "job"}) == 3
+    journal.set("job", None)
+    assert journal.get("job", "missing") is None
+    assert journal.backend.db.replica_chunks.count_documents({"key": "job"}) == 1
 
 
 def test_atomic_state_rejects_unserializable_value_without_changing_any_key(tmp_path):
-    journal = ReplicaJournal(tmp_path)
+    backend = FakeMongoBackend()
+    journal = journal_for(tmp_path, backend)
     journal.set_many({"restore_point": {"revision": 17}, "restore_point_key": KEY})
-    try:
-        with pytest.raises(ValueError):
-            journal.set_many(
-                {"restore_point": {"revision": 18}, "restore_point_key": float("nan")}
-            )
-    finally:
-        journal.close()
-    reopened = ReplicaJournal(tmp_path)
-    try:
-        assert reopened.get("restore_point") == {"revision": 17}
-        assert reopened.get("restore_point_key") == KEY
-    finally:
-        reopened.close()
+    with pytest.raises(ValueError):
+        journal.set_many(
+            {"restore_point": {"revision": 18}, "restore_point_key": float("nan")}
+        )
+    reopened = journal_for(tmp_path, backend)
+    assert reopened.get("restore_point") == {"revision": 17}
+    assert reopened.get("restore_point_key") == KEY
 
 
-def test_process_death_cannot_pair_new_restore_point_with_old_keys(tmp_path):
+def test_failed_write_cannot_pair_new_restore_point_with_old_keys(
+    tmp_path, monkeypatch
+):
     old = {
         "restore_point": {"revision": 17, "backup_message_id": 901},
         "restore_point_key": KEY,
@@ -326,50 +333,67 @@ def test_process_death_cannot_pair_new_restore_point_with_old_keys(tmp_path):
         "restore_point_mongodb_key": None,
         "credentials_digest": "d" * 64,
     }
-    journal = ReplicaJournal(tmp_path)
+    backend = FakeMongoBackend()
+    journal = journal_for(tmp_path, backend)
     journal.set_many(old)
-    journal.close()
-    script = textwrap.dedent(
-        """
-        import json
-        import os
-        import sys
-        from pathlib import Path
-        from tgdrive.replication.replica_state import ReplicaJournal
+    state = backend.db.replica_state
+    replace = state.replace_one
 
-        journal = ReplicaJournal(Path(sys.argv[1]))
-        journal.db.create_function("crash_before_key", 0, lambda: os._exit(73))
-        journal.db.executescript('''
-            CREATE TRIGGER crash_publication BEFORE INSERT ON state
-            WHEN NEW.key = 'restore_point_key'
-            BEGIN SELECT crash_before_key(); END;
-        ''')
-        journal.set_many(json.loads(sys.argv[2]))
-        raise SystemExit("Crash injection did not execute")
-        """
-    )
-    stopped = subprocess.run(  # noqa: S603 - fixed Python and crash-injection script
-        [sys.executable, "-c", script, str(tmp_path), json.dumps(new)],
-        capture_output=True,
-        text=True,
-        timeout=30,
-        check=False,
-    )
-    assert stopped.returncode == 73, stopped.stderr
-    reopened = ReplicaJournal(tmp_path)
-    try:
-        assert {key: reopened.get(key) for key in old} == old
-        reopened.db.execute("DROP TRIGGER crash_publication")
-        reopened.db.commit()
-        reopened.set_many(new)
-    finally:
-        reopened.close()
-    committed = ReplicaJournal(tmp_path)
-    try:
-        assert {key: committed.get(key) for key in new} == new
-        assert committed.get("restore_point_mongodb_key", "stale") is None
-    finally:
-        committed.close()
+    def fail_on_key(query, document, **kwargs):
+        if query["_id"] == "restore_point_key":
+            raise RuntimeError("injected key write failure")
+        return replace(query, document, **kwargs)
+
+    monkeypatch.setattr(state, "replace_one", fail_on_key)
+    with pytest.raises(RuntimeError, match="injected"):
+        journal.set_many(new)
+    monkeypatch.undo()
+    reopened = journal_for(tmp_path, backend)
+    assert {key: reopened.get(key) for key in old} == old
+    reopened.set_many(new)
+    assert {key: reopened.get(key) for key in new} == new
+    assert reopened.get("restore_point_mongodb_key", "stale") is None
+
+
+def test_legacy_sqlite_journal_is_imported_once(tmp_path):
+    path = tmp_path / "channel-backup.sqlite3"
+    with sqlite3.connect(path) as legacy:
+        legacy.executescript(
+            """
+            CREATE TABLE state(key TEXT PRIMARY KEY, value TEXT NOT NULL);
+            CREATE TABLE copies(
+                key TEXT PRIMARY KEY, random_id INTEGER NOT NULL,
+                message_id INTEGER, size INTEGER NOT NULL
+            );
+            """
+        )
+        legacy.execute(
+            "INSERT INTO state VALUES(?,?)",
+            ("config", json.dumps({"channel": BACKUP, "enabled": True})),
+        )
+        legacy.execute("INSERT INTO copies VALUES('part', 7, 901, 12)")
+    legacy.close()
+    backend = FakeMongoBackend()
+    journal = journal_for(tmp_path, backend)
+    assert journal.get("config") == {"channel": BACKUP, "enabled": True}
+    assert journal.intent("part", 12) == (7, 901)
+    assert not path.exists()
+    assert (tmp_path / "channel-backup.sqlite3.migrated").exists()
+    # Later starts use MongoDB only.
+    assert journal_for(tmp_path, backend).get("config")["channel"] == BACKUP
+
+
+def test_legacy_journal_never_overwrites_existing_mongodb_state(tmp_path):
+    backend = FakeMongoBackend()
+    journal_for(tmp_path, backend).set("config", {"channel": BACKUP})
+    path = tmp_path / "channel-backup.sqlite3"
+    with sqlite3.connect(path) as legacy:
+        legacy.execute("CREATE TABLE state(key TEXT, value TEXT)")
+        legacy.execute("CREATE TABLE copies(key TEXT, random_id, message_id, size)")
+    legacy.close()
+    with pytest.raises(ValueError, match=r"Both channel-backup\.sqlite3"):
+        journal_for(tmp_path, backend)
+    assert path.exists()
 
 
 @pytest.mark.asyncio
@@ -405,15 +429,18 @@ async def test_capsule_publication_rolls_back_point_and_keys_as_one_generation(
         configured.mongodb_backup_key = SecretStr("d4" * 32)
         previous = replica.recovery_kit()
         store.create_folder("/", "Next generation")
-        replica.journal.db.executescript(
-            """
-            CREATE TRIGGER reject_publication BEFORE INSERT ON state
-            WHEN NEW.key = 'restore_point_key'
-            BEGIN SELECT RAISE(ABORT, 'injected key write failure'); END;
-            """
-        )
-        with pytest.raises(sqlite3.IntegrityError, match="injected key write failure"):
+        state = backend.db.replica_state
+        replace = state.replace_one
+
+        def reject_key(query, document, **kwargs):
+            if query["_id"] == "restore_point_key":
+                raise RuntimeError("injected key write failure")
+            return replace(query, document, **kwargs)
+
+        monkeypatch.setattr(state, "replace_one", reject_key)
+        with pytest.raises(RuntimeError, match="injected key write failure"):
             await replica._sync(config)
+        monkeypatch.setattr(state, "replace_one", replace)
         await replica.close()
         replica = ChannelReplica(
             configured,
@@ -429,8 +456,6 @@ async def test_capsule_publication_rolls_back_point_and_keys_as_one_generation(
             original["credentials"]["mongodb_backup_key"]
             == previous["mongodb_backup_key"]
         )
-        replica.journal.db.execute("DROP TRIGGER reject_publication")
-        replica.journal.db.commit()
         await replica._sync(config)
         current = replica.recovery_kit()
         assert current["restore_point"] != previous["restore_point"]

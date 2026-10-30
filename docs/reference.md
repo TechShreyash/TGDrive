@@ -232,8 +232,7 @@ plaintext.
 During initial setup MongoDB's `settings` collection stores a bootstrap document
 (`_id: "bootstrap"`) containing `ADMIN_PASSWORD_HASH`, never the plaintext
 `ADMIN_PASSWORD`. A missing explicit owner credential can reuse that saved hash.
-The private `DATA_DIR/replica-bootstrap.json` recovery file also retains the
-owner hash so recovery-only login remains possible. Encrypted database backups
+Encrypted database backups
 can contain those saved credentials. These copies do not reveal the original
 password; plaintext remains readable wherever you configured it. Demo
 administrator credentials stay in deployment configuration, outside these
@@ -609,9 +608,12 @@ original send identities; they can briefly produce the former two-file pair.
 Legacy archives retain their 1 GiB upload/expanded limits and the separate
 `/api/v1/backup/restore` compatibility path.
 
-The local `DATA_DIR/channel-backup.sqlite3` journal persists random operation IDs,
-confirmed message mappings, configuration and recovery state. Preserve the full
-persistent data directory through restarts. Status is confirmed-part progress,
+The MongoDB `replica_state`, `replica_chunks` and `replica_copies` collections
+persist random operation IDs, confirmed message mappings, configuration and
+recovery state. They stay out of backup files. On first start after upgrading
+from 2.0–2.2, TGDrive imports `DATA_DIR/channel-backup.sqlite3` once and renames
+it to `channel-backup.sqlite3.migrated`; startup stops if MongoDB already holds
+backup state, so neither copy is overwritten. Status is confirmed-part progress,
 not speculative queued bytes. Confirmed local ciphertext supports downloading
 the file. Old remote documents and recovery points are retained; changing the
 configured destination does not erase them.

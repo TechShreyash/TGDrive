@@ -1,19 +1,14 @@
 from __future__ import annotations
 
-import gc
 import hashlib
 import json
 import re
-import sqlite3
-import subprocess
-import sys
-import weakref
-from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime, timedelta
 
 import pytest
 
 import tgdrive.storage.store as store_module
+from tests.support.mongo_fixtures import new_store, reopen_store, store_from_payload
 from tgdrive.core.errors import (
     CorruptStoreError,
     DuplicateNameError,
@@ -27,7 +22,7 @@ from tgdrive.core.errors import (
     UnsupportedSchemaError,
     ValidationError,
 )
-from tgdrive.storage.store import SCHEMA_VERSION, DriveStore
+from tgdrive.storage.store import SCHEMA_VERSION
 
 
 def _full_path(record: dict[str, object]) -> str:
@@ -37,11 +32,10 @@ def _full_path(record: dict[str, object]) -> str:
 
 
 def test_create_persist_load_and_frontend_shape(tmp_path) -> None:
-    database = tmp_path / "drive.sqlite3"
-    store = DriveStore.create(database)
+    database = tmp_path / "drive.drive"
+    store = new_store(database)
 
     assert store.revision == 1
-    assert store.dirty is True
     folder = store.create_folder("/", "Résumé")
     folder_path = _full_path(folder)
     uploaded = store.add_file(folder_path, "notes+100%.txt", 41, 123)
@@ -55,29 +49,23 @@ def test_create_persist_load_and_frontend_shape(tmp_path) -> None:
     assert uploaded["name"] == "notes+100%.txt"
     assert uploaded["message_id"] == 41
 
-    loaded = DriveStore.load(database)
+    loaded = reopen_store(database)
     assert loaded.export() == store.export()
     assert loaded.get_file(file_path)["message_id"] == 41
     directory = loaded.get_directory(folder_path)
     assert directory["contents"][uploaded["id"]]["name"] == "notes+100%.txt"
-    assert database.read_bytes().startswith(b"SQLite format 3\x00")
     assert store.export()["schema_version"] == SCHEMA_VERSION
 
 
-def test_corrupt_and_unsupported_metadata_fail_closed(tmp_path) -> None:
-    database = tmp_path / "drive.sqlite3"
-    database.write_bytes(b"{definitely not json")
-    with pytest.raises(CorruptStoreError):
-        DriveStore.load(database)
-
-    unsupported = DriveStore.create()
+def test_corrupt_and_unsupported_metadata_fail_closed() -> None:
+    unsupported = new_store()
     payload = unsupported.export()
     unsupported.close()
     payload["schema_version"] = SCHEMA_VERSION + 1
     with pytest.raises(UnsupportedSchemaError):
-        DriveStore._from_payload(payload)
+        store_from_payload(payload)
 
-    valid = DriveStore.create().export()
+    valid = new_store().export()
     valid["root"]["children"] = {
         "first": {
             "children": {},
@@ -99,7 +87,7 @@ def test_corrupt_and_unsupported_metadata_fail_closed(tmp_path) -> None:
         },
     }
     with pytest.raises(CorruptStoreError, match="duplicate"):
-        DriveStore._from_payload(valid)
+        store_from_payload(valid)
 
 
 @pytest.mark.parametrize(
@@ -107,13 +95,13 @@ def test_corrupt_and_unsupported_metadata_fail_closed(tmp_path) -> None:
     ["relative", "/../escape", "/./child", "/child//file", "/child\\file"],
 )
 def test_paths_reject_traversal_and_ambiguous_forms(bad_path) -> None:
-    store = DriveStore.create()
+    store = new_store()
     with pytest.raises(InvalidPathError):
         store.get_directory(bad_path)
 
 
 def test_root_mutations_are_rejected_and_trailing_slash_is_normalized() -> None:
-    store = DriveStore.create()
+    store = new_store()
     folder = store.create_folder("/", "Folder")
     folder_path = _full_path(folder)
 
@@ -127,7 +115,7 @@ def test_root_mutations_are_rejected_and_trailing_slash_is_normalized() -> None:
 
 
 def test_unicode_names_and_casefolded_sibling_duplicates() -> None:
-    store = DriveStore.create()
+    store = new_store()
     store.create_folder("/", "Résumé")
 
     with pytest.raises(DuplicateNameError):
@@ -140,42 +128,40 @@ def test_unicode_names_and_casefolded_sibling_duplicates() -> None:
         store.create_folder("/", "bad\nname")
 
 
-def test_sqlite_failure_rolls_back_rows_and_revision(tmp_path) -> None:
-    database = tmp_path / "drive.sqlite3"
-    store = DriveStore.create(database)
+def test_storage_failure_rolls_back_rows_and_revision(tmp_path, monkeypatch) -> None:
+    database = tmp_path / "drive"
+    store = new_store(database)
     folder = store.create_folder("/", "Before")
     folder_path = _full_path(folder)
     previous_revision = store.revision
-    connection = sqlite3.connect(database)
-    connection.execute("""CREATE TRIGGER fail_update BEFORE UPDATE ON nodes
-        BEGIN SELECT RAISE(ABORT,'simulated storage failure'); END""")
-    connection.commit()
-    connection.close()
+
+    def fail(*_args, **_kwargs):
+        raise PersistenceError("simulated storage failure")
+
+    monkeypatch.setattr(store.backend.db.nodes, "bulk_write", fail)
     with pytest.raises(PersistenceError, match="simulated storage failure"):
         store.rename(folder_path, "After")
+    monkeypatch.undo()
     assert store.revision == previous_revision
-    assert DriveStore.load(database).get_directory(folder_path)["name"] == "Before"
+    assert reopen_store(database).get_directory(folder_path)["name"] == "Before"
 
 
 def test_backup_revision_race_cannot_clear_newer_mutation() -> None:
-    store = DriveStore.create()
+    store = new_store()
     snapshot_revision, snapshot = store.snapshot()
     assert json.loads(snapshot)["revision"] == snapshot_revision
 
     store.create_folder("/", "arrived during upload")
     newest_revision = store.revision
     assert newest_revision > snapshot_revision
-    assert store.mark_backed_up(snapshot_revision) is True
-    assert store.dirty is True
     assert store.mark_backed_up(newest_revision) is False
-    assert store.dirty is False
 
     with pytest.raises(InvalidRevisionError):
         store.mark_backed_up(newest_revision + 1)
 
 
 def test_trash_listing_and_search_hide_entire_trashed_subtrees() -> None:
-    store = DriveStore.create()
+    store = new_store()
     folder = store.create_folder("/", "Archive")
     folder_path = _full_path(folder)
     secret = store.add_file(folder_path, "Secret Plan.txt", 50, 5)
@@ -200,7 +186,7 @@ def test_trash_listing_and_search_hide_entire_trashed_subtrees() -> None:
 
 
 def test_recursive_delete_returns_all_telegram_message_ids() -> None:
-    store = DriveStore.create()
+    store = new_store()
     outer = store.create_folder("/", "Outer")
     outer_path = _full_path(outer)
     first = store.add_file(outer_path, "one.bin", 101, 1)
@@ -220,7 +206,7 @@ def test_recursive_delete_returns_all_telegram_message_ids() -> None:
 
 
 def test_message_ids_reads_file_and_nested_folder_without_mutation() -> None:
-    store = DriveStore.create()
+    store = new_store()
     outer = store.create_folder("/", "Outer")
     outer_path = _full_path(outer)
     first = store.add_file(outer_path, "one.bin", 301, 1)
@@ -237,7 +223,7 @@ def test_message_ids_reads_file_and_nested_folder_without_mutation() -> None:
 
 
 def test_message_ids_rejects_invalid_and_hidden_targets() -> None:
-    store = DriveStore.create()
+    store = new_store()
     folder = store.create_folder("/", "Trash me")
     folder_path = _full_path(folder)
     store.add_file(folder_path, "inside.bin", 401, 1)
@@ -253,7 +239,7 @@ def test_message_ids_rejects_invalid_and_hidden_targets() -> None:
 
 
 def test_share_tokens_are_hashed_and_strictly_scoped() -> None:
-    store = DriveStore.create()
+    store = new_store()
     shared = store.create_folder("/", "Shared")
     shared_path = _full_path(shared)
     nested = store.create_folder(shared_path, "Nested")
@@ -285,7 +271,7 @@ def test_share_tokens_are_hashed_and_strictly_scoped() -> None:
 
 
 def test_share_token_history_is_bounded() -> None:
-    store = DriveStore.create()
+    store = new_store()
     folder = store.create_folder("/", "Shared")
     folder_path = _full_path(folder)
     tokens = [
@@ -302,52 +288,9 @@ def test_share_token_history_is_bounded() -> None:
     assert len(child["share_hashes"]) == store_module.MAX_SHARE_TOKENS_PER_ITEM
 
 
-def test_committed_metadata_survives_process_exit_without_close(tmp_path) -> None:
-    database = tmp_path / "crash.sqlite3"
-    subprocess.run(  # noqa: S603 - fixed interpreter and trusted test script
-        [
-            sys.executable,
-            "-c",
-            "import os,sys; from tgdrive.storage.store import DriveStore; "
-            "s=DriveStore.create(sys.argv[1]); "
-            "s.add_file('/', 'survives.bin', 123, 4, operation_id='crash-operation'); "
-            "os._exit(0)",
-            str(database),
-        ],
-        check=True,
-    )
-    recovered = DriveStore.load(database)
-    row = next(iter(recovered.list_directory("/").values()))
-    assert recovered.get_file(_full_path(row))["message_id"] == 123
-    again = recovered.add_file(
-        "/", "survives.bin", 123, 4, operation_id="crash-operation"
-    )
-    assert again["id"] == row["id"]
-    assert len(recovered.list_directory("/")) == 1
-
-
-def test_independent_connections_serialize_writers_without_lost_updates(
-    tmp_path,
-) -> None:
-    database = tmp_path / "concurrent.sqlite3"
-    first = DriveStore.create(database)
-    second = DriveStore.load(database)
-    with ThreadPoolExecutor(max_workers=2) as workers:
-        left = workers.submit(
-            lambda: [first.create_folder("/", f"left-{n}") for n in range(20)]
-        )
-        right = workers.submit(
-            lambda: [second.create_folder("/", f"right-{n}") for n in range(20)]
-        )
-        left.result()
-        right.result()
-    assert first.revision == second.revision == 41
-    assert len(DriveStore.load(database).list_directory("/")) == 40
-
-
 def test_deletion_intent_survives_restart_with_partial_confirmations(tmp_path) -> None:
-    database = tmp_path / "deletion.sqlite3"
-    store = DriveStore.create(database)
+    database = tmp_path / "deletion.drive"
+    store = new_store(database)
     folder = store.create_folder("/", "Removal")
     path = _full_path(folder)
     store.add_file(path, "one.bin", 101, 1)
@@ -357,7 +300,7 @@ def test_deletion_intent_survives_restart_with_partial_confirmations(tmp_path) -
     store.confirm_deletion_messages(intent["id"], [101])
     store.fail_deletion(intent["id"], "transport lost")
     store.close()
-    recovered = DriveStore.load(database)
+    recovered = reopen_store(database)
     resumed = recovered.pending_deletions()[0]
     assert resumed["channel_id"] == -100123
     assert resumed["message_ids"] == [101, 102]
@@ -366,7 +309,7 @@ def test_deletion_intent_survives_restart_with_partial_confirmations(tmp_path) -
     assert recovered.begin_deletion(path)["id"] == intent["id"]
     with pytest.raises(ValidationError, match="pending permanent deletion"):
         recovered.set_trashed(path, False)
-    with pytest.raises(ValidationError, match="outside"):
+    with pytest.raises(ValidationError, match="unrelated messages"):
         recovered.confirm_deletion_messages(intent["id"], [999])
     assert recovered.finish_deletion(intent["id"]) == [101, 102]
     assert recovered.finish_deletion(intent["id"]) == []
@@ -376,23 +319,23 @@ def test_deletion_intent_survives_restart_with_partial_confirmations(tmp_path) -
 
 
 def test_deletion_backups_preserve_refs_and_reject_forged_confirmation() -> None:
-    store = DriveStore.create()
+    store = new_store()
     file = store.add_file("/", "delete.bin", 99, 1)
     path = _full_path(file)
     store.set_trashed(path, True)
     intent = store.begin_deletion(path)
     payload = store.export()
-    restored = DriveStore._from_payload(payload)
+    restored = store_from_payload(payload)
     assert restored.pending_deletions() == store.pending_deletions()
     payload["deletions"][0]["message_ids"] = [1000]
     payload["deletions"][0]["pending_message_ids"] = [1000]
     with pytest.raises(CorruptStoreError, match="retained subtree"):
-        DriveStore._from_payload(payload)
+        store_from_payload(payload)
     assert intent["pending_message_ids"] == [99]
 
 
 def test_move_updates_ancestry_without_changing_ids_and_rejects_cycles() -> None:
-    store = DriveStore.create()
+    store = new_store()
     source = store.create_folder("/", "Source")
     target = store.create_folder("/", "Target")
     nested = store.create_folder(_full_path(source), "Nested")
@@ -404,14 +347,14 @@ def test_move_updates_ancestry_without_changing_ids_and_rejects_cycles() -> None
     assert new_path == _full_path(moved) + "/" + file["id"]
     assert store.authorize_file(new_path, token)
     assert store.list_shares()[0]["path"] == _full_path(moved)
-    with pytest.raises(InvalidPathError, match="own subtree"):
+    with pytest.raises(InvalidPathError, match="its subtree"):
         store.move(_full_path(target), _full_path(moved))
     with pytest.raises(NotFoundError):
         store.get_directory(_full_path(nested))
 
 
 def test_move_conflicts_skip_or_keep_both_preserving_extension() -> None:
-    store = DriveStore.create()
+    store = new_store()
     target = store.create_folder("/", "Destination")
     file = store.add_file("/", "résumé.txt", 1, 1)
     store.add_file(_full_path(target), "RÉSUMÉ.txt", 2, 1)
@@ -426,9 +369,9 @@ def test_move_conflicts_skip_or_keep_both_preserving_extension() -> None:
 def test_share_expiry_rotation_revocation_and_trash_are_durable(
     tmp_path, monkeypatch
 ) -> None:
-    import tgdrive.storage.store as module
+    import tgdrive.storage.mongo_store as module
 
-    store = DriveStore.create(tmp_path / "shares.sqlite3")
+    store = new_store(tmp_path / "shares.drive")
     folder = store.create_folder("/", "Shared")
     file = store.add_file(_full_path(folder), "secret.bin", 5, 6)
     folder_path, file_path = _full_path(folder), _full_path(file)
@@ -442,10 +385,11 @@ def test_share_expiry_rotation_revocation_and_trash_are_durable(
     monkeypatch.undo()
     token = store.create_share(file_path, expires_at=None)
     assert store.list_shares(file_path)[0]["expires_at"] is None
-    restored = DriveStore.load(store.storage_path)
+    restored = reopen_store(tmp_path / "shares.drive")
     assert restored.authorize_file(file_path, token)
-    share_id = restored.list_shares(file_path)[0]["id"]
-    assert restored.revoke_share(share_id)
+    # MongoDB has one owner per drive, so the owning store performs the change.
+    share_id = store.list_shares(file_path)[0]["id"]
+    assert store.revoke_share(share_id)
     assert not store.authorize_file(file_path, token)
     token = store.create_share(file_path)
     store.set_trashed(folder_path, True)
@@ -457,8 +401,8 @@ def test_share_expiry_rotation_revocation_and_trash_are_durable(
 def test_operation_id_is_idempotent_across_restart_and_permanent_deletion(
     tmp_path,
 ) -> None:
-    database = tmp_path / "idempotent.sqlite3"
-    store = DriveStore.create(database)
+    database = tmp_path / "idempotent.drive"
+    store = new_store(database)
     file = store.add_file("/", "one.bin", 21, 1, operation_id="one-operation")
     assert store.add_file("/", "one.bin", 21, 1, operation_id="one-operation") == file
     revision = store.revision
@@ -470,14 +414,14 @@ def test_operation_id_is_idempotent_across_restart_and_permanent_deletion(
     intent = store.begin_deletion(path)
     store.confirm_deletion_messages(intent["id"], [21])
     store.finish_deletion(intent["id"])
-    recovered = DriveStore.load(database)
-    with pytest.raises(ValidationError, match="file was deleted"):
+    recovered = reopen_store(database)
+    with pytest.raises(ValidationError, match="already deleted"):
         recovered.add_file("/", "one.bin", 21, 1, operation_id="one-operation")
     assert recovered.list_directory("/") == {}
 
 
 def test_upload_collision_and_trash_restore_keep_both_without_losing_ids() -> None:
-    store = DriveStore.create()
+    store = new_store()
     first = store.add_file("/", "report.txt", 1, 1)
     second = store.add_file(
         "/", "REPORT.txt", 2, 2, keep_both=True, operation_id="duplicate-upload"
@@ -496,72 +440,27 @@ def test_upload_collision_and_trash_restore_keep_both_without_losing_ids() -> No
     assert restored["name"] == "report (2).txt"
     assert store.get_file(_full_path(replacement))["message_id"] == 3
     assert len(store.list_directory("/")) == 3
-    assert DriveStore._from_payload(store.export()).export() == store.export()
-
-
-def test_interrupted_snapshot_import_never_publishes_an_empty_database(
-    tmp_path,
-) -> None:
-    source = tmp_path / "checkpoint.json"
-    original = DriveStore.create()
-    original.create_folder("/", "Must survive")
-    source.write_bytes(original.snapshot()[1])
-    destination = tmp_path / "restore.sqlite3"
-    completed = subprocess.run(  # noqa: S603 - trusted fixed test code
-        [
-            sys.executable,
-            "-c",
-            "import json,os,sys; from tgdrive.storage.store import DriveStore; "
-            "DriveStore._import_shares=lambda *args: os._exit(9); "
-            "DriveStore._from_payload(json.load(open(sys.argv[1])),storage_path=sys.argv[2],persist=True)",
-            str(source),
-            str(destination),
-        ],
-        check=False,
-    )
-    assert completed.returncode == 9
-    assert not destination.exists()
-    assert len(list(tmp_path.glob(".restore-*.sqlite3"))) == 1
+    assert store_from_payload(store.export()).export() == store.export()
 
 
 def test_database_load_rejects_inconsistent_indexes_and_overlapping_deletions(
     tmp_path,
 ) -> None:
-    database = tmp_path / "index.sqlite3"
-    store = DriveStore.create(database)
+    database = tmp_path / "index"
+    store = new_store(database)
     folder = store.create_folder("/", "Folder")
-    connection = sqlite3.connect(database)
-    connection.execute("UPDATE nodes SET name_key='wrong' WHERE id=?", (folder["id"],))
-    connection.commit()
-    connection.close()
-    with pytest.raises(CorruptStoreError, match="name index"):
-        DriveStore.load(database)
-
-
-def test_store_finalizer_closes_abandoned_connection_without_changing_committed_data(
-    tmp_path,
-):
-    database = tmp_path / "finalized.sqlite3"
-    store = DriveStore.create(database)
-    item = store.add_file("/", "committed.bin", 71, 3)
-    connection = store._db
-    reference = weakref.ref(store)
-    del store
-    gc.collect()
-    assert reference() is None
-    with pytest.raises(sqlite3.ProgrammingError, match="closed"):
-        connection.execute("SELECT 1")
-    restored = DriveStore.load(database)
-    assert restored.get_file(_full_path(item))["message_id"] == 71
-    restored.close()
-    restored.close()
+    for row in store.backend.db.nodes.rows:
+        if row["id"] == folder["id"]:
+            row["name_key"] = "wrong"
+    with pytest.raises(CorruptStoreError, match="identity or index"):
+        reopen_store(database)
 
 
 @pytest.mark.parametrize("field", ["drive_id", "shares"])
 def test_portable_catalog_requires_current_identity_and_share_records(field):
-    source = DriveStore.create()
+    source = new_store()
     payload = source.export()
     source.close()
     del payload[field]
     with pytest.raises(CorruptStoreError, match="missing or unknown fields"):
-        DriveStore._from_payload(payload)
+        store_from_payload(payload)

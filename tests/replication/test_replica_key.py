@@ -54,8 +54,8 @@ def test_migrated_unified_key_survives_losing_local_directory(replicas, monkeypa
     assert backend.db.settings.find_one({"_id": "recovery-key"}) == saved_key()
     assert original.settings.mongodb_backup_key.get_secret_value() == LEGACY_KEY
 
+    # The journal lives in MongoDB, so a new DATA_DIR sees the same key.
     restored = create("reinstalled")
-    assert restored.journal.get("key") is None
     assert restored.key() == KEY
     assert restored.journal.get("key") == KEY
     assert restored.settings.mongodb_backup_key.get_secret_value() == LEGACY_KEY
@@ -148,15 +148,12 @@ def test_atomic_creation_uses_winner_without_overwriting_existing_local_key(
 @pytest.mark.parametrize(
     "error", [DatabaseUnavailable("unavailable"), ConnectionFailure("unavailable")]
 )
-def test_database_outage_keeps_local_key_but_never_generates_a_replacement(
+def test_database_outage_never_generates_a_replacement_key(
     replicas, monkeypatch, error
 ):
     create, backend = replicas
-    existing = create(local_key=KEY)
     missing = create("missing")
     monkeypatch.setattr(backend.db.settings, "find_one", Mock(side_effect=error))
-    assert existing.key() == KEY
-    assert not getattr(existing, "_key_persisted", False)
     with pytest.raises(type(error)):
         missing.key()
     assert missing.journal.get("key") is None

@@ -247,14 +247,8 @@ class Settings(BaseSettings):
             if not uri:
                 # Let the required field produce a redacted configuration error.
                 return {}
-            from tgdrive.replication.replica_bootstrap import load_bootstrap
             from tgdrive.storage.mongo import DatabaseUnavailable, configure
 
-            recovery_bootstrap = load_bootstrap(
-                directory,
-                mongodb_uri=uri,
-                mongodb_database=str(base.get("MONGODB_DATABASE", "tgdrive")),
-            )
             backend = configure(
                 directory,
                 uri.get_secret_value() if isinstance(uri, SecretStr) else str(uri),
@@ -269,10 +263,7 @@ class Settings(BaseSettings):
                 ) from None
             # Recovery copies fill missing values; they must never conceal an
             # explicit credential rotation or channel/database mismatch.
-            saved = {
-                **(recovery_bootstrap or {}),
-                **(row["document"] if row else {}),
-            }
+            saved = row["document"] if row else {}
             bootstrap = {
                 key: value
                 for key, value in saved.items()
@@ -291,8 +282,7 @@ class Settings(BaseSettings):
                             else str(value)
                         )
                 existing = bool(
-                    recovery_bootstrap is not None
-                    or (directory / "mongodb-drive.json").exists()
+                    (directory / "mongodb-drive.json").exists()
                     or row is not None
                     or (
                         not all(known.get(key) for key in SECRET_FIELDS)

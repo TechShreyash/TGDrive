@@ -82,9 +82,7 @@ async def test_database_outage_retries_same_backup_after_restart(
             with pytest.raises(ReplicaTransportError):
                 await replica._sync(config)
         job = replica.journal.get("job")
-        intents = replica.journal.db.execute(
-            "SELECT * FROM copies ORDER BY key"
-        ).fetchall()
+        intents = list(replica.journal.backend.db.replica_copies.find())
         receipts = dict(remote.receipts)
         monkeypatch.setattr(collection, "find_one", unavailable)
         monkeypatch.setattr(replica, "report", record_failure)
@@ -101,10 +99,7 @@ async def test_database_outage_retries_same_backup_after_restart(
         assert replica.journal.get("restore_point") == point
         assert replica.recovery_kit() == kit
         assert replica.journal.get("job") == job
-        assert (
-            replica.journal.db.execute("SELECT * FROM copies ORDER BY key").fetchall()
-            == intents
-        )
+        assert list(replica.journal.backend.db.replica_copies.find()) == intents
         assert remote.receipts == receipts
         deadline = state["error"]["retry_at"]
         assert deadline > time.time()

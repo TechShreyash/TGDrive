@@ -2,13 +2,13 @@
 
 import pytest
 
+from tests.support.mongo_fixtures import new_store, reopen_store, store_from_payload
 from tgdrive.core.errors import ValidationError
-from tgdrive.storage.store import DriveStore
 
 
 def test_drive_identity_and_file_operation_tombstones_roundtrip(tmp_path):
-    database = tmp_path / "drive.sqlite3"
-    store = DriveStore.create(database)
+    database = tmp_path / "drive"
+    store = new_store(database)
     identity = store.drive_id
     file = store.add_file("/", "finished.bin", 7, 8, operation_id="finished-operation")
     assert store.has_file_operation("finished-operation")
@@ -21,11 +21,11 @@ def test_drive_identity_and_file_operation_tombstones_roundtrip(tmp_path):
     assert store.has_file_operation("finished-operation")
     with pytest.raises(ValidationError):
         store.has_file_operation("../unsafe")
-    restored = DriveStore._from_payload(store.export())
+    restored = store_from_payload(store.export())
     assert restored.drive_id == identity
     assert restored.has_file_operation("finished-operation")
     restored.close()
     store.close()
-    loaded = DriveStore.load(database)
+    loaded = reopen_store(database)
     assert loaded.drive_id == identity
     loaded.close()

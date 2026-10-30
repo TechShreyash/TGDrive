@@ -222,3 +222,63 @@ def register_test_backend(monkeypatch, settings_or_directory, backend=None):
 
     monkeypatch.setattr(mongo, "configure", configured)
     return backend
+
+
+_STORE_BACKENDS = {}
+
+
+def new_store(path=None, backend=None):
+    """Create an isolated MongoStore; ``path`` only names it for reopen_store."""
+    from tgdrive.storage.mongo_store import MongoStore
+
+    backend = backend or FakeMongoBackend()
+    store = MongoStore.create(backend)
+    if path is not None:
+        _STORE_BACKENDS[str(path)] = backend
+    return store
+
+
+def reopen_store(path):
+    """Open a new MongoStore over the database created by ``new_store(path)``."""
+    from tgdrive.storage.mongo_store import MongoStore
+
+    return MongoStore(_STORE_BACKENDS[str(path)])
+
+
+def store_from_payload(payload, *, revoke_shares=False):
+    """Load a validated portable catalog into a fresh synthetic database."""
+    from tgdrive.replication.replica_activation import _mongo_nodes
+    from tgdrive.storage.mongo_store import MongoStore
+    from tgdrive.storage.store import SCHEMA_VERSION
+
+    MongoStore._validate_payload(payload)
+    backend = FakeMongoBackend()
+    db = backend.db
+    revision = payload["revision"] + (1 if revoke_shares and payload["shares"] else 0)
+    db.catalog.insert_one(
+        {
+            "_id": "catalog",
+            "schema_version": SCHEMA_VERSION,
+            "drive_id": payload["drive_id"],
+            "revision": revision,
+            "backed_up_revision": payload["backed_up_revision"],
+            "generation": 0,
+            "storage_channel_id": payload.get("storage_channel_id"),
+        }
+    )
+    db.nodes.insert_many(_mongo_nodes(payload))
+    if not revoke_shares:
+        db.shares.insert_many([dict(row, _id=row["id"]) for row in payload["shares"]])
+    db.operations.insert_many(
+        [dict(row, _id=row["operation_id"]) for row in payload.get("operations", [])]
+    )
+    db.deletions.insert_many(
+        [dict(row, _id=row["id"]) for row in payload.get("deletions", [])]
+    )
+    db.preparations.insert_many(
+        [
+            dict(row, _id=row["request_id"])
+            for row in payload.get("folder_preparations", [])
+        ]
+    )
+    return MongoStore(backend)

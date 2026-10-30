@@ -11,10 +11,9 @@ from fastapi import UploadFile
 from pymongo.errors import ConnectionFailure
 
 from tests.support.app_fixtures import FakeRuntime, make_settings
-from tests.support.mongo_fixtures import register_test_backend
+from tests.support.mongo_fixtures import new_store, register_test_backend
 from tests.transfers.test_transfers import FakeRemote, make_manager
 from tgdrive.storage.mongo import DatabaseUnavailable
-from tgdrive.storage.store import DriveStore
 from tgdrive.transfers.manager import TransferManager
 from tgdrive.transfers.remote_scheduler import URLDownloadScheduler
 from tgdrive.transfers.staging import StorageUnavailable, staging_usage
@@ -47,7 +46,7 @@ def hold_write(monkeypatch, backend, predicate, *, fail=False):
 @pytest.fixture
 async def journal_app(tmp_path, monkeypatch):
     settings = make_settings(tmp_path)
-    store = DriveStore.create()
+    store = new_store()
     runtime = FakeRuntime(store)
     backend = register_test_backend(monkeypatch, settings, runtime.mongo)
     registry = runtime.transfers.registry = TransferRegistry(

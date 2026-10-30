@@ -9,9 +9,8 @@ import pytest
 from fastapi.testclient import TestClient
 
 from tests.support.app_fixtures import FakeRuntime, login, make_settings
-from tests.support.mongo_fixtures import register_test_backend
+from tests.support.mongo_fixtures import new_store, register_test_backend
 from tgdrive.storage.mongo import for_directory
-from tgdrive.storage.store import DriveStore
 from tgdrive.transfers.tasks import TransferNotFound, TransferRegistry, TransferStatus
 from tgdrive.web.app import create_app
 
@@ -65,7 +64,7 @@ async def add(
 
 @pytest.mark.asyncio
 async def test_history_survives_prune_and_reopen_without_private_context(tmp_path):
-    path = tmp_path / "jobs.sqlite3"
+    path = tmp_path / "jobs"
     registry = registry_for(path, ttl_seconds=60)
     record = await add(registry, "kept.bin", TransferStatus.COMPLETED)
     (await registry.prune(now=time.time() + 61))
@@ -91,9 +90,7 @@ async def test_history_survives_prune_and_reopen_without_private_context(tmp_pat
 async def test_new_transfer_archives_expired_unnamed_url_job(
     tmp_path, persistent, name
 ):
-    registry = registry_for(
-        tmp_path / "jobs.sqlite3" if persistent else None, ttl_seconds=1
-    )
+    registry = registry_for(tmp_path / "jobs" if persistent else None, ttl_seconds=1)
     try:
         previous = await registry.create(
             "checking_source", context={"kind": "remote", "name": name}
@@ -119,7 +116,7 @@ async def test_new_transfer_archives_expired_unnamed_url_job(
 
 @pytest.mark.asyncio
 async def test_name_search_filters_before_cursor_pagination_across_archives(tmp_path):
-    registry = registry_for(tmp_path / "search.sqlite3", ttl_seconds=1)
+    registry = registry_for(tmp_path / "search", ttl_seconds=1)
     for index in range(75):
         (
             await add(
@@ -159,7 +156,7 @@ async def test_name_search_filters_before_cursor_pagination_across_archives(tmp_
 async def test_history_cursor_filters_and_deletions_are_independent_of_live_eviction(
     tmp_path,
 ):
-    registry = registry_for(tmp_path / "jobs.sqlite3", ttl_seconds=1)
+    registry = registry_for(tmp_path / "jobs", ttl_seconds=1)
     for index in range(5):
         (
             await add(
@@ -198,7 +195,7 @@ async def test_history_cursor_filters_and_deletions_are_independent_of_live_evic
 
 async def test_history_http_owner_boundary_and_validation(tmp_path):
     settings = make_settings(tmp_path)
-    store = DriveStore.create(tmp_path / "catalog.sqlite3")
+    store = new_store(tmp_path / "catalog")
     runtime = FakeRuntime(store)
     runtime.mongo = for_directory(tmp_path)
     record = await add(
@@ -239,7 +236,7 @@ async def test_finished_history_pages_mix_terminal_outcomes_without_active_jobs(
     tmp_path, persistent
 ):
     registry = registry_for(
-        tmp_path / "jobs.sqlite3" if persistent else None,
+        tmp_path / "jobs" if persistent else None,
         ttl_seconds=1,
     )
     try:
@@ -273,7 +270,7 @@ async def test_history_search_reads_can_overlap_archive_writes_without_connectio
 ):
     import asyncio
 
-    registry = registry_for(tmp_path / "concurrent.sqlite3", ttl_seconds=1)
+    registry = registry_for(tmp_path / "concurrent", ttl_seconds=1)
     done = asyncio.Event()
     reads = 0
 
@@ -451,7 +448,7 @@ async def test_clear_history_preserves_active_folders_and_recovery(task_registry
 
 
 async def test_cleared_history_stays_cleared_after_restart_and_pruning(tmp_path):
-    path = tmp_path / "clear-history.sqlite3"
+    path = tmp_path / "clear-history"
     registry = registry_for(path, ttl_seconds=1)
     completed = await add(registry, "completed", TransferStatus.COMPLETED)
     failed = await add(registry, "failed", TransferStatus.ERROR)
@@ -471,7 +468,7 @@ async def test_cleared_history_stays_cleared_after_restart_and_pruning(tmp_path)
 
 async def test_clear_history_api_requires_login_and_keeps_live_jobs(tmp_path):
     settings = make_settings(tmp_path)
-    store = DriveStore.create(tmp_path / "clear-api.sqlite3")
+    store = new_store(tmp_path / "clear-api")
     runtime = FakeRuntime(store)
     runtime.mongo = for_directory(tmp_path)
     finished = await add(
@@ -579,7 +576,7 @@ async def test_task_status_and_search_apply_before_pagination_across_live_archiv
 
 
 async def test_folder_task_metadata_survives_mongo_history_reopen(tmp_path):
-    path = tmp_path / "folder-history.sqlite3"
+    path = tmp_path / "folder-history"
     registry = registry_for(path, ttl_seconds=1)
     folder = folder_metadata()
     for index in range(3):
@@ -608,7 +605,7 @@ async def test_task_history_http_bounds_owner_boundary_and_current_folder_metada
     tmp_path,
 ):
     settings = make_settings(tmp_path)
-    store = DriveStore.create(tmp_path / "task-catalog.sqlite3")
+    store = new_store(tmp_path / "task-catalog")
     runtime = FakeRuntime(store)
     runtime.mongo = for_directory(tmp_path)
     registry = runtime.transfers.registry

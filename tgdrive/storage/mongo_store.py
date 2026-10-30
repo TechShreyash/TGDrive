@@ -10,10 +10,12 @@ from __future__ import annotations
 import copy
 import hashlib
 import hmac
+import json
 import secrets
 import threading
 import unicodedata
 from contextlib import contextmanager
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from pymongo import DeleteOne, ReplaceOne
@@ -26,11 +28,14 @@ from tgdrive.core.errors import (
     NotDirectoryError,
     NotFileError,
     NotFoundError,
+    PersistenceError,
     RootMutationError,
     TrashedItemError,
+    UnsupportedSchemaError,
     ValidationError,
 )
 from tgdrive.storage.demo_files import DEMO_FILES_ID, DEMO_FILES_NAME, check_ids
+from tgdrive.storage.file_parts import validate_parts, validate_poster, validate_sha256
 from tgdrive.storage.mongo import DatabaseUnavailable, MongoBackend
 from tgdrive.storage.store import (
     _SHARE_UNSET,
@@ -38,32 +43,39 @@ from tgdrive.storage.store import (
     MAX_SEARCH_OFFSET,
     MAX_SEARCH_RESULTS,
     MAX_SHARE_TOKENS_PER_ITEM,
+    MAX_STORE_BYTES,
     MAX_TREE_DEPTH,
     MAX_TREE_ITEMS,
     ROOT_ID,
     SCHEMA_VERSION,
-    DriveStore,
     FolderTreeConflictError,
+    _FileNode,
     _folder_manifest,
+    _FolderNode,
     _join_path,
     _manifest_json,
     _name_key,
     _normalize_name,
     _normalize_path,
+    _parent_path,
+    _parse_node,
     _share_label,
     _strict_int,
     _utc_now,
     _validate_channel_id,
     _validate_file_rename,
     _validate_id,
+    _validate_share_hashes,
     _validate_timestamp,
+    _validate_tree,
 )
 
 _TABLES = ("nodes", "shares", "operations", "deletions", "preparations")
 
 
-class MongoStore(DriveStore):
+class MongoStore:
     backend_name = "mongodb"
+    _DEFAULT_EXPIRY = object()
 
     def __init__(self, backend: MongoBackend):
         self.backend = backend
@@ -1010,14 +1022,14 @@ class MongoStore(DriveStore):
         self,
         path,
         *,
-        expires_at=DriveStore._DEFAULT_EXPIRY,
+        expires_at=_DEFAULT_EXPIRY,
         token_factory=None,
         label="",
         replace_existing=False,
     ):
         expiry = (
             self._default_share_expiry()
-            if expires_at is DriveStore._DEFAULT_EXPIRY
+            if expires_at is self._DEFAULT_EXPIRY
             else _validate_timestamp(expires_at)
             if expires_at is not None
             else None
@@ -1393,3 +1405,400 @@ class MongoStore(DriveStore):
             if state is self._committed:
                 self._statistics_cache = (state, result)
             return dict(result)
+
+    @staticmethod
+    def _default_share_expiry() -> str:
+        return (
+            (datetime.now(UTC) + timedelta(days=7))
+            .isoformat(timespec="seconds")
+            .replace("+00:00", "Z")
+        )
+
+    @staticmethod
+    def _json_bytes(payload: dict[str, Any]) -> bytes:
+        content = (
+            json.dumps(
+                payload,
+                allow_nan=False,
+                ensure_ascii=False,
+                separators=(",", ":"),
+                sort_keys=True,
+            )
+            + "\n"
+        ).encode("utf-8")
+        if len(content) > MAX_STORE_BYTES:
+            raise PersistenceError("metadata snapshot exceeds the safe size limit")
+        return content
+
+    @classmethod
+    def _validate_payload(cls, payload: object) -> tuple[_FolderNode, dict[str, Any]]:
+        try:
+            if not isinstance(payload, dict):
+                raise ValidationError("top-level metadata must be an object")
+            required = {
+                "backed_up_revision",
+                "revision",
+                "root",
+                "schema_version",
+                "drive_id",
+                "shares",
+            }
+            optional = {
+                "deletions",
+                "operations",
+                "folder_preparations",
+                "storage_channel_id",
+            }
+            if not required <= set(payload) or set(payload) - required - optional:
+                raise ValidationError(
+                    "top-level metadata has missing or unknown fields"
+                )
+            version = payload["schema_version"]
+            if type(version) is not int or version != SCHEMA_VERSION:
+                raise UnsupportedSchemaError(f"unsupported metadata schema {version}")
+            _validate_id(payload["drive_id"])
+            if "storage_channel_id" in payload:
+                _validate_channel_id(payload["storage_channel_id"])
+            revision = _strict_int(payload["revision"], "revision", 1)
+            backed_up = _strict_int(payload["backed_up_revision"], "backed_up_revision")
+            if backed_up > revision:
+                raise ValidationError("backed_up_revision cannot exceed revision")
+            root = _parse_node(payload["root"])
+            if not isinstance(root, _FolderNode):
+                raise ValidationError("root node must be a folder")
+            _validate_tree(root)
+            cls._validate_records(root, payload)
+            return root, payload
+        except UnsupportedSchemaError:
+            raise
+        except (ValidationError, TypeError, RecursionError) as exc:
+            raise CorruptStoreError(f"metadata validation failed: {exc}") from exc
+
+    @classmethod
+    def _validate_records(cls, root: _FolderNode, payload: dict[str, Any]) -> None:
+        """Check recovery records against the tree without opening a database."""
+        nodes, parents, expected_hashes = {}, {}, {}
+        stack = [(root, None)]
+        while stack:
+            node, parent = stack.pop()
+            nodes[node.id], parents[node.id] = node, parent
+            expected_hashes.update((value, node.id) for value in node.share_hashes)
+            if isinstance(node, _FolderNode):
+                stack.extend((child, node.id) for child in node.children.values())
+
+        shares = payload["shares"]
+        if not isinstance(shares, list):
+            raise ValidationError("shares must be a list")
+        actual_hashes, share_ids = {}, set()
+        for raw in shares:
+            share = cls._validate_share_record(raw)
+            if share["id"] in share_ids or share["token_hash"] in actual_hashes:
+                raise ValidationError("duplicate share identity or credential")
+            share_ids.add(share["id"])
+            actual_hashes[share["token_hash"]] = share["node_id"]
+        if actual_hashes != expected_hashes:
+            raise ValidationError("share records do not match node credentials")
+
+        operations = payload.get("operations", [])
+        if not isinstance(operations, list):
+            raise ValidationError("operations must be a list")
+        operation_ids, operation_nodes = set(), set()
+        for operation in operations:
+            if not isinstance(operation, dict) or set(operation) != {
+                "operation_id",
+                "node_id",
+            }:
+                raise ValidationError("invalid file operation")
+            identity = _validate_id(operation["operation_id"])
+            node_id = _validate_id(operation["node_id"])
+            if identity in operation_ids or node_id in operation_nodes:
+                raise ValidationError("duplicate file operation")
+            operation_ids.add(identity)
+            operation_nodes.add(node_id)
+            if node_id in nodes and not isinstance(nodes[node_id], _FileNode):
+                raise ValidationError("file operation must reference a file")
+
+        deletions = payload.get("deletions", [])
+        if not isinstance(deletions, list):
+            raise ValidationError("deletions must be a list")
+        deletion_ids, active_roots = set(), set()
+        for raw in deletions:
+            intent = cls._validate_deletion_record(raw)
+            if intent["id"] in deletion_ids:
+                raise ValidationError("duplicate deletion identity")
+            deletion_ids.add(intent["id"])
+            node = nodes.get(intent["root_id"])
+            if intent["state"] == "completed":
+                if node is not None:
+                    raise ValidationError("completed deletion still has a live root")
+                continue
+            if node is None or not node.trashed or node.id in active_roots:
+                raise ValidationError("invalid active deletion root")
+            active_roots.add(node.id)
+            ancestry, parent = [node.id], parents[node.id]
+            while parent != ROOT_ID:
+                if parent is None or nodes[parent].trashed:
+                    raise ValidationError("deletion root has invalid ancestry")
+                ancestry.append(parent)
+                parent = parents[parent]
+            if "/" + "/".join(reversed(ancestry)) != intent["path"]:
+                raise ValidationError("deletion root has invalid ancestry")
+            messages, pending = set(), [node]
+            while pending:
+                current = pending.pop()
+                if isinstance(current, _FolderNode):
+                    pending.extend(current.children.values())
+                else:
+                    messages.add(current.message_id)
+                    messages.update(part["message_id"] for part in current.parts or [])
+                    if current.poster:
+                        messages.add(current.poster["message_id"])
+            if messages != set(intent["message_ids"]):
+                raise ValidationError(
+                    "deletion references do not match retained subtree"
+                )
+        for identity in active_roots:
+            parent = parents[identity]
+            while parent is not None:
+                if parent in active_roots:
+                    raise ValidationError("overlapping active deletion roots")
+                parent = parents[parent]
+
+        preparations = payload.get("folder_preparations", [])
+        if not isinstance(preparations, list):
+            raise ValidationError("folder_preparations must be a list")
+        preparation_ids = set()
+        for preparation in preparations:
+            cls._validate_folder_preparation(preparation)
+            if preparation["request_id"] in preparation_ids:
+                raise ValidationError("duplicate folder preparation")
+            preparation_ids.add(preparation["request_id"])
+
+    @staticmethod
+    def _validate_share_record(share: object) -> dict[str, Any]:
+        if not isinstance(share, dict) or set(share) - {"label"} != {
+            "id",
+            "node_id",
+            "token_hash",
+            "created_at",
+            "expires_at",
+        }:
+            raise ValidationError("invalid share record")
+        _validate_id(share["id"])
+        _validate_id(share["node_id"], allow_root=True)
+        _validate_share_hashes([share["token_hash"]])
+        created = _validate_timestamp(share["created_at"])
+        expiry = (
+            _validate_timestamp(share["expires_at"])
+            if share["expires_at"] is not None
+            else None
+        )
+        if expiry is not None and expiry <= created:
+            raise ValidationError("invalid share expiry")
+        return dict(
+            share,
+            created_at=created,
+            expires_at=expiry,
+            label=_share_label(share.get("label", "")),
+        )
+
+    @staticmethod
+    def _validate_deletion_record(intent: object) -> dict[str, Any]:
+        keys = {
+            "id",
+            "root_id",
+            "path",
+            "channel_id",
+            "state",
+            "created_at",
+            "error",
+            "message_ids",
+            "pending_message_ids",
+        }
+        if not isinstance(intent, dict) or set(intent) != keys:
+            raise ValidationError("invalid deletion intent")
+        _validate_id(intent["id"])
+        _validate_id(intent["root_id"])
+        _normalize_path(intent["path"])
+        created = _validate_timestamp(intent["created_at"])
+        if intent["state"] not in {"pending", "failed", "completed"}:
+            raise ValidationError("invalid deletion state")
+        if intent["channel_id"] is not None and (
+            type(intent["channel_id"]) is not int or intent["channel_id"] == 0
+        ):
+            raise ValidationError("invalid deletion channel")
+        if intent["error"] is not None and (
+            not isinstance(intent["error"], str) or len(intent["error"]) > 500
+        ):
+            raise ValidationError("invalid deletion error")
+        if not isinstance(intent["message_ids"], list) or not isinstance(
+            intent["pending_message_ids"], list
+        ):
+            raise ValidationError("invalid deletion message list")
+        messages = {
+            _strict_int(value, "message_id", 1) for value in intent["message_ids"]
+        }
+        pending = {
+            _strict_int(value, "message_id", 1)
+            for value in intent["pending_message_ids"]
+        }
+        if not pending <= messages or len(messages) != len(intent["message_ids"]):
+            raise ValidationError("invalid deletion confirmations")
+        if intent["state"] == "completed" and pending:
+            raise ValidationError("completed deletion has pending messages")
+        return dict(intent, created_at=created)
+
+    @staticmethod
+    def _validate_folder_preparation(record: object) -> dict[str, Any]:
+        if not isinstance(record, dict) or set(record) != {
+            "request_id",
+            "fingerprint",
+            "manifest",
+            "result",
+            "created_at",
+        }:
+            raise ValidationError("invalid folder preparation")
+        request_id = _validate_id(record["request_id"])
+        if len(request_id) < 16:
+            raise ValidationError(
+                "folder request id must contain at least 16 characters"
+            )
+        manifest = record["manifest"]
+        if not isinstance(manifest, dict) or set(manifest) != {
+            "destination",
+            "root_name",
+            "folders",
+        }:
+            raise ValidationError("invalid folder preparation manifest")
+        normalized = _folder_manifest(**manifest)
+        if normalized != manifest:
+            raise ValidationError("folder preparation manifest is not canonical")
+        encoded = _manifest_json(normalized)
+        fingerprint = hashlib.sha256(encoded.encode()).hexdigest()
+        if record["fingerprint"] != fingerprint:
+            raise ValidationError("folder preparation fingerprint does not match")
+        result = record["result"]
+        if not isinstance(result, dict) or set(result) != {"root", "folders"}:
+            raise ValidationError("invalid folder preparation result")
+        root = result["root"]
+        if not isinstance(root, dict) or set(root) != {
+            "id",
+            "name",
+            "path",
+            "size",
+            "type",
+            "upload_date",
+        }:
+            raise ValidationError("invalid prepared root")
+        _validate_id(root["id"])
+        if (
+            _normalize_name(root["name"]) != root["name"]
+            or root["path"] != normalized["destination"]
+            or type(root["size"]) is not int
+            or root["size"] != 0
+            or root["type"] != "folder"
+        ):
+            raise ValidationError("invalid prepared root fields")
+        _validate_timestamp(root["upload_date"])
+        mapping = result["folders"]
+        expected = {"", *("/".join(path) for path in normalized["folders"])}
+        if not isinstance(mapping, dict) or set(mapping) != expected:
+            raise ValidationError("prepared folder map does not match manifest")
+        if mapping[""] != _join_path(root["path"], root["id"]):
+            raise ValidationError("prepared root path does not match")
+        ids = {root["id"]}
+        for segments in normalized["folders"]:
+            relative = "/".join(segments)
+            parts, full_path = _normalize_path(mapping[relative])
+            parent = mapping["/".join(segments[:-1])]
+            if (
+                not parts
+                or full_path != mapping[relative]
+                or full_path != _join_path(parent, parts[-1])
+                or parts[-1] in ids
+            ):
+                raise ValidationError("invalid prepared folder ancestry")
+            ids.add(parts[-1])
+        _validate_timestamp(record["created_at"])
+        return record
+
+    def add_file(
+        self,
+        parent_path: str,
+        name: str,
+        message_id: int,
+        size: int,
+        *,
+        operation_id: str | None = None,
+        keep_both: bool = False,
+        parts: list[dict[str, Any]] | None = None,
+        sha256: str | None = None,
+        poster: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        if type(keep_both) is not bool:
+            raise ValidationError("keep_both must be a boolean")
+        message_id = _strict_int(message_id, "message_id", 1)
+        size = _strict_int(size, "size")
+        sha256 = validate_sha256(sha256)
+        if parts is not None:
+            parts = validate_parts(parts, size=size, message_id=message_id)
+        poster = validate_poster(poster, message_id=message_id, parts=parts)
+        return self._add(
+            parent_path,
+            name,
+            message_id,
+            size,
+            operation_id,
+            keep_both,
+            parts,
+            sha256,
+            poster,
+        )
+
+    def backup_snapshot(self) -> tuple[int, bytes]:
+        payload = self.export()
+        payload["backed_up_revision"] = payload["revision"]
+        return payload["revision"], self._json_bytes(payload)
+
+    def create_folder(self, parent_path: str, name: str) -> dict[str, Any]:
+        return self._add(parent_path, name, None)
+
+    def search(
+        self, query: str, *, include_trashed: bool = False
+    ) -> dict[str, dict[str, Any]]:
+        """Compatibility lookup: at most 500 literal filename matches."""
+        page = self.search_page(
+            query, include_trashed=include_trashed, limit=MAX_SEARCH_RESULTS
+        )
+        return {row["id"]: row for row in page["items"]}
+
+    def snapshot(self) -> tuple[int, bytes]:
+        payload = self.export()
+        return payload["revision"], self._json_bytes(payload)
+
+    @staticmethod
+    def _record(
+        row: dict[str, Any], full_path: str, *, message: bool = False
+    ) -> dict[str, Any]:
+        result = dict(
+            id=row["id"],
+            name=row["name"],
+            path=_parent_path(full_path),
+            size=row["size"],
+            type=row["kind"],
+            upload_date=row["upload_date"],
+        )
+        if row.get("starred"):
+            result["starred"] = True
+        if row["kind"] == "file":
+            result["part_count"] = row["part_count"]
+        if message:
+            result["message_id"] = row["message_id"]
+            if row.get("sha256") is not None:
+                result["sha256"] = row["sha256"]
+        return result
+
+    @staticmethod
+    def _visible(chain: list[dict[str, Any]], include_trashed: bool = False) -> None:
+        if not include_trashed and any(row["trashed"] for row in chain):
+            raise TrashedItemError("item or one of its ancestors is trashed")

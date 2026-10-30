@@ -7,6 +7,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from tests.support.mongo_fixtures import reopen_store
 from tests.transfers.test_multipart_transfers import (
     Account,
     dispose,
@@ -14,7 +15,6 @@ from tests.transfers.test_multipart_transfers import (
     registry_for,
 )
 from tests.transfers.test_multipart_transfers import mongo_backend as mongo_backend
-from tgdrive.storage.store import DriveStore
 from tgdrive.telegram.client_pool import ClientPool
 from tgdrive.transfers.manager import TransferManager
 from tgdrive.transfers.staging import staging_usage
@@ -118,7 +118,7 @@ async def test_torrent_retry_skips_completed_files_even_after_child_pruning(
         manager = TransferManager(
             settings=settings,
             pool=pool,
-            store=DriveStore.load(tmp_path / "drive.sqlite3"),
+            store=reopen_store(tmp_path / "drive"),
             registry=registry_for(tmp_path),
             remote=manager.remote,
         )

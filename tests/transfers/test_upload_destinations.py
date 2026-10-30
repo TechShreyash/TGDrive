@@ -10,7 +10,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from tests.support.mongo_fixtures import register_test_backend
+from tests.support.mongo_fixtures import new_store, register_test_backend, reopen_store
 from tests.transfers.test_multipart_transfers import (
     Account,
     dispose,
@@ -25,7 +25,6 @@ from tgdrive.core.errors import (
     PersistenceError,
     TrashedItemError,
 )
-from tgdrive.storage.store import DriveStore
 from tgdrive.telegram.client_pool import ClientPool
 from tgdrive.transfers.manager import TransferManager
 from tgdrive.transfers.tasks import TransferStatus
@@ -210,7 +209,7 @@ async def test_queued_restart_follows_uuid_after_destination_move(tmp_path):
     recovered = TransferManager(
         settings=settings,
         pool=pool,
-        store=DriveStore.load(tmp_path / "drive.sqlite3"),
+        store=reopen_store(tmp_path / "drive"),
         registry=registry_for(tmp_path),
         remote=SimpleNamespace(close=AsyncMock()),
     )
@@ -304,7 +303,7 @@ async def test_delete_worker_matches_moved_destination_uuid_before_cleanup(tmp_p
 
 
 def test_store_destination_binding_requires_a_folder_and_honors_live_ancestry():
-    store = DriveStore.create()
+    store = new_store()
     try:
         parent = folder(store, "Parent")
         target = folder(store, "Target", parent)

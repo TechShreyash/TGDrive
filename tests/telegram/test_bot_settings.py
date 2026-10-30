@@ -6,7 +6,7 @@ from fastapi.testclient import TestClient
 from pydantic import ValidationError
 
 from tests.support.app_fixtures import FakeRuntime, login, make_settings
-from tests.support.mongo_fixtures import register_test_backend
+from tests.support.mongo_fixtures import new_store, register_test_backend
 from tests.telegram.test_bot_mode import FakeBotClient, FakeMessage, settings
 from tgdrive.settings.bot_settings import (
     DEFAULT_FOLDER_NAME,
@@ -16,7 +16,6 @@ from tgdrive.settings.bot_settings import (
     get_bot_settings,
 )
 from tgdrive.settings.managed_settings import SettingsProblem
-from tgdrive.storage.store import DriveStore
 from tgdrive.telegram.bot_mode import BotMode
 from tgdrive.web.app import create_app
 
@@ -24,7 +23,7 @@ from tgdrive.web.app import create_app
 @pytest.fixture
 def bot_setup(tmp_path, monkeypatch):
     configured = settings(tmp_path)
-    store = DriveStore.create(tmp_path / "drive.sqlite3")
+    store = new_store(tmp_path / "drive")
     backend = register_test_backend(monkeypatch, configured)
     runtime = SimpleNamespace(store=store, mongo=backend)
     service = get_bot_settings(configured, runtime)
@@ -247,7 +246,7 @@ async def test_mongodb_preferences_survive_service_restart(bot_setup):
 
 def test_bot_settings_owner_api_validates_and_persists(tmp_path, monkeypatch):
     configured = make_settings(tmp_path)
-    store = DriveStore.create(tmp_path / "drive.sqlite3")
+    store = new_store(tmp_path / "drive")
     runtime = FakeRuntime(store)
     runtime.mongo = register_test_backend(monkeypatch, configured)
     app = create_app(configured, runtime=runtime)

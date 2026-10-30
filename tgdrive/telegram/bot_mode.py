@@ -19,7 +19,7 @@ from tgdrive.core.security import safe_name
 from tgdrive.recovery.backup import BackupError
 from tgdrive.settings.bot_settings import BotSettings
 from tgdrive.settings.managed_settings import SettingsProblem
-from tgdrive.storage.store import DriveStore
+from tgdrive.storage.mongo_store import MongoStore
 from tgdrive.telegram.clients import Client
 
 Message = Any
@@ -43,7 +43,7 @@ class BotMode:
         *,
         client: Client,
         settings: Settings,
-        store: DriveStore,
+        store: MongoStore,
         before_write: Callable[[], Awaitable[None] | None] | None = None,
         before_delete: Callable[[], Awaitable[None]] | None = None,
         folder_settings: BotSettings | None = None,

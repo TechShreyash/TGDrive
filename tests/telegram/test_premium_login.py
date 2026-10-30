@@ -13,7 +13,7 @@ from telethon.errors import (
     SessionPasswordNeededError,
 )
 
-from tests.support.mongo_fixtures import register_test_backend
+from tests.support.mongo_fixtures import new_store, register_test_backend
 from tgdrive.settings.managed_settings import SettingsProblem
 from tgdrive.settings.premium_login import (
     LOGIN_TTL,
@@ -276,11 +276,10 @@ def test_http_login_requires_owner_same_origin_and_hides_validation_secrets(
     from fastapi.testclient import TestClient
 
     from tests.support.app_fixtures import FakeRuntime, make_settings
-    from tgdrive.storage.store import DriveStore
     from tgdrive.web.app import create_app
 
     settings = make_settings(tmp_path)
-    store = DriveStore.create(tmp_path / "drive.json")
+    store = new_store(tmp_path / "drive.json")
     runtime = FakeRuntime(store)
     runtime.mongo = register_test_backend(monkeypatch, settings)
     app = create_app(settings, runtime=runtime)
@@ -330,11 +329,10 @@ def test_new_owner_session_cannot_finish_previous_browser_login(tmp_path, monkey
     from fastapi.testclient import TestClient
 
     from tests.support.app_fixtures import FakeRuntime, make_settings
-    from tgdrive.storage.store import DriveStore
     from tgdrive.web.app import create_app
 
     settings = make_settings(tmp_path)
-    store = DriveStore.create(tmp_path / "drive.json")
+    store = new_store(tmp_path / "drive.json")
     runtime = FakeRuntime(store)
     runtime.mongo = register_test_backend(monkeypatch, settings)
     app = create_app(settings, runtime=runtime)

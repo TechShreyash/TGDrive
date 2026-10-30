@@ -5,10 +5,10 @@ from unittest.mock import AsyncMock
 
 import pytest
 
+from tests.support.mongo_fixtures import new_store, reopen_store, store_from_payload
 from tests.transfers.test_transfers import FakeTelegramClient
 from tgdrive.core.errors import CorruptStoreError, ValidationError
 from tgdrive.recovery.backup import RecoveryConflict
-from tgdrive.storage.store import DriveStore
 from tgdrive.telegram.client_pool import ClientPool
 from tgdrive.transfers.manager import TransferManager
 from tgdrive.transfers.tasks import TransferRegistry, TransferStatus
@@ -31,33 +31,33 @@ def manager_for(tmp_path, pool, store, guard):
 
 
 def test_channel_binding_is_durable_idempotent_and_never_rebound(tmp_path):
-    store = DriveStore.create(tmp_path / "drive.sqlite3")
+    store = new_store(tmp_path / "drive")
     before = store.revision
     assert store.storage_channel_id is None
     store.bind_storage_channel(-100123)
     assert store.revision == before + 1
     store.bind_storage_channel(-100123)
     assert store.revision == before + 1
-    with pytest.raises(ValidationError, match="another storage channel"):
+    with pytest.raises(ValidationError, match="different storage channel"):
         store.bind_storage_channel(-100999)
     payload = store.export()
     assert payload["storage_channel_id"] == -100123
-    restored = DriveStore._from_payload(payload)
+    restored = store_from_payload(payload)
     assert restored.storage_channel_id == -100123
     restored.close()
     store.close()
-    reopened = DriveStore.load(tmp_path / "drive.sqlite3")
+    reopened = reopen_store(tmp_path / "drive")
     assert reopened.storage_channel_id == -100123
     reopened.close()
 
 
 @pytest.mark.parametrize("channel", [0, True, 1.2, "-1001", 2**63, -(2**63) - 1])
 def test_portable_binding_rejects_ambiguous_or_out_of_range_channels(channel):
-    store = DriveStore.create()
+    store = new_store()
     payload = store.export()
     payload["storage_channel_id"] = channel
     with pytest.raises(CorruptStoreError, match="storage_channel_id"):
-        DriveStore._from_payload(payload)
+        store_from_payload(payload)
     assert store.storage_channel_id is None
     store.close()
 
@@ -68,7 +68,7 @@ async def test_catalog_deletion_rechecks_lineage_before_removing_refs(
     client = FakeTelegramClient()
     pool = ClientPool([client])
     await pool.start()
-    store = DriveStore.create()
+    store = new_store()
     folder = store.create_folder("/", "Bulk")
     path = "/" + folder["id"]
     for identity in range(1, 102):
@@ -101,7 +101,7 @@ async def test_cancel_cleanup_does_not_delete_media_after_late_conflict(
     client = FakeTelegramClient()
     pool = ClientPool([client])
     await pool.start()
-    store = DriveStore.create()
+    store = new_store()
     calls = 0
 
     async def guard():

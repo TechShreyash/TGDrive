@@ -11,9 +11,8 @@ from unittest.mock import AsyncMock
 import pytest
 from telethon.errors import FloodWaitError
 
-from tests.support.mongo_fixtures import register_test_backend
+from tests.support.mongo_fixtures import new_store, register_test_backend, reopen_store
 from tgdrive.storage.mongo import for_directory
-from tgdrive.storage.store import DriveStore
 from tgdrive.telegram.client_pool import ClientPool, NoClientAvailable
 from tgdrive.transfers.manager import TransferError, TransferManager
 from tgdrive.transfers.multipart_transfer import fingerprint
@@ -172,7 +171,7 @@ async def manager_for(
     manager = TransferManager(
         settings=settings,
         pool=pool,
-        store=DriveStore.create(tmp_path / "drive.sqlite3"),
+        store=new_store(tmp_path / "drive"),
         registry=registry_for(tmp_path),
         remote=SimpleNamespace(close=AsyncMock()),
         ensure_backup=callback,
@@ -223,7 +222,7 @@ async def test_bot_only_parts_commit_once_then_checkpoint(tmp_path):
             b"".join(ledger.messages[p["message_id"]].content for p in item["parts"])
             == b"abcdefghij"
         )
-        assert record.phase == "backup_pending"
+        assert record.phase == "finalizing"
         assert source.exists()
         assert (await manager.pool.health()).active_leases == 0
         assert all(value == 1 for value in ledger.max_active.values())
@@ -318,7 +317,7 @@ async def test_process_restart_reconciles_ambiguous_part_and_reuses_plan(tmp_pat
     recovered = TransferManager(
         settings=manager.settings,
         pool=pool,
-        store=DriveStore.load(tmp_path / "drive.sqlite3"),
+        store=reopen_store(tmp_path / "drive"),
         registry=registry_for(tmp_path),
         remote=SimpleNamespace(close=AsyncMock()),
     )
@@ -671,7 +670,7 @@ async def test_restart_restores_flood_cooldown_from_terminal_error_job(tmp_path)
     recovered = TransferManager(
         settings=manager.settings,
         pool=pool,
-        store=DriveStore.load(tmp_path / "drive.sqlite3"),
+        store=reopen_store(tmp_path / "drive"),
         registry=registry_for(tmp_path),
         remote=SimpleNamespace(close=AsyncMock()),
     )

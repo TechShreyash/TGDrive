@@ -7,9 +7,8 @@ import pytest
 from fastapi.testclient import TestClient
 
 from tests.support.app_fixtures import FakeRuntime, login, make_settings
-from tests.support.mongo_fixtures import register_test_backend
+from tests.support.mongo_fixtures import new_store, register_test_backend
 from tgdrive.recovery.backup import RecoveryConflict
-from tgdrive.storage.store import DriveStore
 from tgdrive.transfers.manager import BackupPending
 from tgdrive.web.app import create_app
 
@@ -55,7 +54,7 @@ def mongo_backend(tmp_path, monkeypatch):
 @pytest.fixture
 def owner(tmp_path, mongo_backend):
     settings = make_settings(tmp_path)
-    store = DriveStore.create(tmp_path / "drive.sqlite3")
+    store = new_store(tmp_path / "drive")
     runtime = FakeRuntime(store)
     runtime.mongo = mongo_backend
     runtime.pool = None

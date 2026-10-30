@@ -13,7 +13,7 @@ from tgdrive.recovery.backup import RecoveryConflict
 from tgdrive.recovery.mongo_backup import MongoProtection
 from tgdrive.settings.bot_settings import get_bot_settings
 from tgdrive.storage.mongo import DatabaseUnavailable
-from tgdrive.storage.store import DriveStore
+from tgdrive.storage.mongo_store import MongoStore
 from tgdrive.telegram.bot_mode import BotMode
 from tgdrive.telegram.client_pool import ClientPool
 from tgdrive.telegram.clients import build_bot_mode_client, build_client_pool
@@ -50,7 +50,7 @@ class Runtime:
             ),
         )
         self.registry = TransferRegistry(ttl_seconds=settings.transfer_ttl_seconds)
-        self.store: DriveStore | None = None
+        self.store: MongoStore | None = None
         self.transfers: TransferManager | None = None
         self.bot_mode: BotMode | None = None
         self.ready = False

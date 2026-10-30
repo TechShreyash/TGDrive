@@ -13,6 +13,7 @@ from bson import Binary, json_util
 from pydantic import SecretStr
 
 from tests.support.mongo_fixtures import Collection as MongoCollection
+from tests.support.mongo_fixtures import new_store
 from tgdrive.core.config import Settings
 from tgdrive.replication.replica_activation import (
     MANIFEST,
@@ -33,7 +34,6 @@ from tgdrive.settings.managed_settings import (
 )
 from tgdrive.storage.mongo import DatabaseUnavailable, for_settings
 from tgdrive.storage.mongo_store import MongoStore
-from tgdrive.storage.store import DriveStore
 
 OLD = -100111222
 NEW = -100333444
@@ -67,7 +67,7 @@ def settings(tmp_path, monkeypatch):
 
 
 def _seed_catalog():
-    store = DriveStore.create()
+    store = new_store()
     store.bind_storage_channel(OLD)
     item = store.add_file("/", "original.bin", 123, 42)
     store.set_starred("/" + item["id"], True)

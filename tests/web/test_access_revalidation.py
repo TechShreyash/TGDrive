@@ -5,6 +5,7 @@ import pytest
 import tgdrive.web.app as app_module
 from tests.support.app_fixtures import app_client as client_fixture
 from tests.support.app_fixtures import login
+from tests.support.mongo_fixtures import new_store
 
 app_client = client_fixture
 
@@ -50,7 +51,6 @@ async def test_revoking_a_share_stops_cached_http_body_even_with_owner_cookie(
     from tgdrive.core.security import SESSION_COOKIE
     from tgdrive.media.media_reader import BLOCK
     from tgdrive.media.streaming import stream_telegram_file
-    from tgdrive.storage.store import DriveStore
     from tgdrive.telegram.client_pool import ClientPool
 
     settings = make_settings(tmp_path)
@@ -58,7 +58,7 @@ async def test_revoking_a_share_stops_cached_http_body_even_with_owner_cookie(
     client = account("bot", payload)
     pool = ClientPool([client], media_cache_dir=tmp_path / "media-cache")
     await pool.start()
-    store = DriveStore.create(tmp_path / "drive.sqlite3")
+    store = new_store(tmp_path / "drive")
     identity = store.add_file("/", "private.mkv", 77, len(payload))["id"]
     path = "/" + identity
     token = store.create_share(path)

@@ -10,9 +10,8 @@ from tests.media.test_multipart_streaming import build_parts
 from tests.media.test_pooled_media import account
 from tests.media.test_telegram_cache import message
 from tests.support.app_fixtures import FakeRuntime, login, make_settings
-from tests.support.mongo_fixtures import register_test_backend
+from tests.support.mongo_fixtures import new_store, register_test_backend
 from tgdrive.media.media_reader import BLOCK
-from tgdrive.storage.store import DriveStore
 from tgdrive.telegram.client_pool import ClientPool
 from tgdrive.telegram.clients import TelegramMessage
 from tgdrive.web.app import create_app
@@ -54,7 +53,7 @@ def test_manual_preload_api_caches_entire_original_for_download_and_seek(
             return TelegramMessage(telegram, native)
 
         telegram.get_messages = AsyncMock(side_effect=fetch)
-    store = DriveStore.create(tmp_path / "drive.sqlite3")
+    store = new_store(tmp_path / "drive")
     item = store.add_file(
         "/",
         "movie.mp4",
@@ -123,7 +122,7 @@ def test_preload_rejects_disabled_cache_but_direct_download_still_works(
     payload = b"original file bytes"
     telegram = account("bot", payload)
     telegram.configure_transport = Mock()
-    store = DriveStore.create(tmp_path / "drive.sqlite3")
+    store = new_store(tmp_path / "drive")
     item = store.add_file("/", "hello.txt", 77, len(payload))
     path = "/" + item["id"]
     runtime = MediaRuntime(store)

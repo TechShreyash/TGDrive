@@ -11,13 +11,13 @@ from unittest.mock import AsyncMock
 import pytest
 from pydantic import SecretStr
 
-from tests.support.mongo_fixtures import register_test_backend
+from tests.support.mongo_fixtures import new_store, register_test_backend
 from tests.support.recovery_fixtures import settings
 from tgdrive.replication.replica import ChannelReplica
 from tgdrive.replication.replica_state import decode_bundle, files_in, parts_in
 from tgdrive.replication.replica_transport import ReplicaTransportError
 from tgdrive.storage.mongo import for_directory
-from tgdrive.storage.store import DriveStore
+from tgdrive.storage.mongo_store import MongoStore
 
 BACKUP = -1002234567890
 REPLACEMENT = -1003234567890
@@ -177,7 +177,7 @@ class Transport:
 def setup(tmp_path, *, multipart=False, empty=False):
     configured = settings(tmp_path)
     configured.resolved_data_dir.mkdir(parents=True, exist_ok=True)
-    store = DriveStore.create(configured.resolved_data_dir / "catalog.sqlite3")
+    store = new_store(configured.resolved_data_dir / "catalog")
     store.bind_storage_channel(configured.storage_channel)
     remote = Telegram()
     if not empty:
@@ -1731,7 +1731,7 @@ async def test_recovery_refuses_unrelated_pin_introduced_during_pause(tmp_path, 
         unrelated = (
             remote.messages[BACKUP, remote.pins[BACKUP]]
             if kind == "capsule"
-            else DriveStore._json_bytes(store.export())
+            else MongoStore._json_bytes(store.export())
         )
         await replica.inspect_recovery(BACKUP, TOKEN, replica.key())
         recovery = {"target": REPLACEMENT, "target_token": "345678:" + "z" * 30}

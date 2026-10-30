@@ -12,12 +12,11 @@ from tests.core.test_runtime import mongo_backend as mongo_backend
 from tests.replication.test_replica import TOKEN, Telegram
 from tests.replication.test_replica_activation import NEW, candidate
 from tests.support.app_fixtures import FakeRuntime, login, make_settings
-from tests.support.mongo_fixtures import register_test_backend
+from tests.support.mongo_fixtures import new_store, register_test_backend
 from tgdrive.core.errors import CorruptStoreError
 from tgdrive.core.runtime import Runtime
 from tgdrive.replication.replica import ChannelReplica
 from tgdrive.storage.mongo import DatabaseUnavailable
-from tgdrive.storage.store import DriveStore
 from tgdrive.web.app import create_app
 
 
@@ -26,7 +25,7 @@ def owner(tmp_path, monkeypatch):
     settings = make_settings(tmp_path)
     backend = register_test_backend(monkeypatch, settings)
     monkeypatch.setattr("tgdrive.storage.mongo.for_settings", lambda _: backend)
-    store = DriveStore.create(tmp_path / "catalog.sqlite3")
+    store = new_store(tmp_path / "catalog")
     store.bind_storage_channel(settings.storage_channel)
     runtime = FakeRuntime(store)
     runtime.mongo = backend

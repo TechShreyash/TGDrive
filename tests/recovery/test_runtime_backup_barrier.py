@@ -5,10 +5,10 @@ from unittest.mock import AsyncMock, Mock
 
 import tgdrive.core.runtime as runtime_module
 from tests.core.test_runtime import mongo_backend as mongo_backend_fixture
+from tests.support.mongo_fixtures import new_store
 from tgdrive.core.config import Settings
 from tgdrive.core.errors import CorruptStoreError
 from tgdrive.core.runtime import Runtime
-from tgdrive.storage.store import DriveStore
 
 mongo_backend = mongo_backend_fixture
 
@@ -52,7 +52,7 @@ async def test_runtime_upload_barrier_always_calls_its_store_backup(
 ):
     settings = configuration(tmp_path)
     settings.resolved_data_dir.mkdir(parents=True)
-    store = DriveStore.create()
+    store = new_store()
     store.mark_backed_up(store.revision)
     runtime = Runtime(settings, pool=RuntimePool())
     runtime.backup.restore = AsyncMock(return_value=store)
@@ -109,7 +109,7 @@ async def test_missing_catalog_requires_explicit_recovery(tmp_path):
 async def test_existing_catalog_remains_available_during_telegram_outage(tmp_path):
     settings = configuration(tmp_path)
     settings.resolved_data_dir.mkdir(parents=True)
-    store = DriveStore.create()
+    store = new_store()
     store.create_folder("/", "Offline catalog")
     pool = RuntimePool(unavailable=True)
     runtime = Runtime(settings, pool=pool)

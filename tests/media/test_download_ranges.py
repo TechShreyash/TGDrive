@@ -14,9 +14,8 @@ from tests.media.test_pooled_media import account
 from tests.media.test_preload_api import MediaRuntime
 from tests.media.test_telegram_cache import message
 from tests.support.app_fixtures import login, make_settings
-from tests.support.mongo_fixtures import register_test_backend
+from tests.support.mongo_fixtures import new_store, register_test_backend
 from tgdrive.media.media_reader import BLOCK
-from tgdrive.storage.store import DriveStore
 from tgdrive.telegram.client_pool import ClientPool
 from tgdrive.telegram.clients import TelegramMessage
 from tgdrive.web.app import create_app
@@ -43,7 +42,7 @@ def download_drive(tmp_path, request, monkeypatch):
             return TelegramMessage(telegram, native)
 
         telegram.get_messages = AsyncMock(side_effect=fetch)
-    store = DriveStore.create(tmp_path / "drive.sqlite3")
+    store = new_store(tmp_path / "drive")
     item = store.add_file(
         "/",
         "movie.mp4",

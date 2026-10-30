@@ -7,6 +7,7 @@ import hashlib
 
 import pytest
 
+from tests.support.mongo_fixtures import reopen_store
 from tests.transfers.test_multipart_transfers import (
     Account,
     dispose,
@@ -21,7 +22,6 @@ from tests.transfers.test_remote import (
     FakeSession,
 )
 from tests.transfers.test_upload_destinations import folder
-from tgdrive.storage.store import DriveStore
 from tgdrive.telegram.client_pool import ClientPool
 from tgdrive.transfers.manager import TransferManager
 from tgdrive.transfers.remote import RemoteClient, RemoteDestinationExists
@@ -88,7 +88,7 @@ async def test_url_retry_replaces_only_own_unpublished_stage_after_publication_c
         manager = TransferManager(
             settings=settings,
             pool=pool,
-            store=DriveStore.load(tmp_path / "drive.sqlite3"),
+            store=reopen_store(tmp_path / "drive"),
             registry=registry_for(tmp_path),
             remote=fresh,
         )

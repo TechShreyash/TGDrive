@@ -1,43 +1,14 @@
 """File renames preserve extensions in both catalog implementations."""
 
-from types import SimpleNamespace
-from unittest.mock import Mock
-
 import pytest
 
+from tests.support.mongo_fixtures import new_store
 from tgdrive.core.errors import InvalidNameError
-from tgdrive.storage.mongo_store import MongoStore
-from tgdrive.storage.store import ROOT_ID, SCHEMA_VERSION, DriveStore
 
 
-@pytest.fixture(params=["sqlite", "mongodb"])
-def store(request, monkeypatch):
-    if request.param == "sqlite":
-        instance = DriveStore.create()
-    else:
-        # Keep MongoDB's actual transaction and rename behavior; replace only
-        # loading/index setup and cloud persistence for these domain checks.
-        def load(instance):
-            instance._committed = {
-                "metadata": {
-                    "schema_version": SCHEMA_VERSION,
-                    "drive_id": "rename-test",
-                    "revision": 1,
-                    "backed_up_revision": 1,
-                    "generation": 0,
-                    "storage_channel_id": None,
-                },
-                "nodes": {ROOT_ID: MongoStore._node(ROOT_ID, None, "/", "folder")},
-                "shares": {},
-                "operations": {},
-                "deletions": {},
-                "preparations": {},
-            }
-
-        monkeypatch.setattr(MongoStore, "_reload", load)
-        monkeypatch.setattr(MongoStore, "_indexes", Mock())
-        monkeypatch.setattr(MongoStore, "_commit", Mock())
-        instance = MongoStore(SimpleNamespace(check_owner=Mock()))
+@pytest.fixture
+def store():
+    instance = new_store()
     try:
         yield instance
     finally:
@@ -63,8 +34,6 @@ def test_file_extension_change_is_rejected_without_mutation(store, original, ren
     path = "/" + item["id"]
     before = store.export()
     revision = store.revision
-    if isinstance(store, MongoStore):
-        store._commit.reset_mock()
 
     with pytest.raises(InvalidNameError, match="extension cannot be changed"):
         store.rename(path, renamed)
@@ -72,8 +41,6 @@ def test_file_extension_change_is_rejected_without_mutation(store, original, ren
     assert store.export() == before
     assert store.revision == revision
     assert store.get_file(path)["name"] == original
-    if isinstance(store, MongoStore):
-        store._commit.assert_not_called()
 
 
 @pytest.mark.parametrize(

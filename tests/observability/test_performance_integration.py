@@ -14,11 +14,11 @@ from tests.observability.test_performance_preferences import (
     runtime as performance_runtime,
 )
 from tests.support.app_fixtures import FakeRuntime, login, make_settings
+from tests.support.mongo_fixtures import new_store
 from tgdrive.core.runtime import Runtime
 from tgdrive.observability.performance_api import system_snapshot
 from tgdrive.settings.managed_settings import SettingsProblem
 from tgdrive.settings.performance_preferences import PerformanceSettings
-from tgdrive.storage.store import DriveStore
 from tgdrive.web.app import create_app
 
 pytestmark = pytest.mark.usefixtures("mongo_backend")
@@ -92,7 +92,7 @@ def test_lazy_resource_api_without_telegram_runtime_is_controlled(
     tmp_path, mongo_backend
 ):
     settings = make_settings(tmp_path)
-    store = DriveStore.create(tmp_path / "drive.sqlite3")
+    store = new_store(tmp_path / "drive")
     runtime = FakeRuntime(store)
     runtime.mongo = mongo_backend
     app = create_app(settings, runtime=runtime)
@@ -150,7 +150,7 @@ def test_prepare_rejects_catalog_generation_change_before_origin_work(
     tmp_path, monkeypatch, mongo_backend
 ):
     settings = make_settings(tmp_path)
-    store = DriveStore.create(tmp_path / "drive.sqlite3")
+    store = new_store(tmp_path / "drive")
     file_id = store.add_file("/", "movie.mp4", 77, 1024)["id"]
     runtime = FakeRuntime(store)
     runtime.mongo = mongo_backend

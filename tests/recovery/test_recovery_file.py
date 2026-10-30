@@ -254,13 +254,10 @@ def test_capture_uses_one_shared_mongodb_snapshot_session(source, monkeypatch):
 
 
 def test_replica_journal_retains_bson_datetimes(tmp_path):
-    journal = ReplicaJournal(tmp_path)
+    journal = ReplicaJournal(tmp_path, FakeMongoBackend())
     value = {"finished_at": datetime(2026, 10, 28, tzinfo=UTC)}
-    try:
-        journal.set("database", value)
-        assert journal.get("database") == value
-    finally:
-        journal.close()
+    journal.set("database", value)
+    assert journal.get("database") == value
 
 
 def test_standalone_recovery_file_keeps_free_space_reserve(

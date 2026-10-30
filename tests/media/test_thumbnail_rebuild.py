@@ -14,12 +14,11 @@ import pytest
 from fastapi.testclient import TestClient
 
 from tests.support.app_fixtures import FakeRuntime, login, make_settings
-from tests.support.mongo_fixtures import register_test_backend
+from tests.support.mongo_fixtures import new_store, register_test_backend
 from tgdrive.core.errors import TrashedItemError
 from tgdrive.media import thumbnail_rebuild as module
 from tgdrive.media.generated_thumbnails import read, save
 from tgdrive.media.thumbnails import Thumbnail, ThumbnailCache
-from tgdrive.storage.store import DriveStore
 from tgdrive.transfers.tasks import TransferRegistry, TransferStatus
 from tgdrive.web.app import create_app
 
@@ -29,7 +28,7 @@ COVER = b"\xff\xd8\xffnew cover\xff\xd9"
 @pytest.fixture
 async def rebuild(tmp_path):
     settings = make_settings(tmp_path)
-    store = DriveStore.create(tmp_path / "store.json")
+    store = new_store(tmp_path / "store.json")
     registry = TransferRegistry()
     runtime = SimpleNamespace(store=store, pool=object(), registry=registry)
     manager = module.ThumbnailRebuild(settings, lambda: runtime, ThumbnailCache())
@@ -267,7 +266,7 @@ def test_rebuild_routes_require_owner_confirmation_and_offer_progress(
     tmp_path, monkeypatch
 ):
     settings = make_settings(tmp_path)
-    store = DriveStore.create(tmp_path / "store.json")
+    store = new_store(tmp_path / "store.json")
     runtime = FakeRuntime(store)
     runtime.mongo = register_test_backend(monkeypatch, settings)
     app = create_app(settings, runtime=runtime)

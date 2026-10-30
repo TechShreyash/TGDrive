@@ -71,7 +71,7 @@ from tgdrive.storage.demo_files import (
 )
 from tgdrive.storage.file_parts import MAX_POSTER_BYTES
 from tgdrive.storage.mongo import DatabaseUnavailable
-from tgdrive.storage.store import DriveStore
+from tgdrive.storage.mongo_store import MongoStore
 from tgdrive.telegram.client_pool import (
     ClientPoolNotRunning,
     NoClientAvailable,
@@ -139,11 +139,11 @@ def _runtime(request: Request) -> Any:
     return request.app.state.runtime
 
 
-def _store(request: Request) -> DriveStore:
+def _store(request: Request) -> MongoStore:
     store = getattr(_runtime(request), "store", None)
     if store is None:
         raise HTTPException(status_code=503, detail="TGDrive is not ready")
-    return cast(DriveStore, store)
+    return cast(MongoStore, store)
 
 
 def _transfers(request: Request) -> TransferManager:
