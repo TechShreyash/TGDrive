@@ -188,10 +188,7 @@ async def test_boundary_range_reads_only_intersecting_part_and_head_never_stream
     ("header", "status"),
     [
         ("bytes=10-", 416),
-        ("bytes=5-4", 416),
         ("bytes=-0", 416),
-        ("bytes=0-1,3-4", 400),
-        ("garbage", 400),
     ],
 )
 async def test_invalid_ranges_are_rejected_before_any_telegram_rpc(header, status):
@@ -203,6 +200,22 @@ async def test_invalid_ranges_are_rejected_before_any_telegram_rpc(header, statu
         result = await stream(pool, contents, header)
         assert result.status_code == status
         assert not client.fetches and not client.reads
+        assert (await pool.health()).active_leases == 0
+    finally:
+        await pool.stop()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("header", ["bytes=5-4", "bytes=0-1,3-4", "garbage"])
+async def test_unsupported_ranges_are_ignored_and_serve_the_full_file(header):
+    contents = [b"abc", b"defg", b"hij"]
+    client = MultipartClient(contents)
+    pool = ClientPool([client])
+    await pool.start()
+    try:
+        result = await stream(pool, contents, header)
+        assert result.status_code == 200
+        assert await response_body(result) == b"abcdefghij"
         assert (await pool.health()).active_leases == 0
     finally:
         await pool.stop()

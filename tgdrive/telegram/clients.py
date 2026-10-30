@@ -84,14 +84,25 @@ class _BlockCache:
         self.flights: dict[tuple[Any, ...], _BlockFlight] = {}
         self._slots = asyncio.Semaphore(read_slots)
 
+    def _drop(self, key: tuple[Any, ...]) -> None:
+        _, data = self.entries.pop(key)
+        self.bytes_used -= len(data)
+
     def _hit(self, key: tuple[Any, ...]) -> bytes | None:
         now = self.clock()
-        for identity, (expires, data) in list(self.entries.items()):
-            if expires <= now:
-                del self.entries[identity]
-                self.bytes_used -= len(data)
+        # Hits and puts move entries to the end with a fresh deadline, so the
+        # front holds the oldest deadlines; stop at the first live one. A TTL
+        # change can break that order, so the hit entry is checked itself too.
+        while self.entries:
+            oldest = next(iter(self.entries))
+            if self.entries[oldest][0] > now:
+                break
+            self._drop(oldest)
         item = self.entries.get(key)
         if item is None:
+            return None
+        if item[0] <= now:
+            self._drop(key)
             return None
         self.entries.move_to_end(key)
         return item[1]
@@ -107,8 +118,7 @@ class _BlockCache:
             self.bytes_used + len(data) > self.max_bytes
             or len(self.entries) >= self.max_entries
         ):
-            _, (_, evicted) = self.entries.popitem(last=False)
-            self.bytes_used -= len(evicted)
+            self._drop(next(iter(self.entries)))
         self.entries[key] = (self.clock() + self.ttl, data)
         self.bytes_used += len(data)
 
@@ -531,10 +541,16 @@ class Client:
                 if not await self.native.is_user_authorized():
                     raise RuntimeError("Refreshed Telegram endpoint lost authorization")
         except BaseException as error:
-            await self.native.disconnect()
-            session.set_dc(*previous)
-            session.save()
-            await self.native.connect()
+            try:
+                await self.native.disconnect()
+                session.set_dc(*previous)
+                session.save()
+                # Bound the rollback like the attempt: an unreachable previous
+                # address must not hang startup or hide the original error.
+                async with asyncio.timeout(15):
+                    await self.native.connect()
+            except Exception:
+                log.warning("Telegram endpoint rollback could not reconnect")
             if isinstance(error, asyncio.CancelledError):
                 raise
             log.warning("Telegram endpoint refresh failed; restored previous address")

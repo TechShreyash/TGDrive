@@ -464,3 +464,14 @@ def test_portable_catalog_requires_current_identity_and_share_records(field):
     del payload[field]
     with pytest.raises(CorruptStoreError, match="missing or unknown fields"):
         store_from_payload(payload)
+
+
+def test_keep_both_never_creates_a_name_ending_in_whitespace(tmp_path) -> None:
+    store = new_store(tmp_path)
+    name = "a." + "x " * 126 + "x"
+    for message_id in range(1, 12):
+        store.add_file("/", name, message_id, 1, keep_both=True)
+    names = [row["name"] for row in store.list_directory("/").values()]
+    assert len(names) == 11
+    assert all(item == item.strip() for item in names)
+    reopen_store(tmp_path)  # Startup validation accepts every generated name.

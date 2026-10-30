@@ -573,15 +573,20 @@ async def _extract_files(manager, record, directory):
             )
             output = await _open(source.open, "wb")
             stream = _bytes(manager, record, context["archive_source"])
+            checked_at = -1
             try:
                 async for chunk in stream:
-                    check_staging(
-                        manager.settings,
-                        manager,
-                        context["staging_size"],
-                        exclude=record.id,
-                        written=context["staging_written"],
-                    )
+                    # Reservations are rechecked every 64 MiB, not per chunk:
+                    # each check walks all jobs and stats the disk.
+                    if context["staging_written"] - checked_at >= 64 * 1024**2:
+                        checked_at = context["staging_written"]
+                        check_staging(
+                            manager.settings,
+                            manager,
+                            context["staging_size"],
+                            exclude=record.id,
+                            written=context["staging_written"],
+                        )
                     await _worker(output.write, chunk)
                     context["staging_written"] = output.tell()
                     await manager.registry.update(
@@ -752,7 +757,14 @@ async def _decode_archive(manager, record, source, directory):
                     "(512 MiB memory / 600 CPU seconds). "
                     "Try a smaller archive or dictionary."
                 )
-            message = json.loads(line)
+            try:
+                message = json.loads(line)
+            except ValueError:
+                message = None
+            if not isinstance(message, dict):
+                raise ArchiveError(
+                    "The archive processor returned an invalid response."
+                )
             if "error" in message:
                 raise ArchiveError(str(message["error"])[:500])
             if "result" in message:

@@ -282,11 +282,17 @@ class BotMode:
         directory = self.settings.resolved_cache_dir / "bot-imports"
         directory.mkdir(parents=True, exist_ok=True, mode=0o700)
         staged = directory / operation_id
-        await self.client.download_media(message, file_name=str(staged))
-        size = staged.stat().st_size
-        record = await self.transfers.enqueue_upload(
-            staged, path, name, size, transfer_id=operation_id[:32]
-        )
+        try:
+            await self.client.download_media(message, file_name=str(staged))
+            size = staged.stat().st_size
+            record = await self.transfers.enqueue_upload(
+                staged, path, name, size, transfer_id=operation_id[:32]
+            )
+        except BaseException:
+            # No job owns the bytes yet; a failed download or enqueue must not
+            # leave them behind.
+            staged.unlink(missing_ok=True)
+            raise
         if record.task is not None:
             await asyncio.shield(record.task)
         if record.status.value != "completed":

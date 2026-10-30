@@ -674,18 +674,23 @@ class ClientPool:
                 raise problem from None
             raise
         finally:
-            async with self._leases:
-                if slot.active <= 0:
-                    raise RuntimeError("client lease accounting underflow")
-                slot.active -= 1
-                if download:
-                    slot.download_active -= 1
-                if media:
-                    slot.media_active -= 1
-                if media or download:
-                    self._origin_active.pop(ticket, None)
-                    self._origin_durations.append(time.monotonic() - started)
-                self._leases.notify_all()
+            # Release synchronously: waiting for the condition lock here could be
+            # cancelled and leak the slot. No await runs between these updates.
+            if slot.active <= 0:
+                raise RuntimeError("client lease accounting underflow")
+            slot.active -= 1
+            if download:
+                slot.download_active -= 1
+            if media:
+                slot.media_active -= 1
+            if media or download:
+                self._origin_active.pop(ticket, None)
+                self._origin_durations.append(time.monotonic() - started)
+            await asyncio.shield(self._notify_leases())
+
+    async def _notify_leases(self) -> None:
+        async with self._leases:
+            self._leases.notify_all()
 
     async def download_capacity(self) -> int:
         """Potential read windows; upload/read admission shares the media ceiling."""

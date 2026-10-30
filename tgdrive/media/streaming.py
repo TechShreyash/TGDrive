@@ -23,7 +23,6 @@ from telethon.errors import FloodWaitError, RPCError
 from tgdrive.core.security import safe_name
 from tgdrive.media.media_metadata import get_message
 from tgdrive.media.ranges import (
-    MalformedRange,
     RangeNotSatisfiable,
     parse_byte_range,
     plan_telegram_chunks,
@@ -531,13 +530,6 @@ async def stream_telegram_file(
 
         try:
             byte_range = parse_byte_range(_request_range(request, etag), total)
-        except MalformedRange as exc:
-            await release()
-            return Response(
-                status_code=400,
-                content=str(exc),
-                headers={"Accept-Ranges": "bytes"},
-            )
         except RangeNotSatisfiable as exc:
             await release()
             return Response(

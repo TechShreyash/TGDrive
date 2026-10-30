@@ -372,7 +372,8 @@ def main():
         resource.setrlimit(
             resource.RLIMIT_AS, (ADDRESS_SPACE_BYTES, ADDRESS_SPACE_BYTES)
         )
-        resource.setrlimit(resource.RLIMIT_CPU, (8, 8))
+        # No CPU-time limit: ffmpeg inherits it, and heavy decodes need longer
+        # than any fixed budget. The wall-clock timeouts in render() stop hangs.
         resource.setrlimit(resource.RLIMIT_FSIZE, (0, 0))
     except ImportError:
         pass

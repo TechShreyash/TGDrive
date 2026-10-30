@@ -5,7 +5,6 @@ import unittest
 from tgdrive.media.ranges import (
     TELEGRAM_CHUNK_SIZE,
     ByteRange,
-    MalformedRange,
     RangeNotSatisfiable,
     parse_byte_range,
     plan_telegram_chunks,
@@ -47,7 +46,7 @@ class ParseByteRangeTests(unittest.TestCase):
         selected = parse_byte_range(None, 0)
         self.assertEqual((selected.start, selected.end, selected.length), (0, -1, 0))
 
-    def test_malformed_and_multiple_ranges_are_rejected(self) -> None:
+    def test_malformed_and_multiple_ranges_are_ignored(self) -> None:
         for value in (
             "items=0-1",
             "bytes=",
@@ -58,9 +57,13 @@ class ParseByteRangeTests(unittest.TestCase):
             "bytes= 1-2",
             "",
             "   ",
+            "bytes=8-2",
         ):
-            with self.subTest(value=value), self.assertRaises(MalformedRange):
-                parse_byte_range(value, 10)
+            with self.subTest(value=value):
+                self.assertEqual(
+                    parse_byte_range(value, 10),
+                    ByteRange(0, 9, 10, is_partial=False),
+                )
 
     def test_large_range_numerals_preserve_http_semantics_without_int_overflow(self):
         enormous = "9" * 5000
@@ -78,11 +81,10 @@ class ParseByteRangeTests(unittest.TestCase):
         )
         with self.assertRaises(RangeNotSatisfiable):
             parse_byte_range(f"bytes={enormous}-", 10)
-        with self.assertRaises(MalformedRange):
-            parse_byte_range("bytes=٢-٦", 10)
+        self.assertFalse(parse_byte_range("bytes=٢-٦", 10).is_partial)
 
     def test_unsatisfiable_ranges_include_416_header_value(self) -> None:
-        for value in ("bytes=10-", "bytes=8-2", "bytes=-0"):
+        for value in ("bytes=10-", "bytes=-0"):
             with self.subTest(value=value):
                 with self.assertRaises(RangeNotSatisfiable) as raised:
                     parse_byte_range(value, 10)

@@ -135,10 +135,20 @@ class DiskMediaCache:
                     self._remove(key)
                     self._misses += 1
                     return None
-                with path.open("rb") as handle:
-                    payload = handle.read(expected + 33)
-                digest, data = payload[:32], payload[32:]
-                if len(data) != expected or hashlib.sha256(data).digest() != digest:
+                handle = path.open("rb")
+            # Read and hash outside the lock so viewers' cache hits run in
+            # parallel. An open handle survives a concurrent unlink/replace on
+            # POSIX, and the digest still rejects any torn or foreign bytes.
+            with handle:
+                payload = handle.read(expected + 33)
+            digest, data = payload[:32], payload[32:]
+            valid = len(data) == expected and hashlib.sha256(data).digest() == digest
+            with self._lock:
+                if self._entries is None or self._entries.get(key) != item:
+                    # Replaced or evicted meanwhile; serve verified bytes but
+                    # leave the newer entry's bookkeeping untouched.
+                    return data if valid else None
+                if not valid:
                     self._remove(key)
                     self._misses += 1
                     return None

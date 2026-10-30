@@ -25,6 +25,7 @@ from tgdrive.telegram.clients import _block_identity, _BlockCache
 
 BLOCK = 1024**2
 READ_AHEAD = 32  # MiB per response, including currently requested windows.
+HEAD_WAIT_SECONDS = 30
 
 
 class CachedSourceUnavailable(Exception):
@@ -267,48 +268,60 @@ class _PayloadCache(_BlockCache):
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
         self.protected = {}
+        self.protected_bytes = 0
         self.protected_fraction = 0.75
+
+    def _unprotect(self, key):
+        if self.protected.pop(key, False) and key in self.entries:
+            self.protected_bytes -= len(self.entries[key][1])
+
+    def _drop(self, key):
+        self._unprotect(key)
+        super()._drop(key)
+
+    def discard(self, key):
+        if key in self.entries:
+            self._drop(key)
 
     def _hit(self, key):
         data = super()._hit(key)
-        self.protected = {k: None for k in self.protected if k in self.entries}
         if data is not None:
             self.entries[key] = (self.clock() + self.ttl, data)
-            self.protected.pop(key, None)
-            self.protected[key] = None
+            self._unprotect(key)
+            self.protected[key] = True
+            self.protected_bytes += len(data)
             self._demote()
         return data
 
     def _demote(self):
-        size = sum(
-            len(self.entries[key][1]) for key in self.protected if key in self.entries
-        )
-        while self.protected and size > self.max_bytes * self.protected_fraction:
-            key = next(iter(self.protected))
-            self.protected.pop(key)
-            size -= len(self.entries[key][1])
+        while (
+            self.protected
+            and self.protected_bytes > self.max_bytes * self.protected_fraction
+        ):
+            self._unprotect(next(iter(self.protected)))
 
     def trim(self):
         self._demote()
         while self.entries and (
             self.bytes_used > self.max_bytes or len(self.entries) > self.max_entries
         ):
-            key = next(
-                (key for key in self.entries if key not in self.protected),
-                next(iter(self.entries)),
+            self._drop(
+                next(
+                    (key for key in self.entries if key not in self.protected),
+                    next(iter(self.entries)),
+                )
             )
-            _, data = self.entries.pop(key)
-            self.bytes_used -= len(data)
-            self.protected.pop(key, None)
 
     def _put(self, key, data):
         if not data or len(data) > self.max_bytes:
             return
-        old = self.entries.pop(key, None)
-        if old:
-            self.bytes_used -= len(old[1])
+        protected = key in self.protected
+        self.discard(key)
         self.entries[key] = (self.clock() + self.ttl, data)
         self.bytes_used += len(data)
+        if protected:
+            self.protected[key] = True
+            self.protected_bytes += len(data)
         # Evict old probation before the newly admitted payload, keeping hot bytes.
         self.trim()
 
@@ -778,10 +791,7 @@ class MediaReadCache:
             else:
                 payload = await self.memory.get(key, expected, load)
             if generation != self._generation:
-                old = self.memory.entries.pop(key, None)
-                if old:
-                    self.memory.bytes_used -= len(old[1])
-                self.memory.protected.pop(key, None)
+                self.memory.discard(key)
             elif retain_hot:
                 self.memory._hit(key)
                 if key not in self._pending:
@@ -908,10 +918,7 @@ class MediaReadCache:
         if self.disk is not None:
             await asyncio.to_thread(self.disk.clear, None if file_id is None else keys)
         for key in keys:
-            old = self.memory.entries.pop(key, None)
-            if old:
-                self.memory.bytes_used -= len(old[1])
-            self.memory.protected.pop(key, None)
+            self.memory.discard(key)
             self._hot_keys.discard(key)
             self._blocks.pop(key, None)
         if file_id is None:
@@ -1180,7 +1187,16 @@ async def stream_pooled_media(
         for index in range(offset, end):
             frame = frames.frames.get(index)
             if frame is None:
-                await scratch.acquire()
+                try:
+                    # Stalled consumers each pin one yielded head; never wait on
+                    # them forever. A retryable 503 or aborted range lets the
+                    # client resume once memory frees up.
+                    async with asyncio.timeout(HEAD_WAIT_SECONDS):
+                        await scratch.acquire()
+                except TimeoutError:
+                    from tgdrive.telegram.client_pool import MediaQueueFull
+
+                    raise MediaQueueFull(retry_after=2) from None
                 frame = frames.schedule(index, head=True)
             else:
                 frame.head = True

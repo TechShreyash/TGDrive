@@ -414,15 +414,19 @@ class ResumableUploads:
                     "Only the last chunk may be smaller than chunk_size", 422
                 )
             path = self.path(upload_id)
-            if not path.exists() or path.stat().st_size < offset:
-                raise UploadError(
-                    "Staged bytes are missing. Cancel and select the file again."
-                )
-            if (
-                shutil.disk_usage(self.root).free - len(body)
-                < self.settings.min_free_bytes
-            ):
-                raise UploadError("Temporary storage is full", 507)
+
+            def preflight() -> None:
+                if not path.exists() or path.stat().st_size < offset:
+                    raise UploadError(
+                        "Staged bytes are missing. Cancel and select the file again."
+                    )
+                if (
+                    shutil.disk_usage(self.root).free - len(body)
+                    < self.settings.min_free_bytes
+                ):
+                    raise UploadError("Temporary storage is full", 507)
+
+            await self._owned_worker(preflight)
 
             def commit(checksum: str) -> None:
                 item["checksums"].append(

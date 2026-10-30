@@ -10,7 +10,7 @@ from fastapi import Request
 from fastapi.responses import Response
 
 from tgdrive.media.logical_media import PartLease, part_ranges
-from tgdrive.media.ranges import MalformedRange, RangeNotSatisfiable, parse_byte_range
+from tgdrive.media.ranges import RangeNotSatisfiable, parse_byte_range
 from tgdrive.media.streaming import (
     PDF_PREVIEW_BYTES,
     TelegramVariantNotFound,
@@ -48,12 +48,15 @@ async def stream_multipart_file(
     if quality not in (None, "", "original") and not download:
         raise TelegramVariantNotFound("Separate file parts have no alternate rendition")
     etag = media_etag(channel_id, message_id, expected_size, parts=manifest)
+    # The tag depends only on the catalog manifest: answer revalidation before
+    # range parsing or a Telegram lease.
+    if _not_modified(request, etag):
+        return Response(
+            status_code=304,
+            headers={"ETag": etag, "Cache-Control": "private, no-store, no-transform"},
+        )
     try:
         selected = parse_byte_range(_request_range(request, etag), expected_size)
-    except MalformedRange as error:
-        return Response(
-            status_code=400, content=str(error), headers={"Accept-Ranges": "bytes"}
-        )
     except RangeNotSatisfiable as error:
         return Response(
             status_code=416,
@@ -74,16 +77,6 @@ async def stream_multipart_file(
     first = await PartLease(
         pool, channel_id, spans[0][0], authorize=authorize, request_id=request_id
     ).open()
-    if _not_modified(request, etag):
-        try:
-            if authorize is not None:
-                await authorize()
-        finally:
-            await first.close()
-        return Response(
-            status_code=304,
-            headers={"ETag": etag, "Cache-Control": "private, no-store, no-transform"},
-        )
     activity = _observe_media_request(
         pool,
         channel_id=channel_id,

@@ -206,9 +206,6 @@ class Settings(BaseSettings):
     upload_session_ttl_seconds: int = Field(
         default=86400, alias="UPLOAD_SESSION_TTL_SECONDS", ge=60
     )
-    max_concurrent_streams: int = Field(
-        default=4, alias="MAX_CONCURRENT_STREAMS", ge=1, le=64
-    )
     admin_password_hash: SecretStr | None = Field(
         default=None, alias="ADMIN_PASSWORD_HASH"
     )

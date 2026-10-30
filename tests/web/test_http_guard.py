@@ -14,7 +14,6 @@ from starlette.responses import JSONResponse
 from tgdrive.core.security import SESSION_COOKIE, SessionManager
 from tgdrive.web.http_guard import (
     SecurityHeadersMiddleware,
-    StreamConcurrencyMiddleware,
     UploadGuardMiddleware,
 )
 
@@ -150,42 +149,6 @@ async def test_invalid_body_framing_is_rejected(length: bytes) -> None:
     messages, reads = await invoke(guard, headers=headers, chunks=[b"ignored"])
     assert messages[0]["status"] == 400
     assert reads == 0
-
-
-@pytest.mark.asyncio
-async def test_stream_capacity_covers_body_and_releases_after_disconnect() -> None:
-    entered = asyncio.Queue()
-    finish = asyncio.Event()
-
-    async def stream(scope: Any, receive: Any, send: Any) -> None:
-        await entered.put(scope["client"])
-        if scope["client"] == "cancelled":
-            await asyncio.Event().wait()
-        await finish.wait()
-
-    guard = StreamConcurrencyMiddleware(stream, max_concurrent=1)
-
-    async def invoke_stream(label: str, path: str = "/file") -> None:
-        await guard(
-            {"type": "http", "method": "GET", "path": path, "client": label},
-            None,
-            None,
-        )
-
-    first = asyncio.create_task(invoke_stream("cancelled"))
-    assert await asyncio.wait_for(entered.get(), 1) == "cancelled"
-    second = asyncio.create_task(invoke_stream("waiting"))
-    await asyncio.sleep(0)
-    assert entered.empty()
-    # The file limit must not block health/auth/metadata requests.
-    unrelated = asyncio.create_task(invoke_stream("health", "/healthz"))
-    assert await asyncio.wait_for(entered.get(), 1) == "health"
-    first.cancel()
-    with pytest.raises(asyncio.CancelledError):
-        await first
-    assert await asyncio.wait_for(entered.get(), 1) == "waiting"
-    finish.set()
-    await asyncio.gather(second, unrelated)
 
 
 @pytest.mark.asyncio

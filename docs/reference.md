@@ -1404,7 +1404,11 @@ or browser-buffered bytes cannot be recalled.
   bytes, including across Telegram document boundaries. Cache hits and shared
   in-flight fills avoid duplicate Telegram payload reads where possible.
 - Valid ends beyond EOF are clamped.
-- Malformed/unsupported multiple ranges return `400`.
+- Malformed or multi-range headers are ignored, as RFC 9110 allows, so those
+  clients receive the full file with `200`.
+- Viewers that stop reading keep at most one buffered block each. A request
+  that waits 30 seconds for streaming memory gets `503` with `Retry-After`
+  instead of waiting forever.
 - Unsatisfiable ranges return `416` with `Content-Range: bytes */<size>`.
 - HEAD has the corresponding headers and no body.
 - Conditional requests support `If-None-Match` and return `304` after access

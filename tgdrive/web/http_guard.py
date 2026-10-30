@@ -4,12 +4,12 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from http.cookies import CookieError, SimpleCookie
 from urllib.parse import urlsplit
 
 from starlette.datastructures import MutableHeaders
 from starlette.exceptions import HTTPException
 from starlette.formparsers import MultiPartException
+from starlette.requests import cookie_parser
 from starlette.responses import JSONResponse
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
@@ -20,15 +20,18 @@ logger = logging.getLogger(__name__)
 
 def _authenticated(scope: Scope, sessions: SessionManager) -> bool:
     try:
-        cookies: SimpleCookie[str] = SimpleCookie()
-        for key, value in scope.get("headers", []):
-            if key.lower() == b"cookie":
-                cookies.load(value.decode("latin-1"))
-        token = cookies.get(SESSION_COOKIE)
+        # Starlette's parser, like the routes: one malformed sibling cookie
+        # must not hide the session cookie.
+        header = "; ".join(
+            value.decode("latin-1")
+            for key, value in scope.get("headers", [])
+            if key.lower() == b"cookie"
+        )
+        token = cookie_parser(header).get(SESSION_COOKIE)
         if token is None:
             return False
-        sessions.verify(token.value)
-    except InvalidSession, CookieError, ValueError:
+        sessions.verify(token)
+    except InvalidSession, ValueError:
         return False
     return True
 
@@ -307,25 +310,6 @@ class UploadGuardMiddleware:
                     )
                 else:
                     raise
-
-
-class StreamConcurrencyMiddleware:
-    """Hold a slot until a file response finishes or its client disconnects."""
-
-    def __init__(self, app: ASGIApp, *, max_concurrent: int) -> None:
-        self.app = app
-        self.slots = asyncio.Semaphore(max_concurrent)
-
-    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
-        if (
-            scope["type"] == "http"
-            and scope.get("path") in {"/file", "/api/v1/preview", "/api/v1/media"}
-            and scope.get("method") in {"GET", "HEAD"}
-        ):
-            async with self.slots:
-                await self.app(scope, receive, send)
-            return
-        await self.app(scope, receive, send)
 
 
 class SecurityHeadersMiddleware:

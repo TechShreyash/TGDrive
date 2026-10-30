@@ -368,6 +368,7 @@ class Runtime:
                 return
             from tgdrive.settings.managed_settings import SettingsProblem
 
+            probed = False
             for row in await status():
                 if row.kind != "bot" or not row.healthy:
                     continue
@@ -392,6 +393,13 @@ class Runtime:
                     if problem is not None:
                         self.storage_channel_error = problem[1]
                         raise SettingsProblem(problem[1], code=problem[0], status=409)
+                    probed = True
+            if not probed:
+                self.storage_channel_error = (
+                    "No healthy bot could verify the Telegram storage channel. "
+                    "Check bot tokens and connectivity, then retry."
+                )
+                raise ConnectionError(self.storage_channel_error)
             self.storage_channel_error = None
             # Bound Telegram requests for concurrent uploads. Failed checks are
             # never cached, so fixing channel settings takes effect on retry.

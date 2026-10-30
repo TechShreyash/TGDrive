@@ -214,6 +214,13 @@ class MongoStore:
         self._validate_state()
 
     def _validate_state(self):
+        try:
+            self._check_state()
+        except (KeyError, TypeError, AttributeError) as error:
+            # A row missing a field must open owner recovery, not crash startup.
+            raise CorruptStoreError("Catalog contains a malformed record") from error
+
+    def _check_state(self):
         for key, row in self._state["nodes"].items():
             if (
                 row.get("id") != key
@@ -542,7 +549,8 @@ class MongoStore:
         index = 1
         while True:
             label = f" ({index})"
-            ending = suffix[: MAX_NAME_LENGTH - len(label) - 1]
+            # A cut extension may end in whitespace, which names cannot.
+            ending = suffix[: MAX_NAME_LENGTH - len(label) - 1].rstrip()
             value = stem[: MAX_NAME_LENGTH - len(label) - len(ending)] + label + ending
             if self._unique(parent, value, exclude):
                 return value

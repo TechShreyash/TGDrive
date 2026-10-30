@@ -110,6 +110,32 @@ class ClientPoolTests(unittest.IsolatedAsyncioTestCase):
             self.assertIs(next_lease, first)
         await pool.stop()
 
+    async def test_cancel_while_lease_lock_is_busy_still_releases_slot(self) -> None:
+        client = FakeClient("only")
+        pool = ClientPool([client])
+        await pool.start()
+        entered = asyncio.Event()
+
+        async def hold():
+            async with pool.lease():
+                entered.set()
+                await asyncio.Event().wait()
+
+        task = asyncio.create_task(hold())
+        await entered.wait()
+        # Another coroutine owns the condition lock while the lease releases,
+        # and a second cancellation (task group/shutdown) lands meanwhile.
+        async with pool._leases:
+            task.cancel()
+            await asyncio.sleep(0)
+            task.cancel()
+            await asyncio.sleep(0)
+        with self.assertRaises(asyncio.CancelledError):
+            await task
+        status = await pool.status()
+        self.assertEqual([item.active_leases for item in status], [0])
+        await pool.stop()
+
     async def test_missing_premium_client_has_clear_error(self) -> None:
         pool = ClientPool([FakeClient("bot")])
         await pool.start()

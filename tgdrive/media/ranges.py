@@ -1,7 +1,7 @@
 """HTTP byte-range parsing and Telegram chunk planning.
 
-Only a single ``bytes`` range is accepted.  The parser deliberately rejects
-multi-range requests because the streamer does not produce multipart bodies.
+Only a single ``bytes`` range is served. Invalid or multi-range headers are
+ignored (RFC 9110 section 14.2), so those clients receive the full file.
 """
 
 from __future__ import annotations
@@ -16,10 +16,6 @@ _RANGE_RE = re.compile(r"^bytes=([0-9]*)-([0-9]*)$", re.IGNORECASE)
 
 class RangeError(ValueError):
     """Base class for invalid or unsatisfiable HTTP ranges."""
-
-
-class MalformedRange(RangeError):
-    """The Range header is syntactically invalid or unsupported."""
 
 
 class RangeNotSatisfiable(RangeError):
@@ -122,28 +118,26 @@ def parse_byte_range(value: str | None, total: int) -> ByteRange:
     """Parse and normalize one HTTP ``Range`` header.
 
     Supported forms are ``bytes=start-end``, ``bytes=start-``, and
-    ``bytes=-suffix_length``.  An absent header selects the full
-    representation.  Explicit ends beyond EOF are clamped as required by
+    ``bytes=-suffix_length``.  An absent, invalid or multi-range header selects
+    the full representation.  Explicit ends beyond EOF are clamped as required by
     RFC 9110.
     """
 
     if total < 0:
         raise ValueError("total size cannot be negative")
 
-    if value is None:
-        return ByteRange(0, total - 1, total, is_partial=False)
-
-    raw = value.strip()
-    if "," in raw:
-        raise MalformedRange("multiple byte ranges are not supported")
-
-    match = _RANGE_RE.fullmatch(raw)
+    full = ByteRange(0, total - 1, total, is_partial=False)
+    match = _RANGE_RE.fullmatch((value or "").strip())
     if match is None:
-        raise MalformedRange("expected a single 'bytes=start-end' range")
-
+        return full
     first, last = match.groups()
     if not first and not last:
-        raise MalformedRange("a range start or suffix length is required")
+        return full
+    if first and last:
+        # Compare digit strings without int(): headers may hold huge numerals.
+        a, b = first.lstrip("0") or "0", last.lstrip("0") or "0"
+        if (len(b), b) < (len(a), a):
+            return full  # bytes=5-2 is invalid syntax, so the header is ignored
     if total == 0:
         raise RangeNotSatisfiable(total)
 
@@ -158,13 +152,7 @@ def parse_byte_range(value: str | None, total: int) -> ByteRange:
     if start >= total:
         raise RangeNotSatisfiable(total, "range starts beyond end of file")
 
-    if not last:
-        end = total - 1
-    else:
-        requested_end = _bounded_decimal(last, total)
-        if requested_end < start:
-            raise RangeNotSatisfiable(total, "range end precedes range start")
-        end = min(requested_end, total - 1)
+    end = min(_bounded_decimal(last, total), total - 1) if last else total - 1
 
     return ByteRange(start, end, total, is_partial=True)
 

@@ -1404,7 +1404,6 @@ def create_app(
             import mimetypes
 
             from tgdrive.media.ranges import (
-                MalformedRange,
                 RangeNotSatisfiable,
                 parse_byte_range,
             )
@@ -1438,8 +1437,6 @@ def create_app(
                 return Response(status_code=304, headers=headers)
             try:
                 selected = parse_byte_range(_request_range(request, tag), total)
-            except MalformedRange:
-                return Response(status_code=400, headers=headers)
             except RangeNotSatisfiable as exc:
                 return Response(
                     status_code=416,
