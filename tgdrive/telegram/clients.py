@@ -558,8 +558,8 @@ class Client:
     def configure_transport(
         self, *, upload_pipeline: int, request_limit: int, parts_per_second: float
     ) -> None:
-        if type(upload_pipeline) is not int or not 1 <= upload_pipeline <= 16:
-            raise ValueError("Upload pipeline must be between 1 and 16")
+        if type(upload_pipeline) is not int or upload_pipeline < 1:
+            raise ValueError("Upload pipeline must be at least 1")
         self._media_scheduler.configure(limit=request_limit, rate=parts_per_second)
         self._upload_pipeline = upload_pipeline
 

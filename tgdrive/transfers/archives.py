@@ -27,10 +27,6 @@ from tgdrive.transfers.staging import check_staging
 from tgdrive.transfers.tasks import TransferStatus, _journalled
 from tgdrive.transfers.uploads import ResumableUploads
 
-MAX_ENTRIES = 1000
-MAX_DEPTH = 64
-MAX_DIRECTORY_BYTES = 8 * 1024**2
-MAX_MANIFEST_BYTES = 4 * 1024**2
 BLOCK = 1024**2
 _worker = ResumableUploads._owned_worker
 
@@ -117,16 +113,10 @@ def archive_members(store, paths):
             else node["name"]
         )
         relative = (*prefix, name)
-        if len(relative) > MAX_DEPTH or len("/".join(relative)) > 4096:
-            raise ArchiveError(
-                "ZIP paths cannot exceed 64 components or 4096 characters."
-            )
         entry = {"name": "/".join(relative), "type": node["type"], "id": node["id"]}
         if node["type"] == "file":
             entry.update(_member(node))
         result.append(entry)
-        if len(result) > MAX_ENTRIES:
-            raise ArchiveError("A ZIP job supports at most 1000 files and folders.")
         if node["type"] == "folder":
             for child in node["contents"].values():
                 visit(store.resolve_id(child["id"]), relative)
@@ -170,10 +160,8 @@ def _zip_directory(source):
             raise ArchiveError("Invalid ZIP64 directory.")
         count, length, offset = record[7:10]
         end = zip64_at
-    if count > MAX_ENTRIES or length > MAX_DIRECTORY_BYTES or offset + length > end:
-        raise ArchiveError(
-            "ZIP archives support at most 1000 entries and an 8 MiB directory."
-        )
+    if offset + length > end:
+        raise ArchiveError("Invalid ZIP central directory.")
     source.seek(offset)
     directory = source.read(length)
     position = actual = 0
@@ -185,7 +173,7 @@ def _zip_directory(source):
         name, extra, comment = struct.unpack_from("<3H", directory, position + 28)
         position += 46 + name + extra + comment
         actual += 1
-        if actual > MAX_ENTRIES or position > len(directory):
+        if position > len(directory):
             raise ArchiveError("ZIP directory exceeds its declared limits.")
     if actual != count:
         raise ArchiveError("ZIP directory entry count is inconsistent.")
@@ -208,10 +196,8 @@ def zip_manifest(path, limit, budget):
                     ):
                         raise ArchiveError("ZIP contains an unsafe entry path.")
                     parts = raw[:-1].split("/") if entry.is_dir() else raw.split("/")
-                    if not parts or len(parts) > MAX_DEPTH or len(raw) > 4096:
-                        raise ArchiveError(
-                            "ZIP paths cannot exceed 64 components or 4096 characters."
-                        )
+                    if not parts:
+                        raise ArchiveError("ZIP contains an unsafe entry path.")
                     try:
                         parts = tuple(_normalize_name(part) for part in parts)
                     except InvalidNameError as exc:
@@ -286,14 +272,6 @@ def zip_manifest(path, limit, budget):
                             "index": index,
                         }
                     )
-                if (
-                    len(entries) + len(folders) > MAX_ENTRIES
-                    or len(folders) >= MAX_ENTRIES
-                ):
-                    raise ArchiveError(
-                        "A ZIP job supports at most 1000 files and folders "
-                        "including implicit folders."
-                    )
     except (BadZipFile, EOFError, struct.error) as exc:
         raise ArchiveError("This ZIP archive is damaged or incomplete.") from exc
     plan = {
@@ -301,13 +279,6 @@ def zip_manifest(path, limit, budget):
         "folders": sorted(folders.values(), key=lambda p: (len(p), p)),
         "size": total,
     }
-    if (
-        len(json.dumps(plan, ensure_ascii=False, separators=(",", ":")).encode("utf-8"))
-        > MAX_MANIFEST_BYTES
-    ):
-        raise ArchiveError(
-            "The expanded ZIP manifest exceeds the 4 MiB job metadata limit."
-        )
     return plan
 
 
@@ -401,11 +372,6 @@ async def start_archive(
         manager._check_upload_allowed()
     binding = manager.store.upload_destination(destination)
     members = await _worker(archive_members, manager.store, paths)
-    if (
-        sum(80 + len(member["name"].encode("utf-8")) for member in members)
-        > MAX_DIRECTORY_BYTES
-    ):
-        raise ArchiveError("The selected ZIP paths exceed the 8 MiB directory limit.")
     total = sum(member.get("size", 0) for member in members)
     bound = (
         total
@@ -639,10 +605,7 @@ async def _decoder_line(process, cancelled):
 
 
 def _validate_plan(plan, limit, budget, directory):
-    if (
-        not isinstance(plan, dict)
-        or len(plan.get("files", [])) + len(plan.get("folders", [])) > MAX_ENTRIES
-    ):
+    if not isinstance(plan, dict):
         raise ArchiveError("The archive processor returned an invalid manifest.")
     verified = Manifest(limit, budget)
     try:
@@ -716,7 +679,8 @@ async def _decode_archive(manager, record, source, directory):
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.DEVNULL,
             env=environment,
-            limit=MAX_MANIFEST_BYTES + 1024,
+            # One JSON line carries the whole manifest; it has no size limit.
+            limit=2**62,
         )
     )
     interrupted = False
@@ -751,11 +715,10 @@ async def _decode_archive(manager, record, source, directory):
             if record.cancel_event.is_set():
                 raise TransferCancelled("Transfer cancelled")
             line = await _decoder_line(process, cancelled)
-            if not line or len(line) > MAX_MANIFEST_BYTES + 128:
+            if not line:
                 raise ArchiveError(
-                    "The archive processor stopped or exceeded its resource limits "
-                    "(512 MiB memory / 600 CPU seconds). "
-                    "Try a smaller archive or dictionary."
+                    "The archive processor stopped unexpectedly. The server may "
+                    "have run out of memory; free memory and retry."
                 )
             try:
                 message = json.loads(line)

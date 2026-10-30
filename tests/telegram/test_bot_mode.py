@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from contextlib import contextmanager
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -372,20 +373,21 @@ async def test_bot_preserves_saved_media_after_lost_commit_acknowledgement(
     store = MongoStore.create(mongo_backend)
     client = FakeBotClient()
     mode = root_mode(client=client, settings=settings(tmp_path), store=store)
-    transaction = mongo_backend.transaction
+    transaction = mongo_backend.session_transaction
     acknowledgement_lost = False
 
-    def lose_acknowledgement(callback):
+    @contextmanager
+    def lose_acknowledgement():
         nonlocal acknowledgement_lost
         if acknowledgement_lost and reload_fails:
             raise DatabaseUnavailable("Catalog reload unavailable")
-        result = transaction(callback)
+        with transaction() as session:
+            yield session
         if not acknowledgement_lost:
             acknowledgement_lost = True
             raise DatabaseUnavailable("Catalog commit acknowledgement lost")
-        return result
 
-    monkeypatch.setattr(mongo_backend, "transaction", lose_acknowledgement)
+    monkeypatch.setattr(mongo_backend, "session_transaction", lose_acknowledgement)
     message = FakeMessage(
         1,
         copied=SimpleNamespace(

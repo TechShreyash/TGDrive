@@ -17,7 +17,6 @@ from telethon.errors import FloodPremiumWaitError, FloodWaitError, RPCError
 
 from tgdrive.core import encryption
 from tgdrive.storage.file_parts import (
-    MAX_FILE_PARTS,
     MAX_POSTER_BYTES,
     validate_parts,
     validate_sha256,
@@ -271,11 +270,6 @@ async def upload_multipart(manager, record, local_path, destination, file_name, 
             requested = configured * 1024**2 if configured else bot_limit
             maximum = bot_limit
             part_size = min(maximum, requested)
-            # Preserve bounded manifest size even for a deliberately tiny preference.
-            part_size = max(part_size, (size + MAX_FILE_PARTS - 1) // MAX_FILE_PARTS)
-            part_size = min(maximum, part_size)
-            if (size + part_size - 1) // part_size > MAX_FILE_PARTS:
-                raise TransferError("File exceeds the maximum number of Telegram parts")
             await manager.registry.update(
                 record.id, phase="verifying", status=TransferStatus.RUNNING
             )

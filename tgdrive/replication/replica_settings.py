@@ -6,7 +6,6 @@ import json
 
 from tgdrive.settings.bot_settings import BotUploadPreferences
 from tgdrive.settings.managed_settings import (
-    MAX_SETTINGS_BYTES,
     ManagedDocument,
     initial_clients,
     read_document,
@@ -22,7 +21,6 @@ POLICIES = {
     "transfer-preferences.json": UploadPreferences,
     "bot-preferences.json": BotUploadPreferences,
 }
-MAX_SETTINGS_TOTAL = 256 * 1024
 
 
 def collect_credentials(settings, runtime):
@@ -64,14 +62,10 @@ def collect_credentials(settings, runtime):
                 raw = BotUploadPreferences().model_dump()
             else:
                 raw = {"uploads_per_bot": TransferPreferences(settings, runtime)._value}
-        if len(json.dumps(raw, allow_nan=False).encode()) > MAX_SETTINGS_BYTES:
-            raise ValueError("Saved application policy exceeds the recovery size limit")
         if model is PerformancePreferences:
             raw = PerformanceSettings(settings, runtime).value.model_dump() | raw
         preferences[filename] = model.model_validate(raw).model_dump()
     credentials["preferences"] = preferences
-    if len(json.dumps(credentials, allow_nan=False).encode()) > MAX_SETTINGS_TOTAL:
-        raise ValueError("Saved recovery settings exceed the bounded size limit")
     return credentials
 
 
@@ -128,8 +122,6 @@ def validate_recovery_settings(credentials):
     """Validate bounded application settings and optional database archive details."""
     if "managed_document" in credentials:
         raw = credentials["managed_document"]
-        if len(json.dumps(raw, allow_nan=False).encode()) > MAX_SETTINGS_BYTES:
-            raise ValueError
         # PrivateModel normally allows coercion. Serialized capsules must carry
         # actual scalar types so booleans cannot impersonate API/revision IDs.
         if (
@@ -152,8 +144,4 @@ def validate_recovery_settings(credentials):
         if not isinstance(raw, dict) or set(raw) != set(POLICIES):
             raise ValueError
         for filename, value in raw.items():
-            if len(json.dumps(value, allow_nan=False).encode()) > MAX_SETTINGS_BYTES:
-                raise ValueError
             POLICIES[filename].model_validate(value)
-    if len(json.dumps(credentials, allow_nan=False).encode()) > MAX_SETTINGS_TOTAL:
-        raise ValueError

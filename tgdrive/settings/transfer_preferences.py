@@ -11,7 +11,7 @@ from tgdrive.settings.managed_settings import SettingsProblem
 
 class UploadPreferences(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
-    uploads_per_bot: int = Field(ge=1, le=4)
+    uploads_per_bot: int = Field(ge=1)
 
 
 class TransferPreferences:

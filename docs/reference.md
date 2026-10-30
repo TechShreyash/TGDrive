@@ -175,18 +175,18 @@ category-scoped draft; Save validates and applies it. Units are binary:
 
 | Variable | Default | Meaning and bounds |
 | --- | --- | --- |
-| `CACHE_MEMORY_BYTES` | 256 MiB (`268435456`) | RAM payload budget, 0–8 GiB (default 256 MiB). Zero disables RAM retention. Available host/container memory can lower the effective limit. RAM blocks expire after 10 idle minutes; reuse refreshes expiry. |
-| `CACHE_DISK_BYTES` | 10 GiB (`10737418240`) | Disk budget, 0–2 TiB. Zero disables disk retention. It does not reserve that amount of disk in advance. |
-| `CACHE_MIN_FREE_BYTES` | 1 GiB (`1073741824`) | Free-disk floor for cache writes, 0–2 TiB (default 1 GiB). This does not allocate space or constrain other disk users. Upload staging separately uses `MIN_FREE_BYTES`. |
-| `CACHE_TTL_SECONDS` | 24 hours (`86400`) | Sliding disk retention, 60–2678400 seconds. Eviction or disk failure can remove bytes sooner. |
+| `CACHE_MEMORY_BYTES` | 256 MiB (`268435456`) | RAM payload budget (default 256 MiB). Zero disables RAM retention. Available host/container memory can lower the effective limit. RAM blocks expire after 10 idle minutes; reuse refreshes expiry. |
+| `CACHE_DISK_BYTES` | 10 GiB (`10737418240`) | Disk budget. Zero disables disk retention. It does not reserve that amount of disk in advance. |
+| `CACHE_MIN_FREE_BYTES` | 1 GiB (`1073741824`) | Free-disk floor for cache writes (default 1 GiB). This does not allocate space or constrain other disk users. Upload staging separately uses `MIN_FREE_BYTES`. |
+| `CACHE_TTL_SECONDS` | 24 hours (`86400`) | Sliding disk retention, at least 60 seconds. Eviction or disk failure can remove bytes sooner. |
 | `AUTO_PRELOAD` | true | Enable extra bounded warming after delivered original audio/video playback bytes. Explicit downloads and unclassified range clients stay within requested ranges. Disabling it leaves adaptive response read-ahead and manual **Preload file** available. |
-| `PRELOAD_MAX_JOBS` | 2 | Combined manual and automatic preparation jobs, 1–8; foreground work has priority. More jobs share existing account capacity. |
-| `TELEGRAM_UPLOAD_PIPELINE` | 4 | Outstanding upload-part requests per document, 1–16. |
-| `TELEGRAM_REQUEST_LIMIT` | 8 | Shared per-account media/metadata request concurrency, 1–32. |
-| `TELEGRAM_PARTS_PER_SECOND` | 48 | Application request pacing ceiling, 1–128, including scheduled metadata work. This is not a Telegram-provided bandwidth limit. |
-| `TELEGRAM_MEDIA_PER_BOT` | 3 | Shared concurrent origin media operations per account, 1–16. Uploads also retain their separate per-bot/user lane limits. |
-| `TELEGRAM_MAX_QUEUE` | 256 | Global queued origin operations, 1–4096; overflow returns retry guidance. |
-| `UPLOAD_SPLIT_MIB` | 2000 | Default and maximum document size for every account, including Premium. Explicit 1–2000 values choose a smaller preferred cap; 0 also uses 2000 MiB. The minimum grows when needed to stay within 4096 parts, without exceeding 2000 MiB. Persisted plans keep their original boundaries. |
+| `PRELOAD_MAX_JOBS` | 2 | Combined manual and automatic preparation jobs, 1 or more; foreground work has priority. More jobs share existing account capacity. |
+| `TELEGRAM_UPLOAD_PIPELINE` | 4 | Outstanding upload-part requests per document, 1 or more. |
+| `TELEGRAM_REQUEST_LIMIT` | 8 | Shared per-account media/metadata request concurrency, 1 or more. |
+| `TELEGRAM_PARTS_PER_SECOND` | 48 | Application request pacing ceiling, 1 or more, including scheduled metadata work. This is not a Telegram-provided bandwidth limit. |
+| `TELEGRAM_MEDIA_PER_BOT` | 3 | Shared concurrent origin media operations per account, 1 or more. Uploads also retain their separate per-bot/user lane limits. |
+| `TELEGRAM_MAX_QUEUE` | 256 | Global queued origin operations, 1 or more; overflow returns retry guidance. |
+| `UPLOAD_SPLIT_MIB` | 2000 | Default and maximum document size for every account, including Premium; Telegram's document limit. Explicit 1–2000 values choose a smaller part size; 0 also uses 2000 MiB. Persisted plans keep their original boundaries. |
 | `TIMEZONE` | Asia/Kolkata | Installation-wide display timezone for owner and public dates/share expiry. Use a valid IANA name; the default is IST. |
 
 RAM includes the asynchronous disk-write backlog. Active responses have a separate
@@ -323,27 +323,25 @@ empty database or the untouched catalog created by automatic first setup.
 | Variable | Default | Validation and behavior |
 | --- | --- | --- |
 | `MAX_FILE_SIZE` | Unset | Optional positive logical-file byte ceiling; the runtime upload policy supports up to 2 TiB, further bounded by staging. Files above one Telegram document's limit do not require Premium. |
-| `STAGING_BUDGET_BYTES` | 16 GiB (`17179869184`) | Positive integer, at most 2 TiB in the runtime upload policy; 16 GiB total reservation budget by default. |
+| `STAGING_BUDGET_BYTES` | 16 GiB (`17179869184`) | Positive integer; 16 GiB total reservation budget by default. |
 | `MIN_FREE_BYTES` | 1 GiB (`1073741824`) | Nonnegative integer; preserve 1 GiB free space by default. Browser receipt admission reserves remaining bytes; URL downloads also check free space. |
 | `UPLOAD_SESSION_TTL_SECONDS` | 86400 | Integer at least 60; incomplete receipt idle lifetime in seconds, refreshed after each committed chunk. There is no declared upper bound in configuration. |
-| `MAX_CONCURRENT_TRANSFERS` | 2 | Integer 1–32; bounds local fingerprinting and receive work. Torrent downloads and receipt handlers each use a separate bound of this size, so slow peers do not occupy local upload-preparation slots. It does not cap Telegram uploads across bots. |
-| `TELEGRAM_UPLOADS_PER_BOT` | 1 | Integer 1–4; initial per-bot Telegram media limit. **Configuration → Transfer limits** saves an override in MongoDB and applies it immediately. Premium clients remain limited to one media upload each. |
-| `TRANSFER_TTL_SECONDS` | 3600 | Integer 60-86400 inclusive; terminal jobs become eligible for cleanup on admission or explicit pruning. Compact server-transfer history is kept separately; files are unaffected. |
+| `MAX_CONCURRENT_TRANSFERS` | 2 | Integer, at least 1; bounds local fingerprinting and receive work. Torrent downloads and receipt handlers each use a separate bound of this size, so slow peers do not occupy local upload-preparation slots. It does not cap Telegram uploads across bots. |
+| `TELEGRAM_UPLOADS_PER_BOT` | 1 | Integer, at least 1; initial per-bot Telegram media limit. **Configuration → Transfer limits** saves an override in MongoDB and applies it immediately. Premium clients remain limited to one media upload each. |
+| `TRANSFER_TTL_SECONDS` | 3600 | Integer, at least 60; terminal jobs become eligible for cleanup on admission or explicit pruning. Compact server-transfer history is kept separately; files are unaffected. |
 
 New documents use at most **2000 MiB (2,097,152,000 bytes)** for every account,
 including Premium. `UPLOAD_SPLIT_MIB=0` uses that cap. Larger logical files use
 ordered parts and appear as one item with original downloads and range seeking.
-The `/api/config` logical limit is the minimum of `STAGING_BUDGET_BYTES`, optional
-`MAX_FILE_SIZE` and 2000 MiB x 4096 parts: **16 GiB by default**, subject to disk.
-The multipart format's 4096-part ceiling is separate from the current **2 TiB**
-upload-policy maximum; it does not make larger upload settings valid.
-TGDrive has no aggregate stored-byte quota; its catalog is bounded to 250,000
-file/folder entries, including the root.
+The `/api/config` logical limit is the smaller of `STAGING_BUDGET_BYTES` and
+optional `MAX_FILE_SIZE`: **16 GiB by default**, subject to disk. Files split into
+any number of parts. TGDrive has no stored-byte quota and no limit on items or
+folder depth; MongoDB's storage is the limit.
 Premium is preferred when eligible; bot fallback and existing sender identities
 remain supported.
 
-Browser chunks are 8 MiB except the last. At most 1,000 unfinished receipts and
-2,000 rows in unfinished browser batches are tracked. Finished browser history
+Browser chunks are 8 MiB except the last. Unfinished receipts and browser
+batches have no count limit; staging space is the limit. Finished browser history
 keeps at most 30 tasks/2,000 rows, retaining unresolved tasks. Browser bounds
 are per controller; staging and Telegram account limits apply across callers.
 Allow disk headroom for URL work, logs, metadata and backups beyond receipt
@@ -365,10 +363,10 @@ retry and cancellation rules.
 | Variable | Default | Validation and behavior |
 | --- | --- | --- |
 | `ALLOW_PRIVATE_REMOTE_URLS` | false | Enables private/internal destinations only when explicitly true. It broadens what the authenticated owner can reach. |
-| `REMOTE_DOWNLOAD_CONCURRENCY` | 2 | Integer 1–8; full-speed source downloads. Configuration → Transfer limits saves and immediately applies an override. See [URL intake](performance.md#url-import-intake) for queued connections, pacing and storage bounds. |
-| `REMOTE_CONNECT_TIMEOUT` | 20 | Seconds, greater than 0 and at most 300. |
-| `REMOTE_READ_TIMEOUT` | 120 | Seconds, greater than 0 and at most 3600; individual read timeout. |
-| `REMOTE_TOTAL_TIMEOUT` | 21600 | Seconds, greater than 0 and at most 86400; total operation budget. |
+| `REMOTE_DOWNLOAD_CONCURRENCY` | 2 | Integer, at least 1; full-speed source downloads. Configuration → Transfer limits saves and immediately applies an override. See [URL intake](performance.md#url-import-intake) for queued connections, pacing and storage bounds. |
+| `REMOTE_CONNECT_TIMEOUT` | 20 | Seconds, greater than 0. |
+| `REMOTE_READ_TIMEOUT` | 120 | Seconds, greater than 0; individual read timeout. |
+| `REMOTE_TOTAL_TIMEOUT` | 21600 | Seconds, greater than 0; total operation budget. |
 | `REMOTE_MAX_REDIRECTS` | 5 | Integer 0-20 inclusive; manually validated redirect count. |
 
 URL requests validate destinations and redirects, request identity encoding,
@@ -564,10 +562,9 @@ New `tgdrive-backup.tgdb` files use `TGDRIVE-BACKUP-2` framing, compressed BSON 
 and authenticated AES-256-GCM encryption. They hold one database snapshot,
 recovery credentials and channel mappings; portable catalogs are derived from
 the captured data. A standalone file records main only. Independent protection
-adds verified backup mappings to the same artifact. Limits are 64 MiB ciphertext
-and 1 GiB expanded data; uploads reject excess data while staging and enforce
-the free-space reserve. The import route is outside the ordinary 64 KiB JSON
-body limit. Duplicate channel/token headers, a wrong `ENCRYPTION_KEY`, invalid mappings,
+adds verified backup mappings to the same artifact. Telegram's 2000 MiB document
+limit is the only size limit; uploads check free disk space while staging and enforce
+the free-space reserve. Duplicate channel/token headers, a wrong `ENCRYPTION_KEY`, invalid mappings,
 unavailable source documents and wrong sizes block restoration.
 
 The independent worker coalesces changed revisions/settings within 60-second
@@ -604,7 +601,7 @@ These routes cannot edit the storage channel or owner credentials.
 | --- | --- | --- |
 | GET /api/v1/settings | None | Redacted saved configuration, actual running clients, statistics and recovery state. |
 | GET /api/v1/settings/uploads | None | Uploads per bot, connected bot count and available configured bot slots. Owner only; no-store. |
-| PATCH /api/v1/settings/uploads | uploads_per_bot: integer 1–4 | Save in MongoDB and apply immediately to new Telegram leases. Existing transfers finish; provider waits are preserved. |
+| PATCH /api/v1/settings/uploads | uploads_per_bot: integer, at least 1 | Save in MongoDB and apply immediately to new Telegram leases. Existing transfers finish; provider waits are preserved. |
 | PATCH /api/v1/settings | expected_revision, optional api_id/api_hash/clients | Complete redacted snapshot after isolated verification and atomic save. |
 | POST /api/v1/settings/refresh | Empty object | 202 settings snapshot; schedules bounded background saved-credential/channel-permission checks and name refreshes for enabled clients without changing configuration revision. |
 | POST /api/v1/settings/premium-login/start | expected_revision, phone, label | challenge_id, stage:code and expires_in_seconds. |
@@ -739,10 +736,8 @@ its relative descendants atomically, before any file receipts are started:
 - The request ID accepts letters, digits, underscore and hyphen; the web client uses a
   UUID.
 - Persist it before dispatch and reuse it with the same payload on an uncertain
-  response. `folders` excludes the root, includes every ancestor, has at most 999
-  entries, and each entry has 1–63 relative name segments.
-- The root makes at most 1,000 folders.
-- The normal 64 KiB JSON/body guard and the store's 128-level/item limits also apply.
+  response. `folders` excludes the root, includes every ancestor and has any
+  number of entries at any depth.
 - Extra fields are rejected; name normalization is NFC with normalized sibling collision
   checks.
 
@@ -762,8 +757,7 @@ does not invalidate replay.
 - The API prepares metadata only.
 - A successful tree request does not queue file bytes, promise all subsequent file
   uploads succeed, or discover local empty directories.
-- The web picker separately limits the selection to 1,000 files, skips empty/over-cap
-  files, validates root-prefixed file paths, and then queues each accepted file against
+- The web picker skips empty/over-cap files, validates root-prefixed file paths, and then queues each accepted file against
   its mapped destination.
 - A cancelled/lost response can leave an empty prepared tree; retry the original
   request, not a new ID.
@@ -805,7 +799,7 @@ into oneself are rejected. The destination must be a visible folder.
 }
 ~~~
 
-Action is trash/restore/delete. Both routes accept 1–1000 paths and collapse
+Action is trash/restore/delete. Both routes accept any number of paths and collapse
 duplicate/overlapping selections. Trash/restore returns `200` with
 `results: [{path,status}]`, where status is trashed/restored. Delete returns
 `202` with result job IDs and status deleting. Poll retained jobs for completion.
@@ -962,29 +956,26 @@ for the current phase. Created ZIPs use the ordinary file download route.
 - Extraction accepts ZIP, 7z, RAR/RAR5, TAR and gzip/bzip2/xz/Zstandard-compressed
   TAR or single files. ZIP supports Stored, Deflate, BZIP2 and LZMA entries.
   Encrypted and split-volume archives are unsupported; some RAR features remain
-  unsupported by the installed native reader. A job accepts up to 1,000 entries,
-  including implicit folders, with at most 64 relative path components,
-  4,096 path characters, an 8 MiB ZIP
-  directory and a 4 MiB expanded extraction manifest. Extraction validates paths,
+  unsupported by the installed native reader. Archives can hold any number of
+  entries at any depth. Extraction validates paths,
   sizes and available archive-provided integrity checks before creating output
   folders or files. TAR has no payload checksum, so it cannot detect every
   same-size content change.
   Absolute/traversal paths, encrypted entries, symlinks/special files, duplicate
   paths and empty regular files are rejected. Empty directories are retained.
-  Decoded TAR streams may use the remaining staging budget plus an allowance of
-  8 MiB + 1,000 KiB for headers and padding; larger decoded tails are rejected.
+  Decoded TAR streams may use the remaining staging budget plus 8 MiB for
+  headers and padding; larger decoded tails are rejected.
   Compressed streams are checked through EOF, and native-reader warnings fail
   the job before catalog publication.
 - Temporary workspace shares `STAGING_BUDGET_BYTES` and `MIN_FREE_BYTES` with
   uploads and imports. Creation reserves the ZIP bytes plus headers; extraction
   needs space for the source archive and its expanded files together. Defaults are
   16 GiB of shared staging and a 1 GiB free-disk reserve. Normal logical-file
-  upload limits and catalog depth/item limits still apply.
+  upload limits still apply.
 - Source files are read from Telegram, including multipart files, using bounded
   reads directly into the ZIP writer. Extraction runs the native reader in a
-  separate worker with a 512 MiB address-space ceiling and 600 seconds of CPU
-  time. Large dictionaries or unusually expensive archives can exceed these
-  limits even when their output would fit in staging. Cancellation kills and
+  separate worker with no memory or CPU-time limit. If the server runs out of
+  memory, the kernel stops that worker first, not TGDrive. Cancellation kills and
   reaps the worker before workspace cleanup. Outputs use the normal upload,
   catalog and protection pipeline. Existing files are never overwritten.
 - Accepted jobs are server-owned. Retry/restart reuse persisted job identities;
@@ -1476,8 +1467,8 @@ for recovery across server restarts. Public snapshots omit the source link.
 | Engine | `aria2c` must be on the server's `PATH`; bundled in Docker. |
 | Concurrency | At most `MAX_CONCURRENT_TRANSFERS` torrent engines (default 2), independently of local receive/fingerprinting work; Telegram uploading uses its existing admission. |
 | Sources | BitTorrent v1 metadata, including a compatible v1 part in hybrid torrents; v2-only torrents are unsupported. |
-| Metadata | At most 8 MiB; magnet discovery times out after 120 seconds. |
-| Contents | 1–10,000 nonempty files, at most 1,000 folders including the torrent root, and 64 folder levels; the existing destination depth limit also applies. |
+| Metadata | `.torrent` files fetched by URL are at most 256 MiB; magnet discovery times out after 120 seconds. |
+| Contents | Any number of nonempty files and folders at any depth. |
 | Paths | Unsafe names, traversal, symlinks, duplicate names and file/folder collisions are rejected before payload downloading. |
 | Storage | Each file must fit the upload limit; the entire torrent reserves the shared staging budget and free-space reserve. Failed partial data keeps its storage claim. |
 | Peer discovery | IPv4 DHT and public UDP trackers. HTTP(S) trackers, web seeds and magnet auxiliary source URLs are ignored; HTTP-only private torrents cannot import. |
@@ -1577,8 +1568,8 @@ belong in [the roadmap](roadmap.md), not in this implemented API reference.
   timeout. Sensitive settings and backup download accept an active owner
   session without a fresh password prompt.
 - **Requests:** mutations check Origin/Fetch Metadata; private routes authenticate
-  before body processing. JSON bodies are capped at 64 KiB, receipt PATCH at
-  8 MiB. Login allows five failures per client IP in five minutes and bounds
+  before body processing. Bodies of requests without a session are capped at 64 KiB;
+  signed-in requests have no fixed size, and receipt PATCH chunks are 8 MiB. Login allows five failures per client IP in five minutes and bounds
   expensive password verification to one concurrent check. The throttle resets
   after restart and does not stop distributed attempts. Add login rate limiting
   at a public deployment's trusted proxy; there are no per-share traffic quotas.

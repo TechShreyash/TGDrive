@@ -17,7 +17,6 @@ from telethon.sessions import StringSession
 
 from tgdrive.core.config import Settings
 from tgdrive.settings.managed_settings import (
-    MAX_CLIENTS,
     ManagedClient,
     ManagedDocument,
     PrivateModel,
@@ -48,9 +47,7 @@ class SettingsChange(PrivateModel):
     expected_revision: int = Field(ge=0)
     api_id: int | None = Field(default=None, gt=0, le=2147483647)
     api_hash: SecretStr | None = None
-    clients: list[ClientChange] | None = Field(
-        default=None, min_length=1, max_length=MAX_CLIENTS
-    )
+    clients: list[ClientChange] | None = Field(default=None, min_length=1)
 
 
 async def verify_connection(

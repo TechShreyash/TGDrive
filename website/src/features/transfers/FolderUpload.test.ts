@@ -81,24 +81,19 @@ describe("folder selection validation", () => {
         expect(plan.folders).toEqual([]);
         expect(plan.totalSize).toBe(2);
     });
-    it("bounds admission and actual UTF-8 metadata payload bytes", () => {
-        expect(() =>
-            planFolderUpload(
-                Array.from({ length: 1001 }, (_, i) => picked("Root/" + i)),
-                100,
-            ),
-        ).toThrow("1,000 files");
-        expect(() =>
-            planFolderUpload(
-                [picked(["Root", ...Array(63).fill("a"), "file"].join("/"))],
-                100,
-            ),
-        ).toThrow("64 levels");
-        const plan = planFolderUpload([picked("Root/a")], 100);
-        plan.folders = Array.from({ length: 300 }, () => ["界".repeat(255)]);
-        expect(() => folderTreeRequest(plan, "/", "id")).toThrow(
-            "preparation limit",
+    it("plans folders of any size and depth", () => {
+        const many = planFolderUpload(
+            Array.from({ length: 1500 }, (_, i) => picked("Root/" + i)),
+            100,
         );
+        expect(many.files).toHaveLength(1500);
+        const deep = planFolderUpload(
+            [picked(["Root", ...Array(200).fill("a"), "file"].join("/"))],
+            100,
+        );
+        expect(deep.folders).toHaveLength(200);
+        deep.folders = Array.from({ length: 300 }, () => ["界".repeat(255)]);
+        expect(folderTreeRequest(deep, "/", "id").folders).toHaveLength(300);
     });
 });
 describe("confirmed atomic folder preparation", () => {

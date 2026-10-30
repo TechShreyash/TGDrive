@@ -7,14 +7,12 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 
-import tgdrive.storage.store as store_module
 from tests.support.mongo_fixtures import new_store, reopen_store, store_from_payload
 from tgdrive.core.errors import (
     CorruptStoreError,
     DuplicateNameError,
     InvalidNameError,
     InvalidPathError,
-    InvalidRevisionError,
     NotFoundError,
     PersistenceError,
     RootMutationError,
@@ -138,26 +136,12 @@ def test_storage_failure_rolls_back_rows_and_revision(tmp_path, monkeypatch) -> 
     def fail(*_args, **_kwargs):
         raise PersistenceError("simulated storage failure")
 
-    monkeypatch.setattr(store.backend.db.nodes, "bulk_write", fail)
+    monkeypatch.setattr(store.backend.db.catalog, "find_one_and_update", fail)
     with pytest.raises(PersistenceError, match="simulated storage failure"):
         store.rename(folder_path, "After")
     monkeypatch.undo()
     assert store.revision == previous_revision
     assert reopen_store(database).get_directory(folder_path)["name"] == "Before"
-
-
-def test_backup_revision_race_cannot_clear_newer_mutation() -> None:
-    store = new_store()
-    snapshot_revision, snapshot = store.snapshot()
-    assert json.loads(snapshot)["revision"] == snapshot_revision
-
-    store.create_folder("/", "arrived during upload")
-    newest_revision = store.revision
-    assert newest_revision > snapshot_revision
-    assert store.mark_backed_up(newest_revision) is False
-
-    with pytest.raises(InvalidRevisionError):
-        store.mark_backed_up(newest_revision + 1)
 
 
 def test_trash_listing_and_search_hide_entire_trashed_subtrees() -> None:
@@ -169,8 +153,12 @@ def test_trash_listing_and_search_hide_entire_trashed_subtrees() -> None:
     visible = store.add_file("/", "Secret Public.txt", 51, 6)
 
     store.set_trashed(folder_path, True)
-    assert set(store.search("secret")) == {visible["id"]}
-    assert set(store.search("secret", include_trashed=True)) == {
+
+    def search(query, **options):
+        return {row["id"] for row in store.search_page(query, **options)["items"]}
+
+    assert search("secret") == {visible["id"]}
+    assert search("secret", include_trashed=True) == {
         secret["id"],
         visible["id"],
     }
@@ -214,12 +202,10 @@ def test_message_ids_reads_file_and_nested_folder_without_mutation() -> None:
     inner_path = _full_path(inner)
     store.add_file(inner_path, "two.bin", 302, 2)
     revision = store.revision
-    dirty = store.dirty
 
     assert store.message_ids(_full_path(first)) == [301]
     assert set(store.message_ids(outer_path)) == {301, 302}
     assert store.revision == revision
-    assert store.dirty is dirty
 
 
 def test_message_ids_rejects_invalid_and_hidden_targets() -> None:
@@ -270,22 +256,16 @@ def test_share_tokens_are_hashed_and_strictly_scoped() -> None:
     assert store.authorize_file(shared_file_path, folder_token) is False
 
 
-def test_share_token_history_is_bounded() -> None:
+def test_an_item_can_have_any_number_of_independent_links() -> None:
     store = new_store()
     folder = store.create_folder("/", "Shared")
     folder_path = _full_path(folder)
-    tokens = [
-        store.create_share(folder_path)
-        for _ in range(store_module.MAX_SHARE_TOKENS_PER_ITEM)
-    ]
-    with pytest.raises(store_module.ValidationError, match="100 links"):
-        store.create_share(folder_path)
+    tokens = [store.create_share(folder_path) for _ in range(150)]
     assert store.authorize_directory(folder_path, tokens[0]) == folder_path
     assert store.authorize_directory(folder_path, tokens[-1]) == folder_path
-
     exported = store.export()
     child = next(iter(exported["root"]["children"].values()))
-    assert len(child["share_hashes"]) == store_module.MAX_SHARE_TOKENS_PER_ITEM
+    assert len(child["share_hashes"]) == 150
 
 
 def test_deletion_intent_survives_restart_with_partial_confirmations(tmp_path) -> None:
@@ -452,8 +432,9 @@ def test_database_load_rejects_inconsistent_indexes_and_overlapping_deletions(
     for row in store.backend.db.nodes.rows:
         if row["id"] == folder["id"]:
             row["name_key"] = "wrong"
+    # Startup reads no full catalog; every backup export validates it instead.
     with pytest.raises(CorruptStoreError, match="identity or index"):
-        reopen_store(database)
+        reopen_store(database).export()
 
 
 @pytest.mark.parametrize("field", ["drive_id", "shares"])

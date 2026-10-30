@@ -10,8 +10,6 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, SecretStr, field_validator
 
-MAX_CLIENTS = 50
-MAX_SETTINGS_BYTES = 64 * 1024
 _BOT = re.compile(r"[1-9][0-9]{4,14}:[A-Za-z0-9_-]{20,}")
 _ID = re.compile(r"[a-z0-9-]{1,80}")
 
@@ -66,7 +64,7 @@ class ManagedDocument(PrivateModel):
     revision: int = Field(ge=1)
     api_id: int = Field(gt=0, le=2147483647)
     api_hash: SecretStr
-    clients: list[ManagedClient] = Field(min_length=1, max_length=MAX_CLIENTS)
+    clients: list[ManagedClient] = Field(min_length=1)
 
     @field_validator("api_hash")
     @classmethod
@@ -98,10 +96,7 @@ class ManagedDocument(PrivateModel):
             | {"credential": row.credential.get_secret_value()}
             for row in self.clients
         ]
-        raw = json.dumps(result, ensure_ascii=False, allow_nan=False).encode()
-        if len(raw) > MAX_SETTINGS_BYTES:
-            raise SettingsProblem("Connection settings exceed the 64 KiB limit")
-        return raw
+        return json.dumps(result, ensure_ascii=False, allow_nan=False).encode()
 
 
 def read_document(data_dir: Path) -> ManagedDocument | None:

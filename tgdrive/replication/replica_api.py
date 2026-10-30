@@ -112,8 +112,6 @@ def register_replica_routes(app, settings, require_admin, get_runtime):
 
     @app.post("/api/v1/replica/import", dependencies=admin)
     async def import_file(request: Request):
-        from tgdrive.replication.replica_state import MAX_BUNDLE
-
         if settings.demo_mode:
             raise HTTPException(403, "Backup restore is disabled in demo mode")
         if (
@@ -157,10 +155,6 @@ def register_replica_routes(app, settings, require_admin, get_runtime):
                         size = 0
                         async for part in request.stream():
                             size += len(part)
-                            if size > MAX_BUNDLE:
-                                raise HTTPException(
-                                    413, "Recovery file exceeds the 64 MiB limit"
-                                )
                             if (
                                 shutil.disk_usage(current.directory).free
                                 < len(part) + settings.min_free_bytes

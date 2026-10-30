@@ -138,7 +138,8 @@ async def test_unstarted_and_synthetic_pools_keep_logical_limit(
     monkeypatch.setattr(config_module, "_DEFAULT_BOT_LIMIT", 3)
     config = settings(tmp_path)
     pool = ClientPool([Account("bot")], [Account("premium")])
-    assert config.upload_limit == 3 * 4096
+    # Files split into any number of Telegram parts; staging space is the limit.
+    assert config.upload_limit == config.staging_budget_bytes
     assert await current_upload_limit(config, pool) == config.upload_limit
     assert await current_upload_limit(config, object()) == config.upload_limit
     assert await current_upload_limit(config, None) == config.upload_limit

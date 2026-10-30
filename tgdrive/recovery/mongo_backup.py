@@ -36,7 +36,6 @@ COLLECTIONS = (
     "bot_folders",
     "backups",
 )
-MAX_EXPANDED = 1024**3
 _HISTORY_UNAVAILABLE = "Encrypted Telegram backup history is temporarily unavailable."
 
 

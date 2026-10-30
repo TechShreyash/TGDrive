@@ -14,11 +14,9 @@ from datetime import UTC, datetime
 from bson import json_util
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
-from tgdrive.storage.mongo_store import MongoStore
+from tgdrive.storage.mongo_store import MongoStore, catalog_counters
 
 MAGIC = b"TGDRIVE-BACKUP-2\n"
-MAX_FILE_BYTES = 64 * 1024**2
-MAX_EXPANDED = 1024**3
 _TOKEN = re.compile(r"[1-9][0-9]{4,14}:[A-Za-z0-9_-]{20,}")
 
 
@@ -69,11 +67,6 @@ def capture_database(backend):
         }
     records = sanitize_database(records)
     snapshot_catalog(records)
-    if (
-        len(json.dumps(records, default=json_util.default, allow_nan=False).encode())
-        > MAX_EXPANDED
-    ):
-        raise ValueError("Recovery database exceeds the 1 GiB expanded limit")
     return records
 
 
@@ -91,6 +84,7 @@ def rebase_database(records, catalog):
             "revision": catalog["revision"],
             "backed_up_revision": catalog["revision"],
             "storage_channel_id": catalog["storage_channel_id"],
+            **catalog_counters(catalog),
         }
     )
     metadata.pop("replica_activation_id", None)
@@ -218,8 +212,6 @@ def encode_recovery_file(payload, key):
     raw = json.dumps(
         value, default=json_util.default, allow_nan=False, separators=(",", ":")
     ).encode()
-    if len(raw) > MAX_EXPANDED:
-        raise ValueError("Recovery file exceeds the 1 GiB expanded limit")
     nonce = secrets.token_bytes(12)
     encrypted = (
         MAGIC
@@ -228,8 +220,6 @@ def encode_recovery_file(payload, key):
             nonce, zlib.compress(raw, level=6), MAGIC
         )
     )
-    if len(encrypted) > MAX_FILE_BYTES:
-        raise ValueError("Encrypted recovery file exceeds the 64 MiB limit")
     return encrypted
 
 
@@ -259,7 +249,7 @@ def decode_recovery_file(content, key):
     try:
         if (
             not isinstance(content, bytes)
-            or not len(MAGIC) + 28 <= len(content) <= MAX_FILE_BYTES
+            or len(content) < len(MAGIC) + 28
             or not content.startswith(MAGIC)
             or not isinstance(key, str)
             or re.fullmatch(r"[a-fA-F0-9]{64}", key.strip()) is None
@@ -270,13 +260,9 @@ def decode_recovery_file(content, key):
             content[offset : offset + 12], content[offset + 12 :], MAGIC
         )
         decoder = zlib.decompressobj()
-        raw = decoder.decompress(compressed, MAX_EXPANDED + 1)
-        if (
-            len(raw) > MAX_EXPANDED
-            or not decoder.eof
-            or decoder.unused_data
-            or decoder.unconsumed_tail
-        ):
+        # AES-GCM authenticated these bytes, so they are TGDrive's own backup.
+        raw = decoder.decompress(compressed)
+        if not decoder.eof or decoder.unused_data or decoder.unconsumed_tail:
             raise ValueError
         value = json_util.loads(
             raw, object_pairs_hook=_object, parse_constant=_constant

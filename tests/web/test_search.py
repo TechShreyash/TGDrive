@@ -8,7 +8,6 @@ from fastapi.testclient import TestClient
 from tests.support.app_fixtures import FakeRuntime, make_settings
 from tests.support.mongo_fixtures import new_store
 from tgdrive.core.errors import ValidationError
-from tgdrive.storage.store import MAX_SEARCH_OFFSET
 from tgdrive.web.app import create_app
 
 
@@ -87,15 +86,16 @@ def test_filename_only_search_prunes_entire_trash_branch_and_builds_human_parent
     assert {row["id"] for row in store.search_page("Projects")["items"]} == {
         parent["id"]
     }
-    assert hidden["id"] in store.search("report", include_trashed=True)
+    assert hidden["id"] in {
+        row["id"] for row in store.search_page("report", include_trashed=True)["items"]
+    }
 
 
 def set_upload_date(store, value, identities=None):
-    """Rewrite stored timestamps directly, then reload the catalog cache."""
+    """Rewrite stored timestamps directly; reads always come from MongoDB."""
     for row in store.backend.db.nodes.rows:
         if identities is None or row["id"] in identities:
             row["upload_date"] = value
-    store._reload()
 
 
 def test_sort_and_pagination_apply_globally_with_deterministic_ties(store):
@@ -134,7 +134,7 @@ def test_sort_and_pagination_apply_globally_with_deterministic_ties(store):
         )
         assert not second["has_more"] and second["next_offset"] is None
         assert [row["id"] for row in first["items"] + second["items"]] == identities
-    assert target.search_page("report", offset=MAX_SEARCH_OFFSET)["items"] == []
+    assert target.search_page("report", offset=10**9)["items"] == []
 
 
 @pytest.mark.parametrize("sort", ["name", "date", "size"])
@@ -190,7 +190,6 @@ def test_trash_lists_human_parent_names_without_hidden_children(store):
         ("a\x00b", {}),
         ("a\nb", {}),
         ("file", {"offset": -1}),
-        ("file", {"offset": MAX_SEARCH_OFFSET + 1}),
         ("file", {"limit": 0}),
         ("file", {"limit": 501}),
         ("file", {"limit": True}),
@@ -298,7 +297,7 @@ def test_legacy_search_is_bounded_and_exposes_more_results_instead_of_fake_total
     assert len(data["contents"]) == 500
     assert data["search"] == {"query": "Report", "has_more": True, "next_offset": 500}
     assert "total" not in data["search"]
-    assert len(store.search("report")) == 500
+    assert len(store.search_page("report", limit=500)["items"]) == 500
 
 
 def test_search_remains_readable_while_restart_required(search_client):

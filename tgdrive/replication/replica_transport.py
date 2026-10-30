@@ -26,7 +26,10 @@ from telethon import TelegramClient, functions, types, utils
 from telethon.errors import NetworkMigrateError, PhoneMigrateError, UserMigrateError
 
 BACKUP_NAME = "tgdrive-backup.tgdb"
-MAX_CAPSULE_BYTES = 64 * 1024 * 1024
+# shortcut: a recovery file is one Telegram document, so Telegram's 2000 MiB
+# document limit bounds it (tens of millions of catalog items compressed);
+# split it across several pinned documents if a drive ever outgrows that.
+MAX_CAPSULE_BYTES = 2000 * 1024 * 1024
 MAX_VERIFY_BATCH = 32
 _BLOCK = 512 * 1024
 _BOT = re.compile(r"[1-9][0-9]{4,14}:[A-Za-z0-9_-]{20,}")
@@ -756,7 +759,7 @@ class ReplicaTransport:
             size = path.stat().st_size
             if not 0 < size <= MAX_CAPSULE_BYTES:
                 raise ReplicaTransportError(
-                    "The recovery archive exceeds the 64 MiB transport limit.",
+                    "The recovery file exceeds Telegram's 2000 MiB document limit.",
                     "REPLICA_ARCHIVE_TOO_LARGE",
                 )
             with await asyncio.to_thread(path.open, "rb") as source:

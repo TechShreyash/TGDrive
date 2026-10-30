@@ -19,7 +19,7 @@ from tgdrive.settings.performance_preferences import get_performance_settings
 
 class PrepareFile(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    path: str = Field(min_length=1, max_length=4096)
+    path: str = Field(min_length=1)
 
 
 class ClearCache(BaseModel):

@@ -78,8 +78,8 @@ to the unfinished work you confirm; completed files and later uploads remain.
 
 - A folder creates a new root and preserves subfolders. Existing names are kept
   alongside it rather than merged or overwritten.
-- The picker accepts up to 1,000 files and 1,000 discovered folders, subject to
-  path/request limits. It skips empty and oversized files; browser pickers omit empty folders.
+- The picker accepts any number of files and folders at any depth. It skips
+  empty and oversized files; browser pickers omit empty folders.
 - Keep the confirmation open during preparation. **Retry** there reuses the
   tree; closing early and choosing again can leave another empty root.
 - Once queued, resume the existing batch. Choose files individually if bulk matching fails.

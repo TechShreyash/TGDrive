@@ -213,7 +213,6 @@ async def require_admin(request: Request) -> None:
         not in {
             "/api/checkPassword",
             "/api/logout",
-            "/api/v1/backup/restore",
         }
         and not request.url.path.endswith("/cancel")
     ):
@@ -229,7 +228,6 @@ async def require_admin(request: Request) -> None:
                 "/api/checkPassword",
                 "/api/logout",
                 "/api/getDirectory",
-                "/api/v1/backup/restore",
                 "/api/v1/replica/import",
                 "/api/v1/replica/recover",
                 "/api/v1/replica/action",
@@ -263,7 +261,6 @@ async def require_admin(request: Request) -> None:
         or path in read_posts
         or path
         in {
-            "/api/v1/backup/restore",
             "/api/v1/replica/import",
             "/api/v1/replica/recover",
             "/api/v1/replica/action",
@@ -585,7 +582,7 @@ def create_app(
 
     @app.get("/stream")
     async def video_player(
-        path: Annotated[str, Query(min_length=1, max_length=4096)],
+        path: Annotated[str, Query(min_length=1)],
         auth: Annotated[str | None, Query(max_length=512)] = None,
     ) -> FileResponse:
         # Authorization happens when the native player requests /file.
@@ -849,7 +846,7 @@ def create_app(
         request: Request,
         _admin: Admin,
         file: Annotated[UploadFile, File()],
-        path: Annotated[str, Form(min_length=1, max_length=4096)],
+        path: Annotated[str, Form(min_length=1)],
         client_request_id: Annotated[
             str | None,
             Form(min_length=16, max_length=128, pattern=r"^[A-Za-z0-9_-]+$"),
@@ -1052,7 +1049,7 @@ def create_app(
     @app.get("/api/v1/embed")
     async def embed_file(
         request: Request,
-        path: Annotated[str, Query(min_length=1, max_length=4096)],
+        path: Annotated[str, Query(min_length=1)],
         auth: Annotated[str, Query(min_length=1, max_length=512)],
     ) -> dict[str, Any]:
         _, data = await asyncio.to_thread(authorized_file, request, path, auth)
@@ -1063,7 +1060,7 @@ def create_app(
     @app.get("/api/v1/preview")
     async def file_preview(
         request: Request,
-        path: Annotated[str, Query(min_length=1, max_length=4096)],
+        path: Annotated[str, Query(min_length=1)],
         auth: Annotated[str | None, Query(max_length=512)] = None,
     ) -> dict[str, Any]:
         path, file_data = authorized_file(request, path, auth)
@@ -1086,7 +1083,7 @@ def create_app(
     @app.get("/api/v1/books")
     async def book_preview(
         request: Request,
-        path: Annotated[str, Query(min_length=1, max_length=4096)],
+        path: Annotated[str, Query(min_length=1)],
         auth: Annotated[str | None, Query(max_length=512)] = None,
         entry: Annotated[str | None, Query(min_length=1, max_length=1024)] = None,
     ) -> Response:
@@ -1177,7 +1174,7 @@ def create_app(
     @app.get("/api/v1/thumbnail")
     async def file_thumbnail(
         request: Request,
-        path: Annotated[str, Query(min_length=1, max_length=4096)],
+        path: Annotated[str, Query(min_length=1)],
         auth: Annotated[str | None, Query(max_length=512)] = None,
     ) -> Response:
         path, file_data = authorized_file(request, path, auth)
@@ -1282,7 +1279,7 @@ def create_app(
     @app.get("/api/v1/poster")
     async def file_poster(
         request: Request,
-        path: Annotated[str, Query(min_length=1, max_length=4096)],
+        path: Annotated[str, Query(min_length=1)],
         auth: Annotated[str | None, Query(max_length=512)] = None,
     ) -> Response:
         path, file_data = authorized_file(request, path, auth)
@@ -1337,7 +1334,7 @@ def create_app(
     @app.get("/api/v1/media")
     async def file_media(
         request: Request,
-        path: Annotated[str, Query(min_length=1, max_length=4096)],
+        path: Annotated[str, Query(min_length=1)],
         auth: Annotated[str | None, Query(max_length=512)] = None,
     ) -> dict[str, Any]:
         _path, file_data = authorized_file(request, path, auth)
@@ -1358,7 +1355,7 @@ def create_app(
     @app.api_route("/file", methods=["GET", "HEAD"])
     async def download_file(
         request: Request,
-        path: Annotated[str, Query(min_length=1, max_length=4096)],
+        path: Annotated[str, Query(min_length=1)],
         auth: Annotated[str | None, Query(max_length=512)] = None,
         download: bool = False,
         preview: bool = False,
@@ -1483,7 +1480,7 @@ def create_app(
     @app.get("/api/v1/file-status")
     async def file_status(
         request: Request,
-        path: Annotated[str, Query(min_length=1, max_length=4096)],
+        path: Annotated[str, Query(min_length=1)],
         request_id: Annotated[
             str, Query(min_length=1, max_length=128, pattern=r"^[A-Za-z0-9_-]+$")
         ],

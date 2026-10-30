@@ -5,6 +5,7 @@ from __future__ import annotations
 import copy
 import json
 import threading
+from contextlib import contextmanager
 from datetime import UTC, datetime
 from types import SimpleNamespace
 
@@ -12,7 +13,7 @@ import pytest
 from bson import Binary, json_util
 from pydantic import SecretStr
 
-from tests.support.mongo_fixtures import Collection as MongoCollection
+from tests.support.mongo_fixtures import Collection as FixtureCollection
 from tests.support.mongo_fixtures import new_store
 from tgdrive.core.config import Settings
 from tgdrive.replication.replica_activation import (
@@ -34,6 +35,7 @@ from tgdrive.settings.managed_settings import (
 )
 from tgdrive.storage.mongo import DatabaseUnavailable, for_settings
 from tgdrive.storage.mongo_store import MongoStore
+from tgdrive.storage.store import SCHEMA_VERSION
 
 OLD = -100111222
 NEW = -100333444
@@ -307,7 +309,9 @@ def test_pending_conflict_and_corrupt_manifest_preserve_original_intent(settings
     assert installed(settings) == before
 
 
-class Collection(MongoCollection):
+class Collection(FixtureCollection):
+    """Shared fixture queries over this backend's swappable ``data`` mapping."""
+
     def __init__(self, backend, name):
         self.backend, self.name = backend, name
 
@@ -315,39 +319,18 @@ class Collection(MongoCollection):
     def rows(self):
         return self.backend.data.setdefault(self.name, [])
 
-    def find(self, _query, **_kwargs):
-        return copy.deepcopy(self.rows)
+    @rows.setter
+    def rows(self, value):
+        self.backend.data[self.name] = value
 
-    def find_one(self, query, **_kwargs):
-        return next(
-            (
-                copy.deepcopy(row)
-                for row in self.rows
-                if all(row.get(key) == value for key, value in query.items())
-            ),
-            None,
-        )
+    def delete_many(self, query, **kwargs):
+        return super().delete_many(query or {}, **kwargs)
 
-    def count_documents(self, _query, **_kwargs):
-        return len(self.rows)
-
-    def delete_many(self, _query, **_kwargs):
-        self.backend.data[self.name] = []
-
-    def insert_many(self, rows, **_kwargs):
+    def insert_many(self, rows, **kwargs):
         if self.backend.fail_insert and self.name == "nodes":
             self.backend.fail_insert = False
             raise RuntimeError("synthetic transaction interruption")
         self.rows.extend(copy.deepcopy(rows))
-
-    def replace_one(self, query, row, *, upsert=False, **_kwargs):
-        for i, existing in enumerate(self.rows):
-            if all(existing.get(key) == value for key, value in query.items()):
-                self.rows[i] = copy.deepcopy(row)
-                return SimpleNamespace(matched_count=1)
-        if upsert:
-            self.rows.append(copy.deepcopy(row))
-        return SimpleNamespace(matched_count=0)
 
 
 class Database(SimpleNamespace):
@@ -365,7 +348,7 @@ class Backend:
             "catalog": [
                 {
                     "_id": "catalog",
-                    "schema_version": 4,
+                    "schema_version": SCHEMA_VERSION,
                     "drive_id": payload["drive_id"],
                     "generation": 2,
                     "revision": payload["revision"],
@@ -399,6 +382,7 @@ class Backend:
         )
         for name in vars(self.db):
             self.data.setdefault(name, [])
+            self.db[name].database = self.db
         self._settings_lock = threading.RLock()
         self._settings_cached = False
         self._settings_document = None
@@ -414,6 +398,15 @@ class Backend:
 
     def write(self, collection, method, *args, **kwargs):
         return getattr(collection, method)(*args, **kwargs)
+
+    @contextmanager
+    def session_transaction(self):
+        before = copy.deepcopy(self.data)
+        try:
+            yield object()
+        except BaseException:
+            self.data = before
+            raise
 
     def transaction(self, operation):
         before = copy.deepcopy(self.data)
@@ -712,19 +705,9 @@ def test_incomplete_recovery_settings_are_rejected_before_preparation(
     assert not (settings.resolved_data_dir / MANIFEST).exists()
 
 
-def test_archive_symlink_and_manifest_size_limit_leave_catalog_untouched(
-    settings, monkeypatch
-):
+def test_archive_symlink_leaves_catalog_untouched(settings):
     before = catalog(settings)
     value = candidate(before)
-    import tgdrive.replication.replica_activation as module
-
-    original_limit = module.MAX_BUNDLE
-    monkeypatch.setattr(module, "MAX_BUNDLE", 100)
-    with pytest.raises(ActivationError, match="64 MiB"):
-        prepare_activation(settings, value)
-    assert not (settings.resolved_data_dir / MANIFEST).exists()
-    monkeypatch.setattr(module, "MAX_BUNDLE", original_limit)
     prepare_activation(settings, value)
     outside = settings.resolved_data_dir.parent / "outside"
     outside.mkdir()
@@ -780,7 +763,8 @@ def test_full_historical_connection_list_is_archived_without_auto_enabling_it(se
     prepare_activation(settings, value)
     assert _apply(settings)
     saved = read_document(settings.resolved_data_dir)
-    assert len(saved.clients) == 50
+    # The recovery bot plus every former connection: no account count limit.
+    assert len(saved.clients) == 51
     assert sum(row.enabled for row in saved.clients) == 1
     manifest = json.loads(read_private(settings.resolved_data_dir / MANIFEST))
     assert (

@@ -112,7 +112,7 @@ describe("performance settings and HTTP boundaries", () => {
         const odd = { ...preferences, cache_disk_bytes: GIB + 31 };
         expect(performanceChanges(performanceDraft(odd), odd)).toEqual({});
     });
-    it.each(["", "-1", "NaN", "Infinity", "9000"])(
+    it.each(["", "-1", "NaN", "Infinity"])(
         "rejects invalid cache memory %s",
         (value) => {
             expect(() =>

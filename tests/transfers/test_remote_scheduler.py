@@ -48,8 +48,8 @@ async def test_storage_eligibility_and_live_settings_control_promotions():
         assert sum(ticket.full_speed for ticket in scheduler._tickets) == 3
 
 
-@pytest.mark.parametrize("limit", [0, 9, True, 1.5])
-def test_concurrency_is_an_integer_between_one_and_eight(limit):
+@pytest.mark.parametrize("limit", [0, -1, True, 1.5])
+def test_concurrency_is_a_positive_integer(limit):
     with pytest.raises(ValueError):
         URLDownloadScheduler(limit)
 

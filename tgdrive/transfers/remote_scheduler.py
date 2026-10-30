@@ -48,13 +48,13 @@ class URLDownloadScheduler:
         self._changed = asyncio.Event()
         self._monitor: asyncio.Task[None] | None = None
         self._refresh_lock = asyncio.Lock()
-        if type(full_speed_limit) is not int or not 1 <= full_speed_limit <= 8:
-            raise ValueError("URL download concurrency must be between 1 and 8")
+        if type(full_speed_limit) is not int or full_speed_limit < 1:
+            raise ValueError("URL download concurrency must be at least 1")
         self.full_speed_limit = full_speed_limit
 
     async def configure(self, limit: int) -> None:
-        if type(limit) is not int or not 1 <= limit <= 8:
-            raise ValueError("URL download concurrency must be between 1 and 8")
+        if type(limit) is not int or limit < 1:
+            raise ValueError("URL download concurrency must be at least 1")
         self.full_speed_limit = limit
         await self.refresh()
         self._notify()

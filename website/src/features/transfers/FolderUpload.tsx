@@ -11,9 +11,6 @@ import {
 } from "../../shared/types";
 import "./FolderUpload.css";
 
-export const MAX_FOLDER_FILES = 1000;
-const MAX_FOLDERS = 1000;
-const MAX_PATH_SEGMENTS = 64;
 type FolderFile = { file: File; relativePath: string; parent: string };
 export interface FolderUploadPlan {
     rootName: string;
@@ -45,8 +42,6 @@ export function planFolderUpload(
         throw new Error(
             "The selected folder has no files this browser can provide.",
         );
-    if (files.length > MAX_FOLDER_FILES)
-        throw new Error("Choose a folder containing at most 1,000 files.");
     const plan: FolderUploadPlan = {
         rootName: "",
         folders: [],
@@ -77,10 +72,6 @@ export function planFolderUpload(
                 "This browser did not provide folder paths. Use Upload Files instead.",
             );
         const parts = relative.split("/").map(segment);
-        if (parts.length > MAX_PATH_SEGMENTS)
-            throw new Error(
-                "Folder paths can contain at most 64 levels, including the file.",
-            );
         if (segment(file.name) !== parts.at(-1))
             throw new Error(
                 "A selected file has an invalid folder path. Choose the folder again.",
@@ -126,8 +117,6 @@ export function planFolderUpload(
         throw new Error(
             "No supported files were found. Empty files and files above the upload limit cannot be uploaded.",
         );
-    if (folders.size + 1 > MAX_FOLDERS)
-        throw new Error("Choose a folder containing at most 1,000 folders.");
     plan.folders = [...folders.values()].sort(
         (a, b) => a.length - b.length || a.join("/").localeCompare(b.join("/")),
     );
@@ -144,10 +133,6 @@ export function folderTreeRequest(
         folders: plan.folders,
         client_request_id: requestId,
     };
-    if (new TextEncoder().encode(JSON.stringify(payload)).length > 64 * 1024)
-        throw new Error(
-            "The folder names exceed the preparation limit. Choose a smaller folder.",
-        );
     return payload;
 }
 export async function prepareFolderUpload(

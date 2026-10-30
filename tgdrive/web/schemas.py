@@ -18,17 +18,17 @@ class LoginRequest(RequestModel):
 
 
 class DirectoryRequest(RequestModel):
-    path: str = Field(min_length=1, max_length=4096)
+    path: str = Field(min_length=1)
     auth: str | None = Field(default=None, max_length=512)
 
 
 class FolderCreateRequest(RequestModel):
-    path: str = Field(min_length=1, max_length=4096)
+    path: str = Field(min_length=1)
     name: str = Field(min_length=1, max_length=255)
 
 
 class ItemPathRequest(RequestModel):
-    path: str = Field(min_length=1, max_length=4096)
+    path: str = Field(min_length=1)
 
 
 class RenameRequest(ItemPathRequest):
@@ -67,7 +67,7 @@ class RemoteInspectRequest(RequestModel):
 
 
 class RemoteStartRequest(RemoteInspectRequest):
-    path: str = Field(min_length=1, max_length=4096)
+    path: str = Field(min_length=1)
     filename: str | None = Field(default=None, max_length=255)
     single_threaded: bool = Field(default=False, alias="singleThreaded")
     client_request_id: str | None = Field(
@@ -77,7 +77,7 @@ class RemoteStartRequest(RemoteInspectRequest):
 
 class TorrentStartRequest(RequestModel):
     url: str = Field(min_length=1, max_length=16384)
-    path: str = Field(min_length=1, max_length=4096)
+    path: str = Field(min_length=1)
     client_request_id: str | None = Field(
         default=None, min_length=16, max_length=128, pattern=r"^[A-Za-z0-9_-]+$"
     )
@@ -87,11 +87,9 @@ class FolderTreeRequest(BaseModel):
     """Folder names are validated verbatim; whitespace must not be silently stripped."""
 
     model_config = ConfigDict(extra="forbid", strict=True)
-    destination: str = Field(min_length=1, max_length=4096)
+    destination: str = Field(min_length=1)
     root_name: str = Field(min_length=1, max_length=255)
-    folders: list[Annotated[list[str], Field(min_length=1, max_length=63)]] = Field(
-        max_length=999
-    )
+    folders: list[Annotated[list[str], Field(min_length=1)]]
     client_request_id: str = Field(
         min_length=16, max_length=128, pattern=r"^[A-Za-z0-9_-]+$"
     )
@@ -103,7 +101,7 @@ class FolderUploadMetadata(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
     id: str = Field(min_length=16, max_length=128, pattern=r"^[A-Za-z0-9_-]+$")
     name: str = Field(min_length=1, max_length=255)
-    root_path: str = Field(min_length=2, max_length=4096, pattern=r"^/")
+    root_path: str = Field(min_length=2, pattern=r"^/")
     created_at: float = Field(ge=0, allow_inf_nan=False)
 
 
@@ -121,6 +119,4 @@ class TransferTaskHistoryRequest(BaseModel):
     limit: int = Field(default=20, ge=1, le=200)
     q: str = Field(default="", max_length=255)
     offset: int | None = Field(default=None, ge=0)
-    exclude_folders: list[TransferIdentity] = Field(
-        default_factory=list, max_length=2000
-    )
+    exclude_folders: list[TransferIdentity] = Field(default_factory=list)

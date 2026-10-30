@@ -127,7 +127,6 @@ function readRecoveryRecords() {
     }
     return { rows: [...rows.values()], seed, invalid };
 }
-export const MAX_BROWSER_QUEUE = 2000;
 // Device receipts have their own slots; Telegram work never holds one.
 export const BROWSER_RECEIVE_CONCURRENCY = MAX_DEVICE_UPLOAD_CONCURRENCY;
 export const BROWSER_RECEIVE_INITIAL_CONCURRENCY =
@@ -1114,7 +1113,7 @@ export class TransferManager {
         return (
             Number.isSafeInteger(count) &&
             count >= 0 &&
-            retainedRows + count <= MAX_BROWSER_QUEUE
+            Number.isSafeInteger(retainedRows + count)
         );
     }
     add(files: File[], destination: string, maxSize: number): string[] {
@@ -1152,7 +1151,7 @@ export class TransferManager {
         if (requireAll && rejected.length) return rejected;
         if (!this.canQueue(accepted.length))
             return [
-                "The upload queue can track up to 2,000 files in unfinished batches. Finish or cancel an existing batch, then try again.",
+                "This selection is too large to track. Choose fewer files.",
             ];
         if (!accepted.length) return rejected;
         const folder = batch?.folderUpload;

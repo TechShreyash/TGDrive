@@ -146,6 +146,7 @@ def test_container_keys_and_owner_survive_move_without_local_volume(
         "BOT_TOKENS": "123456:" + "x" * 30,
         "STORAGE_CHANNEL": "-1001234567890",
         "ADMIN_PASSWORD": "synthetic deployment owner password",
+        "ENCRYPTION_KEY": "e" * 64,
     }
     for key, value in fixture.items():
         monkeypatch.setenv(key, value)
@@ -395,48 +396,51 @@ def test_receipts_survive_new_instance_without_sqlite(backend, store, tmp_path):
     assert not list(tmp_path.glob("*.sqlite3"))
 
 
-def test_readers_see_last_committed_snapshot_without_waiting_for_cloud(
-    store, backend, monkeypatch
-):
+def test_readers_see_only_committed_writes(store, backend):
     import threading
     from concurrent.futures import ThreadPoolExecutor
 
     entered = threading.Event()
     proceed = threading.Event()
-    original = backend.transaction
+    original = backend.fence
 
-    def delayed(callback):
+    def delayed(session):
         entered.set()
         assert proceed.wait(5)
-        return original(callback)
+        return original(session)
 
-    monkeypatch.setattr(backend, "transaction", delayed)
-    with ThreadPoolExecutor(max_workers=1) as executor:
-        task = executor.submit(store.create_folder, "/", "Pending")
-        assert entered.wait(5)
-        try:
-            assert store.get_directory("/")["contents"] == {}
-        finally:
-            proceed.set()
-        node = task.result(timeout=10)
+    backend.fence = delayed
+    try:
+        with ThreadPoolExecutor(max_workers=1) as executor:
+            task = executor.submit(store.create_folder, "/", "Pending")
+            assert entered.wait(5)
+            try:
+                # The insert is inside an open transaction: readers cannot see it.
+                assert store.get_directory("/")["contents"] == {}
+            finally:
+                proceed.set()
+            node = task.result(timeout=10)
+    finally:
+        backend.fence = original
     assert node["id"] in store.get_directory("/")["contents"]
 
 
-def test_lost_commit_acknowledgement_reloads_authoritative_catalog(
-    store, backend, monkeypatch
-):
-    original = backend.transaction
+def test_lost_commit_acknowledgement_replays_safely(store, backend, monkeypatch):
+    original = backend.session_transaction
     failed = False
 
-    def lost(callback):
+    from contextlib import contextmanager
+
+    @contextmanager
+    def lost():
         nonlocal failed
-        result = original(callback)
+        with original() as session:
+            yield session
         if not failed:
             failed = True
             raise DatabaseUnavailable("Synthetic lost acknowledgement")
-        return result
 
-    monkeypatch.setattr(backend, "transaction", lost)
+    monkeypatch.setattr(backend, "session_transaction", lost)
     with pytest.raises(DatabaseUnavailable):
         store.add_file("/", "safe.txt", 77, 2**32, operation_id="lost-ack-operation")
     row = store.add_file("/", "safe.txt", 77, 2**32, operation_id="lost-ack-operation")
@@ -631,8 +635,6 @@ def test_multiple_independent_share_links_survive_mongo_reopen_and_snapshot(
     store, backend
 ):
     from datetime import UTC, datetime, timedelta
-
-    from tgdrive.storage.store import MongoStore
 
     folder = store.create_folder("/", "Reading")
     target = path(folder)

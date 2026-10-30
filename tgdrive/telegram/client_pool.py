@@ -228,8 +228,8 @@ class ClientPool:
 
     @staticmethod
     def _validate_upload_limit(value: int) -> None:
-        if type(value) is not int or not 1 <= value <= 4:
-            raise ValueError("Uploads per bot must be between 1 and 4")
+        if type(value) is not int or value < 1:
+            raise ValueError("Uploads per bot must be at least 1")
 
     @property
     def uploads_per_bot(self) -> int:
@@ -237,8 +237,8 @@ class ClientPool:
 
     @staticmethod
     def _validate_media_limit(value: int) -> None:
-        if type(value) is not int or not 1 <= value <= 32:
-            raise ValueError("Combined media activity must be between 1 and 32")
+        if type(value) is not int or value < 1:
+            raise ValueError("Combined media activity must be at least 1")
 
     @property
     def media_per_bot(self) -> int:
@@ -252,8 +252,8 @@ class ClientPool:
 
     @staticmethod
     def _validate_queue_limit(value: int) -> None:
-        if type(value) is not int or not 1 <= value <= 4096:
-            raise ValueError("Telegram queue limit must be between 1 and 4096")
+        if type(value) is not int or value < 1:
+            raise ValueError("Telegram queue limit must be at least 1")
 
     async def set_media_queue_limit(self, value: int) -> None:
         self._validate_queue_limit(value)

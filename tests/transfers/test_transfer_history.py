@@ -652,8 +652,9 @@ async def test_task_history_http_bounds_owner_boundary_and_current_folder_metada
             )
             assert excluded.json()["jobs"] == []
             assert excluded.json()["total_tasks"] == 0
+            # Signed-in requests have no fixed body size; malformed JSON is 422.
             response = client.post(route, content=b"x" * (256 * 1024 + 1))
-            assert response.status_code == 413
+            assert response.status_code == 422
             assert (
                 client.get(
                     "/api/v1/transfers/history",

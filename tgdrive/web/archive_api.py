@@ -9,11 +9,11 @@ from pydantic import BaseModel, Field, StrictBool
 from tgdrive.storage.demo_files import check_path
 from tgdrive.transfers.archives import public_destination
 
-PathValue = Annotated[str, Field(min_length=1, max_length=4096)]
+PathValue = Annotated[str, Field(min_length=1)]
 
 
 class CreateArchive(BaseModel):
-    paths: list[PathValue] = Field(min_length=1, max_length=1000)
+    paths: list[PathValue] = Field(min_length=1)
     destination: PathValue = "/"
     name: str = Field(min_length=1, max_length=255)
     allow_public_exposure: StrictBool = False

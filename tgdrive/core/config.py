@@ -62,7 +62,7 @@ class Settings(BaseSettings):
         default="tgdrive", alias="MONGODB_DATABASE", pattern=r"^[A-Za-z0-9_-]{1,63}$"
     )
     mongodb_backup_seconds: int = Field(
-        default=3600, alias="MONGODB_BACKUP_SECONDS", ge=60, le=604800
+        default=3600, alias="MONGODB_BACKUP_SECONDS", ge=60
     )
     encryption_key: SecretStr = Field(alias="ENCRYPTION_KEY")
 
@@ -116,76 +116,58 @@ class Settings(BaseSettings):
 
     telegram_admin_ids_csv: str = Field(default="", alias="TELEGRAM_ADMIN_IDS")
 
-    sleep_threshold: int = Field(default=60, alias="SLEEP_THRESHOLD", ge=0, le=3600)
+    sleep_threshold: int = Field(default=60, alias="SLEEP_THRESHOLD", ge=0)
     max_file_size: int | None = Field(default=None, alias="MAX_FILE_SIZE", gt=0)
     cache_dir: Path = Field(default=Path("cache"), alias="CACHE_DIR")
     data_dir: Path = Field(default=Path("data"), alias="DATA_DIR")
     log_level: str = Field(default="INFO", alias="LOG_LEVEL")
 
-    session_ttl_seconds: int = Field(
-        default=86400, alias="SESSION_TTL_SECONDS", ge=300, le=2592000
-    )
+    session_ttl_seconds: int = Field(default=86400, alias="SESSION_TTL_SECONDS", ge=300)
     cookie_secure: bool = Field(default=True, alias="COOKIE_SECURE")
     demo_mode: bool = Field(default=False, alias="DEMO_MODE")
     allow_private_remote_urls: bool = Field(
         default=False, alias="ALLOW_PRIVATE_REMOTE_URLS"
     )
     remote_connect_timeout: float = Field(
-        default=20.0, alias="REMOTE_CONNECT_TIMEOUT", gt=0, le=300
+        default=20.0, alias="REMOTE_CONNECT_TIMEOUT", gt=0
     )
     remote_download_concurrency: int = Field(
-        default=2, alias="REMOTE_DOWNLOAD_CONCURRENCY", ge=1, le=8
+        default=2, alias="REMOTE_DOWNLOAD_CONCURRENCY", ge=1
     )
-    remote_read_timeout: float = Field(
-        default=120.0, alias="REMOTE_READ_TIMEOUT", gt=0, le=3600
-    )
+    remote_read_timeout: float = Field(default=120.0, alias="REMOTE_READ_TIMEOUT", gt=0)
     remote_total_timeout: float = Field(
-        default=21600.0, alias="REMOTE_TOTAL_TIMEOUT", gt=0, le=86400
+        default=21600.0, alias="REMOTE_TOTAL_TIMEOUT", gt=0
     )
-    remote_max_redirects: int = Field(
-        default=5, alias="REMOTE_MAX_REDIRECTS", ge=0, le=20
-    )
-    transfer_ttl_seconds: int = Field(
-        default=3600, alias="TRANSFER_TTL_SECONDS", ge=60, le=86400
-    )
+    remote_max_redirects: int = Field(default=5, alias="REMOTE_MAX_REDIRECTS", ge=0)
+    transfer_ttl_seconds: int = Field(default=3600, alias="TRANSFER_TTL_SECONDS", ge=60)
     max_concurrent_transfers: int = Field(
-        default=2, alias="MAX_CONCURRENT_TRANSFERS", ge=1, le=32
+        default=2, alias="MAX_CONCURRENT_TRANSFERS", ge=1
     )
 
     telegram_uploads_per_bot: int = Field(
-        default=1, alias="TELEGRAM_UPLOADS_PER_BOT", ge=1, le=4
+        default=1, alias="TELEGRAM_UPLOADS_PER_BOT", ge=1
     )
 
     telegram_upload_pipeline: int = Field(
-        default=4, alias="TELEGRAM_UPLOAD_PIPELINE", ge=1, le=16
+        default=4, alias="TELEGRAM_UPLOAD_PIPELINE", ge=1
     )
-    telegram_request_limit: int = Field(
-        default=8, alias="TELEGRAM_REQUEST_LIMIT", ge=1, le=32
-    )
+    telegram_request_limit: int = Field(default=8, alias="TELEGRAM_REQUEST_LIMIT", ge=1)
     telegram_parts_per_second: int = Field(
-        default=48, alias="TELEGRAM_PARTS_PER_SECOND", ge=1, le=128
+        default=48, alias="TELEGRAM_PARTS_PER_SECOND", ge=1
     )
-    telegram_media_per_bot: int = Field(
-        default=3, alias="TELEGRAM_MEDIA_PER_BOT", ge=1, le=16
-    )
-    telegram_max_queue: int = Field(
-        default=256, alias="TELEGRAM_MAX_QUEUE", ge=1, le=4096
-    )
+    telegram_media_per_bot: int = Field(default=3, alias="TELEGRAM_MEDIA_PER_BOT", ge=1)
+    telegram_max_queue: int = Field(default=256, alias="TELEGRAM_MAX_QUEUE", ge=1)
     upload_split_mib: int = Field(default=2000, alias="UPLOAD_SPLIT_MIB", ge=0, le=2000)
     cache_memory_bytes: int = Field(
-        default=256 * 1024**2, alias="CACHE_MEMORY_BYTES", ge=0, le=8 * 1024**3
+        default=256 * 1024**2, alias="CACHE_MEMORY_BYTES", ge=0
     )
-    cache_disk_bytes: int = Field(
-        default=10 * 1024**3, alias="CACHE_DISK_BYTES", ge=0, le=2 * 1024**4
-    )
+    cache_disk_bytes: int = Field(default=10 * 1024**3, alias="CACHE_DISK_BYTES", ge=0)
     cache_min_free_bytes: int = Field(
-        default=1024**3, alias="CACHE_MIN_FREE_BYTES", ge=0, le=2 * 1024**4
+        default=1024**3, alias="CACHE_MIN_FREE_BYTES", ge=0
     )
-    cache_ttl_seconds: int = Field(
-        default=86400, alias="CACHE_TTL_SECONDS", ge=60, le=2678400
-    )
+    cache_ttl_seconds: int = Field(default=86400, alias="CACHE_TTL_SECONDS", ge=60)
     auto_preload: bool = Field(default=True, alias="AUTO_PRELOAD")
-    preload_max_jobs: int = Field(default=2, alias="PRELOAD_MAX_JOBS", ge=1, le=8)
+    preload_max_jobs: int = Field(default=2, alias="PRELOAD_MAX_JOBS", ge=1)
     timezone: str = Field(default="Asia/Kolkata", alias="TIMEZONE")
 
     @field_validator("timezone")
@@ -489,11 +471,10 @@ class Settings(BaseSettings):
 
     @property
     def upload_limit(self) -> int:
-        """Logical file ceiling; Telegram message limits apply to individual parts."""
+        """Largest file the server can stage; Telegram limits apply per part."""
         return min(
             self.staging_budget_bytes,
             self.max_file_size or self.staging_budget_bytes,
-            self.bot_upload_limit * 4096,
         )
 
     @property

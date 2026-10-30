@@ -5,6 +5,7 @@ from __future__ import annotations
 import copy
 import re
 import threading
+from contextlib import contextmanager
 from types import SimpleNamespace
 
 from pymongo import DeleteOne, ReplaceOne, UpdateOne
@@ -37,7 +38,11 @@ def _matches(document, query):
         actual = _value(document, key)
         if isinstance(expected, dict):
             for operator, value in expected.items():
-                if operator == "$in" and actual not in value:
+                if operator == "$in" and not (
+                    any(item in value for item in actual)
+                    if isinstance(actual, list)
+                    else actual in value
+                ):
                     return False
                 if operator == "$nin" and actual in value:
                     return False
@@ -53,23 +58,81 @@ def _matches(document, query):
                     return False
                 if operator == "$lte" and not (actual is not None and actual <= value):
                     return False
-                if operator == "$regex" and not re.search(value, str(actual or "")):
+                if operator == "$regex" and not (
+                    any(re.search(value, str(item)) for item in actual)
+                    if isinstance(actual, list)
+                    else re.search(value, str(actual or ""))
+                ):
                     return False
+                if operator == "$all" and not (
+                    isinstance(actual, list) and all(item in actual for item in value)
+                ):
+                    return False
+                if operator == "$elemMatch" and not (
+                    isinstance(actual, list)
+                    and any(_matches({"v": item}, {"v": value}) for item in actual)
+                ):
+                    return False
+        elif isinstance(actual, list) and not isinstance(expected, list):
+            if expected not in actual:
+                return False
         elif actual != expected:
             return False
     return True
 
 
+def _sort_key(value):
+    # MongoDB orders null before numbers before strings.
+    if value is None:
+        return (0, 0)
+    if isinstance(value, bool):
+        return (3, value)
+    if isinstance(value, int | float):
+        return (1, value)
+    return (2, str(value))
+
+
+def _project(row, projection):
+    if not projection:
+        return row
+    include = {k.split(".")[0] for k, v in projection.items() if v}
+    if include:
+        return {k: v for k, v in row.items() if k in include or k == "_id"}
+    return {k: v for k, v in row.items() if k not in projection}
+
+
+def _apply(row, update):
+    for field, value in update.get("$set", {}).items():
+        row[field] = copy.deepcopy(value)
+    for field in update.get("$unset", {}):
+        row.pop(field, None)
+    for field, value in update.get("$inc", {}).items():
+        row[field] = row.get(field, 0) + value
+    for field, value in update.get("$max", {}).items():
+        row[field] = max(row.get(field, value), value)
+    for field, value in update.get("$push", {}).items():
+        row.setdefault(field, []).append(copy.deepcopy(value))
+    for field, value in update.get("$pull", {}).items():
+        values = value.get("$in", [value]) if isinstance(value, dict) else [value]
+        row[field] = [item for item in row.get(field, []) if item not in values]
+
+
 class Cursor(list):
     def sort(self, fields, direction=None):
         if isinstance(fields, str):
-            fields = [(fields, direction)]
+            fields = [(fields, direction or 1)]
         for key, direction in reversed(fields):
-            super().sort(key=lambda row: _value(row, key), reverse=direction < 0)
+            super().sort(
+                key=lambda row, key=key: _sort_key(_value(row, key)),
+                reverse=direction < 0,
+            )
         return self
 
+    def skip(self, count):
+        return Cursor(self[count:])
+
     def limit(self, count):
-        return Cursor(self[:count])
+        return Cursor(self[:count] if count else self)
 
     def batch_size(self, _count):
         return self
@@ -79,14 +142,56 @@ class Collection:
     def __init__(self):
         self.rows = []
 
-    def find(self, query=None, **_kwargs):
-        return Cursor(copy.deepcopy([r for r in self.rows if _matches(r, query or {})]))
+    def find(self, query=None, projection=None, **_kwargs):
+        return Cursor(
+            copy.deepcopy(
+                [_project(r, projection) for r in self.rows if _matches(r, query or {})]
+            )
+        )
 
-    def find_one(self, query=None, *, sort=None, **_kwargs):
+    def find_one(self, query=None, projection=None, *, sort=None, **_kwargs):
         rows = self.find(query)
         if sort:
             rows.sort(sort)
-        return next(iter(rows), None)
+        row = next(iter(rows), None)
+        return None if row is None else _project(row, projection)
+
+    def aggregate(self, pipeline, **_kwargs):
+        """Only the ancestor lookup shape the catalog uses: $match + $graphLookup."""
+        rows = list(self.rows)
+        for stage in pipeline:
+            if "$match" in stage:
+                rows = [row for row in rows if _matches(row, stage["$match"])]
+            elif "$graphLookup" in stage:
+                spec = stage["$graphLookup"]
+                by_key = {}
+                source = self.database[spec["from"]].rows
+                for row in source:
+                    by_key.setdefault(row.get(spec["connectToField"]), []).append(row)
+                result = []
+                for row in rows:
+                    found, seen, depth = [], set(), 0
+                    frontier = [row.get(spec["startWith"].removeprefix("$"))]
+                    while frontier:
+                        following = []
+                        for key in frontier:
+                            for match in by_key.get(key, []):
+                                if match["_id"] in seen:
+                                    continue
+                                seen.add(match["_id"])
+                                item = copy.deepcopy(match)
+                                if "depthField" in spec:
+                                    item[spec["depthField"]] = depth
+                                found.append(item)
+                                following.append(match.get(spec["connectFromField"]))
+                        frontier, depth = following, depth + 1
+                    result.append(dict(copy.deepcopy(row), **{spec["as"]: found}))
+                rows = result
+            elif "$project" in stage:
+                rows = [_project(row, stage["$project"]) for row in rows]
+            else:
+                raise AssertionError(f"Unsupported synthetic stage: {stage}")
+        return iter(copy.deepcopy(rows))
 
     def count_documents(self, query, **_kwargs):
         return len(self.find(query))
@@ -131,23 +236,30 @@ class Collection:
         count = 0
         for row in self.rows:
             if _matches(row, query):
-                row.update(copy.deepcopy(update.get("$set", {})))
+                _apply(row, update)
                 count += 1
-        return SimpleNamespace(matched_count=count)
+        return SimpleNamespace(matched_count=count, modified_count=count)
 
     def update_one(self, query, update, *, upsert=False, **_kwargs):
-        row = self.find_one(query)
-        created = row is None
-        if row is None:
-            if not upsert:
-                return SimpleNamespace(matched_count=0)
-            row = copy.deepcopy(query)
-        if created:
-            row.update(copy.deepcopy(update.get("$setOnInsert", {})))
-        row.update(copy.deepcopy(update.get("$set", {})))
-        for field, value in update.get("$max", {}).items():
-            row[field] = max(row.get(field, value), value)
-        return self.replace_one(query, row, upsert=upsert)
+        for row in self.rows:
+            if _matches(row, query):
+                _apply(row, update)
+                return SimpleNamespace(matched_count=1, modified_count=1)
+        if not upsert:
+            return SimpleNamespace(matched_count=0, modified_count=0)
+        row = {k: v for k, v in copy.deepcopy(query).items() if not k.startswith("$")}
+        row.update(copy.deepcopy(update.get("$setOnInsert", {})))
+        _apply(row, update)
+        self.insert_one(row)
+        return SimpleNamespace(matched_count=0, modified_count=0)
+
+    def find_one_and_update(self, query, update, *, return_document=False, **_kwargs):
+        for row in self.rows:
+            if _matches(row, query):
+                before = copy.deepcopy(row)
+                _apply(row, update)
+                return copy.deepcopy(row) if return_document else before
+        return None
 
     def bulk_write(self, requests, **_kwargs):
         for request in requests:
@@ -156,10 +268,7 @@ class Collection:
             elif isinstance(request, DeleteOne):
                 self.delete_one(request._filter)
             elif isinstance(request, UpdateOne):
-                row = self.find_one(request._filter)
-                if row is not None:
-                    row.update(request._doc.get("$set", {}))
-                    self.replace_one(request._filter, row)
+                self.update_one(request._filter, request._doc)
             else:
                 raise AssertionError("Unsupported synthetic database operation")
 
@@ -169,7 +278,10 @@ class Database:
         self.collections = {}
 
     def __getitem__(self, name):
-        return self.collections.setdefault(name, Collection())
+        if name not in self.collections:
+            self.collections[name] = Collection()
+            self.collections[name].database = self
+        return self.collections[name]
 
     def __getattr__(self, name):
         return self[name]
@@ -193,6 +305,19 @@ class FakeMongoBackend:
 
     def write(self, collection, method, *args, **kwargs):
         return getattr(collection, method)(*args, **kwargs)
+
+    @contextmanager
+    def session_transaction(self):
+        before = {
+            name: copy.deepcopy(value.rows)
+            for name, value in self.db.collections.items()
+        }
+        try:
+            yield object()
+        except BaseException:
+            for name in list(self.db.collections):
+                self.db.collections[name].rows = before.get(name, [])
+            raise
 
     def transaction(self, operation):
         before = {
@@ -250,10 +375,16 @@ def reopen_store(path):
     return MongoStore(_STORE_BACKENDS[str(path)])
 
 
+def catalog_counters(payload):
+    from tgdrive.storage.mongo_store import catalog_counters as counters
+
+    return counters(payload)
+
+
 def store_from_payload(payload, *, revoke_shares=False):
     """Load a validated portable catalog into a fresh synthetic database."""
-    from tgdrive.replication.replica_activation import _mongo_nodes
     from tgdrive.storage.mongo_store import MongoStore
+    from tgdrive.storage.mongo_store import mongo_nodes as _mongo_nodes
     from tgdrive.storage.store import SCHEMA_VERSION
 
     MongoStore._validate_payload(payload)
@@ -269,6 +400,7 @@ def store_from_payload(payload, *, revoke_shares=False):
             "backed_up_revision": payload["backed_up_revision"],
             "generation": 0,
             "storage_channel_id": payload.get("storage_channel_id"),
+            **catalog_counters(payload),
         }
     )
     db.nodes.insert_many(_mongo_nodes(payload))

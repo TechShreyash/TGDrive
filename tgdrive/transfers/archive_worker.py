@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import json
 import logging
 import os
@@ -13,12 +14,8 @@ from contextlib import contextmanager
 from pathlib import Path
 
 BLOCK = 1024**2
-MAX_ENTRIES = 1000
-MAX_DEPTH = 64
-MAX_MANIFEST_BYTES = 4 * BLOCK
-MAX_MEMORY_BYTES = 512 * BLOCK
-MAX_CPU_SECONDS = 600
-TAR_METADATA_BYTES = 8 * BLOCK + MAX_ENTRIES * 1024
+# Tar headers are read through the same staging budget as their payloads.
+TAR_METADATA_BYTES = 8 * BLOCK
 FORMATS = {
     ".tar.gz": ("tar", "gzip"),
     ".tgz": ("tar", "gzip"),
@@ -78,7 +75,7 @@ class Manifest:
     def __init__(self, limit, budget):
         self.limit, self.budget = limit, budget
         self.files, self.folders, self.explicit, self.file_keys = [], {}, set(), set()
-        self.size = self.metadata = 0
+        self.size = 0
 
     def add(self, name, *, directory, size, index, container):
         if container != "zip":
@@ -95,8 +92,6 @@ class Manifest:
             if directory and name.endswith("/")
             else name.split("/")
         )
-        if len(parts) > MAX_DEPTH or len(name) > 4096:
-            raise WorkerError("Archive paths exceed 64 components or 4096 characters.")
         normalized = []
         for part in parts:
             value = unicodedata.normalize("NFC", part)
@@ -128,9 +123,6 @@ class Manifest:
                 )
             if parent not in self.folders:
                 self.folders[parent] = actual
-                self.metadata += (
-                    len(json.dumps(actual, ensure_ascii=False).encode()) + 1
-                )
         if directory:
             if size not in {0, None}:
                 raise WorkerError("Archive directory entries must be empty.")
@@ -149,22 +141,9 @@ class Manifest:
             self.file_keys.add(key)
             item = {"name": "/".join(parts), "size": size, "index": index}
             self.files.append(item)
-            self.metadata += len(json.dumps(item, ensure_ascii=False).encode()) + 1
             self.size += size or 0
-        if (
-            len(self.files) + len(self.folders) > MAX_ENTRIES
-            or len(self.explicit) > MAX_ENTRIES
-        ):
-            raise WorkerError(
-                "An archive supports at most 1000 files and folders "
-                "including implicit folders."
-            )
         if self.size > self.budget:
             raise WorkerError("Archive and extracted files exceed the staging budget.")
-        if self.metadata > MAX_MANIFEST_BYTES:
-            raise WorkerError(
-                "The expanded archive manifest exceeds the 4 MiB job metadata limit."
-            )
         return item
 
     def result(self):
@@ -173,13 +152,6 @@ class Manifest:
             "folders": sorted(self.folders.values(), key=lambda p: (len(p), p)),
             "size": self.size,
         }
-        if (
-            len(json.dumps(plan, ensure_ascii=False, separators=(",", ":")).encode())
-            > MAX_MANIFEST_BYTES
-        ):
-            raise WorkerError(
-                "The expanded archive manifest exceeds the 4 MiB job metadata limit."
-            )
         return plan
 
 
@@ -372,8 +344,6 @@ def extract(request):
         for index, entry in enumerate(archive):
             if stream and stream.failure:
                 raise stream.failure
-            if index >= MAX_ENTRIES:
-                raise WorkerError("An archive supports at most 1000 entries.")
             if encrypted(entry._entry_p):
                 raise WorkerError("Encrypted archives are unsupported.")
             if (
@@ -408,8 +378,10 @@ def run():
     import resource
 
     os.umask(0o077)
-    resource.setrlimit(resource.RLIMIT_AS, (MAX_MEMORY_BYTES, MAX_MEMORY_BYTES))
-    resource.setrlimit(resource.RLIMIT_CPU, (MAX_CPU_SECONDS, MAX_CPU_SECONDS))
+    # No memory or CPU caps: the archive's owner decides what to extract. The
+    # kernel kills this worker, not TGDrive, if it ever exhausts memory.
+    with contextlib.suppress(OSError), open("/proc/self/oom_score_adj", "w") as f:
+        f.write("1000")
     resource.setrlimit(resource.RLIMIT_NOFILE, (32, 32))
     resource.setrlimit(resource.RLIMIT_CORE, (0, 0))
     request = json.loads(sys.stdin.buffer.readline(16384))

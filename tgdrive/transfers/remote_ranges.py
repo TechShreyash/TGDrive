@@ -35,7 +35,7 @@ class RangePolicy:
             raise ValueError(
                 "parallel threshold must cover at least two positive blocks"
             )
-        if not 1 <= self.max_connections <= 8 or self.sample_seconds <= 0:
+        if self.max_connections < 1 or self.sample_seconds <= 0:
             raise ValueError("invalid remote range concurrency or sample interval")
 
 

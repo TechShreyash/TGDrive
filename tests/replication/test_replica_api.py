@@ -359,31 +359,20 @@ def test_recovery_file_import_requires_authentication_and_same_origin(owner):
     replica.inspect_file.assert_not_awaited()
 
 
-def test_recovery_file_import_body_limit_applies_with_and_without_content_length(
-    owner, monkeypatch
-):
+def test_recovery_file_import_streams_large_files_without_a_size_limit(owner):
     client, _, replica = owner
-    replica.inspect_file = AsyncMock()
+    replica.inspect_file = AsyncMock(return_value={"phase": "paused"})
     login(client)
-    monkeypatch.setattr("tgdrive.replication.replica_state.MAX_BUNDLE", 128)
-    headers = {
-        "Content-Type": "application/octet-stream",
-        "X-TGDrive-Recovery-Key": "a1" * 32,
-    }
     response = client.post(
         "/api/v1/replica/import",
-        content=b"ciphertext",
-        headers=headers | {"Content-Length": "129"},
+        content=iter([b"x" * (1024**2)] * 70),  # Above the former 64 MiB cap.
+        headers={
+            "Content-Type": "application/octet-stream",
+            "X-TGDrive-Recovery-Key": "a1" * 32,
+        },
     )
-    assert response.status_code == 413
-    response = client.post(
-        "/api/v1/replica/import",
-        content=iter([b"x" * 65, b"x" * 64]),
-        headers=headers,
-    )
-    assert response.status_code == 413
-    assert not list(replica.directory.glob(".replica-import-*"))
-    replica.inspect_file.assert_not_awaited()
+    assert response.status_code != 413
+    replica.inspect_file.assert_awaited_once()
 
 
 def test_recovery_file_import_remains_available_during_recovery_and_connection_repair(

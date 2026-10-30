@@ -6,7 +6,6 @@ import uuid
 import pytest
 from fastapi.testclient import TestClient
 
-import tgdrive.storage.mongo_store as store_module
 from tests.support.app_fixtures import FakeRuntime, login, make_settings
 from tests.support.mongo_fixtures import new_store, reopen_store, store_from_payload
 from tgdrive.core.errors import (
@@ -132,27 +131,21 @@ def test_unicode_is_normalized_and_order_does_not_change_request_identity():
     store.close()
 
 
-def test_folder_and_absolute_depth_bounds_are_enforced_atomically(monkeypatch):
+def test_folder_trees_have_no_size_or_depth_limit():
     store = new_store()
-    first = prepare(store, folders=[[str(n)] for n in range(999)])
-    assert len(first["folders"]) == 1000
-    before = store.export()
-    with pytest.raises(ValidationError, match="1000"):
-        prepare(store, folders=[[str(n)] for n in range(1000)])
-    assert store.export() == before
-    deep = [["x"] * n for n in range(1, 64)]
+    wide = prepare(store, folders=[[str(n)] for n in range(1500)])
+    assert len(wide["folders"]) == 1501
+    deep = [["x"] * n for n in range(1, 300)]
     result = prepare(store, folders=deep)
-    assert len(result["folders"]) == 64
-    monkeypatch.setattr(store_module, "MAX_TREE_DEPTH", 3)
-    before = store.export()
-    with pytest.raises(ValidationError, match="depth"):
-        prepare(store, destination=result["folders"]["x"], folders=[["a"], ["a", "b"]])
-    assert store.export() == before
-    with monkeypatch.context() as limited:
-        limited.setattr(store_module, "MAX_TREE_ITEMS", 2)
-        with pytest.raises(ValidationError, match="catalog size"):
-            prepare(store)
-    assert store.export() == before
+    assert len(result["folders"]) == 300
+    nested = prepare(
+        store,
+        destination=result["folders"]["/".join(["x"] * 299)],
+        folders=[["a"], ["a", "b"]],
+    )
+    assert len(nested["folders"]) == 3
+    assert store.resolve_id(nested["root"]["id"]).count("/") == 301
+    store.export()  # The deep tree validates without recursion limits.
     store.close()
 
 
@@ -163,7 +156,7 @@ def test_database_failure_rolls_back_every_node_and_idempotency_record(monkeypat
     def fail_commit(*_args, **_kwargs):
         raise RuntimeError("injected commit failure")
 
-    monkeypatch.setattr(store.backend.db.preparations, "bulk_write", fail_commit)
+    monkeypatch.setattr(store.backend.db.catalog, "find_one_and_update", fail_commit)
     with pytest.raises(RuntimeError, match="injected"):
         prepare(store, folders=[["Child"], ["Child", "Nested"]])
     monkeypatch.undo()
@@ -267,7 +260,7 @@ def payload(**overrides):
 
 
 def test_tree_route_auth_body_schema_replay_and_conflict(client):
-    http, store = client
+    http, _store = client
     request = payload()
     assert http.post("/api/v1/folders/tree", json=request).status_code == 401
     login(http)
@@ -293,9 +286,8 @@ def test_tree_route_auth_body_schema_replay_and_conflict(client):
         ).status_code
         == 400
     )
-    oversized = payload(folders=[[str(n) + "x" * 100] for n in range(999)])
-    assert http.post("/api/v1/folders/tree", json=oversized).status_code == 413
-    assert len(store.get_directory("/")["contents"]) == 1
+    large = payload(folders=[[str(n) + "x" * 100] for n in range(999)])
+    assert http.post("/api/v1/folders/tree", json=large).status_code == 201
 
 
 def test_tree_inherits_existing_folder_share_without_new_credentials(client):

@@ -66,41 +66,48 @@ and test layout is described in the
 
 ## Authoritative data and identity
 
-**MongoDB is the source of truth**, including on laptops. The in-memory catalog
-is an immutable read cache: it speeds up reads while MongoDB keeps saved state.
-Its collections hold nodes and ordered parts,
+**MongoDB holds the catalog and answers every catalog query.** TGDrive keeps no
+copy of the catalog in its own memory, so server RAM does not grow with the
+number of files and startup does not load the drive. MongoDB caches frequently
+used data in its own memory. Collections hold nodes (with ordered file parts),
 shares, operation IDs, jobs and receipts, deletion intents, private settings and
 sessions, backup records and the runtime ownership lease.
 
-Directory responses are assembled in workers, and resource totals reuse an
-unchanged committed snapshot. See [navigation during uploads](performance.md#navigation-during-uploads)
-for browser update, polling and read-reuse policies.
-Bulk move, Trash and restore share a working copy for the batch rather than
-copying the catalog per item; name, ancestry and share checks still depend on
-catalog size.
+**TGDrive sets no limit on items, folder depth or catalog size.** MongoDB's
+storage is the limit. On the free 512 MB Atlas tier that is roughly 300,000
+items, because names, word tokens and three-letter search pieces are indexed.
+
+| Query | How MongoDB answers it |
+| --- | --- |
+| Folder page | Index on parent, trash state and the sort field |
+| Duplicate name | Unique index on parent and case-folded name |
+| Location, breadcrumbs, share scope, Trash state | One `$graphLookup` up the parent chain |
+| Search | Word-start tokens and three-letter pieces, both indexed |
+| Drive totals | Counters updated inside each write transaction |
+| Old deletions, folder preparations, expired links | TTL indexes remove them after 7 or 30 days |
+
+Trashing or restoring a folder updates that one document; items inside are
+hidden through it. Permanent deletion walks the subtree in batches.
 
 - Paths use stable item IDs: moves and renames retain identity.
 - Names are Unicode-normalized with case-insensitive sibling uniqueness.
-- Files reference one Telegram document or ordered parts with offsets, sizes
-  and checksums. Public listings hide those locations.
-- Schema version 4 tracks revision/commit generation. Catalog bounds are
-  128 levels and 250,000 items. The generation identifies the committed revision
-  so an older writer cannot overwrite newer state.
+- Files reference one Telegram document or any number of ordered parts with
+  offsets, sizes and checksums. Public listings hide those locations.
+- Schema version 5 tracks revision and commit generation.
 
-MongoDB is the only database.
-Only the current portable schema (4) is accepted for channel recovery.
-Snapshots must include their drive identity and share records. TGDrive does not
-import v1 pickle data or upgrade older catalog schemas.
+TGDrive 2.3 starts only on a new database. A database from an earlier version
+is refused at startup, so it can never be overwritten. Channel recovery accepts
+only schema 5 files.
 
 ### How a write becomes visible
 
-1. Change an isolated working copy.
-2. In a MongoDB transaction, check ownership and generation, then commit with
-   majority acknowledgement. Unique indexes enforce active sibling names.
-3. Publish the new read cache.
+1. Open a MongoDB transaction and make the change with targeted updates.
+2. Check ownership, bump the generation and commit with majority
+   acknowledgement. Unique indexes enforce active sibling names.
+3. Readers see the change once MongoDB commits it.
 
-Failure preserves the earlier visible state. Uncertain acknowledgement reloads
-MongoDB authority before further work.
+A failure aborts the whole transaction, including every step of a batch. After
+an uncertain acknowledgement, retrying with the same operation ID is safe.
 
 ## Lifecycle
 
@@ -227,8 +234,8 @@ Visitor steps and deployment limits live in [public demo mode](configuration.md#
 Browser receiving and Telegram dispatch run independently. An **upload receipt**
 records the device bytes the server has confirmed. Each completed receipt creates
 a durable job without waiting for its batch. Device receives start at two
-files and adapt between one and four; staging, disk headroom and the 1,000
-unfinished-receipt bound gate admission.
+files and adapt between one and four; staging space and disk headroom gate
+admission.
 
 Device slots rotate between eligible batches. A new receipt reuses the creation
 response; existing receipts fetch their confirmed offset and checksums before
@@ -583,8 +590,9 @@ before committing the recovered state, and requires a service restart. The
 surviving channel's documents remain intact.
 
 Recovery bytes are verified before confirmation; media and recovered mappings
-must verify before activation. V2 files are bounded to 64 MiB encrypted and
-1 GiB expanded. They omit original Telegram media and staged payloads. See
+must verify before activation. A recovery file is one Telegram document, so
+Telegram's 2000 MiB document limit applies; TGDrive adds no other size limit.
+Files omit original Telegram media and staged payloads. See
 [recovery steps](backup-recovery.md) and [security](reference.md#security-and-privacy).
 
 ### Independent backup pacing and verification

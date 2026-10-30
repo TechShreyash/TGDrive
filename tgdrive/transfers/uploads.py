@@ -259,10 +259,6 @@ class ResumableUploads:
         else:
             binding = self.manager.store.upload_destination(parent_id)
             parent_id = binding["path"]
-        active = self._all()
-        active = [item for item in active if item["state"] in _ACTIVE]
-        if len(active) >= 1000:
-            raise UploadError("Too many unfinished upload sessions", 429)
         try:
             check_staging(self.settings, self.manager, total_size, receipts=self)
         except StorageUnavailable as exc:

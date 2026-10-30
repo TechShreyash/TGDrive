@@ -21,10 +21,8 @@ from bson import json_util
 from pydantic import SecretStr
 
 from tgdrive.core.config import Settings
-from tgdrive.recovery.mongo_backup import MAX_EXPANDED
-from tgdrive.replication.replica_state import MAX_BUNDLE, atomic_private, read_private
+from tgdrive.replication.replica_state import atomic_private, read_private
 from tgdrive.settings.managed_settings import (
-    MAX_CLIENTS,
     ManagedClient,
     ManagedDocument,
     SettingsProblem,
@@ -105,9 +103,6 @@ def _document(credentials, revision):
     for row in original.clients:
         if row.kind == "bot" and row.credential.get_secret_value() in active:
             continue
-        if len(clients) >= MAX_CLIENTS:
-            # The full original remains in the private manifest/capsule.
-            break
         identity = row.id
         if identity in identifiers:
             identity = (
@@ -439,7 +434,7 @@ def _load(settings):
     if not path.exists() and not path.is_symlink():
         return None
     try:
-        content = read_private(path, maximum=MAX_EXPANDED)
+        content = read_private(path)
         value = json_util.loads(content, object_pairs_hook=_object)
         if (
             not isinstance(value, dict)
@@ -458,8 +453,6 @@ def _load(settings):
             or value["version"] != 1
             or value["phase"] not in _PHASES
         ):
-            raise ValueError
-        if "database" not in value["candidate"] and len(content) > MAX_BUNDLE:
             raise ValueError
         checked = _candidate(settings, value["candidate"])
         if checked != value["candidate"] or value["backend"] != "mongodb":
@@ -488,10 +481,6 @@ def _load(settings):
 
 def _write(settings, value):
     content = _raw(value)
-    maximum = MAX_EXPANDED if "database" in value["candidate"] else MAX_BUNDLE
-    if len(content) > maximum:
-        limit = "1 GiB" if "database" in value["candidate"] else "64 MiB"
-        raise ActivationError(f"Recovery activation exceeds the {limit} limit.")
     atomic_private(_manifest_path(settings), content)
 
 
@@ -607,10 +596,10 @@ def _archive_dir(directory, identity):
     return archive
 
 
-def _preserve_mongo(backend, archive, *, maximum=MAX_BUNDLE):
+def _preserve_mongo(backend, archive):
     destination = archive / "mongodb-before.json"
     if destination.exists() or destination.is_symlink():
-        read_private(destination, maximum=maximum)
+        read_private(destination)
         return
     temporary = archive / (".mongodb-preserve-" + secrets.token_hex(12))
 
@@ -618,16 +607,9 @@ def _preserve_mongo(backend, archive, *, maximum=MAX_BUNDLE):
         backend.fence(session)
         temporary.unlink(missing_ok=True)
         fd = os.open(temporary, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
-        total = 0
         with os.fdopen(fd, "wb") as target:
 
             def write(content):
-                nonlocal total
-                total += len(content)
-                if total > maximum:
-                    raise ActivationError(
-                        "MongoDB preservation exceeds the safe recovery limit."
-                    )
                 target.write(content)
 
             write(b"{")
@@ -659,42 +641,14 @@ def _preserve(settings, value, backend):
     archive = _archive_dir(directory, value["id"])
     archive.mkdir(parents=True, exist_ok=True, mode=0o700)
     atomic_private(archive / MANIFEST, _raw(value))
-    _preserve_mongo(
-        backend,
-        archive,
-        maximum=MAX_EXPANDED if "database" in value["candidate"] else MAX_BUNDLE,
-    )
+    _preserve_mongo(backend, archive)
     return archive
 
 
 def _mongo_nodes(catalog):
-    from tgdrive.storage.mongo_store import MongoStore
+    from tgdrive.storage.mongo_store import mongo_nodes
 
-    stack = [(catalog["root"], None)]
-    rows = []
-    while stack:
-        node, parent = stack.pop()
-        values = {
-            key: copy.deepcopy(node[key])
-            for key in (
-                "upload_date",
-                "trashed",
-                "starred",
-                "message_id",
-                "size",
-                "parts",
-                "sha256",
-                "poster",
-            )
-            if key in node
-        }
-        values["part_count"] = len(node.get("parts") or [None])
-        rows.append(
-            MongoStore._node(node["id"], parent, node["name"], node["type"], **values)
-        )
-        if node["type"] == "folder":
-            stack.extend((child, node["id"]) for child in node["children"].values())
-    return rows
+    return mongo_nodes(catalog)
 
 
 def _apply_mongo(settings, value, backend):
@@ -711,6 +665,8 @@ def _apply_mongo(settings, value, backend):
             if settings.admin_password_hash
             else PasswordHasher().hash(settings.admin_password.get_secret_value())
         )
+
+    from tgdrive.storage.mongo_store import catalog_counters
 
     def replace(session):
         backend.fence(session)
@@ -782,6 +738,7 @@ def _apply_mongo(settings, value, backend):
             "storage_channel_id": candidate["catalog"]["storage_channel_id"],
             "generation": (before or {}).get("generation", 0) + 1,
             "replica_activation_id": value["id"],
+            **catalog_counters(candidate["catalog"]),
         }
         backend.db.catalog.replace_one(
             {"_id": "catalog"}, metadata, upsert=True, session=session

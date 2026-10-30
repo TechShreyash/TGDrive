@@ -98,8 +98,7 @@ class FakeBackup:
 
     async def backup(self, store: MongoStore) -> bool:
         self.backups += 1
-        revision, _ = store.snapshot()
-        store.mark_backed_up(revision)
+        store.export()
         return True
 
     def start(self, _store: MongoStore) -> None:

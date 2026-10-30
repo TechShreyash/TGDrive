@@ -25,7 +25,6 @@ from tgdrive.storage.demo_files import (
 )
 from tgdrive.storage.store import (
     MAX_NAME_LENGTH,
-    MAX_SEARCH_OFFSET,
     ROOT_ID,
     FolderTreeConflictError,
 )
@@ -45,48 +44,48 @@ class TransferLocationRequest(BaseModel):
     transfer_id: str | None = Field(
         default=None, min_length=1, max_length=128, pattern=r"^[A-Za-z0-9_-]+$"
     )
-    destination: str = Field(default="/", max_length=4096)
+    destination: str = Field(default="/")
     completed: bool = False
 
 
 class ClearTransferHistoryRequest(BaseModel):
-    exclude_folders: list[str] = Field(default_factory=list, max_length=2000)
+    exclude_folders: list[str] = Field(default_factory=list)
 
 
 class UploadCreate(BaseModel):
     name: str = Field(min_length=1, max_length=1024)
-    parent_id: str = Field(default="/", max_length=4096)
+    parent_id: str = Field(default="/")
     total_size: int = Field(gt=0)
     folder_upload: FolderUploadMetadata | None = None
 
 
 class StarItem(BaseModel):
-    path: str = Field(min_length=1, max_length=4096)
+    path: str = Field(min_length=1)
     starred: StrictBool
 
 
 class ShareCreate(BaseModel):
-    path: str = Field(min_length=1, max_length=4096)
+    path: str = Field(min_length=1)
     expires_in_days: int | None = Field(default=7, ge=1, le=3650)
     expires_at: datetime | None = None
     label: str = Field(default="", max_length=80)
 
 
 class MoveItems(BaseModel):
-    paths: list[str] = Field(min_length=1, max_length=1000)
-    destination: str = Field(min_length=1, max_length=4096)
+    paths: list[str] = Field(min_length=1)
+    destination: str = Field(min_length=1)
     conflict: Literal["keep_both", "skip"] = "keep_both"
     allow_public_exposure: bool = False
 
 
 class BulkItems(BaseModel):
-    paths: list[str] = Field(min_length=1, max_length=1000)
+    paths: list[str] = Field(min_length=1)
     action: Literal["trash", "restore", "delete"]
     allow_public_exposure: bool = False
 
 
 class RevokeShare(BaseModel):
-    path: str | None = Field(default=None, min_length=1, max_length=4096)
+    path: str | None = Field(default=None, min_length=1)
     share_id: str | None = Field(
         default=None, min_length=1, max_length=128, pattern=r"^[A-Za-z0-9_-]+$"
     )
@@ -253,7 +252,7 @@ def register_routes(
     async def search(
         request: Request,
         q: str = Query(min_length=1, max_length=MAX_NAME_LENGTH),
-        offset: int = Query(default=0, ge=0, le=MAX_SEARCH_OFFSET),
+        offset: int = Query(default=0, ge=0),
         limit: int = Query(default=100, ge=1, le=200),
         sort: Literal["name", "date", "size"] = "name",
         order: Literal["asc", "desc"] | None = None,

@@ -88,10 +88,10 @@ class MediaScheduler:
         self._successes = 0
 
     def configure(self, *, limit: int, rate: float) -> None:
-        if type(limit) is not int or not 1 <= limit <= 32:
-            raise ValueError("Telegram request limit must be between 1 and 32")
-        if not 1 <= rate <= 512:
-            raise ValueError("Telegram request rate must be between 1 and 512")
+        if type(limit) is not int or limit < 1:
+            raise ValueError("Telegram request limit must be at least 1")
+        if not rate >= 1:
+            raise ValueError("Telegram request rate must be at least 1")
         self.limit = limit
         self.rate = float(rate)
         self.effective_limit = limit

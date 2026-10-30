@@ -301,7 +301,7 @@ async def test_worker_resource_failure_is_reaped_without_publishing(
         )
         await finish(job)
         assert job.status is TransferStatus.ERROR
-        assert "resource limits" in job.error
+        assert "stopped unexpectedly" in job.error
         assert process is not None and process.returncode != 0
         assert len(manager.store.list_directory("/")) == 1
     finally:
@@ -320,21 +320,20 @@ def test_rar_rejects_volume_and_encryption_flags(tmp_path):
             rar_header(path)
 
 
-def test_manifest_bounds_depth_and_implicit_folders():
-    with pytest.raises(WorkerError, match="64 components"):
-        Manifest(1024, 1024).add(
-            "/".join(["a"] * 65), directory=False, size=1, index=0, container="tar"
+def test_manifest_has_no_depth_or_entry_count_limit():
+    deep = Manifest(1024, 1024)
+    deep.add("/".join(["a"] * 300), directory=False, size=1, index=0, container="tar")
+    assert len(deep.result()["folders"]) == 299
+    plan = Manifest(10_000, 10_000)
+    for index in range(1500):
+        plan.add(
+            f"folder{index}/data",
+            directory=False,
+            size=1,
+            index=index,
+            container="7zip",
         )
-    plan = Manifest(1024, 1024)
-    with pytest.raises(WorkerError, match="1000"):
-        for index in range(501):
-            plan.add(
-                f"folder{index}/data",
-                directory=False,
-                size=1,
-                index=index,
-                container="7zip",
-            )
+    assert len(plan.result()["files"]) == 1500
 
 
 def test_native_warning_prevents_returning_a_publishable_manifest(

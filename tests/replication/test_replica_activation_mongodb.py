@@ -75,7 +75,6 @@ def deployment(tmp_path):
             ADMIN_PASSWORD="synthetic recovery owner password",
             SESSION_SECRET="s" * 40,
             ENCRYPTION_KEY="e" * 64,
-            MONGODB_BACKUP_KEY="e" * 64,
         )
         store = MongoStore.create(backend)
         store.bind_storage_channel(OLD)
@@ -486,7 +485,6 @@ def test_live_mongo_unified_file_restores_durable_state_without_replaying_work(
     )
     assert "data" not in history[0] and "context" not in history[0]["summary"]
     bootstrap = backend.db.settings.find_one({"_id": "bootstrap"})["document"]
-    assert bootstrap["MONGODB_BACKUP_KEY"] == candidate["key"]
     assert bootstrap["STORAGE_CHANNEL"] == NEW and bootstrap["BOT_TOKENS"] == NEW_BOT
     assert PasswordHasher().verify(
         bootstrap["ADMIN_PASSWORD_HASH"], "synthetic recovery owner password"

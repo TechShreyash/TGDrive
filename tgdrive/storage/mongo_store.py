@@ -1,8 +1,10 @@
-"""Native MongoDB catalog with atomic commits and a single-owner read cache.
+"""Native MongoDB catalog: every read and write is a MongoDB query.
 
-The cache is rebuilt from MongoDB at startup. No local catalog file or SQL
-database participates in MongoDB operation. Mutations commit changed documents
-and the catalog generation together before the caller observes success.
+No catalog copy lives in process memory; MongoDB caches what is used. Folder
+listings, names, search and shares use indexes, ancestry is one ``$graphLookup``
+and drive totals are counters updated inside each write transaction. TGDrive
+imposes no item-count, depth or snapshot-size limit; MongoDB's storage is the
+limit. Writes run in majority transactions fenced by the ownership lease.
 """
 
 from __future__ import annotations
@@ -10,7 +12,7 @@ from __future__ import annotations
 import copy
 import hashlib
 import hmac
-import json
+import re
 import secrets
 import threading
 import unicodedata
@@ -18,17 +20,15 @@ from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
-from pymongo import DeleteOne, ReplaceOne
+from pymongo import ASCENDING, DESCENDING
 
 from tgdrive.core.errors import (
     CorruptStoreError,
     DuplicateNameError,
     InvalidPathError,
-    InvalidRevisionError,
     NotDirectoryError,
     NotFileError,
     NotFoundError,
-    PersistenceError,
     RootMutationError,
     TrashedItemError,
     UnsupportedSchemaError,
@@ -40,18 +40,15 @@ from tgdrive.storage.mongo import DatabaseUnavailable, MongoBackend
 from tgdrive.storage.store import (
     _SHARE_UNSET,
     MAX_NAME_LENGTH,
-    MAX_SEARCH_OFFSET,
     MAX_SEARCH_RESULTS,
-    MAX_SHARE_TOKENS_PER_ITEM,
-    MAX_STORE_BYTES,
-    MAX_TREE_DEPTH,
-    MAX_TREE_ITEMS,
     ROOT_ID,
     SCHEMA_VERSION,
     FolderTreeConflictError,
     _FileNode,
+    _fold,
     _folder_manifest,
     _FolderNode,
+    _grams,
     _join_path,
     _manifest_json,
     _name_key,
@@ -61,6 +58,7 @@ from tgdrive.storage.store import (
     _parse_node,
     _share_label,
     _strict_int,
+    _tokens,
     _utc_now,
     _validate_channel_id,
     _validate_file_rename,
@@ -71,6 +69,66 @@ from tgdrive.storage.store import (
 )
 
 _TABLES = ("nodes", "shares", "operations", "deletions", "preparations")
+# Finished bookkeeping and expired links are removed by MongoDB TTL indexes.
+_RECORD_RETENTION = timedelta(days=7)
+_EXPIRED_SHARE_RETENTION = timedelta(days=30)
+_COUNTERS = ("files", "folders", "total_bytes", "trashed_files", "trashed_bytes")
+_BATCH = 1000
+_LIGHT = {"parts": 0, "poster": 0, "tokens": 0, "grams": 0, "fold": 0}
+
+
+def _expiry_date(timestamp):
+    return datetime.fromisoformat(timestamp.replace("Z", "+00:00"))
+
+
+def _clean(row):
+    return {k: v for k, v in row.items() if k != "_id"}
+
+
+def mongo_nodes(catalog):
+    """MongoDB node documents (with search keys) for a portable catalog."""
+    stack = [(catalog["root"], None)]
+    rows = []
+    while stack:
+        node, parent = stack.pop()
+        values = {
+            key: copy.deepcopy(node[key])
+            for key in (
+                "upload_date",
+                "trashed",
+                "starred",
+                "message_id",
+                "size",
+                "parts",
+                "sha256",
+                "poster",
+            )
+            if key in node
+        }
+        values["part_count"] = len(node.get("parts") or [None])
+        rows.append(
+            MongoStore._node(node["id"], parent, node["name"], node["type"], **values)
+        )
+        if node["type"] == "folder":
+            stack.extend((child, node["id"]) for child in node["children"].values())
+    return rows
+
+
+def catalog_counters(catalog):
+    """Drive totals for a portable catalog: visible versus inside Trash."""
+    totals = dict.fromkeys(_COUNTERS, 0)
+    stack = [(catalog["root"], False)]
+    while stack:
+        node, hidden = stack.pop()
+        hidden = hidden or node["trashed"]
+        if node["type"] == "file":
+            totals["trashed_files" if hidden else "files"] += 1
+            totals["trashed_bytes" if hidden else "total_bytes"] += node["size"]
+        else:
+            if node["id"] != ROOT_ID and not hidden:
+                totals["folders"] += 1
+            stack.extend((child, hidden) for child in node["children"].values())
+    return totals
 
 
 class MongoStore:
@@ -82,23 +140,31 @@ class MongoStore:
         self._lock = threading.RLock()
         self._local = threading.local()
         self._closed = False
-        self._committed: dict[str, Any] = {}
-        self._reload()
+        metadata = backend.db.catalog.find_one({"_id": "catalog"})
+        if metadata is None:
+            raise CorruptStoreError(
+                "MongoDB has no TGDrive catalog. Open owner recovery to "
+                "restore a confirmed backup."
+            )
+        if metadata.get("schema_version") != SCHEMA_VERSION:
+            raise CorruptStoreError(
+                "This database belongs to an older TGDrive version. "
+                "Start TGDrive 2.3 with a new MongoDB database and storage channel."
+            )
+        self._metadata = metadata
+        try:
+            root = backend.db.nodes.find_one({"_id": ROOT_ID}, _LIGHT)
+            if (
+                root is None
+                or root.get("parent_id") is not None
+                or root.get("kind") != "folder"
+            ):
+                raise CorruptStoreError("MongoDB catalog root is missing")
+        except (KeyError, TypeError, AttributeError) as error:
+            raise CorruptStoreError("Catalog contains a malformed record") from error
         self._indexes(backend)
 
-    @property
-    def _state(self):
-        return getattr(
-            self._local, "working", getattr(self._local, "reader", self._committed)
-        )
-
-    @property
-    def _depth(self):
-        return getattr(self._local, "depth", 0)
-
-    @_depth.setter
-    def _depth(self, value):
-        self._local.depth = value
+    # ----------------------------------------------------------- lifecycle
 
     @classmethod
     def create(
@@ -120,6 +186,7 @@ class MongoStore:
             "backed_up_revision": 2 if bound else 1,
             "generation": 1 if bound else 0,
             "storage_channel_id": storage_channel,
+            **dict.fromkeys(_COUNTERS, 0),
         }
         root = cls._node(ROOT_ID, None, "/", "folder")
 
@@ -153,26 +220,53 @@ class MongoStore:
 
     @staticmethod
     def _indexes(backend):
-        backend.db.nodes.create_index(
+        nodes = backend.db.nodes
+        nodes.create_index(
             [("parent_id", 1), ("name_key", 1)],
             unique=True,
             partialFilterExpression={"trashed": False},
             name="active_sibling_names",
         )
-        backend.db.nodes.create_index("parent_id")
+        # Listing and every sort order of a folder page; children of a parent.
+        nodes.create_index([("parent_id", 1), ("trashed", 1), ("name_key", 1)])
+        nodes.create_index([("parent_id", 1), ("trashed", 1), ("size", 1)])
+        nodes.create_index([("parent_id", 1), ("trashed", 1), ("upload_date", 1)])
+        nodes.create_index([("parent_id", 1), ("kind", 1)])
+        nodes.create_index("tokens")
+        nodes.create_index("grams")
+        nodes.create_index(
+            [("trashed", 1), ("name_key", 1)],
+            partialFilterExpression={"trashed": True},
+            name="trash_roots",
+        )
+        nodes.create_index(
+            [("starred", 1), ("name_key", 1)],
+            partialFilterExpression={"starred": True},
+            name="starred_items",
+        )
         backend.db.shares.create_index("token_hash", unique=True)
         backend.db.shares.create_index("node_id")
+        backend.db.shares.create_index("expire_at", expireAfterSeconds=0)
+        backend.db.operations.create_index("node_id")
+        backend.db.operations.create_index("expire_at", expireAfterSeconds=0)
         backend.db.deletions.create_index("root_id")
+        backend.db.deletions.create_index("state")
+        backend.db.deletions.create_index("expire_at", expireAfterSeconds=0)
+        backend.db.preparations.create_index("expire_at", expireAfterSeconds=0)
         backend.db.receipts.create_index("purge_at", expireAfterSeconds=0)
 
     @staticmethod
     def _node(identity, parent, name, kind, **values):
+        fold = _fold(name) if parent is not None else ""
         return {
             "_id": identity,
             "id": identity,
             "parent_id": parent,
             "name": name,
             "name_key": _name_key(name),
+            "fold": fold,
+            "tokens": _tokens(name) if parent is not None else [],
+            "grams": _grams(fold),
             "kind": kind,
             "trashed": False,
             "upload_date": _utc_now(),
@@ -183,249 +277,124 @@ class MongoStore:
             **values,
         }
 
-    def _reload(self):
-        def read(session):
-            metadata = self.backend.db.catalog.find_one(
-                {"_id": "catalog"}, session=session
-            )
-            if metadata is None:
-                raise CorruptStoreError(
-                    "MongoDB has no TGDrive catalog. Open owner recovery to "
-                    "restore a confirmed backup."
-                )
-            if metadata.get("schema_version") != SCHEMA_VERSION:
-                raise CorruptStoreError("Unsupported MongoDB catalog schema")
-            return {
-                "metadata": metadata,
-                **{
-                    name: {
-                        row["_id"]: row
-                        for row in self.backend.db[name].find({}, session=session)
-                    }
-                    for name in _TABLES
-                },
-            }
-
-        state = self.backend.transaction(read)
-        self._committed = state
-        self._statistics_cache = None
-        if hasattr(self._local, "working"):
-            self._local.working = state
-        self._validate_state()
-
-    def _validate_state(self):
-        try:
-            self._check_state()
-        except (KeyError, TypeError, AttributeError) as error:
-            # A row missing a field must open owner recovery, not crash startup.
-            raise CorruptStoreError("Catalog contains a malformed record") from error
-
-    def _check_state(self):
-        for key, row in self._state["nodes"].items():
-            if (
-                row.get("id") != key
-                or row.get("name_key") != _name_key(row["name"])
-                or type(row.get("starred", False)) is not bool
-                or type(row.get("part_count")) is not int
-                or row["part_count"] != len(row.get("parts") or [None])
-            ):
-                raise CorruptStoreError("Catalog node identity or index is invalid")
-        for name, identity in (
-            ("shares", "id"),
-            ("operations", "operation_id"),
-            ("deletions", "id"),
-            ("preparations", "request_id"),
-        ):
-            if any(row.get(identity) != key for key, row in self._state[name].items()):
-                raise CorruptStoreError("Catalog recovery record identity is invalid")
-        if ROOT_ID not in self._state["nodes"]:
-            raise CorruptStoreError("MongoDB catalog root is missing")
-        roots = [
-            row["id"]
-            for row in self._state["nodes"].values()
-            if row["parent_id"] is None
-        ]
-        if roots != [ROOT_ID] or len(self._subtree(ROOT_ID)) != len(
-            self._state["nodes"]
-        ):
-            raise CorruptStoreError(
-                "Catalog contains unreachable nodes or invalid roots"
-            )
-        # Reuse portable domain validation without creating a SQLite database.
-        self._validate_payload(self._export())
-
-    @classmethod
-    def validate_snapshot_records(cls, records):
-        """Validate archived records and return their portable catalog without I/O."""
-        catalogs = records["catalog"]
-        if len(catalogs) != 1 or catalogs[0].get("_id") != "catalog":
-            raise CorruptStoreError("Archive catalog metadata is invalid")
-        metadata = catalogs[0]
-        if (
-            metadata.get("schema_version") != SCHEMA_VERSION
-            or type(metadata.get("generation")) is not int
-            or metadata["generation"] < 0
-            or type(metadata.get("revision")) is not int
-            or metadata["revision"] < 1
-            or type(metadata.get("backed_up_revision")) is not int
-            or not 0 <= metadata["backed_up_revision"] <= metadata["revision"]
-        ):
-            raise CorruptStoreError("Archive catalog schema or revision is invalid")
-        view = object.__new__(cls)
-        view._local = threading.local()
-        view._committed = {
-            "metadata": metadata,
-            **{name: {row["_id"]: row for row in records[name]} for name in _TABLES},
+    @staticmethod
+    def _names(name):
+        fold = _fold(name)
+        return {
+            "name": name,
+            "name_key": _name_key(name),
+            "fold": fold,
+            "tokens": _tokens(name),
+            "grams": _grams(fold),
         }
-        if any(row["id"] != row["_id"] for row in records["nodes"]):
-            raise CorruptStoreError("Archive node identity is invalid")
-        view._validate_state()
-        return view._export()
-
-    @property
-    def storage_path(self):
-        return None
-
-    @property
-    def database_path(self):
-        return None
 
     def close(self):
         self._closed = True
+
+    # --------------------------------------------------------- transactions
+
+    @property
+    def _session(self):
+        return getattr(self._local, "session", None)
 
     @contextmanager
     def _transaction(self, *, write=False):
         if self._closed:
             raise DatabaseUnavailable("The catalog is closed")
+        if self._session is not None:
+            # Nested work joins the open transaction; a failure aborts all of it.
+            yield self._session
+            return
         if not write:
-            previous = getattr(self._local, "reader", None)
-            self._local.reader = self._state
-            try:
-                yield self._state
-            finally:
-                if previous is None:
-                    del self._local.reader
-                else:
-                    self._local.reader = previous
+            yield None
             return
         with self._lock:
             self.backend.check_owner()
-            outer = self._depth == 0
-            before = self._committed if outer else copy.deepcopy(self._state)
-            if outer:
-                self._local.working = copy.deepcopy(before)
-            self._depth += 1
-            try:
-                yield self._state
-                if outer and self._state != before:
-                    self._commit(before)
-                    self._committed = self._state
-                    self._statistics_cache = None
-            except BaseException:
-                if not outer:
-                    self._local.working = before
-                raise
-            finally:
-                self._depth -= 1
-                if outer:
-                    del self._local.working
+            with self.backend.session_transaction() as session:
+                self._local.session = session
+                self._local.changed = False
+                try:
+                    yield session
+                    if self._local.changed:
+                        self.backend.fence(session)
+                        self._local.metadata = self.db.catalog.find_one_and_update(
+                            {"_id": "catalog"},
+                            {"$inc": {"generation": 1}},
+                            session=session,
+                            return_document=True,
+                        )
+                except BaseException:
+                    self._local.metadata = None
+                    raise
+                finally:
+                    self._local.session = None
+            # Publish the committed counters only after MongoDB acknowledged them.
+            if getattr(self._local, "metadata", None):
+                self._metadata = self._local.metadata
+            self._local.metadata = None
 
     @contextmanager
     def metadata_batch(self):
         with self._transaction(write=True):
             yield
 
-    def _commit(self, before):
-        after = self._state
-        generation = before["metadata"]["generation"]
-        metadata = dict(after["metadata"], generation=generation + 1)
-        metadata["backed_up_revision"] = metadata["revision"]
-        changes = {}
-        for name in _TABLES:
-            old, new = before[name], after[name]
-            changes[name] = [
-                *[DeleteOne({"_id": key}) for key in old.keys() - new.keys()],
-                *[
-                    ReplaceOne({"_id": key}, value, upsert=True)
-                    for key, value in new.items()
-                    if old.get(key) != value
-                ],
-            ]
+    @property
+    def db(self):
+        return self.backend.db
 
-        def commit(session):
-            self.backend.fence(session)
-            result = self.backend.db.catalog.replace_one(
-                {"_id": "catalog", "generation": generation},
-                metadata,
-                session=session,
-            )
-            if result.matched_count != 1:
-                raise DatabaseUnavailable(
-                    "The MongoDB catalog changed elsewhere. Restart to reload it."
-                )
-            renamed = [
-                key
-                for key in before["nodes"].keys() & after["nodes"].keys()
-                if any(
-                    before["nodes"][key].get(field) != after["nodes"][key].get(field)
-                    for field in ("name_key", "parent_id", "trashed")
-                )
-            ]
-            if renamed:
-                # Free changed uniqueness slots inside the transaction so a valid
-                # multi-rename/name swap is not rejected by intermediate ordering.
-                self.backend.db.nodes.update_many(
-                    {"_id": {"$in": renamed}},
-                    {"$set": {"trashed": True}},
-                    session=session,
-                )
-            for name, operations in changes.items():
-                if operations:
-                    self.backend.db[name].bulk_write(
-                        operations, ordered=True, session=session
-                    )
+    def _bump(self, **counters):
+        changes = {"revision": 1}
+        for name, value in counters.items():
+            if value:
+                changes[name] = value
+        changes["backed_up_revision"] = 1
+        self.db.catalog.update_one(
+            {"_id": "catalog"}, {"$inc": changes}, session=self._session
+        )
+        self._local.changed = True
 
-        try:
-            self.backend.transaction(commit)
-        except Exception:
-            # A lost commit acknowledgement is not proof of rollback. Rebuild
-            # authority from MongoDB before admitting another operation.
-            try:
-                self._reload()
-            except Exception:
-                self._closed = True
-            raise
-        after["metadata"] = metadata
+    def _find(self, collection, query, projection=None, **options):
+        return self.db[collection].find(
+            query, projection, session=self._session, **options
+        )
 
-    def _bump(self):
-        self._state["metadata"]["revision"] += 1
+    def _one(self, collection, query, projection=None):
+        return self.db[collection].find_one(query, projection, session=self._session)
+
+    # --------------------------------------------------------------- reads
+
+    def _current(self):
+        if self._session is not None:
+            return self._one("catalog", {"_id": "catalog"})
+        return self._metadata
 
     @property
     def drive_id(self):
-        return self._state["metadata"]["drive_id"]
+        return self._current()["drive_id"]
 
     @property
     def revision(self):
-        return self._state["metadata"]["revision"]
+        return self._current()["revision"]
 
     @property
     def storage_channel_id(self):
-        return self._state["metadata"].get("storage_channel_id")
-
-    @property
-    def dirty(self):
-        return False
+        return self._current().get("storage_channel_id")
 
     def bind_storage_channel(self, channel_id):
         channel_id = _validate_channel_id(channel_id)
         with self._transaction(write=True):
-            if self.storage_channel_id == channel_id:
+            current = self.storage_channel_id
+            if current == channel_id:
                 return
-            if self.storage_channel_id is not None:
+            if current is not None:
                 raise ValidationError(
                     "The drive belongs to a different storage channel"
                 )
-            self._state["metadata"]["storage_channel_id"] = channel_id
+            self.db.catalog.update_one(
+                {"_id": "catalog"},
+                {"$set": {"storage_channel_id": channel_id}},
+                session=self._session,
+            )
             self._bump()
 
     def has_file_operation(self, operation_id, *, message_id=None):
@@ -433,69 +402,131 @@ class MongoStore:
         if message_id is not None:
             message_id = _strict_int(message_id, "message_id", 1)
         with self._transaction():
-            operation = self._state["operations"].get(operation_id)
+            operation = self._one("operations", {"_id": operation_id})
             if operation is None:
                 return False
-            return message_id is None or (
-                self._state["nodes"].get(operation["node_id"], {}).get("message_id")
-                == message_id
-            )
+            if message_id is None:
+                return True
+            node = self._one("nodes", {"_id": operation["node_id"]}, {"message_id": 1})
+            return node is not None and node.get("message_id") == message_id
 
-    def _resolve(self, path):
+    def _get(self, identity, *, full=False):
+        return self._one("nodes", {"_id": identity}, None if full else _LIGHT)
+
+    def _ancestors(self, identity, *, full=False):
+        """Root-first chain ending at ``identity`` in one MongoDB round trip."""
+        rows = list(
+            self.db.nodes.aggregate(
+                [
+                    {"$match": {"_id": identity}},
+                    {
+                        "$graphLookup": {
+                            "from": "nodes",
+                            "startWith": "$parent_id",
+                            "connectFromField": "parent_id",
+                            "connectToField": "_id",
+                            "as": "up",
+                            "depthField": "depth",
+                        }
+                    },
+                    {
+                        "$project": {
+                            "grams": 0,
+                            "tokens": 0,
+                            "up.grams": 0,
+                            "up.tokens": 0,
+                            "up.parts": 0,
+                            "up.poster": 0,
+                            **({} if full else {"parts": 0, "poster": 0}),
+                        }
+                    },
+                ],
+                session=self._session,
+            )
+        )
+        if not rows:
+            raise NotFoundError("Item not found")
+        node = rows[0]
+        node["_full"] = full
+        up = sorted(node.pop("up"), key=lambda row: -row["depth"])
+        chain = [*up, node]
+        if chain[0]["_id"] != ROOT_ID or any(
+            chain[index]["parent_id"] != chain[index - 1]["_id"]
+            for index in range(1, len(chain))
+        ):
+            raise CorruptStoreError("Invalid catalog ancestry")
+        return chain
+
+    @staticmethod
+    def _chain_path(chain):
+        return "/" + "/".join(row["_id"] for row in chain[1:])
+
+    def _resolve(self, path, *, full=False):
         parts, path = _normalize_path(path)
-        node = self._state["nodes"][ROOT_ID]
-        chain = [node]
-        for identity in parts:
-            if node["kind"] != "folder":
+        if not parts:
+            return self._get(ROOT_ID, full=full), "/", [self._get(ROOT_ID)]
+        chain = self._ancestors(parts[-1], full=full)
+        if tuple(row["_id"] for row in chain[1:]) != parts:
+            # A path is the item's own ID chain; a stale prefix means it moved.
+            if any(row["kind"] != "folder" for row in chain[:-1]):
                 raise NotDirectoryError("A path component is not a folder")
-            child = self._state["nodes"].get(identity)
-            if child is None or child["parent_id"] != node["id"]:
-                raise NotFoundError("Item not found")
-            node = child
-            chain.append(node)
-        return node, path, chain
+            raise NotFoundError("Item not found")
+        return chain[-1], path, chain
 
     def _path(self, identity):
-        parts, visited = [], set()
-        while identity != ROOT_ID:
-            if identity in visited or len(parts) > MAX_TREE_DEPTH:
-                raise CorruptStoreError("Invalid catalog ancestry")
-            visited.add(identity)
-            node = self._state["nodes"].get(identity)
-            if node is None:
-                raise NotFoundError("Item does not exist")
-            parts.append(identity)
-            identity = node["parent_id"]
-        return "/" + "/".join(reversed(parts))
+        if identity == ROOT_ID:
+            return "/"
+        return self._chain_path(self._ancestors(identity))
 
     def resolve_id(self, item_id):
         _validate_id(item_id, allow_root=True)
         with self._transaction():
             return self._path(item_id)
 
-    def _subtree(self, identity):
-        children = {}
-        for row in self._state["nodes"].values():
-            children.setdefault(row["parent_id"], []).append(row["id"])
-        result, pending, seen = [], [identity], set()
-        while pending:
-            current = pending.pop()
-            if current in seen:
-                raise CorruptStoreError("Catalog contains a cycle")
-            seen.add(current)
-            result.append(current)
-            pending.extend(children.get(current, []))
-        return result
+    def _children(self, parent_ids, projection=None):
+        for start in range(0, len(parent_ids), _BATCH):
+            yield from self._find(
+                "nodes",
+                {"parent_id": {"$in": parent_ids[start : start + _BATCH]}},
+                projection or {"_id": 1, "kind": 1},
+            )
+
+    def _walk(self, identity, projection=None):
+        """Every descendant in bounded batches; memory holds one level of folders."""
+        level = [identity]
+        while level:
+            following = []
+            for row in self._children(level, projection):
+                yield row
+                if row["kind"] == "folder":
+                    following.append(row["_id"])
+            level = following
+
+    def _contains(self, ancestor, identity):
+        """True when ``identity`` is ``ancestor`` or inside it (one lookup)."""
+        if ancestor == identity:
+            return True
+        try:
+            return any(row["_id"] == ancestor for row in self._ancestors(identity))
+        except NotFoundError:
+            return False
+
+    def _active_deletion_roots(self):
+        return [
+            row["root_id"]
+            for row in self._find(
+                "deletions", {"state": {"$ne": "completed"}}, {"root_id": 1}
+            )
+        ]
 
     def _mutable(self, chain, *, descendants=False):
         self._demo_mutable(chain, descendants=descendants)
-        roots = {
-            row["root_id"]
-            for row in self._state["deletions"].values()
-            if row["state"] != "completed"
-        }
-        if roots.intersection(row["id"] for row in chain) or (
-            descendants and roots.intersection(self._subtree(chain[-1]["id"]))
+        roots = set(self._active_deletion_roots())
+        if not roots:
+            return
+        if roots.intersection(row["_id"] for row in chain) or (
+            descendants
+            and any(self._contains(chain[-1]["_id"], root) for root in roots)
         ):
             raise ValidationError("Item is pending permanent deletion")
 
@@ -504,13 +535,13 @@ class MongoStore:
 
         if not restricted_writes.get():
             return
-        check_ids(row["id"] for row in chain)
-        if descendants:
-            check_ids(self._subtree(chain[-1]["id"]))
+        check_ids(row["_id"] for row in chain)
+        if descendants and self._contains(chain[-1]["_id"], DEMO_FILES_ID):
+            check_ids([DEMO_FILES_ID])
 
     def ensure_demo_files(self):
         with self._transaction(write=True):
-            node = self._state["nodes"].get(DEMO_FILES_ID)
+            node = self._get(DEMO_FILES_ID)
             if node is not None:
                 if node["kind"] != "folder":
                     raise ValidationError(
@@ -523,21 +554,16 @@ class MongoStore:
                     "Disable demo mode and rename that item before enabling it again."
                 )
             self._mutable(self._resolve("/")[2])
-            if len(self._state["nodes"]) >= MAX_TREE_ITEMS:
-                raise ValidationError("Maximum catalog size exceeded")
             node = self._node(DEMO_FILES_ID, ROOT_ID, DEMO_FILES_NAME, "folder")
-            self._state["nodes"][DEMO_FILES_ID] = node
-            self._bump()
+            self.db.nodes.insert_one(node, session=self._session)
+            self._bump(folders=1)
             return self._record(node, "/" + DEMO_FILES_ID)
 
     def _unique(self, parent, name, exclude=""):
-        return not any(
-            row["parent_id"] == parent
-            and row["name_key"] == _name_key(name)
-            and row["id"] != exclude
-            and not row["trashed"]
-            for row in self._state["nodes"].values()
-        )
+        query = {"parent_id": parent, "name_key": _name_key(name), "trashed": False}
+        if exclude:
+            query["_id"] = {"$ne": exclude}
+        return self._one("nodes", query, {"_id": 1}) is None
 
     def _available(self, parent, name, kind, exclude=""):
         if self._unique(parent, name, exclude):
@@ -546,17 +572,30 @@ class MongoStore:
 
         suffix = Path(name).suffix if kind == "file" else ""
         stem = name[: -len(suffix)] if suffix else name
+        # One indexed query for every "stem (n)" sibling instead of a probe per n.
+        prefix = _name_key(stem[: MAX_NAME_LENGTH - 12])
+        query = {
+            "parent_id": parent,
+            "trashed": False,
+            "name_key": {"$regex": "^" + re.escape(prefix)},
+        }
+        if exclude:
+            query["_id"] = {"$ne": exclude}
+        taken = {row["name_key"] for row in self._find("nodes", query, {"name_key": 1})}
         index = 1
         while True:
             label = f" ({index})"
             # A cut extension may end in whitespace, which names cannot.
             ending = suffix[: MAX_NAME_LENGTH - len(label) - 1].rstrip()
             value = stem[: MAX_NAME_LENGTH - len(label) - len(ending)] + label + ending
-            if self._unique(parent, value, exclude):
+            if _name_key(value) not in taken:
                 return value
             index += 1
 
     def _file(self, node, path):
+        # Light reads omit parts/poster; load them only when a file is returned.
+        if "grams" not in node and not node.get("_full"):
+            node = self._get(node["_id"], full=True) or node
         result = self._record(node, path, message=True)
         if node.get("parts"):
             result["parts"] = copy.deepcopy(node["parts"])
@@ -565,23 +604,28 @@ class MongoStore:
         return result
 
     def transfer_location(self, operation_id, destination="/", *, completed=False):
-        """Resolve committed upload identities against the current read snapshot."""
+        """Resolve committed upload identities against current MongoDB state."""
         if operation_id is not None:
             _validate_id(operation_id)
         with self._transaction():
-            operation = self._state["operations"].get(operation_id)
+            operation = (
+                self._one("operations", {"_id": operation_id})
+                if operation_id is not None
+                else None
+            )
             if operation is not None:
-                path = self._path(operation["node_id"])
+                chain = self._ancestors(operation["node_id"])
             elif completed:
                 raise NotFoundError("Uploaded item is unavailable")
             else:
                 parts, _ = _normalize_path(destination)
-                path = self._path(parts[-1] if parts else ROOT_ID)
-            node, path, chain = self._resolve(path)
+                chain = self._ancestors(parts[-1]) if parts else [self._get(ROOT_ID)]
             self._visible(chain)
             from tgdrive.transfers.transfer_locations import location_record
 
-            return location_record(node, path, chain, stored=operation is not None)
+            return location_record(
+                chain[-1], self._chain_path(chain), chain, stored=operation is not None
+            )
 
     def upload_destination(self, path, *, directory_id=None):
         with self._transaction():
@@ -593,7 +637,7 @@ class MongoStore:
                 raise NotDirectoryError("Upload destination must be a folder")
             self._visible(chain)
             self._mutable(chain)
-            return {"id": node["id"], "path": path}
+            return {"id": node["_id"], "path": path}
 
     def get_directory(self, path, *, include_trashed=False):
         with self._transaction():
@@ -602,24 +646,91 @@ class MongoStore:
                 raise NotDirectoryError("Not a directory")
             self._visible(chain, include_trashed)
             result = self._record(node, path)
+            result["breadcrumbs"] = [
+                {
+                    "id": row["_id"],
+                    "name": row["name"],
+                    "path": self._chain_path(chain[: i + 1]),
+                }
+                for i, row in enumerate(chain)
+            ]
+            query = {"parent_id": node["_id"]}
+            if not include_trashed:
+                query["trashed"] = False
             result["contents"] = {
-                row["id"]: self._record(row, _join_path(path, row["id"]))
-                for row in self._state["nodes"].values()
-                if row["parent_id"] == node["id"]
-                and (include_trashed or not row["trashed"])
+                row["_id"]: self._record(row, _join_path(path, row["_id"]))
+                for row in self._find("nodes", query, _LIGHT).sort("name_key", 1)
             }
             return result
 
     def list_directory(self, path, *, include_trashed=False):
         return self.get_directory(path, include_trashed=include_trashed)["contents"]
 
-    def get_file(self, path, *, include_trashed=False):
+    def list_page(self, path, *, offset=0, limit=100, sort="name", order="asc"):
+        """One indexed page of a folder; folders first, then the sort field."""
+        fields = {
+            "name": "name_key",
+            "size": "size",
+            "date": "upload_date",
+            "type": "name_key",
+        }
+        if sort not in fields or order not in {"asc", "desc"}:
+            raise ValidationError("Invalid sort")
+        if type(offset) is not int or offset < 0 or type(limit) is not int or limit < 1:
+            raise ValidationError("Invalid pagination")
         with self._transaction():
             node, path, chain = self._resolve(path)
+            if node["kind"] != "folder":
+                raise NotDirectoryError("Not a directory")
+            self._visible(chain)
+            direction = ASCENDING if order == "asc" else DESCENDING
+            query = {"parent_id": node["_id"], "trashed": False}
+            folders = self.db.nodes.count_documents(
+                dict(query, kind="folder"), session=self._session
+            )
+            total = self.db.nodes.count_documents(query, session=self._session)
+            items = []
+            for kind, skip in (("folder", offset), ("file", max(0, offset - folders))):
+                if len(items) >= limit or (kind == "folder" and offset >= folders):
+                    continue
+                cursor = (
+                    self._find("nodes", dict(query, kind=kind), _LIGHT)
+                    .sort([(fields[sort], direction), ("_id", direction)])
+                    .skip(skip)
+                    .limit(limit - len(items))
+                )
+                items.extend(
+                    self._record(row, _join_path(path, row["_id"])) for row in cursor
+                )
+            return {"items": items, "total": total, "offset": offset}
+
+    def get_file(self, path, *, include_trashed=False):
+        with self._transaction():
+            node, path, chain = self._resolve(path, full=True)
             if node["kind"] != "file":
                 raise NotFileError("Not a file")
             self._visible(chain, include_trashed)
             return self._file(node, path)
+
+    # -------------------------------------------------------------- writes
+
+    def _subtree_totals(self, identity):
+        """Files, folders and bytes under a node, including the node itself."""
+        node = self._get(identity)
+        files = int(node["kind"] == "file")
+        folders = int(node["kind"] == "folder")
+        size = node["size"] if files else 0
+        if folders:
+            for row in self._walk(identity, {"_id": 1, "kind": 1, "size": 1}):
+                if row["kind"] == "file":
+                    files += 1
+                    size += row["size"]
+                else:
+                    folders += 1
+        return files, folders, size
+
+    def _hidden(self, chain):
+        return any(row["trashed"] for row in chain)
 
     def _add(
         self,
@@ -637,40 +748,40 @@ class MongoStore:
         if operation_id is not None:
             _validate_id(operation_id)
         with self._transaction(write=True):
-            if operation_id in self._state["operations"]:
-                previous = self._state["operations"][operation_id]
-                node = self._state["nodes"].get(previous["node_id"])
-                if node is None:
-                    raise ValidationError("This operation's file was already deleted")
-                result = self._file(node, self._path(node["id"]))
-                if (
-                    node["message_id"] != message_id
-                    or node["size"] != size
-                    or result.get("parts") != parts
-                    or result.get("sha256") != sha256
-                    or result.get("poster") != poster
-                ):
-                    raise ValidationError("Operation already committed different media")
-                return result
+            if operation_id is not None:
+                previous = self._one("operations", {"_id": operation_id})
+                if previous is not None:
+                    node = self._get(previous["node_id"], full=True)
+                    if node is None:
+                        raise ValidationError(
+                            "This operation's file was already deleted"
+                        )
+                    result = self._file(node, self._path(node["_id"]))
+                    if (
+                        node["message_id"] != message_id
+                        or node["size"] != size
+                        or result.get("parts") != parts
+                        or result.get("sha256") != sha256
+                        or result.get("poster") != poster
+                    ):
+                        raise ValidationError(
+                            "Operation already committed different media"
+                        )
+                    return result
             parent, parent_path, chain = self._resolve(parent_path)
             if parent["kind"] != "folder":
                 raise NotDirectoryError("Destination must be a folder")
             self._visible(chain)
             self._mutable(chain)
-            if (
-                len(chain) > MAX_TREE_DEPTH
-                or len(self._state["nodes"]) >= MAX_TREE_ITEMS
-            ):
-                raise ValidationError("Maximum catalog depth or item count exceeded")
             kind = "folder" if message_id is None else "file"
             if keep_both:
-                name = self._available(parent["id"], name, kind)
-            elif not self._unique(parent["id"], name):
+                name = self._available(parent["_id"], name, kind)
+            elif not self._unique(parent["_id"], name):
                 raise DuplicateNameError("An item with this name already exists")
             identity = secrets.token_urlsafe(16)
             row = self._node(
                 identity,
-                parent["id"],
+                parent["_id"],
                 name,
                 kind,
                 message_id=message_id,
@@ -682,14 +793,20 @@ class MongoStore:
                 row["parts"] = copy.deepcopy(parts)
             if poster:
                 row["poster"] = copy.deepcopy(poster)
-            self._state["nodes"][identity] = row
+            self.db.nodes.insert_one(row, session=self._session)
             if operation_id is not None:
-                self._state["operations"][operation_id] = {
-                    "_id": operation_id,
-                    "operation_id": operation_id,
-                    "node_id": identity,
-                }
-            self._bump()
+                self.db.operations.insert_one(
+                    {
+                        "_id": operation_id,
+                        "operation_id": operation_id,
+                        "node_id": identity,
+                    },
+                    session=self._session,
+                )
+            if kind == "file":
+                self._bump(files=1, total_bytes=size)
+            else:
+                self._bump(folders=1)
             path = _join_path(parent_path, identity)
             return (
                 self._file(row, path)
@@ -706,7 +823,7 @@ class MongoStore:
             )
         fingerprint = hashlib.sha256(_manifest_json(manifest).encode()).hexdigest()
         with self._transaction(write=True):
-            prior = self._state["preparations"].get(request_id)
+            prior = self._one("preparations", {"_id": request_id})
             if prior:
                 if not hmac.compare_digest(prior["fingerprint"], fingerprint):
                     raise FolderTreeConflictError("Folder request id was already used")
@@ -734,18 +851,8 @@ class MongoStore:
                     ) from None
                 return copy.deepcopy(result)
             parent = self.upload_destination(manifest["destination"])
-            chain = self._resolve(parent["path"])[2]
-            depth = 1 + max((len(parts) for parts in manifest["folders"]), default=0)
-            if len(chain) - 1 + depth > MAX_TREE_DEPTH:
-                raise ValidationError("Maximum tree depth exceeded")
-            if (
-                len(self._state["nodes"]) + 1 + len(manifest["folders"])
-                > MAX_TREE_ITEMS
-            ):
-                raise ValidationError("Maximum catalog size exceeded")
             root_name = self._available(parent["id"], manifest["root_name"], "folder")
-            mapping = {}
-            root = None
+            mapping, rows, root = {}, [], None
             for segments in [[], *manifest["folders"]]:
                 parent_path = (
                     mapping["/".join(segments[:-1])] if segments else parent["path"]
@@ -760,44 +867,62 @@ class MongoStore:
                     segments[-1] if segments else root_name,
                     "folder",
                 )
-                self._state["nodes"][identity] = node
+                rows.append(node)
                 mapping["/".join(segments)] = _join_path(parent_path, identity)
                 if not segments:
                     root = self._record(node, mapping[""])
+            for start in range(0, len(rows), _BATCH):
+                self.db.nodes.insert_many(
+                    rows[start : start + _BATCH], session=self._session
+                )
             result = {"root": root, "folders": mapping}
-            self._bump()
-            self._state["preparations"][request_id] = {
-                "_id": request_id,
-                "request_id": request_id,
-                "fingerprint": fingerprint,
-                "manifest": manifest,
-                "result": result,
-                "created_at": _utc_now(),
-            }
+            self.db.preparations.insert_one(
+                {
+                    "_id": request_id,
+                    "request_id": request_id,
+                    "fingerprint": fingerprint,
+                    "manifest": manifest,
+                    "result": result,
+                    "created_at": _utc_now(),
+                    "expire_at": datetime.now(UTC) + _RECORD_RETENTION,
+                },
+                session=self._session,
+            )
+            self._bump(folders=len(rows))
             return copy.deepcopy(result)
 
     def rename(self, path, new_name):
         name = _normalize_name(new_name)
         with self._transaction(write=True):
             node, path, chain = self._resolve(path)
-            if node["id"] == ROOT_ID:
+            if node["_id"] == ROOT_ID:
                 raise RootMutationError("The root folder cannot be renamed")
             self._demo_mutable(chain, descendants=True)
             self._mutable(chain)
             if node["kind"] == "file":
                 _validate_file_rename(node["name"], name)
-            if not self._unique(node["parent_id"], name, node["id"]):
+            if not node["trashed"] and not self._unique(
+                node["parent_id"], name, node["_id"]
+            ):
                 raise DuplicateNameError("An item with this name already exists")
             if node["name"] != name:
-                node.update(name=name, name_key=_name_key(name))
+                self.db.nodes.update_one(
+                    {"_id": node["_id"]},
+                    {"$set": self._names(name)},
+                    session=self._session,
+                )
+                node.update(self._names(name))
                 self._bump()
             return self._record(node, path)
 
-    def _revoke(self, identities):
-        ids = set(identities)
-        for key, row in list(self._state["shares"].items()):
-            if row["node_id"] in ids:
-                del self._state["shares"][key]
+    def _revoke_under(self, identity):
+        """Revoke links on a node or anything inside it, checking only shared items."""
+        removed = []
+        for row in self._find("shares", {}, {"node_id": 1}):
+            if self._contains(identity, row["node_id"]):
+                removed.append(row["_id"])
+        if removed:
+            self.db.shares.delete_many({"_id": {"$in": removed}}, session=self._session)
 
     def set_trashed(self, path, trashed):
         with self._transaction(write=True):
@@ -811,7 +936,7 @@ class MongoStore:
         if type(trashed) is not bool:
             raise ValidationError("trashed must be a boolean")
         node, path, chain = self._resolve(path)
-        if node["id"] == ROOT_ID:
+        if node["_id"] == ROOT_ID:
             raise RootMutationError("The root folder cannot be trashed")
         self._mutable(chain, descendants=True)
         if not trashed:
@@ -821,35 +946,53 @@ class MongoStore:
                 node["name"]
                 if trashed
                 else self._available(
-                    node["parent_id"], node["name"], node["kind"], node["id"]
+                    node["parent_id"], node["name"], node["kind"], node["_id"]
                 )
             )
-            node.update(trashed=trashed, name=name, name_key=_name_key(name))
+            # Only the selected item changes; descendants are hidden through it.
+            self.db.nodes.update_one(
+                {"_id": node["_id"]},
+                {"$set": {"trashed": trashed, **self._names(name)}},
+                session=self._session,
+            )
+            node.update(trashed=trashed, **self._names(name))
+            counters = {}
+            if not self._hidden(chain[:-1]):
+                files, folders, size = self._subtree_totals(node["_id"])
+                sign = 1 if trashed else -1
+                counters = {
+                    "files": -sign * files,
+                    "total_bytes": -sign * size,
+                    "folders": -sign * folders,
+                    "trashed_files": sign * files,
+                    "trashed_bytes": sign * size,
+                }
             if trashed:
-                self._revoke(self._subtree(node["id"]))
-            self._bump()
+                self._revoke_under(node["_id"])
+            self._bump(**counters)
         return self._record(node, path)
+
+    def _listed(self, node, chain):
+        return self._record(node, self._chain_path(chain)) | {
+            "parent_names": [item["name"] for item in chain[1:-1]]
+        }
 
     def list_trash(self, query=""):
         with self._transaction():
-            result = {}
             deleting = {
                 row["root_id"]
-                for row in self._state["deletions"].values()
-                if row["state"] == "pending"
+                for row in self._find("deletions", {"state": "pending"}, {"root_id": 1})
             }
-            for node in self._state["nodes"].values():
-                if (
-                    node["trashed"]
-                    and node["id"] not in deleting
-                    and query.casefold() in node["name"].casefold()
-                ):
-                    path = self._path(node["id"])
-                    chain = self._resolve(path)[2]
-                    if not any(row["trashed"] for row in chain[:-1]):
-                        result[node["id"]] = self._record(node, path) | {
-                            "parent_names": [item["name"] for item in chain[1:-1]]
-                        }
+            needle = _fold(query)
+            result = {}
+            for node in self._find("nodes", {"trashed": True}, _LIGHT).sort(
+                "name_key", 1
+            ):
+                if node["_id"] in deleting or needle not in _fold(node["name"]):
+                    continue
+                chain = self._ancestors(node["_id"])
+                if not self._hidden(chain[:-1]):
+                    result[node["_id"]] = self._listed(node, chain)
             return result
 
     def set_starred(self, path, starred):
@@ -857,12 +1000,23 @@ class MongoStore:
             raise ValidationError("starred must be a boolean")
         with self._transaction(write=True):
             node, path, chain = self._resolve(path)
-            if node["id"] == ROOT_ID:
+            if node["_id"] == ROOT_ID:
                 raise RootMutationError("the drive root cannot be starred")
             self._mutable(chain)
             self._visible(chain)
             if bool(node.get("starred", False)) != starred:
-                node["starred"] = starred
+                change = (
+                    {"$set": {"starred": True}}
+                    if starred
+                    else {"$unset": {"starred": ""}}
+                )
+                self.db.nodes.update_one(
+                    {"_id": node["_id"]}, change, session=self._session
+                )
+                if starred:
+                    node["starred"] = True
+                else:
+                    node.pop("starred", None)
                 self._bump()
             return self._record(node, path)
 
@@ -870,22 +1024,19 @@ class MongoStore:
         if not isinstance(query, str) or len(query) > MAX_NAME_LENGTH:
             raise ValidationError("invalid starred search")
         with self._transaction():
+            needle = _fold(query.strip())
             results = {}
-            for node in self._state["nodes"].values():
-                if (
-                    not node.get("starred")
-                    or node["id"] == ROOT_ID
-                    or _name_key(query.strip()) not in node["name_key"]
-                ):
+            for node in self._find("nodes", {"starred": True}, _LIGHT).sort(
+                "name_key", 1
+            ):
+                if node["_id"] == ROOT_ID or needle not in _fold(node["name"]):
                     continue
-                path = self._path(node["id"])
-                chain = self._resolve(path)[2]
-                if any(item["trashed"] for item in chain):
-                    continue
-                results[node["id"]] = self._record(node, path) | {
-                    "parent_names": [row["name"] for row in chain[1:-1]]
-                }
+                chain = self._ancestors(node["_id"])
+                if not self._hidden(chain):
+                    results[node["_id"]] = self._listed(node, chain)
             return results
+
+    # -------------------------------------------------------------- search
 
     def search_page(
         self,
@@ -908,7 +1059,7 @@ class MongoStore:
             raise ValidationError("Search query is empty, too long or invalid")
         if (
             type(offset) is not int
-            or not 0 <= offset <= MAX_SEARCH_OFFSET
+            or offset < 0
             or type(limit) is not int
             or not 1 <= limit <= MAX_SEARCH_RESULTS
             or type(include_trashed) is not bool
@@ -919,32 +1070,87 @@ class MongoStore:
             )
         ):
             raise ValidationError("Invalid search pagination or sort")
+        folded = _fold(query)
+        words = [word for word in re.split(r"[\W_]+", folded) if word]
+        clauses = []
+        if not words:
+            # Only punctuation (for example "%"): a literal substring scan.
+            words = [folded]
+            clauses.append({"fold": {"$regex": re.escape(folded)}})
+        for word in words if not clauses else []:
+            # Word starts use the token index; three or more characters can also
+            # match inside a word through the trigram index.
+            options = [{"tokens": {"$regex": "^" + re.escape(word)}}]
+            if len(word) >= 3:
+                options.append({"grams": {"$all": _grams(word)}})
+            clauses.append({"$or": options})
         direction = order or ("asc" if sort == "name" else "desc")
         with self._transaction():
+            visible = {}
+
+            def placement(parent):
+                if parent not in visible:
+                    chain = self._ancestors(parent)
+                    visible[parent] = (
+                        self._hidden(chain),
+                        [row["name"] for row in chain[1:]],
+                        self._chain_path(chain),
+                    )
+                return visible[parent]
+
+            # shortcut: matches are ranked in memory, so a query matching millions
+            # of names reads all of them; page with an indexed sort key if that
+            # becomes a real workload.
             found = []
-            for node in self._state["nodes"].values():
-                if node["id"] == ROOT_ID or query.casefold() not in node["name_key"]:
+            projection = {
+                "_id": 1,
+                "id": 1,
+                "name": 1,
+                "kind": 1,
+                "size": 1,
+                "upload_date": 1,
+                "starred": 1,
+                "parent_id": 1,
+                "part_count": 1,
+                "fold": 1,
+                "trashed": 1,
+                "tokens": 1,
+            }
+            for node in self._find("nodes", {"$and": clauses}, projection):
+                if node["_id"] == ROOT_ID or not all(
+                    word in node["fold"]
+                    or any(token.startswith(word) for token in node["tokens"])
+                    for word in words
+                ):
                     continue
-                path = self._path(node["id"])
-                chain = self._resolve(path)[2]
-                if not include_trashed and any(row["trashed"] for row in chain):
+                hidden, names, parent_path = placement(node["parent_id"])
+                if not include_trashed and (hidden or node["trashed"]):
                     continue
-                row = self._record(node, path)
-                row["parent_names"] = [item["name"] for item in chain[1:-1]]
-                found.append(row)
-            found.sort(key=lambda r: (_name_key(r["name"]), r["id"]))
-            found.sort(
-                key=lambda r: (
-                    _name_key(r["name"])
-                    if sort == "name"
-                    else r["size"]
-                    if sort == "size"
-                    else r["upload_date"]
-                ),
-                reverse=direction == "desc",
-            )
-            found.sort(key=lambda r: r["type"] != "folder")
-            items = found[offset : offset + limit]
+                row = self._record(node, _join_path(parent_path, node["_id"]))
+                row["parent_names"] = names
+                fold = node["fold"]
+                rank = (
+                    0
+                    if fold == folded
+                    else 1
+                    if fold.startswith(folded)
+                    else 2
+                    if all(any(t.startswith(w) for t in node["tokens"]) for w in words)
+                    else 3
+                )
+                found.append((rank, row))
+            key = {
+                "name": lambda item: _name_key(item[1]["name"]),
+                "size": lambda item: item[1]["size"],
+                "date": lambda item: item[1]["upload_date"],
+            }[sort]
+            # Ties keep name then ID order in both directions (sorts are stable).
+            found.sort(key=lambda item: (_name_key(item[1]["name"]), item[1]["id"]))
+            found.sort(key=key, reverse=direction == "desc")
+            if sort == "name" and order is None:
+                found.sort(key=lambda item: item[0])  # Best matches first.
+            found.sort(key=lambda item: item[1]["type"] != "folder")
+            items = [row for _, row in found[offset : offset + limit]]
             more = len(found) > offset + limit
             return {
                 "items": items,
@@ -953,13 +1159,23 @@ class MongoStore:
                 "next_offset": offset + len(items) if more else None,
             }
 
+    # ------------------------------------------------------ messages/delete
+
     def _messages(self, identity):
         result = set()
-        for key in self._subtree(identity):
-            row = self._state["nodes"][key]
+        root = self._get(identity, full=True)
+        rows = [root] if root["kind"] == "file" else []
+        rows = [
+            *rows,
+            *self._walk(
+                identity,
+                {"_id": 1, "kind": 1, "message_id": 1, "parts": 1, "poster": 1},
+            ),
+        ]
+        for row in rows:
             if row["kind"] == "file":
                 result.add(row["message_id"])
-                result.update(part["message_id"] for part in row.get("parts", []))
+                result.update(part["message_id"] for part in row.get("parts") or [])
                 if row.get("poster"):
                     result.add(row["poster"]["message_id"])
         return sorted(result)
@@ -968,24 +1184,50 @@ class MongoStore:
         with self._transaction():
             node, _, chain = self._resolve(path)
             self._visible(chain, include_trashed)
-            return self._messages(node["id"])
+            return self._messages(node["_id"])
 
     def _remove_subtree(self, identity):
-        ids = self._subtree(identity)
-        self._revoke(ids)
-        for key in ids:
-            del self._state["nodes"][key]
+        """Delete a subtree bottom-up in batches; returns every removed id."""
+        levels, removed = [[identity]], [identity]
+        while levels[-1]:
+            following = []
+            for row in self._children(levels[-1]):
+                removed.append(row["_id"])
+                if row["kind"] == "folder":
+                    following.append(row["_id"])
+            levels.append(following)
+        for level in reversed(levels):
+            for start in range(0, len(level), _BATCH):
+                batch = level[start : start + _BATCH]
+                self.db.nodes.delete_many(
+                    {"parent_id": {"$in": batch}}, session=self._session
+                )
+        self.db.nodes.delete_many({"_id": identity}, session=self._session)
+        for start in range(0, len(removed), _BATCH):
+            batch = removed[start : start + _BATCH]
+            self.db.shares.delete_many(
+                {"node_id": {"$in": batch}}, session=self._session
+            )
+            # Keep upload receipts as tombstones so a replayed upload cannot
+            # recreate deleted media; MongoDB expires them later.
+            self.db.operations.update_many(
+                {"node_id": {"$in": batch}},
+                {"$set": {"expire_at": datetime.now(UTC) + _RECORD_RETENTION}},
+                session=self._session,
+            )
+        return removed
 
     def delete(self, path):
         with self._transaction(write=True):
             node, _, chain = self._resolve(path)
-            if node["id"] == ROOT_ID:
+            if node["_id"] == ROOT_ID:
                 raise RootMutationError("The root folder cannot be deleted")
             self._mutable(chain, descendants=True)
-            if self._messages(node["id"]):
+            if self._messages(node["_id"]):
                 raise ValidationError("Files require a permanent deletion intent")
-            self._remove_subtree(node["id"])
-            self._bump()
+            folders = self._subtree_totals(node["_id"])[1]
+            self._remove_subtree(node["_id"])
+            self._bump(folders=0 if self._hidden(chain) else -folders)
             return []
 
     def move(self, path, destination, *, conflict="keep_both"):
@@ -1001,7 +1243,7 @@ class MongoStore:
             raise ValidationError("Invalid conflict policy")
         node, path, chain = self._resolve(path)
         parent, destination, parent_chain = self._resolve(destination)
-        if node["id"] == ROOT_ID:
+        if node["_id"] == ROOT_ID:
             raise RootMutationError("The root folder cannot be moved")
         if parent["kind"] != "folder":
             raise NotDirectoryError("Destination must be a folder")
@@ -1009,22 +1251,25 @@ class MongoStore:
         self._visible(parent_chain)
         self._mutable(chain, descendants=True)
         self._mutable(parent_chain)
-        if node["id"] in {row["id"] for row in parent_chain}:
+        if node["_id"] in {row["_id"] for row in parent_chain}:
             raise InvalidPathError("A folder cannot move into its subtree")
-        if node["parent_id"] == parent["id"]:
+        if node["parent_id"] == parent["_id"]:
             return self._record(node, path)
-        for key in self._subtree(node["id"]):
-            depth = len(self._path(key).split("/")) - len(path.split("/"))
-            if len(parent_chain) + depth > MAX_TREE_DEPTH:
-                raise ValidationError("Move would exceed maximum tree depth")
         name = node["name"]
-        if not self._unique(parent["id"], name):
+        if not self._unique(parent["_id"], name):
             if conflict == "skip":
                 return None
-            name = self._available(parent["id"], name, node["kind"])
-        node.update(parent_id=parent["id"], name=name, name_key=_name_key(name))
+            name = self._available(parent["_id"], name, node["kind"])
+        self.db.nodes.update_one(
+            {"_id": node["_id"]},
+            {"$set": {"parent_id": parent["_id"], **self._names(name)}},
+            session=self._session,
+        )
+        node.update(parent_id=parent["_id"], **self._names(name))
         self._bump()
-        return self._record(node, _join_path(destination, node["id"]))
+        return self._record(node, _join_path(destination, node["_id"]))
+
+    # -------------------------------------------------------------- shares
 
     def create_share(
         self,
@@ -1052,57 +1297,56 @@ class MongoStore:
             self._demo_mutable(chain, descendants=True)
             self._mutable(chain)
             if replace_existing:
-                self._revoke([node["id"]])
-            if (
-                sum(
-                    row["node_id"] == node["id"]
-                    for row in self._state["shares"].values()
-                )
-                >= MAX_SHARE_TOKENS_PER_ITEM
-            ):
-                raise ValidationError(
-                    "This item has 100 links. Remove an old link first."
+                self.db.shares.delete_many(
+                    {"node_id": node["_id"]}, session=self._session
                 )
             identity = secrets.token_urlsafe(16)
             token = (
                 token_factory(identity) if token_factory else secrets.token_urlsafe(32)
             )
-            self._state["shares"][identity] = {
+            row = {
                 "_id": identity,
                 "id": identity,
-                "node_id": node["id"],
+                "node_id": node["_id"],
                 "token_hash": hashlib.sha256(token.encode()).hexdigest(),
                 "created_at": created,
                 "expires_at": expiry,
                 **({"label": label} if label else {}),
             }
+            if expiry is not None:
+                row["expire_at"] = _expiry_date(expiry) + _EXPIRED_SHARE_RETENTION
+            self.db.shares.insert_one(row, session=self._session)
             self._bump()
             return token
 
     def list_shares(self, path=None, *, include_expired=False, token_factory=None):
         with self._transaction():
-            identity = self._resolve(path)[0]["id"] if path is not None else None
-            return [
-                {
-                    "id": row["id"],
-                    "label": row.get("label", ""),
-                    "node_id": row["node_id"],
-                    "path": self._path(row["node_id"]),
-                    **self._share_details(row, token_factory),
-                    "created_at": row["created_at"],
-                    "expires_at": row["expires_at"],
-                }
-                for row in self._state["shares"].values()
-                if (identity is None or row["node_id"] == identity)
-                and (
-                    include_expired
-                    or row["expires_at"] is None
-                    or row["expires_at"] > _utc_now()
+            query = {}
+            if path is not None:
+                query["node_id"] = self._resolve(path)[0]["_id"]
+            now = _utc_now()
+            result = []
+            for row in self._find("shares", query).sort("created_at", 1):
+                if not include_expired and (
+                    row["expires_at"] is not None and row["expires_at"] <= now
+                ):
+                    continue
+                chain = self._ancestors(row["node_id"])
+                result.append(
+                    {
+                        "id": row["id"],
+                        "label": row.get("label", ""),
+                        "node_id": row["node_id"],
+                        "path": self._chain_path(chain),
+                        **self._share_details(row, chain, token_factory),
+                        "created_at": row["created_at"],
+                        "expires_at": row["expires_at"],
+                    }
                 )
-            ]
+            return result
 
-    def _share_details(self, row, factory):
-        node, path, chain = self._resolve(self._path(row["node_id"]))
+    def _share_details(self, row, chain, factory):
+        node, path = chain[-1], self._chain_path(chain)
         return {
             "name": node["name"],
             "type": node["kind"],
@@ -1127,67 +1371,74 @@ class MongoStore:
         if expiry is not _SHARE_UNSET and expiry is not None and expiry <= _utc_now():
             raise ValidationError("Link expiry must be in the future")
         with self._transaction(write=True):
-            row = self._state["shares"].get(share_id)
+            row = self._one("shares", {"_id": share_id})
             if row is None:
                 raise NotFoundError("Link not found")
-            _, _, chain = self._resolve(self._path(row["node_id"]))
+            chain = self._ancestors(row["node_id"])
             self._visible(chain)
             self._demo_mutable(chain, descendants=True)
             self._mutable(chain)
             if label is _SHARE_UNSET and expiry is _SHARE_UNSET:
                 return
+            change, unset = {}, {}
             if expiry is not _SHARE_UNSET:
-                row["expires_at"] = expiry
+                change["expires_at"] = expiry
+                if expiry is None:
+                    unset["expire_at"] = ""
+                else:
+                    change["expire_at"] = (
+                        _expiry_date(expiry) + _EXPIRED_SHARE_RETENTION
+                    )
             if label is not _SHARE_UNSET:
                 if label:
-                    row["label"] = label
+                    change["label"] = label
                 else:
-                    row.pop("label", None)
+                    unset["label"] = ""
+            update = {"$set": change} if change else {}
+            if unset:
+                update["$unset"] = unset
+            self.db.shares.update_one({"_id": share_id}, update, session=self._session)
             self._bump()
 
     def revoke_share(self, share_id):
         with self._transaction(write=True):
             if share_id.startswith("/"):
-                self._demo_mutable(self._resolve(share_id)[2], descendants=True)
-            elif share_id in self._state["shares"]:
-                node_id = self._state["shares"][share_id]["node_id"]
-                self._demo_mutable(
-                    self._resolve(self._path(node_id))[2], descendants=True
-                )
-            keys = (
-                [
-                    key
-                    for key, row in self._state["shares"].items()
-                    if row["node_id"] == self._resolve(share_id)[0]["id"]
-                ]
-                if share_id.startswith("/")
-                else [share_id]
-            )
-            removed = False
-            for key in keys:
-                removed |= self._state["shares"].pop(key, None) is not None
+                node, _, chain = self._resolve(share_id)
+                self._demo_mutable(chain, descendants=True)
+                query = {"node_id": node["_id"]}
+            else:
+                row = self._one("shares", {"_id": share_id})
+                if row is None:
+                    return False
+                self._demo_mutable(self._ancestors(row["node_id"]), descendants=True)
+                query = {"_id": share_id}
+            removed = self.db.shares.delete_many(
+                query, session=self._session
+            ).deleted_count
             if removed:
                 self._bump()
-            return removed
+            return bool(removed)
 
     def _authorized(self, chain, token):
         if (
             not isinstance(token, str)
             or not token
             or len(token) > 1024
-            or any(row["trashed"] for row in chain)
+            or self._hidden(chain)
         ):
             return None
-        digest = hashlib.sha256(token.encode()).hexdigest()
-        ids = {row["id"] for row in chain}
-        for row in self._state["shares"].values():
-            if (
-                row["node_id"] in ids
-                and (row["expires_at"] is None or row["expires_at"] > _utc_now())
-                and hmac.compare_digest(row["token_hash"], digest)
-            ):
-                return self._path(row["node_id"])
-        return None
+        # The token's SHA-256 is the indexed lookup key; the token never is.
+        row = self._one(
+            "shares", {"token_hash": hashlib.sha256(token.encode()).hexdigest()}
+        )
+        ids = [item["_id"] for item in chain]
+        if (
+            row is None
+            or row["node_id"] not in ids
+            or (row["expires_at"] is not None and row["expires_at"] <= _utc_now())
+        ):
+            return None
+        return self._chain_path(chain[: ids.index(row["node_id"]) + 1])
 
     def authorize_directory(self, path, token):
         with self._transaction():
@@ -1203,25 +1454,22 @@ class MongoStore:
                 raise NotFileError("Not a file")
             return self._authorized(chain, token) is not None
 
+    # ----------------------------------------------------------- deletions
+
     def _pending_for(self, identity):
-        return next(
-            (
-                row
-                for row in self._state["deletions"].values()
-                if row["root_id"] == identity and row["state"] != "completed"
-            ),
-            None,
+        return self._one(
+            "deletions", {"root_id": identity, "state": {"$ne": "completed"}}
         )
 
     def validate_deletion(self, path):
         with self._transaction():
             node, path, chain = self._resolve(path)
-            if node["id"] == ROOT_ID:
+            if node["_id"] == ROOT_ID:
                 raise RootMutationError("The root folder cannot be deleted")
             self._demo_mutable(chain, descendants=True)
-            if not self._pending_for(node["id"]):
+            if not self._pending_for(node["_id"]):
                 self._mutable(chain, descendants=True)
-                if not node["trashed"] or any(row["trashed"] for row in chain[:-1]):
+                if not node["trashed"] or self._hidden(chain[:-1]):
                     raise TrashedItemError(
                         "Permanent deletion requires a top-level trash item"
                     )
@@ -1233,18 +1481,21 @@ class MongoStore:
         with self._transaction(write=True):
             node, path, chain = self._resolve(path)
             self.validate_deletion(path)
-            prior = self._pending_for(node["id"])
+            prior = self._pending_for(node["_id"])
             if prior:
                 if channel_id is not None and prior["channel_id"] != channel_id:
                     raise ValidationError("Deletion channel does not match")
                 return self._deletion(prior)
             self._mutable(chain, descendants=True)
             identity = secrets.token_urlsafe(16)
-            messages = self._messages(node["id"])
+            # shortcut: one document lists every message, so a single deletion is
+            # bound by MongoDB's 16 MB document size (~1.5M messages); store the
+            # ids in their own collection if a drive ever needs a larger one.
+            messages = self._messages(node["_id"])
             row = {
                 "_id": identity,
                 "id": identity,
-                "root_id": node["id"],
+                "root_id": node["_id"],
                 "path": path,
                 "channel_id": channel_id,
                 "state": "pending",
@@ -1253,166 +1504,217 @@ class MongoStore:
                 "message_ids": messages,
                 "pending_message_ids": messages.copy(),
             }
-            self._state["deletions"][identity] = row
-            self._revoke(self._subtree(node["id"]))
+            self.db.deletions.insert_one(row, session=self._session)
+            self._revoke_under(node["_id"])
             self._bump()
             return self._deletion(row)
 
     @staticmethod
     def _deletion(row):
-        return copy.deepcopy({key: value for key, value in row.items() if key != "_id"})
+        return copy.deepcopy(
+            {k: v for k, v in row.items() if k not in {"_id", "expire_at"}}
+        )
 
     def pending_deletions(self):
         with self._transaction():
             return [
                 self._deletion(row)
-                for row in self._state["deletions"].values()
-                if row["state"] != "completed"
+                for row in self._find("deletions", {"state": {"$ne": "completed"}})
             ]
 
     def confirm_deletion_messages(self, intent_id, message_ids):
         validated = {_strict_int(value, "message_id", 1) for value in message_ids}
         with self._transaction(write=True):
-            row = self._state["deletions"].get(intent_id)
+            row = self._one("deletions", {"_id": intent_id})
             if row is None:
                 raise NotFoundError("Deletion intent not found")
-            if not validated <= set(row["message_ids"]):
-                raise ValidationError("Confirmation contains unrelated messages")
             if row["state"] == "completed":
                 return
-            row.update(
-                pending_message_ids=sorted(set(row["pending_message_ids"]) - validated),
-                state="pending",
-                error=None,
+            if not validated <= set(row["message_ids"]):
+                raise ValidationError("Confirmation contains unrelated messages")
+            self.db.deletions.update_one(
+                {"_id": intent_id},
+                {
+                    "$set": {
+                        "pending_message_ids": sorted(
+                            set(row["pending_message_ids"]) - validated
+                        ),
+                        "state": "pending",
+                        "error": None,
+                    }
+                },
+                session=self._session,
             )
             self._bump()
 
     def fail_deletion(self, intent_id, error):
         with self._transaction(write=True):
-            row = self._state["deletions"].get(intent_id)
+            row = self._one("deletions", {"_id": intent_id})
             if row is None or row["state"] == "completed":
                 raise NotFoundError("Active deletion intent not found")
-            row.update(state="failed", error=str(error)[:500])
+            self.db.deletions.update_one(
+                {"_id": intent_id},
+                {"$set": {"state": "failed", "error": str(error)[:500]}},
+                session=self._session,
+            )
             self._bump()
 
     def finish_deletion(self, intent_id):
         """Atomically forget a trashed subtree; retain its Telegram documents."""
         with self._transaction(write=True):
-            row = self._state["deletions"].get(intent_id)
+            row = self._one("deletions", {"_id": intent_id})
             if row is None:
                 raise NotFoundError("Deletion intent not found")
             messages = row["message_ids"].copy()
             if row["state"] != "completed":
-                self._demo_mutable(
-                    self._resolve(self._path(row["root_id"]))[2], descendants=True
-                )
+                chain = self._ancestors(row["root_id"])
+                self._demo_mutable(chain, descendants=True)
+                files, _folders, size = self._subtree_totals(row["root_id"])
                 self._remove_subtree(row["root_id"])
-                row.update(
-                    state="completed",
-                    error=None,
-                    message_ids=[],
-                    pending_message_ids=[],
+                self.db.deletions.update_one(
+                    {"_id": intent_id},
+                    {
+                        "$set": {
+                            "state": "completed",
+                            "error": None,
+                            "message_ids": [],
+                            "pending_message_ids": [],
+                            "expire_at": datetime.now(UTC) + _RECORD_RETENTION,
+                        }
+                    },
+                    session=self._session,
                 )
-                self._bump()
+                self._bump(trashed_files=-files, trashed_bytes=-size)
             return messages
 
-    def _export(self):
-        nodes = {}
-        for key, row in self._state["nodes"].items():
-            value = {
-                "id": key,
-                "name": row["name"],
-                "type": row["kind"],
-                "upload_date": row["upload_date"],
-                "trashed": row["trashed"],
-                "share_hashes": [],
+    # ------------------------------------------------------ export / stats
+
+    @classmethod
+    def _portable(cls, metadata, nodes, shares, operations, deletions, preparations):
+        """Portable schema-5 catalog from raw rows; also validates their shape."""
+        try:
+            portable, parents = {}, {}
+            for row in nodes:
+                key = row["_id"]
+                if row.get("id") != key or row.get("name_key") != _name_key(
+                    row["name"]
+                ):
+                    raise CorruptStoreError("Catalog node identity or index is invalid")
+                value = {
+                    "id": key,
+                    "name": row["name"],
+                    "type": row["kind"],
+                    "upload_date": row["upload_date"],
+                    "trashed": row["trashed"],
+                    "share_hashes": [],
+                }
+                if row.get("starred"):
+                    value["starred"] = True
+                if row["kind"] == "file":
+                    value.update(message_id=row["message_id"], size=row["size"])
+                    if row.get("parts"):
+                        value["parts"] = copy.deepcopy(row["parts"])
+                    if row.get("sha256"):
+                        value["sha256"] = row["sha256"]
+                    if row.get("poster") is not None:
+                        value["poster"] = copy.deepcopy(row["poster"])
+                else:
+                    value["children"] = {}
+                portable[key] = value
+                parents[key] = row["parent_id"]
+            if ROOT_ID not in portable or parents[ROOT_ID] is not None:
+                raise CorruptStoreError("MongoDB catalog root is missing")
+            for row in shares:
+                portable[row["node_id"]]["share_hashes"].append(row["token_hash"])
+            for key, parent in parents.items():
+                if parent is not None:
+                    folder = portable.get(parent)
+                    if folder is None or folder["type"] != "folder":
+                        raise CorruptStoreError("Invalid catalog parent")
+                    folder["children"][key] = portable[key]
+            result = {
+                "schema_version": SCHEMA_VERSION,
+                "drive_id": metadata["drive_id"],
+                "revision": metadata["revision"],
+                "backed_up_revision": metadata["revision"],
+                "root": portable[ROOT_ID],
+                "shares": [
+                    {k: v for k, v in row.items() if k not in {"_id", "expire_at"}}
+                    for row in shares
+                ],
+                "operations": [
+                    {k: v for k, v in row.items() if k not in {"_id", "expire_at"}}
+                    for row in operations
+                ],
+                "deletions": [cls._deletion(row) for row in deletions],
             }
-            if row.get("starred"):
-                value["starred"] = True
-            if row["kind"] == "file":
-                value.update(message_id=row["message_id"], size=row["size"])
-                if row.get("parts"):
-                    value["parts"] = copy.deepcopy(row["parts"])
-                if row.get("sha256"):
-                    value["sha256"] = row["sha256"]
-                if row.get("poster") is not None:
-                    value["poster"] = copy.deepcopy(row["poster"])
-            else:
-                value["children"] = {}
-            nodes[key] = value
-        for row in self._state["shares"].values():
-            nodes[row["node_id"]]["share_hashes"].append(row["token_hash"])
-        for key, row in self._state["nodes"].items():
-            if row["parent_id"] is not None:
-                parent = nodes.get(row["parent_id"])
-                if parent is None or parent["type"] != "folder":
-                    raise CorruptStoreError("Invalid catalog parent")
-                parent["children"][key] = nodes[key]
-        metadata = self._state["metadata"]
-        result = {
-            "schema_version": SCHEMA_VERSION,
-            "drive_id": metadata["drive_id"],
-            "revision": metadata["revision"],
-            "backed_up_revision": metadata["revision"],
-            "root": nodes[ROOT_ID],
-            "shares": [
-                {k: v for k, v in row.items() if k != "_id"}
-                for row in self._state["shares"].values()
-            ],
-            "operations": [
-                {k: v for k, v in row.items() if k != "_id"}
-                for row in self._state["operations"].values()
-            ],
-            "deletions": [
-                self._deletion(row) for row in self._state["deletions"].values()
-            ],
-        }
-        if metadata.get("storage_channel_id") is not None:
-            result["storage_channel_id"] = metadata["storage_channel_id"]
-        if self._state["preparations"]:
-            result["folder_preparations"] = [
-                {k: copy.deepcopy(v) for k, v in row.items() if k != "_id"}
-                for row in self._state["preparations"].values()
-            ]
+            if metadata.get("storage_channel_id") is not None:
+                result["storage_channel_id"] = metadata["storage_channel_id"]
+            if preparations:
+                result["folder_preparations"] = [
+                    {
+                        k: copy.deepcopy(v)
+                        for k, v in row.items()
+                        if k not in {"_id", "expire_at"}
+                    }
+                    for row in preparations
+                ]
+        except (KeyError, TypeError, AttributeError) as error:
+            raise CorruptStoreError("Catalog contains a malformed record") from error
+        cls._validate_payload(result)
+        if cls._count(result["root"]) != len(portable):
+            raise CorruptStoreError(
+                "Catalog contains unreachable nodes or invalid roots"
+            )
         return result
 
-    def export(self):
-        with self._transaction():
-            return self._export()
+    @staticmethod
+    def _count(root):
+        total, pending = 0, [root]
+        while pending:
+            node = pending.pop()
+            total += 1
+            if node["type"] == "folder":
+                pending.extend(node["children"].values())
+        return total
 
-    def mark_backed_up(self, revision):
-        if type(revision) is not int or not 0 <= revision <= self.revision:
-            raise InvalidRevisionError("Invalid catalog revision")
-        return False
+    @classmethod
+    def validate_snapshot_records(cls, records):
+        """Validate archived records and return their portable catalog without I/O."""
+        catalogs = records["catalog"]
+        if len(catalogs) != 1 or catalogs[0].get("_id") != "catalog":
+            raise CorruptStoreError("Archive catalog metadata is invalid")
+        metadata = catalogs[0]
+        if (
+            metadata.get("schema_version") != SCHEMA_VERSION
+            or type(metadata.get("generation")) is not int
+            or metadata["generation"] < 0
+            or type(metadata.get("revision")) is not int
+            or metadata["revision"] < 1
+        ):
+            raise CorruptStoreError("Archive catalog schema or revision is invalid")
+        return cls._portable(metadata, *(records[name] for name in _TABLES))
+
+    def export(self):
+        """Whole portable catalog, read in one snapshot transaction."""
+
+        def read(session):
+            return self._portable(
+                self.db.catalog.find_one({"_id": "catalog"}, session=session),
+                *(list(self.db[name].find({}, session=session)) for name in _TABLES),
+            )
+
+        if self._session is not None:
+            return read(self._session)
+        return self.backend.transaction(read)
 
     def statistics(self):
-        with self._transaction():
-            state = self._state
-            cached = getattr(self, "_statistics_cache", None)
-            if cached is not None and cached[0] is state:
-                return dict(cached[1])
-            result = {
-                "files": 0,
-                "folders": 0,
-                "total_bytes": 0,
-                "trashed_files": 0,
-                "trashed_bytes": 0,
-            }
-            for row in self._state["nodes"].values():
-                if row["id"] == ROOT_ID:
-                    continue
-                hidden = any(
-                    item["trashed"] for item in self._resolve(self._path(row["id"]))[2]
-                )
-                if row["kind"] == "file":
-                    result["trashed_files" if hidden else "files"] += 1
-                    result["trashed_bytes" if hidden else "total_bytes"] += row["size"]
-                elif not hidden:
-                    result["folders"] += 1
-            # Working batches can change again before committing or rolling back.
-            if state is self._committed:
-                self._statistics_cache = (state, result)
-            return dict(result)
+        metadata = (
+            self._one("catalog", {"_id": "catalog"})
+            if self._session is not None
+            else self.db.catalog.find_one({"_id": "catalog"})
+        )
+        return {name: metadata.get(name, 0) for name in _COUNTERS}
 
     @staticmethod
     def _default_share_expiry() -> str:
@@ -1421,22 +1723,6 @@ class MongoStore:
             .isoformat(timespec="seconds")
             .replace("+00:00", "Z")
         )
-
-    @staticmethod
-    def _json_bytes(payload: dict[str, Any]) -> bytes:
-        content = (
-            json.dumps(
-                payload,
-                allow_nan=False,
-                ensure_ascii=False,
-                separators=(",", ":"),
-                sort_keys=True,
-            )
-            + "\n"
-        ).encode("utf-8")
-        if len(content) > MAX_STORE_BYTES:
-            raise PersistenceError("metadata snapshot exceeds the safe size limit")
-        return content
 
     @classmethod
     def _validate_payload(cls, payload: object) -> tuple[_FolderNode, dict[str, Any]]:
@@ -1479,7 +1765,7 @@ class MongoStore:
             return root, payload
         except UnsupportedSchemaError:
             raise
-        except (ValidationError, TypeError, RecursionError) as exc:
+        except (ValidationError, TypeError) as exc:
             raise CorruptStoreError(f"metadata validation failed: {exc}") from exc
 
     @classmethod
@@ -1763,33 +2049,15 @@ class MongoStore:
             poster,
         )
 
-    def backup_snapshot(self) -> tuple[int, bytes]:
-        payload = self.export()
-        payload["backed_up_revision"] = payload["revision"]
-        return payload["revision"], self._json_bytes(payload)
-
     def create_folder(self, parent_path: str, name: str) -> dict[str, Any]:
         return self._add(parent_path, name, None)
-
-    def search(
-        self, query: str, *, include_trashed: bool = False
-    ) -> dict[str, dict[str, Any]]:
-        """Compatibility lookup: at most 500 literal filename matches."""
-        page = self.search_page(
-            query, include_trashed=include_trashed, limit=MAX_SEARCH_RESULTS
-        )
-        return {row["id"]: row for row in page["items"]}
-
-    def snapshot(self) -> tuple[int, bytes]:
-        payload = self.export()
-        return payload["revision"], self._json_bytes(payload)
 
     @staticmethod
     def _record(
         row: dict[str, Any], full_path: str, *, message: bool = False
     ) -> dict[str, Any]:
         result = dict(
-            id=row["id"],
+            id=row["_id"],
             name=row["name"],
             path=_parent_path(full_path),
             size=row["size"],

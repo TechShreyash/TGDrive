@@ -87,7 +87,9 @@ def test_storage_failure_cannot_commit_only_part_of_metadata_batch(
     def fail_bulk_write(*_args, **_kwargs):
         raise DatabaseUnavailable("simulated bulk storage failure")
 
-    monkeypatch.setattr(store.backend.db.nodes, "bulk_write", fail_bulk_write)
+    monkeypatch.setattr(
+        store.backend.db.catalog, "find_one_and_update", fail_bulk_write
+    )
     login(client)
 
     if action == "move":

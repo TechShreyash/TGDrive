@@ -4,8 +4,6 @@ from __future__ import annotations
 
 import asyncio
 import os
-import threading
-from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
@@ -22,7 +20,6 @@ from tgdrive.storage.demo_files import (
     write_policy,
 )
 from tgdrive.storage.mongo_store import MongoStore
-from tgdrive.storage.store import ROOT_ID
 from tgdrive.transfers.tasks import TransferRegistry, TransferStatus
 from tgdrive.web.share_links import token_factory
 
@@ -50,22 +47,7 @@ def catalog(tmp_path, request):
     if request.param == "mongo-live":
         store = MongoStore.create(request.getfixturevalue("backend"))
     else:
-        # Exercise MongoStore's actual domain methods and copy-on-write transactions;
-        # this cache fixture does not claim to validate MongoDB server persistence.
-        store = object.__new__(MongoStore)
-        store._lock = threading.RLock()
-        store._local = threading.local()
-        store._closed = False
-        store.backend = SimpleNamespace(check_owner=lambda: None)
-        store._committed = {
-            "metadata": {"revision": 1, "backed_up_revision": 1, "generation": 0},
-            "nodes": {ROOT_ID: store._node(ROOT_ID, None, "/", "folder")},
-            "shares": {},
-            "operations": {},
-            "deletions": {},
-            "preparations": {},
-        }
-        store._commit = lambda _before: None
+        store = MongoStore.create(FakeMongoBackend())
     try:
         yield store
     finally:

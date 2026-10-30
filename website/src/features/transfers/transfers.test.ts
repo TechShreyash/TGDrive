@@ -1142,10 +1142,10 @@ describe("whole-batch recovery and bounded admission", () => {
                 kept.filter((item) => item.batchId === "batch-" + batch),
             ).toHaveLength(2);
     });
-    it("caps unfinished-batch rows at 2000 including retained completed siblings", () => {
+    it("queues any number of files without a fixed queue cap", () => {
         const manager = managerForTest();
         manager.addEntries(
-            Array.from({ length: 2000 }, (_, i) => ({
+            Array.from({ length: 2500 }, (_, i) => ({
                 file: new File(["x"], "" + i),
                 relativePath: "Folder/" + i,
                 destination: "/",
@@ -1154,12 +1154,9 @@ describe("whole-batch recovery and bounded admission", () => {
             true,
             folderBatch("Folder"),
         );
-        manager.snapshot()[0].state = "completed";
-        expect(manager.canQueue(1)).toBe(false);
-        expect(manager.add([new File(["x"], "extra")], "/", 10)[0]).toContain(
-            "2,000",
-        );
-        expect(manager.snapshot()).toHaveLength(2000);
+        expect(manager.canQueue(1)).toBe(true);
+        expect(manager.add([new File(["x"], "extra")], "/", 10)).toEqual([]);
+        expect(manager.snapshot()).toHaveLength(2501);
     });
     it("matches folder resume by exact rooted path without flattening duplicate basenames", async () => {
         const file = (path: string, data = "same") => {

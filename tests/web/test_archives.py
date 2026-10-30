@@ -179,7 +179,6 @@ def test_demo_archive_destinations_remain_read_only(tmp_path, monkeypatch, extra
     "payload",
     [
         {"paths": [], "name": "Bundle.zip"},
-        {"paths": ["/source"] * 1001, "name": "Bundle.zip"},
         {"paths": [""], "name": "Bundle.zip"},
         {"paths": ["/source"], "name": ""},
         {"paths": ["/source"], "name": "x" * 256},

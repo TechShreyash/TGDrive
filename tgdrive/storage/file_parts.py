@@ -7,7 +7,6 @@ from typing import Any
 
 from tgdrive.core.errors import ValidationError
 
-MAX_FILE_PARTS = 4096
 MAX_FILE_SIZE = (1 << 63) - 1
 MAX_POSTER_BYTES = 1024 * 1024
 _PART_KEYS = {"index", "offset", "size", "message_id", "sha256"}
@@ -74,8 +73,8 @@ def validate_parts(parts: Any, *, size: int, message_id: int) -> list[dict[str, 
         raise ValidationError("multipart file size must be a positive 64-bit integer")
     if type(message_id) is not int or not 0 < message_id <= MAX_FILE_SIZE:
         raise ValidationError("multipart anchor must be a positive message id")
-    if not isinstance(parts, list) or not 1 <= len(parts) <= MAX_FILE_PARTS:
-        raise ValidationError(f"file parts must contain 1-{MAX_FILE_PARTS} records")
+    if not isinstance(parts, list) or not parts:
+        raise ValidationError("file parts must contain at least one record")
     result = []
     offset = 0
     identities = set()

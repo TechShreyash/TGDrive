@@ -32,20 +32,20 @@ def test_later_mutation_failure_restores_every_prior_change_and_revision():
         store.close()
 
 
-def test_caught_inner_error_rolls_back_savepoint_without_corrupting_outer_batch():
+def test_nested_batch_failure_rolls_back_the_whole_outer_batch():
     store = new_store()
     try:
         original = store.create_folder("/", "Original")
         path = "/" + original["id"]
-        before = store.revision
-        with store.metadata_batch():
-            store.rename(path, "Committed")
-            with pytest.raises(NotFoundError), store.metadata_batch():
+        before = store.export()
+        # MongoDB has no savepoints: nested work joins one transaction.
+        with pytest.raises(NotFoundError), store.metadata_batch():
+            store.rename(path, "Changed")
+            with store.metadata_batch():
                 store.set_trashed(path, True)
                 store.get_directory("/missing")
-            assert store.get_directory(path)["name"] == "Committed"
-        assert store.get_directory(path)["name"] == "Committed"
-        assert store.revision == before + 1
+        assert store.export() == before
+        assert store.rename(path, "After")["name"] == "After"
     finally:
         store.close()
 

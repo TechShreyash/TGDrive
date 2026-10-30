@@ -219,12 +219,13 @@ async def test_defaults_are_built_in_and_invalid_updates_never_change_saved_poli
         from pydantic import ValidationError
 
         for changes in [
-            {"cache_memory_bytes": 9 * 1024**3, "timezone": "UTC"},
-            {"telegram_upload_pipeline": 17},
-            {"telegram_request_limit": 33},
-            {"telegram_parts_per_second": 129},
-            {"telegram_media_per_bot": 17},
-            {"telegram_max_queue": 4097},
+            {"cache_memory_bytes": -1, "timezone": "UTC"},
+            {"timezone": "Not/AZone"},
+            {"telegram_upload_pipeline": 0},
+            {"telegram_request_limit": 0},
+            {"telegram_parts_per_second": 0},
+            {"telegram_media_per_bot": 0},
+            {"telegram_max_queue": 0},
             {"preload_max_jobs": 0},
             {"upload_split_mib": 2001},
             {"cache_ttl_seconds": 0},
@@ -258,7 +259,7 @@ async def test_url_concurrency_applies_live_and_persists(tmp_path, mongo_backend
     service = PerformanceSettings(settings, state)
     before = await service.snapshot()
     assert before["remote_download_concurrency"] == 2
-    for invalid in (0, 9, True, 2.5):
+    for invalid in (0, True, 2.5):
         with pytest.raises(ValueError):
             await service.save({"remote_download_concurrency": invalid})
     await service.save({"remote_download_concurrency": 8})

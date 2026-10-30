@@ -13,9 +13,10 @@ from tgdrive.core.errors import (
     UnsupportedSchemaError,
     ValidationError,
 )
-from tgdrive.recovery.backup import decode_catalog_snapshot
-from tgdrive.storage.file_parts import MAX_FILE_PARTS, validate_parts, validate_sha256
+from tgdrive.storage.file_parts import validate_parts, validate_sha256
 from tgdrive.storage.store import SCHEMA_VERSION
+
+MANY_PARTS = 5000  # Above the former 4096-part ceiling.
 
 DATA = b"complete logical file"
 SHA = hashlib.sha256(DATA).hexdigest()
@@ -99,7 +100,7 @@ def test_invalid_manifests_never_create_partial_catalog_metadata(store, damage):
     if damage == "empty":
         parts = []
     elif damage == "limit":
-        parts = [parts[0]] * (MAX_FILE_PARTS + 1)
+        parts = [parts[0]] * 3  # Repeated index/offset, not a count limit.
     elif damage == "not-list":
         parts = tuple(parts)
     elif damage == "unknown-field":
@@ -176,18 +177,18 @@ def test_atomic_commit_idempotency_and_public_records_do_not_expose_provider_par
 
 def test_part_commit_failure_rolls_back_node_operation_and_revision(store, monkeypatch):
     before = store.revision
-    nodes = store.backend.db.nodes
-    original = nodes.bulk_write
+    catalog = store.backend.db.catalog
+    original = catalog.find_one_and_update
 
     def fail(*_args, **_kwargs):
         raise PersistenceError("simulated database failure")
 
-    monkeypatch.setattr(nodes, "bulk_write", fail)
+    monkeypatch.setattr(catalog, "find_one_and_update", fail)
     with pytest.raises(PersistenceError):
         add(store)
     assert store.revision == before and not store.list_directory("/")
     assert not store.has_file_operation("logical-upload-operation")
-    monkeypatch.setattr(nodes, "bulk_write", original)
+    monkeypatch.setattr(catalog, "find_one_and_update", original)
     assert add(store)["part_count"] == 2
 
 
@@ -257,7 +258,7 @@ def test_portable_catalog_recovery_keeps_all_part_ids_and_revokes_shares():
     try:
         item = add(source)
         token = source.create_share(full(item))
-        payload = decode_catalog_snapshot(source.backup_snapshot()[1])
+        payload = source.export()
         assert payload["schema_version"] == SCHEMA_VERSION
         recovered = store_from_payload(payload, revoke_shares=True)
         result = recovered.get_file(full(item))
@@ -282,13 +283,13 @@ def test_exact_4096_part_boundary_is_supported_atomically(store):
             "message_id": index + 1,
             "sha256": checksum,
         }
-        for index in range(MAX_FILE_PARTS)
+        for index in range(MANY_PARTS)
     ]
-    item = store.add_file("/", "many-parts.bin", 1, MAX_FILE_PARTS, parts=parts)
+    item = store.add_file("/", "many-parts.bin", 1, MANY_PARTS, parts=parts)
     result = store.get_file(full(item))
-    assert result["part_count"] == MAX_FILE_PARTS
+    assert result["part_count"] == MANY_PARTS
     assert result["parts"] == parts
-    assert len(store.message_ids(full(item))) == MAX_FILE_PARTS
+    assert len(store.message_ids(full(item))) == MANY_PARTS
 
 
 @pytest.mark.parametrize("document_id", [1, -1, (1 << 63) - 1, -(1 << 63)])

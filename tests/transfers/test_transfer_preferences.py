@@ -69,7 +69,7 @@ def test_owner_api_rejects_invalid_limits_and_applies_without_restart(
             assert response.status_code == 200
             assert response.headers["Cache-Control"] == "no-store"
             assert response.json()["uploads_per_bot"] == 1
-            for value in (0, 5, 1.5, True, "2"):
+            for value in (0, -1, 1.5, True, "2"):
                 assert (
                     client.patch(url, json={"uploads_per_bot": value}).status_code
                     == 422

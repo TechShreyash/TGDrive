@@ -1,4 +1,4 @@
-"""Catalog limits, name/path rules and portable snapshot tree validation."""
+"""Name/path rules, search keys and portable snapshot tree validation."""
 
 from __future__ import annotations
 
@@ -17,18 +17,12 @@ from tgdrive.core.errors import (
 )
 from tgdrive.storage.file_parts import validate_parts, validate_poster, validate_sha256
 
-SCHEMA_VERSION = 4
+SCHEMA_VERSION = 5
 ROOT_ID = "root"
+# Operating systems reject longer names when a file is downloaded.
 MAX_NAME_LENGTH = 255
-MAX_STORE_BYTES = 64 * 1024 * 1024
-MAX_TREE_DEPTH = 128
-MAX_TREE_ITEMS = 250_000
-MAX_FOLDER_TREE_ITEMS = 1000
-MAX_FOLDER_TREE_DEPTH = 64
+# Results per search request; paging continues without a total limit.
 MAX_SEARCH_RESULTS = 500
-MAX_SEARCH_OFFSET = MAX_TREE_ITEMS
-# Bound independent capabilities without evicting somebody else's link.
-MAX_SHARE_TOKENS_PER_ITEM = 100
 _SHARE_UNSET = object()
 
 _ID_RE = re.compile(r"^[A-Za-z0-9_-]{1,128}$")
@@ -96,6 +90,31 @@ def _normalize_name(value: object) -> str:
 
 def _name_key(value: str) -> str:
     return unicodedata.normalize("NFC", value).casefold()
+
+
+def _fold(value: str) -> str:
+    """Search form: case- and accent-insensitive, so ``cafe`` finds ``Café``."""
+    decomposed = unicodedata.normalize("NFKD", value)
+    stripped = "".join(c for c in decomposed if unicodedata.category(c) != "Mn")
+    return unicodedata.normalize("NFC", stripped).casefold()
+
+
+_CHUNK = re.compile(r"[^\W_]+")
+_SPLIT = re.compile(r"(?<=[a-z])(?=[A-Z])|(?<=[^\W\d_])(?=\d)|(?<=\d)(?=[^\W\d_])")
+
+
+def _tokens(name: str) -> list[str]:
+    """Word starts for prefix search: separators, camelCase and letter/digit."""
+    words = set()
+    for chunk in _CHUNK.findall(name):
+        words.add(_fold(chunk))
+        words.update(_fold(part) for part in _SPLIT.split(chunk) if part)
+    return sorted(words)
+
+
+def _grams(value: str) -> list[str]:
+    """Three-character pieces of a folded name for indexed mid-word search."""
+    return sorted({value[i : i + 3] for i in range(len(value) - 2)})
 
 
 def _validate_file_rename(current_name: str, new_name: str) -> None:
@@ -203,9 +222,7 @@ class _FolderNode:
 _Node = _FolderNode | _FileNode
 
 
-def _parse_node(data: object, *, depth: int = 0) -> _Node:
-    if depth > MAX_TREE_DEPTH:
-        raise ValidationError(f"tree exceeds maximum depth of {MAX_TREE_DEPTH}")
+def _parse_one(data: object) -> tuple[_Node, dict[str, Any]]:
     if not isinstance(data, dict):
         raise ValidationError("each tree node must be an object")
     item_type = data.get("type")
@@ -226,7 +243,7 @@ def _parse_node(data: object, *, depth: int = 0) -> _Node:
             raise ValidationError("file parts must be an array")
         if "sha256" in data:
             validate_sha256(data["sha256"], optional=False)
-        return _FileNode(
+        node = _FileNode(
             id=data["id"],
             name=data["name"],
             message_id=data["message_id"],
@@ -239,6 +256,7 @@ def _parse_node(data: object, *, depth: int = 0) -> _Node:
             sha256=data.get("sha256"),
             poster=data.get("poster"),
         )
+        return node, {}
     if item_type == "folder":
         expected = common_keys | {"children"}
         optional = {"starred"}
@@ -247,24 +265,34 @@ def _parse_node(data: object, *, depth: int = 0) -> _Node:
         raw_children = data["children"]
         if not isinstance(raw_children, dict):
             raise ValidationError("folder children must be an object")
-        children: dict[str, _Node] = {}
-        for child_id, raw_child in raw_children.items():
-            if not isinstance(child_id, str):
-                raise ValidationError("child map keys must be strings")
-            child = _parse_node(raw_child, depth=depth + 1)
-            if child.id != child_id:
-                raise ValidationError("child map key does not match child id")
-            children[child_id] = child
-        return _FolderNode(
+        node = _FolderNode(
             id=data["id"],
             name=data["name"],
             upload_date=data["upload_date"],
             trashed=data["trashed"],
             starred=data.get("starred", False),
             share_hashes=data["share_hashes"],
-            children=children,
         )
+        return node, raw_children
     raise ValidationError("node type must be 'file' or 'folder'")
+
+
+def _parse_node(data: object) -> _Node:
+    """Parse a portable tree with an explicit stack: depth has no limit."""
+    root, children = _parse_one(data)
+    pending = [(root, children)]
+    while pending:
+        folder, raw_children = pending.pop()
+        for child_id, raw_child in raw_children.items():
+            if not isinstance(child_id, str):
+                raise ValidationError("child map keys must be strings")
+            child, grandchildren = _parse_one(raw_child)
+            if child.id != child_id:
+                raise ValidationError("child map key does not match child id")
+            folder.children[child_id] = child
+            if isinstance(child, _FolderNode):
+                pending.append((child, grandchildren))
+    return root
 
 
 def _validate_tree(root: _FolderNode) -> None:
@@ -274,20 +302,14 @@ def _validate_tree(root: _FolderNode) -> None:
         )
 
     seen_ids: set[str] = {ROOT_ID}
-    seen_hashes: set[str] = set()
-    item_count = 1
-
-    def visit(folder: _FolderNode, depth: int) -> None:
-        nonlocal item_count
-        if depth > MAX_TREE_DEPTH:
-            raise ValidationError(f"tree exceeds maximum depth of {MAX_TREE_DEPTH}")
+    seen_hashes: set[str] = set(root.share_hashes)
+    if len(seen_hashes) != len(root.share_hashes):
+        raise ValidationError("duplicate root share token hash")
+    pending = [root]
+    while pending:
+        folder = pending.pop()
         sibling_names: set[str] = set()
         for child_id, child in folder.children.items():
-            item_count += 1
-            if item_count > MAX_TREE_ITEMS:
-                raise ValidationError(
-                    f"tree exceeds maximum item count of {MAX_TREE_ITEMS}"
-                )
             if child_id != child.id:
                 raise ValidationError("child map key does not match child id")
             if child.id in seen_ids:
@@ -307,13 +329,7 @@ def _validate_tree(root: _FolderNode) -> None:
                     )
                 seen_hashes.add(token_hash)
             if isinstance(child, _FolderNode):
-                visit(child, depth + 1)
-
-    for token_hash in root.share_hashes:
-        if token_hash in seen_hashes:
-            raise ValidationError("duplicate root share token hash")
-        seen_hashes.add(token_hash)
-    visit(root, 0)
+                pending.append(child)
 
 
 def _normalize_path(path: object) -> tuple[tuple[str, ...], str]:
@@ -357,10 +373,8 @@ def _folder_manifest(
 ) -> dict[str, Any]:
     _, destination = _normalize_path(destination)
     root_name = _normalize_name(root_name)
-    if not isinstance(folders, list) or len(folders) >= MAX_FOLDER_TREE_ITEMS:
-        raise ValidationError(
-            "folder tree supports at most 1000 folders including root"
-        )
+    if not isinstance(folders, list):
+        raise ValidationError("folders must be a list")
     paths: set[tuple[str, ...]] = set()
     siblings: set[tuple[tuple[str, ...], str]] = set()
     for segments in folders:
@@ -368,8 +382,6 @@ def _folder_manifest(
             raise ValidationError(
                 "relative folder paths must be non-empty segment arrays"
             )
-        if len(segments) >= MAX_FOLDER_TREE_DEPTH:
-            raise ValidationError("folder tree cannot exceed 64 levels including root")
         path = tuple(_normalize_name(segment) for segment in segments)
         key = (path[:-1], _name_key(path[-1]))
         if path in paths or key in siblings:

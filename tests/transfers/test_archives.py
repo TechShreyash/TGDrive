@@ -546,36 +546,6 @@ async def test_resource_open_cancel_closes_handle_after_worker_drains():
     assert resource.closed
 
 
-async def test_create_rejects_oversized_directory_before_dispatch(
-    tmp_path, monkeypatch
-):
-    manager, ledger, _ = await manager_for(tmp_path)
-    try:
-        item = source(manager, ledger, "source.txt", b"data")
-        monkeypatch.setattr(archives, "MAX_DIRECTORY_BYTES", 80)
-        with pytest.raises(ArchiveError, match="directory limit"):
-            await manager.start_archive(
-                paths=[manager.store.resolve_id(item["id"])],
-                destination="/",
-                name="out.zip",
-            )
-        assert not manager.registry.list()
-        assert not ledger.calls
-    finally:
-        await dispose(manager)
-
-
-def test_expanded_manifest_is_bounded_before_catalog_writes(tmp_path, monkeypatch):
-    path = write_zip(tmp_path, [("folder/deep/\u00e9.txt", b"payload")])
-    plan = zip_manifest(path, 1024, 1024**2)
-    encoded = archives.json.dumps(
-        plan, ensure_ascii=False, separators=(",", ":")
-    ).encode("utf-8")
-    monkeypatch.setattr(archives, "MAX_MANIFEST_BYTES", len(encoded) - 1)
-    with pytest.raises(ArchiveError, match="4 MiB job metadata"):
-        zip_manifest(path, 1024, 1024**2)
-
-
 async def test_folder_worker_restores_demo_write_policy(tmp_path):
     manager, _, _ = await manager_for(tmp_path)
     try:

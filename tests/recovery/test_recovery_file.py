@@ -196,7 +196,7 @@ def test_rebased_recovery_file_uses_replacement_channel_and_retains_safe_history
 
 
 @pytest.mark.parametrize(
-    "damage", ["key", "ciphertext", "mapping", "duplicate", "nonfinite", "expanded"]
+    "damage", ["key", "ciphertext", "mapping", "duplicate", "nonfinite", "truncated"]
 )
 def test_invalid_unified_files_never_expose_restore_state(source, monkeypatch, damage):
     content = encode_bundle(bundle(source), KEY)
@@ -218,7 +218,7 @@ def test_invalid_unified_files_never_expose_restore_state(source, monkeypatch, d
         value["database"]["jobs"][0]["extra"] = float("nan")
         content = seal_raw(json_util.dumps(value).encode())
     else:
-        monkeypatch.setattr(recovery_file, "MAX_EXPANDED", 32)
+        content = content[:-1]
     with pytest.raises(ValueError, match="nothing changed"):
         decode_bundle(content, key)
 

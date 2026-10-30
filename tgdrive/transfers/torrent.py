@@ -25,8 +25,9 @@ from tgdrive.storage.store import _normalize_name
 from tgdrive.transfers.remote import RemoteClient, address_is_forbidden
 from tgdrive.transfers.uploads import ResumableUploads
 
-MAX_METADATA_BYTES = 8 * 1024 * 1024
-MAX_FILES = 10_000
+# Only metadata fetched over the network is bounded, so a hostile URL cannot
+# fill the disk before the owner sees what the torrent contains.
+MAX_METADATA_BYTES = 256 * 1024 * 1024
 METADATA_TIMEOUT = 120
 STALL_TIMEOUT = 300
 _METADATA_DIRECTORY = ".tgdrive-torrent"
@@ -62,15 +63,16 @@ def available() -> bool:
 
 def _decode(data: bytes):
     """Accept canonical bencode so re-encoding preserves the info hash."""
-    if not data or len(data) > MAX_METADATA_BYTES:
-        raise TorrentError("Torrent metadata exceeds the 8 MiB limit or is empty.")
-    offset = nodes = 0
+    if not data:
+        raise TorrentError("Torrent metadata is empty.")
+    offset = 0
 
     def read(depth=0):
-        nonlocal offset, nodes
-        nodes += 1
-        if depth > 128 or nodes > 100_000 or offset >= len(data):
-            raise TorrentError("Torrent metadata is too complex or truncated.")
+        nonlocal offset
+        # Folder depth is a flat path list in bencode, so nesting stays shallow;
+        # this only stops runaway recursion on malformed input.
+        if depth > 128 or offset >= len(data):
+            raise TorrentError("Torrent metadata is malformed or truncated.")
         marker = data[offset : offset + 1]
         offset += 1
         if marker == b"i":
@@ -171,8 +173,8 @@ def _manifest(metadata: dict) -> TorrentManifest:
         raise TorrentError("Torrent name conflicts with TGDrive's staging metadata.")
     is_folder = b"files" in info
     entries = info.get(b"files") if is_folder else [info]
-    if not isinstance(entries, list) or not entries or len(entries) > MAX_FILES:
-        raise TorrentError("A torrent must contain between 1 and 10,000 files.")
+    if not isinstance(entries, list) or not entries:
+        raise TorrentError("A torrent must contain at least one file.")
     files, paths, folders = [], set(), {}
     for entry in entries:
         if not isinstance(entry, dict):
@@ -191,8 +193,6 @@ def _manifest(metadata: dict) -> TorrentManifest:
         if not isinstance(raw_parts, list) or (is_folder and not raw_parts):
             raise TorrentError("Invalid torrent file path.")
         parts = (name, *(_name(part) for part in raw_parts))
-        if len(parts) > 65:
-            raise TorrentError("Torrent folders cannot exceed 64 levels.")
         key = tuple(part.casefold() for part in parts)
         if key in paths:
             raise TorrentError("Torrent contains duplicate file names.")
@@ -203,8 +203,8 @@ def _manifest(metadata: dict) -> TorrentManifest:
                 raise TorrentError("Torrent has conflicting folder names.")
             folders[folder_key] = folder_name
         files.append(TorrentFile("/".join(parts), size))
-    if paths.intersection(folders) or len(folders) > 1000:
-        raise TorrentError("Torrent has conflicting paths or more than 1000 folders.")
+    if paths.intersection(folders):
+        raise TorrentError("Torrent has conflicting file and folder paths.")
     total = sum(item.size for item in files)
     if len(pieces) // 20 != (total + piece_length - 1) // piece_length:
         raise TorrentError("Torrent checksums do not match its declared size.")
@@ -514,8 +514,6 @@ async def _download(source, output_dir, remote, progress, admit):
                 )
                 metadata_path = result.path
                 trackers = []
-            if metadata_path.stat().st_size > MAX_METADATA_BYTES:
-                raise TorrentError("Torrent metadata exceeds the 8 MiB limit.")
             metadata = _decode(metadata_path.read_bytes())
             manifest = _manifest(metadata)
             trackers = list(

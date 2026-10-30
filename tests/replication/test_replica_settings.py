@@ -65,20 +65,20 @@ def test_settings_snapshot_keeps_labels_and_preferences_without_account_sessions
     assert "mongodb_uri" not in credentials and "DATA_DIR" not in credentials
 
 
-def test_credentials_collector_bounds_and_validates_private_policy_files(
+def test_credentials_collector_validates_private_policy_files(
     tmp_path, mongo_backend, monkeypatch
 ):
     configured = settings(tmp_path)
     collection = mongo_backend.db.settings
     collection.insert_one(
-        {"_id": "transfer-preferences", "document": {"uploads_per_bot": 99}}
+        {"_id": "transfer-preferences", "document": {"uploads_per_bot": 0}}
     )
     runtime = SimpleNamespace(mongo=mongo_backend)
     with pytest.raises(ValueError):
         collect_credentials(configured, runtime)
     collection.replace_one(
         {"_id": "transfer-preferences"},
-        {"_id": "transfer-preferences", "document": {"oversized": "x" * 65536}},
+        {"_id": "transfer-preferences", "document": {"unknown": "x"}},
     )
     with pytest.raises(ValueError):
         collect_credentials(configured, runtime)

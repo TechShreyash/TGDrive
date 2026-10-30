@@ -35,7 +35,7 @@ export const numericPreferences: {
     label: string;
     unit: number;
     min: number;
-    max: number;
+    max?: number;
     appDefault: number;
     unitLabel?: string;
     help: string;
@@ -46,7 +46,6 @@ export const numericPreferences: {
         label: "Full-speed URL downloads",
         unit: 1,
         min: 1,
-        max: 8,
         appDefault: 2,
         help: "Imports downloading at full speed together. Queued sources receive slowly while connection and storage limits permit; expiring links can still fail.",
     },
@@ -55,7 +54,6 @@ export const numericPreferences: {
         label: "Memory cache (MiB)",
         unit: MIB,
         min: 0,
-        max: 8192,
         appDefault: 256,
         unitLabel: "MiB",
         help: "Recently viewed media kept in RAM. TGDrive reduces this budget when memory is tight. 0 turns this cache off.",
@@ -65,7 +63,6 @@ export const numericPreferences: {
         label: "Disk cache (GiB)",
         unit: GIB,
         min: 0,
-        max: 2048,
         appDefault: 10,
         unitLabel: "GiB",
         help: "Disposable copies for repeat access, filled only as data arrives. 0 turns disk caching off; originals stay in Telegram.",
@@ -75,7 +72,6 @@ export const numericPreferences: {
         label: "Cache free-space floor (GiB)",
         unit: GIB,
         min: 0,
-        max: 2048,
         appDefault: 1,
         unitLabel: "GiB",
         help: "Leave this much disk space free when caching. It is not allocated or reserved. Keep 1 GiB or more for normal use.",
@@ -85,7 +81,6 @@ export const numericPreferences: {
         label: "Disk cache retention (hours)",
         unit: 3600,
         min: 60 / 3600,
-        max: 744,
         appDefault: 24,
         unitLabel: "hours",
         help: "Remove disk bytes after this much time without reuse. Space pressure can remove them sooner.",
@@ -95,7 +90,6 @@ export const numericPreferences: {
         label: "Concurrent preloads",
         unit: 1,
         min: 1,
-        max: 8,
         appDefault: 2,
         help: "Files prepared in the background at once. Active playback and downloads always go first.",
     },
@@ -104,7 +98,6 @@ export const numericPreferences: {
         label: "Maximum file size (GiB)",
         unit: GIB,
         min: 1 / GIB,
-        max: 2048,
         appDefault: 16,
         unitLabel: "GiB",
         help: "Largest file accepted for a new upload. Large files are split automatically for Telegram. Must fit within the temporary upload budget.",
@@ -114,7 +107,6 @@ export const numericPreferences: {
         label: "Temporary upload budget (GiB)",
         unit: GIB,
         min: 1 / GIB,
-        max: 2048,
         appDefault: 16,
         unitLabel: "GiB",
         help: "Space all unfinished uploads may use together. This is a ceiling, not preallocated disk space. Each upload also needs real free space.",
@@ -124,7 +116,6 @@ export const numericPreferences: {
         label: "Upload free-space reserve (GiB)",
         unit: GIB,
         min: 0.0625,
-        max: 2048,
         appDefault: 1,
         unitLabel: "GiB",
         help: "Space uploads must leave free on their storage drive. Reservations from other uploads are checked before file data is sent.",
@@ -144,7 +135,6 @@ export const numericPreferences: {
         label: "Upload pipeline",
         unit: 1,
         min: 1,
-        max: 16,
         appDefault: 4,
         help: "Parts sent in parallel within one upload. The shared account request limit also applies.",
         advanced: true,
@@ -154,7 +144,6 @@ export const numericPreferences: {
         label: "Requests per account",
         unit: 1,
         min: 1,
-        max: 32,
         appDefault: 8,
         help: "Concurrent Telegram requests, shared by uploads, downloads and file metadata.",
         advanced: true,
@@ -164,7 +153,6 @@ export const numericPreferences: {
         label: "Requests per second",
         unit: 1,
         min: 1,
-        max: 128,
         appDefault: 48,
         help: "Request pacing ceiling per account. Telegram cooldowns reduce the actual rate.",
         advanced: true,
@@ -174,7 +162,6 @@ export const numericPreferences: {
         label: "Media operations per account",
         unit: 1,
         min: 1,
-        max: 16,
         appDefault: 3,
         help: "Upload and download operations sharing one account. Cached viewers do not need a Telegram download slot.",
         advanced: true,
@@ -184,7 +171,6 @@ export const numericPreferences: {
         label: "Maximum queued operations",
         unit: 1,
         min: 1,
-        max: 4096,
         appDefault: 256,
         help: "Waiting Telegram operations before excess work is asked to retry. A larger queue allows longer waits, not more speed.",
         advanced: true,
@@ -258,17 +244,16 @@ export function performanceChanges(
             !draft[key].trim() ||
             !Number.isFinite(value) ||
             value < min ||
-            value > max ||
+            (max !== undefined && value > max) ||
             (unit === 1 && !Number.isInteger(value))
         )
             throw new Error(
                 label +
                     " must be " +
                     (unit === 1 ? "a whole number " : "a number ") +
-                    "between " +
-                    min +
-                    " and " +
-                    max +
+                    (max === undefined
+                        ? "of at least " + min
+                        : "between " + min + " and " + max) +
                     ".",
             );
         const converted = Math.round(value * unit);

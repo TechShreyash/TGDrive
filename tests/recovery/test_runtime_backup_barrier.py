@@ -54,7 +54,6 @@ async def test_runtime_upload_barrier_always_calls_its_store_backup(
     settings = configuration(tmp_path)
     settings.resolved_data_dir.mkdir(parents=True)
     store = new_store()
-    store.mark_backed_up(store.revision)
     runtime = Runtime(settings, pool=RuntimePool())
     runtime.backup.restore = AsyncMock(return_value=store)
     runtime.backup.ensure_revision = AsyncMock(

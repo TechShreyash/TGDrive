@@ -108,7 +108,6 @@ export default function UploadSettings({
                                     id="uploads-per-bot"
                                     type="number"
                                     min="1"
-                                    max="4"
                                     step="1"
                                     required
                                     aria-describedby="upload-limit-help"
@@ -126,8 +125,7 @@ export default function UploadSettings({
                                     disabled={
                                         demoMode ||
                                         busy ||
-                                        !Number.isInteger(value) ||
-                                        value >= 4
+                                        !Number.isInteger(value)
                                     }
                                     onClick={() => {
                                         setValue(value + 1);
@@ -164,7 +162,6 @@ export default function UploadSettings({
                                     busy ||
                                     !Number.isInteger(value) ||
                                     value < 1 ||
-                                    value > 4 ||
                                     value === saved.uploads_per_bot
                                 }
                             >

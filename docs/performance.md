@@ -344,12 +344,12 @@ offsets continue to require synchronized bytes and a MongoDB receipt commit.
 
 | Control | Default / allowed values |
 | --- | --- |
-| Concurrent uploads per bot | 1 / 1–4 |
+| Concurrent uploads per bot | 1 / 1 or more |
 | Outstanding 512 KiB upload RPCs per document | 4; also bounded by account request limit |
-| Concurrent account media/metadata RPCs | 8 / 1–32 |
-| Account part/metadata pacing | 48 requests/s / 1–128 |
-| Combined upload/download operations per account | 3 / 1–16 |
-| Waiting origin operations, installation-wide | 256 / 1–4096 |
+| Concurrent account media/metadata RPCs | 8 / 1 or more |
+| Account part/metadata pacing | 48 requests/s / 1 or more |
+| Combined upload/download operations per account | 3 / 1 or more |
+| Waiting origin operations, installation-wide | 256 / 1 or more |
 | Preferred document split | 2000 MiB / 1–2000 MiB; 0 also means 2000 MiB |
 
 These count origin operations/RPCs, not viewers or whole files. More queue space
@@ -361,9 +361,8 @@ ceilings, not Telegram entitlements; provider waits take precedence.
 
 Smaller parts can engage more slots but add messages, manifests, retries and
 boundary setup. Pipelining can improve one document without splitting it.
-All new documents stay within 2000 MiB, including Premium. Very large files
-raise tiny split preferences to stay within 4096 parts; journaled plans are never
-re-split by a new preference. Staging/file-size limits still apply.
+All new documents stay within 2000 MiB, including Premium. A file can have any
+number of parts; journaled plans are never re-split by a new preference. Staging/file-size limits still apply.
 
 Ready Premium clients are preferred for parts and payload windows, with eligible
 bot fallback when busy, cooling or unhealthy. Dispatched parts retain their

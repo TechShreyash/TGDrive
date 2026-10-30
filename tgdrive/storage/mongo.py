@@ -9,7 +9,7 @@ from __future__ import annotations
 import threading
 import time
 import uuid
-from contextlib import suppress
+from contextlib import contextmanager, suppress
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -271,6 +271,45 @@ class MongoBackend:
         """Drain current transactions and keep normal writers stopped for restore."""
         with self._write_lock:
             self._writes_paused = True
+
+    @contextmanager
+    def session_transaction(self):
+        """One transaction spanning arbitrary catalog work in a ``with`` block."""
+        with self._write_lock:
+            if self._writes_paused:
+                raise DatabaseUnavailable(
+                    "Database restore has paused normal database access. "
+                    "Restart TGDrive before using this drive."
+                )
+            try:
+                with self.client.start_session() as session:
+                    session.start_transaction(
+                        read_concern=ReadConcern("snapshot"),
+                        write_concern=WriteConcern("majority", wtimeout=10000),
+                        max_commit_time_ms=10000,
+                    )
+                    try:
+                        yield session
+                    except BaseException:
+                        with suppress(PyMongoError):
+                            session.abort_transaction()
+                        raise
+                    for attempt in range(3):
+                        try:
+                            session.commit_transaction()
+                            break
+                        except PyMongoError as error:
+                            # An unknown commit result is safe to retry.
+                            if attempt == 2 or not error.has_error_label(
+                                "UnknownTransactionCommitResult"
+                            ):
+                                raise
+            except PyMongoError:
+                raise DatabaseUnavailable(
+                    "MongoDB could not confirm a transaction. Check database "
+                    "connectivity, replica-set support and write permissions; "
+                    "refresh before retrying."
+                ) from None
 
     def transaction(self, callback, *, allow_paused: bool = False):
         with self._write_lock:

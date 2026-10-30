@@ -13,8 +13,6 @@ from bson import json_util
 
 from tgdrive.storage.mongo_store import MongoStore
 
-MAX_BUNDLE = 64 * 1024**2
-
 
 def atomic_private(path: Path, content: bytes):
     path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
@@ -35,18 +33,18 @@ def atomic_private(path: Path, content: bytes):
         temporary.unlink(missing_ok=True)
 
 
-def read_private(path: Path, *, maximum=MAX_BUNDLE):
+def read_private(path: Path):
     fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
     try:
         info = os.fstat(fd)
         import stat
 
-        if not stat.S_ISREG(info.st_mode) or info.st_size > maximum:
+        if not stat.S_ISREG(info.st_mode):
             raise ValueError("Invalid private recovery file")
         if info.st_mode & 0o077:
             raise ValueError("Recovery files must have mode 0600")
         with os.fdopen(fd, "rb", closefd=False) as source:
-            return source.read(maximum + 1)
+            return source.read()
     finally:
         os.close(fd)
 

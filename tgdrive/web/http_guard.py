@@ -72,19 +72,15 @@ class ApiBodyGuardMiddleware:
                 scope, receive, send, "Not authenticated", 401
             )
             return
-        body_limit = self.body_limit
-        if path == "/api/v1/backup/restore" and scope.get("method") == "POST":
-            from tgdrive.recovery.mongo_backup import MAX_EXPANDED
-
-            body_limit = MAX_EXPANDED
-        elif path == "/api/v1/replica/import" and scope.get("method") == "POST":
-            from tgdrive.replication.replica_state import MAX_BUNDLE
-
-            body_limit = MAX_BUNDLE
-        elif (
-            path == "/api/v1/transfers/history/tasks" and scope.get("method") == "POST"
-        ):
-            body_limit = max(body_limit, 256 * 1024)
+        # Requests that need no session stay small, so strangers cannot make the
+        # server buffer large bodies. A signed-in owner's requests (folder trees,
+        # large selections, recovery files) have no fixed size.
+        body_limit = (
+            self.body_limit
+            if path in self._PUBLIC_POST_PATHS
+            and not _authenticated(scope, self.sessions)
+            else None
+        )
         lengths = [
             value
             for key, value in scope.get("headers", [])
@@ -100,12 +96,7 @@ class ApiBodyGuardMiddleware:
                     scope, receive, send, "Invalid Content-Length", 400
                 )
                 return
-            if parsed[0] > body_limit:
-                if path == "/api/v1/backup/restore":
-                    logger.warning(
-                        "Database archive restore rejected: request exceeds "
-                        "the 1 GiB limit"
-                    )
+            if body_limit is not None and parsed[0] > body_limit:
                 await UploadGuardMiddleware._reject(
                     scope, receive, send, "API request body is too large", 413
                 )
@@ -119,13 +110,8 @@ class ApiBodyGuardMiddleware:
             message = await receive()
             if message["type"] == "http.request":
                 count += len(message.get("body", b""))
-                if count > body_limit:
+                if body_limit is not None and count > body_limit:
                     too_large = True
-                    if path == "/api/v1/backup/restore":
-                        logger.warning(
-                            "Database archive restore rejected: upload exceeds "
-                            "the 1 GiB limit"
-                        )
                     raise HTTPException(413, "API request body is too large")
             return message
 

@@ -66,7 +66,7 @@ Open **Configuration → Transfer limits**. Its controls appear in the order bel
 
 | Setting | Default | Meaning |
 | --- | --- | --- |
-| Simultaneous uploads per bot | 1 | Concurrent Telegram document uploads per healthy bot; choose 1–4. A large file can use multiple document-upload slots. |
+| Simultaneous uploads per bot | 1 | Concurrent Telegram document uploads per healthy bot; choose 1 or more. A large file can use multiple document-upload slots. |
 
 Start with one upload per bot; add eligible bots before increasing the value.
 Existing transfers finish when the limit is lowered. Premium accounts keep one
@@ -90,7 +90,7 @@ For the whole-file limit, use [Upload storage](#upload-size-and-available-disk-s
 
 | Setting | Default | Meaning |
 | --- | --- | --- |
-| Full-speed URL downloads | 2 | URL imports downloading at full speed together; choose 1–8. |
+| Full-speed URL downloads | 2 | URL imports downloading at full speed together; choose 1 or more. |
 
 This controls the source-to-server stage. Telegram uploading uses its own slots.
 Waiting sources may receive data slowly while connection and storage limits
@@ -112,7 +112,7 @@ Open **Transfer limits → Upload storage**.
 
 To upload a **32 GiB file**, raise both the file maximum and temporary budget to
 at least 32 GiB. A 64 GiB budget can reserve two such files if actual disk space
-permits. Both controls support up to **2048 GiB (2 TiB)**. Existing uploads retain
+permits. Neither control has an upper bound; disk space is the limit. Existing uploads retain
 their reservations; reducing the budget below those reservations is rejected.
 
 Browser uploads and full-speed URL imports reserve the whole file and check
