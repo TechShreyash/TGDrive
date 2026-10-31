@@ -23,14 +23,16 @@ including FFmpeg LGPL-2.1-or-later, dav1d BSD-2-Clause, and Signalsmith MIT.
 FFmpeg-LGPL-2.1.txt supplies the full LGPL-2.1 text from upstream FFmpeg.
 Preserve these notices when redistributing the emitted JS and WASM assets.
 
-TGDrive ships its reviewed modified JavaScript in a local pinned npm archive
-under website/vendor. The original license and WASM remain unchanged. See
-movi-player-TGDrive-patch-NOTICE.txt, website/vendor/manifest.json and
-website/scripts/patch-movi-player.js for the changes and upstream identity.
-Normal development/build/test commands do not mutate the installed package.
+TGDrive ships its reviewed modified JavaScript in a pinned npm archive
+published as a TGDrive GitHub release asset. The original license and WASM
+remain unchanged. See movi-player-TGDrive-patch-NOTICE.txt,
+website/vendor/manifest.json and website/scripts/patch-movi-player.js for the
+changes and upstream identity. Normal development/build/test commands do not
+mutate the installed package.
 
-Source and relinking archive (served from the same TGDrive origin):
-/third-party/movi-player-0.4.1-sources.tar.gz
+Source and relinking archive:
+https://github.com/TechShreyash/TGDrive/releases/download/viewer-movi-player-0.4.1-tgdrive.3/movi-player-0.4.1-sources.tar.gz
+SHA-256: 143fb358f1dea3de094f37ae65a882e9ade4407fd273dc7055db9410ab3c3add
 
 The archive supplies complete FFmpeg n9.0.2 and dav1d 1.5.3 source tarballs,
 pinned Movi application/build/Signalsmith sources, published WASM-target static
@@ -51,7 +53,7 @@ Source: https://github.com/mozilla/pdf.js
 Source tag: https://github.com/mozilla/pdf.js/tree/v6.4.299
 pdfjs-LICENSE.txt is copied unchanged from the installed pdfjs-dist package.
 The bundled PDF.js JS and worker use Apache-2.0. The reviewed modified worker
-is installed from the local pinned package archive in website/vendor; see
+is installed from a pinned package archive on a TGDrive GitHub release; see
 pdfjs-TGDrive-patch-NOTICE.txt. CMaps, ICC profiles, standard fonts and decoder
 WASM are served locally under /static/pdfjs/<upstream-version>/ with their
 original resource-directory notices. No external viewer asset CDN is required.

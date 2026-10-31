@@ -12,8 +12,8 @@ dropped audio, absent/disabled audio and media after the audio tail retain the
 upstream behavior.
 
 The exact version and original bundle SHA256 are checked by
-website/scripts/patch-movi-player.js. The reviewed modified package is shipped in
-website/vendor and installed from that local archive. Normal development and
+website/scripts/patch-movi-player.js. The reviewed modified package is published as a
+TGDrive GitHub release asset and installed from that pinned archive. Normal development and
 builds do not rewrite dependencies.
 scripts/vendor_viewers.py verifies upstream package integrity and applies the
 reviewed recipe only during deliberate vendor regeneration.

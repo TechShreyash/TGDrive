@@ -5,7 +5,6 @@ FROM --platform=$BUILDPLATFORM node:24.22.0-bookworm-slim@sha256:a5f4366e834695d
 
 WORKDIR /frontend
 COPY website/package.json website/package-lock.json ./
-COPY website/vendor ./vendor
 RUN --mount=type=cache,target=/root/.npm npm ci --ignore-scripts
 COPY website/ ./
 RUN npm run build

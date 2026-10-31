@@ -9,7 +9,8 @@ the corresponding image is painted. Required masks and color resources load
 before decoding, after image dimension and configured image-size rejection.
 This preserves selective range loading for PDFs with shared page resources.
 
-The reviewed modified package is shipped in website/vendor. The maintenance
+The reviewed modified package is published as a TGDrive GitHub release
+asset. The maintenance
 command scripts/vendor_viewers.py verifies the exact upstream archive and applies
 website/scripts/patch-pdf-worker.js. Normal builds do not rewrite dependencies.
 The original licenses and rendering-resource notices are retained. Local CMaps,

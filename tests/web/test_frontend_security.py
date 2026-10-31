@@ -66,19 +66,22 @@ def test_frontend_dependencies_are_locked() -> None:
             continue
         viewer = manifest["packages"][name]
         vendored = viewer["vendored"]
-        assert version == "file:vendor/" + vendored["archive"]
-        archive = WEBSITE / version.removeprefix("file:")
-        assert archive.parent == WEBSITE / "vendor"
-        assert archive.suffix == ".tgz"
-        content = archive.read_bytes()
-        actual_integrity = "sha512-" + base64.b64encode(
-            hashlib.sha512(content).digest()
-        ).decode("ascii")
+        assert version == (
+            "https://github.com/TechShreyash/TGDrive/releases/download/"
+            f"viewer-{name}-{vendored['version']}/{vendored['archive']}"
+        )
         entry = lock["packages"]["node_modules/" + name]
         assert entry["resolved"] == version
         assert entry["version"] == vendored["version"]
-        assert entry["integrity"] == vendored["integrity"] == actual_integrity
-        assert hashlib.sha256(content).hexdigest() == vendored["sha256"]
+        assert entry["integrity"] == vendored["integrity"]
+        # Archives are release assets; check bytes only when regenerated locally.
+        archive = WEBSITE / "vendor" / vendored["archive"]
+        if archive.is_file():
+            content = archive.read_bytes()
+            assert entry["integrity"] == "sha512-" + base64.b64encode(
+                hashlib.sha512(content).digest()
+            ).decode("ascii")
+            assert hashlib.sha256(content).hexdigest() == vendored["sha256"]
         patch = viewer["patch"]
         recipes = {
             path: hashlib.sha256((ROOT / path).read_bytes()).hexdigest()

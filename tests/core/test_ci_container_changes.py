@@ -14,7 +14,7 @@ import pytest
         ("Dockerfile", True),
         ("uv.lock", True),
         ("website/package-lock.json", True),
-        ("website/vendor/player.tgz", True),
+        ("website/vendor/manifest.json", True),
         ("README.md", False),
         ("tgdrive/web/app.py", False),
     ],

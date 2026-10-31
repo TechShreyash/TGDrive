@@ -564,8 +564,9 @@ intact. The interaction and accessibility contracts below cover individual flows
 <details>
 <summary>Media compatibility and redistribution</summary>
 
-Movi and PDF.js install from committed modified npm archives in
-[`website/vendor/`](../website/vendor/README.md). The lockfile records archive
+Movi and PDF.js install from modified npm archives published as pre-release
+GitHub release assets; [`website/vendor/`](../website/vendor/README.md) keeps
+their manifest and publishing steps. The lockfile records archive
 integrity; normal installs, development and builds do not rewrite dependencies.
 New upstream releases cannot silently replace these viewer packages. Upgrades
 are deliberate: review the upstream source, update the recipes, regenerate with
@@ -588,7 +589,8 @@ decoder readiness. Clean listeners/timers and test delayed media/reduced motion.
 
 Preserve full [third-party notices](../website/public/third-party/README.txt),
 including React/Scheduler/Lucide/Feather attribution and viewer/codec/font licenses.
-The source/relink archive includes FFmpeg/dav1d, application C/C++ and published
+The source/relink archive, a release asset beside the Movi package, includes
+FFmpeg/dav1d, application C/C++ and published
 static archives. Notices record upstream's stale version label, binary/header
 recipe evidence and reproduction limits; TGDrive has not independently rebuilt
 the published decoder WASM.
@@ -805,7 +807,7 @@ The vendored PDF.js worker keeps image substreams sparse during parsing, defers 
 stream bodies in page resource discovery and loads a painted image's dependencies
 after dimension/size rejection and before decoding. Its recipe is
 `website/scripts/patch-pdf-worker.js`; version/source guards reject unknown inputs
-during deliberate vendor regeneration. Normal frontend commands use the committed
+during deliberate vendor regeneration. Normal frontend commands use the pinned
 modified package. Review the recipe when updating PDF.js. Focused tests live in
 `website/scripts/check-pdf-worker.js`; the `shared` case in
 `tests/browser/test_browser_pdf_ranges.py` exercises a generated PDF with every page image

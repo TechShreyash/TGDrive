@@ -38,6 +38,9 @@ Thumbs.db
 
 node_modules/
 website/dist/
+# Viewer archives are published as GitHub release assets
+website/vendor/*.tgz
+website/public/third-party/*-sources.tar.gz
 playwright-report/
 test-results/
 

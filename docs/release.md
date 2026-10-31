@@ -77,6 +77,12 @@ that revision together. Creating a PR or tag does not publish those assets.
 Start from a clean, reviewed revision without discarding local work. Build custom
 ZIPs from that same revision; tag the final merged `main` commit after checks.
 
+Patched viewer packages (Movi, PDF.js) and the Movi source archive are not in
+Git or the source ZIP. They live on separate `viewer-<package>-<version>`
+pre-releases that are never marked latest; `npm ci` downloads them by locked URL
+and integrity. Publish a new viewer release before a TGDrive release that needs
+it. See [`website/vendor/`](../website/vendor/README.md).
+
 <details>
 <summary>Maintainer checklist: build, validate and publish</summary>
 
