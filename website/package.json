@@ -17,9 +17,9 @@
         "test": "vitest run"
     },
     "dependencies": {
-        "@mantine/core": "9.7.3",
-        "@mantine/hooks": "9.7.3",
-        "lucide-react": "1.58.0",
+        "@mantine/core": "9.7.4",
+        "@mantine/hooks": "9.7.4",
+        "lucide-react": "1.63.0",
         "movi-player": "https://github.com/TechShreyash/TGDrive/releases/download/viewer-movi-player-0.4.1-tgdrive.3/movi-player-0.4.1-tgdrive.3.tgz",
         "pdfjs-dist": "https://github.com/TechShreyash/TGDrive/releases/download/viewer-pdfjs-dist-6.4.299-tgdrive.1/pdfjs-dist-6.4.299-tgdrive.1.tgz",
         "react": "19.3.1",
@@ -32,7 +32,7 @@
         "@vitejs/plugin-react": "6.1.2",
         "prettier": "3.9.10",
         "typescript": "7.0.2",
-        "vite": "8.3.4",
+        "vite": "8.3.5",
         "vitest": "5.0.5"
     }
 }
