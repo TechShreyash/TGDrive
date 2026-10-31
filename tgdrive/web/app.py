@@ -72,6 +72,7 @@ from tgdrive.storage.demo_files import (
 from tgdrive.storage.file_parts import MAX_POSTER_BYTES
 from tgdrive.storage.mongo import DatabaseUnavailable
 from tgdrive.storage.mongo_store import MongoStore
+from tgdrive.storage.store import ROOT_ID
 from tgdrive.telegram.client_pool import (
     ClientPoolNotRunning,
     NoClientAvailable,
@@ -736,6 +737,11 @@ def create_app(
                 if auth_home_path is None:
                     raise HTTPException(status_code=403, detail="Invalid share link")
                 data = store.get_directory(real_path)
+                # Never reveal folder names above the shared folder.
+                home = auth_home_path.rstrip("/").rsplit("/", 1)[-1] or ROOT_ID
+                trail = data.get("breadcrumbs", [])
+                ids = [crumb["id"] for crumb in trail]
+                data["breadcrumbs"] = trail[ids.index(home) :] if home in ids else []
                 for item in data.get("contents", {}).values():
                     item.pop("starred", None)
             else:

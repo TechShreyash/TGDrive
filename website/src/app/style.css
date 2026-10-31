@@ -673,7 +673,9 @@ form > select {
     display: flex;
     align-items: center;
     gap: 5px;
-    min-width: 0;
+    /* Wrap long paths onto new lines instead of shrinking crumbs to nothing. */
+    flex: 0 0 auto;
+    max-width: 100%;
 }
 .breadcrumbs a {
     max-width: 220px;

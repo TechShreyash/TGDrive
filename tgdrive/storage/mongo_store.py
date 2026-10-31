@@ -228,10 +228,10 @@ class MongoStore:
             name="active_sibling_names",
         )
         # Listing and every sort order of a folder page; children of a parent.
-        nodes.create_index([("parent_id", 1), ("trashed", 1), ("name_key", 1)])
-        nodes.create_index([("parent_id", 1), ("trashed", 1), ("size", 1)])
-        nodes.create_index([("parent_id", 1), ("trashed", 1), ("upload_date", 1)])
-        nodes.create_index([("parent_id", 1), ("kind", 1)])
+        for field in ("name_key", "size", "upload_date"):
+            nodes.create_index(
+                [("parent_id", 1), ("trashed", 1), ("kind", 1), (field, 1), ("_id", 1)]
+            )
         nodes.create_index("tokens")
         nodes.create_index("grams")
         nodes.create_index(
@@ -466,12 +466,14 @@ class MongoStore:
         if not parts:
             return self._get(ROOT_ID, full=full), "/", [self._get(ROOT_ID)]
         chain = self._ancestors(parts[-1], full=full)
-        if tuple(row["_id"] for row in chain[1:]) != parts:
-            # A path is the item's own ID chain; a stale prefix means it moved.
+        # "/<id>" addresses an item at any depth, so URLs stay short however
+        # deep the folder is. A longer path must be the item's exact ID chain;
+        # a stale prefix means it moved.
+        if len(parts) > 1 and tuple(row["_id"] for row in chain[1:]) != parts:
             if any(row["kind"] != "folder" for row in chain[:-1]):
                 raise NotDirectoryError("A path component is not a folder")
             raise NotFoundError("Item not found")
-        return chain[-1], path, chain
+        return chain[-1], self._chain_path(chain), chain
 
     def _path(self, identity):
         if identity == ROOT_ID:
@@ -672,7 +674,7 @@ class MongoStore:
             "name": "name_key",
             "size": "size",
             "date": "upload_date",
-            "type": "name_key",
+            "type": "_id",
         }
         if sort not in fields or order not in {"asc", "desc"}:
             raise ValidationError("Invalid sort")
@@ -695,7 +697,7 @@ class MongoStore:
                     continue
                 cursor = (
                     self._find("nodes", dict(query, kind=kind), _LIGHT)
-                    .sort([(fields[sort], direction), ("_id", direction)])
+                    .sort([(fields[sort], direction), ("_id", ASCENDING)])
                     .skip(skip)
                     .limit(limit - len(items))
                 )

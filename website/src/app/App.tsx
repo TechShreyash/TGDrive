@@ -39,6 +39,7 @@ import {
 } from "lucide-react";
 import { api, ApiError, errorMessage } from "../shared/api";
 import {
+    itemLink,
     itemPath,
     formatBytes,
     setTimezone,
@@ -332,7 +333,8 @@ export default function App() {
         return () => media.removeEventListener("change", update);
     }, []);
     const [crumbs, setCrumbs] = useState([ROOT_CRUMB]);
-    const [shareRoot, setShareRoot] = useState("");
+    const [crumbsExpanded, setCrumbsExpanded] = useState(false);
+    useEffect(() => setCrumbsExpanded(false), [location.path]);
     const fileInput = useRef<HTMLInputElement>(null);
     const folderInput = useRef<HTMLInputElement>(null);
     const [folderSupported] = useState(
@@ -344,7 +346,6 @@ export default function App() {
         destination: string;
         name: string;
     } | null>(null);
-    const names = useRef(new Map([["/", "My Files"]]));
     const currentPath = location.path;
     const isPublic = currentPath.startsWith("/share_");
     const isSearch = currentPath.startsWith("/search_");
@@ -476,7 +477,6 @@ export default function App() {
     }, [deletionProgress, notify]);
     const reload = useCallback(() => setRefresh((value) => value + 1), []);
     const invalidateMetadata = useCallback(() => {
-        names.current = new Map([["/", "My Files"]]);
         setMetadataRefresh((value) => value + 1);
     }, []);
     const reloadMetadata = useCallback(() => {
@@ -494,7 +494,7 @@ export default function App() {
         ) => {
             clearTimeout(searchTimer.current);
             const params = new URLSearchParams();
-            if (path !== "/") params.set("path", path);
+            if (path !== "/") params.set("path", itemLink(path));
             if (view !== "files" && view !== "trash") params.set("view", view);
             if (view === "settings") params.set("section", settingsSection);
             if (auth) params.set("auth", auth);
@@ -676,11 +676,7 @@ export default function App() {
         listingRefresh.current?.request();
     }, [refresh]);
     useEffect(() => {
-        if (
-            config.recovery_only ||
-            (!authenticated && !isPublic) ||
-            !isFiles
-        ) {
+        if (config.recovery_only || (!authenticated && !isPublic) || !isFiles) {
             loadedListing.current = null;
             setLoading(false);
             return;
@@ -756,18 +752,6 @@ export default function App() {
                     setDirectory((previous) =>
                         reconcileDirectory(previous, result.data),
                     );
-                    setShareRoot(result.auth_home_path || "");
-                    const name = result.data.name;
-                    if (name && names.current.get(currentPath) !== name) {
-                        names.current.set(currentPath, name);
-                        setCrumbs((previous) =>
-                            previous.map((crumb) =>
-                                crumb.path === currentPath
-                                    ? { ...crumb, name }
-                                    : crumb,
-                            ),
-                        );
-                    }
                     return true;
                 })
                 .catch((error) => {
@@ -829,83 +813,27 @@ export default function App() {
         reload,
     ]);
     useEffect(() => {
-        if (
-            config.recovery_only ||
-            (!authenticated && !isPublic) ||
-            !isFiles ||
-            isSearch ||
-            view === "trash" ||
-            view === "starred"
-        )
+        if (!isFiles || isSearch || view === "trash" || view === "starred")
             return;
-        const controller = new AbortController();
-        const realPath = isPublic
-            ? "/" + currentPath.slice(7).replace(/^\/+/, "")
-            : currentPath;
-        const segments = realPath.split("/").filter(Boolean);
-        let start = 0;
-        const base = [ROOT_CRUMB];
-        if (isPublic) {
-            const root = shareRoot || realPath;
-            start = root.split("/").filter(Boolean).length;
-            base[0] = {
-                path: "/share_" + root.replace(/^\/+/, ""),
-                name: "Shared Files",
-            };
-        }
-        const paths = segments
-            .map((_, index) => "/" + segments.slice(0, index + 1).join("/"))
-            .slice(start);
-        void Promise.all(
-            paths.map(async (path) => {
-                const navPath = isPublic ? "/share_" + path.slice(1) : path;
-                let name = names.current.get(navPath);
-                // The listing request already supplies the current folder's name.
-                if (navPath === currentPath)
-                    return { path: navPath, name: name || "Folder" };
-                if (!name) {
-                    try {
-                        const result = await api.directory(
-                            navPath,
-                            location.auth,
-                            controller.signal,
-                        );
-                        if (controller.signal.aborted) return;
-                        name = result.data.name || "Folder";
-                        names.current.set(navPath, name);
-                    } catch {
-                        name = "Folder";
-                    }
-                }
-                return { path: navPath, name };
-            }),
-        ).then((result) => {
-            if (!controller.signal.aborted)
-                setCrumbs([
-                    ...base,
-                    ...result
-                        .filter((item) => item !== undefined)
-                        .map((crumb) => ({
-                            ...crumb,
-                            name: names.current.get(crumb.path) || crumb.name,
-                        })),
-                ]);
-        });
-        return () => {
-            controller.abort();
-        };
-    }, [
-        currentPath,
-        authenticated,
-        isPublic,
-        isSearch,
-        isFiles,
-        view,
-        shareRoot,
-        config.recovery_only,
-        location.auth,
-        metadataRefresh,
-    ]);
+        // The server returns the folder's breadcrumbs with its listing, so the
+        // path never needs one request per ancestor, at any depth.
+        const trail = directory.breadcrumbs || [];
+        if (isPublic)
+            setCrumbs(
+                trail.map((crumb, index) => ({
+                    path: "/share_" + crumb.id,
+                    name: index ? crumb.name : "Shared Files",
+                })),
+            );
+        else
+            setCrumbs([
+                ROOT_CRUMB,
+                ...trail.slice(1).map((crumb) => ({
+                    path: "/" + crumb.id,
+                    name: crumb.name,
+                })),
+            ]);
+    }, [directory.breadcrumbs, isPublic, isFiles, isSearch, view]);
     useEffect(() => {
         if (!location.previewId || loading || view !== "files") return;
         const item = directory.contents[location.previewId];
@@ -1060,11 +988,11 @@ export default function App() {
     };
     const open = (item: DriveItem) => {
         if (item.type === "folder") {
-            const path = isPublic
-                ? "/share_" + itemPath(item).replace(/^\/+/, "")
-                : itemPath(item);
-            names.current.set(path, item.name);
-            navigate(path, "files", location.auth);
+            navigate(
+                (isPublic ? "/share_" : "/") + item.id,
+                "files",
+                location.auth,
+            );
         } else {
             const url = new URL(window.location.href);
             url.searchParams.set("preview", item.id);
@@ -1253,42 +1181,74 @@ export default function App() {
                     view !== "starred" &&
                     crumbs.length > 1 && (
                         <nav className="breadcrumbs" aria-label="Breadcrumb">
-                            {crumbs.slice(0, -1).map((crumb, index) => (
-                                <span key={crumb.path}>
-                                    {index > 0 && (
-                                        <ChevronRight
-                                            size={14}
-                                            aria-hidden="true"
-                                        />
-                                    )}
-                                    <a
-                                        href={
-                                            "/?" +
-                                            new URLSearchParams({
-                                                path: crumb.path,
-                                                ...(location.auth
-                                                    ? { auth: location.auth }
-                                                    : {}),
-                                            })
-                                        }
-                                        onClick={(event) => {
-                                            event.preventDefault();
-                                            navigate(
-                                                crumb.path,
-                                                "files",
-                                                location.auth,
-                                            );
-                                        }}
-                                        aria-current={
-                                            index === crumbs.length - 1
-                                                ? "page"
-                                                : undefined
-                                        }
-                                    >
-                                        {crumb.name}
-                                    </a>
-                                </span>
-                            ))}
+                            {crumbs.slice(0, -1).map((crumb, index, shown) =>
+                                // Deep paths show the first and last two
+                                // folders; the button reveals the rest.
+                                !crumbsExpanded &&
+                                shown.length > 5 &&
+                                index > 0 &&
+                                index < shown.length - 2 ? (
+                                    index === 1 && (
+                                        <span key="collapsed">
+                                            <ChevronRight
+                                                size={14}
+                                                aria-hidden="true"
+                                            />
+                                            <button
+                                                type="button"
+                                                className="text-button"
+                                                aria-label={
+                                                    "Show " +
+                                                    (shown.length - 3) +
+                                                    " hidden folders"
+                                                }
+                                                onClick={() =>
+                                                    setCrumbsExpanded(true)
+                                                }
+                                            >
+                                                …
+                                            </button>
+                                        </span>
+                                    )
+                                ) : (
+                                    <span key={crumb.path}>
+                                        {index > 0 && (
+                                            <ChevronRight
+                                                size={14}
+                                                aria-hidden="true"
+                                            />
+                                        )}
+                                        <a
+                                            href={
+                                                "/?" +
+                                                new URLSearchParams({
+                                                    path: crumb.path,
+                                                    ...(location.auth
+                                                        ? {
+                                                              auth: location.auth,
+                                                          }
+                                                        : {}),
+                                                })
+                                            }
+                                            onClick={(event) => {
+                                                event.preventDefault();
+                                                navigate(
+                                                    crumb.path,
+                                                    "files",
+                                                    location.auth,
+                                                );
+                                            }}
+                                            aria-current={
+                                                index === crumbs.length - 1
+                                                    ? "page"
+                                                    : undefined
+                                            }
+                                        >
+                                            {crumb.name}
+                                        </a>
+                                    </span>
+                                ),
+                            )}
                         </nav>
                     )}
                 <div className="page-title-line">

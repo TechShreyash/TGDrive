@@ -10,10 +10,25 @@ export interface DriveItem {
     read_only?: boolean;
     demo_files?: boolean;
 }
+export interface Breadcrumb {
+    id: string;
+    name: string;
+    path: string;
+}
 export interface Directory {
     name?: string;
     read_only?: boolean;
+    breadcrumbs?: Breadcrumb[];
     contents: Record<string, DriveItem>;
+}
+/** Short link to an item: its own ID, independent of folder depth. */
+export function itemLink(path: string): string {
+    if (path === "/") return "/";
+    if (path.startsWith("/share_")) {
+        const parts = path.slice(7).split("/").filter(Boolean);
+        return parts.length ? "/share_" + parts.at(-1) : path;
+    }
+    return "/" + path.split("/").filter(Boolean).at(-1);
 }
 export interface TransferLocation {
     available: boolean;
@@ -140,8 +155,7 @@ const byteNumberFormat = new Intl.NumberFormat(undefined, {
 });
 export function formatBytes(value: number | undefined): string {
     if (value === undefined || !Number.isFinite(value) || value < 0) return "—";
-    if (value < 1024)
-        return byteNumberFormat.format(value) + " B";
+    if (value < 1024) return byteNumberFormat.format(value) + " B";
     const exponent = Math.min(Math.floor(Math.log(value) / Math.log(1024)), 4);
     return (
         byteNumberFormat.format(value / 1024 ** exponent) +

@@ -42,7 +42,7 @@ def test_folder_navigation_does_not_fetch_current_listing_for_breadcrumbs(
 
 
 @pytest.mark.parametrize("navigate_away", [False, True])
-def test_cold_breadcrumbs_fetch_only_ancestors_and_cancel_obsolete_requests(
+def test_breadcrumbs_come_with_the_listing_and_obsolete_requests_cancel(
     server: Server, desktop: tuple[Any, Any], navigate_away: bool
 ) -> None:
     _, page = desktop
@@ -63,59 +63,36 @@ def test_cold_breadcrumbs_fetch_only_ancestors_and_cancel_obsolete_requests(
         for item in fixture_nodes(page, server, parent_path)
         if item["name"] == "Nested folder"
     )
-    child_path = parent_path + "/" + child["id"]
     requests: list[str] = []
     held: list[Any] = []
-    cancelled: list[Any] = []
-    pending_config: list[tuple[Any, Any]] = []
-
-    def config(route: Any) -> None:
-        pending_config.append((route, route.fetch()))
 
     def directory(route: Any) -> None:
         path = route.request.post_data_json["path"]
         requests.append(path)
-        if navigate_away and path == parent_path:
+        if navigate_away and path == "/" + child["id"]:
             held.append(route.request)
         else:
             route.continue_()
 
     page.route("**/api/getDirectory", directory)
-    if not navigate_away:
-        page.route("**/api/config", config)
-    page.on("requestfailed", lambda request: cancelled.append(request))
-    page.goto(server.url + "/?" + urlencode({"path": child_path}))
-    expect(
-        page.get_by_role("heading", name="Nested folder", exact=True)
-    ).to_be_visible()
-    if not navigate_away:
-        assert len(pending_config) == 1
-        route, response = pending_config.pop()
-        with page.expect_response(
-            lambda response: response.url.endswith("/api/config")
-        ):
-            route.fulfill(response=response)
-        page.evaluate("""async () => {
-          await new Promise(resolve => requestAnimationFrame(
-            () => requestAnimationFrame(resolve)));
-        }""")
+    # The URL carries only the folder's own ID, at any depth.
+    page.goto(server.url + "/?" + urlencode({"path": "/" + child["id"]}))
     if navigate_away:
         deadline = time.monotonic() + 5
         while not held and time.monotonic() < deadline:
             page.wait_for_timeout(25)
         assert len(held) == 1
-        page.get_by_role("link", name="My Files", exact=True).click()
+        page.goto(server.url + "/")
         expect(page.get_by_role("heading", name="My Files", exact=True)).to_be_visible()
-        deadline = time.monotonic() + 5
-        while not cancelled and time.monotonic() < deadline:
-            page.wait_for_timeout(25)
-        assert held[0] in cancelled
     else:
+        expect(
+            page.get_by_role("heading", name="Nested folder", exact=True)
+        ).to_be_visible()
         expect(page.get_by_role("navigation", name="Breadcrumb")).to_contain_text(
             "Preview samples"
         )
-    assert requests.count(child_path) == 1
-    assert requests.count(parent_path) == 1
+        # One listing request returns the breadcrumbs; ancestors are not fetched.
+        assert requests == ["/" + child["id"]]
 
 
 @pytest.mark.parametrize("removal", ["revoke", "partial-trash"])
@@ -199,3 +176,42 @@ def test_upload_refreshes_skip_shares_but_metadata_changes_refresh_badges(
     page.get_by_role("link", name="My Files", exact=True).click()
     expect(folder).to_be_visible()
     expect(page.get_by_label("Shared by Link", exact=True)).to_have_count(0)
+
+
+def test_deep_folder_opens_from_a_short_url_with_its_full_breadcrumb(
+    server: Server, desktop: tuple[Any, Any]
+) -> None:
+    _, page = desktop
+    login(page, server.url)
+    parent, folder = "/", None
+    for level in range(150):  # Deeper than the former 128-level limit.
+        created = page.request.post(
+            server.url + "/api/createNewFolder",
+            data={"path": parent, "name": f"Depth {level}"},
+        )
+        assert created.ok
+        folder = next(
+            item
+            for item in fixture_nodes(page, server, parent)
+            if item["name"] == f"Depth {level}"
+        )
+        parent = (
+            (parent.rstrip("/") + "/" + folder["id"])
+            if parent != "/"
+            else ("/" + folder["id"])
+        )
+    page.goto(server.url + "/?" + urlencode({"path": "/" + folder["id"]}))
+    expect(page.get_by_role("heading", name="Depth 149", exact=True)).to_be_visible()
+    crumbs = page.get_by_role("navigation", name="Breadcrumb")
+    expect(crumbs).to_contain_text("My Files")
+    expect(crumbs).to_contain_text("Depth 148")
+    assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
+    # The address bar carries only the folder's own ID.
+    assert len(page.url) < len(server.url) + 60
+    # Deep paths collapse to the first and last folders until expanded.
+    expect(crumbs.get_by_role("link")).to_have_count(3)
+    crumbs.get_by_role("button", name="Show 147 hidden folders", exact=True).click()
+    expect(crumbs.get_by_role("link")).to_have_count(150)
+    expect(crumbs).to_contain_text("Depth 0")
+    crumbs.get_by_role("link", name="Depth 100", exact=True).click()
+    expect(page.get_by_role("heading", name="Depth 100", exact=True)).to_be_visible()

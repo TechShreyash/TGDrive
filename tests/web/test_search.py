@@ -311,3 +311,38 @@ def test_search_remains_readable_while_restart_required(search_client):
         restart_required=True, close=AsyncMock()
     )
     assert client.get("/api/v1/search", params={"q": "report"}).status_code == 200
+
+
+def test_deep_folders_open_by_id_with_server_breadcrumbs_and_share_boundary(
+    search_client,
+):
+    client, store, _ = search_client
+    path, chain = "/", []
+    for level in range(400):  # Far beyond the former 128-level limit.
+        folder = store.create_folder(path, f"Level {level}")
+        path = full(folder)
+        chain.append(folder)
+    owner(client)
+    deepest = "/" + chain[-1]["id"]  # A short URL at any depth.
+    response = client.post("/api/getDirectory", json={"path": deepest})
+    assert response.status_code == 200
+    crumbs = response.json()["data"]["breadcrumbs"]
+    assert len(crumbs) == 401 and crumbs[-1]["name"] == "Level 399"
+    page = client.get("/api/v1/nodes", params={"parent_id": "/" + chain[-2]["id"]})
+    assert [row["id"] for row in page.json()["items"]] == [chain[-1]["id"]]
+
+    token = store.create_share("/" + chain[200]["id"], expires_at=None)
+    client.post("/api/logout")
+    shared = client.post(
+        "/api/getDirectory",
+        json={"path": "/share_" + chain[300]["id"], "auth": token},
+    )
+    assert shared.status_code == 200
+    trail = shared.json()["data"]["breadcrumbs"]
+    # Folder names above the shared folder stay private.
+    assert trail[0]["id"] == chain[200]["id"] and len(trail) == 101
+    outside = client.post(
+        "/api/getDirectory",
+        json={"path": "/share_" + chain[100]["id"], "auth": token},
+    )
+    assert outside.status_code == 403

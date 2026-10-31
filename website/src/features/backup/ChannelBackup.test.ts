@@ -1,6 +1,5 @@
 import { describe, expect, it } from "vitest";
 import {
-    MAX_RECOVERY_FILE_BYTES,
     parseChannelId,
     retryTime,
     validateBackupToken,
@@ -29,18 +28,17 @@ describe("channel identifiers stay exact before a backup destination is sent", (
 });
 
 describe("saved recovery files", () => {
-    it("accepts the encrypted backup filename at the transport limit", () => {
+    it("accepts a large encrypted backup file", () => {
         expect(() =>
             validateRecoveryFile({
                 name: "tgdrive-backup.TGDB",
-                size: MAX_RECOVERY_FILE_BYTES,
+                size: 1024 ** 3, // Above the former 64 MiB limit.
             }),
         ).not.toThrow();
     });
     it.each([
         { name: "backup.json", size: 1024 },
         { name: "backup.tgdb", size: 0 },
-        { name: "backup.tgdb", size: MAX_RECOVERY_FILE_BYTES + 1 },
     ])(
         "rejects unsupported or incomplete files before upload: $name/$size",
         (file) => {

@@ -105,13 +105,10 @@ export function retryTime(value: number | string | null | undefined): string {
     return formatTimestamp(value);
 }
 
-export const MAX_RECOVERY_FILE_BYTES = 64 * 1024 ** 2;
-
 export function validateRecoveryFile(file: Pick<File, "name" | "size">) {
     if (!file.name.toLowerCase().endsWith(".tgdb"))
         throw new Error("Choose your encrypted .tgdb recovery file.");
-    if (file.size <= 0 || file.size > MAX_RECOVERY_FILE_BYTES)
-        throw new Error("Choose a nonempty recovery file no larger than 64 MiB.");
+    if (file.size <= 0) throw new Error("Choose a nonempty recovery file.");
 }
 
 export default function ChannelBackup({
@@ -1076,8 +1073,8 @@ export default function ChannelBackup({
                                     </label>
                                 </div>
                                 <p id="recovery-file-help">
-                                    Choose your downloaded .tgdb backup, up to 64 MiB. It opens with
-                                    this server's ENCRYPTION_KEY. Checking it does not change the drive.
+                                    Choose your downloaded .tgdb backup. It opens with this
+                                    server's ENCRYPTION_KEY. Checking it does not change the drive.
                                 </p>
                                 <details>
                                     <summary>Channel access changed?</summary>

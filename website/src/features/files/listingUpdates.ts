@@ -91,7 +91,9 @@ export function reconcileDirectory(
     if (
         unchanged &&
         previous.name === next.name &&
-        previous.read_only === next.read_only
+        previous.read_only === next.read_only &&
+        JSON.stringify(previous.breadcrumbs) ===
+            JSON.stringify(next.breadcrumbs)
     )
         return previous;
     return {

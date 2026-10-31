@@ -311,23 +311,15 @@ def register_routes(
             or sort not in {"name", "size", "type", "date"}
         ):
             raise HTTPException(422, "Invalid pagination or sort")
-        data = get_store(request).get_directory(parent_id)
-        items = list(data["contents"].values())
-        items.sort(
-            key=lambda item: (
-                item["type"] != "folder",
-                str(item.get("upload_date" if sort == "date" else sort, "")).casefold()
-                if sort != "size"
-                else item.get("size", 0),
-                item["id"],
-            )
-        )
+        # One indexed MongoDB page off the event loop; no folder is read whole.
         return describe(
-            {
-                "items": items[offset : offset + limit],
-                "total": len(items),
-                "offset": offset,
-            }
+            await asyncio.to_thread(
+                get_store(request).list_page,
+                parent_id,
+                offset=offset,
+                limit=limit,
+                sort=sort,
+            )
         )
 
     @app.post("/api/v1/folders/tree", dependencies=admin, status_code=201)

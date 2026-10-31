@@ -81,8 +81,11 @@ def test_channel_backup_setup_progress_pause_errors_and_private_exports(
         database.get_by_role("button", name="Back Up Now", exact=True)
     ).to_be_enabled()
     section.get_by_role("button", name="Set up backup channel", exact=True).click()
-    section.get_by_label("Backup channel ID", exact=True).fill(BACKUP_CHANNEL)
-    section.get_by_label("Backup bot token", exact=True).fill(BOT)
+    setup = section.locator("form").filter(
+        has=page.get_by_role("button", name="Verify and start backup", exact=True)
+    )
+    setup.get_by_label("Backup channel ID", exact=True).fill(BACKUP_CHANNEL)
+    setup.get_by_label("Backup bot token", exact=True).fill(BOT)
     submit = section.get_by_role("button", name="Verify and start backup", exact=True)
     expect(submit).to_be_disabled()
     section.get_by_role(
@@ -97,7 +100,7 @@ def test_channel_backup_setup_progress_pause_errors_and_private_exports(
         section.get_by_role("progressbar", name="Channel copy progress", exact=True)
     ).to_have_attribute("value", str(1024**2))
     expect(section.get_by_text("Project archive.zip", exact=True)).to_be_visible()
-    expect(section.get_by_label("Backup bot token", exact=True)).to_have_count(0)
+    expect(setup.get_by_label("Backup bot token", exact=True)).to_have_count(0)
     expect(
         section.get_by_role("heading", name="Backups & recovery", exact=True)
     ).to_be_focused()
@@ -142,10 +145,8 @@ def test_channel_backup_setup_progress_pause_errors_and_private_exports(
         Path(backup_download.value.path()).read_bytes()
         == b"synthetic encrypted recovery file"
     )
-    with page.expect_download() as key_download:
-        section.get_by_role("link", name="Save recovery key", exact=True).click()
-    exported = json.loads(Path(key_download.value.path()).read_text())
-    assert exported["key"] == KEY
+    # Backups open with ENCRYPTION_KEY; there is no separate key to save.
+    expect(section.get_by_role("link", name="Save recovery key")).to_have_count(0)
     scenario(page, server, "many-events")
     section.locator("summary").filter(has_text="Activity and report").click()
     expect(section.locator(".channel-backup-report li")).to_have_count(30)
@@ -194,9 +195,6 @@ def test_recovery_only_inspection_confirmation_resume_and_activation(
             "buffer": b"synthetic encrypted recovery file",
         }
     )
-    section.get_by_label("Recovery key (required)", exact=True).fill(
-        json.dumps({"format": "tgdrive-recovery-key-v2", "key": KEY})
-    )
     section.get_by_role("button", name="Inspect backup", exact=True).click()
     expect(
         section.get_by_role("heading", name="Recovery copy found", exact=True)
@@ -204,9 +202,6 @@ def test_recovery_only_inspection_confirmation_resume_and_activation(
     expect(
         section.get_by_role("heading", name="Recovery copy found", exact=True)
     ).to_be_focused()
-    expect(section.get_by_label("Recovery key (required)", exact=True)).to_have_value(
-        ""
-    )
     database_only = section.get_by_role(
         "checkbox",
         name="Restore the database only on this surviving channel",
@@ -267,7 +262,7 @@ def test_recovery_only_inspection_confirmation_resume_and_activation(
     activate.click()
     expect(section.locator(".channel-backup-phase")).to_contain_text("Restart required")
     expect(
-        section.get_by_text("The recovered configuration is saved.", exact=False)
+        section.get_by_text("The recovered drive is saved.", exact=False)
     ).to_be_visible()
     state = page.request.get(server.url + "/__test__/replica", headers=CONTROL).json()
     recovery = next(item for item in state["events"] if item["action"] == "recover")
@@ -293,13 +288,11 @@ def test_file_import_validates_and_accepts_replacement_access(server, desktop):
     section = open_storage(page)
     section.get_by_text("Restore backup", exact=True).click()
     file_input = section.get_by_label("Recovery file (required)", exact=True)
-    key_input = section.get_by_label("Recovery key (required)", exact=True)
     inspect = section.get_by_role("button", name="Inspect backup", exact=True)
     expect(inspect).to_be_disabled()
     file_input.set_input_files(
         {"name": "wrong.txt", "mimeType": "text/plain", "buffer": b"x"}
     )
-    key_input.fill(KEY)
     inspect.click()
     expect(section.get_by_role("alert")).to_contain_text("encrypted .tgdb")
     file_input.set_input_files(
@@ -309,16 +302,12 @@ def test_file_import_validates_and_accepts_replacement_access(server, desktop):
             "buffer": b"synthetic encrypted recovery file",
         }
     )
-    key_input.fill("not-a-key")
-    inspect.click()
-    expect(section.get_by_role("alert")).to_contain_text("saved recovery key")
     state = page.request.get(server.url + "/__test__/replica", headers=CONTROL).json()
     assert not state["events"]
     response = page.request.post(
         server.url + "/__test__/replica/access-revoked", headers=CONTROL
     )
     assert response.ok
-    key_input.fill(KEY)
     section.get_by_text("Channel access changed?", exact=True).click()
     section.get_by_label("Surviving channel ID (optional)", exact=True).fill(
         BACKUP_CHANNEL
@@ -330,7 +319,6 @@ def test_file_import_validates_and_accepts_replacement_access(server, desktop):
         section.get_by_role("heading", name="Recovery copy found", exact=True)
     ).to_be_focused()
     expect(token_input).to_have_value("")
-    expect(key_input).to_have_value("")
     expect(
         section.get_by_role(
             "checkbox",
@@ -354,33 +342,6 @@ def test_file_import_validates_and_accepts_replacement_access(server, desktop):
     capture(page, "recovery-file-replacement-access-390.png")
 
 
-def test_legacy_channel_inspection_stays_available_in_collapsed_controls(
-    server, desktop
-):
-    _, page = desktop
-    login(page, server.url)
-    section = open_storage(page)
-    section.get_by_text("Restore backup", exact=True).click()
-    channel = section.get_by_label("Surviving channel ID", exact=True)
-    expect(channel).to_be_hidden()
-    section.get_by_text("Older backups: recover from a channel", exact=True).click()
-    channel.fill(BACKUP_CHANNEL)
-    section.get_by_label(
-        "Bot token with access to the surviving channel", exact=True
-    ).fill(BOT)
-    section.get_by_label("Saved recovery key", exact=True).fill(KEY)
-    section.get_by_role("button", name="Inspect recovery copy", exact=True).click()
-    expect(
-        section.get_by_role("heading", name="Recovery copy found", exact=True)
-    ).to_be_visible()
-    expect(
-        section.get_by_text(
-            "This older channel recovery copy restores the catalog and", exact=False
-        )
-    ).to_be_visible()
-    expect(section.get_by_label("Saved recovery key", exact=True)).to_have_value("")
-
-
 def test_demo_file_restore_is_disabled_without_disabling_private_backup_exports(
     server, desktop
 ):
@@ -402,7 +363,6 @@ def test_demo_file_restore_is_disabled_without_disabling_private_backup_exports(
     expect(
         section.get_by_label("Recovery file (required)", exact=True)
     ).to_be_disabled()
-    expect(section.get_by_label("Recovery key (required)", exact=True)).to_be_disabled()
     expect(
         section.get_by_role("button", name="Inspect backup", exact=True)
     ).to_be_disabled()
@@ -418,9 +378,7 @@ def test_demo_file_restore_is_disabled_without_disabling_private_backup_exports(
             "button", name="Back Up Now", exact=True
         )
     ).to_be_enabled()
-    expect(
-        section.get_by_role("link", name="Save recovery key", exact=True)
-    ).to_be_visible()
+    expect(section.get_by_role("link", name="Save recovery key")).to_have_count(0)
     with page.expect_download() as saved_file:
         section.get_by_role("link", name="Download backup", exact=True).click()
     assert (

@@ -2481,22 +2481,11 @@ def test_settings_backup_status_never_claims_unconfirmed_protection(
     restore = page.get_by_role("region", name="Backups & recovery", exact=True)
     restore.get_by_text("Restore backup", exact=True).click()
     expect(restore.get_by_label("Recovery file (required)", exact=True)).to_be_visible()
-    expect(restore.get_by_label("Recovery key (required)", exact=True)).to_be_visible()
     expect(
         restore.get_by_role("button", name="Inspect backup", exact=True)
     ).to_be_disabled()
-    page.get_by_text(
-        "Reopen an existing drive or restore an older archive", exact=True
-    ).click()
-    restore_form = page.locator(".drive-recovery-help .database-restore")
-    restore_form.get_by_text(
-        "Older backups: restore a database archive", exact=True
-    ).click()
-    expect(restore_form.get_by_label("Database archive (required)")).to_be_visible()
-    expect(restore_form.get_by_label("Archive recovery key (required)")).to_be_visible()
-    expect(
-        restore_form.get_by_role("button", name="Restore database archive")
-    ).to_be_disabled()
+    # Older database-archive restores were removed with 2.x compatibility.
+    expect(page.get_by_text("Database archive (required)")).to_have_count(0)
     page.screenshot(path=ARTIFACTS / "settings-backup-desktop.png", full_page=False)
     page.set_viewport_size({"width": 390, "height": 844})
     expect(status).to_have_text("Saved to MongoDB")
