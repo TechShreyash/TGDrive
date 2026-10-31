@@ -410,7 +410,8 @@ class ThumbnailRebuild:
                     await self.wait_turn()
                     source = RebuildSource(self, data)
                     try:
-                        async with asyncio.timeout(240):
+                        # shortcut: just above the 15-minute remote render guard.
+                        async with asyncio.timeout(960):
                             cover = await self.render_file(source)
                         await source.authorize()
                         if cover:

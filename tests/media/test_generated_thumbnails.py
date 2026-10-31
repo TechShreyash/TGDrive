@@ -107,7 +107,7 @@ def test_video_first_frame_fallback_after_unsuccessful_seek(monkeypatch, failure
     monkeypatch.setattr(thumbnail_worker.subprocess, "run", run)
     assert thumbnail_worker.render(Path("staged.mov"), ".mov") == cover
     assert [command[command.index("-ss") + 1] for command, _ in calls] == ["600", "0"]
-    assert [timeout for _, timeout in calls] == [6, 3]
+    assert [timeout for _, timeout in calls] == [60, 60]
 
 
 def test_video_first_frame_fallback_remains_bounded(monkeypatch):
@@ -122,7 +122,63 @@ def test_video_first_frame_fallback_remains_bounded(monkeypatch):
     monkeypatch.setattr(thumbnail_worker, "video_seek_time", lambda *_: "600")
     monkeypatch.setattr(thumbnail_worker.subprocess, "run", run)
     assert thumbnail_worker.render(Path("staged.mov"), ".mov") == b""
-    assert timeouts == [6, 3]
+    assert timeouts == [60, 60]
+
+
+@pytest.mark.parametrize(
+    "name,suffix,keyframes",
+    [
+        ("staged.mov", ".mov", True),
+        ("cover.png", ".png", False),
+        ("a.mp3", ".mp3", False),
+    ],
+)
+def test_only_video_decodes_keyframes(monkeypatch, name, suffix, keyframes):
+    from tgdrive.media import thumbnail_worker
+
+    commands = []
+
+    def run(command, **kwargs):
+        commands.append(command)
+        return SimpleNamespace(returncode=0, stdout=b"\xff\xd8\xffc\xff\xd9")
+
+    monkeypatch.setattr(thumbnail_worker, "video_seek_time", lambda *_: "1")
+    monkeypatch.setattr(thumbnail_worker.subprocess, "run", run)
+    thumbnail_worker.render(Path(name), suffix)
+    command = commands[0]
+    assert ("-skip_frame" in command) is keyframes
+    if keyframes:
+        assert command.index("-skip_frame") < command.index("-i")
+
+
+def test_worker_sets_no_address_space_limit():
+    from tgdrive.media import thumbnail_worker
+
+    source = Path(thumbnail_worker.__file__).read_text()
+    assert "RLIMIT_AS" not in source and "RLIMIT_FSIZE" in source
+
+
+@pytest.mark.parametrize("progress", [True, False])
+def test_remote_stall_rule_kills_only_silent_ffmpeg(monkeypatch, progress):
+    import sys
+
+    from tgdrive.media import thumbnail_worker
+
+    monkeypatch.setattr(thumbnail_worker, "STALL_SECONDS", 0.5)
+    monkeypatch.setattr(thumbnail_worker, "read_counter", lambda pid: None)
+    script = (
+        "import sys, time\n"
+        "for _ in range(8):\n"
+        f"    {'print(flush=True, file=sys.stderr)' if progress else 'pass'}\n"
+        "    time.sleep(0.2)\n"
+        "sys.stdout.write('done')\n"
+    )
+    command = [sys.executable, "-c", script]
+    if progress:
+        assert thumbnail_worker.run_remote(command).stdout == b"done"
+    else:
+        with pytest.raises(subprocess.TimeoutExpired):
+            thumbnail_worker.run_remote(command)
 
 
 async def test_disguised_playlist_and_invalid_images_do_not_render(tmp_path):

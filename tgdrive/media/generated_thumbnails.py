@@ -400,7 +400,9 @@ async def _generate(
     try:
         process = None
         try:
-            async with asyncio.timeout(120 if remote_url else 12):
+            # shortcut: outer hang guard above the worker's stall rule; tune if real
+            # slow-network renders hit it.
+            async with asyncio.timeout(900 if remote_url else 180):
                 opening = asyncio.create_task(
                     asyncio.create_subprocess_exec(
                         sys.executable,

@@ -143,18 +143,22 @@ failures may retry sooner. Ordinary missing-provider results are briefly cached.
 
 **Manual rebuild reads:** video/images use a private loopback FFmpeg range bridge
 through the shared cache. Books/office files read their index and cover. Most
-sources have a **64 MiB cumulative read budget and four-minute deadline**;
+sources have a **64 MiB cumulative read budget and 16-minute deadline**;
 books retain their **32 MiB** parser budget. PDFs need seekable local bytes and
 may read the complete original up to **256 MiB**, with free-space checks and
 crash-cleaned private staging. Larger or overly demanding sources are skipped.
-Manual rendering has its own lower-OS-priority slot and a **120-second** native
-deadline for paced reads; only its token-protected loopback source is allowed.
+Manual rendering has its own lower-OS-priority slot; only its token-protected
+loopback source is allowed. Because that source streams from Telegram, network
+waits are not timed: FFmpeg is stopped only after **30 seconds** with no output,
+progress line or bytes read. A **10-minute** ceiling per attempt and a
+**15-minute** native deadline remain as hang guards.
 
 **Automatic renderer:** one slot per process, **two-second** admission wait,
-**12-second** operation timeout. Video metadata probing allows **1.5 seconds**.
+**3-minute** operation timeout. Video metadata probing allows **1.5 seconds**.
 The first frame attempt seeks randomly between 40% and 60% of duration, or ten
-seconds in if duration is unknown, with a **six-second** timeout; first-frame
-fallback allows **three seconds**. Partial JPEGs are rejected; a nonblack frame
+seconds in if duration is unknown; it and the first-frame fallback each allow
+**60 seconds**. Video decoding reads only keyframes (`-skip_frame nokey`), so
+long reference chains such as UHD HEVC are not decoded. Partial JPEGs are rejected; a nonblack frame
 is not guaranteed. Admission/decoder failures retain the cover/icon fallback.
 
 Large JPEGs above **8 MiB** use decoder downsampling. Book/office covers use the
@@ -163,10 +167,10 @@ resources/archive-path extraction and force recognized raster bytes through the
 image decoder. Existing covers change only on new upload, explicit rebuild or
 eligible repair.
 
-The Linux renderer allows **eight CPU-seconds, 768 MiB virtual address space,
-one decoding/filter thread and 64 MiB per allocation**. Address space includes
-libraries, thread stacks and decoder frames; it is not reserved RAM. Tested UHD
-HEVC MOVs fit, but every codec/resolution or low-memory container is not guaranteed.
+The Linux renderer uses **one decoding/filter thread and 64 MiB per allocation**
+and cannot write files. It has no CPU-time or memory cap; instead it sets
+`oom_score_adj` to 1000 so under memory pressure the kernel kills the renderer
+before TGDrive. The renderer then falls back to the cover/icon.
 Forced demuxers and file/pipe-only local inputs block playlist/network loads.
 
 ## Container dependencies

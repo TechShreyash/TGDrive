@@ -3,12 +3,15 @@
 from __future__ import annotations
 
 # Native tools run with fixed argument lists and no shell; see render().
+import contextlib
 import math
 import os
 import secrets
 import struct
 import subprocess  # nosec B404
 import sys
+import threading
+import time
 from pathlib import Path
 
 IMAGE_CODECS = {
@@ -48,9 +51,10 @@ MAX_BYTES = 64 * 1024
 MAX_POSTER_BYTES = 1024 * 1024
 VIDEO_IMAGES_MAGIC = b"TGDRVIMG"
 VIDEO_IMAGES_HEADER = struct.Struct("!8sII")
-# Shared libraries, HEVC reference frames and thread stacks all count toward
-# virtual address space. 512 MiB rejects ordinary UHD HEVC before scaling it.
-ADDRESS_SPACE_BYTES = 768 * 1024**2
+LOCAL_SECONDS = 60
+STALL_SECONDS = 30
+# shortcut: fixed hang guard per remote attempt, replace if real renders need longer.
+REMOTE_CEILING_SECONDS = 600
 
 
 def archive_cover(path: Path, suffix: str) -> tuple[bytes, str] | None:
@@ -204,6 +208,60 @@ def video_seek_time(path: Path | str, suffix: str, *, remote=False) -> str:
     return "10"
 
 
+def read_counter(pid):
+    """Bytes ffmpeg has read, including its socket; None off Linux."""
+    try:
+        with open(f"/proc/{pid}/io", "rb") as io:
+            return io.readline()
+    except OSError:
+        return None
+
+
+def run_remote(command):
+    """Stop ffmpeg only after STALL_SECONDS without output, progress or reads."""
+    # Fixed tool/flags and a validated loopback URL; no shell interprets input.
+    process = subprocess.Popen(  # noqa: S603  # nosec B603
+        command,
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    output = []
+    last = [time.monotonic()]
+
+    def pump(stream, keep):
+        for chunk in iter(lambda: stream.read1(65536), b""):
+            last[0] = time.monotonic()
+            if keep:
+                output.append(chunk)
+
+    threads = [
+        threading.Thread(target=pump, args=(process.stdout, True), daemon=True),
+        threading.Thread(target=pump, args=(process.stderr, False), daemon=True),
+    ]
+    for thread in threads:
+        thread.start()
+    started = time.monotonic()
+    counter = None
+    while True:
+        try:
+            process.wait(timeout=min(1, STALL_SECONDS))
+            break
+        except subprocess.TimeoutExpired:
+            now = time.monotonic()
+            if (current := read_counter(process.pid)) != counter:
+                counter, last[0] = current, now
+            if now - last[0] > STALL_SECONDS or now - started > REMOTE_CEILING_SECONDS:
+                process.kill()
+                process.wait()
+                for thread in threads:
+                    thread.join()
+                raise subprocess.TimeoutExpired(command, STALL_SECONDS) from None
+    for thread in threads:
+        thread.join()
+    return subprocess.CompletedProcess(command, process.returncode, b"".join(output))
+
+
 def render(
     path: Path,
     suffix: str,
@@ -257,6 +315,9 @@ def render(
             "-protocol_whitelist",
             "http,tcp" if remote_url else "file,pipe",
         ]
+        if remote_url:
+            # Progress lines keep the stall watchdog in run_remote() alive.
+            command += ["-progress", "pipe:2", "-nostats"]
         if suffix in IMAGE_CODECS:
             command += ["-f", "image2pipe" if cover_input is not None else "image2"]
             if cover_input is None:
@@ -287,6 +348,9 @@ def render(
             # Decode large JPEGs at one-eighth resolution before scaling; a
             # full-resolution RGB allocation can exceed the worker's budget.
             command += ["-lowres", "3"]
+        if suffix in VIDEO_FORMATS and suffix != ".avif":
+            # A cover needs one picture; keyframes decode without reference chains.
+            command += ["-skip_frame", "nokey"]
         command += [
             "-i",
             "pipe:0" if cover_input is not None else source_name,
@@ -317,24 +381,23 @@ def render(
     else:
         return b""
     # A costly or damaged seek can time out or emit an incomplete frame even
-    # when decoding the first frame is cheap. Keep that fallback inside the
-    # parent's existing 12-second deadline instead of abandoning the cover.
-    timeouts = (70, 20) if remote_url else (6, 3)
-    for attempt, timeout in enumerate(
-        timeouts if "-ss" in command else ((90,) if remote_url else (8,))
-    ):
+    # when decoding the first frame is cheap; retry from the first frame.
+    for attempt in range(2 if "-ss" in command else 1):
         if attempt:
             command[command.index("-ss") + 1] = "0"
         try:
-            # Fixed tool/flags and a resolved staged path; no shell interprets input.
-            result = subprocess.run(  # noqa: S603  # nosec B603
-                command,
-                input=cover_input,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.DEVNULL,
-                timeout=timeout,
-                check=False,
-            )
+            if remote_url:
+                result = run_remote(command)
+            else:
+                # Fixed tool/flags and a resolved staged path; no shell parses input.
+                result = subprocess.run(  # noqa: S603  # nosec B603
+                    command,
+                    input=cover_input,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.DEVNULL,
+                    timeout=LOCAL_SECONDS,
+                    check=False,
+                )
         except subprocess.TimeoutExpired:
             continue
         except OSError:
@@ -369,14 +432,14 @@ def main():
     try:
         import resource
 
-        resource.setrlimit(
-            resource.RLIMIT_AS, (ADDRESS_SPACE_BYTES, ADDRESS_SPACE_BYTES)
-        )
-        # No CPU-time limit: ffmpeg inherits it, and heavy decodes need longer
-        # than any fixed budget. The wall-clock timeouts in render() stop hangs.
+        # No CPU or memory cap: ffmpeg inherits them and heavy decodes need more.
+        # The wall-clock rules in render() stop hangs; oom_score_adj below makes
+        # the kernel pick this worker first under memory pressure.
         resource.setrlimit(resource.RLIMIT_FSIZE, (0, 0))
     except ImportError:
         pass
+    with contextlib.suppress(OSError), open("/proc/self/oom_score_adj", "w") as oom:
+        oom.write("1000")
     # Native tools inherit only a minimal environment, not Telegram credentials.
     os.environ.clear()
     os.environ.update(PATH=os.defpath, LANG="C.UTF-8")
