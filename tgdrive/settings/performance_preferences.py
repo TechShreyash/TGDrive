@@ -1,4 +1,6 @@
-"""Durable operator-owned resource policies, applied without a restart."""
+"""Owner choices (timezone, preloading, split size) plus live-applied
+resource values. The resource values are chosen by the governor
+(tgdrive/core/governor.py) and are never saved or edited by the owner."""
 
 from __future__ import annotations
 
@@ -74,6 +76,11 @@ class PerformanceSettings:
         backend = self.runtime.mongo
         row = backend.db.settings.find_one({"_id": "performance-preferences"})
         raw = row["document"] if row else None
+        if raw is not None:
+            from tgdrive.core.governor import MANAGED
+
+            # Resource values are the governor's; ignore any saved copies.
+            raw = {k: v for k, v in raw.items() if k not in MANAGED}
         return (
             PerformancePreferences.model_validate(self.value.model_dump() | raw)
             if raw is not None
@@ -81,7 +88,9 @@ class PerformanceSettings:
         )
 
     def _write(self, value):
-        document = value.model_dump()
+        from tgdrive.core.governor import MANAGED
+
+        document = {k: v for k, v in value.model_dump().items() if k not in MANAGED}
         backend = self.runtime.mongo
         backend.write(
             backend.db.settings,
@@ -163,13 +172,32 @@ class PerformanceSettings:
 
     async def snapshot(self):
         await self.initialize()
-        return self.value.model_dump() | {
+        from tgdrive.core.governor import MANAGED
+
+        return {
+            key: value
+            for key, value in self.value.model_dump().items()
+            if key not in MANAGED
+        } | {
             "revision": self.etag(),
-            "defaults": PerformancePreferences().model_dump(),
+            "defaults": {
+                key: value
+                for key, value in PerformancePreferences().model_dump().items()
+                if key not in MANAGED
+            },
             "documentation_url": "https://github.com/TechShreyash/TGDrive/blob/main/docs/configuration.md",
         }
 
     async def save(self, changes, *, expected=None):
+        from tgdrive.core.governor import MANAGED
+
+        if MANAGED.intersection(changes):
+            raise SettingsProblem(
+                "TGDrive tunes cache, storage and transfer limits automatically "
+                "from server resources. To cap TGDrive, set Docker memory and "
+                "CPU limits.",
+                status=422,
+            )
         await self.initialize()
         async with self._lock:
             if expected is not None and expected != self.etag():
@@ -180,47 +208,6 @@ class PerformanceSettings:
                 value = PerformancePreferences.model_validate(
                     self.value.model_dump() | changes
                 )
-                if (
-                    {"cache_disk_bytes", "cache_min_free_bytes"}.intersection(changes)
-                    and value.cache_disk_bytes > 0
-                    and value.cache_min_free_bytes < 64 * 1024**2
-                ):
-                    raise SettingsProblem(
-                        "Keep at least 64 MiB (0.0625 GiB) free "
-                        "while disk caching is enabled. "
-                        "Use the 1 GiB default for normal operation.",
-                        status=422,
-                    )
-                upload_keys = {
-                    "max_file_size",
-                    "staging_budget_bytes",
-                    "min_free_bytes",
-                }
-                if upload_keys.intersection(changes):
-                    if value.max_file_size > value.staging_budget_bytes:
-                        raise SettingsProblem(
-                            "Maximum file size cannot exceed "
-                            "the temporary upload budget. "
-                            "Increase the budget or lower the file limit.",
-                            status=422,
-                        )
-                    if value.min_free_bytes < 64 * 1024**2:
-                        raise SettingsProblem(
-                            "Keep at least 64 MiB free for upload storage. "
-                            "The recommended default is 1 GiB.",
-                            status=422,
-                        )
-                    from tgdrive.transfers.staging import staging_usage
-
-                    manager = getattr(self.runtime, "transfers", None)
-                    reserved, _ = staging_usage(manager)
-                    if value.staging_budget_bytes < reserved:
-                        raise SettingsProblem(
-                            "The temporary budget is below space "
-                            "already reserved by uploads. "
-                            "Finish or cancel transfers first.",
-                            status=409,
-                        )
                 await asyncio.to_thread(self._write, value)
             except SettingsProblem:
                 raise

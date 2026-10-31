@@ -119,11 +119,6 @@ export async function request<T>(
     }
     return data as T;
 }
-export interface UploadPreferences {
-    uploads_per_bot: number;
-    connected_bots: number;
-    bot_upload_slots: number;
-}
 export interface BotUploadSettings {
     folder_path: string | null;
     resolved_path: string | null;
@@ -171,16 +166,6 @@ export const api = {
             destination,
             completed,
         }),
-    uploadPreferences: (signal?: AbortSignal) =>
-        request<UploadPreferences>("/api/v1/settings/uploads", undefined, {
-            signal,
-        }),
-    saveUploadPreferences: (uploads_per_bot: number) =>
-        request<UploadPreferences>(
-            "/api/v1/settings/uploads",
-            { uploads_per_bot },
-            { method: "PATCH" },
-        ),
     config: () =>
         request<PublicConfig>("/api/config", undefined, { cache: "no-store" }),
     session: () =>

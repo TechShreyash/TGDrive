@@ -15,6 +15,7 @@ GIB = 1024**3
 INTERVAL_SECONDS = 5
 COOLDOWN_SECONDS = 60
 CONCURRENCY = (
+    "telegram_uploads_per_bot",
     "telegram_upload_pipeline",
     "telegram_request_limit",
     "telegram_media_per_bot",
@@ -28,6 +29,14 @@ BYTES = (
     "cache_min_free_bytes",
     "min_free_bytes",
     "staging_budget_bytes",
+    "max_file_size",
+)
+# Values the owner no longer edits; saves that include them are refused. Queue
+# size, request pacing and cache retention keep their tested defaults.
+MANAGED = frozenset(
+    CONCURRENCY
+    + BYTES
+    + ("telegram_parts_per_second", "telegram_max_queue", "cache_ttl_seconds")
 )
 
 
@@ -92,6 +101,8 @@ def decide(measurements: dict, previous: dict, signals: dict | None, now: float)
         "cache_min_free_bytes": (reserve, "larger of 1 GiB and 5% of the disk"),
         "min_free_bytes": (reserve, "larger of 1 GiB and 5% of the disk"),
         "staging_budget_bytes": (max(1, room), "free disk after the reserve"),
+        # The largest file is whatever staging can hold; TGDrive adds no cap.
+        "max_file_size": (max(1, room), "fits in the staging budget"),
     }
     for key, (target, why) in targets.items():
         old = values.get(key) or 0
@@ -167,15 +178,24 @@ class Governor:
         now = time.monotonic() if now is None else now
         if self.state is None:
             self.state = dict(
-                values={k: getattr(service.value, k) for k in CONCURRENCY + BYTES},
+                values={
+                    k: getattr(service.value, k, None) or getattr(self.settings, k)
+                    for k in CONCURRENCY + BYTES
+                },
                 raised_at=now,
             )
         self.state = decide(self.measurements, self.state, self.signals(), now)
-        values = self.state["values"]
-        # Compare with live settings so an owner save is overridden on the next tick.
+        values = dict(self.state["values"])
+        uploads = values.pop("telegram_uploads_per_bot")
         if any(getattr(self.settings, k, None) != v for k, v in values.items()):
             async with service._lock:
                 await service._apply(service.value.model_copy(update=values))
+        pool = getattr(self.runtime, "pool", None)
+        if uploads != self.settings.telegram_uploads_per_bot and hasattr(
+            pool, "set_uploads_per_bot"
+        ):
+            await pool.set_uploads_per_bot(uploads)
+            self.settings.telegram_uploads_per_bot = uploads
 
     async def _run(self) -> None:
         while True:

@@ -339,7 +339,7 @@ requested ranges rather than warming unrelated gaps or the whole file.
 
 A whole-file preload must fit in memory cache **or** disk cache, allowing for
 overhead and other jobs; the budgets are not combined. If rejected, free space,
-raise **Configuration → Cache settings** or wait. Larger files can still stream
+free server memory or disk (cache budgets follow them automatically) or wait. Larger files can still stream
 in chunks. Preloads sorts by newest downloaded data. Cache access still needs
 valid authorization; network/Telegram delays and decoding can still buffer.
 [Cache policy](performance.md#cache-limits).
@@ -373,9 +373,8 @@ Choose **New → Upload from URL** and paste a public HTTP(S) file URL.
 You can close the tab after submission while TGDrive runs.
 
 By default, two imports receive at full speed. Others receive slowly or wait for
-a source connection/temporary disk. **Configuration → Transfer limits → URL
-downloads** changes concurrency; **Compatibility Mode** helps sources that reject
-parallel retrieval.
+a source connection/temporary disk; TGDrive tunes how many run at full speed.
+**Compatibility Mode** helps sources that reject parallel retrieval.
 
 Temporary interruptions retry with a countdown. After retries stop, correct the
 error and use **Retry**; intake restarts from the beginning. An expired source

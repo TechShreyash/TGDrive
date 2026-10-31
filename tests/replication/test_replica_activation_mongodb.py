@@ -143,7 +143,6 @@ def deployment(tmp_path):
                 "performance-preferences",
                 PerformancePreferences(timezone="UTC").model_dump(),
             ),
-            ("transfer-preferences", {"uploads_per_bot": 2}),
         ):
             backend.write(
                 backend.db.settings,
@@ -231,9 +230,6 @@ def test_live_mongo_catalog_preferences_and_credentials_commit_together(deployme
         ]["timezone"]
         == "UTC"
     )
-    assert row.backend.db.settings.find_one({"_id": "transfer-preferences"})[
-        "document"
-    ] == {"uploads_per_bot": 2}
     archive = (
         row.settings.resolved_data_dir
         / "recovery-archive"

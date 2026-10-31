@@ -14,11 +14,9 @@ from tgdrive.settings.performance_preferences import (
     PerformancePreferences,
     PerformanceSettings,
 )
-from tgdrive.settings.transfer_preferences import TransferPreferences, UploadPreferences
 
 POLICIES = {
     "performance-preferences.json": PerformancePreferences,
-    "transfer-preferences.json": UploadPreferences,
     "bot-preferences.json": BotUploadPreferences,
 }
 
@@ -58,10 +56,8 @@ def collect_credentials(settings, runtime):
         if raw is None:
             if model is PerformancePreferences:
                 raw = PerformanceSettings(settings, runtime).value.model_dump()
-            elif model is BotUploadPreferences:
-                raw = BotUploadPreferences().model_dump()
             else:
-                raw = {"uploads_per_bot": TransferPreferences(settings, runtime)._value}
+                raw = BotUploadPreferences().model_dump()
         if model is PerformancePreferences:
             raw = PerformanceSettings(settings, runtime).value.model_dump() | raw
         preferences[filename] = model.model_validate(raw).model_dump()
@@ -106,9 +102,6 @@ def credentials_from_snapshot(settings, records):
         "performance-preferences.json": PerformanceSettings(
             settings, None
         ).value.model_dump(),
-        "transfer-preferences.json": {
-            "uploads_per_bot": getattr(settings, "telegram_uploads_per_bot", 1)
-        },
         "bot-preferences.json": BotUploadPreferences().model_dump(),
     }
     for filename, model in POLICIES.items():

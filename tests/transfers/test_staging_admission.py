@@ -3,15 +3,11 @@ from __future__ import annotations
 import asyncio
 import errno
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
 
 import pytest
 
-from tests.support.app_fixtures import make_settings
 from tests.support.mongo_fixtures import register_test_backend
 from tests.transfers.test_resumable_uploads import make
-from tgdrive.settings.managed_settings import SettingsProblem
-from tgdrive.settings.performance_preferences import PerformanceSettings
 from tgdrive.transfers.staging import staging_usage
 from tgdrive.transfers.tasks import TransferStatus
 from tgdrive.transfers.uploads import UploadError
@@ -159,42 +155,6 @@ async def test_disk_quota_error_keeps_receipt_acknowledgement_for_resume(
     assert uploads.get(item["id"])["offset"] == 0
 
 
-async def test_owner_limits_persist_and_reject_invalid_combinations(
-    tmp_path, mongo_backend
-):
-    settings = make_settings(tmp_path)
-    settings.max_file_size = None
-    settings.staging_budget_bytes = 24 * 1024**3
-    state = SimpleNamespace(
-        mongo=mongo_backend,
-        pool=SimpleNamespace(
-            _slots=[], set_media_per_bot=AsyncMock(), set_media_queue_limit=AsyncMock()
-        ),
-    )
-    service = PerformanceSettings(settings, state)
-    assert (await service.snapshot())["max_file_size"] == 24 * 1024**3
-    for changes in [
-        {"max_file_size": 32 * 1024**3},
-        {"min_free_bytes": 0},
-        {"staging_budget_bytes": True},
-    ]:
-        with pytest.raises((SettingsProblem, ValueError)):
-            await service.save(changes)
-    after = await service.save(
-        {
-            "max_file_size": 32 * 1024**3,
-            "staging_budget_bytes": 64 * 1024**3,
-            "min_free_bytes": 1024**3,
-        }
-    )
-    assert settings.upload_limit == 32 * 1024**3
-    second = PerformanceSettings(settings, state)
-    assert (await second.snapshot())["staging_budget_bytes"] == after[
-        "staging_budget_bytes"
-    ]
-    await state.preloads.close()
-
-
 def test_unavailable_disk_fails_before_creating_receipt(tmp_path, monkeypatch):
     uploads, _ = make(tmp_path)
 
@@ -265,32 +225,6 @@ async def test_url_import_checks_shared_space_before_reading_body(
     await manager.remote.close()
     await pool.stop()
     store.close()
-
-
-async def test_owner_cannot_shrink_budget_below_reserved_receipts(
-    tmp_path, mongo_backend
-):
-    settings = make_settings(tmp_path)
-    uploads, manager = make(tmp_path)
-    manager.uploads = uploads
-    uploads.settings.upload_limit = 32 * 1024**3
-    uploads.settings.staging_budget_bytes = 64 * 1024**3
-    # Metadata-only reservation; no large allocation is required.
-    item = uploads.create("held.bin", "/", 3)
-    item["total_size"] = 24 * 1024**3
-    uploads._save(item)
-    state = SimpleNamespace(
-        transfers=manager, pool=SimpleNamespace(_slots=[]), mongo=mongo_backend
-    )
-    service = PerformanceSettings(settings, state)
-    before = await service.snapshot()
-    with pytest.raises(SettingsProblem) as error:
-        await service.save(
-            {"staging_budget_bytes": 16 * 1024**3, "max_file_size": 16 * 1024**3}
-        )
-    assert error.value.status == 409
-    assert (await service.snapshot())["revision"] == before["revision"]
-    await state.preloads.close()
 
 
 @pytest.mark.parametrize("known", [True, False])

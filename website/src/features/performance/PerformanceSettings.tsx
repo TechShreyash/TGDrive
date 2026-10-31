@@ -210,9 +210,9 @@ export default function PerformanceSettings({
                     <p>
                         {
                             {
-                                cache: "Control server resources and how much media stays ready for reuse.",
+                                cache: "Cache sizes are set automatically from server memory and disk; see Performance.",
                                 transfers:
-                                    "Control upload splitting and the request capacity shared by Telegram clients.",
+                                    "Upload limits and Telegram concurrency are set automatically; see Performance.",
                                 regional:
                                     "Choose the timezone used for dates and share expiry across this installation.",
                             }[category]
@@ -243,24 +243,6 @@ export default function PerformanceSettings({
                         hidden={category !== "cache"}
                         legend={
                             <span className="configuration-group-title">
-                                <HardDrive size={18} aria-hidden="true" />
-                                Cache storage
-                            </span>
-                        }
-                    >
-                        <p className="settings-help">
-                            Budgets are shared by playback, downloads and
-                            preloads. They are filled only when needed.
-                        </p>
-                        {numericPreferences
-                            .filter((value) => value.key.startsWith("cache_"))
-                            .map(field)}
-                    </Fieldset>
-                    <Fieldset
-                        className="performance-setting-group"
-                        hidden={category !== "cache"}
-                        legend={
-                            <span className="configuration-group-title">
                                 <PlayCircle size={18} aria-hidden="true" />
                                 Automatic preloading
                             </span>
@@ -270,9 +252,6 @@ export default function PerformanceSettings({
                             Keep useful media ready while active playback and
                             downloads take priority.
                         </p>
-                        {numericPreferences
-                            .filter((value) => value.key === "preload_max_jobs")
-                            .map(field)}
                         <Switch
                             className="configuration-auto-preload"
                             label="Preload during playback"
@@ -302,43 +281,6 @@ export default function PerformanceSettings({
                     >
                         {numericPreferences
                             .filter((value) => value.key === "upload_split_mib")
-                            .map(field)}
-                    </Fieldset>
-                    <Fieldset
-                        className="performance-setting-group"
-                        hidden={category !== "transfers"}
-                        legend={
-                            <span className="configuration-group-title">
-                                <Globe size={18} aria-hidden="true" />
-                                URL downloads
-                            </span>
-                        }
-                    >
-                        {numericPreferences
-                            .filter(
-                                (value) =>
-                                    value.key === "remote_download_concurrency",
-                            )
-                            .map(field)}
-                    </Fieldset>
-                    <Fieldset
-                        className="performance-setting-group"
-                        hidden={category !== "transfers"}
-                        legend={
-                            <span className="configuration-group-title">
-                                <HardDrive size={18} aria-hidden="true" />
-                                Upload storage
-                            </span>
-                        }
-                    >
-                        {numericPreferences
-                            .filter((value) =>
-                                [
-                                    "max_file_size",
-                                    "staging_budget_bytes",
-                                    "min_free_bytes",
-                                ].includes(value.key),
-                            )
                             .map(field)}
                     </Fieldset>
                     <Fieldset
@@ -377,25 +319,9 @@ export default function PerformanceSettings({
                             />
                         </div>
                     </Fieldset>
-                    <details
-                        className="performance-advanced"
-                        hidden={category !== "transfers"}
-                    >
-                        <summary>Advanced Telegram limits</summary>
-                        <p>
-                            These limits share each account’s capacity. Higher
-                            values can increase cooldowns and compete with
-                            streaming.
-                        </p>
-                        {numericPreferences
-                            .filter((value) => value.advanced)
-                            .map(field)}
-                    </details>
                     <p className="settings-help performance-save-scope">
                         Save applies to this page. Restore defaults loads values
                         for review before saving.
-                        {category === "transfers" &&
-                            " Parallel uploads has its own Save Changes action above."}
                     </p>
                     <div className="performance-actions">
                         <span className="performance-save-state">

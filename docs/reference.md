@@ -164,28 +164,22 @@ connectivity, not merely a nonempty STRING_SESSIONS value. See
 <details>
 <summary>Live preferences, defaults and cache limits</summary>
 
-Saved dashboard preferences override startup defaults, persist in MongoDB and
-apply to new work immediately. Environment changes require a restart; recreating
-a container does not override saved preferences. Telegram credential edits use
-the separate restart-based connection editor.
-
-**Discard changes** restores the last saved values. **Restore defaults** creates a
-category-scoped draft; Save validates and applies it. Units are binary:
-1 GiB = 1024 MiB. Where a default shows units, use the parenthesized integer in `.env`.
+Cache memory and disk budgets, the cache free-space floor, upload staging,
+the largest accepted file, the upload free-space reserve and Telegram/URL/preload
+concurrency are chosen at runtime by the
+[resource governor](performance.md#automatic-tuning) and are not configurable.
+Their environment variables from earlier versions (`CACHE_MEMORY_BYTES`,
+`CACHE_DISK_BYTES`, `CACHE_MIN_FREE_BYTES`, `CACHE_TTL_SECONDS`, `PRELOAD_MAX_JOBS`,
+`TELEGRAM_UPLOAD_PIPELINE`, `TELEGRAM_REQUEST_LIMIT`, `TELEGRAM_PARTS_PER_SECOND`,
+`TELEGRAM_MEDIA_PER_BOT`, `TELEGRAM_MAX_QUEUE`, `TELEGRAM_UPLOADS_PER_BOT`,
+`REMOTE_DOWNLOAD_CONCURRENCY`, `MAX_FILE_SIZE`, `STAGING_BUDGET_BYTES`,
+`MIN_FREE_BYTES`) only seed the first values before the first measurement.
+`PATCH /api/v1/settings/performance` rejects them with `422`; it accepts only
+the owner choices below, saved in MongoDB and applied immediately.
 
 | Variable | Default | Meaning and bounds |
 | --- | --- | --- |
-| `CACHE_MEMORY_BYTES` | 256 MiB (`268435456`) | RAM payload budget (default 256 MiB). Zero disables RAM retention. Available host/container memory can lower the effective limit. RAM blocks expire after 10 idle minutes; reuse refreshes expiry. |
-| `CACHE_DISK_BYTES` | 10 GiB (`10737418240`) | Disk budget. Zero disables disk retention. It does not reserve that amount of disk in advance. |
-| `CACHE_MIN_FREE_BYTES` | 1 GiB (`1073741824`) | Free-disk floor for cache writes (default 1 GiB). This does not allocate space or constrain other disk users. Upload staging separately uses `MIN_FREE_BYTES`. |
-| `CACHE_TTL_SECONDS` | 24 hours (`86400`) | Sliding disk retention, at least 60 seconds. Eviction or disk failure can remove bytes sooner. |
 | `AUTO_PRELOAD` | true | Enable extra bounded warming after delivered original audio/video playback bytes. Explicit downloads and unclassified range clients stay within requested ranges. Disabling it leaves adaptive response read-ahead and manual **Preload file** available. |
-| `PRELOAD_MAX_JOBS` | 2 | Combined manual and automatic preparation jobs, 1 or more; foreground work has priority. More jobs share existing account capacity. |
-| `TELEGRAM_UPLOAD_PIPELINE` | 4 | Outstanding upload-part requests per document, 1 or more. |
-| `TELEGRAM_REQUEST_LIMIT` | 8 | Shared per-account media/metadata request concurrency, 1 or more. |
-| `TELEGRAM_PARTS_PER_SECOND` | 48 | Application request pacing ceiling, 1 or more, including scheduled metadata work. This is not a Telegram-provided bandwidth limit. |
-| `TELEGRAM_MEDIA_PER_BOT` | 3 | Shared concurrent origin media operations per account, 1 or more. Uploads also retain their separate per-bot/user lane limits. |
-| `TELEGRAM_MAX_QUEUE` | 256 | Global queued origin operations, 1 or more; overflow returns retry guidance. |
 | `UPLOAD_SPLIT_MIB` | 2000 | Default and maximum document size for every account, including Premium; Telegram's document limit. Explicit 1–2000 values choose a smaller part size; 0 also uses 2000 MiB. Persisted plans keep their original boundaries. |
 | `TIMEZONE` | Asia/Kolkata | Installation-wide display timezone for owner and public dates/share expiry. Use a valid IANA name; the default is IST. |
 
@@ -198,10 +192,6 @@ RAM and disk may duplicate blocks, so their sum is not whole-file capacity.
 Preload admission counts complete aligned Telegram blocks, multipart boundaries,
 a 32-byte disk integrity prefix per block and competing reservations. Retention
 never guarantees a pin: TTL, eviction and disk failure still apply.
-
-Dashboard saves reject enabled disk caching with a free-space floor below 64 MiB
-(`422`); a zero disk budget remains valid. Existing environment values are not
-rewritten. Read-only defaults cannot be submitted as a preference.
 
 See [performance policy](performance.md), including
 [automatic read-ahead](performance.md#automatic-read-ahead), for scheduling and
@@ -322,19 +312,15 @@ empty database or the untouched catalog created by automatic first setup.
 
 | Variable | Default | Validation and behavior |
 | --- | --- | --- |
-| `MAX_FILE_SIZE` | Unset | Optional positive logical-file byte ceiling; the runtime upload policy supports up to 2 TiB, further bounded by staging. Files above one Telegram document's limit do not require Premium. |
-| `STAGING_BUDGET_BYTES` | 16 GiB (`17179869184`) | Positive integer; 16 GiB total reservation budget by default. |
-| `MIN_FREE_BYTES` | 1 GiB (`1073741824`) | Nonnegative integer; preserve 1 GiB free space by default. Browser receipt admission reserves remaining bytes; URL downloads also check free space. |
 | `UPLOAD_SESSION_TTL_SECONDS` | 86400 | Integer at least 60; incomplete receipt idle lifetime in seconds, refreshed after each committed chunk. There is no declared upper bound in configuration. |
 | `MAX_CONCURRENT_TRANSFERS` | 2 | Integer, at least 1; bounds local fingerprinting and receive work. Torrent downloads and receipt handlers each use a separate bound of this size, so slow peers do not occupy local upload-preparation slots. It does not cap Telegram uploads across bots. |
-| `TELEGRAM_UPLOADS_PER_BOT` | 1 | Integer, at least 1; initial per-bot Telegram media limit. **Configuration → Transfer limits** saves an override in MongoDB and applies it immediately. Premium clients remain limited to one media upload each. |
 | `TRANSFER_TTL_SECONDS` | 3600 | Integer, at least 60; terminal jobs become eligible for cleanup on admission or explicit pruning. Compact server-transfer history is kept separately; files are unaffected. |
 
 New documents use at most **2000 MiB (2,097,152,000 bytes)** for every account,
 including Premium. `UPLOAD_SPLIT_MIB=0` uses that cap. Larger logical files use
 ordered parts and appear as one item with original downloads and range seeking.
-The `/api/config` logical limit is the smaller of `STAGING_BUDGET_BYTES` and
-optional `MAX_FILE_SIZE`: **16 GiB by default**, subject to disk. Files split into
+The `/api/config` logical limit is the governor's staging budget: free disk
+after the reserve. Files split into
 any number of parts. TGDrive has no stored-byte quota and no limit on items or
 folder depth; MongoDB's storage is the limit.
 Premium is preferred when eligible; bot fallback and existing sender identities
@@ -348,8 +334,8 @@ Allow disk headroom for URL work, logs, metadata and backups beyond receipt
 reservations.
 
 Device receives start at two concurrent files and adapt between one and four.
-Each accepted file queues immediately. Staging/account waits still apply; reducing
-Telegram concurrency lets active uploads finish. See the canonical
+Each accepted file queues immediately. Staging/account waits still apply; when
+the governor lowers Telegram concurrency, active uploads finish. See the canonical
 [transfer pipeline](architecture.md#transfer-pipeline) for adaptation, admission,
 retry and cancellation rules.
 
@@ -363,7 +349,6 @@ retry and cancellation rules.
 | Variable | Default | Validation and behavior |
 | --- | --- | --- |
 | `ALLOW_PRIVATE_REMOTE_URLS` | false | Enables private/internal destinations only when explicitly true. It broadens what the authenticated owner can reach. |
-| `REMOTE_DOWNLOAD_CONCURRENCY` | 2 | Integer, at least 1; full-speed source downloads. Configuration → Transfer limits saves and immediately applies an override. See [URL intake](performance.md#url-import-intake) for queued connections, pacing and storage bounds. |
 | `REMOTE_CONNECT_TIMEOUT` | 20 | Seconds, greater than 0. |
 | `REMOTE_READ_TIMEOUT` | 120 | Seconds, greater than 0; individual read timeout. |
 | `REMOTE_TOTAL_TIMEOUT` | 21600 | Seconds, greater than 0; total operation budget. |

@@ -23,7 +23,6 @@ MANAGEMENT_REQUESTS = [
     ("POST", "/api/v1/settings/thumbnails/rebuild", {"confirmed": True}),
     ("POST", "/api/v1/settings/thumbnails/rebuild/cancel", {}),
     ("PATCH", "/api/v1/settings", {"expected_revision": 0, "api_id": 99999}),
-    ("PATCH", "/api/v1/settings/uploads", {"uploads_per_bot": 2}),
     ("PATCH", "/api/v1/settings/performance", {"timezone": "UTC"}),
     ("PATCH", "/api/v1/settings/bot-mode", {"folder_path": "/"}),
     ("POST", "/api/v1/settings/refresh", {}),
@@ -137,7 +136,6 @@ def test_demo_rejects_direct_management_requests_before_any_side_effect(
     for name in (
         "get_connection_manager",
         "get_bot_settings",
-        "get_transfer_preferences",
     ):
         monkeypatch.setattr("tgdrive.settings.management_api." + name, forbidden)
     monkeypatch.setattr(
@@ -164,7 +162,6 @@ def test_demo_rejects_direct_management_requests_before_any_side_effect(
     assert settings.demo_mode is True
     for filename in (
         "telegram-settings.json",
-        "transfer-preferences.json",
         "performance-preferences.json",
         "bot-preferences.json",
         "channel-activation.json",
@@ -175,7 +172,7 @@ def test_demo_rejects_direct_management_requests_before_any_side_effect(
 @pytest.mark.parametrize(
     "method,path,payload",
     [
-        ("PATCH", "/api/v1/settings/uploads", {"uploads_per_bot": 2}),
+        ("PATCH", "/api/v1/settings/performance", {"timezone": "UTC"}),
         ("GET", "/api/v1/replica/file", None),
     ],
 )
@@ -216,7 +213,7 @@ def test_demo_setting_cannot_be_changed_through_the_settings_api(demo_owner):
 @pytest.mark.parametrize(
     "method,path,payload",
     [
-        ("PATCH", "/demo/api/v1/settings/uploads", {"uploads_per_bot": 2}),
+        ("PATCH", "/demo/api/v1/settings/performance", {"timezone": "UTC"}),
         ("POST", "/demo/api/v1/replica/action", {"action": "sync"}),
         ("POST", "/demo/api/v1/backup", {}),
         ("GET", "/demo/api/v1/replica/file", None),
@@ -238,18 +235,17 @@ def test_demo_guard_uses_matched_route_under_proxy_root_path(
 @pytest.mark.parametrize(
     "path",
     [
-        "/api/v1/settings/uploads/",
-        "/api/v1/%73ettings/uploads",
-        "/api/v1/settings%2Fuploads",
+        "/api/v1/settings/performance/",
+        "/api/v1/%73ettings/performance",
+        "/api/v1/settings%2Fperformance",
     ],
 )
 def test_demo_guard_survives_redirects_and_encoded_management_paths(demo_owner, path):
-    client, _, runtime, _ = demo_owner
+    client, _, _runtime, _ = demo_owner
     login(client)
-    response = client.patch(path, json={"uploads_per_bot": 2}, headers=ORIGIN)
+    response = client.patch(path, json={"timezone": "UTC"}, headers=ORIGIN)
     assert response.status_code == 403, response.text
     assert response.json()["code"] == "DEMO_MODE_READ_ONLY"
-    runtime.pool.set_uploads_per_bot.assert_not_called()
 
 
 def test_demo_keeps_settings_status_and_sanitized_reports_readable(demo_owner):
@@ -260,7 +256,6 @@ def test_demo_keeps_settings_status_and_sanitized_reports_readable(demo_owner):
     login(client)
     for path in (
         "/api/v1/settings",
-        "/api/v1/settings/uploads",
         "/api/v1/settings/performance",
         "/api/v1/settings/bot-mode",
         "/api/v1/status",
@@ -272,7 +267,6 @@ def test_demo_keeps_settings_status_and_sanitized_reports_readable(demo_owner):
         response = client.get(path)
         assert response.status_code == 200, (path, response.text)
         assert TOKEN not in response.text
-    assert client.get("/api/v1/settings/uploads").json()["uploads_per_bot"] == 1
     assert (
         client.get("/api/v1/settings/performance").json()["timezone"] == "Asia/Kolkata"
     )
@@ -282,11 +276,10 @@ def test_normal_deployment_can_still_change_preferences_and_back_up(tmp_path):
     with owner_client(tmp_path, demo_mode=False) as (client, store, runtime, _):
         login(client)
         changed = client.patch(
-            "/api/v1/settings/uploads", json={"uploads_per_bot": 2}, headers=ORIGIN
+            "/api/v1/settings/performance", json={"timezone": "UTC"}, headers=ORIGIN
         )
         assert changed.status_code == 200
-        assert changed.json()["uploads_per_bot"] == 2
-        runtime.pool.set_uploads_per_bot.assert_awaited_with(2)
+        assert changed.json()["timezone"] == "UTC"
         runtime.backup = SimpleNamespace(
             ensure_revision=AsyncMock(),
             snapshot_now=AsyncMock(),

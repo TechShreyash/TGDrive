@@ -70,10 +70,12 @@ def sign_in(client, password, **extra):
 def test_same_login_form_grants_only_the_passwords_signed_access(
     tmp_path, password, privileged, monkeypatch
 ):
-    preference_save = AsyncMock(return_value={"uploads_per_bot": 2})
+    preference_save = AsyncMock(return_value={"timezone": "UTC"})
     monkeypatch.setattr(
-        "tgdrive.settings.management_api.get_transfer_preferences",
-        lambda *_args: SimpleNamespace(save=preference_save),
+        "tgdrive.observability.performance_api.get_performance_settings",
+        lambda *_args: SimpleNamespace(
+            save=preference_save, etag=lambda: '"x"', initialize=AsyncMock()
+        ),
     )
     with auth_client(tmp_path) as (client, settings, runtime):
         assert sign_in(client, password, demo_admin=True).status_code == 200
@@ -92,7 +94,7 @@ def test_same_login_form_grants_only_the_passwords_signed_access(
             assert ADMIN not in response.text
         assert session.json()["authenticated"] is True
         saved = client.patch(
-            "/api/v1/settings/uploads", json={"uploads_per_bot": 2}, headers=ORIGIN
+            "/api/v1/settings/performance", json={"timezone": "UTC"}, headers=ORIGIN
         )
         backup = client.get("/api/v1/replica/file")
         assert saved.status_code == (200 if privileged else 403)

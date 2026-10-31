@@ -8,10 +8,6 @@ from tgdrive.settings.bot_settings import BotUploadPreferences, get_bot_settings
 from tgdrive.settings.managed_settings import SettingsProblem
 from tgdrive.settings.management import SettingsChange, get_connection_manager
 from tgdrive.settings.premium_login_api import register_premium_routes
-from tgdrive.settings.transfer_preferences import (
-    UploadPreferences,
-    get_transfer_preferences,
-)
 
 
 def register_management_routes(app, settings, *, require_admin, get_runtime):
@@ -64,17 +60,3 @@ def register_management_routes(app, settings, *, require_admin, get_runtime):
         response.headers["Cache-Control"] = "no-store"
         manager = get_connection_manager(settings, get_runtime(request))
         return await manager.refresh_connections()
-
-    @app.get("/api/v1/settings/uploads", dependencies=admin)
-    async def upload_preferences(request: Request, response: Response):
-        response.headers["Cache-Control"] = "no-store"
-        return await get_transfer_preferences(settings, get_runtime(request)).snapshot()
-
-    @app.patch("/api/v1/settings/uploads", dependencies=admin)
-    async def save_upload_preferences(
-        change: UploadPreferences, request: Request, response: Response
-    ):
-        response.headers["Cache-Control"] = "no-store"
-        return await get_transfer_preferences(settings, get_runtime(request)).save(
-            change
-        )

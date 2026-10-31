@@ -29,7 +29,14 @@ def test_operator_default_hints_match_runtime_defaults():
     displayed = dict(
         re.findall(r'key: "([a-z_]+)"[\s\S]*?appDefault: (\d+)', definitions)
     )
-    numeric = {key: value for key, value in defaults.items() if type(value) is int}
+    from tgdrive.core.governor import MANAGED
+
+    # Only owner choices are shown with defaults; the governor sets the rest.
+    numeric = {
+        key: value
+        for key, value in defaults.items()
+        if type(value) is int and key not in MANAGED
+    }
     assert displayed.keys() == numeric.keys()
     units = {
         "cache_memory_bytes": 1024**2,
@@ -70,10 +77,7 @@ async def test_policy_persists_conflicts_and_failed_write_is_not_applied(
     state = runtime(mongo_backend)
     service = PerformanceSettings(settings, state)
     before = await service.snapshot()
-    after = await service.save(
-        {"cache_disk_bytes": 16 * 1024**3, "timezone": "UTC"},
-        expected=before["revision"],
-    )
+    after = await service.save({"timezone": "UTC"}, expected=before["revision"])
     assert after["timezone"] == "UTC"
     with pytest.raises(SettingsProblem) as conflict:
         await service.save({"timezone": "Asia/Kolkata"}, expected=before["revision"])
@@ -84,8 +88,8 @@ async def test_policy_persists_conflicts_and_failed_write_is_not_applied(
 
     monkeypatch.setattr(service, "_write", failed)
     with pytest.raises(SettingsProblem):
-        await service.save({"cache_disk_bytes": 1})
-    assert (await service.snapshot())["cache_disk_bytes"] == 16 * 1024**3
+        await service.save({"auto_preload": False})
+    assert (await service.snapshot())["auto_preload"] is True
     other = runtime(mongo_backend)
     restarted = PerformanceSettings(settings, other)
     assert (await restarted.snapshot())["timezone"] == "UTC"
@@ -110,12 +114,16 @@ def test_owner_api_resource_policy_and_share_capability(tmp_path, mongo_backend)
             result = client.get(url)
             assert result.status_code == 200
             assert result.json()["timezone"] == "Asia/Kolkata"
-            assert result.json()["defaults"] == PerformancePreferences().model_dump()
+            assert "cache_disk_bytes" not in result.json()
+            assert set(result.json()["defaults"]) == {
+                "timezone",
+                "auto_preload",
+                "upload_split_mib",
+            }
             assert result.json()["documentation_url"].endswith("/docs/configuration.md")
             assert result.headers["cache-control"] == "no-store"
             for changes in (
-                {"cache_disk_bytes": -1},
-                {"cache_memory_bytes": True},
+                {"cache_disk_bytes": 1},
                 {"unknown": 4},
                 {"timezone": "INVALID"},
             ):
@@ -204,68 +212,36 @@ def test_valid_public_share_cannot_inspect_or_control_operator_resources(
         store.close()
 
 
-async def test_defaults_are_built_in_and_invalid_updates_never_change_saved_policy(
+async def test_owner_saves_choices_but_resource_values_are_automatic(
     tmp_path,
     mongo_backend,
 ):
     settings = make_settings(tmp_path)
-    settings.cache_memory_bytes = 512 * 1024**2
     state = runtime(mongo_backend)
     service = PerformanceSettings(settings, state)
     try:
         before = await service.snapshot()
-        assert before["cache_memory_bytes"] == 512 * 1024**2
-        assert before["defaults"]["cache_memory_bytes"] == 256 * 1024**2
         from pydantic import ValidationError
 
         for changes in [
-            {"cache_memory_bytes": -1, "timezone": "UTC"},
             {"timezone": "Not/AZone"},
-            {"telegram_upload_pipeline": 0},
-            {"telegram_request_limit": 0},
-            {"telegram_parts_per_second": 0},
-            {"telegram_media_per_bot": 0},
-            {"telegram_max_queue": 0},
-            {"preload_max_jobs": 0},
             {"upload_split_mib": 2001},
-            {"cache_ttl_seconds": 0},
-            {"cache_memory_bytes": 1.5},
             {"auto_preload": "false"},
-            {"defaults": {"cache_memory_bytes": 1}},
+            {"defaults": {"timezone": "UTC"}},
         ]:
             with pytest.raises(ValidationError):
                 await service.save(changes, expected=before["revision"])
             assert await service.snapshot() == before
-        with pytest.raises(SettingsProblem) as too_low:
-            await service.save({"cache_min_free_bytes": 0}, expected=before["revision"])
-        assert too_low.value.status == 422
+        for key in ("cache_memory_bytes", "telegram_request_limit", "max_file_size"):
+            with pytest.raises(SettingsProblem, match="automatically") as managed:
+                await service.save({key: 1}, expected=before["revision"])
+            assert managed.value.status == 422
         assert await service.snapshot() == before
-        disabled = await service.save(
-            {"cache_disk_bytes": 0, "cache_min_free_bytes": 0}
-        )
-        assert disabled["cache_disk_bytes"] == 0
-        restored = await service.save(before["defaults"], expected=disabled["revision"])
-        assert all(restored[key] == value for key, value in before["defaults"].items())
+        saved = await service.save({"auto_preload": False, "upload_split_mib": 500})
+        assert saved["auto_preload"] is False and saved["upload_split_mib"] == 500
+        document = mongo_backend.db.settings.find_one(
+            {"_id": "performance-preferences"}
+        )["document"]
+        assert "cache_memory_bytes" not in document
     finally:
         await state.preloads.close()
-
-
-async def test_url_concurrency_applies_live_and_persists(tmp_path, mongo_backend):
-    from tgdrive.transfers.remote_scheduler import URLDownloadScheduler
-
-    settings = make_settings(tmp_path)
-    state = runtime(mongo_backend)
-    state.remote = SimpleNamespace(scheduler=URLDownloadScheduler())
-    service = PerformanceSettings(settings, state)
-    before = await service.snapshot()
-    assert before["remote_download_concurrency"] == 2
-    for invalid in (0, True, 2.5):
-        with pytest.raises(ValueError):
-            await service.save({"remote_download_concurrency": invalid})
-    await service.save({"remote_download_concurrency": 8})
-    assert state.remote.scheduler.full_speed_limit == 8
-    other = runtime(mongo_backend)
-    restarted = PerformanceSettings(settings, other)
-    assert (await restarted.snapshot())["remote_download_concurrency"] == 8
-    await state.preloads.close()
-    await other.preloads.close()

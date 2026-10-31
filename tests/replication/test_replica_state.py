@@ -71,11 +71,7 @@ def payload():
                 ).private_bytes()
             ),
             "preferences": {
-                filename: model.model_validate(
-                    {"uploads_per_bot": 1}
-                    if filename == "transfer-preferences.json"
-                    else {}
-                ).model_dump()
+                filename: model.model_validate({}).model_dump()
                 for filename, model in POLICIES.items()
             },
         },

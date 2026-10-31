@@ -94,11 +94,19 @@ def test_tick_applies_through_performance_settings(monkeypatch):
             for key, item in value.items():
                 setattr(settings, key, item)
 
-    settings = SimpleNamespace(resolved_data_dir="/")
+    settings = SimpleNamespace(resolved_data_dir="/", telegram_uploads_per_bot=2)
     scheduler = SimpleNamespace(floods=0, timeouts=0, bytes=0)
+    uploads = []
+
+    async def set_uploads_per_bot(value):
+        uploads.append(value)
+
     runtime = SimpleNamespace(
         pool=SimpleNamespace(
-            _slots=[SimpleNamespace(client=SimpleNamespace(_media_scheduler=scheduler))]
+            _slots=[
+                SimpleNamespace(client=SimpleNamespace(_media_scheduler=scheduler))
+            ],
+            set_uploads_per_bot=set_uploads_per_bot,
         )
     )
     item = Governor(settings, runtime)
@@ -114,3 +122,7 @@ def test_tick_applies_through_performance_settings(monkeypatch):
     asyncio.run(item.tick(now=10))
     assert applied[-1]["telegram_request_limit"] == 1
     assert item.snapshot()["reasons"]["telegram_request_limit"].startswith("halved")
+    # Uploads per bot is tuned too, through the pool's live setter.
+    assert uploads == [1] and settings.telegram_uploads_per_bot == 1
+    # The largest accepted file follows the staging budget; no fixed cap.
+    assert applied[0]["max_file_size"] == applied[0]["staging_budget_bytes"]

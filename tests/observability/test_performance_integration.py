@@ -35,20 +35,17 @@ async def test_failed_live_policy_apply_restores_saved_policy_and_revision(
     runtime.pool.set_media_per_bot = AsyncMock(side_effect=[OSError("temporary"), None])
     try:
         with pytest.raises(SettingsProblem) as failed:
-            await service.save({"timezone": "UTC", "cache_memory_bytes": 0})
+            await service.save({"timezone": "UTC", "auto_preload": False})
         assert failed.value.status == 503
         assert "restored" in str(failed.value).lower()
         assert (await service.snapshot())["revision"] == before["revision"]
         assert settings.timezone == before["timezone"]
-        assert settings.cache_memory_bytes == before["cache_memory_bytes"]
+        assert settings.auto_preload == before["auto_preload"]
         saved = mongo_backend.db.settings.find_one({"_id": "performance-preferences"})[
             "document"
         ]
         assert saved["timezone"] == before["timezone"]
-        assert (
-            runtime.preloads.cache.policy.memory_max_bytes
-            == before["cache_memory_bytes"]
-        )
+        assert runtime.preloads.cache.policy.auto_preload == before["auto_preload"]
     finally:
         await runtime.preloads.close()
 

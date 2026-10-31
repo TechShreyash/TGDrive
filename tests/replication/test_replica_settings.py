@@ -45,7 +45,7 @@ def test_settings_snapshot_keeps_labels_and_preferences_without_account_sessions
     mongo_backend.db.settings.insert_many(
         [
             {"_id": "performance-preferences", "document": preferences},
-            {"_id": "transfer-preferences", "document": {"uploads_per_bot": 2}},
+            {"_id": "bot-preferences", "document": {"encrypt": False}},
         ]
     )
     credentials = collect_credentials(configured, SimpleNamespace(mongo=mongo_backend))
@@ -58,9 +58,7 @@ def test_settings_snapshot_keeps_labels_and_preferences_without_account_sessions
     assert (
         credentials["preferences"]["performance-preferences.json"]["timezone"] == "UTC"
     )
-    assert credentials["preferences"]["transfer-preferences.json"] == {
-        "uploads_per_bot": 2
-    }
+    assert credentials["preferences"]["bot-preferences.json"]["encrypt"] is False
     assert "mongodb_backup_key" not in credentials
     assert "mongodb_uri" not in credentials and "DATA_DIR" not in credentials
 
@@ -70,15 +68,13 @@ def test_credentials_collector_validates_private_policy_files(
 ):
     configured = settings(tmp_path)
     collection = mongo_backend.db.settings
-    collection.insert_one(
-        {"_id": "transfer-preferences", "document": {"uploads_per_bot": 0}}
-    )
+    collection.insert_one({"_id": "bot-preferences", "document": {"encrypt": "x"}})
     runtime = SimpleNamespace(mongo=mongo_backend)
     with pytest.raises(ValueError):
         collect_credentials(configured, runtime)
     collection.replace_one(
-        {"_id": "transfer-preferences"},
-        {"_id": "transfer-preferences", "document": {"unknown": "x"}},
+        {"_id": "bot-preferences"},
+        {"_id": "bot-preferences", "document": {"unknown": "x"}},
     )
     with pytest.raises(ValueError):
         collect_credentials(configured, runtime)
@@ -116,7 +112,7 @@ def test_imported_settings_are_complete_allowlisted_and_strongly_typed(
     elif damage == "missing-policy":
         value["preferences"].pop("bot-preferences.json")
     elif damage == "invalid-value":
-        value["preferences"]["transfer-preferences.json"] = {"uploads_per_bot": True}
+        value["preferences"]["bot-preferences.json"] = {"encrypt": "yes"}
     elif damage == "coerced-api":
         value["managed_document"]["api_id"] = True
     else:

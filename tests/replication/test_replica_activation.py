@@ -118,11 +118,7 @@ def candidate(payload):
                 ).private_bytes()
             ),
             "preferences": {
-                filename: model.model_validate(
-                    {"uploads_per_bot": 1}
-                    if filename == "transfer-preferences.json"
-                    else {}
-                ).model_dump()
+                filename: model.model_validate({}).model_dump()
                 for filename, model in POLICIES.items()
             },
         },
@@ -528,7 +524,6 @@ def with_saved_settings(value):
                 "performance-preferences.json": PerformancePreferences(
                     timezone="UTC", cache_memory_bytes=0
                 ).model_dump(),
-                "transfer-preferences.json": {"uploads_per_bot": 3},
             },
         }
     )
@@ -549,7 +544,6 @@ def test_recovery_restores_mongo_policies_and_keeps_previous_connections_disable
     pending = effective_settings(settings)
     assert pending.timezone == "UTC"
     assert pending.cache_memory_bytes == 0
-    assert pending.telegram_uploads_per_bot == 3
     assert pending.string_sessions == ()
     assert _apply(pending)
     document = read_document(settings.resolved_data_dir)
@@ -574,14 +568,7 @@ def test_recovery_restores_mongo_policies_and_keeps_previous_connections_disable
         row for row in archived["settings"] if row["_id"] == "performance-preferences"
     )
     assert old_policy["document"]["timezone"] == "Asia/Tokyo"
-    backend.db.settings.replace_one(
-        {"_id": "transfer-preferences"},
-        {"_id": "transfer-preferences", "document": {"uploads_per_bot": 2}},
-    )
     assert not _apply(settings)
-    assert backend.db.settings.find_one({"_id": "transfer-preferences"})[
-        "document"
-    ] == {"uploads_per_bot": 2}
 
 
 def test_mongo_activation_restores_only_saved_domain_preferences(settings, monkeypatch):
@@ -589,9 +576,6 @@ def test_mongo_activation_restores_only_saved_domain_preferences(settings, monke
     with_saved_settings(value)
     prepare_activation(settings, value)
     assert apply_activation(settings, backend)
-    assert backend.db.settings.find_one({"_id": "transfer-preferences"})[
-        "document"
-    ] == {"uploads_per_bot": 3}
     assert (
         backend.db.settings.find_one({"_id": "performance-preferences"})["document"][
             "timezone"

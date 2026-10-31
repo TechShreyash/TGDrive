@@ -17,6 +17,57 @@ import {
 } from "./performanceApi";
 import "./Performance.css";
 
+const TUNING_LABELS: Record<string, string> = {
+    cache_memory_bytes: "Memory cache",
+    cache_disk_bytes: "Disk cache",
+    cache_min_free_bytes: "Cache free-space floor",
+    staging_budget_bytes: "Upload staging budget",
+    max_file_size: "Largest accepted file",
+    min_free_bytes: "Upload free-space reserve",
+    telegram_uploads_per_bot: "Uploads per bot",
+    telegram_upload_pipeline: "Upload pipeline",
+    telegram_request_limit: "Requests per account",
+    telegram_media_per_bot: "Media operations per account",
+    remote_download_concurrency: "Full-speed URL downloads",
+    preload_max_jobs: "Concurrent preloads",
+};
+function AutomaticTuning({
+    tuning,
+}: {
+    tuning: NonNullable<PerformanceSnapshot["tuning"]>;
+}) {
+    return (
+        <section
+            className="performance-section"
+            aria-labelledby="automatic-tuning-heading"
+        >
+            <div className="performance-section-title">
+                <h3 id="automatic-tuning-heading">Automatic tuning</h3>
+            </div>
+            <dl className="performance-facts">
+                {Object.entries(TUNING_LABELS)
+                    .filter(([key]) => key in tuning.values)
+                    .map(([key, label]) => (
+                        <div key={key}>
+                            <dt>{label}</dt>
+                            <dd title={tuning.reasons[key]}>
+                                {key.endsWith("_bytes") ||
+                                key === "max_file_size"
+                                    ? formatBytes(tuning.values[key])
+                                    : tuning.values[key].toLocaleString()}
+                            </dd>
+                        </div>
+                    ))}
+            </dl>
+            <p className="settings-help">
+                {tuning.running
+                    ? "TGDrive measures memory, CPU, disk and Telegram responses every few seconds and sets these values itself. To cap TGDrive on a shared server, set Docker memory and CPU limits."
+                    : "Automatic tuning starts with the drive."}
+            </p>
+        </section>
+    );
+}
+
 type MetricKey =
     | "cpu_percent"
     | "memory_bytes"
@@ -1084,6 +1135,9 @@ export default function PerformancePanel({
                                 "."
                             }
                         />
+                        {snapshot.tuning && (
+                            <AutomaticTuning tuning={snapshot.tuning} />
+                        )}
                         {traffic && (
                             <section
                                 className="performance-section performance-live-traffic"

@@ -162,9 +162,7 @@ def _checked_settings(
     )
     if restoring:
         for filename, policy in credentials["preferences"].items():
-            if filename == "transfer-preferences.json":
-                value["TELEGRAM_UPLOADS_PER_BOT"] = policy["uploads_per_bot"]
-            elif filename == "performance-preferences.json":
+            if filename == "performance-preferences.json":
                 value.update({name.upper(): item for name, item in policy.items()})
     # Init values outrank managed/environment sources. This applies every Settings
     # validator and prevents model_copy from smuggling unvalidated credentials.

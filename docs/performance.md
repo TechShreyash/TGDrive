@@ -44,9 +44,9 @@ connection. [Choosing server capacity](performance-tuning.md#what-a-server-upgra
 ## Automatic tuning
 
 Once the runtime is ready, a resource governor re-measures the server every
-5 seconds and applies new values live, through the same path as saving
-performance settings. While it runs, its values override saved owner
-preferences. `GET /api/v1/performance` returns its current values, a reason
+5 seconds and applies new values live. These values are not owner settings:
+the Configuration page and API no longer accept them, and **Performance →
+Automatic tuning** shows what was chosen and why. `GET /api/v1/performance` returns its current values, a reason
 for each value and the latest measurements under `tuning`.
 
 | Value | Rule |
@@ -54,8 +54,8 @@ for each value and the latest measurements under `tuning`.
 | Memory cache | 25% of available memory; changes only when the target moves by more than 10% |
 | Disk reserve (`min_free_bytes`, `cache_min_free_bytes`) | Larger of 1 GiB and 5% of the data disk |
 | Disk cache | 50% of free data-disk space after the reserve |
-| Temporary upload budget | Free data-disk space after the reserve |
-| Upload pipeline, request limit, media per bot, URL downloads, preload jobs | Start from current settings. Halve (minimum 1) when a window sees a new FloodWait or request timeout. Add 1 when the window moved data without errors, throughput did not drop by more than 10% and 60 seconds have passed since the last change. Only preload jobs have a ceiling: 4 per CPU |
+| Temporary upload budget, largest accepted file | Free data-disk space after the reserve |
+| Uploads per bot, upload pipeline, request limit, media per bot, URL downloads, preload jobs | Start from current settings. Halve (minimum 1) when a window sees a new FloodWait or request timeout. Add 1 when the window moved data without errors, throughput did not drop by more than 10% and 60 seconds have passed since the last change. Only preload jobs have a ceiling: 4 per CPU |
 
 Memory comes from cgroup v2 (`memory.max`, `memory.current`), with
 `/proc/meminfo` as the fallback; the CPU count comes from `cpu.max`, falling
@@ -71,7 +71,9 @@ back to the host CPU count. Byte values also use the same 10% hysteresis.
 - Signals come from per-account request schedulers. Before Telegram traffic
   starts, only the memory and disk values change.
 - Tuned values are not saved; after a restart the governor starts again from
-  saved or default settings.
+  the defaults.
+- To leave room for other apps on a shared server, set Docker `mem_limit` and
+  `cpus`; the governor reads those cgroup limits.
 
 </details>
 
@@ -80,16 +82,15 @@ back to the host CPU count. Byte values also use the same 10% hysteresis.
 For how cached bytes serve repeat viewers and shared files, see
 [how cache helps](performance-tuning.md#how-cache-helps).
 
-Change budgets in **Configuration → Cache settings**. Saved preferences override
-environment defaults; Docker environment edits require recreation/redeployment.
-[Save/discard controls](configuration.md#change-discard-or-restore) ·
+Budgets are set by [automatic tuning](#automatic-tuning) from available memory
+and disk; see their current values on **Performance**.
 [Exact settings](reference.md#performance-and-cache-settings).
 
-| Budget | Default |
+| Budget | Value |
 | --- | --- |
-| Retained RAM | 256 MiB; clamped to ¼ of available host/container memory |
-| Retained disk | 10 GiB |
-| Cache free-disk reserve | 1 GiB |
+| Retained RAM | ¼ of available host/container memory |
+| Retained disk | Half of free disk after the reserve |
+| Cache free-disk reserve | Larger of 1 GiB and 5% of the disk |
 | Disk expiry | 24 hours since last reuse |
 | RAM expiry | 10 idle minutes |
 | Transient streaming payload | 32 MiB, availability-clamped with a 2 MiB floor |
@@ -269,8 +270,8 @@ fresh cycle, honoring a saved source retry deadline; no browser tab is required.
 Only exhausted attempts or permanent errors need user action.
 Neither mode can exceed the source, route or server capacity.
 
-**Transfer limits → URL downloads → Full-speed URL downloads** defaults to **2**,
-configurable from **1 to 8** without a restart. Lowering it lets existing full-speed
+Full-speed URL downloads start at **2** and are tuned by
+[automatic tuning](#automatic-tuning). Lowering it lets existing full-speed
 jobs finish. This limit covers source retrieval; Telegram upload has its own
 scheduling. Eligible waiting jobs are promoted in arrival order. A job that cannot
 reserve its full staging requirement stays slow while another eligible job can run.

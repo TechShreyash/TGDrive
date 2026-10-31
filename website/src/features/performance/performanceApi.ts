@@ -2,24 +2,11 @@ import { request } from "../../shared/api";
 
 export const MIB = 1024 ** 2;
 export const GIB = 1024 ** 3;
+/** Owner choices; cache, storage and transfer limits are tuned automatically. */
 export interface PerformancePolicy {
     timezone: string;
-    cache_memory_bytes: number;
-    cache_disk_bytes: number;
-    cache_min_free_bytes: number;
-    cache_ttl_seconds: number;
     auto_preload: boolean;
-    preload_max_jobs: number;
-    remote_download_concurrency: number;
-    telegram_upload_pipeline: number;
-    telegram_request_limit: number;
-    telegram_parts_per_second: number;
-    telegram_media_per_bot: number;
-    telegram_max_queue: number;
     upload_split_mib: number;
-    max_file_size: number;
-    staging_budget_bytes: number;
-    min_free_bytes: number;
 }
 export interface PerformancePreferences extends PerformancePolicy {
     revision: string;
@@ -42,85 +29,6 @@ export const numericPreferences: {
     advanced?: boolean;
 }[] = [
     {
-        key: "remote_download_concurrency",
-        label: "Full-speed URL downloads",
-        unit: 1,
-        min: 1,
-        appDefault: 2,
-        help: "Imports downloading at full speed together. Queued sources receive slowly while connection and storage limits permit; expiring links can still fail.",
-    },
-    {
-        key: "cache_memory_bytes",
-        label: "Memory cache (MiB)",
-        unit: MIB,
-        min: 0,
-        appDefault: 256,
-        unitLabel: "MiB",
-        help: "Recently viewed media kept in RAM. TGDrive reduces this budget when memory is tight. 0 turns this cache off.",
-    },
-    {
-        key: "cache_disk_bytes",
-        label: "Disk cache (GiB)",
-        unit: GIB,
-        min: 0,
-        appDefault: 10,
-        unitLabel: "GiB",
-        help: "Disposable copies for repeat access, filled only as data arrives. 0 turns disk caching off; originals stay in Telegram.",
-    },
-    {
-        key: "cache_min_free_bytes",
-        label: "Cache free-space floor (GiB)",
-        unit: GIB,
-        min: 0,
-        appDefault: 1,
-        unitLabel: "GiB",
-        help: "Leave this much disk space free when caching. It is not allocated or reserved. Keep 1 GiB or more for normal use.",
-    },
-    {
-        key: "cache_ttl_seconds",
-        label: "Disk cache retention (hours)",
-        unit: 3600,
-        min: 60 / 3600,
-        appDefault: 24,
-        unitLabel: "hours",
-        help: "Remove disk bytes after this much time without reuse. Space pressure can remove them sooner.",
-    },
-    {
-        key: "preload_max_jobs",
-        label: "Concurrent preloads",
-        unit: 1,
-        min: 1,
-        appDefault: 2,
-        help: "Files prepared in the background at once. Active playback and downloads always go first.",
-    },
-    {
-        key: "max_file_size",
-        label: "Maximum file size (GiB)",
-        unit: GIB,
-        min: 1 / GIB,
-        appDefault: 16,
-        unitLabel: "GiB",
-        help: "Largest file accepted for a new upload. Large files are split automatically for Telegram. Must fit within the temporary upload budget.",
-    },
-    {
-        key: "staging_budget_bytes",
-        label: "Temporary upload budget (GiB)",
-        unit: GIB,
-        min: 1 / GIB,
-        appDefault: 16,
-        unitLabel: "GiB",
-        help: "Space all unfinished uploads may use together. This is a ceiling, not preallocated disk space. Each upload also needs real free space.",
-    },
-    {
-        key: "min_free_bytes",
-        label: "Upload free-space reserve (GiB)",
-        unit: GIB,
-        min: 0.0625,
-        appDefault: 1,
-        unitLabel: "GiB",
-        help: "Space uploads must leave free on their storage drive. Reservations from other uploads are checked before file data is sent.",
-    },
-    {
         key: "upload_split_mib",
         label: "File split size (MiB)",
         unit: 1,
@@ -129,51 +37,6 @@ export const numericPreferences: {
         appDefault: 2000,
         unitLabel: "MiB",
         help: "Default and maximum: 2000 MiB per Telegram document for every account. Choose a smaller size to split sooner; 0 uses 2000 MiB. Existing transfers keep their plan.",
-    },
-    {
-        key: "telegram_upload_pipeline",
-        label: "Upload pipeline",
-        unit: 1,
-        min: 1,
-        appDefault: 4,
-        help: "Parts sent in parallel within one upload. The shared account request limit also applies.",
-        advanced: true,
-    },
-    {
-        key: "telegram_request_limit",
-        label: "Requests per account",
-        unit: 1,
-        min: 1,
-        appDefault: 8,
-        help: "Concurrent Telegram requests, shared by uploads, downloads and file metadata.",
-        advanced: true,
-    },
-    {
-        key: "telegram_parts_per_second",
-        label: "Requests per second",
-        unit: 1,
-        min: 1,
-        appDefault: 48,
-        help: "Request pacing ceiling per account. Telegram cooldowns reduce the actual rate.",
-        advanced: true,
-    },
-    {
-        key: "telegram_media_per_bot",
-        label: "Media operations per account",
-        unit: 1,
-        min: 1,
-        appDefault: 3,
-        help: "Upload and download operations sharing one account. Cached viewers do not need a Telegram download slot.",
-        advanced: true,
-    },
-    {
-        key: "telegram_max_queue",
-        label: "Maximum queued operations",
-        unit: 1,
-        min: 1,
-        appDefault: 256,
-        help: "Waiting Telegram operations before excess work is asked to retry. A larger queue allows longer waits, not more speed.",
-        advanced: true,
     },
 ];
 export type PerformanceDraft = Record<NumericPreference, string> & {
@@ -185,23 +48,7 @@ export function performanceCategoryKeys(
     category: PerformanceCategory,
 ): (keyof PerformanceDraft)[] {
     if (category === "regional") return ["timezone"];
-    return [
-        ...numericPreferences
-            .filter(({ key }) =>
-                category === "cache"
-                    ? key.startsWith("cache_") || key === "preload_max_jobs"
-                    : key.startsWith("telegram_") ||
-                      [
-                          "upload_split_mib",
-                          "max_file_size",
-                          "staging_budget_bytes",
-                          "min_free_bytes",
-                          "remote_download_concurrency",
-                      ].includes(key),
-            )
-            .map(({ key }) => key),
-        ...(category === "cache" ? ["auto_preload" as const] : []),
-    ];
+    return category === "cache" ? ["auto_preload"] : ["upload_split_mib"];
 }
 export function performanceCategoryDraft(
     draft: PerformanceDraft,
@@ -217,16 +64,7 @@ export function performanceDraft(saved: PerformancePolicy): PerformanceDraft {
     return Object.fromEntries([
         ...numericPreferences.map(({ key, unit }) => [
             key,
-            String(
-                (saved[key] ??
-                    (key === "max_file_size" || key === "staging_budget_bytes"
-                        ? 16 * GIB
-                        : key === "min_free_bytes"
-                          ? GIB
-                          : key === "remote_download_concurrency"
-                            ? 2
-                            : 0)) / unit,
-            ),
+            String((saved[key] ?? 0) / unit),
         ]),
         ["timezone", saved.timezone],
         ["auto_preload", saved.auto_preload],
@@ -376,6 +214,11 @@ export interface AccountPerformance {
     } | null;
 }
 export interface PerformanceSnapshot {
+    tuning?: {
+        running: boolean;
+        values: Record<string, number>;
+        reasons: Record<string, string>;
+    } | null;
     traffic?: TrafficSample & {
         started_at: number;
         history: TrafficSample[];

@@ -62,7 +62,6 @@ import { Modal, Spinner, ToastNotice as Toast } from "../shared/components";
 import Login from "./Login";
 import SharesView from "../features/shares/SharesView";
 import StorageView from "../features/settings/StorageView";
-import UploadSettings from "../features/settings/UploadSettings";
 import SettingsManagement from "../features/settings/SettingsManagement";
 import PerformanceSettings from "../features/performance/PerformanceSettings";
 import Preloads from "../features/performance/Preloads";
@@ -2016,16 +2015,10 @@ export default function App() {
                                                       : "cache"
                                             }
                                             uploadPreferences={
-                                                <>
-                                                    <UploadSettings
-                                                        demoMode={demoReadOnly}
-                                                        onNotice={notify}
-                                                    />
-                                                    <BotModeSettings
-                                                        demoMode={demoReadOnly}
-                                                        onNotice={notify}
-                                                    />
-                                                </>
+                                                <BotModeSettings
+                                                    demoMode={demoReadOnly}
+                                                    onNotice={notify}
+                                                />
                                             }
                                             onSaved={(value) => {
                                                 setTimezone(value.timezone);

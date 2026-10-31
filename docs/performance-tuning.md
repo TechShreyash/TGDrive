@@ -64,7 +64,7 @@ metadata checks still apply, so even cached access can make Telegram requests.
 - RAM retains frequently reused bytes; disk can hold a larger collection. More
   capacity does not increase **Concurrent preloads** or Telegram request limits.
   Background preparation still shares resources with viewers and uploads.
-- Hardware upgrades do not raise **Configuration → Cache settings** budgets.
+- Hardware upgrades raise cache budgets automatically; see [automatic tuning](performance.md#automatic-tuning).
   Leave room for the app, active streams, unfinished uploads and other processes;
   memory pressure can reduce the effective RAM budget.
 - A whole-file preload must fit either the effective RAM cache or disk cache,
@@ -141,7 +141,7 @@ Respect saved retry deadlines and Telegram's
 Restarting or rotating identities does not bypass them. TGDrive uses
 Telethon/MTProto; hosted HTTP Bot API broadcast limits are a different system.
 
-For current control defaults and bounds, use
-[Transfer limits](configuration.md#transfer-limits). For scheduling details, use
+Concurrency is tuned automatically; see
+[automatic tuning](performance.md#automatic-tuning). For scheduling details, use
 [account selection](architecture.md#account-identity-and-selection) and
 [the upload pipeline](performance.md#upload-pipeline-and-smaller-splits).

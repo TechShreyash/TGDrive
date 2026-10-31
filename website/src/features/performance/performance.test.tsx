@@ -37,32 +37,18 @@ import {
 export const preferences: PerformancePreferences = {
     revision: '"revision-one"',
     timezone: "Asia/Kolkata",
-    cache_memory_bytes: 256 * MIB,
-    cache_disk_bytes: 10 * GIB,
-    cache_min_free_bytes: GIB,
-    cache_ttl_seconds: 86400,
     auto_preload: true,
-    preload_max_jobs: 2,
-    remote_download_concurrency: 2,
-    telegram_upload_pipeline: 4,
-    telegram_request_limit: 8,
-    telegram_parts_per_second: 24,
-    telegram_media_per_bot: 3,
-    telegram_max_queue: 256,
     upload_split_mib: 2000,
-    max_file_size: 16 * GIB,
-    staging_budget_bytes: 16 * GIB,
-    min_free_bytes: GIB,
 };
 beforeEach(() => vi.stubGlobal("window", new EventTarget()));
 afterEach(() => vi.unstubAllGlobals());
 
 describe("performance settings and HTTP boundaries", () => {
-    it("saves only the visible category while unrelated invalid drafts remain untouched", () => {
+    it("saves only the visible category's owner choices", () => {
         const draft = {
             ...performanceDraft(preferences),
             timezone: "UTC",
-            cache_memory_bytes: "",
+            upload_split_mib: "",
         };
         expect(
             performanceChanges(
@@ -70,13 +56,6 @@ describe("performance settings and HTTP boundaries", () => {
                 preferences,
             ),
         ).toEqual({ timezone: "UTC" });
-        expect(draft.cache_memory_bytes).toBe("");
-        expect(() =>
-            performanceChanges(
-                performanceCategoryDraft(draft, preferences, "cache"),
-                preferences,
-            ),
-        ).toThrow("Memory cache");
         expect(
             performanceChanges(
                 performanceCategoryDraft(
@@ -87,52 +66,32 @@ describe("performance settings and HTTP boundaries", () => {
                 preferences,
             ),
         ).toEqual({ upload_split_mib: 512 });
-    });
-    it("roundtrips saved byte limits and sends only changed unit conversions", () => {
-        const draft = performanceDraft(preferences);
-        expect(draft.cache_memory_bytes).toBe("256");
-        expect(draft.cache_disk_bytes).toBe("10");
-        expect(draft.cache_ttl_seconds).toBe("24");
-        expect(performanceChanges(draft, preferences)).toEqual({});
         expect(
             performanceChanges(
-                {
-                    ...draft,
-                    cache_disk_bytes: "1.5",
-                    cache_memory_bytes: "512",
-                    cache_ttl_seconds: "2",
-                },
+                performanceCategoryDraft(
+                    { ...draft, auto_preload: false },
+                    preferences,
+                    "cache",
+                ),
                 preferences,
             ),
-        ).toEqual({
-            cache_disk_bytes: 1.5 * GIB,
-            cache_memory_bytes: 512 * MIB,
-            cache_ttl_seconds: 7200,
-        });
-        const odd = { ...preferences, cache_disk_bytes: GIB + 31 };
-        expect(performanceChanges(performanceDraft(odd), odd)).toEqual({});
+        ).toEqual({ auto_preload: false });
     });
-    it.each(["", "-1", "NaN", "Infinity"])(
-        "rejects invalid cache memory %s",
+    it.each(["", "-1", "1.5", "2001"])(
+        "rejects an invalid split size %s",
         (value) => {
             expect(() =>
                 performanceChanges(
                     {
                         ...performanceDraft(preferences),
-                        cache_memory_bytes: value,
+                        upload_split_mib: value,
                     },
                     preferences,
                 ),
-            ).toThrow("Memory cache");
+            ).toThrow("File split size");
         },
     );
-    it("rejects fractional concurrency and unknown timezones without coercion", () => {
-        expect(() =>
-            performanceChanges(
-                { ...performanceDraft(preferences), preload_max_jobs: "1.5" },
-                preferences,
-            ),
-        ).toThrow("whole number");
+    it("rejects unknown timezones without coercion", () => {
         expect(() =>
             performanceChanges(
                 { ...performanceDraft(preferences), timezone: "not/a-zone" },
@@ -144,7 +103,7 @@ describe("performance settings and HTTP boundaries", () => {
         const fetcher = vi.fn(async () => Response.json(preferences));
         vi.stubGlobal("fetch", fetcher);
         await performanceApi.save(
-            { cache_disk_bytes: GIB },
+            { auto_preload: false },
             preferences.revision,
         );
         const [url, options] = fetcher.mock.calls[0] as unknown as [
@@ -158,7 +117,7 @@ describe("performance settings and HTTP boundaries", () => {
             preferences.revision,
         );
         expect(JSON.parse(options.body as string)).toEqual({
-            cache_disk_bytes: GIB,
+            auto_preload: false,
         });
     });
     it("preserves conflict and preparation-capacity errors for actionable UI", async () => {

@@ -193,9 +193,6 @@ class Runtime:
                 mongo=self.mongo.db.jobs,
                 mongo_backend=self.mongo,
             )
-            from tgdrive.settings.transfer_preferences import get_transfer_preferences
-
-            await get_transfer_preferences(self.settings, self).initialize()
             from tgdrive.settings.performance_preferences import (
                 get_performance_settings,
             )
