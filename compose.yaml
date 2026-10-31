@@ -4,6 +4,9 @@ name: tgdrive
 
 services:
     app:
+        # `docker compose pull` uses the published image; `docker compose build`
+        # builds this checkout and tags it with the same name.
+        image: ghcr.io/techshreyash/tgdrive:${TGDRIVE_VERSION:-latest}
         build:
             context: .
             dockerfile: Dockerfile

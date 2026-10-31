@@ -60,6 +60,13 @@ immutable: fix a release with a new version instead of moving its tag.
 User-facing GitHub documentation links point to `main`; release download links
 pin the corresponding tag. Reserve `dev` links for contributor instructions.
 
+Pushing the tag starts CI on it. When CI passes, the **Publish image** workflow
+builds amd64 and arm64 images on native runners and pushes
+`ghcr.io/techshreyash/tgdrive:X.Y.Z`, `:X.Y` and `:latest` with provenance and an
+SBOM. Check that the workflow succeeded and that `docker pull` works before
+announcing the release. The first time, set the package's visibility to
+**Public** under GitHub → Packages → tgdrive → Package settings.
+
 The GitHub release must link its PR, exact commit and (after the first release)
 comparison with the previous tag, and explain upgrade requirements and known
 limits. If offering custom source assets, attach the ZIP and SHA-256 file from

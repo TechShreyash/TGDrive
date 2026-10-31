@@ -329,10 +329,12 @@ updates. `dev` contains ongoing work and may be unstable. Follow
 > a new empty MongoDB database, a new private storage channel and a new
 > `ENCRYPTION_KEY`, and move files over by downloading and uploading them.
 2. Record the running version and source commit; review the new version's requirements.
-3. Update the source using your installation method below.
-4. Run `docker compose up -d --build`, keeping server `-f` arguments, or redeploy
-   in Coolify. Preserve volumes and start only one instance. Check database
-   status, Connections and a representative file.
+3. Set `TGDRIVE_VERSION` in `.env` to the new release (or keep `latest`), then
+   run `docker compose pull && docker compose up -d`, keeping server `-f`
+   arguments, or redeploy in Coolify. Preserve volumes and start only one
+   instance. Check database status, Connections and a representative file.
+   Building from a source checkout instead? Update it as below and run
+   `docker compose up -d --build`.
 
 **Release archive:** [Verify and extract](release.md#verify-a-downloaded-source-archive)
 into a separate folder. Copy your private `.env` and reviewed Compose changes.

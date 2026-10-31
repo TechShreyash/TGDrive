@@ -45,7 +45,7 @@ the project in Ubuntu's filesystem; use the same terminal/folder consistently.
 With Git installed:
 
 ~~~bash
-git clone --branch main https://github.com/TechShreyash/TGDrive.git
+git clone --branch main --depth 1 https://github.com/TechShreyash/TGDrive.git
 cd TGDrive
 ~~~
 
@@ -171,13 +171,17 @@ project folder, on any supported system:
 
 ~~~bash
 docker compose config --quiet
-docker compose build
+docker compose pull
 docker compose up -d
 docker compose ps
 ~~~
 
-The first build can take several minutes. `config --quiet` checks syntax, not
-credentials; plain `docker compose config` prints secrets.
+`pull` downloads the published image `ghcr.io/techshreyash/tgdrive` for amd64
+or arm64, so nothing is built on your machine. Set `TGDRIVE_VERSION` in `.env`
+(for example `2.3.0`) to pin a release; the default is `latest`. To run your own
+changes instead, use `docker compose build`, which tags the local build with the
+same image name. `config --quiet` checks syntax, not credentials; plain
+`docker compose config` prints secrets.
 
 TGDrive initializes a new empty database or reopens an existing drive. Database
 connection/authentication failures stop startup; correct access and try again.
@@ -290,7 +294,7 @@ Prepare `.env` as above. Name **both files explicitly** to avoid the laptop over
 
 ~~~bash
 docker compose -f compose.yaml -f compose.server.yaml config --quiet
-docker compose -f compose.yaml -f compose.server.yaml build
+docker compose -f compose.yaml -f compose.server.yaml pull
 docker compose -f compose.yaml -f compose.server.yaml up -d
 docker compose -f compose.yaml -f compose.server.yaml ps
 ~~~

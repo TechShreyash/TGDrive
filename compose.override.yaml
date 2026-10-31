@@ -2,7 +2,6 @@
 # Coolify passes -f compose.yaml, so it does not load this local-only override.
 services:
     app:
-        image: tgdrive:local
         # Local installations start only when requested, including after a reboot.
         restart: ${TGDRIVE_RESTART_POLICY:-no}
         environment:
