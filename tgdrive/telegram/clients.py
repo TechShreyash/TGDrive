@@ -1346,12 +1346,12 @@ class Client:
 
     def register_bot(self, mode: Any) -> None:
         async def dispatch(event: Any) -> None:
-            if (
-                not event.is_private
-                or event.sender_id not in mode.settings.telegram_admin_ids
-            ):
+            if not event.is_private:
                 return
             message = TelegramMessage(self, event.message)
+            if event.sender_id not in mode.settings.telegram_admin_ids:
+                await mode._unauthorized(self, message)
+                return
             words = message.text.split()
             command = words[0].split("@")[0].lower() if words else ""
             label = message.text.strip().casefold()

@@ -52,6 +52,7 @@ async def test_bot_transport_routes_menu_commands_and_media_captions(
             "_cancel",
             "_folder_query",
             "_file",
+            "_unauthorized",
         )
     }
     mode = SimpleNamespace(
@@ -68,10 +69,13 @@ async def test_bot_transport_routes_menu_commands_and_media_captions(
     handlers[handler].assert_awaited_once()
     assert sum(item.await_count for item in handlers.values()) == 1
 
-    for private, sender in [(False, 1), (True, 999)]:
-        event.is_private, event.sender_id = private, sender
-        await dispatch(event)
+    event.is_private = False
+    await dispatch(event)
     assert sum(item.await_count for item in handlers.values()) == 1
+    event.is_private, event.sender_id = True, 999
+    await dispatch(event)
+    handlers["_unauthorized"].assert_awaited_once()
+    assert sum(item.await_count for item in handlers.values()) == 2
 
 
 @pytest.mark.asyncio

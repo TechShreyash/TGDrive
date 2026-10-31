@@ -467,6 +467,9 @@ Standard setup enables the main bot for Telegram users listed in
    known, an **Open in TGDrive** button opens that folder. Several files can be
    sent at once; each gets its own status message.
 
+Messages from users not in `TELEGRAM_ADMIN_IDS` get one reply with their
+Telegram user ID, so the owner can allow them; later messages are ignored.
+
 Default: **My Files / TGDriveBotModeFiles**, created on first use. All allowed
 users share the destination; changes apply to new imports without restart.
 Moving/deleting it pauses new imports until an available folder is chosen.

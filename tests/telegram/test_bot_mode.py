@@ -621,3 +621,17 @@ async def test_encrypted_import_failure_explains_where_to_retry(tmp_path):
         assert "Telegram rejected it" in text and "Transfers in TGDrive" in text
     finally:
         mode.store.close()
+
+
+@pytest.mark.asyncio
+async def test_strangers_get_one_private_bot_notice(tmp_path):
+    client = FakeBotClient()
+    mode = root_mode(client=client, settings=settings(tmp_path), store=new_store())
+    try:
+        first, second = FakeMessage(4242), FakeMessage(4242)
+        await mode._unauthorized(client, first)
+        await mode._unauthorized(client, second)
+        assert "4242" in first.replies[-1][0]
+        assert second.replies == []
+    finally:
+        mode.close()

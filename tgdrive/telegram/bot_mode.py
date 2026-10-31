@@ -140,29 +140,27 @@ class BotMode:
     async def _help(self, _client: Client, message: Message) -> None:
         value = await self.folder_settings.snapshot()
         await message.reply_text(
-            "Save files to TGDrive\n\n"
-            "Send or forward files, photos, videos or audio here. "
-            "They will appear in your drive once saved.\n\n"
-            f"Saving to: {value['folder_label']}\n\n"
-            "Use /set_folder to change the upload folder on the TGDrive website.\n"
-            "Tip: send photos as files to keep their original quality.",
+            "Send or forward files here to save them to TGDrive.\n\n"
+            f"Folder: {value['folder_label']}\n\n"
+            "/current_folder · show the folder\n"
+            "/set_folder · change it on the website\n\n"
+            "Tip: send photos as files to keep full quality.",
             reply_markup=self._menu(),
         )
 
     async def _set_folder(self, _client: Client, message: Message) -> None:
         value = await self.folder_settings.snapshot()
         text = (
-            f"Bot upload folder: {value['folder_label']}\n\n"
-            "Choose the upload folder on the TGDrive website under "
-            "Configuration → Transfer limits → Bot uploads. "
-            "Your next forwarded file will be saved there."
+            f"Folder: {value['folder_label']}\n\n"
+            "Change it on the TGDrive website: Configuration → Transfer limits "
+            "→ Bot uploads. New files use the new folder right away."
         )
         if value["settings_url"]:
             text += "\n\n" + value["settings_url"]
         await message.reply_text(
             text,
             reply_markup=(
-                [[Button.url("Set upload folder", value["settings_url"])]]
+                [[Button.url("Change folder", value["settings_url"])]]
                 if value["settings_url"]
                 else self._menu()
             ),
@@ -170,24 +168,36 @@ class BotMode:
 
     async def _cancel(self, _client: Client, message: Message) -> None:
         await message.reply_text(
-            "There is no folder selection to cancel. "
-            "Use /set_folder to manage the upload folder on the website.",
+            "Nothing to cancel here. To stop a running import, cancel it in "
+            "Transfers on the TGDrive website.",
             reply_markup=self._menu(),
         )
 
     async def _folder_query(self, _client: Client, message: Message) -> None:
         await message.reply_text(
-            "Send or forward a file to save it. "
-            "Use /set_folder to change its destination on the website.",
+            "Send a file, photo, video or audio to save it. "
+            "Text messages are not saved. /help shows the commands.",
             reply_markup=self._menu(),
         )
 
     async def _current_folder(self, _client: Client, message: Message) -> None:
         value = await self.folder_settings.snapshot()
         await message.reply_text(
-            f"Saving new files to: {value['folder_label']}\n\n"
-            "Use /set_folder to change it on the website.",
+            f"Folder: {value['folder_label']}\n\nUse /set_folder to change it.",
             reply_markup=self._menu(),
+        )
+
+    async def _unauthorized(self, _client: Client, message: Message) -> None:
+        # Answer each stranger once so the bot cannot be used to send spam.
+        # shortcut: per-process memory, cleared on restart; persist if abused.
+        seen = self.__dict__.setdefault("_answered_strangers", set())
+        if message.from_user.id in seen:
+            return
+        seen.add(message.from_user.id)
+        await message.reply_text(
+            "This is a private TGDrive bot.\n\n"
+            f"Your Telegram user ID is {message.from_user.id}. The owner can "
+            "allow you by adding it to TELEGRAM_ADMIN_IDS."
         )
 
     async def _feedback(
