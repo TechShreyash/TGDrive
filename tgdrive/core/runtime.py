@@ -84,10 +84,7 @@ class Runtime:
                 ActivationError,
                 apply_activation,
             )
-            from tgdrive.storage.mongo import (
-                initialize_if_empty,
-                record_drive_open,
-            )
+            from tgdrive.storage.mongo import initialize_if_empty
 
             # Database configuration, connectivity and ownership are startup
             # requirements, including when recovery metadata is available.
@@ -119,7 +116,6 @@ class Runtime:
                 await asyncio.to_thread(
                     check_drive_key, self.mongo, self.settings.encryption_key
                 )
-                await asyncio.to_thread(record_drive_open, self.settings, self.store)
             except (
                 ActivationError,
                 BackupError,

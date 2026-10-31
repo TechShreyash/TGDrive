@@ -396,23 +396,10 @@ def initialize_if_empty(settings: Any, backend: MongoBackend) -> bool:
             )
         return True
 
+    # All drive state lives in MongoDB; a lost database is detected by the
+    # backup pinned in the storage channel, checked before this runs.
     if not backend.transaction(inspect):
         return False
-    directory = settings.resolved_data_dir
-    if any(
-        (directory / name).exists()
-        for name in (
-            "mongodb-drive.json",
-            "channel-activation.json",
-        )
-    ):
-        raise CorruptStoreError(
-            "This installation has existing drive or recovery state, but MongoDB "
-            "has no catalog. Check the configured database or recover the drive; "
-            "existing state was preserved. To intentionally start a new drive, "
-            "delete mongodb-drive.json and channel-activation.json from DATA_DIR "
-            "and restart."
-        )
     import json
 
     document = ManagedDocument(
@@ -434,22 +421,8 @@ def initialize_if_empty(settings: Any, backend: MongoBackend) -> bool:
             },
         ],
     )
-    try:
-        record_drive_open(settings, store)
-    finally:
-        store.close()
+    store.close()
     settings.managed_revision = document.revision
     settings.managed_client_ids = tuple(row.id for row in document.clients)
     settings.managed_client_labels = tuple(row.label for row in document.clients)
     return True
-
-
-def record_drive_open(settings: Any, store: Any) -> None:
-    """Remember an opened drive so lost MongoDB data cannot look like first setup."""
-    import json
-
-    from tgdrive.replication.replica_state import atomic_private
-
-    path = settings.resolved_data_dir / "mongodb-drive.json"
-    if not path.exists():
-        atomic_private(path, json.dumps({"drive_id": store.drive_id}).encode())

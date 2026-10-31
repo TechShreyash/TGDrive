@@ -262,8 +262,7 @@ class Settings(BaseSettings):
                             else str(value)
                         )
                 existing = bool(
-                    (directory / "mongodb-drive.json").exists()
-                    or row is not None
+                    row is not None
                     or (
                         not all(known.get(key) for key in SECRET_FIELDS)
                         and backend.db.catalog.find_one({"_id": "catalog"})

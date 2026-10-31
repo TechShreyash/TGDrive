@@ -51,7 +51,6 @@ def mongo_backend(monkeypatch):
     monkeypatch.setattr("tgdrive.storage.mongo.for_settings", lambda _: backend)
     monkeypatch.setattr("tgdrive.storage.mongo.initialize_if_empty", lambda *_: False)
     monkeypatch.setattr("tgdrive.storage.mongo.database_is_empty", lambda *_: False)
-    monkeypatch.setattr("tgdrive.storage.mongo.record_drive_open", lambda *_: None)
     monkeypatch.setattr(
         "tgdrive.replication.replica_activation.apply_activation", lambda *_: None
     )

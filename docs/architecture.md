@@ -133,11 +133,11 @@ active in the same process; first setup does not ask for another restart.
 All drive state, including the independent backup journal, lives in MongoDB.
 The same environment and `MONGODB_URI` on another server reopens the same
 drive with its backup channel configuration and copy progress.
-`DATA_DIR/mongodb-drive.json` remembers that a drive has been opened; losing its
-MongoDB catalog cannot then be mistaken for a first deployment on that volume.
-Startup then stays in owner recovery and logs the reason. To start a new drive
-on purpose, delete `mongodb-drive.json` and `channel-activation.json` from
-`DATA_DIR` (or the whole data volume) and restart.
+Nothing on the local volume decides whether a drive exists. When MongoDB is
+empty, startup reads the backup pinned in the storage channel: if one is found,
+it opens **Restore drive**; if none is pinned, it creates a new drive. To start
+over on purpose, use **Start new drive** (see
+[backup and recovery](backup-recovery.md#start-a-new-drive)).
 
 Full archive recovery runs from the website. After authentication and archive
 validation, it pauses writers, reacquires exclusive MongoDB ownership and

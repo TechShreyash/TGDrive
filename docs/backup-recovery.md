@@ -107,8 +107,28 @@ stop confirmation and keep the last confirmed backup.
 **Activity and report → Download report** omits tokens and keys, but file names
 and channel IDs can still be private.
 
-## Starting fresh
+## Start a new drive
+
+Use **Start new drive** when the database or storage channel holds a drive you
+do not want back, for example an older TGDrive version or a test drive. It is on
+the **Storage recovery** screen and at the bottom of **Storage & Backups**.
+
+1. Choose **Start new drive…**, read what will be erased, type `START NEW` and
+   enter your owner password.
+2. TGDrive unpins the backup in the storage channel, erases every TGDrive
+   collection in MongoDB and deletes its cache and data folders on the server.
+   It keeps the `.env`, `ENCRYPTION_KEY` and generated deployment secrets.
+3. TGDrive starts again in place with an empty drive. Sign in again.
+
+Old messages stay in the Telegram channel but no longer appear in TGDrive; use a
+new channel if you want them out of sight. If unpinning fails (for example, the
+bot lost admin rights), the erase still runs; unpin the old backup in Telegram
+yourself before the next restart, or it is offered for restore again.
 
 TGDrive only opens databases created with the current version and its
-`ENCRYPTION_KEY`. A database from an older version is refused at startup: use a
-new empty MongoDB database and a new private storage channel.
+`ENCRYPTION_KEY`; an older database is refused at startup with a message saying
+so. **Start new drive** clears it without opening MongoDB by hand.
+
+Nothing on the server's disk marks a drive as existing: with an empty MongoDB,
+startup restores the backup pinned in the channel if there is one, and otherwise
+creates a new drive.

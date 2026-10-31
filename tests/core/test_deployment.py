@@ -136,36 +136,6 @@ def test_new_container_can_generate_keys_before_explicit_initialization(
     assert first.telegram_admin_ids == (12345,)
 
 
-def test_existing_drive_marker_prevents_key_generation_for_an_empty_database(
-    tmp_path, monkeypatch
-):
-    for key, value in {
-        "TGDRIVE_AUTO_SECRETS": "true",
-        "MONGODB_URI": "mongodb://synthetic.invalid",
-        "ENCRYPTION_KEY": "e" * 64,
-        "DATA_DIR": str(tmp_path),
-        "API_ID": "12345",
-        "API_HASH": "a" * 32,
-        "BOT_TOKENS": "123456:" + "x" * 30,
-        "STORAGE_CHANNEL": "-1001234567890",
-        "ADMIN_PASSWORD": "synthetic owner password",
-        "ADMIN_PASSWORD_HASH": "",
-        "SESSION_SECRET": "",
-    }.items():
-        monkeypatch.setenv(key, value)
-    (tmp_path / "mongodb-drive.json").write_text('{"drive_id":"saved-drive"}')
-    fake = SimpleNamespace(
-        db=SimpleNamespace(
-            settings=SimpleNamespace(find_one=lambda _: None),
-            catalog=SimpleNamespace(find_one=lambda _: None),
-        )
-    )
-    monkeypatch.setattr("tgdrive.storage.mongo.configure", lambda *_args: fake)
-    with pytest.raises(ValueError, match=r"original.*SESSION_SECRET"):
-        Settings(_env_file=None)
-    assert not (tmp_path / "deployment-secrets.json").exists()
-
-
 def recovery_configuration(tmp_path, monkeypatch, **overrides):
     values = {
         "API_ID": 12345,

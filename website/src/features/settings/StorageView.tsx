@@ -24,6 +24,7 @@ import {
     useManualRefresh,
     type RefreshNotice,
 } from "../../shared/useManualRefresh";
+import StartNewDrive from "./StartNewDrive";
 import ChannelBackup from "../backup/ChannelBackup";
 import { transfers, uploadBackupState } from "../transfers/transfers";
 import "./StorageView.css";
@@ -272,9 +273,7 @@ export default function StorageView({
                         className="text-button"
                         aria-label="Check Again"
                         disabled={
-                            loading ||
-                            backingUp ||
-                            refreshAction.refreshing
+                            loading || backingUp || refreshAction.refreshing
                         }
                         onClick={() => void refreshStorage()}
                         aria-busy={refreshAction.refreshing}
@@ -401,6 +400,7 @@ export default function StorageView({
                     </button>
                 </section>
             )}
+            <StartNewDrive demoMode={demoMode} />
         </div>
     );
 }

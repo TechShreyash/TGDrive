@@ -210,6 +210,7 @@ async def require_admin(request: Request) -> None:
     ) and (
         request.method not in {"GET", "HEAD", "OPTIONS"}
         and not request.url.path.startswith("/api/v1/replica")
+        and request.url.path != "/api/v1/start-new"
         and request.url.path
         not in {
             "/api/checkPassword",
@@ -230,6 +231,7 @@ async def require_admin(request: Request) -> None:
                 "/api/logout",
                 "/api/getDirectory",
                 "/api/v1/replica/import",
+                "/api/v1/start-new",
                 "/api/v1/replica/recover",
                 "/api/v1/replica/action",
             }
@@ -263,6 +265,7 @@ async def require_admin(request: Request) -> None:
         or path
         in {
             "/api/v1/replica/import",
+            "/api/v1/start-new",
             "/api/v1/replica/recover",
             "/api/v1/replica/action",
         }
@@ -407,7 +410,8 @@ def create_app(
                 await _app.state.thumbnail_rebuild.close()
                 await _app.state.thumbnails.close()
                 await _app.state.posters.close()
-                await app_runtime.stop()
+                # "Start new drive" swaps in a fresh runtime; stop that one.
+                await _app.state.runtime.stop()
         finally:
             sessions.close()
 
@@ -435,6 +439,9 @@ def create_app(
     register_thumbnail_routes(app, settings, require_admin)
     starts = TransferStarts(ttl_seconds=settings.transfer_ttl_seconds)
     app.state.transfer_starts = starts
+    from tgdrive.recovery.start_new import register_start_new_route
+
+    register_start_new_route(app, settings, require_admin, password_hash)
 
     @app.exception_handler(DatabaseUnavailable)
     async def database_unavailable(_request: Request, _error: DatabaseUnavailable):

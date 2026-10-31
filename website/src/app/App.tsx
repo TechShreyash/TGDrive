@@ -62,6 +62,7 @@ import { Modal, Spinner, ToastNotice as Toast } from "../shared/components";
 import Login from "./Login";
 import SharesView from "../features/shares/SharesView";
 import StorageView from "../features/settings/StorageView";
+import StartNewDrive from "../features/settings/StartNewDrive";
 import SettingsManagement from "../features/settings/SettingsManagement";
 import PerformanceSettings from "../features/performance/PerformanceSettings";
 import Preloads from "../features/performance/Preloads";
@@ -1453,8 +1454,8 @@ export default function App() {
                 <main id="main-content" className="channel-recovery-main">
                     <h1>Storage recovery</h1>
                     <p className="channel-recovery-intro">
-                        This database has no drive yet. File changes are paused
-                        until you restore a backup.
+                        File changes are paused. Restore a backup below, or
+                        start a new drive if you do not need the old one.
                     </p>
                     {configLoad === "ready" ? (
                         <>
@@ -1463,6 +1464,7 @@ export default function App() {
                                 demoMode={demoReadOnly}
                                 onNotice={notify}
                             />
+                            <StartNewDrive demoMode={demoReadOnly} />
                         </>
                     ) : (
                         configGate

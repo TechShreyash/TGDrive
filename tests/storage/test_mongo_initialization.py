@@ -65,23 +65,6 @@ def test_missing_catalog_with_saved_records_is_never_initialized(
     create.assert_not_called()
 
 
-@pytest.mark.parametrize(
-    "marker",
-    ["mongodb-drive.json", "channel-activation.json"],
-)
-def test_preserved_installation_does_not_recreate_an_empty_database(
-    tmp_path, monkeypatch, backend, marker
-):
-    path = tmp_path / marker
-    path.write_bytes(b"preserved installation state")
-    create = Mock()
-    monkeypatch.setattr("tgdrive.storage.mongo_store.MongoStore.create", create)
-    with pytest.raises(CorruptStoreError, match="existing drive or recovery state"):
-        initialize_if_empty(SimpleNamespace(resolved_data_dir=tmp_path), backend)
-    create.assert_not_called()
-    assert path.read_bytes() == b"preserved installation state"
-
-
 def test_existing_catalog_is_reused_without_initialization(
     tmp_path, monkeypatch, backend
 ):
@@ -107,7 +90,6 @@ def test_first_setup_rolls_back_catalog_when_initial_settings_cannot_be_saved(
 
     assert backend.db.catalog.find_one({}) is None
     assert backend.db.nodes.find_one({}) is None
-    assert not (settings.resolved_data_dir / "mongodb-drive.json").exists()
 
 
 def test_first_setup_applies_initial_connections_without_a_restart(
