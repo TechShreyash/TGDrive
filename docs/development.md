@@ -743,6 +743,14 @@ them to `PUBLIC_DOCS` in `scripts/build_release.py`. Keep guides brief, put tech
 detail in collapsible sections, and record change history in meaningful Git commits.
 Update each guide's **Contents** links when adding, renaming or moving sections.
 
+## Agent skills
+
+AI agents load project skills from `.agents/skills/`; `skills-lock.json` pins
+their sources. Restore them with `npx skills experimental_install` and update
+them with `npx skills update -p`. `tgdrive-release` is TGDrive's own release
+checklist; the rest are third-party. UI work reads [PRODUCT.md](../PRODUCT.md).
+Release archives exclude `.agents`.
+
 ## Independent channel backup contracts
 
 <details>

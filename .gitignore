@@ -47,9 +47,9 @@ test-results/
 # Downloaded manual samples have separate, unverified redistribution terms.
 testfiles/
 
-# Local agent skills and design state
-.agents/
-skills-lock.json
+# Agent skills are tracked; local design state and downloaded binaries are not
+.agents/skills/impeccable/scripts/bin/
+!.agents/skills/*/scripts/data/
 .impeccable/
 
 # Private local request tracking
