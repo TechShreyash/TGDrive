@@ -147,9 +147,11 @@ def test_demo_pages_lock_changes_keep_navigation_and_file_features(
     page.get_by_text(
         "Main channel lost: restore from the backup channel", exact=True
     ).click()
-    restore = page.locator("form").filter(
-        has=page.get_by_label("Backup bot token", exact=True)
-    ).last
+    restore = (
+        page.locator("form")
+        .filter(has=page.get_by_label("Backup bot token", exact=True))
+        .last
+    )
     expect(restore.get_by_label("Backup channel ID", exact=True)).to_be_disabled()
     expect(page.locator('a[href="/api/v1/replica/key"]')).to_have_count(0)
     expect(page.locator('a[href="/api/v1/backup/recovery-key"]')).to_have_count(0)
