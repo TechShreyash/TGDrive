@@ -13,7 +13,7 @@ needs them.
 
 | Topic | Read |
 | --- | --- |
-| Where time is spent | [Data path](#follow-the-data-path) · [Performance stats](#read-the-performance-page) |
+| Where time is spent | [Data path](#follow-the-data-path) · [Automatic tuning](#automatic-tuning) · [Performance stats](#read-the-performance-page) |
 | Cached access and sharing | [Cache limits](#cache-limits) · [Read-ahead](#automatic-read-ahead) · [Preloading](#prepare-a-file-before-sharing) · [Queues](#shared-download-load-and-queues) |
 | Transfer throughput | [URL imports](#url-import-intake) · [Device intake](#device-upload-receipts) · [Telegram uploads](#upload-pipeline-and-smaller-splits) · [Archives](#archive-work) |
 | Playback and browser behavior | [Video](#video-controls-and-startup) · [Playback buffer](#browser-playback-buffer) · [Background updates](#browser-progress-and-health-checks) |
@@ -40,6 +40,40 @@ change routing but cannot relocate a document or guarantee improvement.
 Upgrade the resource limiting the affected stage. Device intake still depends
 on your uplink; shared downloads use server upload bandwidth and each viewer's
 connection. [Choosing server capacity](performance-tuning.md#what-a-server-upgrade-changes).
+
+## Automatic tuning
+
+Once the runtime is ready, a resource governor re-measures the server every
+5 seconds and applies new values live, through the same path as saving
+performance settings. While it runs, its values override saved owner
+preferences. `GET /api/v1/performance` returns its current values, a reason
+for each value and the latest measurements under `tuning`.
+
+| Value | Rule |
+| --- | --- |
+| Memory cache | 25% of available memory; changes only when the target moves by more than 10% |
+| Disk reserve (`min_free_bytes`, `cache_min_free_bytes`) | Larger of 1 GiB and 5% of the data disk |
+| Disk cache | 50% of free data-disk space after the reserve |
+| Temporary upload budget | Free data-disk space after the reserve |
+| Upload pipeline, request limit, media per bot, URL downloads, preload jobs | Start from current settings. Halve (minimum 1) when a window sees a new FloodWait or request timeout. Add 1 when the window moved data without errors, throughput did not drop by more than 10% and 60 seconds have passed since the last change. Only preload jobs have a ceiling: 4 per CPU |
+
+Memory comes from cgroup v2 (`memory.max`, `memory.current`), with
+`/proc/meminfo` as the fallback; the CPU count comes from `cpu.max`, falling
+back to the host CPU count. Byte values also use the same 10% hysteresis.
+
+<details>
+<summary>Limits</summary>
+
+- Free disk excludes space the cache and upload staging already occupy, so
+  disk budgets settle below the true maximum on a busy disk.
+- cgroup `memory.current` includes the page cache, so heavy file I/O lowers
+  the measured available memory and shrinks the memory cache.
+- Signals come from per-account request schedulers. Before Telegram traffic
+  starts, only the memory and disk values change.
+- Tuned values are not saved; after a restart the governor starts again from
+  saved or default settings.
+
+</details>
 
 ## Cache limits
 

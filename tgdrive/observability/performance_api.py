@@ -181,8 +181,10 @@ def register_performance_routes(
         cache = getattr(pool, "_media_read_cache", None)
         statistics = getattr(store, "statistics", None)
         drive = await asyncio.to_thread(statistics) if callable(statistics) else {}
+        governor = getattr(runtime, "governor", None)
         return response(
             {
+                "tuning": governor.snapshot() if governor is not None else None,
                 "telegram": snapshot() if callable(snapshot) else {},
                 "cache": await cache.snapshot()
                 if cache is not None

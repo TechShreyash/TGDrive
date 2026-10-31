@@ -74,6 +74,7 @@ class MediaScheduler:
         self.completed = 0
         self.failed = 0
         self.floods = 0
+        self.timeouts = 0
         self.bytes = 0
         self.upload_bytes = 0
         self.download_bytes = 0
@@ -171,6 +172,9 @@ class MediaScheduler:
         try:
             yield
             succeeded = True
+        except TimeoutError:
+            self.timeouts += 1
+            raise
         finally:
             async with self._condition:
                 self.active -= 1

@@ -289,6 +289,10 @@ class Runtime:
             self.backup.start(self.store)
             self.replica.start()
             self.ready = True
+            from tgdrive.core.governor import Governor
+
+            self.governor = Governor(self.settings, self)
+            self.governor.start()
             if not lineage_ready:
                 self._reconnector = asyncio.create_task(
                     self._reconnect(), name="telegram-reconnect"
@@ -423,6 +427,8 @@ class Runtime:
 
     async def stop(self) -> list[BaseException]:
         self.ready = False
+        if getattr(self, "governor", None) is not None:
+            await self.governor.stop()
         if self._reconnector is not None:
             self._reconnector.cancel()
             await asyncio.gather(self._reconnector, return_exceptions=True)
