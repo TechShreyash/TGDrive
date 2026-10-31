@@ -282,3 +282,31 @@ async def test_selected_files_are_the_only_ones_aria2c_downloads(monkeypatch, tm
         admit=admit,
     )
     assert options["select-file"] == "1,3"
+
+
+async def test_retry_progress_counts_verified_pieces_instead_of_restarting():
+    engine = torrent._Aria2(Path("/tmp"))
+    states = iter(
+        [
+            # Re-hashing pieces kept from the failed attempt.
+            {"status": "active", "completedLength": "0", "verifiedLength": "600"},
+            {"status": "complete", "completedLength": "1000", "totalLength": "1000"},
+        ]
+    )
+
+    async def call(_method, *_params):
+        return next(states)
+
+    engine.call = call
+    seen = []
+
+    async def progress(current, total):
+        seen.append(current)
+
+    original = asyncio.sleep
+    torrent.asyncio.sleep = AsyncMock()
+    try:
+        await engine.wait("gid", progress=progress)
+    finally:
+        torrent.asyncio.sleep = original
+    assert seen == [600, 1000]

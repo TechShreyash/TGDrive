@@ -1460,6 +1460,7 @@ for recovery across server restarts. Public snapshots omit the source link.
 | Peer discovery | IPv4 DHT and public UDP trackers. HTTP(S) trackers, web seeds and magnet auxiliary source URLs are ignored; HTTP-only private torrents cannot import. |
 | Network | Local peer discovery is disabled. Peers still see the server IP; peer traffic does not inherit the HTTP downloader's private-address filter. Outbound peer access must suit the host's network policy. |
 | Timeout | A torrent with no byte progress for five minutes fails with a retry action. |
+| Retry | Pieces already on disk are kept: aria2c re-checks them and downloads only what is missing, and progress shows the verified bytes instead of restarting at 0%. Files already uploaded to Telegram are skipped. Cancelling deletes the staged pieces. |
 | Seeding | Pieces may upload while downloading; seeding stops after download completion. |
 
 The job uses `torrent_metadata`, `downloading`, then `torrent_uploading` phases.

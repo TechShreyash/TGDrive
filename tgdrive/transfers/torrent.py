@@ -348,6 +348,8 @@ class _Aria2:
             "--auto-file-renaming=false",
             "--allow-overwrite=false",
             "--check-integrity=true",
+            # Retry keeps the staged pieces: verify them and fetch only the rest.
+            "--continue=true",
             "--seed-time=0",
             "--bt-enable-lpd=false",
             "--enable-dht=true",
@@ -419,7 +421,13 @@ class _Aria2:
         changed = time.monotonic()
         while True:
             state = await self.call("tellStatus", gid)
-            received = int(state.get("completedLength", 0))
+            # On retry aria2c first re-hashes the pieces already on disk; it
+            # reports them as verified, not completed, so progress would drop
+            # to zero and look like a fresh download.
+            received = max(
+                int(state.get("completedLength", 0)),
+                int(state.get("verifiedLength", 0) or 0),
+            )
             if received != current:
                 current = received
                 changed = time.monotonic()
