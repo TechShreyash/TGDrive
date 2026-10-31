@@ -320,7 +320,10 @@ def test_comic_image_error_details_and_automatic_recovery(server, desktop):
     expect(page.locator(".book-content > .book-image > img")).to_be_visible(
         timeout=15000
     )
-    assert len(calls) == 2
+    # The busy first page is retried once; upcoming pages are prefetched once
+    # each, one request at a time alongside it.
+    assert calls.count(calls[0]) == 2
+    assert len(set(calls)) == len(calls) - 1
     page.unroute("**/api/v1/books?**", page_resource)
 
     def refused(route):
@@ -331,7 +334,10 @@ def test_comic_image_error_details_and_automatic_recovery(server, desktop):
         )
 
     page.route("**/api/v1/books?**entry=**", refused)
+    # Pages 2 and 3 were prefetched; page 1 was already shown, so going back
+    # requests it again and meets the refusal.
     page.get_by_role("button", name="Next chapter or page", exact=True).click()
+    page.get_by_role("button", name="Previous chapter or page", exact=True).click()
     expect(page.get_by_role("alert")).to_contain_text("64 MiB preview limit")
     expect(page.get_by_role("button", name="Retry image", exact=True)).to_be_visible()
 

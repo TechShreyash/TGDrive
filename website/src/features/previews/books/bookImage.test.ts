@@ -1,5 +1,12 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { loadBookImage, MAX_BOOK_IMAGE } from "./bookImage";
+import {
+    clearPrefetched,
+    loadBookImage,
+    MAX_BOOK_IMAGE,
+    prefetchAhead,
+    rememberPrefetched,
+    takePrefetched,
+} from "./bookImage";
 afterEach(() => {
     vi.unstubAllGlobals();
     vi.useRealTimers();
@@ -68,7 +75,8 @@ describe("original book page downloads", () => {
             const fetcher = vi.fn().mockImplementation(() => {
                 const response = image(new Uint8Array([1, 2, 3]));
                 response.headers.set("Content-Length", "4");
-                if (encoding) response.headers.set("Content-Encoding", encoding);
+                if (encoding)
+                    response.headers.set("Content-Encoding", encoding);
                 return Promise.resolve(response);
             });
             vi.stubGlobal("fetch", fetcher);
@@ -188,5 +196,44 @@ describe("original book page downloads", () => {
         await expect(
             loadBookImage("/page", new AbortController().signal, vi.fn()),
         ).rejects.toThrow("64 MiB");
+    });
+});
+describe("upcoming page prefetch", () => {
+    afterEach(() => clearPrefetched());
+    it("hands a prefetched page to the reader once without refetching", async () => {
+        const load = vi.fn(async (url: string) => "data:" + url);
+        await prefetchAhead(["a", "b"], new AbortController().signal, load);
+        await prefetchAhead(["b", "c"], new AbortController().signal, load);
+        expect(load.mock.calls.map(([url]) => url)).toEqual(["a", "b", "c"]);
+        expect(takePrefetched("b")).toBe("data:b");
+        expect(takePrefetched("b")).toBeUndefined();
+    });
+    it("keeps only the newest four entries and clears on close", async () => {
+        const urls = ["1", "2", "3", "4", "5", "6"];
+        await prefetchAhead(urls, new AbortController().signal, async (u) => u);
+        expect(urls.map(takePrefetched)).toEqual([
+            undefined,
+            undefined,
+            "3",
+            "4",
+            "5",
+            "6",
+        ]);
+        rememberPrefetched("x", 1);
+        clearPrefetched();
+        expect(takePrefetched("x")).toBeUndefined();
+    });
+    it("stops after a jump aborts the run and does not cache the aborted page", async () => {
+        const controller = new AbortController();
+        const load = vi.fn(async (url: string, signal: AbortSignal) => {
+            if (url === "a") controller.abort();
+            signal.throwIfAborted();
+            return url;
+        });
+        await expect(
+            prefetchAhead(["a", "b"], controller.signal, load),
+        ).rejects.toThrow();
+        expect(load).toHaveBeenCalledTimes(1);
+        expect(takePrefetched("a")).toBeUndefined();
     });
 });

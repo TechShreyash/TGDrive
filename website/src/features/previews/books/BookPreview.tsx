@@ -19,6 +19,12 @@ import { errorMessage } from "../../../shared/api";
 import { ErrorNotice, Spinner } from "../../../shared/components";
 import "./BookPreview.css";
 import BookImage from "./BookImage";
+import {
+    clearPrefetched,
+    loadBookImage,
+    prefetchAhead,
+    takePrefetched,
+} from "./bookImage";
 
 type Entry = { name: string; label: string };
 type Book = { kind: "epub" | "comic"; title?: string; entries: Entry[] };
@@ -251,7 +257,13 @@ export default function BookPreview({
         setLoading(true);
         setError("");
         setNodes([]);
-        void bookJson(bookUrl(path, auth, selected), controller.signal)
+        const url = bookUrl(path, auth, selected);
+        const prefetched = takePrefetched(url);
+        void (
+            prefetched
+                ? Promise.resolve(prefetched)
+                : bookJson(url, controller.signal)
+        )
             .then((result) => {
                 if (result.kind !== "chapter")
                     throw new Error(
@@ -281,6 +293,20 @@ export default function BookPreview({
     }, [loading, nodes]);
     const index =
         book?.entries.findIndex((entry) => entry.name === selected) ?? 0;
+    useEffect(() => {
+        if (!book || index < 0) return;
+        const controller = new AbortController();
+        const ahead = book.entries
+            .slice(index + 1, index + 1 + (book.kind === "comic" ? 3 : 1))
+            .map((entry) => bookUrl(path, auth, entry.name));
+        void prefetchAhead(ahead, controller.signal, (url, signal) =>
+            book.kind === "comic"
+                ? loadBookImage(url, signal, () => {})
+                : bookJson(url, signal),
+        ).catch(() => {});
+        return () => controller.abort();
+    }, [path, auth, book, index]);
+    useEffect(() => clearPrefetched, []);
     const move = (delta: number) => {
         if (!book) return;
         const entry = book.entries[index + delta];

@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { errorMessage } from "../../../shared/api";
 import { Spinner } from "../../../shared/components";
-import { loadBookImage, type ImageProgress } from "./bookImage";
+import { loadBookImage, takePrefetched, type ImageProgress } from "./bookImage";
 
 export default function BookImage({
     id,
@@ -56,7 +56,12 @@ export default function BookImage({
         setUrl("");
         setReady(false);
         setError("");
-        void loadBookImage(src, controller.signal, setProgress)
+        const prefetched = takePrefetched(src);
+        void (
+            prefetched instanceof Blob
+                ? Promise.resolve(prefetched)
+                : loadBookImage(src, controller.signal, setProgress)
+        )
             .then((blob) => {
                 if (controller.signal.aborted) return;
                 objectUrl = URL.createObjectURL(blob);

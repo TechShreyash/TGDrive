@@ -160,3 +160,36 @@ export async function loadBookImage(
         }
     }
 }
+
+// Prefetched, not yet opened reader data. Taking an entry removes it, so the
+// cache only ever holds upcoming pages.
+const prefetchedData = new Map<string, unknown>();
+// Three comic pages or one EPUB chapter ahead, plus one spare.
+const PREFETCH_ENTRIES = 4;
+export function rememberPrefetched(url: string, value: unknown) {
+    prefetchedData.delete(url);
+    prefetchedData.set(url, value);
+    for (const key of prefetchedData.keys()) {
+        if (prefetchedData.size <= PREFETCH_ENTRIES) break;
+        prefetchedData.delete(key);
+    }
+}
+export function takePrefetched(url: string) {
+    const value = prefetchedData.get(url);
+    prefetchedData.delete(url);
+    return value;
+}
+export const clearPrefetched = () => prefetchedData.clear();
+/** Loads upcoming entries one at a time so prefetch never takes both server parser slots. */
+export async function prefetchAhead(
+    urls: string[],
+    signal: AbortSignal,
+    load: (url: string, signal: AbortSignal) => Promise<unknown>,
+) {
+    for (const url of urls) {
+        if (prefetchedData.has(url)) continue;
+        const value = await load(url, signal);
+        signal.throwIfAborted();
+        rememberPrefetched(url, value);
+    }
+}

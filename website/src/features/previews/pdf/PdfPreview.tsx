@@ -636,10 +636,11 @@ export default function PdfPreview({
         firstPaint ? OVERSCAN_PAGE_TARGET : 1,
         visibleCount,
     );
+    // Readers mostly move forward: keep one page behind, spend the rest ahead.
     const start = Math.max(
         0,
         Math.min(
-            firstVisible - Math.floor((targetCount - visibleCount) / 2),
+            firstVisible - Math.min(1, targetCount - visibleCount),
             layout.pages.length - targetCount,
         ),
     );
