@@ -74,6 +74,7 @@ export interface Transfer {
     /** Browser-only receipt: server-discovered jobs never open this device's popup. */
     initiatedHere?: boolean;
     location?: TransferLocation;
+    torrentChoice?: { path: string; size: number }[];
 }
 const STORAGE_KEY = "tgdrive.uploads.v2";
 const STORAGE_PREFIX = STORAGE_KEY + ":";
@@ -410,6 +411,8 @@ export function fromJob(job: Job, previousKind?: string): Partial<Transfer> {
                 job.status === "queued"
                     ? "Waiting to read torrent"
                     : "Reading torrent metadata…";
+        else if (job.phase === "torrent_select")
+            phase = "Choose files to import";
         else if (job.phase === "downloading")
             phase = "Downloading from torrent peers";
         else if (job.phase === "torrent_uploading")
@@ -470,6 +473,7 @@ export function fromJob(job: Job, previousKind?: string): Partial<Transfer> {
         total: job.total ?? 0,
         error: job.error || undefined,
         stage: job.phase,
+        torrentChoice: job.torrent_choice,
         serverStatus: job.status,
         speedBytesPerSecond: job.speed_bytes_per_second,
         etaSeconds: job.eta_seconds,
@@ -1295,6 +1299,15 @@ export class TransferManager {
     }
     startTorrent(url: string, destination: string, requestId: string): string {
         return this.startRemote(url, destination, false, requestId, "torrent");
+    }
+    async chooseTorrentFiles(key: string, files: number[]) {
+        const item = this.items.find((row) => row.key === key);
+        if (!item?.jobId) return;
+        const job = await api.chooseTorrentFiles(item.jobId, files);
+        this.update(key, {
+            ...fromJob(job, item.kind),
+            torrentChoice: undefined,
+        });
     }
     private acceptRemote(key: string, result: { id: string; data?: Job }) {
         const item = this.items.find((row) => row.key === key);

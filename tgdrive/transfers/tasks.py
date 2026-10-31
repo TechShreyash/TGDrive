@@ -306,10 +306,16 @@ class TransferRecord:
             result["name"] = self.context.get("name", "Torrent import")
             manifest = self.context.get("torrent_manifest")
             if isinstance(manifest, dict):
+                selection = self.context.get("torrent_selection")
                 result["torrent_files"] = {
-                    "total": len(manifest["files"]),
+                    "total": len(selection or manifest["files"]),
                     "completed": len(self.context.get("torrent_completed", [])),
                 }
+                if self.phase == "torrent_select":
+                    result["torrent_choice"] = [
+                        {"path": file["path"], "size": file["size"]}
+                        for file in manifest["files"]
+                    ]
         return result
 
 

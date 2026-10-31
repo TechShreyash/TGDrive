@@ -51,6 +51,8 @@ export interface Job {
     queue?: { position: number; estimated_wait_seconds: number | null } | null;
     telegram_parts?: { total: number; stored: number };
     torrent_files?: { total: number; completed: number };
+    /** Offered while a multi-file torrent waits for the owner to choose files. */
+    torrent_choice?: { path: string; size: number }[];
     location?: TransferLocation;
     id: string;
     status: string;

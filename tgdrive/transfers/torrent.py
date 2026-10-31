@@ -445,9 +445,12 @@ async def download_torrent(
     remote: RemoteClient,
     cancel_event: asyncio.Event,
     progress: Callable[[int, int | None], Awaitable[None]],
-    admit: Callable[[TorrentManifest], Awaitable[None]],
+    admit: Callable[[TorrentManifest], Awaitable[list[int] | None]],
 ) -> TorrentManifest:
-    """Validate metadata and reserve staging before any payload is downloaded."""
+    """Validate metadata and reserve staging before any payload is downloaded.
+
+    ``admit`` returns the 0-based file indexes to download, or None for all.
+    """
     if cancel_event.is_set():
         raise TorrentCancelled("Torrent import cancelled.")
     worker = asyncio.create_task(_download(source, output_dir, remote, progress, admit))
@@ -529,7 +532,6 @@ async def _download(source, output_dir, remote, progress, admit):
                     "Private torrents require a public UDP tracker; "
                     "HTTP-only trackers are unsupported."
                 )
-            await admit(manifest)
             # Keep only info: web seeds, DHT bootstrap nodes and tracker redirects
             # must never bypass the guarded HTTP source downloader.
             sanitized = _encode({b"info": metadata[b"info"]})
@@ -557,7 +559,18 @@ async def _download(source, output_dir, remote, progress, admit):
                 finally:
                     saved_path.unlink(missing_ok=True)
 
+            # Saved before admission so a pause for file selection never has to
+            # ask peers for the metadata again.
             await _worker(save_metadata)
+            selected = await admit(manifest)
+            wanted = [
+                item
+                for index, item in enumerate(manifest.files)
+                if selected is None or index in selected
+            ]
+            options = {}
+            if selected is not None:
+                options["select-file"] = ",".join(str(i + 1) for i in sorted(selected))
             gid = await engine.call(
                 "addTorrent",
                 base64.b64encode(sanitized).decode(),
@@ -568,6 +581,7 @@ async def _download(source, output_dir, remote, progress, admit):
                     "bt-metadata-only": "false",
                     "bt-save-metadata": "false",
                     "bt-tracker": ",".join(trackers),
+                    **options,
                 },
             )
             actual = await engine.call("getFiles", gid)
@@ -595,7 +609,7 @@ async def _download(source, output_dir, remote, progress, admit):
                 await progress(current, total)
 
             await engine.wait(gid, progress=received)
-            for item in manifest.files:
+            for item in wanted:
                 path = output_dir / item.path
                 if (
                     path.is_symlink()

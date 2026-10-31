@@ -223,3 +223,62 @@ async def test_downloader_shutdown_waits_for_process_and_closes_rpc():
 
     process.wait.assert_awaited_once()
     engine.session.close.assert_awaited_once()
+
+
+async def test_selected_files_are_the_only_ones_aria2c_downloads(monkeypatch, tmp_path):
+    source = metadata(
+        [
+            {b"length": 4, b"path": [b"one.txt"]},
+            {b"length": 5, b"path": [b"two.txt"]},
+            {b"length": 6, b"path": [b"three.txt"]},
+        ]
+    )
+    options = {}
+
+    class Engine:
+        def __init__(self, _directory):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            pass
+
+        async def call(self, method, *params):
+            if method == "addTorrent":
+                options.update(params[2])
+                return "gid"
+            if method == "getFiles":
+                root = (tmp_path / "Collection").resolve()
+                return [
+                    {"path": str(root / name), "length": str(size)}
+                    for name, size in (("one.txt", 4), ("two.txt", 5), ("three.txt", 6))
+                ]
+
+        async def wait(self, _gid, *, progress):
+            # aria2c leaves unselected files absent; only chosen ones are checked.
+            (tmp_path / "Collection").mkdir()
+            (tmp_path / "Collection/one.txt").write_bytes(b"1111")
+            (tmp_path / "Collection/three.txt").write_bytes(b"333333")
+            await progress(10, 10)
+
+    async def download(_url, directory, **_kwargs):
+        path = directory / "source.torrent"
+        path.write_bytes(torrent._encode(source))
+        return SimpleNamespace(path=path)
+
+    async def admit(_manifest):
+        return [2, 0]
+
+    monkeypatch.setattr(torrent, "_Aria2", Engine)
+    remote = SimpleNamespace(download=AsyncMock(side_effect=download), min_free_bytes=0)
+    await torrent.download_torrent(
+        "https://files.example/source.torrent",
+        tmp_path,
+        remote=remote,
+        cancel_event=asyncio.Event(),
+        progress=AsyncMock(),
+        admit=admit,
+    )
+    assert options["select-file"] == "1,3"

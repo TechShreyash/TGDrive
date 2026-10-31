@@ -386,11 +386,14 @@ server job is gone, submit a new import; it never needs a device file.
 ## Import a torrent or magnet link
 
 Choose **New → Import torrent** in the destination folder. Paste a magnet or
-public HTTP(S) `.torrent` URL. Every file is imported, keeping nested folders;
-a folder torrent creates its own root.
+public HTTP(S) `.torrent` URL. For a torrent with several files, TGDrive reads
+its file list first and asks in **Transfers** which files to import: all are
+selected; untick the ones you don't want, then choose **Import N files**. Only
+the chosen files are downloaded, reserve temporary space and are saved, keeping
+their nested folders; a folder torrent creates its own root.
 
 Transfers shows metadata discovery, downloading, then Telegram uploading.
-You can close the tab while TGDrive runs. The whole torrent needs temporary
+You can close the tab while TGDrive runs. The chosen files need temporary
 server space before Telegram uploading; downloads need reachable peers.
 Use **Retry** or **Cancel** on the existing transfer. Files already saved remain.
 [Torrent limits and restart behavior](reference.md#torrent-imports).

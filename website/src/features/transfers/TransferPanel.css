@@ -197,3 +197,41 @@
     flex: 1;
     margin: 0;
 }
+
+.torrent-picker {
+    display: grid;
+    gap: 8px;
+    margin-top: 8px;
+    font-size: 12px;
+}
+.torrent-picker .text-button,
+.torrent-picker .primary-button {
+    font-size: 12px;
+}
+.torrent-picker-actions {
+    display: flex;
+    gap: 12px;
+}
+.torrent-picker-files {
+    max-height: 260px;
+    overflow: auto;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+    border: 1px solid var(--line);
+    border-radius: 8px;
+}
+.torrent-picker-files label {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr) auto;
+    align-items: center;
+    gap: 8px;
+    padding: 4px 10px;
+}
+.torrent-picker-path {
+    overflow-wrap: anywhere;
+}
+.torrent-picker-size {
+    color: var(--muted);
+    font-variant-numeric: tabular-nums;
+}

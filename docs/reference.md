@@ -1469,6 +1469,7 @@ for recovery across server restarts. Public snapshots omit the source link.
 | Sources | BitTorrent v1 metadata, including a compatible v1 part in hybrid torrents; v2-only torrents are unsupported. |
 | Metadata | `.torrent` files fetched by URL are at most 256 MiB; magnet discovery times out after 120 seconds. |
 | Contents | Any number of nonempty files and folders at any depth. |
+| File choice | The web client starts multi-file torrents with `select_files: true`. After metadata, the job waits in phase `torrent_select` with `torrent_choice: [{path,size}]`; nothing is downloaded or reserved. `POST /api/v1/jobs/{id}/torrent-files` with `{"files": [0-based indexes]}` (non-empty, distinct, in range; otherwise `422`) records the choice in the job, so restart and retry keep it, and continues. aria2c downloads only those files (`select-file`); folders with no chosen file are not created. Single-file torrents and API calls without `select_files` import everything. |
 | Paths | Unsafe names, traversal, symlinks, duplicate names and file/folder collisions are rejected before payload downloading. |
 | Storage | Each file must fit the upload limit; the entire torrent reserves the shared staging budget and free-space reserve. Failed partial data keeps its storage claim. |
 | Peer discovery | IPv4 DHT and public UDP trackers. HTTP(S) trackers, web seeds and magnet auxiliary source URLs are ignored; HTTP-only private torrents cannot import. |

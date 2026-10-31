@@ -126,6 +126,10 @@ async def restore_telegram_cooldowns(
         await pool.defer_client(sender, deadline)
 
 
+class _AwaitingFileChoice(Exception):
+    """A torrent paused after metadata until the owner chooses its files."""
+
+
 class TransferManager:
     """Coordinate staging, Telegram work, and protection of catalogued uploads.
 
@@ -391,7 +395,9 @@ class TransferManager:
         )
 
     @_journalled
-    async def start_torrent(self, *, source: str, destination: str) -> TransferRecord:
+    async def start_torrent(
+        self, *, source: str, destination: str, select_files: bool = False
+    ) -> TransferRecord:
         from tgdrive.transfers.torrent import TorrentError, available, validate_source
 
         validate_source(source)
@@ -412,6 +418,7 @@ class TransferManager:
                 name="Torrent import",
                 destination=binding["path"],
                 destination_id=binding["id"],
+                select_files=select_files,
             ),
         )
         task = self.registry.spawn(record.id, self._torrent_pipeline)
@@ -444,8 +451,6 @@ class TransferManager:
 
                 async def admit(manifest):
                     nonlocal retained_written
-                    if any(file.size > limit for file in manifest.files):
-                        raise RemoteTooLarge(limit)
                     saved = dict(
                         name=manifest.name,
                         files=[
@@ -460,11 +465,33 @@ class TransferManager:
                         raise TransferError(
                             "Torrent metadata changed. Start a new import."
                         )
+                    selection = context.get("torrent_selection")
+                    if (
+                        selection is None
+                        and context.get("select_files")
+                        and len(manifest.files) > 1
+                    ):
+                        # Nothing is reserved or downloaded until the owner picks.
+                        context.update(
+                            name=manifest.name, torrent_manifest=saved, staging_size=0
+                        )
+                        raise _AwaitingFileChoice
+                    chosen = [
+                        manifest.files[index]
+                        for index in (
+                            range(len(manifest.files))
+                            if selection is None
+                            else selection
+                        )
+                    ]
+                    if any(file.size > limit for file in chosen):
+                        raise RemoteTooLarge(limit)
+                    chosen_size = sum(file.size for file in chosen)
 
                     def allocated_payload_bytes():
                         root = directory.resolve()
                         written = 0
-                        for file in manifest.files:
+                        for file in chosen:
                             relative = PurePosixPath(file.path)
                             path = directory / relative
                             if (
@@ -488,22 +515,23 @@ class TransferManager:
                     check_staging(
                         self.settings,
                         self,
-                        manifest.total_size,
+                        chosen_size,
                         exclude=record.id,
                         written=retained_written,
                     )
                     context.update(
                         name=manifest.name,
                         torrent_manifest=saved,
-                        staging_size=manifest.total_size,
+                        staging_size=chosen_size,
                         staging_written=retained_written,
                     )
                     await self.registry.update(
                         record.id,
                         phase="downloading",
                         current=0,
-                        total=manifest.total_size,
+                        total=chosen_size,
                     )
+                    return selection
 
                 async def progress(current, total):
                     # Hash verification can report zero while retained bytes
@@ -538,11 +566,14 @@ class TransferManager:
                 context["torrent_downloaded"] = True
                 await self.registry.persist(record)
             manifest = context["torrent_manifest"]
+            indexes = context.get("torrent_selection") or range(len(manifest["files"]))
+            files = {index: manifest["files"][index] for index in indexes}
+            selected_size = sum(file["size"] for file in files.values())
             if manifest["is_folder"]:
                 tree = context.get("torrent_tree")
                 if tree is None:
                     folders = set()
-                    for file in manifest["files"]:
+                    for file in files.values():
                         parts = PurePosixPath(file["path"]).parts[1:-1]
                         folders.update(
                             parts[:depth] for depth in range(1, len(parts) + 1)
@@ -567,12 +598,12 @@ class TransferManager:
                 status=TransferStatus.RUNNING,
                 phase="torrent_uploading",
                 current=0,
-                total=manifest["total_size"],
+                total=selected_size,
             )
             completed = context.setdefault("torrent_completed", [])
             completed_indexes = set(completed)
             uploaded_total = sum(manifest["files"][i]["size"] for i in completed)
-            for index, file in enumerate(manifest["files"]):
+            for index, file in files.items():
                 if index in completed_indexes:
                     continue
                 if record.cancel_event.is_set():
@@ -634,9 +665,19 @@ class TransferManager:
                 record.id,
                 status=TransferStatus.COMPLETED,
                 phase="completed",
-                current=manifest["total_size"],
+                current=selected_size,
+                total=selected_size,
+            )
+        except _AwaitingFileChoice:
+            manifest = context["torrent_manifest"]
+            await self.registry.update(
+                record.id,
+                status=TransferStatus.QUEUED,
+                phase="torrent_select",
+                current=0,
                 total=manifest["total_size"],
             )
+            await self.registry.persist(record)
         except TorrentCancelled, TransferCancelled:
             record.cancel_event.set()
             await self.registry.update(
@@ -650,6 +691,33 @@ class TransferManager:
                 await self._cancel_torrent_children(record)
             if record.status in {TransferStatus.COMPLETED, TransferStatus.CANCELLED}:
                 self._discard_torrent_stage(record)
+
+    async def select_torrent_files(
+        self, job_id: str, indexes: list[int]
+    ) -> TransferRecord:
+        """Record the owner's file choice for a paused torrent, then continue it."""
+        record = self.registry.get(job_id)
+        manifest = record.context.get("torrent_manifest")
+        if (
+            record.context.get("kind") != "torrent"
+            or record.phase != "torrent_select"
+            or not isinstance(manifest, dict)
+        ):
+            raise ValueError("This torrent is not waiting for a file choice")
+        count = len(manifest["files"])
+        if (
+            not indexes
+            or len(set(indexes)) != len(indexes)
+            or any(type(i) is not int or not 0 <= i < count for i in indexes)
+        ):
+            raise ValueError("Choose one or more distinct files from this torrent")
+        record.context["torrent_selection"] = sorted(indexes)
+        await self.registry.persist(record)
+        if record.task is not None and not record.task.done():
+            # The pause is recorded just before its task returns.
+            await asyncio.shield(record.task)
+        await self._resume(record)
+        return record
 
     async def _cancel_torrent_children(self, record: TransferRecord) -> None:
         pending = []

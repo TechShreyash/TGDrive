@@ -422,7 +422,14 @@ export const api = {
             url,
             path,
             client_request_id,
+            // Multi-file torrents pause after metadata so files can be chosen.
+            select_files: true,
         }),
+    chooseTorrentFiles: (id: string, files: number[]) =>
+        request<Job>(
+            "/api/v1/jobs/" + encodeURIComponent(id) + "/torrent-files",
+            { files },
+        ),
     remoteRequest: (client_request_id: string) =>
         request<{ id: string; data: Job }>("/api/getTransferByRequest", {
             client_request_id,

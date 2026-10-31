@@ -45,6 +45,7 @@ import {
     formatProgressPercent,
 } from "./progress";
 import "./TransferPanel.css";
+import TorrentFilePicker from "./TorrentFilePicker";
 
 export default function TransferPanel({
     items,
@@ -673,7 +674,9 @@ export function BatchTransfer({
             batch.items.some(
                 (item) =>
                     !item.historyOnly &&
-                    !["remote", "torrent", "delete"].includes(item.kind || "") &&
+                    !["remote", "torrent", "delete"].includes(
+                        item.kind || "",
+                    ) &&
                     !isArchiveTransfer(item),
             ));
     const receiptComplete = deviceStage && !batch.device.pending;
@@ -1369,6 +1372,15 @@ function TransferRow({
                     <span className="transfer-device-status" role="status">
                         {deviceMessage}
                     </span>
+                )}
+                {item.stage === "torrent_select" && item.torrentChoice && (
+                    <TorrentFilePicker
+                        name={item.name}
+                        files={item.torrentChoice}
+                        onChoose={(files) =>
+                            transfers.chooseTorrentFiles(item.key, files)
+                        }
+                    />
                 )}
                 {item.state !== "cancelled" && item.error && (
                     <span className="transfer-error">{item.error}</span>

@@ -978,7 +978,9 @@ def create_app(
         try:
             manager = _transfers(request)
             record = await manager.start_torrent(
-                source=payload.url, destination=payload.path
+                source=payload.url,
+                destination=payload.path,
+                select_files=payload.select_files,
             )
         except Exception as exc:
             if entry:

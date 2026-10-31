@@ -315,3 +315,86 @@ async def test_busy_torrent_slots_keep_next_queued_and_allow_local_uploads(
     finally:
         release.set()
         await dispose(manager)
+
+
+async def test_chosen_torrent_files_are_the_only_ones_reserved_and_imported(
+    tmp_path, monkeypatch
+):
+    manifest = TorrentManifest(
+        "Album",
+        (
+            TorrentFile("Album/a.txt", 3),
+            TorrentFile("Album/Disc/b.bin", 4),
+            TorrentFile("Album/Extra/c.bin", 5),
+        ),
+        12,
+        True,
+        "a" * 40,
+    )
+    selections = []
+
+    async def download(source, directory, *, remote, cancel_event, progress, admit):
+        selected = await admit(manifest)
+        selections.append(selected)
+        for index, file in enumerate(manifest.files):
+            if selected is None or index in selected:
+                target = directory / file.path
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_bytes(b"x" * file.size)
+        return manifest
+
+    monkeypatch.setattr("tgdrive.transfers.torrent.available", lambda: True)
+    monkeypatch.setattr("tgdrive.transfers.torrent.download_torrent", download)
+    manager, ledger = await manager_for(tmp_path)
+    try:
+        record = await manager.start_torrent(
+            source=SOURCE, destination="/", select_files=True
+        )
+        await record.task
+        # Paused after metadata: nothing reserved, the choice is offered.
+        assert record.phase == "torrent_select"
+        assert record.context["staging_size"] == 0
+        offered = record.as_dict()["torrent_choice"]
+        assert [row["path"] for row in offered] == [f.path for f in manifest.files]
+        assert not ledger.messages
+
+        for invalid in ([], [0, 0], [3], [-1]):
+            with pytest.raises(ValueError):
+                await manager.select_torrent_files(record.id, invalid)
+
+        await manager.select_torrent_files(record.id, [2, 0])
+        await record.task
+        assert record.status is TransferStatus.COMPLETED
+        assert selections == [[0, 2]]
+        assert record.total == 8
+        assert record.as_dict()["torrent_files"] == {"total": 2, "completed": 2}
+        tree = record.context["torrent_tree"]
+        assert set(tree["folders"]) == {"", "Extra"}  # No empty "Disc" folder.
+        # Only the two chosen files reach Telegram (plus any generated covers).
+        stored = [
+            row for row in manager.store.backend.db.nodes.rows if row["kind"] == "file"
+        ]
+        assert sorted(row["name"] for row in stored) == ["a.txt", "c.bin"]
+        with pytest.raises(ValueError, match="not waiting"):
+            await manager.select_torrent_files(record.id, [1])
+    finally:
+        await dispose(manager)
+
+
+async def test_single_file_torrent_starts_without_waiting_for_a_choice(
+    tmp_path, monkeypatch
+):
+    manifest = TorrentManifest(
+        "song.bin", (TorrentFile("song.bin", 3),), 3, False, "a" * 40
+    )
+    torrent_source(monkeypatch, manifest=manifest)
+    manager, ledger = await manager_for(tmp_path)
+    try:
+        record = await manager.start_torrent(
+            source=SOURCE, destination="/", select_files=True
+        )
+        await record.task
+        assert record.status is TransferStatus.COMPLETED
+        assert len(ledger.messages) == 1
+    finally:
+        await dispose(manager)

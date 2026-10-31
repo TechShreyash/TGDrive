@@ -94,3 +94,68 @@ def test_torrent_import_metadata_and_reload_keep_server_identity(
     assert receipt["state"] == "uploading"
     assert len(starts) == 1
     page.screenshot(path=ARTIFACTS / f"torrent-reloaded-{width}.png")
+
+
+def test_multi_file_torrent_waits_for_a_file_choice(
+    server: Server, desktop: tuple[Any, Any]
+) -> None:
+    _, page = desktop
+    job: dict[str, Any] = {
+        "id": "torrent-choice-job",
+        "name": "Album",
+        "kind": "torrent",
+        "source_kind": "torrent",
+        "status": "queued",
+        "phase": "torrent_select",
+        "current": 0,
+        "total": 12,
+        "destination": "/",
+        "torrent_choice": [
+            {"path": "Album/a.txt", "size": 3},
+            {"path": "Album/Disc/b.bin", "size": 4},
+            {"path": "Album/Extra/c.bin", "size": 5},
+        ],
+    }
+    starts: list[dict[str, Any]] = []
+    choices: list[dict[str, Any]] = []
+
+    def start(route: Any) -> None:
+        starts.append(route.request.post_data_json)
+        route.fulfill(json={"status": "ok", "id": job["id"]})
+
+    def choose(route: Any) -> None:
+        choices.append(route.request.post_data_json)
+        job.update(status="running", phase="downloading", total=8)
+        job.pop("torrent_choice")
+        route.fulfill(json=job)
+
+    page.route("**/api/startTorrentDownload", start)
+    page.route("**/api/v1/jobs/torrent-choice-job/torrent-files", choose)
+    page.route(
+        "**/api/getTransferProgress",
+        lambda route: route.fulfill(json={"status": "ok", "data": job}),
+    )
+    page.route(
+        "**/api/v1/jobs",
+        lambda route: route.fulfill(json={"jobs": [job] if starts else []}),
+    )
+    login(page, server.url)
+    page.locator("#new-button:visible, #compact-new-button:visible").click()
+    page.get_by_role("button", name="Import torrent", exact=True).click()
+    dialog = page.get_by_role("dialog", name="Import torrent", exact=True)
+    dialog.get_by_label("Magnet link or torrent URL", exact=True).fill(
+        "magnet:?xt=urn:btih:" + "a" * 40 + "&dn=Album"
+    )
+    dialog.get_by_role("button", name="Start Import", exact=True).click()
+    toggle = page.get_by_role("button", name="Show Transfer Details", exact=True)
+    if toggle.count():
+        toggle.click()
+    picker = page.get_by_role("form", name="Choose files from Album", exact=True)
+    expect(picker).to_be_visible()
+    assert starts[0]["select_files"] is True
+    picker.get_by_role("checkbox", name="Disc/b.bin").uncheck()
+    submit = picker.get_by_role("button", name="Import 2 files · 8 B", exact=True)
+    page.screenshot(path=ARTIFACTS / "torrent-file-choice.png")
+    submit.click()
+    expect(picker).to_have_count(0)
+    assert choices == [{"files": [0, 2]}]

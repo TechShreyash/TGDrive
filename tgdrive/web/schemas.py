@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Annotated, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, HttpUrl, model_validator
+from pydantic import BaseModel, ConfigDict, Field, HttpUrl, StrictBool, model_validator
 
 
 class RequestModel(BaseModel):
@@ -78,6 +78,8 @@ class RemoteStartRequest(RemoteInspectRequest):
 class TorrentStartRequest(RequestModel):
     url: str = Field(min_length=1, max_length=16384)
     path: str = Field(min_length=1)
+    # Pause after metadata so the owner can choose files (multi-file torrents).
+    select_files: StrictBool = False
     client_request_id: str | None = Field(
         default=None, min_length=16, max_length=128, pattern=r"^[A-Za-z0-9_-]+$"
     )

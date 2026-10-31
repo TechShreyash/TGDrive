@@ -10,7 +10,7 @@ from typing import Any, Literal
 
 from fastapi import Depends, HTTPException, Query, Request, Response
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel, Field, StrictBool
+from pydantic import BaseModel, ConfigDict, Field, StrictBool
 
 from tgdrive.core.errors import ValidationError as DriveValidationError
 from tgdrive.recovery.backup import RecoveryConflict
@@ -38,6 +38,11 @@ from tgdrive.web.schemas import (
     TransferTaskHistoryRequest,
 )
 from tgdrive.web.share_links import token_factory
+
+
+class TorrentFileChoice(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+    files: list[int] = Field(min_length=1)
 
 
 class TransferLocationRequest(BaseModel):
@@ -557,6 +562,18 @@ def register_routes(
             if getattr(exc, "code", None) == "BACKUP_PENDING":
                 raise
             raise HTTPException(409, str(exc)) from exc
+
+    @app.post("/api/v1/jobs/{job_id}/torrent-files", dependencies=admin)
+    async def choose_torrent_files(
+        job_id: str, payload: TorrentFileChoice, request: Request
+    ) -> dict[str, Any]:
+        manager = get_manager(request)
+        check_transfer(get_store(request), manager.registry.get(job_id))
+        try:
+            record = await manager.select_torrent_files(job_id, payload.files)
+        except ValueError as exc:
+            raise HTTPException(422, str(exc)) from exc
+        return job_snapshot(record, request)
 
     @app.post("/api/v1/jobs/{job_id}/retry", dependencies=admin)
     async def retry_job(job_id: str, request: Request) -> dict[str, Any]:
