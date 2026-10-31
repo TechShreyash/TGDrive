@@ -1065,9 +1065,13 @@ class Client:
     async def delete_messages(self, channel: int, message_ids: Any) -> Any:
         return await self.native.delete_messages(channel, message_ids, revoke=True)
 
-    async def download_media(self, message: Any, *, file_name: str) -> Any:
+    async def download_media(
+        self, message: Any, *, file_name: str, progress: Any = None
+    ) -> Any:
         return await self.native.download_media(
-            getattr(message, "native", message), file=file_name
+            getattr(message, "native", message),
+            file=file_name,
+            progress_callback=progress,
         )
 
     async def download_thumbnail(

@@ -1072,6 +1072,21 @@ describe("whole-batch recovery and bounded admission", () => {
             }),
         ).not.toHaveProperty("folderUpload");
     });
+    it("labels bot-mode receipts as coming from the Telegram bot", () => {
+        expect(
+            fromJob({
+                id: "bot-import",
+                status: "running",
+                phase: "downloading",
+                kind: "telegram",
+                current: 4,
+                total: 10,
+            }),
+        ).toMatchObject({
+            phase: "Receiving from Telegram bot",
+            kind: "telegram",
+        });
+    });
     it("retains completed siblings in an unfinished batch beyond the old hundred-row limit", () => {
         const manager = managerForTest();
         manager.addEntries(

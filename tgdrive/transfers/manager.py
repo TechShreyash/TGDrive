@@ -935,6 +935,90 @@ class TransferManager:
         )
         return record
 
+    async def receive_telegram_file(
+        self,
+        download: Callable[
+            [Path, Callable[[int, int], Awaitable[None]]], Awaitable[Any]
+        ],
+        local_path: Path,
+        destination: str,
+        file_name: str,
+        size: int,
+        *,
+        transfer_id: str,
+    ) -> TransferRecord:
+        """Show a bot download as a transfer, then queue its encrypted upload."""
+        if self._check_upload_allowed is not None:
+            self._check_upload_allowed()
+        binding = self.store.upload_destination(destination)
+        destination = binding["path"]
+        if all(item.id != transfer_id for item in self.registry.list()):
+            limit = await current_upload_limit(self.settings, self.pool)
+            if size > limit:
+                raise TransferTooLarge(f"file exceeds the {limit}-byte upload limit")
+            check_staging(self.settings, self, size)
+        record = await self.registry.create(
+            "downloading",
+            total=size,
+            transfer_id=transfer_id,
+            context=dict(
+                kind="receiving",
+                source_kind="telegram",
+                local_path=str(local_path),
+                destination=destination,
+                destination_id=binding["id"],
+                name=file_name,
+                staging_size=size,
+                staging_written=0,
+            ),
+        )
+        # A replayed message reuses the existing job instead of downloading again.
+        if record.task is not None or record.terminal:
+            return record
+
+        async def progress(current: int, total: int) -> None:
+            if record.cancel_event.is_set():
+                raise TransferCancelled("Transfer cancelled")
+            record.context["staging_written"] = current
+            await self.registry.update(
+                record.id,
+                current=current,
+                total=total or record.total,
+                checkpoint_progress=False,
+            )
+
+        async def receive(item: TransferRecord) -> None:
+            try:
+                await self.registry.update(item.id, status=TransferStatus.RUNNING)
+                await download(local_path, progress)
+                if item.cancel_event.is_set():
+                    raise TransferCancelled("Transfer cancelled")
+                written = (await asyncio.to_thread(local_path.stat)).st_size
+                if written == 0:
+                    raise TransferEmptyFile(
+                        "Empty files cannot be uploaded to Telegram"
+                    )
+            except BaseException as exc:
+                with suppress(OSError):
+                    await asyncio.to_thread(local_path.unlink, missing_ok=True)
+                if isinstance(exc, TransferCancelled):
+                    await self.registry.update(
+                        item.id,
+                        status=TransferStatus.CANCELLED,
+                        error="Transfer cancelled",
+                    )
+                    return
+                raise
+            item.context.update(kind="upload", size=written, staging_written=written)
+            await self.registry.update(
+                item.id, phase="queued", current=0, total=written
+            )
+            await self._upload_path(item, local_path, destination, file_name, written)
+
+        # Spawning synchronously gives concurrent replays one task to await.
+        self.registry.spawn(record.id, receive)
+        return record
+
     async def _verify_lineage(self, record: TransferRecord | None = None) -> None:
         if self._ensure_lineage is None:
             return
@@ -1133,10 +1217,16 @@ class TransferManager:
                 ),
             )
         else:
+            if context.get("source_kind") == "telegram":
+                await asyncio.to_thread(
+                    Path(context["local_path"]).unlink, missing_ok=True
+                )
             await self.registry.update(
                 record.id,
                 status=TransferStatus.ERROR,
-                error="Interrupted browser receipt. Reselect the file to resume.",
+                error="Interrupted Telegram download. Send the file to the bot again."
+                if context.get("source_kind") == "telegram"
+                else "Interrupted browser receipt. Reselect the file to resume.",
             )
 
     def _metadata_committed(self, record: TransferRecord) -> bool:

@@ -281,22 +281,27 @@ class BotMode:
         name = self._media_name(media, message)
         directory = self.settings.resolved_cache_dir / "bot-imports"
         directory.mkdir(parents=True, exist_ok=True, mode=0o700)
-        staged = directory / operation_id
-        try:
-            await self.client.download_media(message, file_name=str(staged))
-            size = staged.stat().st_size
-            record = await self.transfers.enqueue_upload(
-                staged, path, name, size, transfer_id=operation_id[:32]
+        # The suffix stops Telethon from appending the media's own extension.
+        staged = directory / f"{operation_id}.part"
+
+        async def download(target, progress):
+            await self.client.download_media(
+                message, file_name=str(target), progress=progress
             )
-        except BaseException:
-            # No job owns the bytes yet; a failed download or enqueue must not
-            # leave them behind.
-            staged.unlink(missing_ok=True)
-            raise
+
+        # The job owns the staged bytes: it removes them after a failed download
+        # and keeps them after a failed upload so the website can retry it.
+        record = await self.transfers.receive_telegram_file(
+            download,
+            staged,
+            path,
+            name,
+            getattr(media, "file_size", 0) or 0,
+            transfer_id=operation_id[:32],
+        )
         if record.task is not None:
             await asyncio.shield(record.task)
         if record.status.value != "completed":
-            staged.unlink(missing_ok=True)
             raise RuntimeError(record.error or "Encrypted upload did not complete")
         return {"name": record.context.get("name", name)}
 

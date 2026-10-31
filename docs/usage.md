@@ -472,9 +472,15 @@ Repeated sends create copies; conflicting names are kept alongside existing ones
 upload it encrypted, which takes longer for large files. Turn it off for instant
 Telegram copies that stay unencrypted. [Encryption details](reference.md#stored-file-encryption).
 
+Encrypted bot imports appear in the website **Transfers** panel: first
+**Receiving from Telegram bot** with bytes and speed, then the usual Telegram
+upload. Cancel them there. Sending the same message again reuses its transfer
+instead of downloading twice. A server restart during the download marks it
+failed and deletes the partial file; send the file again. A failed upload keeps
+the downloaded file so **Retry** works.
+
 If the bot says **Upload could not be confirmed**, check the drive before
-resending: its database write may have succeeded. Bot imports lack the web
-queue's full restart/resume guarantees.
+resending: its database write may have succeeded.
 
 **/start** and **/help** explain uploads; **/current_folder** shows the destination,
 and **/set_folder** links to the website setting. The website address is remembered
