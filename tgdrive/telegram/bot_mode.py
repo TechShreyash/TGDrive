@@ -6,10 +6,12 @@ import asyncio
 import hashlib
 import inspect
 import logging
+import time
 from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime
 from types import SimpleNamespace
 from typing import Any
+from urllib.parse import urlencode
 
 from telethon import Button
 from telethon.errors import ChatForwardsRestrictedError, FloodWaitError
@@ -17,10 +19,12 @@ from telethon.errors import ChatForwardsRestrictedError, FloodWaitError
 from tgdrive.core.config import Settings
 from tgdrive.core.security import safe_name
 from tgdrive.recovery.backup import BackupError
-from tgdrive.settings.bot_settings import BotSettings
+from tgdrive.settings.bot_settings import SETTINGS_LOCATION, BotSettings
 from tgdrive.settings.managed_settings import SettingsProblem
 from tgdrive.storage.mongo_store import MongoStore
 from tgdrive.telegram.clients import Client
+from tgdrive.transfers.manager import TransferError
+from tgdrive.transfers.staging import StorageUnavailable
 
 Message = Any
 
@@ -35,6 +39,44 @@ _MEDIA_ATTRIBUTES = (
     "voice",
     "video_note",
 )
+# Telegram rate-limits edits; one status edit per few seconds stays well clear.
+_EDIT_SECONDS = 4
+_EDIT_PERCENT = 5
+
+
+class _ImportFailed(Exception):
+    pass
+
+
+def _size(value: float) -> str:
+    """Match the website's 1024-based byte labels."""
+    exponent = 0
+    while value >= 1024 and exponent < 4:
+        value /= 1024
+        exponent += 1
+    unit = ("B", "KB", "MB", "GB", "TB")[exponent]
+    return f"{value:.0f} {unit}" if exponent == 0 else f"{value:.1f} {unit}"
+
+
+def _progress(record: Any) -> tuple[str, int] | None:
+    """Status text and percent for a bot import transfer, or None when idle."""
+    name = record.context.get("name", "file")
+    if record.phase == "downloading":
+        label = "Receiving"
+    elif record.phase in {"uploading", "finalizing", "verifying"}:
+        label = "Saving to TGDrive"
+    elif record.phase in {"retry_wait", "waiting_for_telegram"}:
+        return f"Waiting for Telegram, retrying automatically…\n{name}", -1
+    elif record.phase == "queued":
+        return f"Waiting for a free upload slot…\n{name}", -2
+    else:
+        return None
+    total = record.total
+    percent = min(100, record.current * 100 // total) if total else 0
+    return (
+        f"{label} {percent}% · {_size(record.current)} of {_size(total)}\n{name}",
+        percent,
+    )
 
 
 class BotMode:
@@ -56,6 +98,7 @@ class BotMode:
         self.before_write = before_write
         self.before_delete = before_delete
         self.active_imports = 0
+        self.clock = time.monotonic
         if folder_settings is None:
             from tgdrive.storage.mongo import for_settings
 
@@ -148,15 +191,62 @@ class BotMode:
         )
 
     async def _feedback(
-        self, message: Message, status: Message | None, text: str
+        self, message: Message, status: Message | None, text: str, buttons=None
     ) -> None:
         if status is not None:
             try:
-                await status.edit_text(text)
+                await status.edit_text(text, reply_markup=buttons)
                 return
             except Exception:
                 logger.warning("Could not update bot upload feedback", exc_info=True)
-        await message.reply_text(text, reply_markup=self._menu())
+        await message.reply_text(text, reply_markup=buttons or self._menu())
+
+    def _reporter(self, status: Message):
+        """Edit one status message, throttled by time, percent and FloodWait."""
+        shown: tuple[str, int] | None = None
+        next_at = 0.0
+
+        async def report(record: Any) -> None:
+            nonlocal shown, next_at
+            current = _progress(record)
+            if current is None or self.clock() < next_at:
+                return
+            if shown is not None and (
+                current[0].split(" ", 1)[0] == shown[0].split(" ", 1)[0]
+                and 0 <= current[1] - shown[1] < _EDIT_PERCENT
+            ):
+                return
+            try:
+                await status.edit_text(current[0])
+            except FloodWaitError as error:
+                next_at = self.clock() + max(1, error.seconds)
+                return
+            except Exception:
+                logger.debug("Could not update bot progress", exc_info=True)
+            shown = current
+            next_at = self.clock() + _EDIT_SECONDS
+
+        return report
+
+    async def _saved(self, message, status, item, path, folder_name) -> None:
+        settings_url = (await self.folder_settings.snapshot())["settings_url"]
+        buttons = None
+        if settings_url:
+            site = settings_url.removesuffix(SETTINGS_LOCATION)
+            folder = path.rstrip("/").rsplit("/", 1)[-1] if path else ""
+            link = (
+                site + "/" + ("?" + urlencode({"path": "/" + folder}) if folder else "")
+            )
+            buttons = [[Button.url("Open in TGDrive", link)]]
+        size = item.get("size")
+        await self._feedback(
+            message,
+            status,
+            f"Saved ✓ {item['name']}\n"
+            + (f"{_size(size)} · " if size else "")
+            + f"in {folder_name}",
+            buttons,
+        )
 
     async def _file(self, _client: Client, message: Message) -> None:
         self.active_imports += 1
@@ -182,18 +272,11 @@ class BotMode:
                 if inspect.isawaitable(check):
                     await check
             path, folder_name = await self.folder_settings.destination()
-            status = await message.reply_text(
-                f"Saving your file to: {folder_name}…",
-                reply_markup=self._menu(),
-            )
+            # No reply keyboard here: inline buttons are edited in when saved.
+            status = await message.reply_text(f"Saving to {folder_name}…")
             if self.transfers is not None and await self.folder_settings.encrypt():
-                item = await self._encrypted_import(message, path, operation_id)
-                await self._feedback(
-                    message,
-                    status,
-                    f"Uploaded {item['name']}\nSaved to: {folder_name}\n\n"
-                    "Send another file to save it here, or use /set_folder.",
-                )
+                item = await self._encrypted_import(message, path, operation_id, status)
+                await self._saved(message, status, item, path, folder_name)
                 return
             copied = await message.copy(
                 self.settings.storage_channel,
@@ -254,6 +337,11 @@ class BotMode:
                     f"Telegram needs a pause. Wait {max(1, error.seconds)} seconds, "
                     "then send this file again."
                 )
+            elif isinstance(error, (_ImportFailed, TransferError, StorageUnavailable)):
+                text = (
+                    f"Couldn't save this file: {error}\n"
+                    "Check Transfers in TGDrive, or send the file again."
+                )
             elif isinstance(error, ChatForwardsRestrictedError):
                 text = (
                     "This chat protects its files from copying. "
@@ -266,14 +354,9 @@ class BotMode:
                 )
             await self._feedback(message, status, text)
             return
-        await self._feedback(
-            message,
-            status,
-            f"Uploaded {item['name']}\nSaved to: {folder_name}\n\n"
-            "Send another file to save it here, or use /set_folder.",
-        )
+        await self._saved(message, status, item, path, folder_name)
 
-    async def _encrypted_import(self, message, path, operation_id):
+    async def _encrypted_import(self, message, path, operation_id, status):
         """Download the forwarded file, then upload it encrypted like a web upload."""
         media = self._media(message)
         if media is None:
@@ -299,11 +382,20 @@ class BotMode:
             getattr(media, "file_size", 0) or 0,
             transfer_id=operation_id[:32],
         )
-        if record.task is not None:
-            await asyncio.shield(record.task)
+        task = record.task
+        report = self._reporter(status)
+        # asyncio.wait never cancels the transfer when this handler is cancelled.
+        while task is not None and not task.done():
+            await report(record)
+            await asyncio.wait({task}, timeout=1)
+        if record.status.value == "cancelled":
+            raise _ImportFailed("it was cancelled in TGDrive.")
         if record.status.value != "completed":
-            raise RuntimeError(record.error or "Encrypted upload did not complete")
-        return {"name": record.context.get("name", name)}
+            raise _ImportFailed(record.error or "the upload did not finish.")
+        return {
+            "name": record.context.get("name", name),
+            "size": record.context.get("size", record.total),
+        }
 
     @staticmethod
     def _media(message: Message) -> Any | None:

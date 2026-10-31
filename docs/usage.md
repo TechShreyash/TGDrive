@@ -461,7 +461,11 @@ Standard setup enables the main bot for Telegram users listed in
    Change folder**, then **Use this folder** (or **Use default folder**).
 2. Send or forward files, photos, video or audio to the bot. Send photos as files
    to preserve quality.
-3. Wait for **Saving…** to become a filename/destination confirmation.
+3. Each file gets one status message that updates in place, about every
+   4 seconds and at 5% steps: **Receiving 42% · …**, then **Saving to TGDrive …**,
+   then **Saved ✓** with the name, size and folder. When the website address is
+   known, an **Open in TGDrive** button opens that folder. Several files can be
+   sent at once; each gets its own status message.
 
 Default: **My Files / TGDriveBotModeFiles**, created on first use. All allowed
 users share the destination; changes apply to new imports without restart.

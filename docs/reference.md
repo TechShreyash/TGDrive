@@ -140,7 +140,7 @@ do not make a configuration file safe to publish.
 | `BOT_TOKENS` | Legacy bootstrap, secret | Existing comma-separated storage bot lists remain supported; duplicates are rejected. An explicit list is preserved rather than replaced by MAIN_BOT_TOKEN. For new deployments, use MAIN_BOT_TOKEN and add further storage bots through Connections. |
 | `STORAGE_CHANNEL` | Required | Negative integer private channel ID. Confirmed catalogs bind to this channel; changing it is not relocation and can trigger RECOVERY_REQUIRED. Use the membership/permissions from [Telegram setup](setup.md#2-prepare-telegram). |
 | `STRING_SESSIONS` | Empty by default, secret | Comma-separated Telethon StringSession credentials for optional Premium users; duplicates are rejected. Sessions must already be authorized and identify Premium user accounts. |
-| `PUBLIC_URL` | Omitted/empty by default | Optional HTTP(S) website origin for the bot's `/set_folder` link. Otherwise the website address is remembered when saving its bot upload folder. |
+| `PUBLIC_URL` | Omitted/empty by default | Optional HTTP(S) website origin for the bot's `/set_folder` link and **Open in TGDrive** button. Otherwise the website address is remembered when saving its bot upload folder. |
 | `TELEGRAM_ADMIN_IDS` | Required with MAIN_BOT_TOKEN | Comma-separated positive numeric Telegram user IDs allowed to use the bot in private chat; usernames are not accepted. [Find your ID](setup.md#find-your-telegram-user-id). |
 
 After initialization, saved **Connections** are authoritative for storage

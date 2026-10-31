@@ -128,7 +128,7 @@ async def test_photo_upload_gets_fallback_name_and_metadata(tmp_path: Path) -> N
     assert item["name"].startswith("photo-")
     assert item["name"].endswith("-55.jpg")
     assert message.replies[0][0].startswith("Saving")
-    assert message.status.edit_text.calls[-1][0][0].startswith("Uploaded")
+    assert message.status.edit_text.calls[-1][0][0].startswith("Saved ✓")
     assert client.deleted == []
 
 
@@ -306,7 +306,7 @@ async def test_failed_success_message_edit_does_not_roll_back_committed_upload(b
     await bot._file(bot.client, message)
     assert len(bot.store.list_directory("/")) == 1
     assert not bot.client.deleted
-    assert message.replies[-1][0].startswith("Uploaded")
+    assert message.replies[-1][0].startswith("Saved ✓")
 
 
 @pytest.mark.asyncio
@@ -418,7 +418,7 @@ async def test_bot_repeated_file_forwards_and_same_message_replay(bot, same_mess
         )
         message.id = incoming_id
         await bot._file(bot.client, message)
-        assert message.status.edit_text.calls[-1][0][0].startswith("Uploaded")
+        assert message.status.edit_text.calls[-1][0][0].startswith("Saved ✓")
 
     names = {item["name"] for item in bot.store.list_directory("/").values()}
     assert names == (
@@ -456,7 +456,7 @@ async def test_bot_operation_identity_survives_token_rotation_and_bot_replacemen
         replay = FakeMessage(1, copied=copied)
         await replacement._file(replacement.client, replay)
         assert len(bot.store.list_directory("/")) == (1 if same_account else 2)
-        assert replay.status.edit_text.calls[-1][0][0].startswith("Uploaded")
+        assert replay.status.edit_text.calls[-1][0][0].startswith("Saved ✓")
         assert replacement.client.deleted == []
     finally:
         replacement.close()
@@ -488,3 +488,136 @@ async def test_bot_replay_preserves_saved_media_when_write_guard_pauses(bot):
     assert len(bot.store.list_directory("/")) == 1
     assert bot.client.deleted == []
     assert "could not be confirmed" in message.status.edit_text.calls[-1][0][0]
+
+
+class ProgressStatus:
+    def __init__(self, *, flood_once=False) -> None:
+        self.edits: list[tuple[str, Any]] = []
+        self.flood_once = flood_once
+
+    async def edit_text(self, text: str, reply_markup: Any | None = None) -> None:
+        if self.flood_once:
+            from telethon.errors import FloodWaitError
+
+            self.flood_once = False
+            raise FloodWaitError(request=None, capture=30)
+        self.edits.append((text, reply_markup))
+
+
+@pytest.mark.asyncio
+async def test_progress_edits_are_throttled_by_time_percent_and_flood_wait(bot):
+    now = 0.0
+    bot.clock = lambda: now
+    status = ProgressStatus(flood_once=True)
+    report = bot._reporter(status)
+    record = SimpleNamespace(
+        phase="downloading", current=0, total=100 * 1024**2, context={"name": "a.mkv"}
+    )
+
+    async def at(seconds, current, phase="downloading"):
+        nonlocal now
+        now = seconds
+        record.current, record.phase = current, phase
+        await report(record)
+
+    mib = 1024**2
+    await at(0, 0)  # FloodWait: wait 30 s before the next edit.
+    await at(10, 20 * mib)
+    assert status.edits == []
+    await at(31, 42 * mib)
+    assert status.edits[-1][0] == "Receiving 42% · 42.0 MB of 100.0 MB\na.mkv"
+    await at(33, 60 * mib)  # Under the edit interval.
+    await at(40, 44 * mib)  # Under 5 percentage points.
+    assert len(status.edits) == 1
+    await at(41, 60 * mib)
+    await at(43, 10 * mib, "uploading")  # Under the edit interval.
+    await at(46, 10 * mib, "uploading")  # A new stage shows despite a lower %.
+    assert [text.split(" ", 1)[0] for text, _ in status.edits] == [
+        "Receiving",
+        "Receiving",
+        "Saving",
+    ]
+
+
+class FakeTransfers:
+    def __init__(self, *, fail: str | None = None) -> None:
+        self.fail = fail
+        self.calls = 0
+
+    async def receive_telegram_file(
+        self, download, local_path, destination, name, size, *, transfer_id
+    ):
+        self.calls += 1
+        record = SimpleNamespace(
+            id=transfer_id,
+            phase="downloading",
+            status=SimpleNamespace(value="running"),
+            current=0,
+            total=size,
+            error=None,
+            context={"name": name, "size": size},
+        )
+
+        async def run():
+            await download(local_path, None)
+            if self.fail:
+                record.status.value, record.error = "error", self.fail
+            else:
+                record.status.value = "completed"
+
+        record.task = asyncio.create_task(run())
+        return record
+
+
+class FakeDownloadClient(FakeBotClient):
+    async def download_media(self, _message, *, file_name, progress):
+        Path(file_name).write_bytes(b"abc")
+
+
+def encrypted_bot(tmp_path, transfers, site_url=None):
+    store = new_store(tmp_path / "drive")
+    folder = store.create_folder("/", "Inbox")
+    mode = root_mode(
+        client=FakeDownloadClient(),
+        settings=settings(tmp_path),
+        store=store,
+        transfers=transfers,
+    )
+    mode.folder_settings.value = BotUploadPreferences(
+        folder_path=f"/{folder['id']}", site_url=site_url
+    )
+    return mode, folder
+
+
+@pytest.mark.asyncio
+async def test_encrypted_import_reports_saved_file_with_open_button(tmp_path):
+    transfers = FakeTransfers()
+    mode, folder = encrypted_bot(tmp_path, transfers, "https://drive.example")
+    message = FakeMessage(1)
+    message.document = SimpleNamespace(file_name="movie.mkv", file_size=3 * 1024**2)
+    try:
+        await mode._file(mode.client, message)
+        assert message.replies[0] == ("Saving to My Files / Inbox…", None)
+        text = message.status.edit_text.calls[-1][0][0]
+        buttons = message.status.edit_text.calls[-1][1]["reply_markup"]
+        assert text == "Saved ✓ movie.mkv\n3.0 MB · in My Files / Inbox"
+        assert buttons[0][0].text == "Open in TGDrive"
+        assert (
+            buttons[0][0].type.url == f"https://drive.example/?path=%2F{folder['id']}"
+        )
+        assert transfers.calls == 1 and mode.active_imports == 0
+    finally:
+        mode.store.close()
+
+
+@pytest.mark.asyncio
+async def test_encrypted_import_failure_explains_where_to_retry(tmp_path):
+    mode, _ = encrypted_bot(tmp_path, FakeTransfers(fail="Telegram rejected it"))
+    message = FakeMessage(1)
+    message.document = SimpleNamespace(file_name="movie.mkv", file_size=3)
+    try:
+        await mode._file(mode.client, message)
+        text = message.status.edit_text.calls[-1][0][0]
+        assert "Telegram rejected it" in text and "Transfers in TGDrive" in text
+    finally:
+        mode.store.close()
