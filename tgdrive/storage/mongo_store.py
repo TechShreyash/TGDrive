@@ -464,7 +464,8 @@ class MongoStore:
     def _resolve(self, path, *, full=False):
         parts, path = _normalize_path(path)
         if not parts:
-            return self._get(ROOT_ID, full=full), "/", [self._get(ROOT_ID)]
+            root = self._get(ROOT_ID, full=full)
+            return root, "/", [root]
         chain = self._ancestors(parts[-1], full=full)
         # "/<id>" addresses an item at any depth, so URLs stay short however
         # deep the folder is. A longer path must be the item's exact ID chain;

@@ -68,7 +68,7 @@ def register_replica_routes(app, settings, require_admin, get_runtime):
     @app.get("/api/v1/replica", dependencies=admin)
     async def status(request: Request, response: Response):
         response.headers["Cache-Control"] = "no-store"
-        return service(request).status()
+        return await asyncio.to_thread(service(request).status)
 
     @app.post("/api/v1/replica/configure", dependencies=admin)
     async def configure(payload: ConfigureReplica, request: Request):

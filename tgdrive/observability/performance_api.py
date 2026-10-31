@@ -126,8 +126,10 @@ def register_performance_routes(
         await service(request)
         store, runtime = get_store(request), get_runtime(request)
         manager = media_manager(request)
-        path = store.resolve_id(payload.path.rstrip("/").rsplit("/", 1)[-1])
-        data = store.get_file(path)
+        path = await asyncio.to_thread(
+            store.resolve_id, payload.path.rstrip("/").rsplit("/", 1)[-1]
+        )
+        data = await asyncio.to_thread(store.get_file, path)
 
         async def authorize():
             # Deletion, trash and recovery must stop background work too.

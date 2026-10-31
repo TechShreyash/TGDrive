@@ -195,7 +195,9 @@ def register_routes(
             "staging_budget_bytes": settings.staging_budget_bytes,
             "metadata_revision": get_store(request).revision,
             "backup": history,
-            "recovery": backup.protection_status(get_store(request))
+            "recovery": await asyncio.to_thread(
+                backup.protection_status, get_store(request)
+            )
             if backup and hasattr(backup, "protection_status")
             else None,
             "clients": asdict(health) if health else None,
@@ -264,8 +266,13 @@ def register_routes(
     ) -> dict[str, Any]:
         try:
             return describe(
-                get_store(request).search_page(
-                    q, offset=offset, limit=limit, sort=sort, order=order
+                await asyncio.to_thread(
+                    get_store(request).search_page,
+                    q,
+                    offset=offset,
+                    limit=limit,
+                    sort=sort,
+                    order=order,
                 )
             )
         except DriveValidationError as error:
@@ -826,7 +833,7 @@ def register_routes(
         results = []
         if payload.action == "delete":
             for path in selected:
-                store.validate_deletion(path)
+                await asyncio.to_thread(store.validate_deletion, path)
             records = await get_manager(request).start_deletions(selected)
             for path, record in zip(selected, records, strict=True):
                 results.append({"path": path, "id": record.id, "status": "deleting"})

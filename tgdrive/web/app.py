@@ -809,7 +809,7 @@ def create_app(
         check_path(store, payload.path, descendants=True)
         manager = _transfers(request)
         try:
-            store.validate_deletion(payload.path)
+            await asyncio.to_thread(store.validate_deletion, payload.path)
         except NotFoundError, RootMutationError, TrashedItemError:
             raise HTTPException(
                 status_code=409,
@@ -825,10 +825,10 @@ def create_app(
     ) -> dict[str, str]:
         store = _store(request)
         check_path(store, payload.path, descendants=True)
-        if expected_type == "folder":
-            store.get_directory(payload.path)
-        else:
-            store.get_file(payload.path)
+        await asyncio.to_thread(
+            store.get_directory if expected_type == "folder" else store.get_file,
+            payload.path,
+        )
         from tgdrive.web.share_links import token_factory
 
         token = await asyncio.to_thread(
@@ -1078,7 +1078,7 @@ def create_app(
         path: Annotated[str, Query(min_length=1)],
         auth: Annotated[str | None, Query(max_length=512)] = None,
     ) -> dict[str, Any]:
-        path, file_data = authorized_file(request, path, auth)
+        path, file_data = await asyncio.to_thread(authorized_file, request, path, auth)
         try:
             result = await describe_preview(
                 pool=_runtime(request).pool,
@@ -1104,7 +1104,7 @@ def create_app(
     ) -> Response:
         from tgdrive.media.books import BookCache, parse_book, read_range
 
-        path, data = authorized_file(request, path, auth)
+        path, data = await asyncio.to_thread(authorized_file, request, path, auth)
         cache = getattr(app.state, "book_cache", None)
         if cache is None:
             cache = app.state.book_cache = BookCache()
@@ -1192,7 +1192,7 @@ def create_app(
         path: Annotated[str, Query(min_length=1)],
         auth: Annotated[str | None, Query(max_length=512)] = None,
     ) -> Response:
-        path, file_data = authorized_file(request, path, auth)
+        path, file_data = await asyncio.to_thread(authorized_file, request, path, auth)
         # Prefer upload-generated/provider covers; missing derivatives can use
         # a complete verified original already cached, without origin reads.
         headers = {"Cache-Control": "private, no-cache", "Vary": "Cookie"}
@@ -1297,7 +1297,7 @@ def create_app(
         path: Annotated[str, Query(min_length=1)],
         auth: Annotated[str | None, Query(max_length=512)] = None,
     ) -> Response:
-        path, file_data = authorized_file(request, path, auth)
+        path, file_data = await asyncio.to_thread(authorized_file, request, path, auth)
         headers = {"Cache-Control": "private, no-cache", "Vary": "Cookie"}
 
         async def authorize():
@@ -1352,7 +1352,7 @@ def create_app(
         path: Annotated[str, Query(min_length=1)],
         auth: Annotated[str | None, Query(max_length=512)] = None,
     ) -> dict[str, Any]:
-        _path, file_data = authorized_file(request, path, auth)
+        _path, file_data = await asyncio.to_thread(authorized_file, request, path, auth)
         try:
             result = await describe_media(
                 pool=_runtime(request).pool,
@@ -1362,7 +1362,7 @@ def create_app(
                 file_name=file_data["name"],
                 size=file_data["size"],
             )
-            authorized_file(request, _path, auth)
+            await asyncio.to_thread(authorized_file, request, _path, auth)
             return result
         except TelegramFileNotFound as exc:
             raise HTTPException(404, exc.public_detail) from exc
@@ -1379,7 +1379,7 @@ def create_app(
             str | None, Query(max_length=128, pattern=r"^[A-Za-z0-9_-]+$")
         ] = None,
     ) -> Response:
-        path, file_data = authorized_file(request, path, auth)
+        path, file_data = await asyncio.to_thread(authorized_file, request, path, auth)
 
         pool = _runtime(request).pool
         progress = None
@@ -1501,7 +1501,7 @@ def create_app(
         ],
         auth: Annotated[str | None, Query(max_length=512)] = None,
     ):
-        _, data = authorized_file(request, path, auth)
+        _, data = await asyncio.to_thread(authorized_file, request, path, auth)
         pool = _runtime(request).pool
         estimate = getattr(pool, "queue_estimate", None)
         progress = getattr(pool, "_request_files", {}).get(request_id)
