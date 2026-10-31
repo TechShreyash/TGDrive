@@ -150,6 +150,7 @@ def test_multi_file_torrent_waits_for_a_file_choice(
     toggle = page.get_by_role("button", name="Show Transfer Details", exact=True)
     if toggle.count():
         toggle.click()
+    page.get_by_role("button", name="Choose files (3)", exact=True).click()
     picker = page.get_by_role("form", name="Choose files from Album", exact=True)
     expect(picker).to_be_visible()
     assert starts[0]["select_files"] is True

@@ -198,22 +198,27 @@
     margin: 0;
 }
 
+.torrent-choose-button {
+    justify-self: start;
+    margin-top: 6px;
+}
 .torrent-picker {
     display: grid;
-    gap: 8px;
-    margin-top: 8px;
-    font-size: 12px;
-}
-.torrent-picker .text-button,
-.torrent-picker .primary-button {
-    font-size: 12px;
+    gap: 12px;
+    min-width: 0;
 }
 .torrent-picker-actions {
     display: flex;
-    gap: 12px;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 16px;
+}
+.torrent-picker-count {
+    margin-left: auto;
+    color: var(--muted);
 }
 .torrent-picker-files {
-    max-height: 260px;
+    max-height: min(60vh, 520px);
     overflow: auto;
     margin: 0;
     padding: 0;
@@ -221,17 +226,27 @@
     border: 1px solid var(--line);
     border-radius: 8px;
 }
+.torrent-picker-files li + li {
+    border-top: 1px solid var(--line-subtle);
+}
 .torrent-picker-files label {
     display: grid;
     grid-template-columns: auto minmax(0, 1fr) auto;
     align-items: center;
-    gap: 8px;
-    padding: 4px 10px;
+    gap: 12px;
+    padding: 8px 12px;
+    cursor: pointer;
 }
 .torrent-picker-path {
+    min-width: 0;
     overflow-wrap: anywhere;
 }
 .torrent-picker-size {
     color: var(--muted);
     font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+}
+.torrent-picker-submit {
+    display: flex;
+    justify-content: flex-end;
 }

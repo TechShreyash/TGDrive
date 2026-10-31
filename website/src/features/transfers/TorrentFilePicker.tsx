@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { Modal } from "../../shared/components";
 import { formatBytes } from "../../shared/types";
 
 /** Indexes and byte total of the chosen files. */
@@ -14,7 +15,47 @@ export function torrentSelection(
     };
 }
 
+/** Row action that opens the file choice in a full-size dialog. */
 export default function TorrentFilePicker({
+    name,
+    files,
+    onChoose,
+}: {
+    name: string;
+    files: { path: string; size: number }[];
+    onChoose: (indexes: number[]) => Promise<void>;
+}) {
+    const [open, setOpen] = useState(false);
+    return (
+        <>
+            <button
+                type="button"
+                className="secondary-button torrent-choose-button"
+                onClick={() => setOpen(true)}
+            >
+                Choose files ({files.length})
+            </button>
+            {open && (
+                <Modal
+                    title={"Choose files from " + name}
+                    wide
+                    onClose={() => setOpen(false)}
+                >
+                    <TorrentFileChoice
+                        name={name}
+                        files={files}
+                        onChoose={async (indexes) => {
+                            await onChoose(indexes);
+                            setOpen(false);
+                        }}
+                    />
+                </Modal>
+            )}
+        </>
+    );
+}
+
+function TorrentFileChoice({
     name,
     files,
     onChoose,
@@ -49,6 +90,9 @@ export default function TorrentFilePicker({
                     .finally(() => setBusy(false));
             }}
         >
+            <p className="settings-help">
+                Only the files you keep selected are downloaded and saved.
+            </p>
             <div className="torrent-picker-actions">
                 <button
                     type="button"
@@ -66,6 +110,9 @@ export default function TorrentFilePicker({
                 >
                     Select none
                 </button>
+                <span className="torrent-picker-count">
+                    {indexes.length} of {files.length} selected
+                </span>
             </div>
             <ul className="torrent-picker-files">
                 {files.map((file, index) => (
@@ -90,19 +137,21 @@ export default function TorrentFilePicker({
                 ))}
             </ul>
             {error && <p role="alert">{error}</p>}
-            <button
-                type="submit"
-                className="primary-button"
-                disabled={busy || !indexes.length}
-            >
-                {busy
-                    ? "Starting…"
-                    : "Import " +
-                      indexes.length +
-                      (indexes.length === 1 ? " file" : " files") +
-                      " · " +
-                      formatBytes(size)}
-            </button>
+            <div className="torrent-picker-submit">
+                <button
+                    type="submit"
+                    className="primary-button"
+                    disabled={busy || !indexes.length}
+                >
+                    {busy
+                        ? "Starting…"
+                        : "Import " +
+                          indexes.length +
+                          (indexes.length === 1 ? " file" : " files") +
+                          " · " +
+                          formatBytes(size)}
+                </button>
+            </div>
         </form>
     );
 }
