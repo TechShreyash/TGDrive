@@ -284,8 +284,8 @@ async def test_selected_files_are_the_only_ones_aria2c_downloads(monkeypatch, tm
     assert options["select-file"] == "1,3"
 
 
-async def test_retry_progress_counts_verified_pieces_instead_of_restarting():
-    engine = torrent._Aria2(Path("/tmp"))
+async def test_retry_progress_counts_verified_pieces_instead_of_restarting(tmp_path):
+    engine = torrent._Aria2(tmp_path)
     states = iter(
         [
             # Re-hashing pieces kept from the failed attempt.
