@@ -136,7 +136,9 @@ not keep a sleeping host available. [Cache defaults and retention](performance.m
 | Network capacity and route | Server ingress/egress or its path to Telegram/viewers is the bottleneck. | Viewers still have their own connection limits, and monthly bandwidth allowances can apply. |
 
 Also use provider/host/database monitoring when needed: TGDrive does not report
-the server's physical network-port capacity or MongoDB response latency.
+the server's physical network-port capacity. It backs off automatically when
+MongoDB slows down ([automatic tuning](performance.md#automatic-tuning)), but
+database dashboards still give the full picture.
 Compare improvements with the same mix of cold reads, cached reads and uploads.
 Keep **one active TGDrive installation and one app worker per drive**; increasing
 workers against the same drive is not the supported way to use a larger server.

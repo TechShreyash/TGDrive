@@ -56,6 +56,7 @@ for each value and the latest measurements under `tuning`.
 | Disk cache | 50% of free data-disk space after the reserve |
 | Temporary upload budget, largest accepted file | Free data-disk space after the reserve |
 | Uploads per bot, upload pipeline, request limit, media per bot, URL downloads, preload jobs | Start from current settings. Halve (minimum 1) when a window sees a new FloodWait or request timeout. Add 1 when the window moved data without errors, throughput did not drop by more than 10% and 60 seconds have passed since the last change. Only preload jobs have a ceiling: 4 per CPU |
+| MongoDB back-off | Pings MongoDB every tick and learns its usual latency (the lowest seen, drifting up 1% per tick). A ping above both 250 ms and four times the usual latency halves every concurrency value, at most once per 60 seconds, and pauses increases until MongoDB is fast again. A failed ping is ignored |
 
 Memory comes from cgroup v2 (`memory.max`, `memory.current`), with
 `/proc/meminfo` as the fallback; the CPU count comes from `cpu.max`, falling
