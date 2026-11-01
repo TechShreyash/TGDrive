@@ -39,6 +39,8 @@ use the [user guide](usage.md); for settings you can change on screen, use
 | --- | --- |
 | Catalog / metadata | Records describing your files and folders; not their contents |
 | Receipt | The server's record of upload bytes already received |
+| Replica set | A MongoDB deployment mode that supports transactions; Atlas clusters are replica sets, a plain standalone `mongod` is not |
+| Publication | The final upload step: sending the Telegram message and saving the file record |
 | Staging | Temporary server disk holding unfinished upload bytes |
 | Bootstrap settings | Saved startup values used to reopen an existing drive |
 | Origin request | A request to Telegram for data not already available in cache |

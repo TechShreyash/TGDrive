@@ -36,9 +36,8 @@ other visitors can change unprotected content.
 ## Keep these essentials in mind
 
 - **Wait for the upload status.** Keep the tab open until **You can close this
-  tab**. The host can then finish accepted work without your browser, while
-  TGDrive keeps running. Keep source files until **Completed**. Optional channel
-  protection has a separate **Backup confirmed** status.
+  tab**, and your originals until **Completed**.
+  [What upload statuses mean](usage.md#can-i-close-the-tab).
 - **Let TGDrive manage its channel.** Use a dedicated private broadcast channel
   with auto-delete **Off**. Upload through TGDrive or its configured bot; do not
   edit storage messages, clear channel history, alter recovery pins or add
@@ -46,10 +45,8 @@ other visitors can change unprotected content.
 - **Keep another copy of valuable files.** TGDrive has no total storage cap,
   but file-size, database, disk and provider limits apply. Permanent access is
   not guaranteed. A second Telegram channel still depends on the same provider.
-- **Keep recovery material usable.** A recovery file saves database data; it
-  still needs a surviving channel containing the original bytes. It excludes
-  unfinished uploads. Its key is separate from your login password; losing it
-  can make that backup unusable. [Backup options](backup-recovery.md).
+- **Keep recovery material usable.** Save a recovery file and its separate key
+  outside the server. [What a backup can and can't restore](backup-recovery.md).
 - **Protect access.** The owner password grants full shared access. Anyone
   holding a valid share link can read its selected content. Use a unique
   password and HTTPS for remote access; keep credentials and keys private.
@@ -71,7 +68,7 @@ unreadable. Only open downloads you trust: TGDrive does not scan for malware.
 **Is TGDrive free?**  
 Yes. All app features are free. Run it on your computer or your own server;
 server and database providers may charge for their resources.
-Premium is optional, including for automatic splitting of large files.
+Premium is optional; [large files split automatically](usage.md#files-above-2-gb).
 [Upload limits](configuration.md#transfer-limits) ·
 [Self-hosting choices](hosting.md).
 

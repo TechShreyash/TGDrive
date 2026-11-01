@@ -693,7 +693,7 @@ Owner cookie or scoped file/folder capability required; supply `path` and option
 
 | Route | Response |
 | --- | --- |
-| GET /api/v1/books | path, optional auth and entry. Without entry: book index with format, title and ordered entries. With entry: passive EPUB chapter JSON or raster page bytes. See [reader limits](reading.md#reader-limits). |
+| GET /api/v1/books | path, optional auth and entry. Without entry: book index with format, title and ordered entries. With entry: passive EPUB chapter JSON or raster page bytes. See [reader limits](architecture.md#book-reader-internals). |
 | GET /api/v1/preview | name, size and kind:text/pdf/video/book/unsupported. Text includes text, language, truncated and preview_bytes; PDF includes an authorized local URL; unsupported includes a reason. |
 | GET /api/v1/media | original descriptor and variants list from the actual stored message. Each descriptor has id, label, is_original, size, mime_type, width, height and duration where applicable. |
 | GET /api/v1/thumbnail | TGDrive-generated JPEG cover when cached, otherwise a provider JPEG/PNG/WebP thumbnail, at most 128 KiB; optional `If-None-Match` can return `304`. |
@@ -753,14 +753,14 @@ the descriptor may expose its XML. Ambiguous `.ts`/`.mts` require repeated MPEG
 packet evidence to become video; valid TypeScript and `.cts` remain source text.
 The source-byte cap does not bound all internal Telegram transfer bytes.
 
-Book raster pages are checked against the [reader dimension limits](reading.md#reader-limits)
+Book raster pages are checked against the [reader dimension limits](architecture.md#book-reader-internals)
 before delivery; an oversized or malformed image returns a preview error without
 changing its original download.
 
 **PDF:** at most 256 MiB source, lazy authorized ranges without a cumulative
 session-byte cap or automatic whole-file preparation. Local PDF.js disables
 streaming/full-file prefetch; closing aborts requests. Normal range-cache and
-multipart mapping apply. [Reader limits](reading.md#reader-limits) define request,
+multipart mapping apply. [Reader limits](architecture.md#book-reader-internals) define request,
 buffer and parser budgets for PDF/EPUB/CBZ/CBR; they are not total browser-memory
 guarantees. Failed previews retain original download.
 

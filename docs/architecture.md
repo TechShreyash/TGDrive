@@ -14,6 +14,27 @@ TGDrive prevents conflicting writes. For everyday actions, use the
 | How do uploads become saved files? | [Transfer pipeline](#transfer-pipeline) · [Retries](#bounds-and-retries) · [Cancellation](#cancellation-and-destination-changes) |
 | How are reads, history and backups handled? | [File responses](#telegram-transport-and-file-responses) · [History](#finished-history) · [Backups](#database-safety-copies-and-security) |
 | Where is the code? | [Components](#components) |
+| How do readers and thumbnails stay bounded? | [Book reader internals](#book-reader-internals) · [Thumbnail rendering internals](#thumbnail-rendering-internals) |
+
+<details>
+<summary>All sections</summary>
+
+- [The short version](#the-short-version)
+- [Components](#components)
+- [Authoritative data and identity](#authoritative-data-and-identity)
+- [Lifecycle](#lifecycle)
+- [Account identity and selection](#account-identity-and-selection)
+- [Connection management](#connection-management)
+- [Demo access boundaries](#demo-access-boundaries)
+- [Transfer pipeline](#transfer-pipeline)
+- [Telegram transport and file responses](#telegram-transport-and-file-responses)
+- [Media and performance](#media-and-performance)
+- [Book reader internals](#book-reader-internals)
+- [Thumbnail rendering internals](#thumbnail-rendering-internals)
+- [Database safety copies and security](#database-safety-copies-and-security)
+- [Diagnostic history](#diagnostic-history)
+
+</details>
 
 ## The short version
 
@@ -568,6 +589,116 @@ Completion removes the record; opening and closing an unused Continue offer
 preserves it. Invalid or out-of-range positions do not produce a Continue offer,
 and storage failures do not block playback. See the
 [watch-position behavior and browser-storage limits](usage.md#open-preview-and-download).
+
+## Book reader internals
+
+User-facing formats and controls are in [Reading books and comics](reading.md).
+
+EPUB chapters with images and at most 80 surrounding text characters use the
+illustrated-page layout. More complex publisher layouts can differ.
+
+PDF.js retains a source buffer up to the **256 MiB** file limit. HTTP requests use
+at most **1 MiB** ranges with **two** reader requests active. Combined active
+response buffers normally stay within **64 MiB**; a larger metadata request runs
+alone, bounded by source size. Queued requests hold descriptors, not response
+buffers. Success/failure releases claims. Reading more than 64 MiB over time does
+not close the document. Canvas/page/text budgets also apply; these limits do not
+guarantee a complex PDF will fit every device's memory.
+
+| Bound | Limit |
+| --- | --- |
+| Index/chapter/thumbnail operation | 32 MiB fetched; aligned 1 MiB reads and a four-block parser cache |
+| One selected original raster image | 64 MiB encoded image; up to 96 MiB source reads without loading unrelated ZIP entries |
+| Raster images | Headers are validated before bytes leave the parser; no pixel or edge limit |
+| Archive | Stored/deflate ZIP methods; no entry-count limit |
+| EPUB / entries | 2 MiB/text entry; 16 MiB thumbnail-source image, separate from the 64 MiB reader-page limit |
+| Parser work | Two simultaneous operations, 16 pending requests, 45-second parser timeout; 55-second total route deadline including shared-result waits |
+| Linux container parser process | No memory or CPU cap; the kernel ends the parser, not TGDrive, under memory pressure |
+
+The server caches extracted pages and parsed chapters/indexes for up to **five
+minutes**, bounded to **64 MiB and 16 results**. Concurrent requests for the same
+result share one extraction. Eviction/restart requires parsing again; normal
+source-range cache data can still be reused. Private browser entries are
+revalidated; **304** reuses unchanged bytes. Every request rechecks current access
+and source identity, including cache hits and 304s. Revocation stops later reads
+through that link; it cannot recall delivered bytes or revoke independent links.
+
+Raster bytes cross the parser boundary as bounded binary output without base64
+expansion. Header checks do not decode or resize images. JPEG dimensions must
+appear within the first 1 MiB; excessive/malformed headers are rejected. There
+is no pixel limit, so very large images depend on the browser's decoder, GPU and
+memory. Unsafe/duplicate archive names and extreme compression ratios
+fail. Solid CBR may exhaust its read budget before a page; busy readers receive
+retry guidance. Budgets apply per operation and allow cached-data reuse.
+
+Docker includes CBR's native libarchive runtime; no host installation is needed.
+The bounded parser is not an OS security sandbox: keep the deployment image
+updated. If it cannot parse a book, download the original for a dedicated reader.
+
+## Thumbnail rendering internals
+
+User-facing behavior is in [Thumbnails and video posters](thumbnails.md).
+
+Generated JPEGs have a maximum **320-pixel edge and 64 KiB size**. The separate
+`CACHE_DIR/thumbnails` cache holds at most **128 MiB / 4,096 entries**, evicts older
+entries and avoids writes below **64 MiB free disk**. It is excluded from metadata
+backups; attached Telegram covers remain the fallback. Cached bytes do not grant
+access to expired/deleted files.
+
+Video posters use a separate `CACHE_DIR/posters` cache with the same
+**128 MiB / 4,096-entry** bounds and free-space floor. A bounded RAM cache
+coalesces poster requests; each response rechecks current file/share access and
+verifies the saved image's size and SHA-256. A fresh player waits at most ten
+seconds for its optional poster lookup before trying the representative frame.
+Poster publication follows the original parts, with a **15-second attempt
+window**. Transfer byte progress counts the original file, so it can remain at
+100% while poster publication and metadata protection finish. A send that may
+have reached Telegram retains its retry journal instead of being silently skipped.
+Generating both sizes normally decodes the source video once, then derives the
+small thumbnail from that picture; unsuccessful poster generation can fall back
+to the existing small-cover renderer within its operation deadline.
+
+**Warm-cache repair:** one file at a time, with an **eight-second** copy/render
+deadline. Verified blocks are copied to a locked private temporary file rather
+than joined in RAM. Complete coverage and multipart checksums are checked; free
+space must cover the source plus the larger of 64 MiB or the configured cache
+free-space floor. Startup/later repairs remove unlocked crash leftovers. Eviction,
+cache clearing, revocation or cancellation aborts safely and removes the source.
+Failed rendering is reconsidered when new cache data arrives for that file;
+metadata/cache hits alone do not repeat it. Temporary admission/space/copy
+failures may retry sooner. Ordinary missing-provider results are briefly cached.
+
+**Manual rebuild reads:** video/images use a private loopback FFmpeg range bridge
+through the shared cache. Books/office files read their index and cover. Most
+sources have a **64 MiB cumulative read budget and 16-minute deadline**;
+books retain their **32 MiB** parser budget. PDFs need seekable local bytes and
+may read the complete original up to **256 MiB**, with free-space checks and
+crash-cleaned private staging. Larger or overly demanding sources are skipped.
+Manual rendering has its own lower-OS-priority slot; only its token-protected
+loopback source is allowed. Because that source streams from Telegram, network
+waits are not timed: FFmpeg is stopped only after **30 seconds** with no output,
+progress line or bytes read. A **10-minute** ceiling per attempt and a
+**15-minute** native deadline remain as hang guards.
+
+**Automatic renderer:** one slot per process, **two-second** admission wait,
+**3-minute** operation timeout. Video metadata probing allows **1.5 seconds**.
+The first frame attempt seeks randomly between 40% and 60% of duration, or ten
+seconds in if duration is unknown; it and the first-frame fallback each allow
+**60 seconds**. Video decoding reads only keyframes (`-skip_frame nokey`), so
+long reference chains such as UHD HEVC are not decoded. Partial JPEGs are rejected; a nonblack frame
+is not guaranteed. Admission/decoder failures retain the cover/icon fallback.
+
+Large JPEGs above **8 MiB** use decoder downsampling. Book/office covers use the
+bounded archive parser (**32 MiB** reads, **16 MiB** per image), reject remote
+resources/archive-path extraction and force recognized raster bytes through the
+image decoder. Existing covers change only on new upload, explicit rebuild or
+eligible repair.
+
+The Linux renderer uses **one decoding/filter thread and 64 MiB per allocation**
+and cannot write files. It has no CPU-time or memory cap; instead it sets
+`oom_score_adj` to 1000 so under memory pressure the kernel kills the renderer
+before TGDrive. The renderer then falls back to the cover/icon.
+Forced demuxers and file/pipe-only local inputs block playlist/network loads.
 
 ## Database safety copies and security
 

@@ -10,6 +10,30 @@ Docker Compose supplies Python, the website and preview/import tools. You do not
 need to install Python or Node separately. For a **new v2 drive**, use an empty
 MongoDB database and a new private Telegram channel; v1 catalogs are not imported.
 
+<details>
+<summary>Contents</summary>
+
+- [Choose your installation](#choose-your-installation)
+- [Before you start](#before-you-start)
+  - [Get the source](#get-the-source)
+- [1. Prepare MongoDB](#1-prepare-mongodb)
+- [2. Prepare Telegram](#2-prepare-telegram)
+- [3. Configure your drive](#3-configure-your-drive)
+- [4. Start locally](#4-start-locally)
+- [5. Open your drive](#5-open-your-drive)
+- [Apply updates to an existing drive](#apply-updates-to-an-existing-drive)
+- [If setup stops](#if-setup-stops)
+- [Reinstall or move to another machine](#reinstall-or-move-to-another-machine)
+- [Additional bots and Premium accounts](#additional-bots-and-premium-accounts)
+- [Hosting beyond your machine](#hosting-beyond-your-machine)
+  - [Coolify](#coolify)
+  - [Docker Compose on a server](#docker-compose-on-a-server)
+  - [Other hosting](#other-hosting)
+- [Features and settings after setup](#features-and-settings-after-setup)
+- [Optional independent channel protection](#optional-independent-channel-protection)
+
+</details>
+
 ## Choose your installation
 
 Local TGDrive works while your computer and Docker are running. A sleeping or
@@ -73,7 +97,7 @@ For optional custom archives/checksums, see [release verification](release.md#ve
 
 MongoDB stores your file index and settings; Telegram stores file contents.
 [MongoDB Atlas](https://www.mongodb.com/docs/atlas/tutorial/deploy-free-tier-cluster/)
-is the simplest option. Self-hosted MongoDB must be a **replica set**, not a
+is the simplest option. Self-hosted MongoDB must be a **[replica set](reference.md#terms-used-here)**, not a
 standalone container. TGDrive's Compose files do not include MongoDB.
 
 > [!NOTE]

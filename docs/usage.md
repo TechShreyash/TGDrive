@@ -264,7 +264,7 @@ remain available to choose originals, retry or cancel once the endpoints are rea
 
 **Clear history** removes finished entries across all pages, ignoring the current
 filter/search. It cannot be undone. It keeps stored files, active work and uploads
-still needing originals, including failed uploads with resumable receipts.
+still needing originals, including failed uploads with resumable [receipts](reference.md#terms-used-here).
 Folders with unfinished files retain their rows until cleared after completion.
 Server history clears for all devices; browser-only history clears here.
 
@@ -448,13 +448,13 @@ server disk, not your total Telegram storage.
 
 **Back up now** creates one encrypted recovery file. Automatic copies normally
 run hourly without an independent channel; independent protection batches changes.
-Each backup is pinned in your channel and opens with your `ENCRYPTION_KEY`. Reuse
-the same `.env` and MongoDB after losing a local installation. [Backup setup and restore](backup-recovery.md).
+Each backup is pinned in your channel and opens only with your encryption key.
+[Backup setup and restore](backup-recovery.md).
 
 ## Upload through your Telegram bot
 
-Standard setup enables the main bot for Telegram users listed in
-`TELEGRAM_ADMIN_IDS`. Use its **private chat**:
+Your server operator chooses which Telegram users may use the bot
+([bot access settings](configuration.md#telegram-bot-access)). Use its **private chat**:
 
 1. On the website, choose **Configuration → Transfer limits → Bot uploads →
    Change folder**, then **Use this folder** (or **Use default folder**).
@@ -466,8 +466,8 @@ Standard setup enables the main bot for Telegram users listed in
    known, an **Open in TGDrive** button opens that folder. Several files can be
    sent at once; each gets its own status message.
 
-Messages from users not in `TELEGRAM_ADMIN_IDS` get one reply with their
-Telegram user ID, so the owner can allow them; later messages are ignored.
+Messages from users who are not allowed get one reply with their Telegram user
+ID, so the owner can allow them; later messages are ignored.
 
 Default: **My Files / TGDriveBotModeFiles**, created on first use. All allowed
 users share the destination; changes apply to new imports without restart.
@@ -489,10 +489,8 @@ If the bot says **Upload could not be confirmed**, check the drive before
 resending: its database write may have succeeded.
 
 **/start** and **/help** explain uploads; **/current_folder** shows the destination,
-and **/set_folder** links to the website setting. The website address is remembered
-when saved; `PUBLIC_URL` can supply it earlier. Installations using only
-`BOT_TOKENS` must configure a main bot/allowed IDs and restart to enable this.
-[Bot settings](reference.md#telegram-accounts) · [Known recovery gaps](roadmap.md#known-correctness-and-recovery-gaps)
+and **/set_folder** links to the website setting.
+[Bot access settings](configuration.md#telegram-bot-access) · [Known recovery gaps](roadmap.md#known-correctness-and-recovery-gaps)
 
 ## Try the public demo
 

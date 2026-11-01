@@ -7,6 +7,14 @@ usually means no usable cover was available; it does not prove the file is damag
 For one older file, try [cached-cover repair](#existing-files-and-fallback).
 For a library, use [background rebuilding](#rebuild-existing-thumbnails).
 
+**Contents**
+
+- [Video posters](#video-posters)
+- [Bandwidth and storage](#bandwidth-and-storage)
+- [Rebuild existing thumbnails](#rebuild-existing-thumbnails)
+- [Existing files and fallback](#existing-files-and-fallback)
+- [Container dependencies](#container-dependencies)
+
 | File | Cover |
 | --- | --- |
 | JPEG, PNG, WebP, GIF, BMP, TIFF | Scaled image; one frame for animation |
@@ -44,7 +52,7 @@ a durable poster. Thumbnail repair/rebuilding still refreshes small covers only;
 there is no automatic whole-library poster rebuild.
 
 Generation and pre-dispatch poster failures retain the normal video upload.
-Poster publication has its own durable retry identity. If a send may have reached
+Poster [publication](reference.md#terms-used-here) has its own durable retry identity. If a send may have reached
 Telegram, the job keeps its journal and staged data for retry or cancellation
 instead of forgetting a possibly published image. Accepted server uploads can
 finish with the browser closed; on-demand preview decoding needs the viewer open.
@@ -109,71 +117,8 @@ Partial, cold, larger, unsupported, damaged, encrypted or overly complex sources
 keep their provider cover/icon. A container such as MOV still needs a supported
 codec and decoding cost; a missing cover does not establish playback failure.
 
-<details>
-<summary>Technical budgets, rendering and dependencies</summary>
-
-Generated JPEGs have a maximum **320-pixel edge and 64 KiB size**. The separate
-`CACHE_DIR/thumbnails` cache holds at most **128 MiB / 4,096 entries**, evicts older
-entries and avoids writes below **64 MiB free disk**. It is excluded from metadata
-backups; attached Telegram covers remain the fallback. Cached bytes do not grant
-access to expired/deleted files.
-
-Video posters use a separate `CACHE_DIR/posters` cache with the same
-**128 MiB / 4,096-entry** bounds and free-space floor. A bounded RAM cache
-coalesces poster requests; each response rechecks current file/share access and
-verifies the saved image's size and SHA-256. A fresh player waits at most ten
-seconds for its optional poster lookup before trying the representative frame.
-Poster publication follows the original parts, with a **15-second attempt
-window**. Transfer byte progress counts the original file, so it can remain at
-100% while poster publication and metadata protection finish. A send that may
-have reached Telegram retains its retry journal instead of being silently skipped.
-Generating both sizes normally decodes the source video once, then derives the
-small thumbnail from that picture; unsuccessful poster generation can fall back
-to the existing small-cover renderer within its operation deadline.
-
-**Warm-cache repair:** one file at a time, with an **eight-second** copy/render
-deadline. Verified blocks are copied to a locked private temporary file rather
-than joined in RAM. Complete coverage and multipart checksums are checked; free
-space must cover the source plus the larger of 64 MiB or the configured cache
-free-space floor. Startup/later repairs remove unlocked crash leftovers. Eviction,
-cache clearing, revocation or cancellation aborts safely and removes the source.
-Failed rendering is reconsidered when new cache data arrives for that file;
-metadata/cache hits alone do not repeat it. Temporary admission/space/copy
-failures may retry sooner. Ordinary missing-provider results are briefly cached.
-
-**Manual rebuild reads:** video/images use a private loopback FFmpeg range bridge
-through the shared cache. Books/office files read their index and cover. Most
-sources have a **64 MiB cumulative read budget and 16-minute deadline**;
-books retain their **32 MiB** parser budget. PDFs need seekable local bytes and
-may read the complete original up to **256 MiB**, with free-space checks and
-crash-cleaned private staging. Larger or overly demanding sources are skipped.
-Manual rendering has its own lower-OS-priority slot; only its token-protected
-loopback source is allowed. Because that source streams from Telegram, network
-waits are not timed: FFmpeg is stopped only after **30 seconds** with no output,
-progress line or bytes read. A **10-minute** ceiling per attempt and a
-**15-minute** native deadline remain as hang guards.
-
-**Automatic renderer:** one slot per process, **two-second** admission wait,
-**3-minute** operation timeout. Video metadata probing allows **1.5 seconds**.
-The first frame attempt seeks randomly between 40% and 60% of duration, or ten
-seconds in if duration is unknown; it and the first-frame fallback each allow
-**60 seconds**. Video decoding reads only keyframes (`-skip_frame nokey`), so
-long reference chains such as UHD HEVC are not decoded. Partial JPEGs are rejected; a nonblack frame
-is not guaranteed. Admission/decoder failures retain the cover/icon fallback.
-
-Large JPEGs above **8 MiB** use decoder downsampling. Book/office covers use the
-bounded archive parser (**32 MiB** reads, **16 MiB** per image), reject remote
-resources/archive-path extraction and force recognized raster bytes through the
-image decoder. Existing covers change only on new upload, explicit rebuild or
-eligible repair.
-
-The Linux renderer uses **one decoding/filter thread and 64 MiB per allocation**
-and cannot write files. It has no CPU-time or memory cap; instead it sets
-`oom_score_adj` to 1000 so under memory pressure the kernel kills the renderer
-before TGDrive. The renderer then falls back to the cover/icon.
-Forced demuxers and file/pipe-only local inputs block playlist/network loads.
-
-</details>
+Exact cache sizes, render deadlines and decoder limits are in
+[thumbnail rendering internals](architecture.md#thumbnail-rendering-internals).
 
 ## Container dependencies
 

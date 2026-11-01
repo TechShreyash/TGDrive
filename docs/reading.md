@@ -64,52 +64,9 @@ Temporary image failures get up to three attempts, with 2/4-second waits or a
 server retry hint up to 30 seconds. Permanent errors stop retries. Leaving the
 page cancels that browser's download and retries.
 
-<details>
-<summary>Technical limits, caching and server dependencies</summary>
-
 ## Reader limits
 
-EPUB chapters with images and at most 80 surrounding text characters use the
-illustrated-page layout. More complex publisher layouts can differ.
-
-PDF.js retains a source buffer up to the **256 MiB** file limit. HTTP requests use
-at most **1 MiB** ranges with **two** reader requests active. Combined active
-response buffers normally stay within **64 MiB**; a larger metadata request runs
-alone, bounded by source size. Queued requests hold descriptors, not response
-buffers. Success/failure releases claims. Reading more than 64 MiB over time does
-not close the document. Canvas/page/text budgets also apply; these limits do not
-guarantee a complex PDF will fit every device's memory.
-
-| Bound | Limit |
-| --- | --- |
-| Index/chapter/thumbnail operation | 32 MiB fetched; aligned 1 MiB reads and a four-block parser cache |
-| One selected original raster image | 64 MiB encoded image; up to 96 MiB source reads without loading unrelated ZIP entries |
-| Raster images | Headers are validated before bytes leave the parser; no pixel or edge limit |
-| Archive | Stored/deflate ZIP methods; no entry-count limit |
-| EPUB / entries | 2 MiB/text entry; 16 MiB thumbnail-source image, separate from the 64 MiB reader-page limit |
-| Parser work | Two simultaneous operations, 16 pending requests, 45-second parser timeout; 55-second total route deadline including shared-result waits |
-| Linux container parser process | No memory or CPU cap; the kernel ends the parser, not TGDrive, under memory pressure |
-
-The server caches extracted pages and parsed chapters/indexes for up to **five
-minutes**, bounded to **64 MiB and 16 results**. Concurrent requests for the same
-result share one extraction. Eviction/restart requires parsing again; normal
-source-range cache data can still be reused. Private browser entries are
-revalidated; **304** reuses unchanged bytes. Every request rechecks current access
-and source identity, including cache hits and 304s. Revocation stops later reads
-through that link; it cannot recall delivered bytes or revoke independent links.
-
-Raster bytes cross the parser boundary as bounded binary output without base64
-expansion. Header checks do not decode or resize images. JPEG dimensions must
-appear within the first 1 MiB; excessive/malformed headers are rejected. There
-is no pixel limit, so very large images depend on the browser's decoder, GPU and
-memory. Unsafe/duplicate archive names and extreme compression ratios
-fail. Solid CBR may exhaust its read budget before a page; busy readers receive
-retry guidance. Budgets apply per operation and allow cached-data reuse.
-
-## Running the reader
-
-Docker includes CBR's native libarchive runtime; no host installation is needed.
-The bounded parser is not an OS security sandbox: keep the deployment image
-updated. If it cannot parse a book, download the original for a dedicated reader.
-
-</details>
+Very large or complex books may not open on every device. If a book won't open,
+download the original for a dedicated reader. Docker includes the CBR runtime,
+so no host installation is needed. Exact transfer, parser and cache bounds are
+in [book reader internals](architecture.md#book-reader-internals).

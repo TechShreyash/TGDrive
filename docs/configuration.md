@@ -14,6 +14,7 @@ choices that are yours to make.
 | Turn playback preloading on or off | [Cache settings](#cache-settings) |
 | Split files into smaller Telegram documents | [Transfer limits](#transfer-limits) |
 | Change displayed dates | [Timezone](#timezone) |
+| Choose who can use the bot | [Telegram bot access](#telegram-bot-access) |
 | Change credentials or hosting behavior | [Deployment-only settings](#deployment-only-settings) |
 | Run a shared demo with locked settings | [Public demo mode](#public-demo-mode) |
 
@@ -86,6 +87,16 @@ MongoDB is required for every deployment. Invalid configuration or failed
 database access stops startup; no local database is substituted. A pristine
 database is initialized automatically.
 See [startup and recovery boundaries](architecture.md#lifecycle).
+
+## Telegram bot access
+
+The main bot accepts [bot uploads](usage.md#upload-through-your-telegram-bot)
+only from the Telegram user IDs in `TELEGRAM_ADMIN_IDS`. Anyone else gets one
+reply with their user ID, so you can add it. The bot's **Open in TGDrive** button
+uses the website address once it has been saved; set `PUBLIC_URL` to supply it
+earlier. Installations that only set `BOT_TOKENS` need `MAIN_BOT_TOKEN` and
+`TELEGRAM_ADMIN_IDS`, then a container recreation, to enable bot uploads.
+Exact names: [Telegram accounts](reference.md#telegram-accounts).
 
 ## Public demo mode
 
