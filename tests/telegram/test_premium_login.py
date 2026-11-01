@@ -67,7 +67,7 @@ class LoginClient:
 
 def login_service(client=None, *, clock=None, saver=None):
     client = client or LoginClient()
-    saved = saver or AsyncMock(return_value={"revision": 2, "restart_required": True})
+    saved = saver or AsyncMock(return_value={"revision": 2})
     service = PremiumLoginService(
         lambda: (12345, SecretStr("a" * 32), 1),
         saved,
@@ -95,7 +95,7 @@ async def test_success_saves_private_session_and_returns_only_redacted_settings(
         )
         assert response == {
             "stage": "complete",
-            "settings": {"revision": 2, "restart_required": True},
+            "settings": {"revision": 2},
         }
         save.assert_awaited_once_with(1, "Personal account", SESSION)
         assert SESSION not in str(response) and PHONE not in str(challenge)

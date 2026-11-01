@@ -106,7 +106,7 @@ recovery screen.
 
 ## If someone changed the Telegram channel
 
-Keep storage bots as administrators, the channel private and auto-delete off. Repair tokens, membership or permissions in Telegram, then use **Connections → Refresh** and retry; replaced credentials apply on save when idle, otherwise after a restart.
+Keep storage bots as administrators, the channel private and auto-delete off. Repair tokens, membership or permissions in Telegram, then use **Connections → Refresh** and retry; replaced credentials apply when you save.
 
 Missing/replaced documents are detected when checked or accessed; cached bytes can temporarily hide damage. Make changes through TGDrive rather than editing Telegram messages or captions. Restore a [confirmed independent copy](backup-recovery.md#main-channel-lost), or upload the original as a new file. **A database backup cannot recreate missing Telegram bytes.** Do not change channel/database bindings to bypass the error.
 
@@ -206,7 +206,7 @@ verified, and switch only through explicit activation.
 
 ## Connection changes
 
-Manage accounts in **Connections**. Saves apply at once when nothing is transferring; otherwise restart. Keep an enabled bot with
+Manage accounts in **Connections**; saves apply at once, without a restart. Keep an enabled bot with
 channel permissions. **Changing channel ID does not move files**; a different
 drive needs its own database.
 
@@ -223,8 +223,8 @@ the **same account**; TGDrive verifies its identity.
 
 | Problem | Repair |
 | --- | --- |
-| Revoked bot token | Replace with a valid token for the same bot; restart if transfers were pending, then retry. |
-| Expired/removed Premium session | Reconnect the same account through **Connections**; restart if transfers were pending, then retry. |
+| Revoked bot token | Replace with a valid token for the same bot, then retry. |
+| Expired/removed Premium session | Reconnect the same account through **Connections**, then retry. |
 | Missing channel permissions | Restore membership/admin rights, Refresh and retry. A still-connected client can resume after a successful check. |
 | Network/Telegram wait | Follow reconnection, retry and cooldown status. |
 
@@ -366,7 +366,7 @@ Do not run an older app against an incompatible database format. Restore a compa
 | Another installation owns the database | Stop the old app and let its lease expire. |
 | Catalog missing | Verify database name and use [recovery](backup-recovery.md); preserve existing state. After deliberately emptying MongoDB, also clear the data volume (see [architecture](architecture.md)). |
 | Old transfer stuck after a fresh install | It is saved in this browser only. Cancel marks it cancelled when the server no longer knows it. |
-| Connection changes pending | Work was running when you saved, or reconnecting failed. Restart to apply them. |
+| A saved account shows an error | It could not connect. Fix the token, session or channel permissions, then use **Connections → Refresh**. |
 | Backup fails/decryption fails | Matching key, intact archive, posting access, disk and retry time |
 | Upload cannot resume | Reselect its original in the existing transfer; missing staging may require re-upload. |
 | Archive job fails | Read its error in Transfers, free temporary server storage if needed, then retry the existing job. Unsupported, encrypted or damaged archives need a corrected source; non-Docker installations also need libarchive. Earlier committed outputs remain; see [archive workflow and limits](usage.md#create-zips-and-extract-archives). |
@@ -388,7 +388,7 @@ When stopped, `DATA_DIR/media-cache` can be removed and rebuilt on demand. **Nev
 Use the [load and capacity guide](performance-tuning.md) to investigate queues,
 cache reuse and server/bot capacity before increasing limits.
 
-Check headroom and queues first, stop unnecessary preloads, then change one limit at a time. Compare warm/cold and shared/unrelated-file reads. Supported web preferences apply live; environment changes require recreation, credentials require restart.
+Check headroom and queues first, stop unnecessary preloads, then change one limit at a time. Compare warm/cold and shared/unrelated-file reads. Supported web preferences and Connections apply live; environment changes require recreation.
 
 ## HTTP delivery and proxy configuration
 

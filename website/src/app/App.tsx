@@ -548,9 +548,7 @@ export default function App() {
             return;
         }
         return startStatusPolling((status) => {
-            setAdmissionPaused(
-                Boolean(status.admission_paused || status.restart_required),
-            );
+            setAdmissionPaused(Boolean(status.admission_paused));
             setTelegramWarning(
                 status.telegram_issues?.[0]?.detail ||
                     (status.telegram_ready === false &&
@@ -564,26 +562,14 @@ export default function App() {
     useEffect(() => {
         const saved = (event: Event) => {
             const detail = (
-                event as CustomEvent<{
-                    admission_paused?: boolean;
-                    restart_required?: boolean;
-                }>
+                event as CustomEvent<{ admission_paused?: boolean }>
             ).detail;
-            setAdmissionPaused(
-                Boolean(detail?.admission_paused || detail?.restart_required),
-            );
-            setNewOpen(false);
-        };
-        const required = () => {
-            setAdmissionPaused(true);
+            setAdmissionPaused(Boolean(detail?.admission_paused));
             setNewOpen(false);
         };
         window.addEventListener("tgdrive:settings-saved", saved);
-        window.addEventListener("tgdrive:restart-required", required);
-        return () => {
+        return () =>
             window.removeEventListener("tgdrive:settings-saved", saved);
-            window.removeEventListener("tgdrive:restart-required", required);
-        };
     }, []);
     useEffect(() => {
         transfers.setAdmissionPaused(admissionPaused);
@@ -1797,9 +1783,7 @@ export default function App() {
                         <div className="restart-required-banner" role="status">
                             <ShieldAlert size={20} />
                             <div>
-                                <strong>
-                                    Restart TGDrive to apply connection changes
-                                </strong>
+                                <strong>File changes are paused</strong>
                                 <p>
                                     File changes and new uploads are paused. You
                                     can still browse, preview and download.

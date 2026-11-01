@@ -10,7 +10,6 @@ import {
     AlertCircle,
     Bot,
     Check,
-    ChevronDown,
     KeyRound,
     Pencil,
     Plus,
@@ -41,10 +40,7 @@ import "./SettingsManagement.css";
 function announceSaved(value: ManagementSettings) {
     window.dispatchEvent(
         new CustomEvent("tgdrive:settings-saved", {
-            detail: {
-                admission_paused: value.admission_paused,
-                restart_required: value.restart_required,
-            },
+            detail: { admission_paused: false },
         }),
     );
 }
@@ -324,11 +320,7 @@ export default function SettingsManagement({
             announceSaved(value);
             setError("");
             closeEditor();
-            setNotice(
-                value.restart_required
-                    ? "Verified and saved. Restart TGDrive to apply your connection changes."
-                    : "Connection verified and saved.",
-            );
+            setNotice("Connection verified and saved.");
         } catch (cause) {
             if (!mounted.current) return;
             if (
@@ -410,9 +402,7 @@ export default function SettingsManagement({
             <fieldset disabled={demoMode || saving}>
                 {row.removed ? (
                     <div className="client-removal">
-                        <p>
-                            {row.label} will be removed when you save.
-                        </p>
+                        <p>{row.label} will be removed when you save.</p>
                         <button
                             type="button"
                             className="text-button"
@@ -565,31 +555,10 @@ export default function SettingsManagement({
                         <strong>Storage channel needs attention</strong>
                         <p>{settings.storage_channel_error}</p>
                         <p>
-                            Resolve the issue above, then restart TGDrive to
-                            check the channel again. Keep the same storage
-                            channel for this drive.
+                            Resolve the issue above, then use Refresh to check
+                            the channel again. Keep the same storage channel for
+                            this drive.
                         </p>
-                    </div>
-                </div>
-            )}
-            {settings?.restart_required && (
-                <div className="management-pending" role="status">
-                    <AlertCircle size={20} />
-                    <div>
-                        <strong>Saved changes need a restart</strong>
-                        <p>
-                            New file changes are paused. Your running connection
-                            is still available for browsing and downloads.
-                        </p>
-                        <details>
-                            <summary>How to Restart</summary>
-                            <code>docker compose restart app</code>
-                            <p>
-                                Run this in the installation folder, using the
-                                existing Compose project name if you selected
-                                one.
-                            </p>
-                        </details>
                     </div>
                 </div>
             )}
@@ -702,10 +671,29 @@ export default function SettingsManagement({
                                                 <UserRound size={20} />
                                             )}
                                         </span>
-                                        <div className="managed-client-info">
+                                        <div
+                                            className="managed-client-info"
+                                            aria-describedby={
+                                                client.connection_check_error ||
+                                                client.error
+                                                    ? "connection-error-" +
+                                                      client.id
+                                                    : undefined
+                                            }
+                                        >
                                             <strong>
                                                 {clientDisplayName(client)}
                                             </strong>
+                                            {(client.connection_check_error ||
+                                                client.error) && (
+                                                <p
+                                                    className="connection-row-error"
+                                                    id={`connection-error-${client.id}`}
+                                                >
+                                                    {client.connection_check_error ||
+                                                        client.error}
+                                                </p>
+                                            )}
                                             <span>
                                                 {client.username && (
                                                     <>@{client.username} · </>
@@ -737,16 +725,6 @@ export default function SettingsManagement({
                                                     </>
                                                 )}
                                             </span>
-                                            {(client.connection_check_error ||
-                                                client.error) && (
-                                                <span
-                                                    className="danger-text"
-                                                    role="status"
-                                                >
-                                                    {client.connection_check_error ||
-                                                        client.error}
-                                                </span>
-                                            )}
                                         </div>
                                         <button
                                             type="button"
@@ -802,9 +780,7 @@ export default function SettingsManagement({
                                     announceSaved(value);
                                     setPremiumOpen(false);
                                     setNotice(
-                                        value.restart_required
-                                            ? "Premium account verified and saved. Restart TGDrive to use it."
-                                            : "Premium account verified, saved and connected.",
+                                        "Premium account verified, saved and connected.",
                                     );
                                 }}
                             />
@@ -827,38 +803,10 @@ export default function SettingsManagement({
                             <p className="management-caption">
                                 The last confirmed catalog is current. You can
                                 repair a failed connection; backup needs
-                                attention until the repaired service restarts
-                                and verifies it.
+                                attention until the repaired connection verifies
+                                it.
                             </p>
                         )}
-                        {settings.restart_required &&
-                            settings.active_clients?.length > 0 && (
-                                <details className="management-running">
-                                    <summary>
-                                        Currently running clients{" "}
-                                        <ChevronDown size={15} />
-                                    </summary>
-                                    <ul>
-                                        {settings.active_clients.map(
-                                            (client) => (
-                                                <li key={client.id}>
-                                                    <span>
-                                                        {clientDisplayName(
-                                                            client,
-                                                        )}
-                                                    </span>
-                                                    <span>
-                                                        {clientConnectionLabel({
-                                                            ...client,
-                                                            enabled: true,
-                                                        })}
-                                                    </span>
-                                                </li>
-                                            ),
-                                        )}
-                                    </ul>
-                                </details>
-                            )}
                     </section>
                     <section
                         className="settings-section"
@@ -993,8 +941,7 @@ export default function SettingsManagement({
                     <p className="management-caption connection-footer-note">
                         Credentials are saved privately in MongoDB and encrypted
                         in Telegram database backups. Keep at least one enabled
-                        bot. Verified changes connect on save when no work
-                        is running, otherwise after a restart.
+                        bot. Verified changes connect when you save.
                     </p>
                 </>
             )}

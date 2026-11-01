@@ -42,7 +42,7 @@ action. Remaining live validation:
 | Area | Current limit |
 | --- | --- |
 | Authentication | Password-only owner login; no MFA/passkeys, idle session timeout or fresh reauthentication for sensitive settings/key exports. Login throttling is process-local. |
-| Credentials | Same-account token/session replacement during pending transfers needs restart; Refresh can apply verified channel-permission repair to a live client. |
+| Credentials | Removing or replacing an account waits for pending transfers that may need it. |
 | Bot imports | Do not use the web queue's full durable job model. |
 | History | Compaction must preserve unresolved effects and retry identities. |
 | Large folders | Listings sort/materialize before slicing; database cursor pagination remains work. |

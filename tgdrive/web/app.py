@@ -221,33 +221,6 @@ async def require_admin(request: Request) -> None:
         raise HTTPException(
             409, "Channel recovery has paused file changes. Open Storage & Backups."
         )
-    connections = getattr(runtime, "connection_manager", None)
-    if connections is not None and connections.restart_required:
-        allowed = (
-            request.method in {"GET", "HEAD", "OPTIONS"}
-            or request.url.path
-            in {
-                "/api/checkPassword",
-                "/api/logout",
-                "/api/getDirectory",
-                "/api/v1/replica/import",
-                "/api/v1/start-new",
-                "/api/v1/replica/recover",
-                "/api/v1/replica/action",
-            }
-            or request.url.path == "/api/v1/settings"
-            or request.url.path.startswith("/api/v1/settings/premium-login/")
-            or request.url.path.endswith("/cancel")
-        )
-        if not allowed:
-            from tgdrive.settings.managed_settings import SettingsProblem
-
-            raise SettingsProblem(
-                "Restart TGDrive to apply the saved connection settings "
-                "before making changes.",
-                code="SETTINGS_RESTART_REQUIRED",
-                status=409,
-            )
     service = getattr(runtime, "backup", None)
     if not getattr(service, "recovery_required", False):
         return
@@ -377,7 +350,7 @@ def create_app(
             )
 
             class LivePool:
-                # Follows runtime swaps (Start new drive, live connection apply).
+                # Follows the runtime swap done by Start new drive.
                 def __getattr__(self, name):
                     return getattr(getattr(_app.state.runtime, "pool", None), name)
 
@@ -431,8 +404,6 @@ def create_app(
     )
     app.state.settings = settings
     app.state.runtime = app_runtime
-    # Saved connections apply live only to runtimes this app built itself.
-    app.state.runtime_factory = Runtime if runtime is None else None
     app.state.sessions = sessions
     app.state.login_limiter = limiter
     app.state.thumbnails = ThumbnailCache()

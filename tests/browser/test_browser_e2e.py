@@ -2655,7 +2655,7 @@ def test_revoked_account_warning_links_to_connections_and_clears(server, desktop
     _, page = desktop
     detail = (
         "This storage bot can no longer sign in. Open Connections and replace "
-        "its revoked token, then restart TGDrive and retry."
+        "its revoked token, then retry."
     )
     issue = {"code": "TELEGRAM_CREDENTIALS_REVOKED", "detail": detail}
     state = {"telegram_ready": False, "telegram_issues": [issue]}
@@ -2819,7 +2819,7 @@ def test_queued_uploads_have_no_elapsed_speed_or_eta(
     expect(panel.locator(".transfer-item[data-status=cancelled]")).to_have_count(2)
 
 
-def test_settings_connection_changes_are_write_only_verified_and_restart_scoped(
+def test_settings_connection_changes_are_write_only_verified_and_apply_live(
     server: Server, desktop: tuple[Any, Any]
 ) -> None:
     _, page = desktop
@@ -2911,9 +2911,9 @@ def test_settings_connection_changes_are_write_only_verified_and_restart_scoped(
     form.get_by_role("button", name="Verify and Save", exact=True).click()
     expect(section.locator("form.connection-editor")).to_have_count(0)
     expect(
-        section.get_by_text("Saved changes need a restart", exact=True)
+        section.get_by_text("Connection verified and saved.", exact=True)
     ).to_be_visible()
-    expect(page.locator(".restart-required-banner")).to_be_visible()
+    expect(page.locator(".restart-required-banner")).to_have_count(0)
 
     # Per-client editing remains inline and retains omitted secrets.
     section.get_by_role("button", name="Manage TGDrive Test Bot", exact=True).click()
@@ -2935,9 +2935,8 @@ def test_settings_connection_changes_are_write_only_verified_and_restart_scoped(
     pending = page.request.get(server.url + "/api/v1/settings")
     assert pending.ok
     body = pending.json()
-    assert body["revision"] == 3 and body["applied_revision"] == 0
-    assert body["restart_required"] and body["admission_paused"]
-    assert body["application_mode"] == "restart"
+    assert body["revision"] == 3
+    assert "restart_required" not in body and "application_mode" not in body
     assert body["active_clients"][0]["connected"] is True
     assert "api_hash" not in body
     serialized = json.dumps(body)
@@ -2954,16 +2953,11 @@ def test_settings_connection_changes_are_write_only_verified_and_restart_scoped(
     expect(form.get_by_label("Replace Bot Token", exact=True)).to_have_value("")
     form.get_by_role("button", name="Done", exact=True).click()
     page.locator(".drive-nav").get_by_role("link", name="My Files", exact=True).click()
-    expect(page.locator("#new-button")).to_be_disabled()
+    # Saved connections apply live, so file changes are never paused.
+    expect(page.locator("#new-button")).to_be_enabled()
     page.reload()
-    expect(page.locator(".restart-required-banner")).to_be_visible()
-    expect(page.locator("#new-button")).to_be_disabled()
-    blocked = page.request.post(
-        server.url + "/api/v1/uploads",
-        data={"name": "must-not-start.bin", "parent_id": "/", "total_size": 3},
-    )
-    assert blocked.status == 409
-    assert blocked.json()["code"] == "SETTINGS_RESTART_REQUIRED"
+    expect(page.locator(".restart-required-banner")).to_have_count(0)
+    expect(page.locator("#new-button")).to_be_enabled()
     open_admin(page)
     page.get_by_role("link", name="Connections", exact=True).click()
     page.set_viewport_size({"width": 320, "height": 844})
@@ -3016,7 +3010,9 @@ def test_settings_guided_premium_login_cancel_code_and_two_step(
     premium.get_by_role("button", name="Connect Account", exact=True).click()
     expect(section.locator(".premium-connection")).to_have_count(0)
     expect(
-        section.get_by_text("Saved changes need a restart", exact=True)
+        section.get_by_text(
+            "Premium account verified, saved and connected.", exact=True
+        )
     ).to_be_visible()
     account = section.locator(".managed-client-list > li").filter(
         has_text="My verified Premium"
@@ -3025,7 +3021,7 @@ def test_settings_guided_premium_login_cancel_code_and_two_step(
     expect(account).not_to_contain_text("Premium is not active")
     assert page.locator("input[type=password]").count() == 0
     snapshot = page.request.get(server.url + "/api/v1/settings").json()
-    assert snapshot["restart_required"] is True
+    assert "restart_required" not in snapshot
     assert "synthetic-premium-session-for-browser-tests" not in json.dumps(snapshot)
     assert not any("credential" in client for client in snapshot["clients"])
 

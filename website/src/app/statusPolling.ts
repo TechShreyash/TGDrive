@@ -31,9 +31,8 @@ export function startStatusPolling(receive: (status: ServerStatus) => void) {
             if (!controller.signal.aborted) {
                 attention = Boolean(
                     status.admission_paused ||
-                        status.restart_required ||
-                        status.telegram_ready === false ||
-                        status.telegram_issues?.length,
+                    status.telegram_ready === false ||
+                    status.telegram_issues?.length,
                 );
                 receive(status);
             }

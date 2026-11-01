@@ -11,10 +11,6 @@ import type { ManagementSettings } from "../../shared/types";
 
 const snapshot = (): ManagementSettings => ({
     revision: 3,
-    applied_revision: 3,
-    restart_required: false,
-    application_mode: "restart",
-    admission_paused: false,
     api_id: 12345,
     api_hash_configured: true,
     storage_channel: -1001234567890,

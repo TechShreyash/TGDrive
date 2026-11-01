@@ -77,7 +77,7 @@ needed. Names are case-insensitive; **unknown names are ignored**, so check spel
 | --- | --- |
 | Deployment environment / `.env` | Startup values; host environment wins over `.env` |
 | Saved MongoDB bootstrap | Fills missing startup values; explicit deployment values take precedence over local recovery fallback |
-| Saved **Connections** | Overrides original storage-account credentials; applied on save when idle, otherwise after restart |
+| Saved **Connections** | Overrides original storage-account credentials; applied to the running client pool on save |
 | Saved dashboard performance preferences | Overrides matching startup defaults and applies to new work immediately |
 
 Recreate Docker containers after changing their environment; a process restart
@@ -593,8 +593,7 @@ These routes cannot edit the storage channel or owner credentials.
 | POST /api/v1/settings/premium-login/verify | challenge_id and exactly one code/password for the current stage | stage:password with the challenge, or stage:complete plus settings snapshot. |
 | DELETE /api/v1/settings/premium-login/{challenge_id} | No body | status:cancelled; discards an owned unfinished challenge. |
 
-**Snapshots.** Settings include `revision`, `applied_revision`, `restart_required`,
-`admission_paused`, `application_mode:restart`, API credential presence,
+**Snapshots.** Settings include `revision`, API credential presence,
 `storage_channel`, `clients`, `active_clients`, `stats` and `recovery`. Client rows
 include opaque ID, label, bot/user kind, enabled/configured/connected/healthy/
 Premium state, active leases and sanitized errors. `active_clients` describes
@@ -630,13 +629,18 @@ conflict. Failed preflight never partially saves.
 
 Errors: `409 SETTINGS_CONFLICT` for revision races, `409 SETTINGS_BUSY` for blocked
 changes, `422 SETTINGS_INVALID`, `503 SETTINGS_PREFLIGHT_FAILED`. A successful
-save applies the new connections immediately when no transfer, browser upload,
-bot import or unconfirmed backup is pending: TGDrive stops its runtime and starts
-a fresh one in the same process, so open streams reconnect. If work is pending,
-or the fresh runtime cannot start (`503 SETTINGS_APPLY_FAILED`), new
-catalog/upload mutations pause with `409 SETTINGS_RESTART_REQUIRED` until
-restart. Reads, authentication, cancellation and management remain available
-unless recovery separately blocks them. Do not replay a stale full client list.
+save applies to the running client pool at once; no restart is needed:
+
+| Change | Live effect |
+| --- | --- |
+| Unchanged client | Keeps running; its transfers and streams are untouched. |
+| Added bot or Premium account | Connects now. Allowed while transfers run. |
+| Removed or disabled client | Takes no new work, finishes current work, then disconnects. Refused while pending work may need it. |
+| Same bot, new token | The old client drains, then the new one connects; both use one session file. |
+| API ID or hash | Every client is replaced the same way. |
+
+A client that fails to connect keeps its saved settings and shows its error in
+**Connections**; **Refresh** retries it. Do not replay a stale full client list.
 
 **Premium login.** Owner-bound in-memory challenges last five minutes, at most
 two per service. Limits are six starts/15 minutes, one start/phone/minute and five

@@ -87,11 +87,10 @@ async def test_atomic_private_save_cas_and_secret_safe_snapshot(managed):
         )
     )
     assert result["revision"] == 1
-    assert result["applied_revision"] == 0
-    assert result["restart_required"] and result["admission_paused"]
     assert result["api_id"] == 99999
-    assert settings.api_id == 12345  # Running configuration never changes.
-    assert result["active_clients"][0]["label"] == "Storage bot 1"
+    assert settings.api_id == 99999  # Applied live; no restart.
+    assert settings.managed_revision == 1
+    assert result["active_clients"][0]["label"] == "Main bot"
     text = json.dumps(result)
     for secret in (TOKEN, "b" * 32, settings.session_secret.get_secret_value()):
         assert secret not in text
@@ -103,9 +102,6 @@ async def test_atomic_private_save_cas_and_secret_safe_snapshot(managed):
         await manager.save(SettingsChange(expected_revision=0, api_id=1000))
     assert conflict.value.code == "SETTINGS_CONFLICT"
     assert read_document(settings.resolved_data_dir).revision == 1
-    with pytest.raises(SettingsProblem) as pending:
-        manager.check_upload_allowed()
-    assert pending.value.code == "SETTINGS_RESTART_REQUIRED"
 
 
 @pytest.mark.asyncio
@@ -184,7 +180,7 @@ async def test_pending_upload_allows_only_same_account_credential_repair(
     )
     if same_account:
         result = await manager.save(change)
-        assert result["restart_required"]
+        assert result["revision"] == 1
         assert token not in json.dumps(result)
         saved = read_document(settings.resolved_data_dir).clients[0]
         assert saved.runtime_name == record.context["sender"]
@@ -422,7 +418,7 @@ def test_store_cas_atomic_write_and_no_catalog_secret_export(managed):
 
 
 def test_owner_only_api_omits_secret_inputs_and_preserves_unsaved_on_invalid(managed):
-    manager, runtime, settings, _ = managed
+    _, runtime, settings, _ = managed
     app = create_app(settings, runtime=runtime)
     with TestClient(app, base_url="https://testserver") as client:
         assert client.get("/api/v1/settings").status_code == 401
@@ -450,9 +446,9 @@ def test_owner_only_api_omits_secret_inputs_and_preserves_unsaved_on_invalid(man
         result = client.patch(
             "/api/v1/settings", json={"expected_revision": 0, "api_id": 67890}
         )
-        assert result.status_code == 200 and result.json()["restart_required"]
+        assert result.status_code == 200 and result.json()["api_id"] == 67890
         assert TOKEN not in result.text
-        assert manager.restart_required
+        assert settings.api_id == 67890
 
 
 @pytest.mark.asyncio
@@ -495,7 +491,7 @@ async def test_clean_confirmed_watermark_can_repair_broken_old_credentials(manag
         }
     )
     result = await manager.save(SettingsChange(expected_revision=0, api_id=123))
-    assert result["restart_required"]
+    assert result["api_id"] == 123
     assert result["recovery"]["state"] == "error"  # No false protection claim.
 
 
@@ -688,8 +684,7 @@ async def test_restart_applies_enabled_rows_and_removal_cannot_resurrect_environ
     runtime = SimpleNamespace(store=None, pool=None, mongo=backend)
     manager = ConnectionManager(applied, runtime)
     result = await manager.snapshot()
-    assert result["applied_revision"] == result["revision"] == 1
-    assert not result["restart_required"]
+    assert result["revision"] == 1
     assert len(result["clients"]) == 2
     assert len(result["active_clients"]) == 1
 
@@ -813,17 +808,15 @@ async def test_removing_premium_preserves_bot_multipart_logical_limit(managed):
         }
     )
     result = await manager.save(SettingsChange(expected_revision=0, api_id=123))
-    assert result["restart_required"]
+    assert result["api_id"] == 123
     assert manager.settings.upload_limit == 3000 * 1024**2
     assert read_document(settings.resolved_data_dir) is not None
 
 
-async def test_login_api_rejects_busy_before_phone_code_request(managed):
+async def test_premium_login_is_allowed_while_transfers_run(managed):
     manager, runtime, _, _ = managed
     await runtime.transfers.registry.create("uploading")
-    with pytest.raises(SettingsProblem) as captured:
-        manager.login_api()
-    assert captured.value.code == "SETTINGS_BUSY"
+    assert manager.login_api()[2] == 0
 
 
 @pytest.mark.asyncio
@@ -837,7 +830,7 @@ async def test_stale_completed_receipt_does_not_block_connection_changes(managed
         )
         record.status = TransferStatus.COMPLETED
         result = await manager.save(SettingsChange(expected_revision=0, api_id=123))
-        assert result["restart_required"]
+        assert result["revision"] == 1
         assert result["stats"]["staging_reserved_bytes"] == 0
     finally:
         uploads.close()
@@ -1016,7 +1009,6 @@ def test_refresh_names_requires_owner_and_same_origin_without_saving_configurati
         assert response.status_code == 202
         assert response.headers["cache-control"] == "no-store"
         assert response.json()["revision"] == 0
-        assert response.json()["restart_required"] is False
         assert TOKEN not in response.text
 
         async def completed_checks():
@@ -1090,7 +1082,6 @@ async def test_refresh_checks_all_enabled_saved_clients_bounded_and_isolates_fai
     assert result["clients"][0]["connection_check"] == "passed"
     assert "connection_check" not in result["clients"][4]
     assert result["revision"] == 0
-    assert not result["restart_required"]
 
 
 @pytest.mark.asyncio
@@ -1174,12 +1165,11 @@ async def test_refresh_obeys_existing_transfer_pool_wait_before_network_probe(ma
 
 
 @pytest.mark.asyncio
-async def test_saved_connections_apply_live_when_idle(managed):
-    from tgdrive.settings.management_api import apply_saved_connections
-
-    manager, runtime, settings, store = managed
+async def test_save_applies_connections_to_the_running_pool(managed):
+    manager, runtime, settings, _ = managed
+    runtime.pool = SimpleNamespace(reconfigure=AsyncMock())
     row = (await manager.snapshot())["clients"][0]
-    await manager.save(
+    result = await manager.save(
         SettingsChange.model_validate(
             {
                 "expected_revision": 0,
@@ -1190,19 +1180,42 @@ async def test_saved_connections_apply_live_when_idle(managed):
             }
         )
     )
-    built = []
+    assert settings.bot_tokens == (TOKEN, SECOND_TOKEN)
+    assert settings.managed_revision == result["revision"] == 1
+    bots, users = runtime.pool.reconfigure.await_args.args
+    assert [identity for _, identity, _ in bots] == [
+        "storage-bot-123456",
+        "storage-bot-654321",
+    ]
+    assert users == []
+    assert [client["label"] for client in result["active_clients"]] == [
+        "Main bot",
+        "Second",
+    ]
 
-    def factory(value):
-        fresh = FakeRuntime(store)
-        fresh.mongo = runtime.mongo
-        built.append(value)
-        return fresh
 
-    app = SimpleNamespace(state=SimpleNamespace(runtime_factory=factory))
-    assert await apply_saved_connections(app, settings, manager)
-    assert runtime.stopped and app.state.runtime.ready
-    assert built == [settings] and settings.bot_tokens == (TOKEN, SECOND_TOKEN)
-    assert not manager.restart_required
-    manager.check_upload_allowed()
-    assert not await apply_saved_connections(app, settings, manager)
-    app.state.runtime.transfers.registry.close()
+@pytest.mark.asyncio
+async def test_adding_a_bot_is_allowed_while_transfers_run(managed):
+    manager, runtime, settings, _ = managed
+    await runtime.transfers.registry.create("uploading")
+    row = (await manager.snapshot())["clients"][0]
+    clients = [{"id": row["id"], "label": row["label"], "kind": "bot"}]
+    result = await manager.save(
+        SettingsChange.model_validate(
+            {
+                "expected_revision": 0,
+                "clients": [
+                    *clients,
+                    {"label": "Second", "kind": "bot", "credential": SECOND_TOKEN},
+                ],
+            }
+        )
+    )
+    assert len(result["clients"]) == 2
+    # Removing or disabling an account pending work may need still waits.
+    with pytest.raises(SettingsProblem) as captured:
+        await manager.save(
+            SettingsChange.model_validate({"expected_revision": 1, "clients": clients})
+        )
+    assert captured.value.code == "SETTINGS_BUSY"
+    assert settings.bot_tokens == (TOKEN, SECOND_TOKEN)

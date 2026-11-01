@@ -4,10 +4,11 @@ from __future__ import annotations
 
 import asyncio
 import inspect
+import logging
 import time
 from collections import Counter, deque
 from collections.abc import AsyncIterator, Awaitable, Callable, Iterable
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, suppress
 from dataclasses import dataclass
 from enum import StrEnum
 from typing import TYPE_CHECKING, Any, Literal, Protocol
@@ -25,6 +26,8 @@ from tgdrive.telegram.connection_errors import (
 
 if TYPE_CHECKING:
     from tgdrive.core.config import Settings
+
+logger = logging.getLogger(__name__)
 
 type ClientKind = Literal["bot", "user"]
 
@@ -150,6 +153,11 @@ class _ClientSlot:
     cooldown_until: float = 0
     error: BaseException | None = None
     needs_stop: bool = False
+    # Credential identity used by ``reconfigure`` to keep unchanged clients.
+    key: Any = None
+    # Account name known before start (bots), so leases can wait for it.
+    identity: str | None = None
+    starting: bool = False
 
     @property
     def fallback_name(self) -> str:
@@ -158,7 +166,9 @@ class _ClientSlot:
     @property
     def name(self) -> str:
         value = getattr(self.client, "name", None)
-        return str(value) if value not in (None, "") else self.fallback_name
+        if value not in (None, ""):
+            return str(value)
+        return self.identity or self.fallback_name
 
 
 async def _maybe_await(value: Any) -> Any:
@@ -201,8 +211,15 @@ class ClientPool:
         self._load_history: deque[dict[str, Any]] = deque(maxlen=120)
         self._last_load_sample = 0.0
         self._slots: list[_ClientSlot] = []
+        # Removed clients finish their leases here, then disconnect.
+        self._retiring: list[_ClientSlot] = []
+        self._retire_tasks: set[asyncio.Task] = set()
         for kind, sources in (("bot", bot_clients), ("user", user_clients)):
             for index, source in enumerate(sources):
+                # ``(key, identity, source)`` entries can later be reconfigured.
+                key, identity = None, None
+                if isinstance(source, tuple):
+                    key, identity, source = source
                 is_factory = callable(source) and not callable(
                     getattr(source, "start", None)
                 )
@@ -213,6 +230,8 @@ class ClientPool:
                         index=index,
                         is_factory=is_factory,
                         client=None if is_factory else source,
+                        key=key,
+                        identity=identity,
                     )
                 )
 
@@ -326,29 +345,167 @@ class ClientPool:
                     self._state = PoolState.FAILED
                     raise ClientPoolStartError(failures, cleanup_failures)
 
-            seen: dict[str, _ClientSlot] = {}
-            for slot in self._slots:
-                if not slot.started or not self._slot_is_healthy(slot):
-                    continue
-                previous = seen.get(slot.name)
-                if previous is None:
-                    seen[slot.name] = slot
-                    continue
-                error = DuplicateClientIdentity(
-                    "This Telegram account already has a usable connection"
-                )
-                if slot.client is previous.client:
-                    # A shared instance must only be stopped by its owning slot.
-                    slot.started = False
-                    slot.needs_stop = False
-                else:
-                    # Failed disconnects remain unhealthy and are retried at stop.
-                    await asyncio.gather(self._stop_slot(slot), return_exceptions=True)
-                slot.healthy = False
-                slot.error = error
-
+            await self._drop_duplicates()
             self._state = PoolState.RUNNING
             return self
+
+    async def _drop_duplicates(self) -> None:
+        seen: dict[str, _ClientSlot] = {}
+        for slot in self._slots:
+            if not slot.started or not self._slot_is_healthy(slot):
+                continue
+            previous = seen.get(slot.name)
+            if previous is None:
+                seen[slot.name] = slot
+                continue
+            error = DuplicateClientIdentity(
+                "This Telegram account already has a usable connection"
+            )
+            if slot.client is previous.client:
+                # A shared instance must only be stopped by its owning slot.
+                slot.started = False
+                slot.needs_stop = False
+            else:
+                # Failed disconnects remain unhealthy and are retried at stop.
+                await asyncio.gather(self._stop_slot(slot), return_exceptions=True)
+            slot.healthy = False
+            slot.error = error
+
+    async def reconfigure(
+        self,
+        bot_clients: Iterable[tuple[Any, str | None, ClientSource]] = (),
+        user_clients: Iterable[tuple[Any, str | None, ClientSource]] = (),
+    ) -> None:
+        """Apply a new client list without interrupting unchanged clients.
+
+        Entries are ``(key, identity, source)``. A slot whose kind and key are
+        unchanged keeps running. New clients start now, removed ones stop taking
+        leases and disconnect after their current work. A replacement with the
+        same identity (one bot, new token) waits for the old client to stop,
+        because both use one session file. Failed clients are retried.
+        """
+        retry_pool = False
+        async with self._lifecycle_lock:
+            current = {(slot.kind, slot.key): slot for slot in self._slots}
+            ordered: list[_ClientSlot] = []
+            for kind, entries in (("bot", bot_clients), ("user", user_clients)):
+                for index, (key, identity, source) in enumerate(entries):
+                    slot = current.pop((kind, key), None) if key is not None else None
+                    if slot is None:
+                        is_factory = callable(source) and not callable(
+                            getattr(source, "start", None)
+                        )
+                        slot = _ClientSlot(
+                            source=source,
+                            kind=kind,
+                            index=index,
+                            is_factory=is_factory,
+                            client=None if is_factory else source,
+                            key=key,
+                            identity=identity,
+                        )
+                    slot.index = index
+                    ordered.append(slot)
+            retired = list(current.values())
+            async with self._leases:
+                self._slots = ordered
+                self._retiring.extend(retired)
+                self._leases.notify_all()
+            running = self._state is PoolState.RUNNING
+            retry_pool = self._state is PoolState.FAILED
+            blocked: list[_ClientSlot] = []
+            ready: list[_ClientSlot] = []
+            if running:
+                busy = {
+                    slot.identity
+                    for slot in self._retiring
+                    if slot.identity and slot.needs_stop
+                }
+                for slot in ordered:
+                    if slot.started or slot.starting:
+                        continue
+                    slot.starting = True
+                    (blocked if slot.identity in busy else ready).append(slot)
+            for slot in retired:
+                self._spawn(self._retire(slot))
+            if blocked:
+                self._spawn(self._start_after_retire(blocked))
+            if ready:
+                await self._start_new(ready)
+        if retry_pool:
+            # A pool that failed to start (for example its only bot was
+            # revoked) retries with the repaired list instead of waiting.
+            with suppress(ClientPoolStartError):
+                await self.start()
+
+    async def retry_failed(self) -> None:
+        """Reconnect configured clients that are not running; others stay."""
+        retry_pool = False
+        async with self._lifecycle_lock:
+            retry_pool = self._state is PoolState.FAILED
+            if self._state is PoolState.RUNNING:
+                ready = [
+                    slot
+                    for slot in self._slots
+                    if not slot.started and not slot.starting
+                ]
+                for slot in ready:
+                    slot.starting = True
+                if ready:
+                    await self._start_new(ready)
+        if retry_pool:
+            with suppress(ClientPoolStartError):
+                await self.start()
+
+    def _spawn(self, coroutine) -> None:
+        task = asyncio.create_task(coroutine)
+        self._retire_tasks.add(task)
+        task.add_done_callback(self._retire_tasks.discard)
+
+    async def _start_new(self, slots: list[_ClientSlot]) -> None:
+        try:
+            await asyncio.gather(
+                *(self._start_slot(slot) for slot in slots), return_exceptions=True
+            )
+            for slot in slots:
+                if slot.error is not None and slot.needs_stop:
+                    await asyncio.gather(self._stop_slot(slot), return_exceptions=True)
+            await self._drop_duplicates()
+        finally:
+            for slot in slots:
+                slot.starting = False
+            await self._notify_leases()
+
+    async def _retire(self, slot: _ClientSlot) -> None:
+        try:
+            async with self._leases:
+                await self._leases.wait_for(lambda: slot.active == 0)
+            if slot.needs_stop:
+                await self._stop_slot(slot)
+        except Exception:
+            logger.warning("A removed Telegram client did not disconnect cleanly")
+        finally:
+            async with self._leases:
+                if slot in self._retiring:
+                    self._retiring.remove(slot)
+                self._leases.notify_all()
+
+    async def _start_after_retire(self, slots: list[_ClientSlot]) -> None:
+        names = {slot.identity for slot in slots}
+        async with self._leases:
+            await self._leases.wait_for(
+                lambda: (
+                    not any(
+                        old.identity in names and old.needs_stop
+                        for old in self._retiring
+                    )
+                )
+            )
+        if self._state is PoolState.RUNNING:
+            await self._start_new(slots)
+        else:
+            for slot in slots:
+                slot.starting = False
 
     async def stop(
         self,
@@ -384,7 +541,11 @@ class ClientPool:
                 )
                 raise
 
+            for task in list(self._retire_tasks):
+                task.cancel()
+            await asyncio.gather(*self._retire_tasks, return_exceptions=True)
             failures = await self._stop_materialized()
+            self._retiring.clear()
             self._state = PoolState.STOPPED
             return failures
 
@@ -502,6 +663,19 @@ class ClientPool:
                             if (client_name is None or slot.name == client_name)
                             and (slot.kind == kind or (allow_users and not premium))
                         ]
+                        if any(
+                            slot.starting
+                            and (slot.kind == kind or (allow_users and not premium))
+                            # A Premium account's name is known only after start.
+                            and (
+                                client_name is None
+                                or slot.identity in (None, client_name)
+                            )
+                            for slot in self._slots
+                        ):
+                            # A new or replacement client is connecting.
+                            await self._leases.wait()
+                            continue
                         if client_name is not None and not matching:
                             raise removed_sender(client_name)
                         for unavailable in matching:
@@ -1076,7 +1250,9 @@ class ClientPool:
         self,
     ) -> tuple[tuple[str, BaseException], ...]:
         slots = [
-            slot for slot in self._slots if slot.client is not None and slot.needs_stop
+            slot
+            for slot in (*self._slots, *self._retiring)
+            if slot.client is not None and slot.needs_stop
         ]
         results = await asyncio.gather(
             *(self._stop_slot(slot) for slot in slots),
@@ -1113,11 +1289,13 @@ class ClientPool:
     async def _wait_for_all_leases(self) -> None:
         async with self._leases:
             await self._leases.wait_for(
-                lambda: all(slot.active == 0 for slot in self._slots)
+                lambda: all(
+                    slot.active == 0 for slot in (*self._slots, *self._retiring)
+                )
             )
 
     def _find_slot(self, client: TelegramClientLifecycle) -> _ClientSlot:
-        for slot in self._slots:
+        for slot in (*self._slots, *self._retiring):
             if slot.client is client:
                 return slot
         raise ValueError("client does not belong to this pool")

@@ -94,7 +94,6 @@ it("wakes for new work and retains five-second checks while hidden and active", 
 
 it.each([
     { admission_paused: true },
-    { restart_required: true },
     { telegram_ready: false },
     { telegram_issues: [{ code: "DISCONNECTED", detail: "Reconnect" }] },
 ])("keeps checking readiness problems promptly: %j", async (status) => {

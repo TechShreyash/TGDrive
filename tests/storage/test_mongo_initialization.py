@@ -106,7 +106,6 @@ def test_first_setup_applies_initial_connections_without_a_restart(
     manager = ConnectionManager(settings, SimpleNamespace(mongo=backend))
     assert settings.managed_revision == 1
     assert tuple(row.id for row in manager.active) == settings.managed_client_ids
-    assert not manager.restart_required
 
 
 def test_archive_restore_pause_blocks_old_writers_but_allows_restore_transaction():

@@ -435,10 +435,10 @@ Additional bots need administrator access to the same private channel with
 **Post Messages** and **Delete Messages**. Add them here rather than editing token
 lists. [Connection setup](setup.md#additional-bots-and-premium-accounts).
 
-Finish/cancel pending transfers before changing accounts, enabled states or API
+Saved changes connect at once. Add accounts at any time; finish/cancel pending
+transfers before removing, disabling or replacing one, or changing API
 credentials. Repairing credentials for the same Telegram account can recover
-pending work. Saved changes pause new uploads until restart. Blank replacement
-fields keep secrets. [Connection maintenance and recovery](operations.md#connection-changes).
+pending work. Blank replacement fields keep secrets. [Connection maintenance and recovery](operations.md#connection-changes).
 
 ### Storage and backup
 

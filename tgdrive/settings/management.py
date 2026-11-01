@@ -21,6 +21,7 @@ from tgdrive.settings.managed_settings import (
     ManagedDocument,
     PrivateModel,
     SettingsProblem,
+    apply_document,
     initial_clients,
     read_document,
     save_document,
@@ -29,6 +30,7 @@ from tgdrive.telegram.channel_state import storage_channel_problem
 from tgdrive.telegram.client_identity import IdentityCache, account_identity
 from tgdrive.telegram.connection_errors import connection_problem
 
+logger = logging.getLogger(__name__)
 _PREFLIGHT_LOG = logging.getLogger("tgdrive.private_telegram_preflight")
 _PREFLIGHT_LOG.addHandler(logging.NullHandler())
 _PREFLIGHT_LOG.propagate = False
@@ -179,6 +181,23 @@ async def verify_connection(
                 await client.disconnect()
 
 
+def _adds_only(document, existing, api_id, api_hash) -> bool:
+    """True when a save only adds accounts or renames labels.
+
+    Pending transfers keep their accounts, so this is safe while work runs.
+    """
+    if document.api_id != api_id or document.api_hash != api_hash:
+        return False
+    rows = document.clients
+    return len(rows) >= len(existing) and all(
+        row.id == prior.id
+        and row.kind == prior.kind
+        and row.enabled == prior.enabled
+        and row.credential == prior.credential
+        for row, prior in zip(rows, existing, strict=False)
+    )
+
+
 class ConnectionManager:
     def __init__(self, settings: Any, runtime: Any, *, verifier=verify_connection):
         self.settings = settings
@@ -193,14 +212,10 @@ class ConnectionManager:
         self._check_tasks: set[asyncio.Task] = set()
         self._refresh_not_before = 0.0
 
-    @property
-    def restart_required(self) -> bool:
-        revision, _, _, _ = self._desired()
-        return revision != self.settings.managed_revision
-
     def login_api(self) -> tuple[int, SecretStr, int]:
         """Private handoff for bounded login challenges; never an HTTP response."""
-        self._ensure_idle()
+        # Adding an account never disturbs pending work, so only backup state counts.
+        self._ensure_idle(include_work=False)
         revision, api_id, api_hash, _ = self._desired()
         return api_id, api_hash, revision
 
@@ -221,15 +236,12 @@ class ConnectionManager:
             # Never revoke an authorization that may already be persisted.
             return None
 
-    def check_upload_allowed(self) -> None:
-        if self.restart_required:
-            raise SettingsProblem(
-                "Connection changes are saved. Restart TGDrive before uploading.",
-                code="SETTINGS_RESTART_REQUIRED",
-                status=409,
-            )
+    def _ensure_idle(self, *, include_work: bool = True) -> None:
+        if include_work:
+            self._ensure_no_work()
+        self._ensure_backup_confirmed()
 
-    def _ensure_idle(self) -> None:
+    def _ensure_no_work(self) -> None:
         runtime = self.runtime
         if getattr(getattr(runtime, "bot_mode", None), "active_imports", 0):
             raise SettingsProblem(
@@ -255,6 +267,9 @@ class ConnectionManager:
                 code="SETTINGS_BUSY",
                 status=409,
             )
+
+    def _ensure_backup_confirmed(self) -> None:
+        runtime = self.runtime
         backup = getattr(runtime, "backup", None)
         store = getattr(runtime, "store", None)
         if store is not None and callable(getattr(backup, "protection_status", None)):
@@ -332,8 +347,7 @@ class ConnectionManager:
                     "error": getattr(status, "error", None)
                     or (
                         "Connection unavailable. Refresh to check credentials and "
-                        "storage-channel access; repair the connection and restart "
-                        "TGDrive if needed."
+                        "storage-channel access, then repair the connection."
                         if getattr(status, "last_error_type", None)
                         else None
                     ),
@@ -356,6 +370,12 @@ class ConnectionManager:
                     if row.enabled
                 }
                 self._refresh_not_before = time.monotonic() + 30
+                # Reconnect saved clients that failed to start; running ones stay.
+                retry = getattr(
+                    getattr(self.runtime, "pool", None), "retry_failed", None
+                )
+                if callable(retry):
+                    await retry()
                 gate = asyncio.Semaphore(2)
                 for row in rows:
                     if not row.enabled:
@@ -553,10 +573,6 @@ class ConnectionManager:
         store = getattr(self.runtime, "store", None)
         return {
             "revision": revision,
-            "applied_revision": self.settings.managed_revision,
-            "restart_required": revision != self.settings.managed_revision,
-            "admission_paused": revision != self.settings.managed_revision,
-            "application_mode": "restart",
             "api_id": api_id,
             "api_hash_configured": True,
             "storage_channel": self.settings.storage_channel,
@@ -729,8 +745,9 @@ class ConnectionManager:
                     "Check the configured storage credentials."
                 ) from None
             repair = None
+            addition = _adds_only(document, existing, api_id, api_hash)
             try:
-                self._ensure_idle()
+                self._ensure_idle(include_work=not addition)
             except SettingsProblem:
                 repair = await self._credential_repair(
                     document, existing, api_id, api_hash
@@ -806,11 +823,30 @@ class ConnectionManager:
             active = await self._active_snapshot(rows)
             response = self._snapshot(document.revision, document.api_id, rows, active)
             if repair is None:
-                self._ensure_idle()
+                self._ensure_idle(include_work=not addition)
             await asyncio.to_thread(
                 save_document, self.settings.resolved_data_dir, document, revision
             )
-            return response
+            try:
+                # Shielded: the save is committed, so the live apply must finish.
+                return await asyncio.shield(self._apply(document))
+            except Exception:
+                logger.exception("Saved connections could not be applied live")
+                return response
+
+    async def _apply(self, document: ManagedDocument) -> dict[str, Any]:
+        """Load saved connections into the running settings and client pool."""
+        apply_document(self.settings, document)
+        self.active = initial_clients(self.settings)
+        await self._reconfigure_pool()
+        return await self.snapshot()
+
+    async def _reconfigure_pool(self) -> None:
+        from tgdrive.telegram.clients import client_entries
+
+        reconfigure = getattr(getattr(self.runtime, "pool", None), "reconfigure", None)
+        if callable(reconfigure):
+            await reconfigure(*client_entries(self.settings))
 
     async def add_authenticated_session(
         self, expected_revision: int, label: str, session_string: str

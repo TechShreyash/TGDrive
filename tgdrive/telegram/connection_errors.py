@@ -51,8 +51,7 @@ def connection_problem(
         )
         return TelegramConnectionError(
             f"This {account} can no longer sign in. Open Connections and {repair}, "
-            "then restart TGDrive and retry. Existing files and saved upload "
-            "progress are preserved.",
+            "then retry. Existing files and saved upload progress are preserved.",
             "TELEGRAM_CREDENTIALS_REVOKED",
             client_name=client_name,
         )
@@ -71,7 +70,7 @@ def connection_problem(
 def removed_sender(client_name: str) -> TelegramConnectionError:
     return TelegramConnectionError(
         "The Telegram account that started this upload is no longer configured. "
-        "Reconnect the same account in Connections, restart TGDrive and retry. "
+        "Reconnect the same account in Connections and retry. "
         "The saved upload is preserved; switching an already dispatched part to "
         "another account could create a duplicate.",
         "TELEGRAM_ACCOUNT_REMOVED",

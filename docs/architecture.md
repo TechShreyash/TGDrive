@@ -192,9 +192,11 @@ cancel obsolete checks.
 
 Temporary clients check proposed credentials and channel permissions before
 saving private settings atomically. A revision check prevents overwriting another
-owner session's changes. New mutations pause until restart. Editing requires
-settled jobs/upload receipts and valid ownership; it does not require a Telegram
-database backup.
+owner session's changes. Saved changes apply to the running client pool in
+place (`ClientPool.reconfigure`), so unchanged clients keep their leases and new
+ones connect without a restart. Adding accounts is allowed while work runs;
+removing, disabling or replacing one requires settled jobs/upload receipts and
+valid ownership. It does not require a Telegram database backup.
 
 Secrets are write-only; omitted replacements keep saved values. Premium login uses
 owner-bound five-minute in-memory challenges. Codes/passwords are not stored;

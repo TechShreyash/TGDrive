@@ -472,7 +472,7 @@ class Client:
                     raise TelegramConnectionError(
                         "This Premium session is no longer authorized. Open "
                         "Connections and sign in to the same account again, then "
-                        "restart TGDrive and retry.",
+                        "retry.",
                         "TELEGRAM_CREDENTIALS_REVOKED",
                         client_name=self.name,
                     )
@@ -1371,24 +1371,45 @@ class Client:
         self.native.add_event_handler(dispatch, events.NewMessage(incoming=True))
 
 
-def build_client_pool(settings: Settings) -> ClientPool:
-    """Create lazy client factories with the configured account admission limits."""
-    return ClientPool(
-        bot_clients=[
+def client_entries(settings: Settings):
+    """``(key, identity, factory)`` per configured account for ``ClientPool``.
+
+    The key changes when the credential or API application changes, so
+    ``ClientPool.reconfigure`` keeps every other client running.
+    """
+    api = (settings.api_id, settings.api_hash.get_secret_value())
+    bots = [
+        (
+            (*api, token),
+            "storage-bot-" + token.split(":", 1)[0],
             partial(
                 Client, name=f"storage-bot-{index}", settings=settings, bot_token=token
-            )
-            for index, token in enumerate(settings.bot_tokens, 1)
-        ],
-        user_clients=[
+            ),
+        )
+        for index, token in enumerate(settings.bot_tokens, 1)
+    ]
+    users = [
+        (
+            (*api, session),
+            None,
             partial(
                 Client,
                 name=f"premium-user-{index}",
                 settings=settings,
                 session_string=session,
-            )
-            for index, session in enumerate(settings.string_sessions, 1)
-        ],
+            ),
+        )
+        for index, session in enumerate(settings.string_sessions, 1)
+    ]
+    return bots, users
+
+
+def build_client_pool(settings: Settings) -> ClientPool:
+    """Create lazy client factories with the configured account admission limits."""
+    bots, users = client_entries(settings)
+    return ClientPool(
+        bot_clients=bots,
+        user_clients=users,
         allow_partial_start=True,
         media_send_interval=1.0,
         uploads_per_bot=settings.telegram_uploads_per_bot,

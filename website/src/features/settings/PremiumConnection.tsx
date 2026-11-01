@@ -295,8 +295,8 @@ export default function PremiumConnection({
             </div>
             <p className="management-caption">
                 After verification, the account is saved privately for this
-                installation and connected when no transfers are running.
-                Treat the saved session as an account credential.
+                installation and connected right away. Treat the saved session
+                as an account credential.
             </p>
         </form>
     );

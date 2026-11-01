@@ -1,8 +1,5 @@
 """Archive admission, owner access and explicit public-destination consent."""
 
-from types import SimpleNamespace
-from unittest.mock import AsyncMock
-
 import pytest
 
 from tests.support.app_fixtures import app_client as app_client
@@ -134,24 +131,6 @@ def test_invalid_archive_destinations_never_start_work(
     )
     response = client.post(route, json={**payload, "destination": destination})
     assert response.status_code == 404
-    assert calls == []
-
-
-@pytest.mark.parametrize("extract", [False, True])
-def test_archive_admission_obeys_restart_pause(app_client, monkeypatch, extract):
-    client, _, runtime, _ = app_client
-    calls = capture_starts(runtime, monkeypatch)
-    runtime.connection_manager = SimpleNamespace(
-        restart_required=True, close=AsyncMock()
-    )
-    login(client)
-    route = "/api/v1/archives" + ("/extract" if extract else "")
-    payload = (
-        {"path": "/source"} if extract else {"paths": ["/source"], "name": "Bundle.zip"}
-    )
-    response = client.post(route, json=payload)
-    assert response.status_code == 409
-    assert response.json()["code"] == "SETTINGS_RESTART_REQUIRED"
     assert calls == []
 
 

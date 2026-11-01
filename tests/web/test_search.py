@@ -300,19 +300,6 @@ def test_legacy_search_is_bounded_and_exposes_more_results_instead_of_fake_total
     assert len(store.search_page("report", limit=500)["items"]) == 500
 
 
-def test_search_remains_readable_while_restart_required(search_client):
-    client, store, runtime = search_client
-    store.add_file("/", "report.txt", 1, 3)
-    owner(client)
-    from types import SimpleNamespace
-    from unittest.mock import AsyncMock
-
-    runtime.connection_manager = SimpleNamespace(
-        restart_required=True, close=AsyncMock()
-    )
-    assert client.get("/api/v1/search", params={"q": "report"}).status_code == 200
-
-
 def test_deep_folders_open_by_id_with_server_breadcrumbs_and_share_boundary(
     search_client,
 ):

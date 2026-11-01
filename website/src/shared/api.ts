@@ -107,8 +107,6 @@ export async function request<T>(
                   : typeof data.status === "string"
                     ? data.status
                     : "The request could not be completed.";
-        if (data.code === "SETTINGS_RESTART_REQUIRED")
-            window.dispatchEvent(new Event("tgdrive:restart-required"));
         notifyDemoFilesReadOnly(data.code);
         throw new ApiError(
             detail,

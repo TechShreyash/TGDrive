@@ -312,9 +312,6 @@ class Runtime:
                 "Finish or disable channel recovery before uploading.", status=409
             )
         self.backup.check_upload_allowed(self.store)
-        manager = getattr(self, "connection_manager", None)
-        if manager is not None:
-            manager.check_upload_allowed()
 
     async def _check_bot_upload_allowed(self) -> None:
         self._check_upload_allowed()
@@ -385,7 +382,7 @@ class Runtime:
                             "Telegram storage channel could not be verified. "
                             "Check the network, channel membership "
                             "and bot permissions, "
-                            "then retry or restart TGDrive."
+                            "then retry."
                         )
                         raise ConnectionError(self.storage_channel_error) from None
                     if problem is not None:

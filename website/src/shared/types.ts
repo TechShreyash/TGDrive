@@ -133,7 +133,6 @@ export interface ServerStatus {
     telegram_ready?: boolean;
     telegram_issues?: { code: string; detail: string }[];
     admission_paused?: boolean;
-    restart_required?: boolean;
     backup?: unknown;
     [key: string]: unknown;
 }
@@ -276,10 +275,6 @@ export interface ManagementStats {
 }
 export interface ManagementSettings {
     revision: number;
-    applied_revision: number;
-    restart_required: boolean;
-    application_mode: "restart";
-    admission_paused: boolean;
     api_id: number;
     api_hash_configured: boolean;
     storage_channel: number;

@@ -29,9 +29,7 @@ class LoginVerify(BaseModel):
     password: SecretStr | None = Field(default=None, max_length=512)
 
 
-def register_premium_routes(
-    app: Any, *, require_admin: Any, get_service: Any, after_save: Any = None
-) -> None:
+def register_premium_routes(app: Any, *, require_admin: Any, get_service: Any) -> None:
     def service(request: Request) -> PremiumLoginService:
         current = getattr(app.state, "premium_login_service", None)
         if current is None:
@@ -74,15 +72,12 @@ def register_premium_routes(
 
     @app.post("/api/v1/settings/premium-login/verify", dependencies=admin)
     async def verify(payload: LoginVerify, request: Request) -> dict[str, Any]:
-        result = await service(request).verify(
+        return await service(request).verify(
             owner(request),
             payload.challenge_id,
             code=payload.code.get_secret_value() if payload.code else None,
             password=payload.password.get_secret_value() if payload.password else None,
         )
-        if result.get("stage") == "complete" and after_save is not None:
-            result["settings"] = await after_save(request) or result["settings"]
-        return result
 
     @app.delete("/api/v1/settings/premium-login/{challenge_id}", dependencies=admin)
     async def cancel(challenge_id: str, request: Request) -> dict[str, str]:

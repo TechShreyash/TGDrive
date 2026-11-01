@@ -183,11 +183,8 @@ def register_routes(
         backup = getattr(runtime, "backup", None)
         latest = getattr(backup, "latest_history", None)
         history = latest() if callable(latest) else []
-        connections = getattr(runtime, "connection_manager", None)
-        restart_required = bool(connections and connections.restart_required)
         return {
-            "restart_required": restart_required,
-            "admission_paused": restart_required,
+            "admission_paused": False,
             "telegram_ready": bool(health and health.ready),
             "telegram_issues": telegram_issues,
             "demo": bool(getattr(runtime, "synthetic", False)),

@@ -23,13 +23,7 @@ describe("owner management HTTP boundary", () => {
     });
 
     it("sends secret replacements only in the mutation body, with a revision guard", async () => {
-        const fetcher = vi.fn(async () =>
-            Response.json({
-                revision: 4,
-                restart_required: true,
-                admission_paused: true,
-            }),
-        );
+        const fetcher = vi.fn(async () => Response.json({ revision: 4 }));
         vi.stubGlobal("fetch", fetcher);
         await api.saveSettings({
             expected_revision: 3,
@@ -115,25 +109,5 @@ describe("owner management HTTP boundary", () => {
             return;
         }
         throw new Error("Expected the rate-limited response to reject");
-    });
-    it("reconciles the global paused state after any authoritative restart-required refusal", async () => {
-        const changed = vi.fn();
-        window.addEventListener("tgdrive:restart-required", changed);
-        vi.stubGlobal(
-            "fetch",
-            vi.fn(async () =>
-                Response.json(
-                    {
-                        detail: "Restart TGDrive to apply your connection changes.",
-                        code: "SETTINGS_RESTART_REQUIRED",
-                    },
-                    { status: 409 },
-                ),
-            ),
-        );
-        await expect(api.folder("/", "new")).rejects.toMatchObject({
-            code: "SETTINGS_RESTART_REQUIRED",
-        });
-        expect(changed).toHaveBeenCalledOnce();
     });
 });

@@ -998,6 +998,12 @@ class FixtureReplica:
         return self.status()
 
 
+class FixturePool(ClientPool):
+    async def reconfigure(self, *_entries):
+        # Saved fixture accounts are never dialled; they stay "Not connected".
+        return None
+
+
 class FixtureRuntime:
     def __init__(self) -> None:
         self.mongo = FixtureMongoBackend()
@@ -1064,7 +1070,7 @@ class FixtureRuntime:
         for identity, (name, content) in enumerate(samples.items(), 110):
             self.payloads[identity] = content
             self.store.add_file(preview_path, name, identity, len(content))
-        self.pool = ClientPool([FixtureClient(self.payloads)])
+        self.pool = FixturePool([FixtureClient(self.payloads)])
         self.transfers = FixtureTransfers(self.store, self.payloads)
         self.backup = FixtureBackup(self.store)
         self.recovery_only = False

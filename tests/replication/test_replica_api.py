@@ -380,9 +380,6 @@ def test_recovery_file_import_remains_available_during_recovery_and_connection_r
 ):
     client, runtime, replica = owner
     runtime.backup = SimpleNamespace(recovery_required=True)
-    runtime.connection_manager = SimpleNamespace(
-        restart_required=True, close=AsyncMock()
-    )
     replica.inspect_file = AsyncMock(return_value={"phase": "paused"})
     login(client)
     response = client.post(
