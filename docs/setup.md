@@ -242,7 +242,7 @@ after Docker starts, set `TGDRIVE_RESTART_POLICY=unless-stopped` and recreate.
 1. Open [http://127.0.0.1:8000](http://127.0.0.1:8000) and sign in with your web password.
 2. Open **Connections → Refresh** and check your bot.
 3. Upload and download a small sample; stop/start TGDrive and confirm it still opens.
-4. Under **Storage & Backups → Backups & recovery**, choose **Back up now**.
+4. Under **Storage & Backups → Backups & recovery**, choose **Back Up Now**.
    After confirmation it is pinned in your channel. Optionally choose
    **Download backup** for a copy outside Telegram; it opens with your
    `ENCRYPTION_KEY`.

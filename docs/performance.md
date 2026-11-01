@@ -104,7 +104,7 @@ Clearing it leaves Telegram originals and the catalog intact.
 <summary>Memory, disk integrity and eviction</summary>
 
 - Disk space is consumed as blocks arrive, not reserved upfront. Cache writes
-  respect their free-space floor; upload staging separately uses `MIN_FREE_BYTES`.
+  respect their free-space floor; upload staging keeps its own reserve.
   Leave headroom for the OS, uploads and backups.
 - Disk blocks include integrity overhead. RAM and disk may retain the same hot
   bytes, so their budgets cannot be added to decide whole-file capacity.
@@ -379,15 +379,15 @@ offsets continue to require synchronized bytes and a MongoDB receipt commit.
 
 ## Upload pipeline and smaller splits
 
-| Control | Default / allowed values |
+| Control | Starting value (tuned automatically) |
 | --- | --- |
-| Concurrent uploads per bot | 1 / 1 or more |
+| Concurrent uploads per bot | 1 |
 | Outstanding 512 KiB upload RPCs per document | 4; also bounded by account request limit |
-| Concurrent account media/metadata RPCs | 8 / 1 or more |
-| Account part/metadata pacing | 48 requests/s / 1 or more |
-| Combined upload/download operations per account | 3 / 1 or more |
-| Waiting origin operations, installation-wide | 256 / 1 or more |
-| Preferred document split | 2000 MiB / 1–2000 MiB; 0 also means 2000 MiB |
+| Concurrent account media/metadata RPCs | 8 |
+| Account part/metadata pacing | 48 requests/s |
+| Combined upload/download operations per account | 3 |
+| Waiting origin operations, installation-wide | 256 |
+| Preferred document split (owner setting) | 2000 MiB; choose 1–2000, 0 also means 2000 |
 
 These count origin operations/RPCs, not viewers or whole files. More queue space
 permits longer waits, not throughput. Rate limits are protective application
@@ -407,10 +407,9 @@ sender on retry. Premium is a potential speed benefit, not a larger TGDrive file
 limit. [Telegram's file documentation](https://core.telegram.org/api/files) describes
 Premium throttling differences; TGDrive has not measured a live Premium multiplier.
 
-Keep one upload per bot initially. Change one limit at a time against a representative
-workload. Retain increases only when throughput improves without harming playback
-or increasing cooldowns; reduce concurrency/pacing when contention grows. Never
-rotate identities around provider waits.
+The governor makes these trade-offs: it backs off after provider waits and keeps
+an increase only while throughput holds. Never rotate identities around provider
+waits.
 
 </details>
 

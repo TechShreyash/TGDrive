@@ -78,9 +78,9 @@ or Telegram clients to the bottleneck shown by your workload.
 | Telegram and MongoDB access | Provider availability, account cooldowns, database capacity and connection health |
 | Device and viewer connections | Your upload connection and each recipient's download connection remain part of the path |
 
-New uploads default to a **16 GiB file limit and 16 GiB temporary upload budget**.
-Larger files need both settings raised and enough free server disk, even though
-TGDrive splits them in Telegram. See [upload storage settings](configuration.md#transfer-limits)
+The largest file you can upload is the server's free disk after a reserve, because
+each upload is staged on disk before TGDrive splits it in Telegram. See
+[transfer limits](configuration.md#transfer-limits)
 and [exact file/catalog limits](reference.md#file-capacity-staging-and-work-limits).
 
 Larger servers help when server resources are the bottleneck. They do not

@@ -69,7 +69,7 @@ unreadable. Only open downloads you trust: TGDrive does not scan for malware.
 Yes. All app features are free. Run it on your computer or your own server;
 server and database providers may charge for their resources.
 Premium is optional; [large files split automatically](usage.md#files-above-2-gb).
-[Upload limits](configuration.md#transfer-limits) ·
+[Upload limits](usage.md#files-above-2-gb) ·
 [Self-hosting choices](hosting.md).
 
 **Does uploading a folder keep it synchronized?**  

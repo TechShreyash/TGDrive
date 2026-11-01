@@ -93,10 +93,10 @@ to the unfinished work you confirm; completed files and later uploads remain.
 ### Files above 2 GB
 
 TGDrive splits large files automatically and presents them as one file for
-playback/download. Premium is optional. Defaults allow **16 GiB per file**, subject
-to available temporary upload space; every account uses Telegram documents of at
+playback/download. Premium is optional. The largest file is whatever fits in the
+server's free disk after a reserve; every account uses Telegram documents of at
 most **2000 MiB**. Keep the [catalog](reference.md#terms-used-here) and every part for recovery.
-[Change upload limits](configuration.md#transfer-limits).
+[Transfer limits](configuration.md#transfer-limits).
 
 ### Upload speed and queue
 
@@ -448,7 +448,7 @@ pending work. Blank replacement fields keep secrets. [Connection maintenance and
 unfinished uploads are complete. **Temporary storage** holds unfinished work on
 server disk, not your total Telegram storage.
 
-**Back up now** creates one encrypted recovery file. Automatic copies normally
+**Back Up Now** creates one encrypted recovery file. Automatic copies normally
 run hourly without an independent channel; independent protection batches changes.
 Each backup is pinned in your channel and opens only with your encryption key.
 [Backup setup and restore](backup-recovery.md).

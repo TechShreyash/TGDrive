@@ -101,7 +101,6 @@ Optional does not always mean that a blank value is accepted:
   setups can omit MAIN_BOT_TOKEN. Blank/omitted bot-interface credentials can
   reuse values saved in MongoDB, so blanks do not disable a configured interface.
   A main bot token requires TELEGRAM_ADMIN_IDS; storage still needs a working bot.
-- MAX_FILE_SIZE= means the bounded default logical-file limit.
 - With standard Compose auto-secrets enabled, a blank SESSION_SECRET reuses the
   saved value, or is generated for a new drive. ENCRYPTION_KEY is never generated.
 
