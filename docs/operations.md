@@ -326,8 +326,8 @@ updates. `dev` contains ongoing work and may be unstable. Follow
 1. Finish work, save a confirmed backup off-host, then stop safely.
 
 > [!WARNING]
-> TGDrive 3.0 cannot open a 2.x drive or restore a 2.x recovery file. Download
-> the files you want to keep, then start 3.0 with a new empty MongoDB database, a
+> TGDrive 2.3 cannot open a drive or restore a recovery file from 2.2 or earlier. Download
+> the files you want to keep, then start 2.3 with a new empty MongoDB database, a
 > new private storage channel (recommended, so old messages are not mixed in)
 > and a new `ENCRYPTION_KEY`, and upload them again. Keep the 2.x database until
 > you have checked the new drive.

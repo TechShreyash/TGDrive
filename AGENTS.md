@@ -101,9 +101,11 @@ rule with scripts, automation or another tool that publishes the local commits.
 ## Version every published update
 
 Every update published to `main` must belong to a new semantic version, starting
-with `2.0.0`. Use patch versions for compatible fixes, documentation and
-maintenance, minor versions for compatible features, and major versions for
-breaking changes. Development commits may accumulate for one upcoming release.
+with `2.0.0`. Use patch versions for fixes, documentation and maintenance, and
+minor versions for features, including breaking changes; document their upgrade
+steps in `docs/operations.md`. Change the major version only when the owner
+explicitly asks. When the owner names a target version, use it.
+Development commits may accumulate for one upcoming release.
 `main` receives stable updates after review and required checks; `dev` is ongoing
 development and may be unstable. Point user-facing documentation links to `main`
 and release downloads to their version tags. Use `dev` links only for development

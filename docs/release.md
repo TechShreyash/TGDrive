@@ -38,9 +38,9 @@ Use a published tag to reproduce a release; `dev` may be unstable.
 
 | Change | Next version after `2.0.0` |
 | --- | --- |
-| Compatible fixes, documentation or maintenance | `2.0.1` |
-| Compatible features | `2.1.0` |
-| Breaking changes | `3.0.0` |
+| Fixes, documentation or maintenance | `2.0.1` |
+| Features, including breaking changes with documented upgrade steps | `2.1.0` |
+| A new major version, only when the owner decides | `3.0.0` |
 
 `pyproject.toml` is the version authority. Keep `tgdrive/__init__.py`, the
 frontend `package.json` and both root version entries in `package-lock.json`,

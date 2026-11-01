@@ -95,7 +95,7 @@ hidden through it. Permanent deletion walks the subtree in batches.
   offsets, sizes and checksums. Public listings hide those locations.
 - Schema version 5 tracks revision and commit generation.
 
-TGDrive 3.0 starts only on a new database. A database from an earlier version
+TGDrive 2.3 starts only on a new database. A database from an earlier version
 is refused at startup, so it can never be overwritten. Channel recovery accepts
 only schema 5 files.
 

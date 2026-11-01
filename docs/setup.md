@@ -185,7 +185,7 @@ docker compose ps
 
 `pull` downloads the published image `ghcr.io/techshreyash/tgdrive` for amd64
 or arm64, so nothing is built on your machine. Set `TGDRIVE_VERSION` in `.env`
-(for example `3.0.0`) to pin a release; the default is `latest`. To run your own
+(for example `2.3.0`) to pin a release; the default is `latest`. To run your own
 changes instead, use `docker compose build`, which tags the local build with the
 same image name. `config --quiet` checks syntax, not credentials; plain
 `docker compose config` prints secrets.
