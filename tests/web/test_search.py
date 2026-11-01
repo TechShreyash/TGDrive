@@ -117,7 +117,7 @@ def test_sort_and_pagination_apply_globally_with_deterministic_ties(store):
         set_upload_date(store, timestamp, {row["id"]})
     target = store
     expected = {
-        ("name", None): [1, 2, 0],
+        ("name", None): [2, 1, 0],  # Equal relevance: newest first.
         ("name", "asc"): [1, 2, 0],
         ("name", "desc"): [0, 2, 1],
         ("size", None): [1, 2, 0],
@@ -211,6 +211,7 @@ def test_api_owner_only_search_does_not_accept_public_share_tokens(search_client
     shared = store.create_folder("/", "Public")
     public = store.add_file(full(shared), "report shared.txt", 1, 3)
     private = store.add_file("/", "report private.txt", 2, 4)
+    extra = [store.add_file("/", f"report {i}.txt", 10 + i, 1)["id"] for i in range(24)]
     token = store.create_share(full(shared))
     assert (
         client.get("/api/v1/search", params={"q": "report", "auth": token}).status_code
@@ -222,19 +223,21 @@ def test_api_owner_only_search_does_not_accept_public_share_tokens(search_client
     assert denied.status_code == 401
     assert "report private" not in denied.text
     owner(client)
-    response = client.get("/api/v1/search", params={"q": "REPORT", "limit": 1})
+    response = client.get("/api/v1/search", params={"q": "REPORT", "limit": 25})
     assert (
         response.status_code == 200 and response.headers["cache-control"] == "no-store"
     )
     first = response.json()
-    assert first["has_more"] and first["next_offset"] == 1
+    assert first["has_more"] and first["next_offset"] == 25
     second = client.get(
-        "/api/v1/search", params={"q": "REPORT", "offset": 1, "limit": 1}
+        "/api/v1/search", params={"q": "REPORT", "offset": 25, "limit": 25}
     ).json()
     assert {item["id"] for item in first["items"] + second["items"]} == {
         public["id"],
         private["id"],
+        *extra,
     }
+    assert client.get("/api/v1/search", params={"q": "report"}).json()["total"] == 26
     assert not second["has_more"]
     assert "message_id" not in str(first)
 
@@ -247,6 +250,8 @@ def test_api_owner_only_search_does_not_accept_public_share_tokens(search_client
         {"q": "x" * 256},
         {"q": "a\x00b"},
         {"q": "report", "limit": 201},
+        {"q": "report", "limit": 30},
+        {"q": "report", "limit": 1},
         {"q": "report", "offset": -1},
         {"q": "report", "sort": "modified"},
         {"q": "report", "order": "ascending"},
@@ -262,28 +267,34 @@ def test_api_direction_applies_before_offset_pagination(search_client):
     client, store, _ = search_client
     folder = store.create_folder("/", "a report folder")
     first = store.add_file("/", "a report.txt", 1, 10)
+    names = [f"m report {i:02d}.txt" for i in range(23)]
+    middle = [
+        store.add_file("/", name, 10 + i, 15)["id"] for i, name in enumerate(names)
+    ]
     last = store.add_file("/", "z report.txt", 2, 20)
     owner(client)
     for sort in ("name", "size"):
         response = client.get(
             "/api/v1/search",
-            params={"q": "report", "sort": sort, "order": "desc", "limit": 2},
+            params={"q": "report", "sort": sort, "order": "desc", "limit": 25},
         )
         assert response.status_code == 200
         page = response.json()
-        assert [item["id"] for item in page["items"]] == [folder["id"], last["id"]]
+        assert [item["id"] for item in page["items"]][:2] == [folder["id"], last["id"]]
+        assert page["next_offset"] == 25
         response = client.get(
             "/api/v1/search",
             params={
                 "q": "report",
                 "sort": sort,
                 "order": "desc",
-                "limit": 2,
+                "limit": 25,
                 "offset": page["next_offset"],
             },
         )
         assert response.status_code == 200
         assert [item["id"] for item in response.json()["items"]] == [first["id"]]
+        assert set(middle) <= {item["id"] for item in page["items"]}
 
 
 def test_legacy_search_is_bounded_and_exposes_more_results_instead_of_fake_total(
@@ -297,8 +308,13 @@ def test_legacy_search_is_bounded_and_exposes_more_results_instead_of_fake_total
     assert response.status_code == 200
     data = response.json()["data"]
     assert len(data["contents"]) == 500
-    assert data["search"] == {"query": "Report", "has_more": True, "next_offset": 500}
-    assert "total" not in data["search"]
+    assert data["search"] == {
+        "query": "Report",
+        "has_more": True,
+        "next_offset": 500,
+        "total": 502,
+        "capped": False,
+    }
     assert len(store.search_page("report", limit=500)["items"]) == 500
 
 
@@ -537,3 +553,108 @@ def test_shared_pages_trim_breadcrumbs_to_the_share(search_client):
         params={"auth": token, "parent_id": full(above), "around": shared["id"]},
     )
     assert outside.status_code == 403
+
+
+RELEASES = [
+    "[SubsPlease] Sousou no Frieren - 01 (1080p) [ABCD1234].mkv",
+    "[SubsPlease] Sousou no Frieren - 10 (1080p) [EF567890].mkv",
+    "[Erai-raws] Kimetsu no Yaiba S04E03 [1920x1080][HEVC].mkv",
+    "One.Piece.E1100.WEB-DL.x265.mkv",
+    "Quarterly report 2024.pdf",
+    "Reports archive.zip",
+]
+
+
+@pytest.fixture
+def releases(store):
+    ids = {}
+    for index, name in enumerate(RELEASES):
+        ids[name] = store.add_file("/", name, index + 1, 1)["id"]
+    return ids
+
+
+def names(store, query, **options):
+    return [row["name"] for row in store.search_page(query, **options)["items"]]
+
+
+@pytest.mark.parametrize(
+    "query,expected",
+    [
+        ("frie", RELEASES[:2]),
+        ("frieren 01", RELEASES[:1]),
+        ("frieren 1", RELEASES[:1]),
+        ("kimetsu 3", RELEASES[2:3]),
+        ("s04e03", RELEASES[2:3]),
+        ("1080", RELEASES[:3]),
+        ("x265", RELEASES[3:4]),
+        ("one piece 1100", RELEASES[3:4]),
+        ("subsplease", RELEASES[:2]),
+        ("please", RELEASES[:2]),
+        ("ieren", []),  # Mid-word text does not match.
+        ("port", []),
+    ],
+)
+def test_release_names_match_word_starts_and_numbers(store, releases, query, expected):
+    assert sorted(names(store, query)) == sorted(expected)
+
+
+def test_ranking_puts_whole_words_in_order_before_partial_matches(store, releases):
+    store.add_file("/", "Frieren - 01 extras.zip", 20, 1)
+    store.add_file("/", "01 Frieren.mkv", 21, 1)
+    ranked = names(store, "frieren 01")
+    # Whole words in query order, then whole words out of order.
+    assert ranked[-1] == "01 Frieren.mkv"
+    assert set(ranked[:2]) == {RELEASES[0], "Frieren - 01 extras.zip"}
+    store.add_file("/", "Report summary.txt", 23, 1)
+    assert names(store, "report") == [
+        "Report summary.txt",  # Starts with the whole word.
+        "Quarterly report 2024.pdf",  # Whole word.
+        "Reports archive.zip",  # Only the start of a longer word.
+    ]
+    exact = store.add_file("/", "Reports archive", 22, 1)
+    assert names(store, "reports archive")[0] == exact["name"]
+
+
+def test_search_caps_matches_and_reports_the_total(store):
+    for index in range(1005):
+        store.add_file("/", f"Clip {index}.mp4", index + 1, 1)
+    page = store.search_page("clip", limit=100)
+    assert page["capped"] and page["total"] == 1000
+    assert len(page["items"]) == 100 and page["has_more"]
+    last = store.search_page("clip", offset=900, limit=100)
+    assert len(last["items"]) == 100 and not last["has_more"]
+    small = store.search_page("clip 7", limit=100)
+    assert not small["capped"]
+
+
+def test_search_looks_up_all_matching_folders_in_one_query(store):
+    folders = [store.create_folder("/", f"Season {index}") for index in range(30)]
+    for index, folder in enumerate(folders):
+        store.add_file(full(folder), f"episode {index}.mkv", index + 1, 1)
+    calls = []
+    original = store.db.nodes.aggregate
+
+    def counted(pipeline, **kwargs):
+        calls.append(pipeline)
+        return original(pipeline, **kwargs)
+
+    store.db.nodes.aggregate = counted
+    page = store.search_page("episode", limit=50)
+    assert len(page["items"]) == 30
+    assert len(calls) == 1  # One batched ancestor lookup, not one per folder.
+    assert {tuple(row["parent_names"]) for row in page["items"]} == {
+        (f"Season {index}",) for index in range(30)
+    }
+
+
+def test_old_grams_are_dropped_and_tokens_rebuilt(store):
+    item = store.add_file("/", "Frieren - 03.mkv", 1, 1)
+    store.db.nodes.update_one(
+        {"_id": item["id"]}, {"$set": {"grams": ["fri"], "tokens": ["frieren"]}}
+    )
+    store.db.nodes.create_index("grams")
+    MongoStore._indexes(store.backend)
+    row = store.db.nodes.find_one({"_id": item["id"]})
+    assert "grams" not in row and "3" in row["tokens"]
+    assert "grams_1" not in store.db.nodes.index_information()
+    assert names(store, "frieren 3") == ["Frieren - 03.mkv"]

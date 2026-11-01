@@ -50,12 +50,12 @@ from tgdrive.storage.store import (
     _fold,
     _folder_manifest,
     _FolderNode,
-    _grams,
     _join_path,
     _manifest_json,
     _name_key,
     _normalize_name,
     _normalize_path,
+    _number,
     _parent_path,
     _parse_node,
     _share_label,
@@ -97,7 +97,9 @@ def _group(name, kind):
     return _EXTENSION_GROUP.get(name.rsplit(".", 1)[-1].lower(), "other")
 
 
-_LIGHT = {"parts": 0, "poster": 0, "tokens": 0, "grams": 0, "fold": 0}
+_LIGHT = {"parts": 0, "poster": 0, "tokens": 0, "fold": 0}
+# Search ranks at most this many matches; broader queries are told to narrow.
+MAX_SEARCH_MATCHES = 1000
 
 
 def _expiry_date(timestamp):
@@ -307,8 +309,27 @@ class MongoStore:
                 batch = []
         if batch:
             nodes.bulk_write(batch, ordered=False)
+        # Search used to keep three-letter pieces ("grams") for mid-word matches;
+        # they were most of each file's index space. Drop them once and rebuild
+        # the word list, which now also holds numbers without leading zeros.
+        old = nodes.find({"grams": {"$exists": True}}, {"name": 1, "parent_id": 1})
+        batch = []
+        for row in old:
+            tokens = _tokens(row["name"]) if row.get("parent_id") is not None else []
+            batch.append(
+                UpdateOne(
+                    {"_id": row["_id"]},
+                    {"$set": {"tokens": tokens}, "$unset": {"grams": ""}},
+                )
+            )
+            if len(batch) == _BATCH:
+                nodes.bulk_write(batch, ordered=False)
+                batch = []
+        if batch:
+            nodes.bulk_write(batch, ordered=False)
+        if "grams_1" in nodes.index_information():
+            nodes.drop_index("grams_1")
         nodes.create_index("tokens")
-        nodes.create_index("grams")
         nodes.create_index(
             [("trashed", 1), ("name_key", 1)],
             partialFilterExpression={"trashed": True},
@@ -341,7 +362,6 @@ class MongoStore:
             "name_key": _name_key(name),
             "fold": fold,
             "tokens": _tokens(name) if parent is not None else [],
-            "grams": _grams(fold),
             "kind": kind,
             "group": _group(name, kind),
             "trashed": False,
@@ -361,7 +381,6 @@ class MongoStore:
             "name_key": _name_key(name),
             "fold": fold,
             "tokens": _tokens(name),
-            "grams": _grams(fold),
             "group": _group(name, kind),
         }
 
@@ -508,9 +527,7 @@ class MongoStore:
                     },
                     {
                         "$project": {
-                            "grams": 0,
                             "tokens": 0,
-                            "up.grams": 0,
                             "up.tokens": 0,
                             "up.parts": 0,
                             "up.poster": 0,
@@ -674,7 +691,7 @@ class MongoStore:
 
     def _file(self, node, path):
         # Light reads omit parts/poster; load them only when a file is returned.
-        if "grams" not in node and not node.get("_full"):
+        if "tokens" not in node and not node.get("_full"):
             node = self._get(node["_id"], full=True) or node
         result = self._record(node, path, message=True)
         if node.get("parts"):
@@ -1281,34 +1298,34 @@ class MongoStore:
         words = [word for word in re.split(r"[\W_]+", folded) if word]
         clauses = []
         if not words:
-            # Only punctuation (for example "%"): a literal substring scan.
-            words = [folded]
+            # Only punctuation (for example "%"): a literal match on the name.
             clauses.append({"fold": {"$regex": re.escape(folded)}})
-        for word in words if not clauses else []:
-            # Word starts use the token index; three or more characters can also
-            # match inside a word through the trigram index.
-            options = [{"tokens": {"$regex": "^" + re.escape(word)}}]
-            if len(word) >= 3:
-                options.append({"grams": {"$all": _grams(word)}})
-            clauses.append({"$or": options})
+        for word in words:
+            # Words match the start of a word in the name; numbers also match
+            # without leading zeros, so "3" finds "- 03" and "1080" finds "1080p".
+            number = _number(word)
+            if number is None:
+                clauses.append({"tokens": {"$regex": "^" + re.escape(word)}})
+            elif len(word) >= 3:
+                options = [{"tokens": number}]
+                options.append({"tokens": {"$regex": "^" + re.escape(word)}})
+                clauses.append({"$or": options})
+            else:
+                clauses.append({"tokens": number})
+        order_pattern = (
+            re.compile(
+                ".*?".join(
+                    r"(?<!\d)0*" + re.escape(_number(word))
+                    if _number(word)
+                    else r"(?<![^\W_])" + re.escape(word)
+                    for word in words
+                )
+            )
+            if len(words) > 1
+            else None
+        )
         direction = order or ("asc" if sort == "name" else "desc")
         with self._transaction():
-            visible = {}
-
-            def placement(parent):
-                if parent not in visible:
-                    chain = self._ancestors(parent)
-                    visible[parent] = (
-                        self._hidden(chain),
-                        [row["name"] for row in chain[1:]],
-                        self._chain_path(chain),
-                    )
-                return visible[parent]
-
-            # shortcut: every match is ranked in memory (about 0.3 s per 100,000
-            # items locally); an external search engine is needed past millions.
-            # Ranking reads only small key fields; full rows load for one page.
-            found = []
             projection = {
                 "_id": 1,
                 "name_key": 1,
@@ -1320,25 +1337,51 @@ class MongoStore:
                 "trashed": 1,
                 "tokens": 1,
             }
-            for node in self._find("nodes", {"$and": clauses}, projection):
-                if node["_id"] == ROOT_ID:
-                    continue
-                fold, tokens = node["fold"], node["tokens"]
-                starts = [any(t.startswith(w) for t in tokens) for w in words]
-                if not all(s or w in fold for s, w in zip(starts, words, strict=True)):
+            # Index order puts whole-word matches ("report") before longer words
+            # ("reports"), so the capped set keeps the most relevant names.
+            candidates = list(
+                self._find("nodes", {"$and": clauses}, projection).limit(
+                    MAX_SEARCH_MATCHES + 1
+                )
+            )
+            capped = len(candidates) > MAX_SEARCH_MATCHES
+            candidates = [
+                node
+                for node in candidates[:MAX_SEARCH_MATCHES]
+                if node["_id"] != ROOT_ID
+            ]
+            # One query for every parent folder chain, however many folders match.
+            chains = self._chains({node["parent_id"] for node in candidates})
+            found = []
+            for node in candidates:
+                chain = chains.get(node["parent_id"])
+                if chain is None:
                     continue
                 if not include_trashed and (
-                    node["trashed"] or placement(node["parent_id"])[0]
+                    node["trashed"] or any(row["trashed"] for row in chain)
                 ):
                     continue
+                fold, tokens = node["fold"], node["tokens"]
+                stem = fold.rsplit(".", 1)[0] if node["kind"] == "file" else fold
+                whole = all(
+                    word in tokens or (_number(word) or word) in tokens
+                    for word in words
+                )
+                ordered = order_pattern is None or bool(order_pattern.search(fold))
                 rank = (
                     0
-                    if fold == folded
+                    if folded in (fold, stem)
+                    # A name starting with the query only outranks other
+                    # whole-word matches when it starts with whole words too.
                     else 1
-                    if fold.startswith(folded)
+                    if whole and fold.startswith(folded)
                     else 2
-                    if all(starts)
+                    if whole and ordered
                     else 3
+                    if whole
+                    else 4
+                    if ordered
+                    else 5
                 )
                 found.append(
                     (
@@ -1349,14 +1392,16 @@ class MongoStore:
                         {"size": node["size"], "date": node["upload_date"]},
                     )
                 )
-            # Ties keep name then ID order in both directions (sorts are stable).
+            # Sorts are stable, so each key below breaks ties of the next one.
             found.sort(key=lambda item: (item[2], item[3]))
-            if sort != "name":
+            if sort == "name" and order is None:
+                # Relevance: best match first, newest first among equals.
+                found.sort(key=lambda item: item[4]["date"], reverse=True)
+                found.sort(key=lambda item: item[1])
+            elif sort != "name":
                 found.sort(key=lambda item: item[4][sort], reverse=direction == "desc")
             elif direction == "desc":
                 found.sort(key=lambda item: item[2], reverse=True)
-            if sort == "name" and order is None:
-                found.sort(key=lambda item: item[1])  # Best matches first.
             found.sort(key=lambda item: item[0])  # Folders first.
             page = [item[3] for item in found[offset : offset + limit]]
             rows = {
@@ -1366,9 +1411,9 @@ class MongoStore:
             items = []
             for identity in page:
                 node = rows[identity]
-                _, names, parent_path = placement(node["parent_id"])
-                row = self._record(node, _join_path(parent_path, identity))
-                row["parent_names"] = names
+                chain = chains[node["parent_id"]]
+                row = self._record(node, _join_path(self._chain_path(chain), identity))
+                row["parent_names"] = [item["name"] for item in chain[1:]]
                 items.append(row)
             more = len(found) > offset + limit
             return {
@@ -1376,7 +1421,54 @@ class MongoStore:
                 "query": query,
                 "has_more": more,
                 "next_offset": offset + len(items) if more else None,
+                "total": len(found),
+                "capped": capped,
             }
+
+    def _chains(self, identities):
+        """Root-first ancestor chains (names, trash state) for many folders at once."""
+        identities = sorted(identities)
+        result = {}
+        for start in range(0, len(identities), _BATCH):
+            rows = self.db.nodes.aggregate(
+                [
+                    {"$match": {"_id": {"$in": identities[start : start + _BATCH]}}},
+                    {
+                        "$graphLookup": {
+                            "from": "nodes",
+                            "startWith": "$parent_id",
+                            "connectFromField": "parent_id",
+                            "connectToField": "_id",
+                            "as": "up",
+                            "depthField": "depth",
+                        }
+                    },
+                    {
+                        "$project": {
+                            "_id": 1,
+                            "parent_id": 1,
+                            "name": 1,
+                            "trashed": 1,
+                            "up._id": 1,
+                            "up.parent_id": 1,
+                            "up.name": 1,
+                            "up.trashed": 1,
+                            "up.depth": 1,
+                        }
+                    },
+                ],
+                session=self._session,
+            )
+            for node in rows:
+                up = sorted(node.pop("up"), key=lambda row: -row["depth"])
+                chain = [*up, node]
+                if chain[0]["_id"] != ROOT_ID or any(
+                    chain[index]["parent_id"] != chain[index - 1]["_id"]
+                    for index in range(1, len(chain))
+                ):
+                    raise CorruptStoreError("Invalid catalog ancestry")
+                result[node["_id"]] = chain
+        return result
 
     # ------------------------------------------------------ messages/delete
 

@@ -196,8 +196,18 @@ class Collection:
     def count_documents(self, query, **_kwargs):
         return len(self.find(query))
 
-    def create_index(self, *_args, **_kwargs):
-        return "synthetic-index"
+    def create_index(self, keys, **kwargs):
+        if isinstance(keys, str):
+            keys = [(keys, 1)]
+        name = kwargs.get("name") or "_".join(f"{k}_{d}" for k, d in keys)
+        self.__dict__.setdefault("indexes", {"_id_": {}})[name] = kwargs
+        return name
+
+    def index_information(self):
+        return dict(self.__dict__.setdefault("indexes", {"_id_": {}}))
+
+    def drop_index(self, name):
+        self.__dict__.setdefault("indexes", {"_id_": {}}).pop(name)
 
     def insert_one(self, document, **_kwargs):
         if self.find_one({"_id": document["_id"]}) is not None:

@@ -103,18 +103,25 @@ _CHUNK = re.compile(r"[^\W_]+")
 _SPLIT = re.compile(r"(?<=[a-z])(?=[A-Z])|(?<=[^\W\d_])(?=\d)|(?<=\d)(?=[^\W\d_])")
 
 
+def _number(word: str) -> str | None:
+    """A number without leading zeros, so ``3`` and ``03`` are the same episode."""
+    if word.isascii() and word.isdigit():
+        return word.lstrip("0") or "0"
+    return None
+
+
 def _tokens(name: str) -> list[str]:
-    """Word starts for prefix search: separators, camelCase and letter/digit."""
+    """Searchable words: separators, camelCase and letter/digit boundaries.
+
+    ``[SubsPlease] Frieren - 01 (1080p).mkv`` gives ``subsplease``, ``subs``,
+    ``please``, ``frieren``, ``01``, ``1``, ``1080p``, ``1080``, ``p``, ``mkv``.
+    """
     words = set()
     for chunk in _CHUNK.findall(name):
         words.add(_fold(chunk))
         words.update(_fold(part) for part in _SPLIT.split(chunk) if part)
+    words.update(number for word in list(words) if (number := _number(word)))
     return sorted(words)
-
-
-def _grams(value: str) -> list[str]:
-    """Three-character pieces of a folded name for indexed mid-word search."""
-    return sorted({value[i : i + 3] for i in range(len(value) - 2)})
 
 
 def _validate_file_rename(current_name: str, new_name: str) -> None:

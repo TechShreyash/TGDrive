@@ -104,6 +104,10 @@ class ShareUpdate(BaseModel):
     expires_at: datetime | None = None
 
 
+# Fixed choices keep pages predictable; the cap of 1,000 matches is 10 pages.
+SEARCH_PAGE_SIZES = (25, 50, 100)
+
+
 def register_routes(
     app: Any,
     settings: Any,
@@ -259,10 +263,12 @@ def register_routes(
         request: Request,
         q: str = Query(min_length=1, max_length=MAX_NAME_LENGTH),
         offset: int = Query(default=0, ge=0),
-        limit: int = Query(default=100, ge=1, le=200),
+        limit: int = 50,
         sort: Literal["name", "date", "size"] = "name",
         order: Literal["asc", "desc"] | None = None,
     ) -> dict[str, Any]:
+        if limit not in SEARCH_PAGE_SIZES:
+            raise HTTPException(422, "Results per page must be 25, 50 or 100")
         try:
             return describe(
                 await asyncio.to_thread(
