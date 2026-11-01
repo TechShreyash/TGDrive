@@ -114,7 +114,7 @@ characters. Account errors include `TELEGRAM_CREDENTIALS_REVOKED`,
 | Method and route | Access | Purpose | Notes and errors |
 | --- | --- | --- | --- |
 | `POST /api/getDirectory` | Owner, Share | `{"path", "auth"}`: folder contents keyed by child ID | Special paths: `/trash`, `/search_<q>` (max 500 results), `/share_<folder-id>` |
-| `GET /api/v1/nodes` | Owner | `parent_id`, `offset`, `limit` (1–500), `sort` (`name`, `size`, `type`, `date`) | `{items, total, offset}` |
+| `GET /api/v1/nodes` | Owner | `parent_id`, `limit` (1–500), `sort` (`name`, `size`, `type`, `date`), `order` (`asc`, `desc`), then `cursor` (up to 1024 characters) or `offset` | `{items, total, offset, next_cursor}`; `next_cursor` is `null` on the last page. `422` for an invalid cursor or a cursor with a non-zero offset |
 | `GET /api/v1/search` | Owner | `q` (1–255), `offset`, `limit` (1–200), `sort`, `order` | Name-only, literal match, excludes Trash; `{items, has_more, next_offset}` |
 | `GET /api/v1/trash` | Owner | Top-level Trash items, optional `q` | Pending deletions are hidden |
 | `POST /api/createNewFolder` | Owner | `{"path", "name"}` | |
@@ -122,7 +122,8 @@ characters. Account errors include `TELEGRAM_CREDENTIALS_REVOKED`,
 | `POST /api/trashFileFolder` | Owner | `{"path", "trash": bool}` | No exposure check; prefer the bulk route |
 | `POST /api/deleteFileFolder` | Owner | `{"path"}` of a top-level Trash item | `202` with a deletion job ID |
 
-Folders sort first. File rows include `part_count` but never message IDs or checksums.
+Pass `next_cursor` back as `cursor` to page large folders; it stays as fast as the
+first page, while deep `offset` pages slow down. Folders sort first. File rows include `part_count` but never message IDs or checksums.
 
 ## Atomic folder preparation
 

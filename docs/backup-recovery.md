@@ -26,7 +26,8 @@ Same env + same MongoDB is never a restore: the drive simply opens.
 ## How backups work
 
 - TGDrive saves a backup every hour (`MONGODB_BACKUP_SECONDS`) and when you choose
-  **Storage & Backups → Back Up Now**.
+  **Storage & Backups → Back Up Now**. A scheduled backup is skipped when nothing
+  has changed since the last confirmed one; **Back Up Now** always runs.
 - Each backup is one file: every MongoDB collection, compressed and encrypted
   (AES-256-GCM) with a key derived from `ENCRYPTION_KEY`. Browser sessions are
   left out.
@@ -112,7 +113,8 @@ and channel IDs can still be private.
 
 Use **Start new drive** when the database or storage channel holds a drive you
 do not want back, for example an older TGDrive version or a test drive. It is on
-the **Storage recovery** screen and at the bottom of **Storage & Backups**.
+the **Storage recovery** screen and in the red danger card at the end of
+**Storage & Backups**.
 
 1. Choose **Start new drive…**, read what will be erased, type `START NEW` and
    enter your owner password.

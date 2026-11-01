@@ -431,7 +431,7 @@ configuration drafts are retained, while management actions wait for a successfu
 
 Use **Management → Connections** to refresh credentials/channel access, manage
 accounts, add storage bots or connect a Premium account. **Refresh** requests
-checks; watch each account's result for verification. Keep one working storage bot.
+checks; each account row shows its own result or error. Keep one working storage bot.
 
 Additional bots need administrator access to the same private channel with
 **Post Messages** and **Delete Messages**. Add them here rather than editing token
