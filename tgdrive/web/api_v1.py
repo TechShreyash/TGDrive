@@ -313,6 +313,8 @@ def register_routes(
         offset: int = 0,
         limit: int = 100,
         sort: str = "name",
+        order: Literal["asc", "desc"] = "asc",
+        cursor: str | None = Query(default=None, max_length=1024),
     ) -> dict[str, Any]:
         if (
             offset < 0
@@ -321,15 +323,20 @@ def register_routes(
         ):
             raise HTTPException(422, "Invalid pagination or sort")
         # One indexed MongoDB page off the event loop; no folder is read whole.
-        return describe(
-            await asyncio.to_thread(
-                get_store(request).list_page,
-                parent_id,
-                offset=offset,
-                limit=limit,
-                sort=sort,
+        try:
+            return describe(
+                await asyncio.to_thread(
+                    get_store(request).list_page,
+                    parent_id,
+                    offset=offset,
+                    limit=limit,
+                    sort=sort,
+                    order=order,
+                    after=cursor,
+                )
             )
-        )
+        except DriveValidationError as error:
+            raise HTTPException(422, str(error)) from None
 
     @app.post("/api/v1/folders/tree", dependencies=admin, status_code=201)
     async def prepare_folder_tree(payload: FolderTreeRequest, request: Request) -> Any:

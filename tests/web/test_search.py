@@ -333,3 +333,46 @@ def test_deep_folders_open_by_id_with_server_breadcrumbs_and_share_boundary(
         json={"path": "/share_" + chain[100]["id"], "auth": token},
     )
     assert outside.status_code == 403
+
+
+@pytest.mark.parametrize("sort", ["name", "size", "date", "type"])
+@pytest.mark.parametrize("order", ["asc", "desc"])
+def test_folder_cursor_pages_match_offset_pages(store, sort, order):
+    for index in range(5):
+        store.create_folder("/", f"Folder {index}")
+    for index in range(9):
+        store.add_file("/", f"file {index}.bin", index + 1, index % 3)
+    expected = store.list_page("/", limit=100, sort=sort, order=order)["items"]
+    seen, cursor = [], None
+    while True:
+        page = store.list_page("/", limit=4, sort=sort, order=order, after=cursor)
+        seen.extend(page["items"])
+        cursor = page["next_cursor"]
+        if cursor is None:
+            break
+    assert [row["id"] for row in seen] == [row["id"] for row in expected]
+    assert len(seen) == 14 and all(row["type"] == "folder" for row in seen[:5])
+
+
+@pytest.mark.parametrize(
+    "cursor", ["%%%", "e30", "WyJzaXplIiwiZmlsZSIsIngiLCJ5Il0", "x" * 2000]
+)
+def test_folder_cursor_rejects_tampered_values(store, cursor):
+    with pytest.raises(ValidationError):
+        store.list_page("/", sort="size", after=cursor)
+
+
+def test_api_folder_cursor_continues_listing(search_client):
+    client, store, _ = search_client
+    for index in range(3):
+        store.add_file("/", f"page {index}.txt", index + 1, 1)
+    owner(client)
+    first = client.get("/api/v1/nodes", params={"limit": 2}).json()
+    second = client.get(
+        "/api/v1/nodes", params={"limit": 2, "cursor": first["next_cursor"]}
+    ).json()
+    names = [row["name"] for row in first["items"] + second["items"]]
+    assert names == ["page 0.txt", "page 1.txt", "page 2.txt"]
+    assert second["next_cursor"] is None
+    bad = client.get("/api/v1/nodes", params={"cursor": "%%%"})
+    assert bad.status_code == 422

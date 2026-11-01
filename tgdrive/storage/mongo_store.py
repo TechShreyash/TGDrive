@@ -9,9 +9,11 @@ limit. Writes run in majority transactions fenced by the ownership lease.
 
 from __future__ import annotations
 
+import base64
 import copy
 import hashlib
 import hmac
+import json
 import re
 import secrets
 import threading
@@ -129,6 +131,31 @@ def catalog_counters(catalog):
                 totals["folders"] += 1
             stack.extend((child, hidden) for child in node["children"].values())
     return totals
+
+
+def _encode_cursor(sort, position):
+    raw = json.dumps([sort, *position], separators=(",", ":")).encode()
+    return base64.urlsafe_b64encode(raw).decode().rstrip("=")
+
+
+def _decode_cursor(value, sort):
+    """Validate a client cursor; its values reach MongoDB queries."""
+    try:
+        if not isinstance(value, str) or len(value) > 1024:
+            raise ValueError
+        raw = base64.urlsafe_b64decode(value + "=" * (-len(value) % 4))
+        cursor_sort, kind, key, identity = json.loads(raw)
+    except ValueError, TypeError:
+        raise ValidationError("Invalid cursor") from None
+    expected = int if sort == "size" else str
+    if (
+        cursor_sort != sort
+        or kind not in {"folder", "file"}
+        or type(key) is not expected
+        or type(identity) is not str
+    ):
+        raise ValidationError("Invalid cursor")
+    return kind, key, identity
 
 
 class MongoStore:
@@ -669,8 +696,15 @@ class MongoStore:
     def list_directory(self, path, *, include_trashed=False):
         return self.get_directory(path, include_trashed=include_trashed)["contents"]
 
-    def list_page(self, path, *, offset=0, limit=100, sort="name", order="asc"):
-        """One indexed page of a folder; folders first, then the sort field."""
+    def list_page(
+        self, path, *, offset=0, limit=100, sort="name", order="asc", after=None
+    ):
+        """One indexed page of a folder; folders first, then the sort field.
+
+        ``after`` is the ``next_cursor`` of the previous page. It continues from
+        the last item's index position, so deep pages cost the same as the
+        first; ``offset`` still works but skips index entries one by one.
+        """
         fields = {
             "name": "name_key",
             "size": "size",
@@ -681,31 +715,77 @@ class MongoStore:
             raise ValidationError("Invalid sort")
         if type(offset) is not int or offset < 0 or type(limit) is not int or limit < 1:
             raise ValidationError("Invalid pagination")
+        field = fields[sort]
+        start = None if after is None else _decode_cursor(after, sort)
+        if start is not None and offset:
+            raise ValidationError("Use either offset or a cursor")
         with self._transaction():
             node, path, chain = self._resolve(path)
             if node["kind"] != "folder":
                 raise NotDirectoryError("Not a directory")
             self._visible(chain)
             direction = ASCENDING if order == "asc" else DESCENDING
+            beyond = "$gt" if order == "asc" else "$lt"
+            # The tie-break follows the sort direction so one index serves both.
+            ordering = [(field, direction)]
+            if field != "_id":
+                ordering.append(("_id", direction))
             query = {"parent_id": node["_id"], "trashed": False}
             folders = self.db.nodes.count_documents(
                 dict(query, kind="folder"), session=self._session
             )
             total = self.db.nodes.count_documents(query, session=self._session)
-            items = []
-            for kind, skip in (("folder", offset), ("file", max(0, offset - folders))):
-                if len(items) >= limit or (kind == "folder" and offset >= folders):
-                    continue
+
+            def after_row(kind, value, identity):
+                rest = dict(query, kind=kind)
+                if field == "_id":
+                    rest["_id"] = {beyond: identity}
+                else:
+                    rest["$or"] = [
+                        {field: {beyond: value}},
+                        {field: value, "_id": {beyond: identity}},
+                    ]
+                return rest
+
+            items, last = [], None
+            kinds = ("folder", "file")
+            if start is not None:
+                kinds = kinds[kinds.index(start[0]) :]
+            for kind in kinds:
+                if len(items) >= limit:
+                    break
+                if start is not None and kind == start[0]:
+                    selection, skip = after_row(*start), 0
+                else:
+                    selection = dict(query, kind=kind)
+                    skip = 0 if start is not None else offset
+                    if kind == "file" and start is None:
+                        skip = max(0, offset - folders)
+                    elif kind == "folder" and offset >= folders:
+                        continue
                 cursor = (
-                    self._find("nodes", dict(query, kind=kind), _LIGHT)
-                    .sort([(fields[sort], direction), ("_id", ASCENDING)])
+                    self._find("nodes", selection, _LIGHT)
+                    .sort(ordering)
                     .skip(skip)
                     .limit(limit - len(items))
                 )
-                items.extend(
-                    self._record(row, _join_path(path, row["_id"])) for row in cursor
+                for row in cursor:
+                    items.append(self._record(row, _join_path(path, row["_id"])))
+                    last = row
+            following = None
+            if last is not None and len(items) == limit:
+                position = (last["kind"], last[field], last["_id"])
+                more = self._one("nodes", after_row(*position), {"_id": 1}) or (
+                    last["kind"] == "folder" and total > folders
                 )
-            return {"items": items, "total": total, "offset": offset}
+                if more:
+                    following = _encode_cursor(sort, position)
+            return {
+                "items": items,
+                "total": total,
+                "offset": offset,
+                "next_cursor": following,
+            }
 
     def get_file(self, path, *, include_trashed=False):
         with self._transaction():
