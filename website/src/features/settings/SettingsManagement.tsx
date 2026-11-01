@@ -14,6 +14,7 @@ import {
     Pencil,
     Plus,
     RefreshCw,
+    Send,
     Undo2,
     UserRound,
     X,
@@ -564,6 +565,49 @@ export default function SettingsManagement({
             )}
             {settings && (
                 <>
+                    <div
+                        className="connection-hero"
+                        data-state={
+                            connectedClients === 0
+                                ? "danger"
+                                : connectedClients < settings.clients.length
+                                  ? "warning"
+                                  : "success"
+                        }
+                    >
+                        <span className="connection-hero-icon">
+                            <Send size={22} aria-hidden="true" />
+                        </span>
+                        <div className="connection-hero-copy">
+                            <strong>
+                                {connectedClients === 0
+                                    ? "Telegram not connected"
+                                    : connectedClients < settings.clients.length
+                                      ? "Some storage clients need attention"
+                                      : "Telegram connected"}
+                            </strong>
+                            <p className="connection-summary">
+                                {connectedClients} connected ·{" "}
+                                {settings.clients.length} configured
+                            </p>
+                        </div>
+                        <dl className="connection-hero-facts">
+                            <div>
+                                <dt>Bots</dt>
+                                <dd>
+                                    {
+                                        settings.clients.filter(
+                                            (client) => client.kind === "bot",
+                                        ).length
+                                    }
+                                </dd>
+                            </div>
+                            <div>
+                                <dt>Channel</dt>
+                                <dd>{settings.storage_channel}</dd>
+                            </div>
+                        </dl>
+                    </div>
                     <section
                         className="settings-section"
                         aria-labelledby="storage-clients-heading"
@@ -579,10 +623,6 @@ export default function SettingsManagement({
                                     download speed. All accounts use the same
                                     file split size, capped at 2000 MiB per
                                     document.
-                                </p>
-                                <p className="connection-summary">
-                                    {connectedClients} connected ·{" "}
-                                    {settings.clients.length} configured
                                 </p>
                             </div>
                             <div className="management-actions">
@@ -694,13 +734,17 @@ export default function SettingsManagement({
                                                         client.error}
                                                 </p>
                                             )}
-                                            <span>
+                                            <span className="managed-client-meta">
                                                 {client.username && (
-                                                    <>@{client.username} · </>
-                                                )}
-                                                {client.kind === "bot"
-                                                    ? "Storage Bot"
-                                                    : "Premium account"}
+                                                    <span className="managed-client-handle">
+                                                        @{client.username}
+                                                    </span>
+                                                )}{" "}
+                                                <span className="managed-client-role">
+                                                    {client.kind === "bot"
+                                                        ? "Storage Bot"
+                                                        : "Premium account"}
+                                                </span>
                                             </span>
                                         </div>
                                         <div className="managed-client-state">

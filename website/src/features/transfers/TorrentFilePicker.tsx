@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { Magnet } from "lucide-react";
 import { Modal } from "../../shared/components";
 import { formatBytes } from "../../shared/types";
 
@@ -38,6 +39,9 @@ export default function TorrentFilePicker({
             {open && (
                 <Modal
                     title={"Choose files from " + name}
+                    icon={<Magnet />}
+                    tone="violet"
+                    description="Only the files you keep selected are downloaded and saved."
                     wide
                     onClose={() => setOpen(false)}
                 >
@@ -90,9 +94,6 @@ function TorrentFileChoice({
                     .finally(() => setBusy(false));
             }}
         >
-            <p className="settings-help">
-                Only the files you keep selected are downloaded and saved.
-            </p>
             <div className="torrent-picker-actions">
                 <button
                     type="button"

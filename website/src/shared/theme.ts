@@ -41,7 +41,7 @@ export function applyThemePreference(preference: ThemePreference) {
     document.documentElement.style.colorScheme = theme;
     document
         .querySelector('meta[name="theme-color"]')
-        ?.setAttribute("content", theme === "dark" ? "#1c1d1f" : "#f5f7f9");
+        ?.setAttribute("content", theme === "dark" ? "#121316" : "#eceff3");
 }
 export function initializeTheme() {
     applyThemePreference(readThemePreference());

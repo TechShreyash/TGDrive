@@ -199,6 +199,24 @@ export function formatDate(value: string | number | null | undefined): string {
               timeZone: instanceTimezone,
           }).format(date);
 }
+export function formatShortDate(
+    value: string | number | null | undefined,
+): string {
+    if (!value) return "";
+    const date = new Date(typeof value === "number" ? value * 1000 : value);
+    if (Number.isNaN(date.getTime())) return "";
+    const year = (when: Date) =>
+        new Intl.DateTimeFormat("en", {
+            year: "numeric",
+            timeZone: instanceTimezone,
+        }).format(when);
+    return new Intl.DateTimeFormat(undefined, {
+        month: "short",
+        day: "numeric",
+        ...(year(date) === year(new Date()) ? {} : { year: "numeric" }),
+        timeZone: instanceTimezone,
+    }).format(date);
+}
 const mediaRequests = new Map<string, string>();
 export function mediaRequestId(path: string, auth = ""): string {
     const key = path + "\0" + auth;

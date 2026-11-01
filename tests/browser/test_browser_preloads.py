@@ -94,7 +94,7 @@ def test_file_menu_preloads_whole_file_and_reuses_cached_bytes(server, desktop, 
     help_panel.get_by_text("About preloading", exact=True).click()
     cached = page.locator(".cached-file").filter(has_text="archive.bin")
     expect(cached.locator(".cache-ready-state")).to_have_text("Ready", timeout=15000)
-    expect(cached.locator(".cache-coverage")).to_contain_text("256 / 256 B cached")
+    expect(cached.locator(".cache-coverage")).to_contain_text("256 B")
     expect(cached.locator(".cache-coverage-ready")).to_have_attribute("width", "1000")
     page.screenshot(path=ARTIFACTS / f"preload-file-ready-{width}.png")
     page.goto(directory_url)

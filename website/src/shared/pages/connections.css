@@ -1,0 +1,444 @@
+/* Tools & settings redesign: connections pages. Loaded after refresh.css. */
+
+.connection-management > .settings-section {
+    padding: 22px 24px;
+    margin-bottom: 16px;
+    border: 1px solid var(--line-subtle);
+    border-radius: 18px;
+    background: var(--surface);
+}
+:root[data-theme="dark"] .connection-management > .settings-section {
+    background: var(--surface-subtle);
+}
+.connection-management .settings-section-title {
+    align-items: flex-start;
+    margin-bottom: 18px;
+}
+.connection-management .settings-section-title p {
+    font-size: 13px;
+}
+
+/* Status hero */
+.connection-hero {
+    --tone: var(--success);
+    --tone-soft: var(--success-soft);
+    display: grid;
+    grid-template-columns: 52px minmax(0, 1fr) auto;
+    align-items: center;
+    gap: 16px;
+    margin-bottom: 16px;
+    padding: 20px 24px;
+    border: 1px solid var(--line-subtle);
+    border-radius: 18px;
+    background: var(--surface);
+    animation: connection-rise var(--dur-3) var(--ease-out);
+}
+:root[data-theme="dark"] .connection-hero {
+    background: var(--surface-subtle);
+}
+.connection-hero[data-state="warning"] {
+    --tone: var(--warning);
+    --tone-soft: var(--warning-soft);
+}
+.connection-hero[data-state="danger"] {
+    --tone: var(--danger);
+    --tone-soft: var(--danger-soft);
+}
+.connection-hero-icon {
+    position: relative;
+    display: grid;
+    place-items: center;
+    width: 52px;
+    height: 52px;
+    border-radius: 16px;
+    background: var(--tone-soft);
+    color: var(--tone);
+}
+.connection-hero-icon::after {
+    content: "";
+    position: absolute;
+    right: -3px;
+    bottom: -3px;
+    width: 14px;
+    height: 14px;
+    border: 3px solid var(--surface);
+    border-radius: 50%;
+    background: var(--tone);
+}
+:root[data-theme="dark"] .connection-hero-icon::after {
+    border-color: var(--surface-subtle);
+}
+.connection-hero-copy {
+    min-width: 0;
+}
+.connection-hero-copy strong {
+    display: block;
+    font-size: 17px;
+    font-weight: 650;
+    letter-spacing: -0.01em;
+    line-height: 24px;
+}
+.connection-management .connection-hero .connection-summary {
+    margin: 2px 0 0;
+    color: var(--muted);
+    font-size: 13px;
+    font-variant-numeric: tabular-nums;
+}
+.connection-hero-facts {
+    display: flex;
+    gap: 8px;
+    margin: 0;
+}
+.connection-hero-facts > div {
+    min-width: 0;
+    padding: 8px 14px;
+    border-radius: 12px;
+    background: var(--surface-subtle);
+}
+:root[data-theme="dark"] .connection-hero-facts > div {
+    background: var(--hover);
+}
+.connection-hero-facts dt {
+    color: var(--muted);
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+}
+.connection-hero-facts dd {
+    margin: 2px 0 0;
+    font-family: var(--mantine-font-family-monospace, ui-monospace, monospace);
+    font-size: 14px;
+    font-variant-numeric: tabular-nums;
+    overflow-wrap: anywhere;
+    user-select: text;
+}
+
+/* Storage client rows */
+.connection-management .managed-client-columns {
+    display: none;
+}
+.connection-management .managed-client-list {
+    display: grid;
+    gap: 8px;
+    border: 0;
+}
+.connection-management .managed-client-list > li {
+    border: 1px solid var(--line-subtle);
+    border-radius: 14px;
+    background: var(--surface);
+    transition: border-color var(--dur-1);
+}
+.connection-management .managed-client-list > li:hover {
+    border-color: var(--line);
+}
+.connection-management .managed-client-list > .is-editing {
+    border-color: var(--line);
+    background: var(--surface-subtle);
+}
+:root[data-theme="dark"] .connection-management .managed-client-list > li {
+    background: var(--surface-raised);
+}
+:root[data-theme="dark"]
+    .connection-management
+    .managed-client-list
+    > .is-editing {
+    background: var(--surface-subtle);
+}
+.connection-management .managed-client-row {
+    grid-template-columns: 44px minmax(0, 1.2fr) minmax(0, 1fr) auto;
+    gap: 14px;
+    min-height: 76px;
+    padding: 14px 12px 14px 14px;
+    border-radius: 14px;
+    background: transparent;
+}
+.connection-management .managed-client-icon {
+    width: 44px;
+    height: 44px;
+    border-radius: 13px;
+    background: color-mix(in srgb, var(--kind-folder) 13%, transparent);
+    color: var(--kind-folder);
+}
+.connection-management .managed-client-info {
+    gap: 5px;
+}
+.connection-management .managed-client-info strong {
+    font-size: 15px;
+}
+.connection-management .managed-client-info > .managed-client-meta {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 6px;
+}
+.managed-client-handle {
+    color: var(--muted);
+    font-family: var(--mantine-font-family-monospace, ui-monospace, monospace);
+    font-size: 12px;
+    overflow-wrap: anywhere;
+    user-select: text;
+}
+.managed-client-role {
+    padding: 1px 8px;
+    border-radius: 999px;
+    background: var(--surface-subtle);
+    color: var(--muted);
+    font-size: 11px;
+    font-weight: 600;
+    line-height: 18px;
+    white-space: nowrap;
+}
+:root[data-theme="dark"] .managed-client-role {
+    background: var(--hover);
+}
+.connection-management .managed-client-state {
+    align-items: flex-start;
+    gap: 5px;
+}
+.connection-management .managed-client-state .client-health {
+    display: inline-flex;
+    padding: 2px 10px 2px 8px;
+    border-radius: 999px;
+    background: var(--surface-subtle);
+    font-size: 12px;
+    font-weight: 600;
+    line-height: 20px;
+}
+:root[data-theme="dark"]
+    .connection-management
+    .managed-client-state
+    .client-health {
+    background: var(--hover);
+}
+.connection-management .managed-client-state .client-health.is-connected {
+    background: var(--success-soft);
+    color: var(--success);
+}
+.connection-management .client-health > span {
+    width: 7px;
+    height: 7px;
+    flex-basis: 7px;
+}
+.connection-management .managed-client-state > span:not(.client-health) {
+    font-variant-numeric: tabular-nums;
+}
+.connection-management .managed-client-row > .text-button {
+    min-height: 40px;
+    padding-inline: 14px;
+    border: 1px solid var(--line);
+    border-radius: 12px;
+    color: var(--ink);
+    font-weight: 600;
+}
+.connection-management .managed-client-row > .text-button:hover:not(:disabled) {
+    background: var(--hover);
+}
+.connection-management .managed-client-list .connection-editor {
+    background: transparent;
+    padding-top: 8px;
+}
+.connection-management .connection-readiness {
+    margin-top: 12px;
+}
+
+/* Telegram API key-value grid */
+.connection-management .connection-api-summary {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 0;
+    margin: 0 0 16px;
+    overflow: hidden;
+    border: 1px solid var(--line-subtle);
+    border-radius: 14px;
+    background: var(--surface);
+}
+:root[data-theme="dark"] .connection-management .connection-api-summary {
+    background: var(--surface-raised);
+}
+.connection-management .connection-api-summary > div {
+    padding: 14px 16px;
+    border-inline-end: 1px solid var(--line-subtle);
+}
+.connection-management .connection-api-summary > div:last-child {
+    border-inline-end: 0;
+}
+.connection-management .connection-api-summary dt {
+    margin-bottom: 6px;
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+}
+.connection-management .connection-api-summary dd {
+    font-family: var(--mantine-font-family-monospace, ui-monospace, monospace);
+    font-size: 14px;
+    font-variant-numeric: tabular-nums;
+}
+.connection-management .connection-api-summary dd svg {
+    color: var(--muted);
+}
+.connection-management .connection-api-summary dd small {
+    font-family: var(--mantine-font-family, inherit);
+    font-size: 12px;
+}
+
+/* Advanced disclosure */
+.connection-management .connection-advanced {
+    margin-top: 4px;
+    border-top: 1px solid var(--line-subtle);
+    font-size: 13px;
+}
+.connection-management .connection-advanced summary {
+    width: 100%;
+    min-height: 44px;
+    justify-content: space-between;
+    color: var(--ink);
+    font-weight: 600;
+}
+.connection-management .connection-advanced summary::after {
+    content: "";
+    width: 8px;
+    height: 8px;
+    margin-inline-end: 4px;
+    border-right: 2px solid var(--muted);
+    border-bottom: 2px solid var(--muted);
+    transform: translateY(-2px) rotate(45deg);
+    transition: transform var(--dur-2) var(--ease-out);
+}
+.connection-management .connection-advanced[open] summary::after {
+    transform: translateY(2px) rotate(-135deg);
+}
+.connection-management .connection-advanced summary::-webkit-details-marker {
+    display: none;
+}
+.connection-management .connection-advanced p {
+    margin: 4px 0 12px;
+    font-size: 13px;
+}
+.connection-management .connection-footer-note {
+    padding-inline: 4px;
+}
+
+@keyframes connection-rise {
+    from {
+        opacity: 0;
+        transform: translateY(6px);
+    }
+}
+
+@media (max-width: 720px) {
+    .connection-hero {
+        grid-template-columns: 48px minmax(0, 1fr);
+        padding: 16px;
+    }
+    .connection-hero-icon {
+        width: 48px;
+        height: 48px;
+    }
+    .connection-hero-facts {
+        grid-column: 1 / -1;
+        display: grid;
+        grid-template-columns: auto minmax(0, 1fr);
+    }
+    .connection-management > .settings-section {
+        padding: 18px 16px;
+    }
+    .connection-management .managed-client-row {
+        grid-template-columns: 40px minmax(0, 1fr) auto;
+        gap: 6px 12px;
+        padding: 12px;
+    }
+    .connection-management .managed-client-icon {
+        width: 40px;
+        height: 40px;
+    }
+    /* With an error, the details take the full width and Manage moves beside the status. */
+    .connection-management .managed-client-row:has(.connection-row-error) {
+        grid-template-areas:
+            "icon info info"
+            "state state action";
+    }
+    .connection-management
+        .managed-client-row:has(.connection-row-error)
+        > .managed-client-icon {
+        grid-area: icon;
+        align-self: start;
+    }
+    .connection-management
+        .managed-client-row:has(.connection-row-error)
+        > .managed-client-info {
+        grid-area: info;
+    }
+    .connection-management
+        .managed-client-row:has(.connection-row-error)
+        > .managed-client-state {
+        grid-area: state;
+    }
+    .connection-management
+        .managed-client-row:has(.connection-row-error)
+        > .text-button {
+        grid-area: action;
+    }
+    .connection-management .connection-row-error {
+        width: auto;
+        max-width: none;
+    }
+    .connection-management .managed-client-row > .text-button {
+        min-height: 44px;
+        min-width: 44px;
+    }
+    .connection-management .settings-section-title > .management-actions {
+        grid-template-columns: auto minmax(0, 1fr);
+    }
+    .connection-management
+        .settings-section-title
+        .management-actions
+        > button {
+        min-height: 44px;
+        justify-content: center;
+    }
+    .connection-management .settings-section-title .secondary-button {
+        justify-self: stretch;
+    }
+    .connection-management .connection-readiness .inline-link {
+        min-height: 0;
+    }
+    .connection-management .connection-api-summary {
+        grid-template-columns: minmax(0, 1fr);
+    }
+    .connection-management .connection-api-summary > div {
+        border-inline-end: 0;
+        border-bottom: 1px solid var(--line-subtle);
+    }
+    .connection-management .connection-api-summary > div:last-child {
+        border-bottom: 0;
+    }
+}
+
+/* A client that failed to connect explains why on its own row. */
+.connection-management .connection-row-error {
+    display: flex;
+    gap: 6px;
+    align-items: flex-start;
+    width: fit-content;
+    max-width: 64ch;
+    margin: 6px 0 2px;
+    padding: 6px 10px;
+    border-radius: 10px;
+    background: var(--danger-soft);
+    color: var(--danger-soft-ink, var(--danger));
+    font-size: 12.5px;
+    font-weight: 550;
+    line-height: 1.45;
+    overflow-wrap: anywhere;
+}
+.connection-management .connection-row-error::before {
+    content: "";
+    flex: 0 0 auto;
+    width: 6px;
+    height: 6px;
+    margin-top: 6px;
+    border-radius: 50%;
+    background: var(--danger);
+}

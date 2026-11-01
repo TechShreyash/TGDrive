@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { Button, Paper } from "@mantine/core";
-import { ChevronRight, Folder } from "lucide-react";
+import { Bot, ChevronRight, Folder } from "lucide-react";
 import { api, errorMessage, type BotUploadSettings } from "../../shared/api";
 import { ErrorNotice, Modal, Spinner } from "../../shared/components";
 import { itemPath, type DriveItem } from "../../shared/types";
@@ -74,11 +74,16 @@ export default function BotModeSettings({
             className="settings-section preference-section"
             aria-labelledby="bot-mode-heading"
         >
-            <h2 id="bot-mode-heading">Bot uploads</h2>
-            <p className="settings-help">
-                Files you send or forward to the Telegram bot are saved in this
-                folder.
-            </p>
+            <div className="preference-heading" data-hue="amber">
+                <Bot size={18} aria-hidden="true" />
+                <div>
+                    <h2 id="bot-mode-heading">Bot uploads</h2>
+                    <p className="settings-help">
+                        Files you send or forward to the Telegram bot are saved
+                        in this folder.
+                    </p>
+                </div>
+            </div>
             {loading ? (
                 <p role="status">
                     <Spinner /> Loading bot settings…
@@ -140,10 +145,11 @@ export default function BotModeSettings({
                             <span>Encrypt bot uploads</span>
                         </label>
                         <p className="settings-help">
-                            On: TGDrive downloads each forwarded file and uploads
-                            it encrypted, which takes longer and uses server
-                            bandwidth. Off: Telegram copies the file instantly, but
-                            it stays readable by anyone with channel access.
+                            On: TGDrive downloads each forwarded file and
+                            uploads it encrypted, which takes longer and uses
+                            server bandwidth. Off: Telegram copies the file
+                            instantly, but it stays readable by anyone with
+                            channel access.
                         </p>
                     </>
                 )

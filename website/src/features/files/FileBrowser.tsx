@@ -1,4 +1,12 @@
-import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import {
+    useEffect,
+    useMemo,
+    useRef,
+    useState,
+    type CSSProperties,
+    type ReactNode,
+} from "react";
+import { flushSync } from "react-dom";
 import {
     Star,
     AlertCircle,
@@ -22,6 +30,9 @@ import {
     SquareCheck,
     Archive,
     FolderArchive,
+    Image,
+    FileText,
+    Music,
 } from "lucide-react";
 import type { ActionDialogState } from "./ActionDialog";
 import {
@@ -29,16 +40,17 @@ import {
     fileUrl,
     formatBytes,
     formatDate,
+    formatShortDate,
     type DriveItem,
     type Directory,
     type Share,
 } from "../../shared/types";
 import { api } from "../../shared/api";
 import { shareExpired } from "../shares/SharesView";
-import { FileIcon, Spinner } from "../../shared/components";
+import { FileIcon, Spinner, fileKind } from "../../shared/components";
 import SortMenu, { type FileSort } from "./SortMenu";
-import "./FileBrowser.css";
 import FileThumbnail from "./FileThumbnail";
+import "./FileBrowser.css";
 import { isExtractableArchive } from "./archiveApi";
 import { COMPACT_LAYOUT_QUERY } from "../../shared/responsive";
 import {
@@ -77,6 +89,34 @@ function positionItemMenu(details: HTMLDetailsElement) {
         ) + "px";
 }
 
+type FileFilter = "all" | "folder" | "media" | "docs" | "audio" | "other";
+const FILE_FILTERS: [FileFilter, string, typeof Folder | null][] = [
+    ["all", "All", null],
+    ["folder", "Folders", Folder],
+    ["media", "Photos & videos", Image],
+    ["docs", "Documents", FileText],
+    ["audio", "Audio", Music],
+    ["other", "Other", Archive],
+];
+function filterGroup(item: DriveItem): FileFilter {
+    const kind = fileKind(item.name, item.type === "folder");
+    if (kind === "folder") return "folder";
+    if (kind === "image" || kind === "video") return "media";
+    if (["pdf", "document", "book", "sheet", "slides"].includes(kind))
+        return "docs";
+    if (kind === "audio") return "audio";
+    return "other";
+}
+function withViewTransition(update: () => void) {
+    const start = (
+        document as Document & {
+            startViewTransition?: (callback: () => void) => unknown;
+        }
+    ).startViewTransition;
+    if (!start || matchMedia("(prefers-reduced-motion: reduce)").matches)
+        return update();
+    start.call(document, () => flushSync(update));
+}
 function hideItemMenus() {
     document
         .querySelectorAll<HTMLDetailsElement>(".item-actions[open]")
@@ -199,11 +239,11 @@ export default function FileBrowser({
     const [localOrder, setLocalOrder] = useState<SortOrder>("asc");
     const [layout, setLayout] = useState<"list" | "grid">(() => {
         try {
-            return localStorage.getItem("tgdrive.file-view") === "grid"
-                ? "grid"
-                : "list";
+            return localStorage.getItem("tgdrive.file-view") === "list"
+                ? "list"
+                : "grid";
         } catch {
-            return "list";
+            return "grid";
         }
     });
     const sort = searchSort || localSort;
@@ -344,8 +384,32 @@ export default function FileBrowser({
         });
         return () => cancelAnimationFrame(frame);
     }, [allItems, listingKey, highlightId, loading, sort, order, layout]);
-    const visibleItems = allItems.slice(page * 100, (page + 1) * 100);
+    const [filter, setFilter] = useState<FileFilter>("all");
+    useEffect(() => setFilter("all"), [listingKey]);
+    const filterCounts = useMemo(() => {
+        const counts = new Map<FileFilter, number>();
+        for (const item of allItems) {
+            const group = filterGroup(item);
+            counts.set(group, (counts.get(group) || 0) + 1);
+        }
+        return counts;
+    }, [allItems]);
+    const filteredItems =
+        filter === "all"
+            ? allItems
+            : allItems.filter((item) => filterGroup(item) === filter);
+    const visibleItems = filteredItems.slice(page * 100, (page + 1) * 100);
     const chosen = allItems.filter((item) => selected.has(item.id));
+    const recentItems = useMemo(
+        () =>
+            allItems
+                .filter((item) => item.type === "file" && item.upload_date)
+                .sort((a, b) =>
+                    String(b.upload_date).localeCompare(String(a.upload_date)),
+                )
+                .slice(0, 8),
+        [allItems],
+    );
     const closeItemMenus = () => {
         const trigger = document.activeElement
             ?.closest(".item-actions")
@@ -419,6 +483,21 @@ export default function FileBrowser({
             else next.add(id);
             return next;
         });
+    const groupedGrid =
+        layout === "grid" &&
+        !searchPagination &&
+        visibleItems.some((item) => item.type === "folder");
+    const gridSection = (item: DriveItem, index: number) =>
+        groupedGrid &&
+        (index === 0 || visibleItems[index - 1].type !== item.type) ? (
+            <li
+                key={"section-" + item.type}
+                className="file-grid-section"
+                role="presentation"
+            >
+                <h2>{item.type === "folder" ? "Folders" : "Files"}</h2>
+            </li>
+        ) : null;
     const Collection = layout === "grid" ? "div" : "table";
     const CollectionBody = layout === "grid" ? "ul" : "tbody";
     const Row = layout === "grid" ? "li" : "tr";
@@ -665,6 +744,33 @@ export default function FileBrowser({
                     and try changes.
                 </p>
             )}
+            {!loading && !error && filterCounts.size > 1 && (
+                <div
+                    className="file-filters"
+                    role="group"
+                    aria-label="Filter by type"
+                >
+                    {FILE_FILTERS.filter(
+                        ([value]) => value === "all" || filterCounts.has(value),
+                    ).map(([value, label, Icon]) => (
+                        <button
+                            key={value}
+                            type="button"
+                            className="file-filter-chip"
+                            aria-pressed={filter === value}
+                            onClick={() =>
+                                withViewTransition(() => {
+                                    setFilter(value);
+                                    setPage(0);
+                                })
+                            }
+                        >
+                            {Icon && <Icon size={15} aria-hidden="true" />}
+                            {label}
+                        </button>
+                    ))}
+                </div>
+            )}
             <div
                 className={
                     "file-list-scroll" +
@@ -692,8 +798,26 @@ export default function FileBrowser({
                         </button>
                     </div>
                 ) : loading ? (
-                    <div className="loading-state" role="status">
-                        <Spinner /> Loading files…
+                    <div
+                        className="loading-state file-skeleton"
+                        data-layout={layout}
+                        role="status"
+                    >
+                        <span className="sr-only">Loading files…</span>
+                        {Array.from(
+                            { length: layout === "grid" ? 10 : 8 },
+                            (_, i) => (
+                                <span
+                                    key={i}
+                                    className="skeleton-item"
+                                    aria-hidden="true"
+                                >
+                                    <span className="skeleton-block" />
+                                    <span className="skeleton-line" />
+                                    <span className="skeleton-line short" />
+                                </span>
+                            ),
+                        )}
                     </div>
                 ) : allItems.length === 0 ? (
                     <div className="empty-state">
@@ -735,6 +859,72 @@ export default function FileBrowser({
                     </div>
                 ) : (
                     <>
+                        {layout === "grid" &&
+                            filter === "all" &&
+                            page === 0 &&
+                            !isSearch &&
+                            !isTrash &&
+                            !isStarred &&
+                            !isPublic &&
+                            recentItems.length >= 4 &&
+                            allItems.length >= 12 &&
+                            recentItems.some(
+                                (item, index) =>
+                                    item.id !==
+                                    allItems.filter(
+                                        (entry) => entry.type === "file",
+                                    )[index]?.id,
+                            ) && (
+                                <section
+                                    className="recent-files"
+                                    aria-labelledby="recent-files-title"
+                                >
+                                    <h2 id="recent-files-title">
+                                        Recently added
+                                    </h2>
+                                    <ul>
+                                        {recentItems.map((item, index) => (
+                                            <li
+                                                key={item.id}
+                                                style={
+                                                    {
+                                                        "--i": index,
+                                                    } as CSSProperties
+                                                }
+                                            >
+                                                <button
+                                                    type="button"
+                                                    className="recent-file"
+                                                    aria-label={
+                                                        "Open " + item.name
+                                                    }
+                                                    onClick={() => onOpen(item)}
+                                                >
+                                                    <FileThumbnail
+                                                        item={item}
+                                                        auth={auth}
+                                                    />
+                                                    <span className="recent-file-name">
+                                                        <FileIcon
+                                                            name={item.name}
+                                                        />
+                                                        <span>{item.name}</span>
+                                                    </span>
+                                                    <span className="recent-file-meta">
+                                                        {formatBytes(
+                                                            item.size,
+                                                        ) +
+                                                            " · " +
+                                                            formatShortDate(
+                                                                item.upload_date,
+                                                            )}
+                                                    </span>
+                                                </button>
+                                            </li>
+                                        ))}
+                                    </ul>
+                                </section>
+                            )}
                         <div className="file-table-wrap">
                             <Collection
                                 className={
@@ -923,7 +1113,8 @@ export default function FileBrowser({
                                             : undefined
                                     }
                                 >
-                                    {visibleItems.map((item) => (
+                                    {visibleItems.map((item, index) => [
+                                        gridSection(item, index),
                                         <Row
                                             key={item.id}
                                             className={
@@ -933,6 +1124,11 @@ export default function FileBrowser({
                                                     : "")
                                             }
                                             data-item-id={item.id}
+                                            style={
+                                                {
+                                                    "--i": Math.min(index, 14),
+                                                } as CSSProperties
+                                            }
                                             onClick={(event) => {
                                                 if (
                                                     (event.detail > 1 &&
@@ -996,15 +1192,16 @@ export default function FileBrowser({
                                                                 )}
                                                             </span>
                                                         )}
-                                                    {layout === "list" && (
-                                                        <FileIcon
-                                                            name={item.name}
-                                                            folder={
-                                                                item.type ===
-                                                                "folder"
-                                                            }
-                                                        />
-                                                    )}
+                                                    <FileIcon
+                                                        name={item.name}
+                                                        folder={
+                                                            item.type ===
+                                                            "folder"
+                                                        }
+                                                        inline={
+                                                            layout === "grid"
+                                                        }
+                                                    />
                                                     <div className="file-name-details">
                                                         <div className="file-title-line">
                                                             <button
@@ -1051,7 +1248,7 @@ export default function FileBrowser({
                                                                         )}
                                                                         {!isStarred &&
                                                                             item.starred && (
-                                                                                <span className="file-status-label">
+                                                                                <span className="file-status-label file-status-starred">
                                                                                     Starred
                                                                                 </span>
                                                                             )}
@@ -1060,7 +1257,7 @@ export default function FileBrowser({
                                                                                 item,
                                                                             ) && (
                                                                                 <span
-                                                                                    className="file-status-label"
+                                                                                    className="file-status-label file-status-shared"
                                                                                     title={sharing(
                                                                                         item,
                                                                                     )}
@@ -1121,6 +1318,15 @@ export default function FileBrowser({
                                                         ? "Folder"
                                                         : "—"
                                                     : formatBytes(item.size)}
+                                                {layout === "grid" &&
+                                                    item.upload_date && (
+                                                        <span className="file-grid-date">
+                                                            {" · " +
+                                                                formatShortDate(
+                                                                    item.upload_date,
+                                                                )}
+                                                        </span>
+                                                    )}
                                             </Cell>
                                             <Cell className="actions-cell">
                                                 {isPublic ? (
@@ -1496,8 +1702,8 @@ export default function FileBrowser({
                                                     </details>
                                                 )}
                                             </Cell>
-                                        </Row>
-                                    ))}
+                                        </Row>,
+                                    ])}
                                 </CollectionBody>
                             </Collection>
                         </div>
@@ -1528,15 +1734,15 @@ export default function FileBrowser({
                                     </button>
                                 </div>
                             )}
-                        {!searchPagination && allItems.length > 100 && (
+                        {!searchPagination && filteredItems.length > 100 && (
                             <div className="pagination">
                                 <span>
                                     Showing {page * 100 + 1}–
                                     {Math.min(
                                         (page + 1) * 100,
-                                        allItems.length,
+                                        filteredItems.length,
                                     )}{" "}
-                                    of {allItems.length}
+                                    of {filteredItems.length}
                                 </span>
                                 <button
                                     className="icon-button"
@@ -1552,7 +1758,7 @@ export default function FileBrowser({
                                 <button
                                     className="icon-button"
                                     disabled={
-                                        (page + 1) * 100 >= allItems.length
+                                        (page + 1) * 100 >= filteredItems.length
                                     }
                                     aria-label="Next Page"
                                     onClick={() => {

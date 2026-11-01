@@ -20,17 +20,7 @@ def preferences():
     return {
         "revision": '"first-revision"',
         "timezone": "Asia/Kolkata",
-        "cache_memory_bytes": 256 * MIB,
-        "cache_disk_bytes": 10 * GIB,
-        "cache_min_free_bytes": GIB,
-        "cache_ttl_seconds": 86400,
         "auto_preload": True,
-        "preload_max_jobs": 2,
-        "telegram_upload_pipeline": 4,
-        "telegram_request_limit": 8,
-        "telegram_parts_per_second": 24,
-        "telegram_media_per_bot": 3,
-        "telegram_max_queue": 256,
         "upload_split_mib": 2000,
     }
 
@@ -96,72 +86,47 @@ def test_settings_save_converts_units_guards_revision_and_recovers_conflict(
         route.fulfill(json=saved)
 
     page.route("**/api/v1/settings/performance", settings)
-    login(page, server.url + "/?view=settings&section=cache")
+    login(page, server.url + "/?view=settings&section=transfers")
     section = page.locator(".performance-settings")
-    expect(section.get_by_label("Memory cache (MiB)", exact=True)).to_have_value("256")
-    section.get_by_label("Memory cache (MiB)", exact=True).fill("512")
-    section.get_by_label("Disk cache (GiB)", exact=True).fill("1.5")
+    split = section.get_by_label("File split size (MiB)", exact=True)
+    expect(split).to_have_value("2000")
+    split.fill("1024")
     expect(
-        section.locator("#perf-help-cache_memory_bytes")
+        section.locator("#perf-help-upload_split_mib")
         .locator("xpath=ancestor::*[contains(@class, 'performance-field')]")
         .locator(".mantine-Badge-root")
     ).to_have_count(0)
-    expect(
-        section.locator("#perf-help-cache_memory_bytes").locator(
-            "xpath=ancestor::*[contains(@class, 'performance-field')]"
-        )
-    ).to_contain_text("reduces this budget when memory is tight")
-    expect(section.locator("#perf-help-cache_min_free_bytes")).to_contain_text(
-        "Keep 1 GiB or more for normal use"
+    expect(section.locator("#perf-help-upload_split_mib")).to_contain_text(
+        "0 uses 2000 MiB"
     )
-    section.get_by_label("Disk cache retention (hours)", exact=True).fill("2")
     page.get_by_role("link", name="Timezone", exact=True).click()
     section.get_by_label("Timezone", exact=True).fill("UTC")
-    page.get_by_role("link", name="Cache settings", exact=True).click()
+    page.get_by_role("link", name="Transfer limits", exact=True).click()
     section.get_by_role("button", name="Save Performance Settings", exact=True).click()
     expect(page.locator(".toast")).to_have_text("Performance settings saved.")
-    assert patches == [
-        {
-            "cache_memory_bytes": 512 * MIB,
-            "cache_disk_bytes": 1.5 * GIB,
-            "cache_ttl_seconds": 7200,
-        }
-    ]
+    assert patches == [{"upload_split_mib": 1024}]
     page.get_by_role("link", name="Timezone", exact=True).click()
     expect(section.get_by_label("Timezone", exact=True)).to_have_value("UTC")
     section.get_by_role("button", name="Save Performance Settings", exact=True).click()
     expect(page.locator(".toast")).to_have_text("Performance settings saved.")
     assert patches[-1] == {"timezone": "UTC"}
-    page.get_by_role("link", name="Cache settings", exact=True).click()
+    page.get_by_role("link", name="Transfer limits", exact=True).click()
     section.scroll_into_view_if_needed()
     page.screenshot(path=ARTIFACTS / "performance-settings-desktop.png")
     page.set_viewport_size({"width": 390, "height": 844})
-    section.get_by_label("Disk cache (GiB)", exact=True).scroll_into_view_if_needed()
+    split.scroll_into_view_if_needed()
     assert page.evaluate("document.documentElement.scrollWidth<=innerWidth")
     page.screenshot(path=ARTIFACTS / "performance-settings-mobile.png")
     reject = True
-    section.get_by_label("Disk cache (GiB)", exact=True).fill("2")
+    split.fill("512")
     section.get_by_role("button", name="Save Performance Settings", exact=True).click()
     expect(section.get_by_role("alert")).to_contain_text("another tab")
     expect(
         section.get_by_role("button", name="Save Performance Settings", exact=True)
     ).to_be_disabled()
+    assert len(patches) == 3
     section.get_by_role("button", name="Reload Latest Settings", exact=True).click()
-    expect(section.get_by_label("Disk cache (GiB)", exact=True)).to_have_value("1.5")
-    expect(
-        section.locator("#perf-help-cache_disk_bytes")
-        .locator("xpath=ancestor::*[contains(@class, 'performance-field')]")
-        .locator(".mantine-Badge-root")
-    ).to_have_count(0)
-    page.set_viewport_size({"width": 1440, "height": 960})
-    page.get_by_role("link", name="Transfer limits", exact=True).click()
-    section.locator("summary").filter(has_text="Advanced Telegram limits").click()
-    expect(section.get_by_label("Requests per second", exact=True)).to_have_value("24")
-    expect(
-        section.locator("#perf-help-telegram_parts_per_second")
-        .locator("xpath=ancestor::*[contains(@class, 'performance-field')]")
-        .locator(".mantine-Badge-root")
-    ).to_have_count(0)
+    expect(split).to_have_value("1024")
 
 
 def test_preload_inventory_cancel_and_scoped_eviction(

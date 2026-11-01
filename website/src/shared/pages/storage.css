@@ -1,0 +1,340 @@
+/* Tools & settings redesign: storage pages. Loaded after refresh.css. */
+
+.storage-page > .settings-section,
+.storage-page
+    > .settings-section.storage-protection:is(
+        :has(.connection-ready),
+        :has(.error-notice)
+    ) {
+    padding: 22px 24px;
+    margin-bottom: 16px;
+    border: 1px solid var(--line-subtle) !important;
+    border-radius: 18px;
+    background: var(--surface) !important;
+}
+:root[data-theme="dark"] .storage-page > .settings-section,
+:root[data-theme="dark"]
+    .storage-page
+    > .settings-section.storage-protection:is(
+        :has(.connection-ready),
+        :has(.error-notice)
+    ) {
+    background: var(--surface-subtle) !important;
+}
+.storage-page .settings-section-title p,
+.storage-page .channel-backup-heading p {
+    font-size: 13px;
+}
+
+/* Health summary */
+.storage-page .storage-protection {
+    --tone: var(--hue-slate);
+    --tone-soft: color-mix(in srgb, var(--hue-slate) 13%, transparent);
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    padding-block: 22px;
+    animation: storage-rise var(--dur-3) var(--ease-out);
+}
+.storage-page .storage-protection:has(.storage-protection-icon.is-protected) {
+    --tone: var(--success);
+    --tone-soft: var(--success-soft);
+}
+.storage-page .storage-protection:has(.storage-protection-icon.is-attention) {
+    --tone: var(--danger);
+    --tone-soft: var(--danger-soft);
+}
+.storage-page .storage-protection-heading {
+    gap: 16px;
+    margin-bottom: 16px;
+}
+.storage-page .storage-protection-icon {
+    width: 56px;
+    height: 56px;
+    flex: 0 0 56px;
+    border-radius: 16px;
+    background: var(--tone-soft);
+    color: var(--tone);
+}
+.storage-page .storage-protection-heading h2 {
+    margin: 0 0 4px;
+    font-size: 17px;
+}
+.storage-page .storage-protection .drive-backup-state {
+    width: max-content;
+    max-width: 100%;
+    padding: 2px 10px;
+    border-radius: 999px;
+    background: var(--tone-soft);
+    color: var(--tone);
+    font-size: 12px;
+    font-weight: 600;
+    line-height: 20px;
+}
+.storage-page .storage-protection .drive-backup-state .spinner {
+    width: 14px;
+    height: 14px;
+}
+.storage-page .storage-protection .backup-confirmation-date {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: 4px 8px;
+    width: max-content;
+    max-width: 100%;
+    margin: 0 0 12px;
+    padding: 8px 12px;
+    border-radius: 12px;
+    background: var(--surface-subtle);
+    font-size: 12px;
+}
+:root[data-theme="dark"] .storage-page .backup-confirmation-date {
+    background: var(--hover);
+}
+.storage-page .backup-confirmation-date strong {
+    font-variant-numeric: tabular-nums;
+}
+.storage-page .storage-protection .backup-safety-note {
+    font-size: 13px;
+}
+.storage-page .backup-guide-link {
+    width: max-content;
+    padding-inline: 0;
+}
+
+/* Backups & recovery */
+.storage-page .channel-backup-heading h2 {
+    font-size: 16px;
+}
+.storage-page .channel-backup .icon-button {
+    border: 1px solid var(--line);
+    border-radius: 12px;
+}
+.storage-page .channel-backup-phase {
+    width: max-content;
+    max-width: 100%;
+    margin: 18px 0 4px;
+    padding: 4px 12px;
+    border-radius: 999px;
+    background: var(--surface-subtle);
+    font-size: 13px;
+}
+:root[data-theme="dark"] .storage-page .channel-backup-phase {
+    background: var(--hover);
+}
+.storage-page .channel-backup-phase:has(svg:not(.spinner)) {
+    background: var(--success-soft);
+    color: var(--success);
+}
+.storage-page .channel-backup-phase strong {
+    font-weight: 600;
+}
+.storage-page .channel-backup-channels {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 0;
+    overflow: hidden;
+    border: 1px solid var(--line-subtle);
+    border-radius: 14px;
+}
+.storage-page .channel-backup-channels > div {
+    padding: 12px 16px;
+}
+.storage-page .channel-backup-channels > div + div {
+    border-inline-start: 1px solid var(--line-subtle);
+}
+.storage-page .channel-backup-channels dd {
+    font-family: var(--mantine-font-family-monospace, ui-monospace, monospace);
+    user-select: text;
+}
+.storage-page .channel-backup-actions {
+    gap: 8px;
+}
+.storage-page .channel-backup-actions .secondary-button[disabled] {
+    opacity: 0.55;
+}
+.storage-page .channel-backup-key-help {
+    margin-top: 0;
+}
+.storage-page .channel-backup-details {
+    margin-top: 16px;
+    padding-top: 4px;
+    border-top: 1px solid var(--line-subtle);
+}
+.storage-page .channel-backup-details > summary {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    min-height: 44px;
+    list-style: none;
+}
+.storage-page .channel-backup-details > summary::-webkit-details-marker {
+    display: none;
+}
+.storage-page .channel-backup-details > summary::after {
+    content: "";
+    flex: 0 0 auto;
+    width: 8px;
+    height: 8px;
+    margin-inline: 12px 4px;
+    border-right: 2px solid currentColor;
+    border-bottom: 2px solid currentColor;
+    opacity: 0.7;
+    transform: translateY(-2px) rotate(45deg);
+    transition: transform var(--dur-2) var(--ease-out);
+}
+.storage-page .channel-backup-details[open] > summary::after {
+    transform: translateY(2px) rotate(-135deg);
+}
+
+/* Restore stays visibly separate, in a warning tone */
+.storage-page .channel-backup-details.channel-backup-restore {
+    margin-top: 20px;
+    padding: 4px 16px;
+    border: 1px solid color-mix(in srgb, var(--warning) 35%, transparent);
+    border-radius: 14px;
+    background: var(--warning-soft);
+}
+.storage-page .channel-backup-restore > summary {
+    color: var(--warning);
+}
+.storage-page .channel-backup-restore[open] {
+    padding-bottom: 16px;
+}
+.storage-page .channel-backup-restore .channel-backup-details {
+    border-top-color: color-mix(in srgb, var(--warning) 25%, transparent);
+}
+.storage-page .channel-backup-restore input:not([type="checkbox"]) {
+    background: var(--surface);
+}
+.storage-page .channel-backup-guide {
+    display: inline-flex;
+    align-items: center;
+    min-height: 44px;
+    margin-top: 8px;
+    padding-inline: 0;
+}
+
+/* Files in This Drive */
+.storage-page .storage-catalog {
+    gap: 8px;
+    padding: 0;
+}
+.storage-page .storage-catalog > div,
+.storage-page .storage-catalog > div:first-child {
+    padding: 16px 18px;
+    border: 0;
+    border-radius: 14px;
+    background: var(--surface-subtle);
+}
+:root[data-theme="dark"] .storage-page .storage-catalog > div {
+    background: var(--hover);
+}
+.storage-page .storage-catalog dt {
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+}
+.storage-page .storage-catalog dd {
+    font-size: 30px;
+    line-height: 36px;
+    font-weight: 650;
+    letter-spacing: -0.02em;
+}
+.storage-page .storage-catalog dd > span {
+    letter-spacing: 0;
+}
+.storage-page .staging-meter {
+    height: 8px;
+    border-radius: 999px;
+}
+
+@keyframes storage-rise {
+    from {
+        opacity: 0;
+        transform: translateY(6px);
+    }
+}
+
+@media (max-width: 720px) {
+    .storage-page > .settings-section,
+    .storage-page
+        > .settings-section.storage-protection:is(
+            :has(.connection-ready),
+            :has(.error-notice)
+        ) {
+        padding: 18px 16px;
+    }
+    .storage-page .storage-protection-heading {
+        grid-template-columns: 48px minmax(0, 1fr);
+    }
+    .storage-page .storage-protection-icon {
+        width: 48px;
+        height: 48px;
+        flex-basis: 48px;
+        border-radius: 14px;
+    }
+    .storage-page .storage-protection-heading > .secondary-button {
+        grid-column: 1 / -1;
+        justify-self: stretch;
+        min-height: 44px;
+    }
+    .storage-page .channel-backup-channels {
+        grid-template-columns: minmax(0, 1fr);
+    }
+    .storage-page .channel-backup-channels > div + div {
+        border-inline-start: 0;
+        border-top: 1px solid var(--line-subtle);
+    }
+    .storage-page
+        .channel-backup-actions
+        > :is(.primary-button, .secondary-button) {
+        flex: 1 1 100%;
+        justify-content: center;
+        min-height: 44px;
+    }
+    .storage-page .channel-backup-details.channel-backup-restore {
+        padding-inline: 12px;
+    }
+    .storage-page .storage-catalog dd {
+        font-size: 24px;
+        line-height: 30px;
+    }
+    .storage-page .storage-jobs > .secondary-button {
+        width: 100%;
+        min-height: 44px;
+    }
+}
+@media (max-width: 480px) {
+    .storage-page .storage-catalog > div {
+        align-items: center;
+        padding: 10px 14px;
+    }
+    .storage-page .storage-catalog dd > span {
+        margin-top: 0;
+    }
+}
+.storage-page .channel-backup .channel-backup-key-help {
+    font-size: 13px;
+}
+.storage-page .channel-backup-actions + .channel-backup-key-help {
+    margin-top: -4px;
+}
+
+/* Start a new drive: a quiet danger zone at the end of the page. */
+.start-new-drive {
+    border: 1px solid color-mix(in srgb, var(--danger) 28%, var(--line-subtle));
+}
+.start-new-drive h2 {
+    color: var(--danger);
+}
+.start-new-drive > p {
+    max-width: 72ch;
+    color: var(--muted);
+}
+.start-new-drive > .danger-button {
+    justify-self: start;
+    min-height: 40px;
+    padding: 8px 16px;
+    border-radius: 12px;
+}

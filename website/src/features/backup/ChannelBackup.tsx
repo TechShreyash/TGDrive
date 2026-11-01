@@ -430,7 +430,8 @@ export default function ChannelBackup({
                     parseChannelId(source),
                 );
             if (sourceToken.trim())
-                headers["X-TGDrive-Bot-Token"] = validateBackupToken(sourceToken);
+                headers["X-TGDrive-Bot-Token"] =
+                    validateBackupToken(sourceToken);
         } catch (cause) {
             setActionError(errorMessage(cause));
             return;
@@ -487,7 +488,8 @@ export default function ChannelBackup({
     };
 
     const phase = state?.phase || "disabled";
-    const fileRestoreBlocked = demoMode || state?.file_restore_allowed === false;
+    const fileRestoreBlocked =
+        demoMode || state?.file_restore_allowed === false;
     const active = ACTIVE.has(phase);
     const blocked =
         demoMode || Boolean(busy) || active || phase === "restart_required";
@@ -818,7 +820,9 @@ export default function ChannelBackup({
                                     Your storage channel has a backup from{" "}
                                     <strong>
                                         {candidate.created_at
-                                            ? formatTimestamp(candidate.created_at)
+                                            ? formatTimestamp(
+                                                  candidate.created_at,
+                                              )
                                             : "an earlier session"}
                                     </strong>{" "}
                                     with {candidate.files.toLocaleString()}{" "}
@@ -1035,7 +1039,7 @@ export default function ChannelBackup({
                 </details>
             )}
             <details
-                className="channel-backup-details"
+                className="channel-backup-details channel-backup-restore"
                 open={recoveryOpen}
                 onToggle={(event) => setRecoveryOpen(event.currentTarget.open)}
             >
@@ -1049,11 +1053,15 @@ export default function ChannelBackup({
                     !active &&
                     phase !== "restart_required" && (
                         <>
-                            <form className="channel-backup-form" onSubmit={inspectFile}>
+                            <form
+                                className="channel-backup-form"
+                                onSubmit={inspectFile}
+                            >
                                 {state?.file_restore_allowed === false && (
                                     <p>
-                                        Recovery-file restore is unavailable in demo mode.
-                                        Use a private installation for recovery.
+                                        Recovery-file restore is unavailable in
+                                        demo mode. Use a private installation
+                                        for recovery.
                                     </p>
                                 )}
                                 <div className="channel-backup-fields">
@@ -1063,25 +1071,33 @@ export default function ChannelBackup({
                                             type="file"
                                             accept=".tgdb"
                                             required
-                                            disabled={fileRestoreBlocked || !!busy}
+                                            disabled={
+                                                fileRestoreBlocked || !!busy
+                                            }
                                             aria-describedby="recovery-file-help"
                                             onChange={(event) => {
-                                                setRecoveryFile(event.target.files?.[0] || null);
+                                                setRecoveryFile(
+                                                    event.target.files?.[0] ||
+                                                        null,
+                                                );
                                                 setActionError("");
                                             }}
                                         />
                                     </label>
                                 </div>
                                 <p id="recovery-file-help">
-                                    Choose your downloaded .tgdb backup. It opens with this
-                                    server's ENCRYPTION_KEY. Checking it does not change the drive.
+                                    Choose your downloaded .tgdb backup. It opens with
+                                    this server's ENCRYPTION_KEY. Checking it does
+                                    not change the drive.
                                 </p>
                                 <details>
                                     <summary>Channel access changed?</summary>
                                     <p>
-                                        TGDrive tries the channels and credentials in the file.
-                                        If a saved token was revoked, grant a replacement bot access
-                                        to the surviving channel and enter its token here.
+                                        TGDrive tries the channels and
+                                        credentials in the file. If a saved
+                                        token was revoked, grant a replacement
+                                        bot access to the surviving channel and
+                                        enter its token here.
                                     </p>
                                     <div className="channel-backup-fields">
                                         <label>
@@ -1090,8 +1106,14 @@ export default function ChannelBackup({
                                                 inputMode="numeric"
                                                 autoComplete="off"
                                                 value={source}
-                                                onChange={(event) => setSource(event.target.value)}
-                                                disabled={fileRestoreBlocked || !!busy}
+                                                onChange={(event) =>
+                                                    setSource(
+                                                        event.target.value,
+                                                    )
+                                                }
+                                                disabled={
+                                                    fileRestoreBlocked || !!busy
+                                                }
                                             />
                                         </label>
                                         <label>
@@ -1100,10 +1122,16 @@ export default function ChannelBackup({
                                                 type="password"
                                                 autoComplete="new-password"
                                                 value={sourceToken}
-                                                onChange={(event) => setSourceToken(event.target.value)}
+                                                onChange={(event) =>
+                                                    setSourceToken(
+                                                        event.target.value,
+                                                    )
+                                                }
                                                 spellCheck={false}
                                                 maxLength={512}
-                                                disabled={fileRestoreBlocked || !!busy}
+                                                disabled={
+                                                    fileRestoreBlocked || !!busy
+                                                }
                                             />
                                         </label>
                                     </div>
@@ -1111,30 +1139,51 @@ export default function ChannelBackup({
                                 <button
                                     type="submit"
                                     className="secondary-button"
-                                    disabled={fileRestoreBlocked || !!busy || !recoveryFile}
+                                    disabled={
+                                        fileRestoreBlocked ||
+                                        !!busy ||
+                                        !recoveryFile
+                                    }
                                 >
-                                    {busy === "inspect_file" ? <Spinner /> : <RefreshCw size={16} aria-hidden="true" />}
-                                    {busy === "inspect_file" ? "Checking backup…" : "Inspect backup"}
+                                    {busy === "inspect_file" ? (
+                                        <Spinner />
+                                    ) : (
+                                        <RefreshCw
+                                            size={16}
+                                            aria-hidden="true"
+                                        />
+                                    )}
+                                    {busy === "inspect_file"
+                                        ? "Checking backup…"
+                                        : "Inspect backup"}
                                 </button>
                                 {busy === "inspect_file" && (
-                                    <p role="status">Keep this page open while the file is sent and its recovery data is checked.</p>
+                                    <p role="status">
+                                        Keep this page open while the file is
+                                        sent and its recovery data is checked.
+                                    </p>
                                 )}
                             </form>
                             <details className="channel-backup-details">
-                                <summary>Main channel lost: restore from the backup channel</summary>
+                                <summary>
+                                    Main channel lost: restore from the backup
+                                    channel
+                                </summary>
                                 <form
                                     className="channel-backup-form"
                                     onSubmit={(event) => recover(event, false)}
                                 >
                                     <div className="channel-backup-fields">
                                         <label>
-                                            Backup channel ID
+                                            Surviving backup channel ID
                                             <input
                                                 inputMode="numeric"
                                                 autoComplete="off"
                                                 value={source}
                                                 onChange={(event) =>
-                                                    setSource(event.target.value)
+                                                    setSource(
+                                                        event.target.value,
+                                                    )
                                                 }
                                                 placeholder="-1001234567890"
                                                 required
@@ -1142,13 +1191,15 @@ export default function ChannelBackup({
                                             />
                                         </label>
                                         <label>
-                                            Backup bot token
+                                            Surviving backup bot token
                                             <input
                                                 type="password"
                                                 autoComplete="new-password"
                                                 value={sourceToken}
                                                 onChange={(event) =>
-                                                    setSourceToken(event.target.value)
+                                                    setSourceToken(
+                                                        event.target.value,
+                                                    )
                                                 }
                                                 spellCheck={false}
                                                 maxLength={512}
@@ -1158,9 +1209,9 @@ export default function ChannelBackup({
                                         </label>
                                     </div>
                                     <p>
-                                        TGDrive reads the latest pinned backup with
-                                        this server's ENCRYPTION_KEY. Checking it does
-                                        not change the drive.
+                                        TGDrive reads the latest pinned backup
+                                        with this server's ENCRYPTION_KEY.
+                                        Checking it does not change the drive.
                                     </p>
                                     <button
                                         type="submit"
@@ -1215,8 +1266,9 @@ export default function ChannelBackup({
                         </dl>
                         {candidate.has_database === false && (
                             <p>
-                                This older channel recovery copy restores the catalog and
-                                supported settings. It does not contain the complete database.
+                                This older channel recovery copy restores the
+                                catalog and supported settings. It does not
+                                contain the complete database.
                             </p>
                         )}
                         {!candidate.complete &&
@@ -1322,7 +1374,8 @@ export default function ChannelBackup({
                                         disabled={
                                             blocked ||
                                             (!catalogOnly && !target.trim()) ||
-                                            (!catalogOnly && !targetToken.trim()) ||
+                                            (!catalogOnly &&
+                                                !targetToken.trim()) ||
                                             (catalogOnly
                                                 ? String(candidate.channel)
                                                 : target.trim()) !==
@@ -1350,11 +1403,11 @@ export default function ChannelBackup({
                                         {candidate.has_database === false
                                             ? "catalog"
                                             : "database"}{" "}
-                                        data are confirmed. Activation
-                                        switches TGDrive to this main channel; a
-                                        service restart is required. Keep the
-                                        surviving channel intact and save the
-                                        updated recovery file after recovery.
+                                        data are confirmed. Activation switches
+                                        TGDrive to this main channel; a service
+                                        restart is required. Keep the surviving
+                                        channel intact and save the updated
+                                        recovery file after recovery.
                                     </p>
                                     <label>
                                         Type {candidate.channel} to activate

@@ -1,4 +1,5 @@
 import { useState, type FormEvent } from "react";
+import { Eraser } from "lucide-react";
 import { errorMessage, request } from "../../shared/api";
 import { Modal, Spinner } from "../../shared/components";
 
@@ -36,7 +37,7 @@ export default function StartNewDrive({
     };
     return (
         <section
-            className="settings-section"
+            className="settings-section start-new-drive"
             aria-labelledby="start-new-drive-heading"
         >
             <h2 id="start-new-drive-heading">Start a new drive</h2>
@@ -56,9 +57,15 @@ export default function StartNewDrive({
             {open && (
                 <Modal
                     title="Start a new drive"
+                    icon={<Eraser />}
+                    tone="red"
+                    description="Erase this drive and start empty with the same configuration."
                     onClose={() => !busy && setOpen(false)}
                 >
-                    <form onSubmit={(event) => void submit(event)}>
+                    <form
+                        className="start-new-drive-form"
+                        onSubmit={(event) => void submit(event)}
+                    >
                         <p>This permanently erases:</p>
                         <ul>
                             <li>
@@ -103,18 +110,30 @@ export default function StartNewDrive({
                             />
                         </label>
                         {error && <p role="alert">{error}</p>}
-                        <button
-                            type="submit"
-                            className="danger-button"
-                            disabled={
-                                busy || confirm !== CONFIRMATION || !password
-                            }
-                        >
-                            {busy && <Spinner />}
-                            {busy
-                                ? "Starting new drive…"
-                                : "Erase and start new"}
-                        </button>
+                        <div className="dialog-actions">
+                            <button
+                                type="button"
+                                className="secondary-button"
+                                disabled={busy}
+                                onClick={() => setOpen(false)}
+                            >
+                                Cancel
+                            </button>
+                            <button
+                                type="submit"
+                                className="danger-button"
+                                disabled={
+                                    busy ||
+                                    confirm !== CONFIRMATION ||
+                                    !password
+                                }
+                            >
+                                {busy && <Spinner />}
+                                {busy
+                                    ? "Starting new drive…"
+                                    : "Erase and start new"}
+                            </button>
+                        </div>
                     </form>
                 </Modal>
             )}

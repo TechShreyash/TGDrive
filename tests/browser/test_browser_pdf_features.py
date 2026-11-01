@@ -54,7 +54,7 @@ def test_pdf_password_retry_cancel_and_reopen_keep_the_password_in_memory(
     expect(password).to_be_focused()
     expect(password).to_have_attribute("type", "password")
     expect(password).to_have_value("")
-    expect(dialog.locator(".pdf-controls select")).to_contain_text("Password Required")
+    expect(dialog.get_by_label("Page", exact=True)).to_be_disabled()
     expect(dialog.locator(".pdf-zoom")).to_have_text("—")
     assert dialog.locator(".pdf-password").evaluate(
         "form => form.getBoundingClientRect().width <= innerWidth - 16"

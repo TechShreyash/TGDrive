@@ -88,7 +88,8 @@ def test_cache_inventory_filters_verified_coverage_and_clear_actions(server, des
     ).to_contain_text("Preloading")
     ready = page.locator(".cached-file").filter(has_text="Prepared movie")
     partial = page.locator(".cached-file").filter(has_text="Interview.mkv")
-    expect(ready.locator("svg[role=img]")).to_be_visible()
+    # Ready rows hide the coverage bar; the painted range stays in the markup.
+    expect(ready.locator("svg[role=img]")).to_be_hidden()
     expect(ready.locator(".cache-coverage-ready")).to_have_attribute("x", "0")
     expect(ready.locator(".cache-coverage-ready")).to_have_attribute("width", "1000")
     expect(ready.locator(".cache-ready-state")).to_have_text("Ready")
@@ -333,11 +334,19 @@ def test_performance_views_keyboard_navigation_and_settings_groups(server, deskt
             }
         ],
     )
+    snapshot["tuning"] = {
+        "running": True,
+        "values": {"cache_memory_bytes": 256 * 1024**2},
+        "reasons": {"cache_memory_bytes": "Sized from free memory"},
+    }
     page.route("**/api/v1/performance", lambda route: route.fulfill(json=snapshot))
     page.goto(server.url + "/?view=performance")
     overview = page.get_by_role("tab", name="Overview", exact=True)
     expect(overview).to_have_attribute("aria-selected", "true")
     expect(page.get_by_role("tabpanel", name="Overview")).to_be_visible()
+    tuning = page.get_by_role("region", name="Automatic tuning", exact=True)
+    expect(tuning.get_by_text("Memory cache", exact=True)).to_be_visible()
+    expect(tuning.get_by_title("Sized from free memory")).to_have_text("256 MB")
     expect(page.get_by_role("heading", name="Live file transfers")).to_be_visible()
     expect(page.get_by_text("3 MB/s", exact=True)).to_be_visible()
     expect(page.get_by_text("1 MB/s", exact=True)).to_be_visible()
@@ -386,14 +395,18 @@ def test_performance_views_keyboard_navigation_and_settings_groups(server, deskt
             full_page=True,
         )
     page.goto(server.url + "/?view=settings&section=cache")
-    expect(page.get_by_role("group", name="Cache storage", exact=True)).to_be_visible()
+    # c24bc4a replaced the cache budgets with automatic tuning.
+    expect(page.get_by_role("group", name="Cache storage", exact=True)).to_have_count(0)
+    expect(page.get_by_label("Memory cache (MiB)", exact=True)).to_have_count(0)
     expect(
         page.get_by_role("group", name="Automatic preloading", exact=True)
     ).to_be_visible()
     expect(
         page.get_by_role("button", name="Save Performance Settings")
     ).to_be_disabled()
-    page.get_by_label("Memory cache (MiB)", exact=True).fill("512")
+    preload = page.get_by_role("switch", name=re.compile(r"^Preload during playback"))
+    expect(preload).to_be_checked()
+    page.get_by_text("Preload during playback", exact=True).click()
     expect(page.get_by_text("Unsaved changes", exact=True)).to_be_visible()
     expect(page.get_by_role("button", name="Save Performance Settings")).to_be_enabled()
     with page.expect_response(
@@ -404,9 +417,10 @@ def test_performance_views_keyboard_navigation_and_settings_groups(server, deskt
     ) as saved:
         page.get_by_role("button", name="Save Performance Settings").click()
     assert saved.value.ok, saved.value.text()
-    assert saved.value.json()["cache_memory_bytes"] == 512 * 1024**2
+    assert saved.value.request.post_data_json == {"auto_preload": False}
+    assert saved.value.json()["auto_preload"] is False
     expect(page.locator(".toast")).to_have_text("Performance settings saved.")
-    expect(page.get_by_label("Memory cache (MiB)", exact=True)).to_have_value("512")
+    expect(preload).not_to_be_checked()
     expect(
         page.get_by_role("button", name="Save Performance Settings")
     ).to_be_disabled()

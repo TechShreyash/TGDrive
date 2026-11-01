@@ -13,6 +13,8 @@ import {
     PlayCircle,
     Upload,
     Globe,
+    Minus,
+    Plus,
 } from "lucide-react";
 import {
     Button,
@@ -20,6 +22,7 @@ import {
     NumberInput,
     TextInput,
     Switch,
+    type NumberInputHandlers,
 } from "@mantine/core";
 import { ApiError, errorMessage } from "../../shared/api";
 import { ErrorNotice, Spinner } from "../../shared/components";
@@ -59,6 +62,9 @@ export default function PerformanceSettings({
     const [notice, setNotice] = useState("");
     const [conflict, setConflict] = useState(false);
     const latestLoad = useRef(0);
+    const steppers = useRef<
+        Partial<Record<string, NumberInputHandlers | undefined>>
+    >({});
     const { refreshing, run } = useManualRefresh(
         onNotice ||
             ((message, failed) => {
@@ -166,8 +172,29 @@ export default function PerformanceSettings({
                 </label>
                 <p id={"perf-help-" + definition.key}>{definition.help} </p>
             </div>
-            <div className="configuration-value">
+            <div className="configuration-value number-control">
+                <button
+                    type="button"
+                    className="number-step"
+                    tabIndex={-1}
+                    aria-label={"Decrease " + definition.label}
+                    disabled={
+                        demoMode ||
+                        busy ||
+                        Number(draft![definition.key]) <= definition.min
+                    }
+                    onClick={() =>
+                        steppers.current[definition.key]?.decrement()
+                    }
+                >
+                    <Minus size={16} aria-hidden="true" />
+                </button>
                 <NumberInput
+                    hideControls
+                    handlersRef={(handlers) => {
+                        steppers.current[definition.key] =
+                            handlers ?? undefined;
+                    }}
                     id={"perf-" + definition.key}
                     min={definition.min}
                     max={definition.max}
@@ -187,6 +214,28 @@ export default function PerformanceSettings({
                         setNotice("");
                     }}
                 />
+                {definition.unitLabel && (
+                    <span className="number-unit" aria-hidden="true">
+                        {definition.unitLabel}
+                    </span>
+                )}
+                <button
+                    type="button"
+                    className="number-step"
+                    tabIndex={-1}
+                    aria-label={"Increase " + definition.label}
+                    disabled={
+                        demoMode ||
+                        busy ||
+                        Number(draft![definition.key]) >=
+                            (definition.max ?? Infinity)
+                    }
+                    onClick={() =>
+                        steppers.current[definition.key]?.increment()
+                    }
+                >
+                    <Plus size={16} aria-hidden="true" />
+                </button>
             </div>
         </div>
     );
@@ -231,7 +280,12 @@ export default function PerformanceSettings({
                     Configuration guide <ExternalLink size={14} />
                 </a>
             </div>
-            <div hidden={category !== "transfers"}>{uploadPreferences}</div>
+            <div
+                className="settings-card-grid"
+                hidden={category !== "transfers"}
+            >
+                {uploadPreferences}
+            </div>
             {loading ? (
                 <p className="performance-loading" role="status">
                     <Spinner /> Loading performance settings…
@@ -240,6 +294,7 @@ export default function PerformanceSettings({
                 <form noValidate onSubmit={(event) => void save(event)}>
                     <Fieldset
                         className="performance-setting-group"
+                        data-hue="green"
                         hidden={category !== "cache"}
                         legend={
                             <span className="configuration-group-title">
@@ -271,6 +326,7 @@ export default function PerformanceSettings({
                     </Fieldset>
                     <Fieldset
                         className="performance-setting-group"
+                        data-hue="violet"
                         hidden={category !== "transfers"}
                         legend={
                             <span className="configuration-group-title">
@@ -285,6 +341,7 @@ export default function PerformanceSettings({
                     </Fieldset>
                     <Fieldset
                         className="performance-setting-group"
+                        data-hue="green"
                         hidden={category !== "regional"}
                         legend={
                             <span className="configuration-group-title">
@@ -293,6 +350,13 @@ export default function PerformanceSettings({
                             </span>
                         }
                     >
+                        <p className="settings-help">
+                            Applies to every browser that opens this
+                            installation.
+                        </p>
+                        {category === "regional" && (
+                            <TimezonePreview zone={draft.timezone} />
+                        )}
                         <div className="performance-field">
                             <div>
                                 <label htmlFor="performance-timezone">
@@ -323,7 +387,10 @@ export default function PerformanceSettings({
                         Save applies to this page. Restore defaults loads values
                         for review before saving.
                     </p>
-                    <div className="performance-actions">
+                    <div
+                        className="performance-actions"
+                        data-dirty={changed || undefined}
+                    >
                         <span className="performance-save-state">
                             {changed
                                 ? "Unsaved changes"
@@ -417,5 +484,53 @@ export default function PerformanceSettings({
             <ErrorNotice message={error} />
             {category === "cache" && <ThumbnailSettings demoMode={demoMode} />}
         </section>
+    );
+}
+
+function TimezonePreview({ zone }: { zone: string }) {
+    const [now, setNow] = useState(() => new Date());
+    useEffect(() => {
+        const timer = setInterval(() => setNow(new Date()), 1000);
+        return () => clearInterval(timer);
+    }, []);
+    let time = "";
+    let date = "";
+    let offset = "";
+    try {
+        const zoneOptions = { timeZone: zone.trim() || "invalid" };
+        time = new Intl.DateTimeFormat(undefined, {
+            ...zoneOptions,
+            timeStyle: "short",
+        }).format(now);
+        date = new Intl.DateTimeFormat(undefined, {
+            ...zoneOptions,
+            dateStyle: "full",
+        }).format(now);
+        offset =
+            new Intl.DateTimeFormat("en-US", {
+                ...zoneOptions,
+                timeZoneName: "longOffset",
+            })
+                .formatToParts(now)
+                .find((part) => part.type === "timeZoneName")?.value || "";
+    } catch {
+        time = "";
+    }
+    return (
+        <div className="timezone-preview" data-invalid={!time || undefined}>
+            <span className="timezone-preview-label">Current time</span>
+            {time ? (
+                <>
+                    <strong className="timezone-preview-time">{time}</strong>
+                    <span className="timezone-preview-date">
+                        {date} · {offset}
+                    </span>
+                </>
+            ) : (
+                <span className="timezone-preview-date">
+                    Enter a valid IANA timezone, such as UTC or Asia/Kolkata.
+                </span>
+            )}
+        </div>
     );
 }

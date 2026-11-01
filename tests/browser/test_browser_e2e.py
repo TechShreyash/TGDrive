@@ -133,6 +133,12 @@ def desktop(browser: Any, request: pytest.FixtureRequest):
     ARTIFACTS.mkdir(parents=True, exist_ok=True)
     context = browser.new_context(viewport={"width": 1440, "height": 960})
     context.tracing.start(screenshots=True, snapshots=True, sources=True)
+    # Grid is the product default; most checks were written against list rows.
+    if "default_grid" not in request.fixturenames:
+        context.add_init_script(
+            "localStorage.getItem('tgdrive.file-view')"
+            "||localStorage.setItem('tgdrive.file-view','list')"
+        )
     page = context.new_page()
     page.set_default_timeout(10000)
     errors: list[str] = []
@@ -403,7 +409,7 @@ def assert_pdf_header_layout(page: Any, dialog: Any) -> None:
     )
     if page.viewport_size["width"] > 720:
         header = dialog.locator(".preview-header").bounding_box()
-        for name in ("Zoom in", "Zoom Out", "Fit Width"):
+        for name in ("Zoom in", "Zoom Out", "PDF View Options"):
             control = toolbar.get_by_role("button", name=name, exact=True)
             expect(control).to_be_visible()
             bounds = control.bounding_box()
@@ -1021,10 +1027,12 @@ def test_safe_document_previews_download_and_pdf_canvas(
     assert_pdf_canvas_budget(dialog)
     dialog.get_by_role("button", name="Zoom Out", exact=True).click()
     expect(zoom).to_have_text(initial_zoom)
+    # Fit modes are items in the zoom menu.
+    dialog.get_by_role("button", name="PDF View Options", exact=True).click()
     dialog.get_by_role("button", name="Fit Width", exact=True).click()
-    expect(
-        dialog.get_by_role("button", name="Fit Width", exact=True)
-    ).to_have_attribute("aria-pressed", "true")
+    expect(dialog.locator('[aria-label="Fit Width"]')).to_have_attribute(
+        "aria-pressed", "true"
+    )
     assert_pdf_canvas_budget(dialog)
     page.screenshot(path=ARTIFACTS / "preview-desktop.png", full_page=False)
     page.set_viewport_size({"width": 390, "height": 844})
@@ -2737,7 +2745,7 @@ def test_light_dark_theme_preference_persists_and_preserves_sort_keyboard(
       injected: document.querySelectorAll('style[data-mantine-styles]').length
     })""")
     assert "InterVariable" in baseline["font"]
-    assert baseline["background"] == "rgb(245, 247, 249)"
+    assert baseline["background"] == "rgb(236, 239, 243)"
     assert baseline["injected"] == 0
     login(page)
     page.reload()
@@ -3621,34 +3629,6 @@ def test_transfer_task_numbered_pages_keep_folder_intact(
         expect(folder.locator(".transfer-item")).to_have_count(count)
     expect(folder.locator("button.transfer-show-more")).to_have_count(0)
     assert offsets[-1] == 0
-
-
-def test_upload_concurrency_setting_saves_and_survives_reload(
-    server: Server, desktop: tuple[Any, Any]
-) -> None:
-    _, page = desktop
-    page.emulate_media(color_scheme="dark")
-    login(page, server.url)
-    open_admin(page)
-    page.get_by_role("link", name="Transfer limits", exact=True).click()
-    setting = page.get_by_role("region", name="Parallel uploads", exact=True)
-    field = setting.get_by_label("Simultaneous Uploads per Bot", exact=True)
-    expect(field).to_have_value("1")
-    setting.get_by_role("button", name="More Uploads per Bot", exact=True).click()
-    expect(field).to_have_value("2")
-    setting.get_by_role("button", name="Save Changes", exact=True).click()
-    expect(setting.get_by_role("status")).to_have_text("Upload settings saved.")
-    page.reload()
-    expect(field).to_have_value("2")
-    setting.screenshot(path=str(ARTIFACTS / "upload-settings-dark.png"))
-    page.set_viewport_size({"width": 390, "height": 844})
-    page.emulate_media(color_scheme="light")
-    expect(field).to_be_visible()
-    setting.screenshot(path=str(ARTIFACTS / "upload-settings-mobile.png"))
-    assert page.evaluate("document.documentElement.scrollWidth <= window.innerWidth")
-    setting.get_by_role("button", name="Fewer Uploads per Bot", exact=True).click()
-    setting.get_by_role("button", name="Save Changes", exact=True).click()
-    expect(setting.get_by_role("status")).to_have_text("Upload settings saved.")
 
 
 def test_transfer_sections_locate_highlight_and_normal_preview(

@@ -1,0 +1,136 @@
+/*
+ * Shared motion: list entrances, press feedback and live-data cues.
+ * Entrances on clickable containers fade only; a moving ancestor would
+ * shift taps and become a containing block for fixed-position menus.
+ */
+
+/* Lists and cards: opacity-only stagger, capped at 8 steps. */
+:is(
+    .settings-section,
+    .performance-section,
+    .transfer-batch,
+    .transfer-item,
+    .share-row,
+    .preload-job
+) {
+    animation: refresh-fade var(--dur-3) var(--ease-out) backwards;
+}
+:is(
+    .settings-section,
+    .performance-section,
+    .transfer-batch,
+    .transfer-item,
+    .share-row,
+    .preload-job
+) {
+    &:nth-child(2) {
+        animation-delay: 30ms;
+    }
+    &:nth-child(3) {
+        animation-delay: 60ms;
+    }
+    &:nth-child(4) {
+        animation-delay: 90ms;
+    }
+    &:nth-child(5) {
+        animation-delay: 120ms;
+    }
+    &:nth-child(6) {
+        animation-delay: 150ms;
+    }
+    &:nth-child(7) {
+        animation-delay: 180ms;
+    }
+    &:nth-child(n + 8) {
+        animation-delay: 210ms;
+    }
+}
+
+/* Press and hover feedback */
+.icon-button {
+    transition:
+        background-color var(--dur-1),
+        color var(--dur-1),
+        transform var(--dur-1) var(--ease-out);
+}
+.icon-button:active:not(:disabled) {
+    transform: scale(0.94);
+}
+.drive-nav a,
+.file-filter-chip,
+.performance-view-tabs .mantine-Tabs-tab {
+    transition:
+        background-color var(--dur-2) var(--ease-out),
+        color var(--dur-2) var(--ease-out);
+}
+input[type="checkbox"]:not(.switch):checked {
+    animation: motion-check-pop var(--dur-2) var(--ease-spring);
+}
+.sidebar-tools .nav-disclosure {
+    transition: transform var(--dur-2) var(--ease-out);
+}
+.sidebar-tools[open] > .sidebar-tools-content {
+    animation: refresh-fade var(--dur-2) var(--ease-out);
+}
+
+/* Live data */
+progress::-webkit-progress-value {
+    transition: width 400ms var(--ease-out);
+}
+:is(
+        .transfer-item:is([data-status="uploading"], [data-status="receiving"]),
+        .transfer-batch[data-status="active"],
+        .preload-job[data-state="preparing"]
+    )
+    progress::-webkit-progress-value {
+    background-image: linear-gradient(
+        100deg,
+        transparent 30%,
+        #ffffff40 50%,
+        transparent 70%
+    );
+    background-size: 200% 100%;
+    animation: motion-sheen 1.6s linear infinite;
+}
+.performance-page .performance-chart-now::before {
+    animation: motion-pulse 1.8s var(--ease-out) infinite;
+}
+
+/* Previews: PDF pages fade in once rendered (canvas leaves [hidden]). */
+.pdf-page > canvas {
+    animation: refresh-fade var(--dur-2) var(--ease-out);
+}
+
+@keyframes motion-check-pop {
+    50% {
+        transform: scale(1.18);
+    }
+}
+@keyframes motion-sheen {
+    from {
+        background-position: 150% 0;
+    }
+    to {
+        background-position: -50% 0;
+    }
+}
+@keyframes motion-pulse {
+    from {
+        box-shadow: 0 0 0 0 color-mix(in srgb, currentColor 55%, transparent);
+    }
+    to {
+        box-shadow: 0 0 0 6px transparent;
+    }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    :is(.transfer-item, .transfer-batch, .preload-job)
+        progress::-webkit-progress-value,
+    .performance-page .performance-chart-now::before,
+    input[type="checkbox"]:checked {
+        animation: none;
+    }
+    .icon-button:active:not(:disabled) {
+        transform: none;
+    }
+}

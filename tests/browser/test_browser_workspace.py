@@ -19,6 +19,7 @@ desktop = fixtures.desktop
 server = fixtures.server
 
 pytestmark = pytest.mark.e2e
+PRELOAD = re.compile(r"^Preload during playback")
 
 
 @pytest.mark.parametrize("width", [1440, 390])
@@ -122,29 +123,29 @@ def test_admin_navigation_separates_categories_preserves_drafts_and_supports_key
     expect(
         page.get_by_role("heading", name="Cache & preloading", exact=True)
     ).to_be_visible()
-    memory = page.get_by_label("Memory cache (MiB)", exact=True)
-    memory.fill("512")
+    preload = page.get_by_role("switch", name=PRELOAD)
+    expect(preload).to_be_checked()
+    page.get_by_text("Preload during playback", exact=True).click()
+    expect(preload).not_to_be_checked()
     expect(page.get_by_label("Timezone", exact=True)).not_to_be_visible()
     navigate("Timezone")
     timezone = page.get_by_label("Timezone", exact=True)
     expect(timezone).to_be_visible()
     timezone.fill("Europe/London")
-    expect(memory).not_to_be_visible()
+    expect(preload).not_to_be_visible()
     expect(page.get_by_role("link", name="Settings", exact=True)).to_have_count(0)
     navigate("Transfer limits")
-    expect(
-        page.get_by_label("Simultaneous Uploads per Bot", exact=True)
-    ).to_be_visible()
+    split = page.get_by_label("File split size (MiB)", exact=True)
+    expect(split).to_be_visible()
+    split.fill("1024")
     expect(timezone).not_to_be_visible()
     page.go_back()
     expect(timezone).to_have_value("Europe/London")
     navigate("Cache settings")
-    expect(memory).to_have_value("512")
+    expect(preload).not_to_be_checked()
     navigate("Transfer limits")
-    expect(
-        page.get_by_label("Simultaneous Uploads per Bot", exact=True)
-    ).to_be_visible()
-    expect(memory).not_to_be_visible()
+    expect(split).to_have_value("1024")
+    expect(preload).not_to_be_visible()
     expect(timezone).not_to_be_visible()
     page.screenshot(path=ARTIFACTS / f"admin-transfers-category-{width}.png")
     assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
@@ -175,7 +176,8 @@ def test_save_only_current_category_preserves_unrelated_invalid_draft(
 
     page.route("**/api/v1/settings/performance", policy)
     login(page, server.url + "/?view=settings&section=cache")
-    page.get_by_label("Memory cache (MiB)", exact=True).fill("")
+    page.get_by_role("link", name="Transfer limits", exact=True).click()
+    page.get_by_label("File split size (MiB)", exact=True).fill("")
     page.get_by_role("link", name="Timezone", exact=True).click()
     page.get_by_label("Timezone", exact=True).fill("UTC")
     if refresh_failure:
@@ -198,11 +200,11 @@ def test_save_only_current_category_preserves_unrelated_invalid_draft(
         state.get_by_role("button", name="Try Again", exact=True).click()
         expect(state).to_have_count(0)
         expect(page.get_by_label("Timezone", exact=True)).to_have_value("UTC")
-    page.get_by_role("link", name="Cache settings", exact=True).click()
-    expect(page.get_by_label("Memory cache (MiB)", exact=True)).to_have_value("")
+    page.get_by_role("link", name="Transfer limits", exact=True).click()
+    expect(page.get_by_label("File split size (MiB)", exact=True)).to_have_value("")
     page.get_by_role("button", name="Save Performance Settings", exact=True).click()
     expect(page.locator(".performance-settings").get_by_role("alert")).to_contain_text(
-        "Memory cache (MiB) must be"
+        "File split size (MiB) must be"
     )
     assert len(patches) == 1
 
@@ -279,39 +281,39 @@ def test_sidebar_logout_busy_error_retry_and_server_transfer_survives(
 def test_restore_defaults_is_reviewable_scoped_and_durable(server, desktop, width):
     _, page = desktop
     page.set_viewport_size({"width": width, "height": 844})
-    login(page, server.url + "/?view=settings&section=cache")
+    login(page, server.url + "/?view=settings&section=transfers")
     initial = page.request.get(server.url + "/api/v1/settings/performance").json()
     assert page.request.patch(
         server.url + "/api/v1/settings/performance",
-        data={"cache_memory_bytes": 512 * 1024**2, "timezone": "UTC"},
+        data={"upload_split_mib": 512, "timezone": "UTC"},
         headers={"If-Match": initial["revision"]},
     ).ok
     page.reload()
-    memory = page.get_by_label("Memory cache (MiB)", exact=True)
-    expect(memory).to_have_value("512")
+    split = page.get_by_label("File split size (MiB)", exact=True)
+    expect(split).to_have_value("512")
     page.get_by_role("button", name="Restore defaults", exact=True).click()
-    expect(memory).to_have_value("256")
+    expect(split).to_have_value("2000")
     assert (
         page.request.get(server.url + "/api/v1/settings/performance").json()[
-            "cache_memory_bytes"
+            "upload_split_mib"
         ]
-        == 512 * 1024**2
+        == 512
     )
     expect(
         page.get_by_role("link", name="Configuration guide", exact=True)
     ).to_have_attribute("href", re.compile(r"/docs/configuration\.md$"))
     page.get_by_role("button", name="Discard changes", exact=True).click()
-    expect(memory).to_have_value("512")
+    expect(split).to_have_value("512")
     page.get_by_role("button", name="Restore defaults", exact=True).click()
     page.get_by_role("button", name="Save Performance Settings", exact=True).click()
     expect(page.locator(".toast")).to_have_text("Performance settings saved.")
     policy = page.request.get(server.url + "/api/v1/settings/performance").json()
-    assert policy["cache_memory_bytes"] == 256 * 1024**2
+    assert policy["upload_split_mib"] == 2000
     assert policy["timezone"] == "UTC"
-    page.get_by_label("Cache free-space floor (GiB)", exact=True).fill("0")
+    split.fill("2001")
     page.get_by_role("button", name="Save Performance Settings", exact=True).click()
     expect(page.locator(".performance-settings").get_by_role("alert")).to_contain_text(
-        "at least 64 MiB"
+        "between 0 and 2000"
     )
     assert (
         page.request.get(server.url + "/api/v1/settings/performance").json()["revision"]
@@ -322,32 +324,30 @@ def test_restore_defaults_is_reviewable_scoped_and_durable(server, desktop, widt
     assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
 
 
-@pytest.mark.parametrize("width", [1440, 390])
-def test_owner_upload_storage_limits_validate_save_and_refresh_sidebar(
-    server, desktop, width
-):
+def test_owner_resource_limits_are_automatic_and_rejected(server, desktop):
+    # c24bc4a moved upload storage limits to automatic tuning.
     _, page = desktop
-    page.set_viewport_size({"width": width, "height": 844})
     login(page, server.url + "/?view=settings&section=transfers")
-    maximum = page.get_by_label("Maximum file size (GiB)", exact=True)
-    budget = page.get_by_label("Temporary upload budget (GiB)", exact=True)
-    reserve = page.get_by_label("Upload free-space reserve (GiB)", exact=True)
-    maximum.fill("32")
-    page.get_by_role("button", name="Save Performance Settings", exact=True).click()
-    expect(page.locator(".performance-settings").get_by_role("alert")).to_contain_text(
-        "cannot exceed"
+    expect(page.get_by_label("File split size (MiB)", exact=True)).to_be_visible()
+    for label in [
+        "Maximum file size (GiB)",
+        "Temporary upload budget (GiB)",
+        "Upload free-space reserve (GiB)",
+        "Simultaneous Uploads per Bot",
+    ]:
+        expect(page.get_by_label(label, exact=True)).to_have_count(0)
+    expect(
+        page.get_by_role("region", name="Parallel uploads", exact=True)
+    ).to_have_count(0)
+    initial = page.request.get(server.url + "/api/v1/settings/performance").json()
+    assert "max_file_size" not in initial
+    rejected = page.request.patch(
+        server.url + "/api/v1/settings/performance",
+        data={"max_file_size": 32 * 1024**3},
+        headers={"If-Match": initial["revision"]},
     )
-    expect(maximum).to_have_value("32")
-    budget.fill("64")
-    reserve.fill("1")
-    page.get_by_role("button", name="Save Performance Settings", exact=True).click()
-    expect(page.locator(".toast")).to_have_text("Performance settings saved.")
+    assert rejected.status == 422
     assert (
-        page.request.get(server.url + "/api/config").json()["max_file_size"]
-        == 32 * 1024**3
+        page.request.get(server.url + "/api/v1/settings/performance").json()["revision"]
+        == initial["revision"]
     )
-    page.reload()
-    expect(maximum).to_have_value("32")
-    expect(budget).to_have_value("64")
-    page.screenshot(path=ARTIFACTS / f"owner-upload-storage-{width}.png")
-    assert page.evaluate("document.documentElement.scrollWidth<=innerWidth")

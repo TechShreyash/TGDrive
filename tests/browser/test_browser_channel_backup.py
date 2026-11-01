@@ -295,6 +295,12 @@ def test_file_import_validates_and_accepts_replacement_access(server, desktop):
     )
     inspect.click()
     expect(section.get_by_role("alert")).to_contain_text("encrypted .tgdb")
+    state = page.request.get(server.url + "/__test__/replica", headers=CONTROL).json()
+    assert not state["events"]
+    response = page.request.post(
+        server.url + "/__test__/replica/access-revoked", headers=CONTROL
+    )
+    assert response.ok
     file_input.set_input_files(
         {
             "name": "tgdrive-backup.tgdb",

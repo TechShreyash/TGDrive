@@ -110,6 +110,10 @@ def test_sidebar_keeps_rare_tools_collapsed_and_exposes_project_link(
     def open_drawer():
         if page.locator(".sidebar").get_attribute("inert") is not None:
             page.get_by_role("button", name="Toggle Navigation", exact=True).click()
+            # The drawer slides in; measure geometry once it has settled.
+            page.locator(".sidebar").evaluate(
+                "e => Promise.all(e.getAnimations().map(a => a.finished))"
+            )
 
     open_drawer()
     tools = page.locator(".sidebar-tools")

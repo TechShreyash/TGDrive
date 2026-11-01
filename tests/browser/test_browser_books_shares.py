@@ -69,7 +69,7 @@ def test_selective_reader_controls_and_mobile_layout(
         expect(image).to_have_js_property("naturalWidth", 480)
         page.locator('summary[aria-label="Reading options"]').click()
         page.get_by_label("Right to left", exact=True).check()
-        page.get_by_label("Page fit", exact=True).select_option("page")
+        page.get_by_label("Fit page", exact=True).check()
         page.locator('summary[aria-label="Reading options"]').click()
         page.locator(".book-content").focus()
         page.keyboard.press("ArrowLeft")

@@ -15,15 +15,32 @@ import {
     Presentation,
     BookOpen,
     AlertCircle,
+    CircleAlert,
+    CircleCheck,
 } from "lucide-react";
 export function Spinner() {
     return <LoaderCircle className="spinner" aria-hidden="true" size={18} />;
 }
 
 const FILE_ICON_GROUPS = [
-    { icon: Film, extensions: ["mp4", "mkv", "webm", "mov", "avi"] },
+    {
+        icon: Film,
+        kind: "video",
+        extensions: [
+            "mp4",
+            "mkv",
+            "webm",
+            "mov",
+            "avi",
+            "wmv",
+            "m4v",
+            "3gp",
+            "ts",
+        ],
+    },
     {
         icon: Image,
+        kind: "image",
         extensions: [
             "png",
             "jpg",
@@ -35,34 +52,64 @@ const FILE_ICON_GROUPS = [
             "svg",
         ],
     },
-    { icon: Music, extensions: ["mp3", "wav", "ogg", "flac", "m4a"] },
-    { icon: FileArchive, extensions: ["zip", "gz", "7z", "rar", "tar"] },
-    { icon: FileSpreadsheet, extensions: ["csv", "xlsx", "xls", "ods"] },
-    { icon: Presentation, extensions: ["ppt", "pptx", "odp"] },
-    { icon: BookOpen, extensions: ["epub", "cbz", "cbr"] },
-    { icon: FileText, extensions: ["txt", "md", "pdf", "doc", "docx"] },
+    {
+        icon: Music,
+        kind: "audio",
+        extensions: ["mp3", "wav", "ogg", "flac", "m4a"],
+    },
+    {
+        icon: FileArchive,
+        kind: "archive",
+        extensions: ["zip", "gz", "7z", "rar", "tar"],
+    },
+    {
+        icon: FileSpreadsheet,
+        kind: "sheet",
+        extensions: ["csv", "xlsx", "xls", "ods"],
+    },
+    { icon: Presentation, kind: "slides", extensions: ["ppt", "pptx", "odp"] },
+    { icon: BookOpen, kind: "book", extensions: ["epub", "cbz", "cbr"] },
+    { icon: FileText, kind: "pdf", extensions: ["pdf"] },
+    {
+        icon: FileText,
+        kind: "document",
+        extensions: ["txt", "md", "doc", "docx"],
+    },
 ];
 
-function iconForExtension(extension: string) {
-    for (const group of FILE_ICON_GROUPS) {
-        if (group.extensions.includes(extension)) return group.icon;
-    }
-    return File;
+function groupForExtension(extension: string) {
+    return FILE_ICON_GROUPS.find((group) =>
+        group.extensions.includes(extension),
+    );
+}
+
+export function fileKind(name: string, folder = false) {
+    if (folder) return "folder";
+    const extension = name.split(".").at(-1)?.toLowerCase() || "";
+    return groupForExtension(extension)?.kind || "file";
 }
 
 export function FileIcon({
     name,
     folder = false,
+    inline = false,
 }: {
     name: string;
     folder?: boolean;
+    /** A small type glyph beside a name; not the item's main icon. */
+    inline?: boolean;
 }) {
     const extension = name.split(".").at(-1)?.toLowerCase() || "";
-    const Icon = folder ? Folder : iconForExtension(extension);
+    const Icon = folder ? Folder : groupForExtension(extension)?.icon || File;
     return (
         <span
-            className={"file-icon " + (folder ? "folder-icon" : "")}
+            className={
+                inline
+                    ? "file-kind-icon"
+                    : "file-icon " + (folder ? "folder-icon" : "")
+            }
             data-extension={extension}
+            data-kind={fileKind(name, folder)}
         >
             <Icon size={22} aria-hidden="true" />
         </span>
@@ -74,15 +121,23 @@ export function Modal({
     onClose,
     wide = false,
     initialFocus,
+    icon,
+    tone,
+    description,
 }: {
     title: string;
     children: ReactNode;
     onClose: () => void;
     wide?: boolean;
     initialFocus?: string;
+    /** A tinted tile beside the title that names the action. */
+    icon?: ReactNode;
+    tone?: "amber" | "blue" | "violet" | "green" | "red" | "orange";
+    description?: ReactNode;
 }) {
     const dialog = useRef<HTMLDialogElement>(null);
     const titleId = useId();
+    const descriptionId = useId();
     useEffect(() => {
         const node = dialog.current!;
         const trigger = document.activeElement as HTMLElement | null;
@@ -149,9 +204,26 @@ export function Modal({
                 }
             }}
             aria-labelledby={titleId}
+            aria-describedby={description ? descriptionId : undefined}
         >
             <header className="modal-header">
-                <h2 id={titleId}>{title}</h2>
+                {icon && (
+                    <span
+                        className="modal-icon"
+                        data-tone={tone}
+                        aria-hidden="true"
+                    >
+                        {icon}
+                    </span>
+                )}
+                <div className="modal-heading">
+                    <h2 id={titleId}>{title}</h2>
+                    {description && (
+                        <p id={descriptionId} className="modal-description">
+                            {description}
+                        </p>
+                    )}
+                </div>
                 <button
                     className="icon-button"
                     type="button"
@@ -252,6 +324,19 @@ export function ToastNotice({
                     setFocused(false);
             }}
         >
+            {toast.error ? (
+                <CircleAlert
+                    className="toast-icon"
+                    size={19}
+                    aria-hidden="true"
+                />
+            ) : (
+                <CircleCheck
+                    className="toast-icon"
+                    size={19}
+                    aria-hidden="true"
+                />
+            )}
             <span tabIndex={toast.error ? 0 : undefined}>{toast.message}</span>
             <button
                 className="icon-button"

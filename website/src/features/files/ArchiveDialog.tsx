@@ -99,6 +99,13 @@ export default function ArchiveDialog({
         <Modal
             title={extracting ? "Extract archive" : "Create ZIP"}
             initialFocus="#archive-name"
+            icon={extracting ? <FolderArchive /> : <Archive />}
+            tone="orange"
+            description={
+                extracting
+                    ? "Extract the archive’s files and folders into your drive. The original is kept."
+                    : "Save one ZIP in your drive to download these items together. Original files and folders are kept."
+            }
             onClose={close}
         >
             <form
@@ -107,20 +114,17 @@ export default function ArchiveDialog({
                     void submit();
                 }}
             >
-                <p className="archive-source">
-                    {items.length === 1
-                        ? items[0].name
-                        : items.length + " selected files and folders"}
-                </p>
-                <p>
-                    {extracting
-                        ? "Extract the archive’s files and folders into your drive. The original is kept."
-                        : "Save one ZIP in your drive to download these items together. Original files and folders are kept."}
-                </p>
-                <p className="archive-location">
-                    {extracting ? "Extract in: " : "Save in: "}
-                    <strong>{targetLabel}</strong>
-                </p>
+                <div className="archive-summary">
+                    <p className="archive-source">
+                        {items.length === 1
+                            ? items[0].name
+                            : items.length + " selected files and folders"}
+                    </p>
+                    <p className="archive-location">
+                        {extracting ? "Extract in: " : "Save in: "}
+                        <strong>{targetLabel}</strong>
+                    </p>
+                </div>
                 {extracting && (
                     <fieldset className="archive-destination-options">
                         <legend>Destination</legend>

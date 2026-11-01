@@ -16,6 +16,15 @@ browser, desktop, server = fixtures.browser, fixtures.desktop, fixtures.server
 pytestmark = pytest.mark.e2e
 
 
+def choose_pdf_fit(page, name):
+    """Fit modes live in the zoom menu; open it when the item is not showing."""
+    item = page.locator(f'[aria-label="{name}"]')
+    if not item.is_visible():
+        page.get_by_role("button", name="PDF View Options", exact=True).click()
+    item.click()
+    return item
+
+
 def expect_collapsed_fullscreen_toolbar(page):
     page.wait_for_function(
         "document.fullscreenElement === "
@@ -55,32 +64,26 @@ def test_pdf_real_fit_width_page_and_fullscreen(server, desktop, width):
     page.get_by_role("button", name="Preview samples", exact=True).press("Enter")
     page.get_by_role("button", name="sample.pdf", exact=True).press("Enter")
     expect(page.locator(".pdf-page canvas").first).to_be_visible()
-    if width < 721:
-        page.get_by_role("button", name="PDF View Options", exact=True).click()
-    page.get_by_role("button", name="Fit Page", exact=True).click()
-    expect(page.get_by_role("button", name="Fit Page", exact=True)).to_have_attribute(
-        "aria-pressed", "true"
-    )
+    fit_page = choose_pdf_fit(page, "Fit Page")
+    expect(fit_page).to_have_attribute("aria-pressed", "true")
     page.wait_for_function(
         "() => {const p=document.querySelector('.pdf-page'),"
         "s=document.querySelector('.pdf-scroll');return p && "
         "p.clientHeight <= s.clientHeight-30 && p.clientWidth <= s.clientWidth-30}"
     )
-    page.get_by_role("button", name="Fit Width", exact=True).click()
-    expect(page.get_by_role("button", name="Fit Width", exact=True)).to_have_attribute(
-        "aria-pressed", "true"
-    )
+    fit_width = choose_pdf_fit(page, "Fit Width")
+    expect(fit_width).to_have_attribute("aria-pressed", "true")
+    # Fit width fills the viewport up to the 960px reading width (PDF_READING_WIDTH).
     page.wait_for_function(
         "() => Math.abs(document.querySelector('.pdf-page').clientWidth-"
-        "(document.querySelector('.pdf-scroll').clientWidth-32)) <= 2"
+        "Math.min(960, document.querySelector('.pdf-scroll').clientWidth-32)) <= 2"
     )
     page.get_by_role("button", name="Zoom in", exact=True).click()
-    expect(page.get_by_role("button", name="Fit Width", exact=True)).to_have_attribute(
-        "aria-pressed", "false"
-    )
-    page.get_by_role("button", name="Fit Width", exact=True).click()
-    if width < 721:
-        page.get_by_role("button", name="PDF View Options", exact=True).click()
+    expect(fit_width).to_have_attribute("aria-pressed", "false")
+    choose_pdf_fit(page, "Fit Width")
+    options = page.locator('[aria-label="PDF View Options"]')
+    if options.get_attribute("aria-expanded") == "true":
+        options.click()
     page.get_by_role("button", name="Enter Fullscreen", exact=True).click()
     expect_expanded_fullscreen_toolbar(page)
     hide = page.get_by_role("button", name="Hide Toolbar", exact=True)
@@ -95,7 +98,7 @@ def test_pdf_real_fit_width_page_and_fullscreen(server, desktop, width):
     if width < 721:
         page.get_by_role("button", name="PDF View Options", exact=True).click()
     page.get_by_role("button", name="Zoom in", exact=True).click()
-    expect(page.get_by_role("button", name="Fit Width", exact=True)).to_have_attribute(
+    expect(page.locator('[aria-label="Fit Width"]')).to_have_attribute(
         "aria-pressed", "false"
     )
     if width < 721:

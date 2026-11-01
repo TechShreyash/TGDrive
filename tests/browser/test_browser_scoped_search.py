@@ -259,14 +259,21 @@ def test_compact_fixed_directory_controls_leave_room_for_files(
         )
     bounds = page.locator(".workspace").bounding_box()
     viewport = page.viewport_size
-    assert abs(bounds["x"] + bounds["width"] - viewport["width"]) <= 1
-    assert abs(bounds["y"] + bounds["height"] - viewport["height"]) <= 1
-    assert bounds["y"] == (52 if width < 700 else 0)
     if width < 700:
-        assert bounds["x"] == 0
+        # Phone: full width, between the top bar and the bottom tab bar.
+        top_bar = page.locator(".topbar").bounding_box()
+        tab_bar = page.locator(".mobile-tabbar").bounding_box()
+        assert bounds["x"] == 0 and abs(bounds["width"] - viewport["width"]) <= 1
+        assert abs(bounds["y"] - (top_bar["y"] + top_bar["height"])) <= 1
+        assert abs(bounds["y"] + bounds["height"] - tab_bar["y"]) <= 1
     else:
+        # Desktop: an inset card with an equal small gutter on the right and bottom.
+        right_gap = viewport["width"] - (bounds["x"] + bounds["width"])
+        bottom_gap = viewport["height"] - (bounds["y"] + bounds["height"])
+        assert 0 <= right_gap <= 16 and abs(right_gap - bottom_gap) <= 1
+        assert 0 <= bounds["y"] <= 16
         sidebar = page.locator(".sidebar").bounding_box()
-        assert abs(bounds["x"] - sidebar["x"] - sidebar["width"]) <= 1
+        assert 0 <= bounds["x"] - sidebar["x"] - sidebar["width"] <= 16
     assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
     assert page.locator(".file-toolbar").evaluate(
         "node => node.scrollWidth <= node.clientWidth + 1"

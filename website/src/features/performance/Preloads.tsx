@@ -1,5 +1,19 @@
-import { useCallback, useEffect, useRef, useState } from "react";
-import { RefreshCw, Trash2, X, AlertCircle, Settings2 } from "lucide-react";
+import {
+    useCallback,
+    useEffect,
+    useRef,
+    useState,
+    type ReactNode,
+} from "react";
+import {
+    RefreshCw,
+    Trash2,
+    X,
+    AlertCircle,
+    Settings2,
+    MemoryStick,
+    HardDrive,
+} from "lucide-react";
 import { errorMessage } from "../../shared/api";
 import { ErrorNotice, Spinner, FileIcon, Modal } from "../../shared/components";
 import { formatByteProgress, formatBytes } from "../../shared/types";
@@ -55,25 +69,33 @@ export function CacheCoverage({
         file.size > 0
             ? Math.min(100, Math.floor((ready / file.size) * 100))
             : 0;
+    const state = complete ? "Ready" : status || "Partial";
     return (
         <div className="cache-coverage" data-complete={complete}>
             <div className="cached-file-heading">
-                {showName && (
-                    <strong title={file.name || "Cached file"}>
-                        {file.name || "Cached file"}
-                    </strong>
-                )}
-                <span className="cache-ready-state" data-complete={complete}>
-                    {complete ? "Ready" : status || "Partial"}
+                {showName &&
+                    (file.name ? (
+                        <strong title={file.name}>{file.name}</strong>
+                    ) : (
+                        <strong className="cached-file-unnamed" title={file.id}>
+                            {cachedFileLabel(file)}
+                        </strong>
+                    ))}
+                <span className="cached-file-meta">
+                    {complete
+                        ? formatBytes(file.size)
+                        : formatByteProgress(ready, file.size) +
+                          " cached · " +
+                          percent +
+                          "%"}
                 </span>
             </div>
-            <div className="cached-file-meta">
-                <span>{formatByteProgress(ready, file.size)} cached</span>
-                <span>{percent}%</span>
-            </div>
+            <span className="cache-ready-state" data-complete={complete}>
+                {state}
+            </span>
             <svg
                 role="img"
-                aria-label={`${formatByteProgress(ready, file.size)} cached · ${percent}% · ${complete ? "Ready" : status || "Partial"}`}
+                aria-label={`${formatByteProgress(ready, file.size)} cached · ${percent}% · ${state}`}
                 viewBox="0 0 1000 8"
                 preserveAspectRatio="none"
             >
@@ -98,29 +120,47 @@ export function CacheCoverage({
         </div>
     );
 }
+/** Files cached by a raw stream before a named request have no name; show where they came from. */
+export function cachedFileLabel(file: CachedFile): string {
+    return (
+        file.name ||
+        (file.message_id
+            ? "Unnamed file · message " + file.message_id
+            : "Unnamed file · " + file.id.slice(0, 8))
+    );
+}
 export function CacheCapacity({
     label,
     used,
     limit,
     disabled = false,
     unavailable = false,
+    icon,
 }: {
     label: string;
     used: number;
     limit: number;
     disabled?: boolean;
     unavailable?: boolean;
+    icon?: ReactNode;
 }) {
     const available = !disabled && !unavailable && limit > 0;
     const percent = available ? Math.round((used / limit) * 100) : 0;
     return (
         <div className="preload-capacity-tier" role="group" aria-label={label}>
-            <h4>{label}</h4>
+            <h4>
+                {icon && (
+                    <span className="preload-capacity-icon" aria-hidden="true">
+                        {icon}
+                    </span>
+                )}
+                {label}
+            </h4>
             <div className="preload-capacity-value">
                 {available ? (
                     <>
                         <strong>{formatBytes(used)}</strong>
-                        <span>of {formatBytes(limit)} used</span>
+                        <span>of {formatBytes(limit)}</span>
                         <span>{percent}%</span>
                     </>
                 ) : (
@@ -271,7 +311,7 @@ export default function Preloads({
     const readyCount = files.filter(cachedFileComplete).length;
     const visibleFiles = files.filter(
         (file) =>
-            (file.name || "Cached file")
+            cachedFileLabel(file)
                 .toLocaleLowerCase()
                 .includes(query.trim().toLocaleLowerCase()) &&
             (filter === "all" ||
@@ -396,6 +436,7 @@ export default function Preloads({
                         >
                             <CacheCapacity
                                 label="Memory cache"
+                                icon={<MemoryStick size={18} />}
                                 used={cache.memory.bytes}
                                 limit={cache.memory.effective_max_bytes}
                                 disabled={cache.memory.max_bytes === 0}
@@ -405,6 +446,7 @@ export default function Preloads({
                             />
                             <CacheCapacity
                                 label="Disk cache"
+                                icon={<HardDrive size={18} />}
                                 used={cache.disk.bytes}
                                 limit={cache.disk.max_bytes}
                                 disabled={cache.disk.max_bytes === 0}
@@ -513,10 +555,7 @@ export default function Preloads({
                                                 key={file.id}
                                             >
                                                 <FileIcon
-                                                    name={
-                                                        file.name ||
-                                                        "Cached file"
-                                                    }
+                                                    name={cachedFileLabel(file)}
                                                 />
                                                 <CacheCoverage
                                                     file={file}
@@ -550,8 +589,9 @@ export default function Preloads({
                                                                 }
                                                                 aria-label={
                                                                     "Cancel preload of " +
-                                                                    (file.name ||
-                                                                        "file")
+                                                                    cachedFileLabel(
+                                                                        file,
+                                                                    )
                                                                 }
                                                                 title="Cancel preload"
                                                                 onClick={() =>
@@ -587,16 +627,17 @@ export default function Preloads({
                                                         }
                                                         aria-label={
                                                             "Evict cached bytes for " +
-                                                            (file.name ||
-                                                                "file")
+                                                            cachedFileLabel(
+                                                                file,
+                                                            )
                                                         }
                                                         title="Clear cached bytes"
                                                         onClick={() =>
                                                             setClearing({
                                                                 id: file.id,
-                                                                name:
-                                                                    file.name ||
-                                                                    "Cached file",
+                                                                name: cachedFileLabel(
+                                                                    file,
+                                                                ),
                                                             })
                                                         }
                                                     >

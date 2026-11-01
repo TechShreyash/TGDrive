@@ -355,3 +355,28 @@ def test_escape_selection_returns_focus_to_file_control_not_workspace(
     expect(
         page.get_by_role("heading", name="Preview samples", exact=True)
     ).to_be_visible()
+
+
+@pytest.fixture
+def default_grid():
+    """Opt out of the list-view default the shared fixture sets for older checks."""
+
+
+@pytest.mark.parametrize("width", [1440, 390])
+def test_new_browsers_open_files_in_grid_with_type_filters(
+    server, default_grid, desktop, width
+):
+    _, page = desktop
+    page.set_viewport_size({"width": width, "height": 844})
+    login(page, server.url)
+    grid = page.get_by_role("list", name="Files and folders", exact=True)
+    expect(grid).to_be_visible()
+    page.get_by_role("button", name="Preview samples", exact=True).press("Enter")
+    expect(page.get_by_role("button", name="sample.png", exact=True)).to_be_visible()
+    filters = page.get_by_role("group", name="Filter by type", exact=True)
+    filters.get_by_role("button", name="Audio", exact=True).click()
+    expect(page.get_by_role("button", name="sample.wav", exact=True)).to_be_visible()
+    expect(page.get_by_role("button", name="sample.png", exact=True)).to_have_count(0)
+    filters.get_by_role("button", name="All", exact=True).click()
+    expect(page.get_by_role("button", name="sample.png", exact=True)).to_be_visible()
+    assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")

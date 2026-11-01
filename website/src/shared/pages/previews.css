@@ -1,0 +1,1023 @@
+/*
+ * File previews: three-zone reader toolbar (file, page, view), a themed details
+ * dialog, and content-sized text, audio and image stages.
+ * Loaded last. PdfPreview.css and BookPreview.css load lazily after it, so
+ * rules that override them carry an extra `.file-preview .preview-header-reader`.
+ */
+
+/* ---------- Chrome shared by every preview ---------- */
+
+/* Image and video stay on dark chrome; readers, text and audio follow the app theme below. */
+.preview-header {
+    gap: 12px;
+    min-height: 62px;
+    padding: 8px 14px 8px 10px;
+    border-bottom: 1px solid #2c3036;
+    background: #15171b;
+}
+.preview-header .icon-button,
+.preview-download {
+    border-radius: 10px;
+    transition:
+        background-color var(--dur-1),
+        transform var(--dur-1) var(--ease-out);
+}
+.preview-header .icon-button:active,
+.preview-download:active {
+    transform: scale(0.94);
+}
+.preview-header > .file-icon {
+    width: 38px;
+    height: 38px;
+    border-radius: 11px;
+    background: color-mix(in srgb, var(--kind, #8acbff) 16%, transparent);
+    color: var(--kind, #c0d1ff);
+}
+.preview-heading h2 {
+    font-weight: 600;
+}
+.preview-download {
+    padding: 0 16px;
+    background: #ffffff14;
+    font-weight: 600;
+}
+.preview-download:hover {
+    background: #ffffff24;
+}
+.file-preview,
+.preview-fullscreen-surface {
+    animation: refresh-fade var(--dur-2) var(--ease-out);
+}
+.file-preview {
+    color: #eef1f5;
+    color-scheme: dark;
+}
+.file-preview :is(.preview-header, .preview-download, .preview-heading h2) {
+    color: #eef1f5;
+}
+.file-preview .preview-heading > span {
+    color: #a9b1bd;
+}
+
+/* Themed previews: PDF, EPUB, comics, text and audio. */
+.file-preview:is(
+    :has(.preview-header-reader),
+    :has(.preview-surface-text),
+    :has(.preview-surface-audio)
+) {
+    --pill: light-dark(#eef1f5, #26292d);
+    --pill-hover: light-dark(#e1e5eb, #33373c);
+    color: var(--ink);
+    background: var(--canvas);
+    /* inherit the app's chosen theme; `light dark` would follow the OS instead */
+    color-scheme: inherit;
+}
+.file-preview:is(
+        :has(.preview-header-reader),
+        :has(.preview-surface-text),
+        :has(.preview-surface-audio)
+    )
+    .preview-header {
+    background: var(--surface);
+    border-bottom-color: var(--line-subtle);
+    color: var(--ink);
+}
+.file-preview:is(
+        :has(.preview-header-reader),
+        :has(.preview-surface-text),
+        :has(.preview-surface-audio)
+    )
+    .preview-header
+    :is(.preview-heading h2, .icon-button, .preview-download) {
+    color: var(--ink);
+}
+.file-preview:is(
+        :has(.preview-header-reader),
+        :has(.preview-surface-text),
+        :has(.preview-surface-audio)
+    )
+    .preview-heading
+    > span {
+    color: var(--muted);
+}
+.file-preview:is(
+        :has(.preview-header-reader),
+        :has(.preview-surface-text),
+        :has(.preview-surface-audio)
+    )
+    :is(button, a, input, select, summary):focus-visible {
+    outline-color: var(--action);
+}
+.file-preview:is(
+        :has(.preview-header-reader),
+        :has(.preview-surface-text),
+        :has(.preview-surface-audio)
+    )
+    .preview-header
+    :is(.icon-button, .preview-download):hover {
+    background: var(--hover);
+}
+.file-preview:is(
+        :has(.preview-header-reader),
+        :has(.preview-surface-text),
+        :has(.preview-surface-audio)
+    )
+    .preview-download {
+    background: var(--pill);
+}
+.file-preview:is(
+        :has(.preview-header-reader),
+        :has(.preview-surface-text),
+        :has(.preview-surface-audio)
+    )
+    .preview-download:hover {
+    background: var(--pill-hover);
+}
+.file-preview:is(
+        :has(.preview-header-reader),
+        :has(.preview-surface-text),
+        :has(.preview-surface-audio)
+    )
+    .preview-limit {
+    color: var(--muted);
+    background: var(--surface-subtle);
+}
+
+/* ---------- Reader toolbar: file left, page center, view right ---------- */
+
+/* One pill per control group: pager in the center, zoom on the right. */
+.file-preview .preview-header-reader :is(.reader-navigation, .book-toolbar),
+.file-preview .preview-header-reader .pdf-toolbar > .inline-actions {
+    display: flex;
+    flex-wrap: nowrap;
+    align-items: center;
+    gap: 0;
+    padding: 0;
+    border-radius: 10px;
+    background: var(--pill);
+}
+.file-preview
+    .preview-header-reader
+    :is(
+        .reader-navigation .icon-button,
+        .book-toolbar > .icon-button,
+        .book-options > summary,
+        .pdf-toolbar .inline-actions .icon-button,
+        .pdf-options-toggle
+    ) {
+    width: 36px;
+    min-width: 36px;
+    height: 36px;
+    min-height: 36px;
+    padding: 0;
+    border: 0;
+    border-radius: 10px;
+    background: transparent;
+    color: var(--ink);
+}
+.file-preview
+    .preview-header-reader
+    :is(
+        .reader-navigation .icon-button,
+        .book-toolbar > .icon-button,
+        .book-options > summary,
+        .pdf-toolbar .inline-actions .icon-button,
+        .pdf-options-toggle,
+        .pdf-zoom-toggle
+    ):hover:not(:disabled) {
+    background: var(--pill-hover);
+}
+.file-preview .preview-header-reader .book-options[open] > summary,
+.file-preview .preview-header-reader .pdf-zoom-toggle[aria-expanded="true"],
+.file-preview .preview-header-reader .pdf-options-toggle[aria-expanded="true"] {
+    background: var(--pill-hover);
+}
+.file-preview .preview-header-reader .pdf-zoom-toggle {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 2px;
+    min-width: 64px;
+    height: 36px;
+    padding: 0 6px 0 10px;
+    border: 0;
+    border-radius: 8px;
+    background: transparent;
+    color: var(--ink);
+    font: inherit;
+}
+.file-preview .preview-header-reader .pdf-zoom-toggle svg {
+    color: var(--muted);
+}
+.file-preview .preview-header-reader .pdf-zoom {
+    display: inline;
+    min-width: 0;
+    color: var(--ink);
+    font-size: 12.5px;
+    font-weight: 600;
+    font-variant-numeric: tabular-nums;
+    background: none;
+}
+.file-preview .preview-header-reader .pdf-toolbar {
+    gap: 0;
+    color: var(--ink);
+}
+/* The id selector outranks the old #book-entry select sizing in BookPreview.css. */
+.file-preview .preview-header-reader :is(.page-jump, #book-entry.page-jump) {
+    flex: 0 0 auto;
+    max-width: 8ch;
+}
+.file-preview .preview-header-reader .page-jump {
+    width: 4.5ch;
+    min-width: 40px;
+    height: 28px;
+    margin: 0 2px;
+    padding: 0 4px;
+    border: 1px solid var(--line);
+    border-radius: 7px;
+    background: var(--surface);
+    color: var(--ink);
+    font: inherit;
+    font-size: 13px;
+    font-weight: 600;
+    font-variant-numeric: tabular-nums;
+    text-align: center;
+    field-sizing: content;
+}
+.file-preview .preview-header-reader .page-jump:focus {
+    border-color: var(--action);
+    outline: 2px solid color-mix(in srgb, var(--action) 30%, transparent);
+    outline-offset: 0;
+}
+.file-preview .preview-header-reader .book-position {
+    padding: 0 6px 0 4px;
+    color: var(--muted);
+    font-size: 13px;
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+}
+/* EPUB chapters keep a short native picker, styled as part of the pill. */
+.file-preview .preview-header-reader .book-toolbar select#book-entry {
+    flex: 0 1 auto;
+    width: auto;
+    min-width: 0;
+    max-width: 220px;
+    height: 36px;
+    padding: 0 8px;
+    border: 0;
+    border-radius: 8px;
+    background: transparent;
+    color: var(--ink);
+    font: inherit;
+    font-size: 13px;
+    font-weight: 600;
+    cursor: pointer;
+}
+.file-preview .preview-header-reader .book-toolbar select#book-entry:hover {
+    background: var(--pill-hover);
+}
+.file-preview .preview-header-reader .book-toolbar > .book-position {
+    padding-inline: 2px 4px;
+}
+.file-preview .preview-header-reader .book-options {
+    border-left: 1px solid var(--line);
+    padding-left: 2px;
+    margin-left: 2px;
+}
+
+/* View menus: PDF zoom presets and the reading options popover. */
+.file-preview .preview-header-reader :is(.view-menu, .book-options-panel) {
+    position: absolute;
+    z-index: 6;
+    display: flex;
+    flex-direction: column;
+    align-items: stretch;
+    gap: 2px;
+    width: 220px;
+    max-width: calc(100vw - 24px);
+    max-height: calc(
+        100dvh - 90px - env(safe-area-inset-top) - env(safe-area-inset-bottom)
+    );
+    overflow: auto;
+    overscroll-behavior: contain;
+    padding: 6px;
+    border: 1px solid var(--line-subtle);
+    border-radius: 14px;
+    background: var(--surface-raised);
+    color: var(--ink);
+    box-shadow: var(--menu-shadow);
+    animation: refresh-fade var(--dur-1) var(--ease-out);
+}
+.file-preview .preview-header-reader .view-menu {
+    top: calc(100% + 6px);
+    right: 0;
+}
+.file-preview .preview-header-reader .view-menu[hidden] {
+    display: none;
+}
+.file-preview .preview-header-reader .pdf-toolbar {
+    position: relative;
+}
+.file-preview .preview-header-reader .book-options-panel {
+    top: calc(100% + 10px);
+    right: -2px;
+    flex-wrap: nowrap;
+}
+.file-preview .preview-header-reader .view-menu-item {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    width: 100%;
+    min-height: 36px;
+    padding: 0 10px;
+    border: 0;
+    border-radius: 9px;
+    background: none;
+    color: var(--ink);
+    font: inherit;
+    font-size: 13.5px;
+    font-weight: 500;
+    font-variant-numeric: tabular-nums;
+    text-align: left;
+    cursor: pointer;
+}
+.file-preview .preview-header-reader .view-menu-item.pdf-fit,
+.file-preview
+    .preview-header-reader
+    .view-menu-item.pdf-fit[aria-pressed="true"] {
+    width: 100%;
+    height: auto;
+    background: none;
+    box-shadow: none;
+}
+.file-preview .preview-header-reader .view-menu-item:hover:not(:disabled) {
+    background: var(--hover);
+}
+.file-preview .preview-header-reader .view-menu-item > svg {
+    flex: none;
+    color: var(--action);
+    visibility: hidden;
+}
+.file-preview
+    .preview-header-reader
+    :is(.view-menu-item[aria-pressed="true"], .view-menu-item:has(:checked)) {
+    color: var(--on-action-soft);
+    font-weight: 600;
+}
+.file-preview
+    .preview-header-reader
+    :is(.view-menu-item[aria-pressed="true"], .view-menu-item:has(:checked))
+    > svg {
+    visibility: visible;
+}
+.file-preview .preview-header-reader label.view-menu-item {
+    position: relative;
+}
+/* The radio covers its row, invisible, so the whole row is the target. */
+.file-preview .preview-header-reader .view-menu-item > input {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    margin: 0;
+    opacity: 0;
+    cursor: pointer;
+}
+.file-preview .preview-header-reader .view-menu-item:has(:focus-visible) {
+    outline: 2px solid var(--action);
+    outline-offset: -2px;
+}
+.file-preview .preview-header-reader .view-menu hr {
+    width: auto;
+    margin: 4px 6px;
+    border: 0;
+    border-top: 1px solid var(--line-subtle);
+}
+.file-preview .preview-header-reader .reader-menu-section {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    min-width: 0;
+    margin: 0;
+    padding: 0;
+    border: 0;
+}
+.file-preview
+    .preview-header-reader
+    .reader-menu-section
+    + .reader-menu-section,
+.file-preview
+    .preview-header-reader
+    .book-typeface-control
+    + .reader-menu-section {
+    margin-top: 4px;
+    padding-top: 6px;
+    border-top: 1px solid var(--line-subtle);
+}
+.file-preview .preview-header-reader .reader-menu-section legend {
+    padding: 4px 10px 2px;
+    color: var(--muted);
+    font-size: 12px;
+    font-weight: 600;
+}
+/* EPUB text size row stays one compact line above the sections. */
+.file-preview .preview-header-reader .book-options-panel > .icon-button {
+    display: none;
+}
+.file-preview .preview-header-reader .book-options-panel:has(> .icon-button) {
+    display: grid;
+    grid-template-columns: 36px 1fr 36px;
+    align-items: center;
+}
+.file-preview
+    .preview-header-reader
+    .book-options-panel:has(> .icon-button)
+    > .icon-button {
+    display: inline-flex;
+    width: 36px;
+    height: 36px;
+    border-radius: 9px;
+    color: var(--ink);
+}
+.file-preview
+    .preview-header-reader
+    .book-options-panel:has(> .icon-button)
+    > span {
+    text-align: center;
+    font-size: 13px;
+    font-weight: 600;
+    font-variant-numeric: tabular-nums;
+}
+.file-preview
+    .preview-header-reader
+    .book-options-panel
+    > :is(.book-typeface-control, .reader-menu-section) {
+    grid-column: 1 / -1;
+}
+.file-preview .preview-header-reader .book-typeface-control {
+    padding: 4px 4px 4px 10px;
+    font-size: 13px;
+}
+.file-preview .preview-header-reader .book-typeface-control select {
+    height: 32px;
+    padding: 0 8px;
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    background: var(--surface);
+    color: var(--ink);
+    font: inherit;
+}
+
+.file-preview .preview-header-reader .preview-fullscreen {
+    flex: 0 0 36px;
+}
+
+@media (min-width: 721px) {
+    .file-preview .preview-header-reader {
+        position: relative;
+        gap: 10px;
+    }
+    .file-preview
+        .preview-header-reader
+        :is(.preview-close, .preview-fullscreen, .preview-download) {
+        min-height: 36px;
+        height: 36px;
+    }
+    .file-preview
+        .preview-header-reader
+        :is(.preview-close, .preview-fullscreen) {
+        width: 36px;
+        min-width: 36px;
+    }
+    .file-preview .preview-header-reader .preview-fullscreen {
+        background: var(--pill);
+    }
+    .file-preview .preview-header-reader .preview-fullscreen:hover {
+        background: var(--pill-hover);
+    }
+    .file-preview .preview-header-reader .preview-download {
+        padding: 0 14px;
+    }
+    /* The heading stops short of the centered pager. */
+    .file-preview .preview-header-reader .preview-heading {
+        flex: 1 1 auto;
+        max-width: calc(50% - 200px);
+    }
+    .file-preview .preview-header-reader .preview-toolbar-slot {
+        flex: 0 0 auto;
+        min-width: 0;
+        margin-left: auto;
+    }
+    .file-preview .preview-header-reader .pdf-controls {
+        position: static;
+        display: flex;
+        align-items: center;
+        gap: 10px;
+    }
+    .file-preview
+        .preview-header-reader
+        :is(.reader-navigation, .book-toolbar) {
+        position: absolute;
+        top: 50%;
+        left: 50%;
+        translate: -50% -50%;
+    }
+    .file-preview .preview-header-reader .pdf-controls .pdf-toolbar {
+        display: flex;
+        inset: auto;
+        padding: 0;
+        border: 0;
+        background: none;
+        box-shadow: none;
+    }
+    .file-preview .preview-header-reader .pdf-controls .pdf-toolbar[hidden] {
+        display: none;
+    }
+}
+
+/* Narrow desktop or touch: zoom and fit open from one options button. */
+@media (min-width: 721px) and (max-width: 1100px),
+    (min-width: 721px) and (pointer: coarse) {
+    .file-preview .preview-header-reader .pdf-options-toggle {
+        display: inline-flex;
+        background: var(--pill);
+    }
+    .file-preview .preview-header-reader .pdf-controls .pdf-toolbar {
+        position: fixed;
+        z-index: 6;
+        inset: 68px max(12px, env(safe-area-inset-right)) auto auto;
+        flex-direction: column;
+        align-items: stretch;
+        gap: 6px;
+        width: 228px;
+        padding: 6px;
+        border: 1px solid var(--line-subtle);
+        border-radius: 14px;
+        background: var(--surface-raised);
+        box-shadow: var(--menu-shadow);
+    }
+    .file-preview .preview-header-reader .pdf-toolbar > .inline-actions {
+        justify-content: space-between;
+    }
+    .file-preview .preview-header-reader .pdf-toolbar .view-menu {
+        position: static;
+        width: auto;
+        padding: 0;
+        border: 0;
+        box-shadow: none;
+        animation: none;
+    }
+    .file-preview .preview-header-reader .book-toolbar {
+        position: static;
+        translate: none;
+    }
+    .file-preview .preview-header-reader.preview-header-book .preview-heading {
+        max-width: none;
+    }
+}
+
+/* Phone: title row plus a full-width controls row, 44px targets. */
+@media (max-width: 720px) {
+    .file-preview
+        .preview-header-reader
+        :is(.reader-navigation, .book-toolbar) {
+        flex: 1;
+        min-width: 0;
+        justify-content: center;
+    }
+    .file-preview .preview-header-reader .pdf-controls {
+        gap: 8px;
+    }
+    .file-preview
+        .preview-header-reader
+        :is(
+            .reader-navigation .icon-button,
+            .book-toolbar > .icon-button,
+            .book-options > summary,
+            .pdf-toolbar .inline-actions .icon-button,
+            .pdf-options-toggle,
+            .view-menu-item
+        ) {
+        flex: 0 0 auto;
+        min-width: 44px;
+        min-height: 44px;
+        height: 44px;
+    }
+    .file-preview .preview-header-reader .reader-navigation .icon-button,
+    .file-preview .preview-header-reader .book-toolbar > .icon-button {
+        width: 44px;
+    }
+    .file-preview
+        .preview-header-reader
+        .reader-navigation
+        .icon-button:last-child,
+    .file-preview
+        .preview-header-reader
+        .book-toolbar
+        > .icon-button
+        + .book-position
+        + .icon-button {
+        margin-left: auto;
+    }
+    .file-preview
+        .preview-header-reader
+        .reader-navigation
+        .icon-button:first-child,
+    .file-preview
+        .preview-header-reader
+        .book-toolbar
+        > .icon-button:first-child {
+        margin-right: auto;
+    }
+    .file-preview .preview-header-reader .page-jump {
+        height: 36px;
+        font-size: 16px;
+    }
+    .file-preview .preview-header-reader .book-toolbar select#book-entry {
+        flex: 1 1 auto;
+        height: 44px;
+        max-width: none;
+        font-size: 16px;
+    }
+    .file-preview .preview-header-reader .pdf-options-toggle {
+        display: inline-flex;
+        width: 44px;
+        background: var(--pill);
+    }
+    .file-preview .preview-header-reader .pdf-controls .pdf-toolbar {
+        position: fixed;
+        z-index: 6;
+        inset: calc(112px + env(safe-area-inset-top))
+            max(12px, env(safe-area-inset-right)) auto
+            max(12px, env(safe-area-inset-left));
+        display: flex;
+        flex-direction: column;
+        align-items: stretch;
+        gap: 6px;
+        width: auto;
+        max-height: calc(
+            100dvh - 124px - env(safe-area-inset-top) -
+                env(safe-area-inset-bottom)
+        );
+        overflow: auto;
+        padding: 8px;
+        border: 1px solid var(--line-subtle);
+        border-radius: 14px;
+        background: var(--surface-raised);
+        box-shadow: var(--menu-shadow);
+    }
+    .file-preview .preview-header-reader .pdf-controls .pdf-toolbar[hidden] {
+        display: none;
+    }
+    .file-preview .preview-header-reader .pdf-toolbar > .inline-actions {
+        justify-content: space-between;
+    }
+    .file-preview .preview-header-reader .pdf-toolbar .view-menu {
+        position: static;
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        width: auto;
+        max-height: none;
+        padding: 0;
+        border: 0;
+        box-shadow: none;
+        animation: none;
+    }
+    .file-preview .preview-header-reader .pdf-toolbar .view-menu hr {
+        grid-column: 1 / -1;
+    }
+    .file-preview .preview-header-reader .book-options-panel {
+        position: fixed;
+        top: calc(112px + env(safe-area-inset-top));
+        right: max(12px, env(safe-area-inset-right));
+        width: min(260px, calc(100vw - 24px));
+    }
+}
+
+/* PDF stage: thin themed scrollbar on a soft canvas. */
+.file-preview .pdf-scroll {
+    background: light-dark(#e9ecf0, #16181c);
+    scrollbar-width: thin;
+    scrollbar-color: light-dark(#b4bcc6, #4a4f57) transparent;
+}
+
+.pdf-page,
+.book-page,
+.reader-page {
+    border-radius: 4px;
+    box-shadow:
+        0 18px 44px -18px light-dark(#141a2366, #000c),
+        0 2px 6px light-dark(#141a231f, #0006);
+}
+
+/* Comics and image pages: capped like PDF fit width, centered on the soft canvas. */
+.file-preview .book-content:has(> .book-image) {
+    background: light-dark(#e9ecf0, #16181c);
+}
+.file-preview .book-fit-width > .book-image > img,
+.file-preview .book-fit-width .book-illustrated-page img {
+    max-width: min(100%, 960px);
+}
+.file-preview .book-fit-page > .book-image > img {
+    max-height: 100%;
+}
+.file-preview .book-content > .book-image > img,
+.file-preview .book-illustrated-page img {
+    border-radius: 4px;
+    box-shadow:
+        0 18px 44px -18px light-dark(#141a2366, #000c),
+        0 2px 6px light-dark(#141a231f, #0006);
+}
+
+/* ---------- Text, CSV and JSON: a content-sized sheet ---------- */
+
+.file-preview .preview-surface-text {
+    background: var(--canvas);
+}
+.file-preview .text-preview {
+    align-items: center;
+    padding: 0 24px 24px;
+    color: var(--ink);
+    background: transparent;
+    color-scheme: inherit;
+}
+.file-preview .preview-document-toolbar {
+    width: min(960px, 100%);
+    min-height: 44px;
+    padding: 6px 2px;
+    border: 0;
+    background: none;
+    color: var(--muted);
+    font-size: 12.5px;
+}
+.file-preview .preview-document-toolbar label {
+    padding: 6px 10px;
+    border-radius: 10px;
+    cursor: pointer;
+    transition: background-color var(--dur-1);
+}
+.file-preview .preview-document-toolbar label:hover {
+    background: var(--hover);
+    color: var(--ink);
+}
+.file-preview .preview-document-toolbar input[type="checkbox"] {
+    accent-color: var(--action);
+}
+.file-preview .text-preview .preview-limit {
+    width: min(960px, 100%);
+    margin: 0 0 8px;
+    border-radius: 10px;
+}
+.file-preview .text-preview pre {
+    flex: 0 1 auto;
+    width: min(960px, 100%);
+    margin: 0;
+    padding: 20px 24px;
+    border: 1px solid var(--line-subtle);
+    border-radius: 14px;
+    background: var(--surface-raised);
+    color: var(--ink);
+    box-shadow: var(--panel-shadow);
+    font:
+        13.5px/1.7 ui-monospace,
+        SFMono-Regular,
+        "SF Mono",
+        Menlo,
+        Consolas,
+        monospace;
+}
+.file-preview .text-preview pre:focus-visible {
+    outline: 2px solid var(--action);
+    outline-offset: 2px;
+}
+@media (max-width: 720px) {
+    .file-preview .text-preview {
+        padding: 0 12px max(12px, env(safe-area-inset-bottom));
+    }
+    .file-preview .text-preview pre {
+        padding: 14px 16px;
+        font-size: 13px;
+    }
+}
+
+/* ---------- Image: checkerboard stage, centered with a soft drop ---------- */
+
+.preview-surface-image {
+    background:
+        repeating-conic-gradient(#ffffff08 0% 25%, transparent 0% 50%) 0 0 /
+            24px 24px,
+        #121418;
+}
+.preview-surface-image > img {
+    min-width: min(240px, 100%);
+    min-height: min(240px, 100%);
+    border-radius: 6px;
+    box-shadow: 0 24px 60px -24px #000e;
+    object-fit: contain;
+}
+.preview-surface-video {
+    background: #050608;
+}
+
+/* ---------- Audio: one centered card ---------- */
+
+.file-preview .preview-surface-audio {
+    background: var(--canvas);
+}
+.audio-card {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 18px;
+    width: min(420px, 100%);
+    padding: 32px 28px 28px;
+    border: 1px solid var(--line-subtle);
+    border-radius: 22px;
+    background: var(--surface-raised);
+    box-shadow: var(--raise-shadow);
+    text-align: center;
+}
+.audio-card > .file-icon {
+    width: 88px;
+    height: 88px;
+    border-radius: 24px;
+    background: color-mix(in srgb, var(--kind, var(--muted)) 14%, transparent);
+    color: var(--kind, var(--muted));
+}
+.audio-card > .file-icon svg {
+    width: 40px;
+    height: 40px;
+    stroke-width: 1.6;
+}
+.audio-card-heading {
+    display: grid;
+    gap: 4px;
+    width: 100%;
+    min-width: 0;
+}
+.audio-card-heading strong {
+    overflow: hidden;
+    color: var(--ink);
+    font-size: 16px;
+    font-weight: 650;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.audio-card-heading span {
+    color: var(--muted);
+    font-size: 12.5px;
+    font-variant-numeric: tabular-nums;
+}
+.audio-card audio {
+    width: 100%;
+    accent-color: var(--action);
+}
+@media (max-width: 720px) {
+    .audio-card {
+        padding: 24px 18px 20px;
+    }
+}
+
+/* ---------- File details: a compact dialog, bottom sheet on phones ---------- */
+
+.file-preview.file-details {
+    width: min(440px, calc(100vw - 32px));
+    border-radius: 22px;
+    background: var(--surface-raised);
+    color: var(--ink);
+    box-shadow: var(--dialog-shadow);
+}
+/* Fade only: geometry stays final, so layout checks never see a moving box. */
+.file-preview.file-details[open] {
+    animation: refresh-fade var(--dur-2) var(--ease-out);
+}
+.file-details::backdrop {
+    background: var(--scrim);
+    backdrop-filter: blur(3px);
+}
+.file-details .preview-close {
+    top: 14px;
+    right: 14px;
+    width: 36px;
+    height: 36px;
+    border-radius: 10px;
+}
+.file-details .preview-close:hover {
+    background: var(--hover);
+}
+.file-details-body {
+    padding: 32px 24px 24px;
+    text-align: center;
+}
+.file-details-icon {
+    position: relative;
+    width: fit-content;
+    margin: 0 auto 18px;
+}
+.file-details-icon .file-icon {
+    width: 72px;
+    height: 72px;
+    border-radius: 20px;
+    background: color-mix(in srgb, var(--kind, var(--muted)) 14%, transparent);
+    color: var(--kind, var(--muted));
+}
+.file-details-icon svg {
+    width: 34px;
+    height: 34px;
+    stroke-width: 1.6;
+}
+.file-details-extension {
+    position: absolute;
+    right: -10px;
+    bottom: -6px;
+    max-width: 72px;
+    padding: 2px 6px;
+    overflow: hidden;
+    border: 2px solid var(--surface-raised);
+    border-radius: 7px;
+    background: var(--kind, var(--muted));
+    color: var(--surface-raised);
+    font-size: 10px;
+    font-weight: 750;
+    letter-spacing: 0.04em;
+    line-height: 14px;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.file-details-body h2 {
+    font-size: 18px;
+    font-weight: 680;
+    letter-spacing: -0.012em;
+}
+.file-details-body > p {
+    margin: 6px auto 20px;
+    font-size: 13.5px;
+    line-height: 1.55;
+}
+.file-details-metadata {
+    gap: 0;
+    margin: 0 0 20px;
+    padding: 0;
+    border: 0;
+    border-top: 1px solid var(--line-subtle);
+    border-radius: 0;
+    background: none;
+    font-size: 13px;
+    text-align: left;
+}
+.file-details-metadata > div {
+    padding: 10px 0;
+    border-bottom: 1px solid var(--line-subtle);
+}
+.file-details-metadata dt {
+    color: var(--muted);
+}
+.file-details-metadata dd {
+    font-weight: 600;
+    font-variant-numeric: tabular-nums;
+}
+.file-details-download {
+    min-height: 46px;
+    border-radius: 12px;
+    font-weight: 600;
+}
+@media (max-width: 720px),
+    (max-width: 1000px) and (max-height: 600px) and (pointer: coarse) {
+    .file-preview.file-details:not(.preview-embedded) {
+        width: 100%;
+        max-width: 100%;
+        max-height: calc(100dvh - 24px);
+        inset: auto 0 0;
+        margin: 0;
+        border-radius: 24px 24px 0 0;
+    }
+    .file-preview.file-details:not(.preview-embedded)::before {
+        content: "";
+        position: absolute;
+        top: 8px;
+        left: 50%;
+        width: 36px;
+        height: 4px;
+        border-radius: 2px;
+        background: var(--line);
+        translate: -50% 0;
+    }
+    .file-details .preview-close {
+        width: 44px;
+        height: 44px;
+        top: 10px;
+        right: 10px;
+    }
+    .file-details-body {
+        padding: 32px 20px max(20px, env(safe-area-inset-bottom));
+    }
+    .file-details-download {
+        min-height: 48px;
+    }
+}
+
+.file-preview .empty-state > svg,
+.file-preview .empty-state .file-icon {
+    background: #ffffff10;
+    color: #c0d1ff;
+}

@@ -664,6 +664,14 @@ export default function Preview({
                     <section className="file-details-body">
                         <div className="file-details-icon">
                             <FileIcon name={item.name} />
+                            {suffix && (
+                                <span
+                                    className="file-details-extension"
+                                    aria-hidden="true"
+                                >
+                                    {suffix.slice(0, 8).toUpperCase()}
+                                </span>
+                            )}
                         </div>
                         <h2 id="preview-title">{item.name}</h2>
                         {loading ? (
@@ -831,13 +839,26 @@ export default function Preview({
                                     }
                                 />
                             ) : kind === "audio" ? (
-                                <audio
-                                    key={attempt}
-                                    src={src}
-                                    controls
-                                    preload="metadata"
-                                    onError={mediaFailed}
-                                />
+                                <div className="audio-card">
+                                    <FileIcon name={item.name} />
+                                    <div
+                                        className="audio-card-heading"
+                                        aria-hidden="true"
+                                    >
+                                        <strong>{item.name}</strong>
+                                        <span>
+                                            {formatBytes(item.size)} ·{" "}
+                                            {formatDate(item.upload_date)}
+                                        </span>
+                                    </div>
+                                    <audio
+                                        key={attempt}
+                                        src={src}
+                                        controls
+                                        preload="metadata"
+                                        onError={mediaFailed}
+                                    />
+                                </div>
                             ) : descriptor?.kind === "text" ? (
                                 <div className="text-preview">
                                     <div className="preview-document-toolbar">

@@ -10,6 +10,14 @@ import {
     Download,
     AlertCircle,
     Code,
+    FolderPlus,
+    FolderInput,
+    Globe,
+    Magnet,
+    Pencil,
+    Trash2,
+    ArchiveRestore,
+    HardDriveDownload,
 } from "lucide-react";
 import { api, request, ApiError, errorMessage } from "../../shared/api";
 import { performanceApi } from "../performance/performanceApi";
@@ -106,9 +114,13 @@ export default function ActionDialog({
                         ? "Preload file"
                         : "Copy Download Link"
                 }
+                icon={
+                    dialog.type === "prepare" ? <HardDriveDownload /> : <Link />
+                }
+                tone="blue"
+                description={dialog.item.name}
                 onClose={close}
             >
-                <p>{dialog.item.name}</p>
                 <p>
                     {dialog.type === "prepare"
                         ? "Cache the whole file on the server for faster later streaming and downloads. This uses the shared cache budget and runs behind active streams and downloads. Cached bytes may be removed when space is needed."
@@ -215,7 +227,12 @@ export default function ActionDialog({
         return <Preview item={dialog.item} auth={auth} onClose={onClose} />;
     if (dialog.type === "restore")
         return (
-            <Modal title="Restore to a Shared Folder?" onClose={close}>
+            <Modal
+                title="Restore to a Shared Folder?"
+                icon={<ArchiveRestore />}
+                tone="orange"
+                onClose={close}
+            >
                 <p>
                     The destination has an active public folder link. Restoring
                     these items will make them accessible to anyone with that
@@ -248,15 +265,22 @@ export default function ActionDialog({
         );
     if (dialog.type === "delete")
         return (
-            <Modal title="Delete Permanently?" onClose={close}>
-                <p>
-                    This will remove{" "}
-                    {dialog.items.length === 1
-                        ? "“" + dialog.items[0].name + "”"
-                        : dialog.items.length + " selected items"}{" "}
-                    and all files inside from TGDrive’s database. The original
-                    files will remain in Telegram.
-                </p>
+            <Modal
+                title="Delete Permanently?"
+                icon={<Trash2 />}
+                tone="red"
+                description={
+                    <>
+                        This will remove{" "}
+                        {dialog.items.length === 1
+                            ? "“" + dialog.items[0].name + "”"
+                            : dialog.items.length + " selected items"}{" "}
+                        and all files inside from TGDrive’s database. The
+                        original files will remain in Telegram.
+                    </>
+                }
+                onClose={close}
+            >
                 <p className="muted">
                     Items disappear from Trash once deletion starts and are
                     removed in the background. You cannot restore them after
@@ -294,20 +318,21 @@ export default function ActionDialog({
         );
     if (dialog.type === "share")
         return (
-            <Modal title={"Share “" + dialog.item.name + "”"} onClose={close}>
-                <p>
-                    Anyone with the link can{" "}
-                    {dialog.item.type === "folder"
-                        ? "view and download this folder’s current and future contents"
-                        : "download this file"}
-                    . They cannot edit your drive.
-                </p>
-                {!link && (
-                    <p className="muted">
-                        Each link has its own expiry. Existing links keep
-                        working.
-                    </p>
-                )}
+            <Modal
+                title={"Share “" + dialog.item.name + "”"}
+                icon={<Link />}
+                tone="blue"
+                description={
+                    <>
+                        Anyone with the link can{" "}
+                        {dialog.item.type === "folder"
+                            ? "view and download this folder’s current and future contents"
+                            : "download this file"}
+                        . They cannot edit your drive.
+                    </>
+                }
+                onClose={close}
+            >
                 {!link ? (
                     <form
                         onSubmit={(event) => {
@@ -374,6 +399,10 @@ export default function ActionDialog({
                                     </button>
                                 ))}
                             </div>
+                            <p className="muted">
+                                Each link has its own expiry. Existing links
+                                keep working.
+                            </p>
                         </fieldset>
                         {expires === "custom" && (
                             <>
@@ -495,6 +524,35 @@ export default function ActionDialog({
                         ? "Import torrent"
                         : "Upload from URL"
             }
+            icon={
+                isFolder ? (
+                    <FolderPlus />
+                ) : isRename ? (
+                    <Pencil />
+                ) : isTorrent ? (
+                    <Magnet />
+                ) : (
+                    <Globe />
+                )
+            }
+            tone={
+                isFolder
+                    ? "amber"
+                    : isRename
+                      ? "green"
+                      : isTorrent
+                        ? "violet"
+                        : "blue"
+            }
+            description={
+                isFolder
+                    ? "Create a folder in the current location."
+                    : isRename
+                      ? dialog.item.name
+                      : isTorrent
+                        ? "Paste a magnet link or a public .torrent URL. Every file is imported, with folders kept intact."
+                        : "Import a direct HTTP or HTTPS file link. The server downloads it and uploads the original bytes to Telegram."
+            }
             onClose={close}
         >
             <form
@@ -568,38 +626,44 @@ export default function ActionDialog({
                     </>
                 ) : (
                     <>
-                        <p className="muted">
-                            {isTorrent
-                                ? "Paste a magnet link or a public .torrent URL. Every file is imported, with folders kept intact."
-                                : "Import a direct HTTP or HTTPS file link. The server downloads it and uploads the original bytes to Telegram."}
-                        </p>
                         <label htmlFor="remote-url">
                             {isTorrent
                                 ? "Magnet link or torrent URL"
                                 : "Direct File URL"}
                         </label>
-                        <input
-                            id="remote-url"
-                            type={isTorrent ? "text" : "url"}
-                            required
-                            autoComplete="off"
-                            spellCheck={false}
-                            aria-describedby={
-                                isTorrent ? "torrent-import-hint" : undefined
-                            }
-                            placeholder={
-                                isTorrent
-                                    ? "magnet:?xt=urn:btih:…"
-                                    : "https://example.com/file.zip"
-                            }
-                            value={url}
-                            onChange={(event) => {
-                                setUrl(event.target.value);
-                                setRequestId(
-                                    crypto.randomUUID().replaceAll("-", "_"),
-                                );
-                            }}
-                        />
+                        <div className="input-with-icon">
+                            {isTorrent ? (
+                                <Magnet size={18} aria-hidden="true" />
+                            ) : (
+                                <Link size={18} aria-hidden="true" />
+                            )}
+                            <input
+                                id="remote-url"
+                                type={isTorrent ? "text" : "url"}
+                                required
+                                autoComplete="off"
+                                spellCheck={false}
+                                aria-describedby={
+                                    isTorrent
+                                        ? "torrent-import-hint"
+                                        : undefined
+                                }
+                                placeholder={
+                                    isTorrent
+                                        ? "magnet:?xt=urn:btih:…"
+                                        : "https://example.com/file.zip"
+                                }
+                                value={url}
+                                onChange={(event) => {
+                                    setUrl(event.target.value);
+                                    setRequestId(
+                                        crypto
+                                            .randomUUID()
+                                            .replaceAll("-", "_"),
+                                    );
+                                }}
+                            />
+                        </div>
                         {isTorrent ? (
                             <p id="torrent-import-hint" className="muted">
                                 Saves to the current folder. You can close this
@@ -607,9 +671,10 @@ export default function ActionDialog({
                                 running.
                             </p>
                         ) : (
-                            <label className="check-field">
+                            <label className="check-field option-row">
                                 <input
                                     type="checkbox"
+                                    className="switch"
                                     checked={compat}
                                     onChange={(event) =>
                                         setCompat(event.target.checked)
@@ -746,14 +811,13 @@ function MoveDialog({
                     ? "“" + items[0].name + "”"
                     : items.length + " items")
             }
+            icon={<FolderInput />}
+            tone="amber"
+            description="Choose a different destination folder. Existing files are never overwritten."
             onClose={() => {
                 if (!busy) onClose();
             }}
         >
-            <p className="muted">
-                Choose a different destination folder. Existing files are never
-                overwritten.
-            </p>
             <nav
                 className="move-breadcrumbs"
                 aria-label="Destination breadcrumb"

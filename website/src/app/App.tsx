@@ -391,6 +391,14 @@ export default function App() {
     useLayoutEffect(() => {
         if (workspace.current) workspace.current.scrollTop = 0;
     }, [currentPath, view, location.settingsSection, searchOffset]);
+    // Opacity only: a moving workspace would shift taps and fixed menus.
+    useEffect(() => {
+        if (matchMedia("(prefers-reduced-motion: reduce)").matches) return;
+        workspace.current?.animate?.([{ opacity: 0 }, { opacity: 1 }], {
+            duration: 200,
+            easing: "cubic-bezier(0.2, 0.8, 0.2, 1)",
+        });
+    }, [view, location.settingsSection]);
     const items = useSyncExternalStore(transfers.subscribe, transfers.snapshot);
     const deletionProgress = useSyncExternalStore(
         transfers.subscribe,
@@ -2052,6 +2060,63 @@ export default function App() {
                             <ChevronRight size={18} aria-hidden="true" />
                         </button>
                     )}
+                {mobile && !isPublic && (
+                    <nav className="mobile-tabbar" aria-label="Sections">
+                        {[
+                            {
+                                view: "files" as View,
+                                label: "Files",
+                                icon: FolderClosed,
+                            },
+                            {
+                                view: "starred" as View,
+                                label: "Starred",
+                                icon: Star,
+                            },
+                            {
+                                view: "activity" as View,
+                                label: "Transfers",
+                                icon: ArrowDownUp,
+                            },
+                        ].map((tab) => (
+                            <button
+                                key={tab.view}
+                                type="button"
+                                aria-current={
+                                    view === tab.view ? "page" : undefined
+                                }
+                                onClick={() => navigate("/", tab.view)}
+                            >
+                                <span className="mobile-tab-icon">
+                                    <tab.icon size={21} aria-hidden="true" />
+                                    {tab.view === "activity" &&
+                                        activeCount > 0 && (
+                                            <span className="mobile-tab-count">
+                                                {activeCount}
+                                            </span>
+                                        )}
+                                </span>
+                                {tab.label}
+                            </button>
+                        ))}
+                        <button
+                            type="button"
+                            aria-current={
+                                !["files", "starred", "activity"].includes(view)
+                                    ? "page"
+                                    : undefined
+                            }
+                            aria-controls="drive-navigation"
+                            aria-expanded={mobileNav}
+                            onClick={() => setMobileNav(true)}
+                        >
+                            <span className="mobile-tab-icon">
+                                <Menu size={21} aria-hidden="true" />
+                            </span>
+                            More
+                        </button>
+                    </nav>
+                )}
             </main>
             {!mobile &&
                 !isPublic &&

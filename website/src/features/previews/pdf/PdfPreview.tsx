@@ -14,13 +14,13 @@ import {
     type FormEvent,
 } from "react";
 import {
-    ArrowLeftRight,
+    Check,
+    ChevronDown,
     ChevronLeft,
     ChevronRight,
     Minus,
     Plus,
-    Scan,
-    SlidersHorizontal,
+    ZoomIn,
 } from "lucide-react";
 import { createPortal } from "react-dom";
 import {
@@ -38,6 +38,8 @@ import {
 import workerUrl from "pdfjs-dist/build/pdf.worker.mjs?worker&url";
 import { ErrorNotice, Spinner } from "../../../shared/components";
 import { errorMessage } from "../../../shared/api";
+import PageJump from "../PageJump";
+import { useMediaQuery } from "@mantine/hooks";
 import "./PdfPreview.css";
 
 GlobalWorkerOptions.workerSrc = workerUrl;
@@ -50,10 +52,15 @@ const MAX_TEXT_RUNS = 2500;
 const MAX_TEXT_CHARACTERS = 100_000;
 const MAX_TOTAL_TEXT_RUNS = 12_500;
 const MAX_TOTAL_TEXT_CHARACTERS = 500_000;
+// Fit Width caps at a readable page width instead of stretching to any monitor.
+const PDF_READING_WIDTH = 960;
 const PAGE_GAP = 24;
 const PDF_RESOURCE_BASE = `/static/pdfjs/${pdfjsVersion}/`;
 const MIN_ZOOM = 0.25;
 const MAX_ZOOM = 5;
+const ZOOM_PRESETS = [0.5, 0.75, 1, 1.25, 1.5, 2];
+// Below this width (or on touch) zoom and fit move into one options menu.
+const COMPACT_PDF_QUERY = "(max-width: 1100px), (pointer: coarse)";
 type PageSize = { width: number; height: number };
 type PageFrame = PageSize & { top: number };
 type Layout = { pages: PageFrame[]; width: number; height: number };
@@ -326,6 +333,9 @@ export default function PdfPreview({
     toolbarTarget: HTMLElement | null;
 }) {
     const [toolsOpen, setToolsOpen] = useState(false);
+    const compact = useMediaQuery(COMPACT_PDF_QUERY, false, {
+        getInitialValueInEffect: false,
+    });
     const tools = useRef<HTMLDivElement>(null);
     const toolsToggle = useRef<HTMLButtonElement>(null);
     const toolsId = useId();
@@ -533,7 +543,7 @@ export default function PdfPreview({
     }, [url, size]);
 
     const firstSize = sizes.get(1) ?? { width: 612, height: 792 };
-    const fitWidth = Math.max(64, view.width - 32);
+    const fitWidth = Math.max(64, Math.min(view.width - 32, PDF_READING_WIDTH));
     const fitHeight = Math.max(64, view.height - 32);
     const layout = useMemo<Layout>(() => {
         if (!document) return { pages: [], width: view.width, height: 0 };
@@ -614,6 +624,13 @@ export default function PdfPreview({
         if (scroll.current) scroll.current.scrollLeft = 0;
         setFit(mode);
         setZoom(null);
+        closeMenu();
+    }
+    function closeMenu() {
+        // The phone options sheet stays open for repeated changes; the desktop menu closes.
+        if (compact) return;
+        setToolsOpen(false);
+        toolsToggle.current?.focus();
     }
     let firstVisible = layout.pages.length ? pageAt(layout.pages, view.top) : 0;
     if (
@@ -665,6 +682,15 @@ export default function PdfPreview({
         rememberAnchor();
         setZoom(normalized);
     }
+    function goToPage(page: number) {
+        scroll.current?.scrollTo({ top: layout.pages[page - 1]?.top ?? 0 });
+        syncView();
+    }
+    const zoomLabel = (
+        <span className="pdf-zoom" id={toolsId + "-zoom"} aria-label="PDF zoom">
+            {document ? Math.round(scale * 100) + "%" : "—"}
+        </span>
+    );
     return (
         <div className="pdf-preview">
             {toolbarTarget &&
@@ -698,14 +724,9 @@ export default function PdfPreview({
                             <button
                                 className="icon-button"
                                 aria-label="Previous page"
+                                title="Previous page"
                                 disabled={!document || current === 0}
-                                onClick={() => {
-                                    scroll.current?.scrollTo({
-                                        top:
-                                            layout.pages[current - 1]?.top ?? 0,
-                                    });
-                                    syncView();
-                                }}
+                                onClick={() => goToPage(current)}
                             >
                                 <ChevronLeft size={20} />
                             </button>
@@ -715,130 +736,141 @@ export default function PdfPreview({
                             >
                                 Page
                             </label>
-                            <select
+                            <PageJump
                                 id={toolsId + "-page"}
-                                value={current + 1}
-                                disabled={!document}
-                                onChange={(event) => {
-                                    scroll.current?.scrollTo({
-                                        top:
-                                            layout.pages[
-                                                Number(event.target.value) - 1
-                                            ]?.top ?? 0,
-                                    });
-                                    syncView();
-                                }}
-                            >
-                                {document ? (
-                                    Array.from(
-                                        { length: document.numPages },
-                                        (_, i) => (
-                                            <option key={i} value={i + 1}>
-                                                Page {i + 1}
-                                            </option>
-                                        ),
-                                    )
-                                ) : (
-                                    <option value={1}>
-                                        {passwordChallenge
-                                            ? "Password Required"
-                                            : "Loading PDF"}
-                                    </option>
-                                )}
-                            </select>
+                                current={current + 1}
+                                total={document?.numPages ?? 0}
+                                onJump={goToPage}
+                            />
                             <span className="book-position" aria-live="polite">
-                                {document
-                                    ? current + 1 + " / " + document.numPages
-                                    : ""}
+                                {document && (
+                                    <>
+                                        <span className="sr-only">
+                                            {current + 1}
+                                        </span>{" "}
+                                        / {document.numPages}
+                                    </>
+                                )}
                             </span>
                             <button
                                 className="icon-button"
                                 aria-label="Next page"
+                                title="Next page"
                                 disabled={
                                     !document ||
                                     current >= document.numPages - 1
                                 }
-                                onClick={() => {
-                                    scroll.current?.scrollTo({
-                                        top:
-                                            layout.pages[current + 1]?.top ?? 0,
-                                    });
-                                    syncView();
-                                }}
+                                onClick={() => goToPage(current + 2)}
                             >
                                 <ChevronRight size={20} />
                             </button>
                         </div>
-                        <button
-                            ref={toolsToggle}
-                            type="button"
-                            className="icon-button pdf-options-toggle"
-                            aria-label="PDF View Options"
-                            aria-expanded={toolsOpen}
-                            aria-controls={toolsId}
-                            onClick={() => setToolsOpen((open) => !open)}
-                        >
-                            <SlidersHorizontal size={20} />
-                        </button>
+                        {compact && (
+                            <button
+                                ref={toolsToggle}
+                                type="button"
+                                className="icon-button pdf-options-toggle"
+                                aria-label="PDF View Options"
+                                title="Zoom and fit"
+                                aria-expanded={toolsOpen}
+                                aria-controls={toolsId}
+                                onClick={() => setToolsOpen((open) => !open)}
+                            >
+                                <ZoomIn size={20} />
+                            </button>
+                        )}
                         <div
                             className="pdf-toolbar"
                             id={toolsId}
                             role="group"
                             aria-label="PDF View Controls"
+                            hidden={compact && !toolsOpen}
                         >
                             <div className="inline-actions">
                                 <button
                                     className="icon-button"
                                     aria-label="Zoom Out"
+                                    title="Zoom out"
                                     disabled={!document || scale <= MIN_ZOOM}
                                     onClick={() => setScale(scale - 0.25)}
                                 >
                                     <Minus size={18} />
                                 </button>
-                                <span
-                                    className="pdf-zoom"
-                                    aria-label="PDF zoom"
-                                >
-                                    {document
-                                        ? Math.round(scale * 100) + "%"
-                                        : "—"}
-                                </span>
+                                {compact ? (
+                                    zoomLabel
+                                ) : (
+                                    <button
+                                        ref={toolsToggle}
+                                        type="button"
+                                        className="pdf-zoom-toggle"
+                                        aria-label="PDF View Options"
+                                        aria-describedby={toolsId + "-zoom"}
+                                        title="Zoom and fit"
+                                        aria-expanded={toolsOpen}
+                                        aria-controls={toolsId + "-menu"}
+                                        onClick={() =>
+                                            setToolsOpen((open) => !open)
+                                        }
+                                    >
+                                        {zoomLabel}
+                                        <ChevronDown size={14} />
+                                    </button>
+                                )}
                                 <button
                                     className="icon-button"
                                     aria-label="Zoom in"
+                                    title="Zoom in"
                                     disabled={!document || scale >= MAX_ZOOM}
                                     onClick={() => setScale(scale + 0.25)}
                                 >
                                     <Plus size={18} />
                                 </button>
-                                <button
-                                    className="secondary-button pdf-fit"
-                                    aria-label="Fit Width"
-                                    aria-pressed={
-                                        zoom === null && fit === "width"
-                                    }
-                                    disabled={!document}
-                                    onClick={() => fitView("width")}
-                                >
-                                    <ArrowLeftRight size={16} />{" "}
-                                    <span className="pdf-fit-label">
-                                        Fit Width
-                                    </span>
-                                </button>
-                                <button
-                                    className="secondary-button pdf-fit"
-                                    aria-label="Fit Page"
-                                    aria-pressed={
-                                        zoom === null && fit === "page"
-                                    }
-                                    disabled={!document}
-                                    onClick={() => fitView("page")}
-                                >
-                                    <Scan size={16} />{" "}
-                                    <span className="pdf-fit-label">
-                                        Fit Page
-                                    </span>
-                                </button>
+                            </div>
+                            <div
+                                className="view-menu"
+                                id={toolsId + "-menu"}
+                                role="group"
+                                aria-label="Zoom presets"
+                                hidden={!compact && !toolsOpen}
+                            >
+                                {(
+                                    [
+                                        ["width", "Fit Width", "Fit width"],
+                                        ["page", "Fit Page", "Fit page"],
+                                    ] as const
+                                ).map(([mode, label, text]) => (
+                                    <button
+                                        key={mode}
+                                        type="button"
+                                        className="view-menu-item pdf-fit"
+                                        aria-label={label}
+                                        aria-pressed={
+                                            zoom === null && fit === mode
+                                        }
+                                        disabled={!document}
+                                        onClick={() => fitView(mode)}
+                                    >
+                                        <Check size={16} aria-hidden="true" />
+                                        {text}
+                                    </button>
+                                ))}
+                                <hr />
+                                {ZOOM_PRESETS.map((value) => (
+                                    <button
+                                        key={value}
+                                        type="button"
+                                        className="view-menu-item"
+                                        aria-pressed={zoom === value}
+                                        disabled={!document}
+                                        onClick={() => {
+                                            setScale(value);
+                                            closeMenu();
+                                        }}
+                                    >
+                                        <Check size={16} aria-hidden="true" />
+                                        {value * 100}%
+                                    </button>
+                                ))}
                             </div>
                         </div>
                     </div>,

@@ -7,6 +7,7 @@ import {
 } from "react";
 import { createPortal } from "react-dom";
 import {
+    Check,
     ChevronLeft,
     ChevronRight,
     Minus,
@@ -25,6 +26,7 @@ import {
     prefetchAhead,
     takePrefetched,
 } from "./bookImage";
+import PageJump from "../PageJump";
 
 type Entry = { name: string; label: string };
 type Book = { kind: "epub" | "comic"; title?: string; entries: Entry[] };
@@ -377,19 +379,33 @@ export default function BookPreview({
             <label className="sr-only" htmlFor="book-entry">
                 {book.kind === "epub" ? "Chapter" : "Page"}
             </label>
-            <select
-                id="book-entry"
-                value={selected}
-                onChange={(event) => setSelected(event.target.value)}
-            >
-                {book.entries.map((entry, i) => (
-                    <option key={i} value={entry.name}>
-                        {bookEntryLabel(entry, i)}
-                    </option>
-                ))}
-            </select>
+            {book.kind === "epub" ? (
+                <select
+                    id="book-entry"
+                    value={selected}
+                    onChange={(event) => setSelected(event.target.value)}
+                >
+                    {book.entries.map((entry, i) => (
+                        <option key={i} value={entry.name}>
+                            {bookEntryLabel(entry, i)}
+                        </option>
+                    ))}
+                </select>
+            ) : (
+                <PageJump
+                    id="book-entry"
+                    current={index + 1}
+                    total={book.entries.length}
+                    onJump={(page) => move(page - 1 - index)}
+                />
+            )}
             <span className="book-position" aria-live="polite">
-                {index + 1} / {book.entries.length}
+                {book.kind === "epub" ? (
+                    index + 1
+                ) : (
+                    <span className="sr-only">{index + 1}</span>
+                )}{" "}
+                / {book.entries.length}
             </span>
             <button
                 className="icon-button"
@@ -447,31 +463,47 @@ export default function BookPreview({
                             </label>
                         </>
                     ) : null}
-                    <>
-                        <label className="sr-only" htmlFor="comic-fit">
-                            Page fit
-                        </label>
-                        <select
-                            id="comic-fit"
-                            value={fit}
-                            onChange={(event) =>
-                                setFit(event.target.value as typeof fit)
-                            }
-                        >
-                            <option value="width">Fit width</option>
-                            <option value="page">Fit page</option>
-                        </select>
-                        <label className="book-direction">
-                            <input
-                                type="checkbox"
-                                checked={rtl}
-                                onChange={(event) =>
-                                    setRtl(event.target.checked)
-                                }
-                            />
-                            Right to left
-                        </label>
-                    </>
+                    <fieldset className="reader-menu-section">
+                        <legend>Page fit</legend>
+                        {(
+                            [
+                                ["width", "Fit width"],
+                                ["page", "Fit page"],
+                            ] as const
+                        ).map(([value, label]) => (
+                            <label key={value} className="view-menu-item">
+                                <input
+                                    type="radio"
+                                    name="book-fit"
+                                    value={value}
+                                    checked={fit === value}
+                                    onChange={() => setFit(value)}
+                                />
+                                <Check size={16} aria-hidden="true" />
+                                {label}
+                            </label>
+                        ))}
+                    </fieldset>
+                    <fieldset className="reader-menu-section">
+                        <legend>Reading direction</legend>
+                        {(
+                            [
+                                [false, "Left to right"],
+                                [true, "Right to left"],
+                            ] as const
+                        ).map(([value, label]) => (
+                            <label key={label} className="view-menu-item">
+                                <input
+                                    type="radio"
+                                    name="book-direction"
+                                    checked={rtl === value}
+                                    onChange={() => setRtl(value)}
+                                />
+                                <Check size={16} aria-hidden="true" />
+                                {label}
+                            </label>
+                        ))}
+                    </fieldset>
                 </div>
             </details>
         </div>

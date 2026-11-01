@@ -94,3 +94,119 @@
 .embed-items :is(button, a):hover {
     background: var(--hover);
 }
+
+/* Redesign: sticky header with breadcrumb chips, rows with tinted type tiles. */
+.embed-view {
+    background: var(--canvas, var(--surface));
+}
+.embed-header {
+    position: sticky;
+    top: 0;
+    z-index: 2;
+    min-height: 56px;
+    padding: 6px 8px 6px 12px;
+    background: color-mix(in srgb, var(--surface) 88%, transparent);
+    backdrop-filter: blur(12px);
+}
+.embed-header ol {
+    gap: 2px;
+}
+.embed-header li {
+    gap: 2px;
+    color: var(--muted);
+}
+.embed-header li button {
+    min-height: 36px;
+    padding: 6px 10px;
+    border-radius: 10px;
+    color: var(--muted);
+    font-weight: 550;
+}
+.embed-header [aria-current="page"] {
+    color: var(--ink);
+    font-weight: 650;
+}
+.embed-view .icon-button {
+    border-radius: 12px;
+    color: var(--muted);
+}
+.embed-view .icon-button:hover {
+    color: var(--ink);
+}
+.embed-items {
+    display: grid;
+    gap: 4px;
+    max-width: 960px;
+    margin: 0 auto;
+    padding: 12px;
+}
+.embed-items li {
+    gap: 4px;
+    padding-right: 6px;
+    border: 1px solid transparent;
+    border-radius: 14px;
+    background: var(--surface);
+    transition:
+        background-color var(--dur-1, 120ms),
+        border-color var(--dur-1, 120ms);
+}
+.embed-items li:hover {
+    border-color: var(--line-subtle);
+    background: var(--surface-raised, var(--surface));
+}
+.embed-items .embed-item:hover {
+    background: transparent;
+}
+.embed-item {
+    min-height: 60px;
+    padding: 8px 6px 8px 8px;
+    border-radius: 14px;
+    font-weight: 550;
+}
+.embed-item:focus-visible {
+    outline: 2px solid var(--action);
+    outline-offset: -2px;
+}
+.embed-item .file-icon {
+    display: grid;
+    place-items: center;
+    flex: 0 0 auto;
+    width: 42px;
+    height: 42px;
+    border-radius: 12px;
+    background: color-mix(in srgb, var(--kind, var(--muted)) 14%, transparent);
+}
+.embed-item .file-icon svg {
+    width: 20px;
+    height: 20px;
+}
+.embed-item-size {
+    font-variant-numeric: tabular-nums;
+    font-weight: 500;
+}
+.embed-message {
+    max-width: 520px;
+    margin: 48px auto;
+    padding: 28px;
+    border: 1px solid var(--line-subtle);
+    border-radius: 20px;
+    background: var(--surface);
+    text-align: center;
+    color: var(--muted);
+}
+.embed-message h1 {
+    color: var(--ink);
+}
+@media (max-width: 720px) {
+    .embed-items {
+        padding: 8px;
+    }
+    .embed-header li button {
+        min-height: 44px;
+    }
+}
+@media (prefers-reduced-motion: reduce) {
+    .embed-items li {
+        transition: none;
+    }
+}

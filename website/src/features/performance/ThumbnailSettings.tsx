@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { Button, Fieldset } from "@mantine/core";
-import { RefreshCw } from "lucide-react";
+import { Image, RefreshCw } from "lucide-react";
 import { errorMessage, request } from "../../shared/api";
 import { ErrorNotice, Modal, Spinner } from "../../shared/components";
 import { formatBytes } from "../../shared/types";
@@ -117,7 +117,13 @@ export default function ThumbnailSettings({
     return (
         <Fieldset
             className="performance-setting-group thumbnail-settings"
-            legend="Thumbnails"
+            data-hue="pink"
+            legend={
+                <span className="configuration-group-title">
+                    <Image size={18} aria-hidden="true" />
+                    Thumbnails
+                </span>
+            }
         >
             <p className="settings-help">
                 New uploads generate thumbnails automatically. Rebuild covers
@@ -172,6 +178,7 @@ export default function ThumbnailSettings({
             <Button
                 type="button"
                 variant="default"
+                className="thumbnail-rebuild-button"
                 disabled={demoMode || busy || !state}
                 onClick={() => (running ? void change(true) : setConfirm(true))}
             >

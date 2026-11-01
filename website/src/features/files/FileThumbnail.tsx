@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
-import { FileIcon } from "../../shared/components";
+import { Play } from "lucide-react";
+import { FileIcon, fileKind } from "../../shared/components";
 import type { DriveItem } from "../../shared/types";
 import { fetchThumbnail, thumbnailCandidate, thumbnailUrl } from "./thumbnails";
 
@@ -83,15 +84,32 @@ export default function FileThumbnail({
             className={
                 "file-tile-preview" + (loading ? " thumbnail-loading" : "")
             }
+            data-kind={fileKind(item.name, item.type === "folder")}
+            data-has-image={source ? "true" : undefined}
             aria-hidden="true"
         >
             {source ? (
-                <img
-                    src={source}
-                    alt=""
-                    decoding="async"
-                    onError={() => setSource(null)}
-                />
+                <>
+                    <img
+                        src={source}
+                        alt=""
+                        decoding="async"
+                        onError={() => setSource(null)}
+                    />
+                    {fileKind(item.name) === "video" && (
+                        <span className="file-tile-play">
+                            <Play size={16} />
+                        </span>
+                    )}
+                    {/* Photos and videos explain themselves; page-like thumbnails keep their format. */}
+                    {!["image", "video"].includes(fileKind(item.name)) && (
+                        <span className="file-tile-format">
+                            {(item.name.split(".").at(-1) || "File")
+                                .slice(0, 8)
+                                .toUpperCase()}
+                        </span>
+                    )}
+                </>
             ) : (
                 <>
                     <FileIcon

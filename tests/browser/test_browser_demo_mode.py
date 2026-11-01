@@ -18,6 +18,7 @@ browser = fixtures.browser
 desktop = fixtures.desktop
 server = fixtures.server
 pytestmark = pytest.mark.e2e
+PRELOAD = re.compile(r"^Preload during playback")
 
 
 @pytest.fixture
@@ -42,7 +43,7 @@ def test_management_waits_for_deployment_policy(demo_server, desktop, config_fai
     login(page, demo_server.url + "/?view=settings&section=cache")
     state = page.locator(".deployment-config-state")
     expect(state).to_be_visible()
-    expect(page.get_by_label("Memory cache (MiB)", exact=True)).to_have_count(0)
+    expect(page.get_by_role("switch", name=PRELOAD)).to_have_count(0)
     expect(page.locator(".demo-mode-notice")).to_have_count(0)
 
     if config_failure:
@@ -61,12 +62,12 @@ def test_management_waits_for_deployment_policy(demo_server, desktop, config_fai
         # that the stale response leaves the management gate in place.
         page.evaluate("() => new Promise(requestAnimationFrame)")
         expect(state).to_be_visible()
-        expect(page.get_by_label("Memory cache (MiB)", exact=True)).to_have_count(0)
+        expect(page.get_by_role("switch", name=PRELOAD)).to_have_count(0)
         for route in pending[1:]:
             route.fulfill(json=config)
 
     expect(state).to_have_count(0)
-    expect(page.get_by_label("Memory cache (MiB)", exact=True)).to_be_disabled()
+    expect(page.get_by_role("switch", name=PRELOAD)).to_be_disabled()
     expect(page.locator(".demo-mode-notice")).to_be_visible()
 
 
@@ -95,11 +96,7 @@ def test_demo_pages_lock_changes_keep_navigation_and_file_features(
         expect(page.locator(".demo-mode-notice")).to_contain_text("read-only")
 
     expect(page.locator(".demo-mode-notice")).to_be_visible()
-    expect(page.get_by_label("Memory cache (MiB)", exact=True)).to_be_disabled()
-    expect(page.get_by_label("Memory cache (MiB)", exact=True)).not_to_have_value("")
-    expect(
-        page.get_by_role("switch", name=re.compile(r"^Preload during playback"))
-    ).to_be_disabled()
+    expect(page.get_by_role("switch", name=PRELOAD)).to_be_disabled()
     expect(
         page.get_by_role("button", name="Save Performance Settings", exact=True)
     ).to_be_disabled()
@@ -108,14 +105,16 @@ def test_demo_pages_lock_changes_keep_navigation_and_file_features(
     ).to_be_disabled()
 
     navigate("Transfer limits")
-    expect(page.get_by_label("More Uploads per Bot", exact=True)).to_be_disabled()
-    expect(page.get_by_label("Maximum file size (GiB)", exact=True)).to_be_disabled()
+    split = page.get_by_label("File split size (MiB)", exact=True)
+    expect(split).to_be_disabled()
+    expect(split).not_to_have_value("")
+    for step in ["Decrease", "Increase"]:
+        expect(
+            page.get_by_role("button", name=f"{step} File split size (MiB)", exact=True)
+        ).to_be_disabled()
     expect(
         page.get_by_role("button", name="Change folder", exact=True)
     ).to_be_disabled()
-    page.get_by_text("Advanced Telegram limits", exact=True).click()
-    expect(page.get_by_label("Requests per account", exact=True)).to_be_visible()
-    expect(page.get_by_label("Requests per account", exact=True)).to_be_disabled()
 
     navigate("Timezone")
     expect(page.get_by_label("Timezone", exact=True)).to_be_disabled()
@@ -147,12 +146,9 @@ def test_demo_pages_lock_changes_keep_navigation_and_file_features(
     page.get_by_text(
         "Main channel lost: restore from the backup channel", exact=True
     ).click()
-    restore = (
-        page.locator("form")
-        .filter(has=page.get_by_label("Backup bot token", exact=True))
-        .last
-    )
-    expect(restore.get_by_label("Backup channel ID", exact=True)).to_be_disabled()
+    surviving = page.get_by_label("Surviving backup channel ID", exact=True)
+    expect(surviving).to_be_visible()
+    expect(surviving).to_be_disabled()
     expect(page.locator('a[href="/api/v1/replica/key"]')).to_have_count(0)
     expect(page.locator('a[href="/api/v1/backup/recovery-key"]')).to_have_count(0)
     assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")

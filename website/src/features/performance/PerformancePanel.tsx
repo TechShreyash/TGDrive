@@ -1,6 +1,6 @@
 import { Tabs, Paper } from "@mantine/core";
 import { useCallback, useEffect, useRef, useState } from "react";
-import { RefreshCw } from "lucide-react";
+import { ArrowDownToLine, ArrowUpFromLine, RefreshCw } from "lucide-react";
 import { errorMessage } from "../../shared/api";
 import { ErrorNotice, Spinner } from "../../shared/components";
 import { formatBytes, formatTimestamp, getTimezone } from "../../shared/types";
@@ -73,7 +73,12 @@ type MetricKey =
     | "memory_bytes"
     | "received_bytes_per_second"
     | "sent_bytes_per_second";
-type MetricSeries = { key: MetricKey; label: string; secondary?: boolean };
+type MetricSeries = {
+    key: MetricKey;
+    label: string;
+    hint?: string;
+    secondary?: boolean;
+};
 export function metricSegments(
     samples: ResourceSample[],
     key: MetricKey,
@@ -204,7 +209,7 @@ function MetricChart({
             </div>
             {series.length > 1 && (
                 <div className="performance-chart-legend">
-                    {series.map(({ key, label, secondary }) => (
+                    {series.map(({ key, label, hint, secondary }) => (
                         <span
                             key={key}
                             className={
@@ -214,6 +219,7 @@ function MetricChart({
                             }
                         >
                             {label}
+                            {hint && <small>{hint}</small>}
                         </span>
                     ))}
                 </div>
@@ -912,6 +918,53 @@ export default function PerformancePanel({
                       ),
                   ),
               );
+    const trafficHistory = traffic?.history || [];
+    const recentErrors = Math.max(
+        0,
+        (trafficHistory.at(-1)?.errors ?? 0) - (trafficHistory[0]?.errors ?? 0),
+    );
+    const waiting =
+        telegram?.accounts.filter(
+            (account) =>
+                Math.max(
+                    account.cooldown_seconds,
+                    account.requests?.cooldown_seconds || 0,
+                ) > 0,
+        ).length || 0;
+    const accountCount = telegram?.accounts.length || 0;
+    const queueFull =
+        !!telegram &&
+        telegram.max_queue > 0 &&
+        telegram.queued >= telegram.max_queue * 0.8;
+    const health: "ok" | "degraded" | "failing" =
+        error || !accountCount || waiting === accountCount
+            ? "failing"
+            : recentErrors || waiting || queueFull
+              ? "degraded"
+              : "ok";
+    const healthDetail = [
+        error
+            ? "Latest reading failed"
+            : !accountCount
+              ? "No Telegram accounts reporting"
+              : waiting
+                ? waiting +
+                  " of " +
+                  accountCount +
+                  (accountCount === 1 ? " account" : " accounts") +
+                  " in a Telegram flood wait"
+                : "All Telegram accounts ready",
+        recentErrors
+            ? recentErrors +
+              " failed " +
+              (recentErrors === 1 ? "request" : "requests") +
+              " in the last few minutes"
+            : "no recent failed requests",
+        queueFull ? "Telegram queue nearly full" : "",
+        traffic ? traffic.errors.toLocaleString() + " failed this session" : "",
+    ]
+        .filter(Boolean)
+        .join(" · ");
     const networkRate = (value: number | null | undefined) =>
         typeof value === "number" ? formatBytes(value) + "/s" : "Measuring…";
     return (
@@ -1097,6 +1150,83 @@ export default function PerformancePanel({
                         value="overview"
                         className="performance-overview-grid"
                     >
+                        <section
+                            className="performance-health"
+                            data-health={health}
+                            aria-label="Health"
+                        >
+                            <strong>
+                                {health === "ok"
+                                    ? "Healthy"
+                                    : health === "degraded"
+                                      ? "Degraded"
+                                      : "Failing"}
+                            </strong>
+                            <span>{healthDetail}</span>
+                        </section>
+                        {traffic && (
+                            <section
+                                className="performance-section performance-live-traffic"
+                                aria-labelledby="http-traffic-heading"
+                            >
+                                <div className="performance-section-title">
+                                    <h3 id="http-traffic-heading">
+                                        Live file transfers
+                                    </h3>
+                                    <span className="performance-chart-now">
+                                        Now
+                                    </span>
+                                </div>
+                                <p className="settings-help">
+                                    What TGDrive is sending and receiving for
+                                    files right now, including cached downloads.
+                                </p>
+                                <dl className="performance-live-strip">
+                                    <div data-series="out">
+                                        <dt>
+                                            <ArrowDownToLine
+                                                size={14}
+                                                aria-hidden="true"
+                                            />
+                                            To viewers
+                                        </dt>
+                                        <dd>
+                                            {typeof sendRate === "number"
+                                                ? formatBytes(sendRate) + "/s"
+                                                : "Measuring…"}
+                                        </dd>
+                                    </div>
+                                    <div data-series="in">
+                                        <dt>
+                                            <ArrowUpFromLine
+                                                size={14}
+                                                aria-hidden="true"
+                                            />
+                                            From devices
+                                        </dt>
+                                        <dd>
+                                            {typeof receiveRate === "number"
+                                                ? formatBytes(receiveRate) +
+                                                  "/s"
+                                                : "Measuring…"}
+                                        </dd>
+                                    </div>
+                                    <div>
+                                        <dt>Active requests</dt>
+                                        <dd>
+                                            {traffic.active.toLocaleString()}
+                                        </dd>
+                                    </div>
+                                    <div>
+                                        <dt>Telegram operations</dt>
+                                        <dd>
+                                            {telegram.active} active ·{" "}
+                                            {telegram.queued} waiting
+                                        </dd>
+                                    </div>
+                                </dl>
+                            </section>
+                        )}
                         <MetricChart
                             windowSeconds={windowSeconds}
                             historical={historical}
@@ -1109,10 +1239,12 @@ export default function PerformancePanel({
                                 {
                                     key: "received_bytes_per_second",
                                     label: "Download to server",
+                                    hint: "from Telegram, URLs and devices",
                                 },
                                 {
                                     key: "sent_bytes_per_second",
                                     label: "Upload from server",
+                                    hint: "to viewers and Telegram",
                                     secondary: true,
                                 },
                             ]}
@@ -1135,59 +1267,122 @@ export default function PerformancePanel({
                                 "."
                             }
                         />
+                        <section
+                            className="performance-section performance-limits"
+                            aria-labelledby="speed-limits-heading"
+                        >
+                            <h3 id="speed-limits-heading">What limits speed</h3>
+                            <p className="settings-help">
+                                Each Telegram account runs a few transfers at
+                                once. A flood wait is a pause Telegram imposes
+                                when an account sends too many requests.
+                            </p>
+                            {telegram.accounts.length ? (
+                                <ul className="performance-limit-list">
+                                    {telegram.accounts.map((account) => {
+                                        const busy =
+                                            account.uploads + account.downloads;
+                                        const wait = Math.max(
+                                            account.cooldown_seconds,
+                                            account.requests
+                                                ?.cooldown_seconds || 0,
+                                        );
+                                        return (
+                                            <li key={account.name}>
+                                                <span className="performance-limit-name">
+                                                    <strong>
+                                                        {account.name}
+                                                    </strong>
+                                                    <small>
+                                                        {account.kind === "user"
+                                                            ? "Premium account"
+                                                            : "Storage bot"}
+                                                    </small>
+                                                </span>
+                                                <span className="performance-limit-meter">
+                                                    <small>
+                                                        {busy} of{" "}
+                                                        {account.combined_limit}{" "}
+                                                        transfer slots
+                                                    </small>
+                                                    <progress
+                                                        aria-label={
+                                                            account.name +
+                                                            " transfer slots"
+                                                        }
+                                                        value={Math.min(
+                                                            busy,
+                                                            account.combined_limit,
+                                                        )}
+                                                        max={Math.max(
+                                                            1,
+                                                            account.combined_limit,
+                                                        )}
+                                                    />
+                                                </span>
+                                                <span
+                                                    className="performance-limit-state"
+                                                    data-state={
+                                                        wait > 0
+                                                            ? "wait"
+                                                            : "ready"
+                                                    }
+                                                >
+                                                    {wait > 0
+                                                        ? "Flood wait " +
+                                                          historyDuration(
+                                                              Math.ceil(wait),
+                                                          )
+                                                        : "Ready"}
+                                                    {account.requests && (
+                                                        <small>
+                                                            {
+                                                                account.requests
+                                                                    .floods
+                                                            }{" "}
+                                                            flood waits this
+                                                            session
+                                                        </small>
+                                                    )}
+                                                </span>
+                                            </li>
+                                        );
+                                    })}
+                                </ul>
+                            ) : (
+                                <p className="performance-empty">
+                                    No account samples are available. Check
+                                    Connections.
+                                </p>
+                            )}
+                            <div className="performance-resource-meters">
+                                <UsageMeter
+                                    label="CPU"
+                                    percent
+                                    used={cpu?.percent ?? NaN}
+                                    total={100}
+                                    unavailableLabel="Measuring…"
+                                />
+                                <UsageMeter
+                                    label="Memory"
+                                    used={memoryUsed}
+                                    total={memoryLimit}
+                                    unavailableLabel={
+                                        Number.isFinite(memoryUsed)
+                                            ? formatBytes(memoryUsed) +
+                                              " in use, no limit"
+                                            : "Unavailable"
+                                    }
+                                />
+                                <UsageMeter
+                                    label="Cache disk"
+                                    used={snapshot.server.disk.used_bytes}
+                                    total={snapshot.server.disk.total_bytes}
+                                />
+                            </div>
+                        </section>
                         {snapshot.tuning && (
                             <AutomaticTuning tuning={snapshot.tuning} />
-                        )}
-                        {traffic && (
-                            <section
-                                className="performance-section performance-live-traffic"
-                                aria-labelledby="http-traffic-heading"
-                            >
-                                <div className="performance-section-title">
-                                    <h3 id="http-traffic-heading">
-                                        Live file transfers
-                                    </h3>
-                                    <span className="performance-chart-now">
-                                        Now
-                                    </span>
-                                </div>
-                                <dl className="performance-facts">
-                                    <div>
-                                        <dt>Downloads to viewers</dt>
-                                        <dd>
-                                            {typeof sendRate === "number"
-                                                ? formatBytes(sendRate) + "/s"
-                                                : "Measuring…"}
-                                        </dd>
-                                    </div>
-                                    <div>
-                                        <dt>Uploads from devices</dt>
-                                        <dd>
-                                            {typeof receiveRate === "number"
-                                                ? formatBytes(receiveRate) +
-                                                  "/s"
-                                                : "Measuring…"}
-                                        </dd>
-                                    </div>
-                                    <div>
-                                        <dt>Active requests</dt>
-                                        <dd>
-                                            {traffic.active.toLocaleString()}
-                                        </dd>
-                                    </div>
-                                    <div>
-                                        <dt>Failed requests this session</dt>
-                                        <dd>
-                                            {traffic.errors.toLocaleString()}
-                                        </dd>
-                                    </div>
-                                </dl>
-                                <p className="settings-help">
-                                    TGDrive file endpoints, including cached
-                                    downloads. These live readings are
-                                    independent of the chart time range.
-                                </p>
-                            </section>
                         )}
                         {recorded && (
                             <section
