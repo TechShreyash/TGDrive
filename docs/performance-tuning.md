@@ -102,7 +102,7 @@ metadata checks still apply, so even cached access can make Telegram requests.
 ### Cache capacity and preloading
 
 - RAM retains frequently reused bytes; disk can hold a larger collection. More
-  capacity does not increase **Concurrent preloads** or Telegram request limits.
+  capacity does not increase preload or Telegram request concurrency.
   Background preparation still shares resources with viewers and uploads.
 - Hardware upgrades raise cache budgets automatically; see [automatic tuning](performance.md#automatic-tuning).
   Leave room for the app, active streams, unfinished uploads and other processes;
