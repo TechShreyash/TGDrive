@@ -8,6 +8,7 @@ from fastapi.testclient import TestClient
 from tests.support.app_fixtures import FakeRuntime, make_settings
 from tests.support.mongo_fixtures import new_store
 from tgdrive.core.errors import ValidationError
+from tgdrive.storage.mongo_store import MongoStore
 from tgdrive.web.app import create_app
 
 
@@ -376,3 +377,85 @@ def test_api_folder_cursor_continues_listing(search_client):
     assert second["next_cursor"] is None
     bad = client.get("/api/v1/nodes", params={"cursor": "%%%"})
     assert bad.status_code == 422
+
+
+def test_folder_type_filter_matches_ui_groups_and_survives_rename(store):
+    store.create_folder("/", "Albums")
+    names = ["a.JPG", "b.mkv", "c.pdf", "d.epub", "e.flac", "f.zip", "g", "h.xlsx"]
+    for index, name in enumerate(names):
+        store.add_file("/", name, index + 1, 1)
+
+    def names_in(group):
+        return [row["name"] for row in store.list_page("/", group=group)["items"]]
+
+    assert names_in("folder") == ["Albums"]
+    assert names_in("media") == ["a.JPG", "b.mkv"]
+    assert names_in("docs") == ["c.pdf", "d.epub", "h.xlsx"]
+    assert names_in("audio") == ["e.flac"]
+    assert names_in("other") == ["f.zip", "g"]
+    assert store.list_page("/", group="media")["total"] == 2
+    page = store.list_page("/", group="docs", limit=2)
+    rest = store.list_page("/", group="docs", limit=2, after=page["next_cursor"])
+    assert [row["name"] for row in rest["items"]] == ["h.xlsx"]
+    item = next(row for row in store.list_page("/")["items"] if row["name"] == "g")
+    store.rename(full(item), "g.mp3")  # A file without an extension may gain one.
+    assert names_in("audio") == ["e.flac", "g.mp3"]
+    with pytest.raises(ValidationError):
+        store.list_page("/", group="videos")
+
+
+def test_type_field_is_backfilled_for_existing_nodes(store):
+    store.add_file("/", "song.mp3", 1, 1)
+    store.db.nodes.update_many({}, {"$unset": {"group": ""}})
+    MongoStore._indexes(store.backend)
+    assert [row["name"] for row in store.list_page("/", group="audio")["items"]] == [
+        "song.mp3"
+    ]
+
+
+def test_shared_folder_pages_need_the_share_and_hide_starred(search_client):
+    client, store, _ = search_client
+    shared = store.create_folder("/", "Public")
+    inner = store.create_folder(full(shared), "Inner")
+    for index in range(3):
+        store.add_file(full(inner), f"photo {index}.jpg", index + 1, 1)
+    store.add_file(full(inner), "notes.txt", 9, 1)
+    store.add_file("/", "private.jpg", 10, 1)
+    store.set_starred(
+        full(inner) + "/" + store.list_page(full(inner))["items"][0]["id"], True
+    )
+    token = store.create_share(full(shared))
+    route = "/api/v1/shared/nodes"
+    first = client.get(
+        route,
+        params={"auth": token, "parent_id": full(inner), "limit": 2, "type": "media"},
+    )
+    assert first.status_code == 200
+    assert first.headers["cache-control"] == "private, no-store"
+    body = first.json()
+    assert [row["name"] for row in body["items"]] == ["photo 0.jpg", "photo 1.jpg"]
+    assert body["share_home"] == full(shared) and body["total"] == 3
+    assert all("starred" not in row for row in body["items"])
+    second = client.get(
+        route,
+        params={
+            "auth": token,
+            "parent_id": full(inner),
+            "type": "media",
+            "cursor": body["next_cursor"],
+        },
+    ).json()
+    assert [row["name"] for row in second["items"]] == ["photo 2.jpg"]
+    # Outside the share, a wrong token, a file or a missing ID all look alike.
+    for parent, auth in [
+        ("/", token),
+        (full(inner), "wrong-token"),
+        ("/" + "x" * 22, token),
+    ]:
+        denied = client.get(route, params={"auth": auth, "parent_id": parent})
+        assert denied.status_code == 403
+        assert "private.jpg" not in denied.text
+    assert client.get(route, params={"parent_id": full(inner)}).status_code == 422
+    owner(client)
+    mine = client.get("/api/v1/nodes", params={"type": "media"}).json()
+    assert [row["name"] for row in mine["items"]] == ["private.jpg"]

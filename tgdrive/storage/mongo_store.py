@@ -22,7 +22,7 @@ from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
-from pymongo import ASCENDING, DESCENDING
+from pymongo import ASCENDING, DESCENDING, UpdateOne
 
 from tgdrive.core.errors import (
     CorruptStoreError,
@@ -76,6 +76,27 @@ _RECORD_RETENTION = timedelta(days=7)
 _EXPIRED_SHARE_RETENTION = timedelta(days=30)
 _COUNTERS = ("files", "folders", "total_bytes", "trashed_files", "trashed_bytes")
 _BATCH = 1000
+# File type groups for listing filters; the web UI's chips use the same
+# extension lists (website/src/shared/components.tsx FILE_ICON_GROUPS).
+_GROUP_EXTENSIONS = {
+    "media": "mp4 mkv webm mov avi wmv m4v 3gp ts png jpg jpeg gif webp avif heic svg",
+    "audio": "mp3 wav ogg flac m4a",
+    "docs": "pdf epub cbz cbr txt md doc docx csv xlsx xls ods ppt pptx odp",
+}
+_EXTENSION_GROUP = {
+    extension: group
+    for group, extensions in _GROUP_EXTENSIONS.items()
+    for extension in extensions.split()
+}
+GROUPS = ("folder", "media", "docs", "audio", "other")
+
+
+def _group(name, kind):
+    if kind == "folder":
+        return "folder"
+    return _EXTENSION_GROUP.get(name.rsplit(".", 1)[-1].lower(), "other")
+
+
 _LIGHT = {"parts": 0, "poster": 0, "tokens": 0, "grams": 0, "fold": 0}
 
 
@@ -156,6 +177,10 @@ def _decode_cursor(value, sort):
     ):
         raise ValidationError("Invalid cursor")
     return kind, key, identity
+
+
+class ShareDenied(PermissionError):
+    """A share token does not cover the requested folder."""
 
 
 class MongoStore:
@@ -259,6 +284,29 @@ class MongoStore:
             nodes.create_index(
                 [("parent_id", 1), ("trashed", 1), ("kind", 1), (field, 1), ("_id", 1)]
             )
+        # Type-filtered pages ("Photos & videos" and so on). Only the default
+        # name order gets its own index: size and date filters reuse the kind
+        # indexes and skip other types, which keeps free-tier index space down.
+        nodes.create_index(
+            [
+                ("parent_id", 1),
+                ("trashed", 1),
+                ("group", 1),
+                ("name_key", 1),
+                ("_id", 1),
+            ]
+        )
+        # Nodes written before the field existed get it once; later writes set it.
+        missing = nodes.find({"group": {"$exists": False}}, {"name": 1, "kind": 1})
+        batch = []
+        for row in missing:
+            group = _group(row["name"], row["kind"])
+            batch.append(UpdateOne({"_id": row["_id"]}, {"$set": {"group": group}}))
+            if len(batch) == _BATCH:
+                nodes.bulk_write(batch, ordered=False)
+                batch = []
+        if batch:
+            nodes.bulk_write(batch, ordered=False)
         nodes.create_index("tokens")
         nodes.create_index("grams")
         nodes.create_index(
@@ -295,6 +343,7 @@ class MongoStore:
             "tokens": _tokens(name) if parent is not None else [],
             "grams": _grams(fold),
             "kind": kind,
+            "group": _group(name, kind),
             "trashed": False,
             "upload_date": _utc_now(),
             "size": 0,
@@ -305,7 +354,7 @@ class MongoStore:
         }
 
     @staticmethod
-    def _names(name):
+    def _names(name, kind):
         fold = _fold(name)
         return {
             "name": name,
@@ -313,6 +362,7 @@ class MongoStore:
             "fold": fold,
             "tokens": _tokens(name),
             "grams": _grams(fold),
+            "group": _group(name, kind),
         }
 
     def close(self):
@@ -697,13 +747,25 @@ class MongoStore:
         return self.get_directory(path, include_trashed=include_trashed)["contents"]
 
     def list_page(
-        self, path, *, offset=0, limit=100, sort="name", order="asc", after=None
+        self,
+        path,
+        *,
+        offset=0,
+        limit=100,
+        sort="name",
+        order="asc",
+        after=None,
+        group=None,
+        share_token=None,
     ):
         """One indexed page of a folder; folders first, then the sort field.
 
         ``after`` is the ``next_cursor`` of the previous page. It continues from
         the last item's index position, so deep pages cost the same as the
         first; ``offset`` still works but skips index entries one by one.
+        ``group`` keeps one file type (see ``GROUPS``). With ``share_token`` the
+        folder must be inside that share; ``share_home`` then names the shared
+        folder so callers can hide everything above it.
         """
         fields = {
             "name": "name_key",
@@ -715,6 +777,8 @@ class MongoStore:
             raise ValidationError("Invalid sort")
         if type(offset) is not int or offset < 0 or type(limit) is not int or limit < 1:
             raise ValidationError("Invalid pagination")
+        if group is not None and group not in GROUPS:
+            raise ValidationError("Invalid type filter")
         field = fields[sort]
         start = None if after is None else _decode_cursor(after, sort)
         if start is not None and offset:
@@ -724,6 +788,11 @@ class MongoStore:
             if node["kind"] != "folder":
                 raise NotDirectoryError("Not a directory")
             self._visible(chain)
+            home = None
+            if share_token is not None:
+                home = self._authorized(chain, share_token)
+                if home is None:
+                    raise ShareDenied("Invalid share link")
             direction = ASCENDING if order == "asc" else DESCENDING
             beyond = "$gt" if order == "asc" else "$lt"
             # The tie-break follows the sort direction so one index serves both.
@@ -731,8 +800,15 @@ class MongoStore:
             if field != "_id":
                 ordering.append(("_id", direction))
             query = {"parent_id": node["_id"], "trashed": False}
-            folders = self.db.nodes.count_documents(
-                dict(query, kind="folder"), session=self._session
+            if group is not None:
+                # One group is one kind, so folders-first ordering still holds.
+                query["group"] = group
+            folders = (
+                0
+                if group not in (None, "folder")
+                else self.db.nodes.count_documents(
+                    dict(query, kind="folder"), session=self._session
+                )
             )
             total = self.db.nodes.count_documents(query, session=self._session)
 
@@ -780,12 +856,15 @@ class MongoStore:
                 )
                 if more:
                     following = _encode_cursor(sort, position)
-            return {
+            result = {
                 "items": items,
                 "total": total,
                 "offset": offset,
                 "next_cursor": following,
             }
+            if home is not None:
+                result["share_home"] = home
+            return result
 
     def get_file(self, path, *, include_trashed=False):
         with self._transaction():
@@ -991,10 +1070,10 @@ class MongoStore:
             if node["name"] != name:
                 self.db.nodes.update_one(
                     {"_id": node["_id"]},
-                    {"$set": self._names(name)},
+                    {"$set": self._names(name, node["kind"])},
                     session=self._session,
                 )
-                node.update(self._names(name))
+                node.update(self._names(name, node["kind"]))
                 self._bump()
             return self._record(node, path)
 
@@ -1035,10 +1114,10 @@ class MongoStore:
             # Only the selected item changes; descendants are hidden through it.
             self.db.nodes.update_one(
                 {"_id": node["_id"]},
-                {"$set": {"trashed": trashed, **self._names(name)}},
+                {"$set": {"trashed": trashed, **self._names(name, node["kind"])}},
                 session=self._session,
             )
-            node.update(trashed=trashed, **self._names(name))
+            node.update(trashed=trashed, **self._names(name, node["kind"]))
             counters = {}
             if not self._hidden(chain[:-1]):
                 files, folders, size = self._subtree_totals(node["_id"])
@@ -1357,10 +1436,10 @@ class MongoStore:
             name = self._available(parent["_id"], name, node["kind"])
         self.db.nodes.update_one(
             {"_id": node["_id"]},
-            {"$set": {"parent_id": parent["_id"], **self._names(name)}},
+            {"$set": {"parent_id": parent["_id"], **self._names(name, node["kind"])}},
             session=self._session,
         )
-        node.update(parent_id=parent["_id"], **self._names(name))
+        node.update(parent_id=parent["_id"], **self._names(name, node["kind"]))
         self._bump()
         return self._record(node, _join_path(destination, node["_id"]))
 

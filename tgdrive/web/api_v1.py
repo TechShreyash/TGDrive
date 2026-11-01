@@ -12,6 +12,7 @@ from fastapi import Depends, HTTPException, Query, Request, Response
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, Field, StrictBool
 
+from tgdrive.core.errors import NotDirectoryError, NotFoundError, TrashedItemError
 from tgdrive.core.errors import ValidationError as DriveValidationError
 from tgdrive.recovery.backup import RecoveryConflict
 from tgdrive.settings.management_api import register_management_routes
@@ -23,6 +24,7 @@ from tgdrive.storage.demo_files import (
     restricted_writes,
     write_policy,
 )
+from tgdrive.storage.mongo_store import ShareDenied
 from tgdrive.storage.store import (
     MAX_NAME_LENGTH,
     ROOT_ID,
@@ -306,6 +308,25 @@ def register_routes(
         )
         return describe({"data": {"contents": contents}})
 
+    async def folder_page(request, parent_id, *, share_token=None, **options):
+        sort = options["sort"]
+        if (
+            options["offset"] < 0
+            or not 1 <= options["limit"] <= 500
+            or sort not in {"name", "size", "type", "date"}
+        ):
+            raise HTTPException(422, "Invalid pagination or sort")
+        # One indexed MongoDB page off the event loop; no folder is read whole.
+        try:
+            return await asyncio.to_thread(
+                get_store(request).list_page,
+                parent_id,
+                share_token=share_token,
+                **options,
+            )
+        except DriveValidationError as error:
+            raise HTTPException(422, str(error)) from None
+
     @app.get("/api/v1/nodes", dependencies=admin)
     async def nodes(
         request: Request,
@@ -315,28 +336,58 @@ def register_routes(
         sort: str = "name",
         order: Literal["asc", "desc"] = "asc",
         cursor: str | None = Query(default=None, max_length=1024),
+        type: Literal["folder", "media", "docs", "audio", "other"] | None = None,
     ) -> dict[str, Any]:
-        if (
-            offset < 0
-            or not 1 <= limit <= 500
-            or sort not in {"name", "size", "type", "date"}
-        ):
-            raise HTTPException(422, "Invalid pagination or sort")
-        # One indexed MongoDB page off the event loop; no folder is read whole.
-        try:
-            return describe(
-                await asyncio.to_thread(
-                    get_store(request).list_page,
-                    parent_id,
-                    offset=offset,
-                    limit=limit,
-                    sort=sort,
-                    order=order,
-                    after=cursor,
-                )
+        return describe(
+            await folder_page(
+                request,
+                parent_id,
+                offset=offset,
+                limit=limit,
+                sort=sort,
+                order=order,
+                after=cursor,
+                group=type,
             )
-        except DriveValidationError as error:
-            raise HTTPException(422, str(error)) from None
+        )
+
+    @app.get("/api/v1/shared/nodes")
+    async def shared_nodes(
+        request: Request,
+        response: Response,
+        auth: str = Query(min_length=1, max_length=512),
+        parent_id: str = "/",
+        offset: int = 0,
+        limit: int = 100,
+        sort: str = "name",
+        order: Literal["asc", "desc"] = "asc",
+        cursor: str | None = Query(default=None, max_length=1024),
+        type: Literal["folder", "media", "docs", "audio", "other"] | None = None,
+    ) -> dict[str, Any]:
+        """A paged folder listing inside a share, authorized by its token."""
+        response.headers["Cache-Control"] = "private, no-store"
+        if getattr(
+            getattr(get_runtime(request), "backup", None), "recovery_required", False
+        ):
+            raise HTTPException(409, "Shared access is paused until recovery completes")
+        try:
+            page = await folder_page(
+                request,
+                parent_id,
+                share_token=auth,
+                offset=offset,
+                limit=limit,
+                sort=sort,
+                order=order,
+                after=cursor,
+                group=type,
+            )
+        except ShareDenied, NotFoundError, NotDirectoryError, TrashedItemError:
+            # One answer for "no such folder" and "not shared": IDs stay secret.
+            raise HTTPException(403, "Invalid share link") from None
+        for item in page["items"]:
+            item.pop("starred", None)
+        return describe(page)
 
     @app.post("/api/v1/folders/tree", dependencies=admin, status_code=201)
     async def prepare_folder_tree(payload: FolderTreeRequest, request: Request) -> Any:
