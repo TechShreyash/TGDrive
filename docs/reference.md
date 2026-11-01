@@ -77,7 +77,7 @@ needed. Names are case-insensitive; **unknown names are ignored**, so check spel
 | --- | --- |
 | Deployment environment / `.env` | Startup values; host environment wins over `.env` |
 | Saved MongoDB bootstrap | Fills missing startup values; explicit deployment values take precedence over local recovery fallback |
-| Saved **Connections** | Overrides original storage-account credentials after restart |
+| Saved **Connections** | Overrides original storage-account credentials; applied on save when idle, otherwise after restart |
 | Saved dashboard performance preferences | Overrides matching startup defaults and applies to new work immediately |
 
 Recreate Docker containers after changing their environment; a process restart
@@ -630,8 +630,12 @@ conflict. Failed preflight never partially saves.
 
 Errors: `409 SETTINGS_CONFLICT` for revision races, `409 SETTINGS_BUSY` for blocked
 changes, `422 SETTINGS_INVALID`, `503 SETTINGS_PREFLIGHT_FAILED`. A successful
-save pauses new catalog/upload mutations with `409 SETTINGS_RESTART_REQUIRED`
-until restart. Reads, authentication, cancellation and management remain available
+save applies the new connections immediately when no transfer, browser upload,
+bot import or unconfirmed backup is pending: TGDrive stops its runtime and starts
+a fresh one in the same process, so open streams reconnect. If work is pending,
+or the fresh runtime cannot start (`503 SETTINGS_APPLY_FAILED`), new
+catalog/upload mutations pause with `409 SETTINGS_RESTART_REQUIRED` until
+restart. Reads, authentication, cancellation and management remain available
 unless recovery separately blocks them. Do not replay a stale full client list.
 
 **Premium login.** Owner-bound in-memory challenges last five minutes, at most

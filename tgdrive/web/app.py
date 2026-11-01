@@ -376,10 +376,16 @@ def create_app(
                 sample_performance,
             )
 
+            class LivePool:
+                # Follows runtime swaps (Start new drive, live connection apply).
+                def __getattr__(self, name):
+                    return getattr(getattr(_app.state.runtime, "pool", None), name)
+
+            live_pool = LivePool()
             sampler = asyncio.create_task(
                 sample_performance(
                     _app.state.traffic,
-                    getattr(app_runtime, "pool", None),
+                    live_pool,
                     history=_app.state.telemetry_history,
                 ),
                 name="tgdrive-performance-sampler",
@@ -393,7 +399,7 @@ def create_app(
                 try:
                     await checkpoint_history(
                         _app.state.traffic,
-                        getattr(app_runtime, "pool", None),
+                        live_pool,
                         _app.state.telemetry_history,
                         force=True,
                     )
@@ -425,6 +431,8 @@ def create_app(
     )
     app.state.settings = settings
     app.state.runtime = app_runtime
+    # Saved connections apply live only to runtimes this app built itself.
+    app.state.runtime_factory = Runtime if runtime is None else None
     app.state.sessions = sessions
     app.state.login_limiter = limiter
     app.state.thumbnails = ThumbnailCache()

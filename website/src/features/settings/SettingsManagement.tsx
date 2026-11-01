@@ -411,8 +411,7 @@ export default function SettingsManagement({
                 {row.removed ? (
                     <div className="client-removal">
                         <p>
-                            {row.label} will be removed after you save and
-                            restart.
+                            {row.label} will be removed when you save.
                         </p>
                         <button
                             type="button"
@@ -490,7 +489,7 @@ export default function SettingsManagement({
                                         })
                                     }
                                 />{" "}
-                                Enabled after restart
+                                Enabled
                             </label>
                             {row.id && (
                                 <button
@@ -803,7 +802,9 @@ export default function SettingsManagement({
                                     announceSaved(value);
                                     setPremiumOpen(false);
                                     setNotice(
-                                        "Premium account verified and saved. Restart TGDrive to use it.",
+                                        value.restart_required
+                                            ? "Premium account verified and saved. Restart TGDrive to use it."
+                                            : "Premium account verified, saved and connected.",
                                     );
                                 }}
                             />
@@ -992,7 +993,8 @@ export default function SettingsManagement({
                     <p className="management-caption connection-footer-note">
                         Credentials are saved privately in MongoDB and encrypted
                         in Telegram database backups. Keep at least one enabled
-                        bot. Verified changes apply after restart.
+                        bot. Verified changes connect on save when no work
+                        is running, otherwise after a restart.
                     </p>
                 </>
             )}

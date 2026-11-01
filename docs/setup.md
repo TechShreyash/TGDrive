@@ -251,7 +251,7 @@ using the same MongoDB database. **Do not initialize it again.**
 After setup, add bots through **Management → Connections → Add storage bot**.
 First add each bot as a channel administrator with **Post Messages** and
 **Delete Messages** in the same channel.
-Finish pending transfers before changing accounts, save changes and restart.
+Finish pending transfers before changing accounts, then save. Changes connect immediately; a restart is only needed if work was still pending.
 
 Premium is optional. Use **Connections → Connect Premium account** to sign in,
 or its advanced controls to import an authorized session. All accounts use the

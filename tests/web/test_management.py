@@ -1171,3 +1171,38 @@ async def test_refresh_obeys_existing_transfer_pool_wait_before_network_probe(ma
     assert result["clients"][0]["connection_retry_at"] == deadline
     manager.verifier.assert_not_awaited()
     await manager.close()
+
+
+@pytest.mark.asyncio
+async def test_saved_connections_apply_live_when_idle(managed):
+    from tgdrive.settings.management_api import apply_saved_connections
+
+    manager, runtime, settings, store = managed
+    row = (await manager.snapshot())["clients"][0]
+    await manager.save(
+        SettingsChange.model_validate(
+            {
+                "expected_revision": 0,
+                "clients": [
+                    {"id": row["id"], "label": "Main bot", "kind": "bot"},
+                    {"label": "Second", "kind": "bot", "credential": SECOND_TOKEN},
+                ],
+            }
+        )
+    )
+    built = []
+
+    def factory(value):
+        fresh = FakeRuntime(store)
+        fresh.mongo = runtime.mongo
+        built.append(value)
+        return fresh
+
+    app = SimpleNamespace(state=SimpleNamespace(runtime_factory=factory))
+    assert await apply_saved_connections(app, settings, manager)
+    assert runtime.stopped and app.state.runtime.ready
+    assert built == [settings] and settings.bot_tokens == (TOKEN, SECOND_TOKEN)
+    assert not manager.restart_required
+    manager.check_upload_allowed()
+    assert not await apply_saved_connections(app, settings, manager)
+    app.state.runtime.transfers.registry.close()

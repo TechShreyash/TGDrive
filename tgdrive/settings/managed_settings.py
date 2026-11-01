@@ -168,6 +168,33 @@ def save_document(
         backend._settings_cached = True
 
 
+def apply_document(settings, document: ManagedDocument) -> None:
+    """Load saved connections into live settings, as startup's managed source does."""
+    rows = [
+        row
+        for kind in ("bot", "user")
+        for row in document.clients
+        if row.kind == kind and row.enabled
+    ]
+    settings.api_id = document.api_id
+    settings.api_hash = document.api_hash
+    for field, kind in (("bot_tokens_csv", "bot"), ("string_sessions_csv", "user")):
+        setattr(
+            settings,
+            field,
+            SecretStr(
+                ",".join(
+                    row.credential.get_secret_value()
+                    for row in rows
+                    if row.kind == kind
+                )
+            ),
+        )
+    settings.managed_revision = document.revision
+    settings.managed_client_ids = tuple(row.id for row in rows)
+    settings.managed_client_labels = tuple(row.label for row in rows)
+
+
 def credential_id(kind: str, credential: str) -> str:
     # Opaque source identity; raw credentials never appear in response IDs.
     return kind + "-" + hashlib.sha256(credential.encode()).hexdigest()[:24]
