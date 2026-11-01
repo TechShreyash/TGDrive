@@ -114,8 +114,8 @@ characters. Account errors include `TELEGRAM_CREDENTIALS_REVOKED`,
 | Method and route | Access | Purpose | Notes and errors |
 | --- | --- | --- | --- |
 | `POST /api/getDirectory` | Owner, Share | `{"path", "auth"}`: folder contents keyed by child ID | Special paths: `/trash`, `/search_<q>` (max 500 results), `/share_<folder-id>` |
-| `GET /api/v1/nodes` | Owner | `parent_id`, `limit` (1–500), `sort` (`name`, `size`, `type`, `date`), `order` (`asc`, `desc`), optional `type` filter, then `cursor` (up to 1024 characters) or `offset` | `{items, total, offset, next_cursor}`; `next_cursor` is `null` on the last page. `422` for an invalid cursor or a cursor with a non-zero offset |
-| `GET /api/v1/shared/nodes` | Share | `auth` (1–512 characters) plus the same parameters as `/api/v1/nodes` | `{items, total, offset, next_cursor, share_home}`, without `starred`; `private, no-store`. `403` invalid share or folder outside it; `409` during recovery; `422` bad paging |
+| `GET /api/v1/nodes` | Owner | `parent_id`, `limit` (1–500), `sort` (`name`, `size`, `type`, `date`), `order` (`asc`, `desc`), optional `type` filter, then one of `cursor` (up to 1024 characters), `offset` or `around` (an item ID, up to 64 characters) | `{items, total, offset, next_cursor}`, plus `folder` on pages that don't continue a cursor and `index` with `around`. `next_cursor` is `null` on the last page. `422` for an invalid cursor or mixed paging parameters; `404` if the `around` item isn't in the folder |
+| `GET /api/v1/shared/nodes` | Share | `auth` (1–512 characters) plus the same parameters as `/api/v1/nodes` | `{items, total, offset, next_cursor, share_home}` plus `folder` and `index` as above, without `starred`; breadcrumbs start at the shared folder; `private, no-store`. `403` invalid share, folder outside it or `around` item not in the folder; `409` during recovery; `422` bad paging |
 | `GET /api/v1/search` | Owner | `q` (1–255), `offset`, `limit` (1–200), `sort`, `order` | Name-only, literal match, excludes Trash; `{items, has_more, next_offset}` |
 | `GET /api/v1/trash` | Owner | Top-level Trash items, optional `q` | Pending deletions are hidden |
 | `POST /api/createNewFolder` | Owner | `{"path", "name"}` | |
@@ -124,7 +124,10 @@ characters. Account errors include `TELEGRAM_CREDENTIALS_REVOKED`,
 | `POST /api/deleteFileFolder` | Owner | `{"path"}` of a top-level Trash item | `202` with a deletion job ID |
 
 `type` is `folder`, `media`, `docs`, `audio` or `other`, matching the My Files
-filter chips. Pass `next_cursor` back as `cursor` to page large folders; it stays as fast as the
+filter chips. `folder` is the folder's own record with `breadcrumbs`, as from
+`getDirectory`. `around` starts the page at that item, for links that open a file
+in a large folder, and `index` is its position under the current sort and filter.
+Pass `next_cursor` back as `cursor` to page large folders; it stays as fast as the
 first page, while deep `offset` pages slow down. Folders sort first. File rows include `part_count` but never message IDs or checksums.
 
 ## Atomic folder preparation
