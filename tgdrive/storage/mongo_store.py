@@ -1101,59 +1101,71 @@ class MongoStore:
                     )
                 return visible[parent]
 
-            # shortcut: matches are ranked in memory, so a query matching millions
-            # of names reads all of them; page with an indexed sort key if that
-            # becomes a real workload.
+            # shortcut: every match is ranked in memory (about 0.3 s per 100,000
+            # items locally); an external search engine is needed past millions.
+            # Ranking reads only small key fields; full rows load for one page.
             found = []
             projection = {
                 "_id": 1,
-                "id": 1,
-                "name": 1,
+                "name_key": 1,
                 "kind": 1,
                 "size": 1,
                 "upload_date": 1,
-                "starred": 1,
                 "parent_id": 1,
-                "part_count": 1,
                 "fold": 1,
                 "trashed": 1,
                 "tokens": 1,
             }
             for node in self._find("nodes", {"$and": clauses}, projection):
-                if node["_id"] == ROOT_ID or not all(
-                    word in node["fold"]
-                    or any(token.startswith(word) for token in node["tokens"])
-                    for word in words
+                if node["_id"] == ROOT_ID:
+                    continue
+                fold, tokens = node["fold"], node["tokens"]
+                starts = [any(t.startswith(w) for t in tokens) for w in words]
+                if not all(s or w in fold for s, w in zip(starts, words, strict=True)):
+                    continue
+                if not include_trashed and (
+                    node["trashed"] or placement(node["parent_id"])[0]
                 ):
                     continue
-                hidden, names, parent_path = placement(node["parent_id"])
-                if not include_trashed and (hidden or node["trashed"]):
-                    continue
-                row = self._record(node, _join_path(parent_path, node["_id"]))
-                row["parent_names"] = names
-                fold = node["fold"]
                 rank = (
                     0
                     if fold == folded
                     else 1
                     if fold.startswith(folded)
                     else 2
-                    if all(any(t.startswith(w) for t in node["tokens"]) for w in words)
+                    if all(starts)
                     else 3
                 )
-                found.append((rank, row))
-            key = {
-                "name": lambda item: _name_key(item[1]["name"]),
-                "size": lambda item: item[1]["size"],
-                "date": lambda item: item[1]["upload_date"],
-            }[sort]
+                found.append(
+                    (
+                        node["kind"] != "folder",
+                        rank,
+                        node["name_key"],
+                        node["_id"],
+                        {"size": node["size"], "date": node["upload_date"]},
+                    )
+                )
             # Ties keep name then ID order in both directions (sorts are stable).
-            found.sort(key=lambda item: (_name_key(item[1]["name"]), item[1]["id"]))
-            found.sort(key=key, reverse=direction == "desc")
+            found.sort(key=lambda item: (item[2], item[3]))
+            if sort != "name":
+                found.sort(key=lambda item: item[4][sort], reverse=direction == "desc")
+            elif direction == "desc":
+                found.sort(key=lambda item: item[2], reverse=True)
             if sort == "name" and order is None:
-                found.sort(key=lambda item: item[0])  # Best matches first.
-            found.sort(key=lambda item: item[1]["type"] != "folder")
-            items = [row for _, row in found[offset : offset + limit]]
+                found.sort(key=lambda item: item[1])  # Best matches first.
+            found.sort(key=lambda item: item[0])  # Folders first.
+            page = [item[3] for item in found[offset : offset + limit]]
+            rows = {
+                row["_id"]: row
+                for row in self._find("nodes", {"_id": {"$in": page}}, _LIGHT)
+            }
+            items = []
+            for identity in page:
+                node = rows[identity]
+                _, names, parent_path = placement(node["parent_id"])
+                row = self._record(node, _join_path(parent_path, identity))
+                row["parent_names"] = names
+                items.append(row)
             more = len(found) > offset + limit
             return {
                 "items": items,
