@@ -198,26 +198,10 @@ class MongoBackend:
     def _renew_loop(self) -> None:
         while not self._stop.wait(15):
             try:
-                result = self.db.runtime.update_one(
-                    {
-                        "_id": "owner",
-                        "token": self.token,
-                        "$expr": {"$gt": ["$expires_at", "$$NOW"]},
-                    },
-                    [
-                        {
-                            "$set": {
-                                "expires_at": {
-                                    "$dateAdd": {
-                                        "startDate": "$$NOW",
-                                        "unit": "second",
-                                        "amount": 60,
-                                    }
-                                }
-                            }
-                        }
-                    ],
-                )
+                # Renewing while a catalog transaction is open makes that
+                # transaction fail with a WriteConflict on the owner document.
+                with self._write_lock:
+                    result = self._renew()
                 if result.matched_count != 1:
                     self._lost = True
                     return
@@ -226,6 +210,28 @@ class MongoBackend:
                 # Keep read-only cache available briefly; no remote side effect
                 # is admitted after the conservative local ownership deadline.
                 continue
+
+    def _renew(self):
+        return self.db.runtime.update_one(
+            {
+                "_id": "owner",
+                "token": self.token,
+                "$expr": {"$gt": ["$expires_at", "$$NOW"]},
+            },
+            [
+                {
+                    "$set": {
+                        "expires_at": {
+                            "$dateAdd": {
+                                "startDate": "$$NOW",
+                                "unit": "second",
+                                "amount": 60,
+                            }
+                        }
+                    }
+                }
+            ],
+        )
 
     def check_owner(self) -> None:
         if not self.token or self._lost or time.monotonic() >= self._healthy_until:

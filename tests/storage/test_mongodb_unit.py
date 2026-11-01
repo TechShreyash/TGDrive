@@ -655,3 +655,21 @@ def test_database_status_reports_active_independent_checkpoint_without_recursion
     assert result["state"] == "protected"
     assert result["metadata_revision"] == result["protected_revision"] == store.revision
     service.replica.status.assert_not_called()
+
+
+def test_owner_renewal_waits_for_open_catalog_transactions():
+    from tgdrive.storage.mongo import MongoBackend
+
+    backend = MongoBackend("mongodb://synthetic.invalid", "tgdrive")
+    backend._stop = Mock(wait=Mock(side_effect=[False, True]))
+    held = []
+
+    def renew():
+        # A renewal inside a transaction would WriteConflict that transaction.
+        held.append(backend._write_lock._is_owned())
+        return SimpleNamespace(matched_count=1)
+
+    backend._renew = renew
+    backend._renew_loop()
+    assert held == [True] and not backend._lost
+    backend.client.close()
