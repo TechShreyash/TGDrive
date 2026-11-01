@@ -425,7 +425,7 @@ Solid 7z/RAR entries are consumed sequentially, avoiding a separate decompressio
 pass per file. Memory, CPU, output and metadata limits keep unusual archives
 bounded; they can also reject valid archives with expensive dictionaries. See
 [supported formats](usage.md#create-zips-and-extract-archives) and
-[exact resource limits](reference.md#archive-jobs). No archive throughput target
+[exact resource limits](api.md#archive-jobs). No archive throughput target
 has been measured.
 
 ## Video controls and startup

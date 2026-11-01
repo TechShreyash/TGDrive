@@ -85,7 +85,7 @@ to the unfinished work you confirm; completed files and later uploads remain.
 - Once queued, resume the existing batch. Choose files individually if bulk matching fails.
 - Files uploaded into a shared folder inherit its access.
 
-[Folder protocol and bounds](reference.md#atomic-folder-preparation) ·
+[Folder protocol and bounds](api.md#atomic-folder-preparation) ·
 [Restart recovery](operations.md#after-a-shutdown-crash-or-network-loss)
 
 </details>
@@ -305,7 +305,7 @@ installations need libarchive.
 Failure/cancellation may leave finished outputs. Retry the existing job to
 continue. Preserve cache across restarts; missing temporary data may require
 cancelling and starting again, keeping earlier outputs.
-[Exact archive limits](reference.md#archive-jobs).
+[Exact archive limits](api.md#archive-jobs).
 
 ## Preload a file for smoother playback and downloads
 
@@ -395,7 +395,7 @@ Transfers shows metadata discovery, downloading, then Telegram uploading.
 You can close the tab while TGDrive runs. The chosen files need temporary
 server space before Telegram uploading; downloads need reachable peers.
 Use **Retry** or **Cancel** on the existing transfer. Files already saved remain.
-[Torrent limits and restart behavior](reference.md#torrent-imports).
+[Torrent limits and restart behavior](api.md#torrent-imports).
 
 Peers can see the server's IP and receive downloaded pieces while downloading.
 TGDrive stops seeding after download. Import only content you are entitled to use.

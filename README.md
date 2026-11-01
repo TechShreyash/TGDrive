@@ -1,85 +1,96 @@
-# TGDrive
+<div align="center">
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="website/public/static/brand/tgdrive-logo-dark.svg">
+  <img src="website/public/static/brand/tgdrive-logo.svg" alt="TGDrive" width="320">
+</picture>
 
 **Your Telegram files, organized like a cloud drive.**
-Run TGDrive on your computer or server to upload files and folders, stream media,
-read documents and share links from your browser. Files live in your private
-Telegram channel; TGDrive adds the file browser and handles large-file splitting.
 
-**[Try the demo](#try-the-public-demo)** · **[Set up TGDrive](docs/setup.md)** · **[Explore screenshots and videos](docs/showcase.md)**
+[![Latest release](https://img.shields.io/github/v/release/TechShreyash/TGDrive?label=release)](https://github.com/TechShreyash/TGDrive/releases/latest)
+[![CI](https://github.com/TechShreyash/TGDrive/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/TechShreyash/TGDrive/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
 
-[![TGDrive file browser with a current sample collection](docs/assets/drive-overview.jpg)](docs/showcase.md)
+[**Try the demo**](#try-the-demo) · [**Set up TGDrive**](docs/setup.md) · [**Screenshots**](docs/showcase.md) · [**Docs**](docs/README.md)
+
+</div>
+
+TGDrive is a self-hosted web app that turns a private Telegram channel into a
+file drive. You run it on your computer or a server, then upload, browse, stream
+and share files from your browser. Files are stored in your channel, and
+TGDrive keeps the folders, previews and sharing on top.
+
+[![TGDrive file browser with a sample collection](docs/assets/drive-overview.jpg)](docs/showcase.md)
 
 ## Features
 
-- **[Upload and resume](docs/usage.md#upload-files-or-folders).** Upload files or folders, keep their structure and resume interrupted device uploads by reselecting the originals. Large files split automatically.
-- **[Import torrents and magnet links](docs/usage.md#import-a-torrent-or-magnet-link).** Bring in whole torrent folders with their nested structure. Direct file URLs and your configured Telegram upload bot are supported too.
-- **[Create ZIPs and extract archives](docs/usage.md#create-zips-and-extract-archives).** Bundle files/folders into a ZIP, or unpack ZIP, 7z, RAR, TAR and compressed files. Follow background jobs in Transfers.
-- **[Watch where you left off](docs/usage.md#open-preview-and-download).** Stream supported video and audio. For videos, choose **Continue** from a position saved in this browser; use track/subtitle menus, chapters and seek previews when available.
-- **Read and browse.** Open photos, PDFs, text, EPUB ebooks and CBZ/CBR comics. Search, star favorites, manage folders and restore from Trash.
-- **Share and embed.** Create read-only file or folder links with expiry and revocation, or embed a viewer in your website.
-- **Prepare and monitor.** Preload files for later access; follow transfers, history and server activity.
-- **[One file for recovery](docs/backup-recovery.md).** Save an encrypted recovery file and its separate key. Restore the database using surviving Telegram files, or rebuild a lost channel from an optional independent copy.
+| Feature | What you can do |
+| --- | --- |
+| **[Upload and resume](docs/usage.md#upload-files-or-folders)** | Upload files or whole folders. Interrupted uploads resume when you reselect the originals, and large files split automatically. |
+| **[Import from anywhere](docs/usage.md#import-a-torrent-or-magnet-link)** | Bring in torrents and magnet links with their folders, [direct URLs](docs/usage.md#import-from-a-url), or files sent to [your Telegram bot](docs/usage.md#upload-through-your-telegram-bot). |
+| **[Watch and read](docs/usage.md#open-preview-and-download)** | Stream video and audio and pick up where you left off. Open photos, PDFs, text, EPUB ebooks and CBZ/CBR comics in the browser. |
+| **[Archives](docs/usage.md#create-zips-and-extract-archives)** | Create ZIPs, or extract ZIP, 7z, RAR, TAR and compressed files, as background jobs. |
+| **[Share and embed](docs/usage.md#share-and-revoke)** | Create read-only links for files or folders with expiry and revocation, or embed a viewer in your website. |
+| **[Recover](docs/backup-recovery.md)** | Save one encrypted recovery file and its key. Restore after losing the database, or rebuild a lost channel from an optional backup channel. |
 
-TGDrive has no fixed total-storage quota. File-size limits, server resources and
-Telegram availability still apply. [Learn the essentials →](docs/new-user-guide.md)
+Files are encrypted before they reach Telegram, with a key only you hold.
+There is no fixed storage quota; file-size limits, server resources and Telegram
+availability still apply. [Learn the essentials →](docs/new-user-guide.md)
 
-## Try the public demo
+## Try the demo
 
-**[Open the live demo](https://tgdrive.nexgenbots.us/)** · **Password:** `password12345`
+**[Open the live demo](https://tgdrive.nexgenbots.us/)** · Password: `password12345`
 
-Explore **Demo Files**, or upload a disposable sample to **My Files**.
-**The demo is shared:** other visitors can change or delete unprotected files.
-Use only non-private samples. [Demo guide →](docs/usage.md#try-the-public-demo)
+> [!WARNING]
+> The demo is shared with other visitors, who can change or delete unprotected
+> files. Upload only non-private samples. [Demo guide](docs/usage.md#try-the-public-demo)
 
 ## See it in action
 
-**[Watch the 62-second feature tour](docs/assets/current-features.mp4)** — torrent
+[Watch the 62-second feature tour](docs/assets/current-features.mp4): torrent
 imports, ZIP jobs, extraction, video Continue, player settings and the recovery form.
 
-| Watch the tour | Your drive on mobile |
+| Video player | Phone layout |
 | :---: | :---: |
-| [<img src="docs/assets/video-continue.jpg" alt="Video Continue in the current player; open the feature tour" width="560">](docs/assets/current-features.mp4) | <img src="docs/assets/mobile-drive.jpg" alt="Current TGDrive file browser in an emulated phone viewport" width="240"> |
+| [<img src="docs/assets/video-continue.jpg" alt="Video player offering Continue; opens the feature tour" width="560">](docs/assets/current-features.mp4) | <img src="docs/assets/mobile-drive.jpg" alt="TGDrive file browser in a phone-sized window" width="240"> |
 
-Captured **28 October 2026**. The silent tour uses edited cuts; its recovery
-screen is a local demo. The phone viewport is emulated.
-[Gallery and video chapters](docs/showcase.md) · [Capture notes](docs/assets/README.md)
+Captured on 28 October 2026. The phone view is emulated and the tour's recovery
+screen is a local demo. [Full gallery](docs/showcase.md)
 
-## Make it yours
+## Get started
 
-TGDrive is free and open source, with every feature included. You provide a
-Telegram channel, bot and MongoDB database. Hosting and database resources may
-have their own costs.
+TGDrive is free and open source with every feature included. You need:
 
-| Where to run it | Get started |
+- Docker with Compose 2.24 or newer
+- A Telegram account, a bot and a private channel
+- A MongoDB database (the MongoDB Atlas free tier works)
+
+| Where to run it | Guide |
 | --- | --- |
-| Your computer | [Local setup](docs/setup.md) for use while your computer is on |
-| Your own server | [Server deployment](docs/setup.md#hosting-beyond-your-machine) for access while your laptop is off |
+| Your computer, while it's on | [Local setup](docs/setup.md) |
+| A server, always available | [Server deployment](docs/setup.md#hosting-beyond-your-machine) · [Hosting choices](docs/hosting.md) |
 
-Keep TGDrive running for website access, share links and background work.
-Files are encrypted before they reach Telegram, using a key only you hold.
-Keep separate copies of important files: TGDrive does not guarantee permanent
-storage. [Privacy and backup basics](docs/new-user-guide.md).
+> [!IMPORTANT]
+> Keep TGDrive running for website access, share links and background work.
+> Keep separate copies of important files: TGDrive does not guarantee
+> permanent storage. [Backup basics](docs/backup-recovery.md)
 
-## Find your guide
+## Documentation
 
-| What you want to do | Where to go |
+| I want to… | Read |
 | --- | --- |
-| Understand how your drive works | [TGDrive basics](docs/new-user-guide.md) |
+| Learn how TGDrive works | [TGDrive basics](docs/new-user-guide.md) |
 | Upload, organize, preview and share | [User guide](docs/usage.md) |
-| Back up your drive or recover after a failure | [Backup & recovery](docs/backup-recovery.md) |
-| Change settings, maintain the app or fix a problem | [Configuration](docs/configuration.md) · [Operations](docs/operations.md) |
-| Find technical details or contributor resources | [Documentation home](docs/README.md) |
+| Back up or recover a drive | [Backup and recovery](docs/backup-recovery.md) |
+| Change settings or fix a problem | [Configuration](docs/configuration.md) · [Operations](docs/operations.md) |
+| Build on TGDrive or contribute | [Docs home](docs/README.md) · [API reference](docs/api.md) |
 
-## Updates and support
+## Community
 
-Follow the [updates channel](https://t.me/TechZBots) for announcements, or join the
-[support group](https://t.me/TechZBots_Support) for help with self-hosting, setup
-and discussion.
+- **News:** [updates channel](https://t.me/TechZBots)
+- **Help:** [support group](https://t.me/TechZBots_Support) for setup and self-hosting questions
+- **Bugs and ideas:** [GitHub issues](https://github.com/TechShreyash/TGDrive/issues/new/choose)
+- **Security:** report privately as described in [SECURITY.md](SECURITY.md)
+- **Contributing:** see [CONTRIBUTING.md](CONTRIBUTING.md)
 
-## Contribute
-
-[Report a bug or request a feature](https://github.com/TechShreyash/TGDrive/issues),
-or read the [contributing guide](CONTRIBUTING.md). Report security issues privately per [SECURITY.md](SECURITY.md).
-Include your version and reproduction steps; remove credentials and private links.
-
-[MIT License](LICENSE)
+TGDrive is released under the [MIT License](LICENSE).

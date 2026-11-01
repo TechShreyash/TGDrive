@@ -28,7 +28,8 @@ For specific tasks: [ebooks and comics](reading.md), [thumbnails and video poste
 | Topic | Guide |
 | --- | --- |
 | Components, data flow and durability | [Architecture](architecture.md) |
-| Environment variables and API contracts | [Reference](reference.md) |
+| Environment variables and security | [Configuration reference](reference.md) |
+| HTTP endpoints for API clients | [API reference](api.md) |
 | Cache, scheduling and bottlenecks | [Performance policies](performance.md) |
 | Source layout, frontend contracts, builds and validation | [Development](development.md) |
 | Source artifacts and release checks | [Release verification](release.md) |

@@ -46,7 +46,7 @@ action. Remaining live validation:
 | Bot imports | Do not use the web queue's full durable job model. |
 | History | Compaction must preserve unresolved effects and retry identities. |
 | Large folders | Listings sort/materialize before slicing; database cursor pagination remains work. |
-| Direct API clients | Some request mappings are process-local and error formats vary; follow the [documented API contracts](reference.md#http-api). |
+| Direct API clients | Some request mappings are process-local and error formats vary; follow the [documented API contracts](api.md). |
 | Storage channel changes | Require verified channel recovery; editing an ID does not move files. |
 
 See [Troubleshooting](operations.md#troubleshooting) for current recovery actions.

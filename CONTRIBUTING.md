@@ -33,7 +33,7 @@ or earlier TGDrive versions.
 | Settings and deployment variables | `docs/configuration.md`, `docs/reference.md` |
 | Restart, upgrade, backup and recovery | `docs/operations.md`, `docs/backup-recovery.md` |
 | Speed and capacity | `docs/performance-tuning.md` (operators), `docs/performance.md` (internals) |
-| HTTP API | `docs/reference.md` |
+| HTTP API | `docs/api.md` |
 | Components, data flow and durability | `docs/architecture.md` |
 | Development, CI and releases | `docs/development.md`, `docs/release.md` |
 

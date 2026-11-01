@@ -88,6 +88,7 @@ PUBLIC_DOCS = (
     "docs/development.md",
     "docs/roadmap.md",
     "docs/reference.md",
+    "docs/api.md",
     "docs/performance.md",
     "docs/performance-tuning.md",
     "docs/assets/README.md",

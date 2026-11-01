@@ -1,6 +1,6 @@
 # How TGDrive works
 
-[Docs home](README.md) · [API reference](reference.md#http-api) · [Performance](performance.md)
+[Docs home](README.md) · [API reference](api.md) · [Performance](performance.md)
 
 This guide explains where data lives, how work survives interruption and how
 TGDrive prevents conflicting writes. For everyday actions, use the
@@ -430,7 +430,7 @@ For folder torrents, idempotent tree preparation preserves hierarchy; stable
 per-file child jobs reuse normal upload splitting and catalog protection. The
 parent journals completed files and owns the shared staging reservation, avoiding
 duplicate byte claims and duplicate history rows. Browser closure does not stop
-server work. See [torrent limits and recovery](reference.md#torrent-imports).
+server work. See [torrent limits and recovery](api.md#torrent-imports).
 
 Permanent deletion journals all accepted intents before starting removal. Pending
 roots are hidden from Trash listings; failures return to the listing and retries
@@ -468,7 +468,7 @@ Workspace admission shares the upload staging budget and disk reserve. Archive p
 and entry metadata are checked before extraction publishes output. Existing items
 are kept when names collide. Persisted job state allows retry without deliberately
 recreating completed outputs; cancellation and failures can retain earlier
-committed files and folders. [Archive limits and API](reference.md#archive-jobs)
+committed files and folders. [Archive limits and API](api.md#archive-jobs)
 are the canonical contract.
 
 ### Finished history
