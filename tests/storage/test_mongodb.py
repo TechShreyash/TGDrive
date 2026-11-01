@@ -613,14 +613,14 @@ async def test_operator_performance_policy_survives_new_service_with_mongodb(
     try:
         before = await service.snapshot()
         saved = await service.save(
-            {"timezone": "UTC", "telegram_media_per_bot": 4},
+            {"timezone": "UTC", "auto_preload": False},
             expected=before["revision"],
         )
         restarted = PerformanceSettings(settings, second)
         observed = await restarted.snapshot()
         assert observed["revision"] == saved["revision"]
         assert observed["timezone"] == "UTC"
-        assert observed["telegram_media_per_bot"] == 4
+        assert observed["auto_preload"] is False
         assert not (
             settings.resolved_data_dir / "performance-preferences.json"
         ).exists()
