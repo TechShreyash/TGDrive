@@ -2,9 +2,14 @@
 
 [Docs home](README.md) · [Configuration reference](reference.md) · [Architecture](architecture.md)
 
-These endpoints serve the web app. Owner requests use a login cookie; shared
-requests use a token scoped to selected content. Read the conventions before
-integrating. There are no API keys, per-person accounts or interactive OpenAPI pages.
+These endpoints serve TGDrive's own web app. Each section lists the routes, who
+may call them and the errors worth handling. Behavior and recovery guarantees
+are explained in [Architecture](architecture.md) and [Performance](performance.md);
+this page links there rather than repeating them. There are no API keys,
+per-person accounts or OpenAPI pages, and response fields may grow over time.
+
+**Access** column: **Public** needs nothing, **Owner** needs the login cookie,
+**Share** accepts a scoped share token in `auth`.
 
 **Contents**
 
@@ -29,1123 +34,359 @@ integrating. There are no API keys, per-person accounts or interactive OpenAPI p
 
 ## Conventions and authentication
 
-<details>
-<summary>Cookies, ID paths, bodies and timestamps</summary>
-
-Routes are relative to your TGDrive website address. Use JSON with
-`Content-Type: application/json` unless a route specifies raw bytes or multipart data.
-The React client uses both versioned `/api/v1` routes and application routes such
-as `/api/getDirectory`. Both are active v2 interfaces.
-
-Drive paths contain **IDs**, not display names. Root is `/`; a nested item is
-`/<folder-id>/<item-id>`. In a listing, a node's `path` is its **parent** path;
-append `id` to address the item. The `parent_id` parameter in receipt/listing
-requests currently accepts a complete folder path despite its name.
-
-Private routes require the `tgdrive_session` cookie. Browser requests must use
-same-origin cookies. Mutations reject a supplied foreign Origin, or
-`Sec-Fetch-Site: cross-site` without an Origin. Non-browser clients may use a
-protected cookie jar. There is no general cross-origin integration mode.
-
-Metadata/share dates are ISO strings; receipt `expires_at` is Unix seconds.
-Job `current`/`total` mean bytes for media transfers and message counts for
-deletion. Additional response fields may appear. This is not a promise of
-permanent third-party API compatibility.
-
-</details>
+- Routes are relative to your TGDrive address. Bodies are JSON unless a route
+  says raw bytes or multipart. Both `/api/v1/...` and older `/api/...` routes are
+  current.
+- Paths contain **IDs**, not names: root is `/`, a nested item is
+  `/<folder-id>/<item-id>`. A listed node's `path` is its **parent**; append `id`
+  to address it. `parent_id` in listing and upload requests takes a full folder path.
+- Owner routes need the `tgdrive_session` cookie (HttpOnly, SameSite=Strict).
+  Mutations reject a foreign `Origin`, or `Sec-Fetch-Site: cross-site` without
+  one. There is no cross-origin integration mode.
+- Dates are ISO strings, except upload `expires_at` and job timestamps, which are
+  Unix seconds.
 
 ## Session, configuration, health, and assets
 
-<details>
-<summary>Login, health, backup and asset endpoints</summary>
-
-| Method and route | Access | Request | Success |
+| Method and route | Access | Purpose | Notes and errors |
 | --- | --- | --- | --- |
-| `GET /` | Public shell | None | React HTML; build instructions if frontend source is not built. |
-| `GET /embed?path=...&auth=...` | Public embed shell | File ID path or `/share_<folder-id>` and share token used by the viewer. | Embeddable React file viewer/folder browser; data requests enforce capability access. |
-| `GET /api/config` | Public | None | Includes `status`, `max_file_size` (default 16 GiB logical limit), `timezone`, `recovery_only` and `demo_mode` (default false). |
-| `POST /api/checkPassword` | Public, throttled | `{"pass":"<owner-password>"}` | `200 {"status":"ok"}` plus session cookie. |
-| `POST /api/logout` | Cookie if present | `{}` | `200 {"status":"ok"}`; revokes an active owner session and clears the cookie. Missing/invalid/expired/revoked cookies do not trigger a session database write. |
-| `GET /api/v1/session` | Public | None | `{"authenticated":true}` or false. |
-| `GET /api/v1/status` | Owner | None | Connection, capacity, committed revision, backend, latest locally observed encrypted snapshot record and client health. The backup observation reloads at startup and updates during publication; this polling endpoint does not query backup history. |
-| `POST /api/v1/backup` | Owner | `{}` | Creates a confirmed unified recovery file; runs the independent checkpoint when enabled, otherwise a standalone main-channel snapshot. Returns recovery status; `503` if not confirmed. |
-| `GET /health/live` | Public | None | `200 {"status":"ok"}` if HTTP can answer. |
-| `GET /health/ready` | Public | None | `200` if runtime/pool ready or `200 {"status":"recovery"}` in owner recovery, so proxies keep the recovery page reachable; otherwise `503`. |
-| `GET /healthz` | Public | None | Readiness alias used by Docker. |
-| `GET /stream?path=...&auth=...` | Public player shell | Required path, optional share token. | Player HTML; its /file requests enforce authorization. |
-| `GET /assets/...`, `GET /static/...`, `GET /third-party/...` | Public | Asset path. | Frontend/player assets, not drive payloads. |
+| `GET /api/config` | Public | `status`, `max_file_size`, `timezone`, `recovery_only`, `demo_mode`, `demo_read_only`, `demo_admin` | `no-store` |
+| `POST /api/checkPassword` | Public | `{"pass": "..."}` signs in and sets the cookie | `401` wrong password; `429` after five failures per IP in five minutes |
+| `POST /api/logout` | Cookie | Revokes the session and clears the cookie | |
+| `GET /api/v1/session` | Public | `{"authenticated": bool}` plus demo permission fields | `no-store` |
+| `GET /api/v1/status` | Owner | Connections, capacity, catalog revision, latest backup, client health, `telegram_issues` | Does not query Telegram backup history |
+| `POST /api/v1/backup` | Owner | Creates a confirmed recovery file now | `503` if it can't be confirmed |
+| `GET /health/live` | Public | `200` when HTTP answers | |
+| `GET /health/ready`, `GET /healthz` | Public | `200` when ready or in recovery mode | `503` otherwise |
+| `GET /`, `GET /stream`, `GET /embed` | Public | App, standalone player and embed shells | Data requests still check access |
+| `GET /assets/…`, `/static/…`, `/third-party/…` | Public | Frontend and player assets | |
 
-Effective max_file_size is the configured logical-file/staging limit and does
-not require Premium. Status includes telegram_ready, demo, max_file_size,
-staging_budget_bytes, metadata_revision, backup, clients, restart_required and
-admission_paused.
-
-With `DEMO_MODE=true`, restricted visitor requests that mutate `/api/v1/settings`
-or its subroutes, `/api/v1/replica` or its subroutes, and `POST /api/v1/backup`
-return `403` with `code: "DEMO_MODE_READ_ONLY"`. This includes connection refresh
-and Premium login/cancellation. `GET /api/v1/replica/file` returns the same denial
-to prevent backup export.
-Status/settings reads and the secret-free replica report remain available under
-normal authentication. The status field `demo` identifies a synthetic test
-runtime; it is separate from the deployment's `demo_mode` flag. Authenticated
-full-access demo sessions can use management and key exports normally.
-
-`GET /api/config` includes `demo_read_only` and `demo_admin`, computed from the
-current signed cookie. `GET /api/v1/session` includes these permission fields
-and `demo_mode` during demo mode, alongside `authenticated`. Both responses
-use `Cache-Control: no-store` so changing access cannot reuse another session's
-permissions. No response contains either password or password hash.
-
-Demo Files has the reserved catalog ID `tgdrive-demo-files`. Restricted writes
-to it, its descendants, or ancestors whose move/delete would affect it return
-`403 DEMO_FILES_READ_ONLY`. Upload destinations, share changes and durable job
-retry/cancel are checked before side effects; catalog writes also check ancestry
-under the store transaction. Restricted jobs keep their policy in the durable
-context as `demo_read_only: true`, reapplied on resume only while demo mode is
-enabled. Full-access retries can explicitly authorize privileged work.
-
-The compatibility-named recovery object includes state:protected|pending|error,
-backend:mongodb, metadata_revision, protected_revision, last_success_at,
-optional error/backup_error. Here protected means the
-catalog is committed in MongoDB. An independent safety-copy failure does not
-make an acknowledged catalog write uncommitted.
-
-POST /api/v1/backup explicitly requests a complete encrypted recovery point,
-bypassing the independent worker's batching delay but respecting provider retry
-deadlines. Ordinary uploads do not call or wait for it. Backup file
-downloads are owner-only and absent from ordinary status/configuration.
-
-The Storage & Backups page additionally accounts for unfinished transfers. Queued/active
-uploads remain pending; failed/missing-original uploads need attention.
-Client health distinguishes configured accounts from healthy started accounts.
-
-</details>
+**Demo mode.** Restricted visitors get `403 DEMO_MODE_READ_ONLY` for writes under
+`/api/v1/settings`, `/api/v1/replica`, `POST /api/v1/backup` and
+`GET /api/v1/replica/file`, and `403 DEMO_FILES_READ_ONLY` for changes that touch
+Demo Files (ID `tgdrive-demo-files`). See [demo access boundaries](architecture.md#demo-access-boundaries).
 
 ## Independent channel backup and recovery
 
-<details>
-<summary>Channel copy, recovery and activation endpoints</summary>
+All routes are **Owner**. Credentials go in request bodies or headers, never URLs.
+The workflow is in [Backup & recovery](backup-recovery.md); pacing and
+verification are in [architecture](architecture.md#independent-backup-pacing-and-verification).
 
-The recovery-file routes also work without a second channel. Optional independent
-protection is configured through Storage & Backups; credentials are never put in
-URLs. See the [operator guide](backup-recovery.md) for the file/key workflow,
-channel preparation and recovery limits.
-
-| Route | Request | Result |
+| Method and route | Purpose | Notes and errors |
 | --- | --- | --- |
-| `GET /api/v1/replica` | None | Configuration, phase, channel IDs, revisions, progress, retry guidance, `backup_file_available`, `file_restore_allowed`, bounded activity and optional recovery candidate including `has_database` and `source_is_backup`. File restore is unavailable in demo mode. No bot tokens or key. |
-| `POST /api/v1/replica/configure` | `channel_id`, write-only `bot_token`, `independent_accounts: true` | Verifies private distinct channels and a separate backup bot, saves configuration, schedules initial copying. Requires an existing catalog. |
-| `POST /api/v1/replica/action` | `action`: `sync`, `pause`, `resume`, `retry` or `disable` | Durable operation control. Resume also re-enables configured protection. |
-| `GET /api/v1/replica/file` | None | Private no-store `tgdrive-backup.tgdb` download of retained confirmed local ciphertext; `404` until a confirmed file is available. Status reads do not download from Telegram. |
-| `POST /api/v1/replica/import` | Raw file bytes; `Content-Type: application/octet-stream`; optional `X-TGDrive-Source-Channel` and `X-TGDrive-Bot-Token` | Authenticates and stages the recovery file, tries recorded channels/access and returns a candidate. Overrides repair revoked credentials or select a survivor. Inspection does not activate a drive. Disabled in demo mode. |
-| `GET /api/v1/replica/report` | None | Secret-free owner status/report attachment; file/channel names and IDs may still be private. |
-| `POST /api/v1/replica/restore` | `{}` | One-click restore of the backup found in the storage channel at startup: verifies every part, restores and activates. Restart when asked. Disabled in demo mode. |
-| `POST /api/v1/replica/recover` | `source_channel`, write-only `bot_token` | Reads the channel's latest pinned backup with `ENCRYPTION_KEY` and records a candidate. |
-| `POST /api/v1/replica/recover` | `target_channel`, write-only `target_bot_token`, matching typed `confirm_channel`, optional `catalog_only: true` | Copies the inspected candidate into an empty private destination, or verifies the surviving channel for database-only restoration. A database-only request may omit the target token to reuse verified source access. |
-| `POST /api/v1/replica/recover` | `activate: true`, `confirm_channel` matching the pending candidate's destination channel ID | Explicitly activates a completed candidate; service restart is required. Missing/wrong confirmation or incomplete candidates cannot be activated. |
+| `GET /api/v1/replica` | Configuration, phase, revisions, progress, retry guidance and any recovery candidate | Never returns tokens or the key |
+| `POST /api/v1/replica/configure` | `channel_id`, `bot_token`, `independent_accounts: true`: set up a backup channel | Needs a separate private channel and bot |
+| `POST /api/v1/replica/action` | `action`: `sync`, `pause`, `resume`, `retry` or `disable` | |
+| `GET /api/v1/replica/file` | Download the latest confirmed `tgdrive-backup.tgdb` | `404` until one exists; denied in demo mode |
+| `GET /api/v1/replica/report` | Secret-free status report | May still contain private names and IDs |
+| `POST /api/v1/replica/import` | Raw recovery-file bytes; optional `X-TGDrive-Source-Channel`, `X-TGDrive-Bot-Token` | Returns a candidate; does not activate. Disabled in demo mode |
+| `POST /api/v1/replica/restore` | Restore the backup found in the storage channel at startup | Restart when asked. Disabled in demo mode |
+| `POST /api/v1/replica/recover` | Three steps: `source_channel` + `bot_token` to inspect; `target_channel` + `target_bot_token` + `confirm_channel` (optional `catalog_only`) to copy; `activate: true` + `confirm_channel` to switch | Wrong confirmation or an incomplete candidate can't activate |
+| `POST /api/v1/start-new` | `confirm: "START NEW"` and `password`: erase this drive and start an empty one | `403` wrong password or demo mode; `409` already running; `422` missing confirmation. [What is erased](backup-recovery.md#start-a-new-drive) |
 
-Database connection failures and timeouts report
-`error.code: REPLICA_MONGODB_UNAVAILABLE`, phase `waiting` and a Unix-second
-`retry_at`. Database access/configuration or ownership failures report
-`REPLICA_MONGODB_FAILED`, phase `error` and `retry_at: 0`. Neither advances the
-confirmed revision or discards the pending backup. See the
-[retry policy](backup-recovery.md#add-a-backup-channel).
-
-All routes require owner authentication and normal same-origin mutation checks.
-A recovery-only startup exposes the authenticated recovery surface when the local
-catalog cannot open; it must not enable ordinary file mutations against a missing
-catalog. Channel IDs are negative integers; source and copy destinations must be
-different, except an explicitly requested database-only restore.
-
-New `tgdrive-backup.tgdb` files use `TGDRIVE-BACKUP-2` framing, compressed BSON JSON
-and authenticated AES-256-GCM encryption. They hold one database snapshot,
-recovery credentials and channel mappings; portable catalogs are derived from
-the captured data. A standalone file records main only. Independent protection
-adds verified backup mappings to the same artifact. Telegram's 2000 MiB document
-limit is the only size limit; uploads check free disk space while staging and enforce
-the free-space reserve. Duplicate channel/token headers, a wrong `ENCRYPTION_KEY`, invalid mappings,
-unavailable source documents and wrong sizes block restoration.
-
-The independent worker coalesces changed revisions/settings within 60-second
-checkpoint windows. Initial setup, explicit backup/sync and destructive-operation
-barriers do not wait for that window; none bypasses saved Telegram waits.
-Healthy unchanged points get hourly checks. Browser polling remains read-only.
-
-Full database state is staged with the candidate and validated again during
-fenced activation. Restored browser sessions are empty; Telegram user-account
-sessions are excluded. Unfinished jobs become canceled history and unsafe
-source-channel mutation work is not replayed. Recovery retains the surviving
-backup documents and valid independent configuration while rebasing locations to
-the verified target. It requires an accessible matching database or an empty
-replacement, not access to the previous MongoDB host.
-
-The MongoDB `replica_state`, `replica_chunks` and `replica_copies` collections
-persist random operation IDs, confirmed message mappings, configuration and
-recovery state. They stay out of backup files. Status is confirmed-part progress,
-not speculative queued bytes. Confirmed local ciphertext supports downloading
-the file. Old remote documents and recovery points are retained; changing the
-configured destination does not erase them.
-
-</details>
+Database outages report `REPLICA_MONGODB_UNAVAILABLE` with a `retry_at`;
+configuration or ownership problems report `REPLICA_MONGODB_FAILED`. Neither
+discards the pending backup.
 
 ## Owner connection management
 
-<details>
-<summary>Connections, Refresh, saving and Premium login</summary>
+All routes are **Owner**. Secrets are write-only body fields; these routes cannot
+change the storage channel or the owner password. How saving applies live is
+covered in [connection management](architecture.md#connection-management).
 
-Owner cookie and mutation-origin checks apply. Secrets are write-only body fields.
-These routes cannot edit the storage channel or owner credentials.
-
-| Method and route | Request | Success |
+| Method and route | Purpose | Notes and errors |
 | --- | --- | --- |
-| GET /api/v1/settings | None | Redacted saved configuration, actual running clients, statistics and recovery state. |
-| GET /api/v1/settings/uploads | None | Uploads per bot, connected bot count and available configured bot slots. Owner only; no-store. |
-| PATCH /api/v1/settings/uploads | uploads_per_bot: integer, at least 1 | Save in MongoDB and apply immediately to new Telegram leases. Existing transfers finish; provider waits are preserved. |
-| PATCH /api/v1/settings | expected_revision, optional api_id/api_hash/clients | Complete redacted snapshot after isolated verification and atomic save. |
-| POST /api/v1/settings/refresh | Empty object | 202 settings snapshot; schedules bounded background saved-credential/channel-permission checks and name refreshes for enabled clients without changing configuration revision. |
-| POST /api/v1/settings/premium-login/start | expected_revision, phone, label | challenge_id, stage:code and expires_in_seconds. |
-| POST /api/v1/settings/premium-login/verify | challenge_id and exactly one code/password for the current stage | stage:password with the challenge, or stage:complete plus settings snapshot. |
-| DELETE /api/v1/settings/premium-login/{challenge_id} | No body | status:cancelled; discards an owned unfinished challenge. |
+| `GET /api/v1/settings` | Redacted configuration, running clients, `stats` and recovery state | Never calls Telegram |
+| `PATCH /api/v1/settings` | `expected_revision`, optional `api_id`, `api_hash`, `clients` (the full desired list) | `409 SETTINGS_CONFLICT`, `409 SETTINGS_BUSY`, `422 SETTINGS_INVALID`, `503 SETTINGS_PREFLIGHT_FAILED` |
+| `POST /api/v1/settings/refresh` | Re-check saved accounts and channel access in the background | `202` |
+| `GET`, `PATCH /api/v1/settings/bot-mode` | Bot upload folder, `site_url` and `encrypt` | `no-store` |
+| `POST /api/v1/settings/premium-login/start` | `expected_revision`, `phone`, `label` | Returns `challenge_id`; FloodWait sets `Retry-After` |
+| `POST /api/v1/settings/premium-login/verify` | `challenge_id` plus `code` or `password` | `410 TELEGRAM_LOGIN_EXPIRED` |
+| `DELETE /api/v1/settings/premium-login/{challenge_id}` | Cancel an unfinished login | |
 
-**Snapshots.** Settings include `revision`, API credential presence,
-`storage_channel`, `clients`, `active_clients`, `stats` and `recovery`. Client rows
-include opaque ID, label, bot/user kind, enabled/configured/connected/healthy/
-Premium state, active leases and sanitized errors. `active_clients` describes
-the applied pool, including accounts removed from the saved candidate.
-
-`connection_check` is queued/checking/waiting/passed/failed, with optional error
-and Unix `connection_checked_at`/`connection_retry_at`. Cached `display_name`,
-`username`, `identity_refreshing` and `identity_retry_at` are read-only; labels
-remain the fallback. Reading settings never calls Telegram. Refresh probes saved
-enabled accounts in isolated sessions, including failed starters; it does not
-apply pending credentials or reconnect the pool. Probe and runtime health differ.
-Account errors include `TELEGRAM_CREDENTIALS_REVOKED`, `TELEGRAM_CHANNEL_ACCESS`
-and `TELEGRAM_ACCOUNT_REMOVED`; operation failures return `503` with detail/code.
-Owner status exposes `telegram_issues`.
-
-**Saving.** `clients` is the full desired list: retain an existing `id`, omit its
-`credential` to keep the secret, and omit removed rows. New rows omit `id` and
-require a credential. Omitting `clients` or `api_hash` preserves that whole value;
-an empty credential is not a keep-secret marker.
-
-Limits: 50 managed rows, at least one enabled bot, trimmed visible labels 1-80
-characters, credentials 1-8192 characters without whitespace, API ID 1-2147483647,
-and a 32-hex API hash. Enabled accounts undergo identity/Premium/permission
-preflight; disabled rows need not authenticate. Duplicate identities fail.
-Management capacity does not imply linear Telegram throughput.
-
-Membership/API changes need settled jobs/receipts, valid database ownership and
-a committed catalog. Same-account credential repair may preserve pending work
-if API credentials, client IDs/order, kinds and enabled states stay unchanged;
-each replacement must verify its original identity. A narrow error-state repair
-requires exactly matching confirmed/protected/current revisions and no recovery
-conflict. Failed preflight never partially saves.
-
-Errors: `409 SETTINGS_CONFLICT` for revision races, `409 SETTINGS_BUSY` for blocked
-changes, `422 SETTINGS_INVALID`, `503 SETTINGS_PREFLIGHT_FAILED`. A successful
-save applies to the running client pool at once; no restart is needed:
-
-| Change | Live effect |
-| --- | --- |
-| Unchanged client | Keeps running; its transfers and streams are untouched. |
-| Added bot or Premium account | Connects now. Allowed while transfers run. |
-| Removed or disabled client | Takes no new work, finishes current work, then disconnects. Refused while pending work may need it. |
-| Same bot, new token | The old client drains, then the new one connects; both use one session file. |
-| API ID or hash | Every client is replaced the same way. |
-
-A client that fails to connect keeps its saved settings and shows its error in
-**Connections**; **Refresh** retries it. Do not replay a stale full client list.
-
-**Premium login.** Owner-bound in-memory challenges last five minutes, at most
-two per service. Limits are six starts/15 minutes, one start/phone/minute and five
-verification attempts; FloodWait supplies `Retry-After`. Foreign/expired challenges
-return `410 TELEGRAM_LOGIN_EXPIRED`. Retry invalid codes/passwords while the
-challenge lives; consumed/failed-save challenges need a new login. Non-Premium
-accounts fail. Codes/passwords are not saved, and StringSessions never reach the
-browser. Cancellation, expiry and failed post-auth save revoke unsaved
-authorizations; restart loses challenges.
-
-`stats` includes active/trashed file counts and bytes, folders excluding root,
-active/queued/failed jobs, staging budget/reservations and nullable free disk.
-These are catalog/resource counts, not Telegram quota or proof of readable files.
-
-</details>
+In `clients`, keep an existing row's `id` and omit `credential` to keep its secret;
+omit a row to remove it. Limits: 50 rows, at least one enabled bot, labels 1–80
+characters. Account errors include `TELEGRAM_CREDENTIALS_REVOKED`,
+`TELEGRAM_CHANNEL_ACCESS` and `TELEGRAM_ACCOUNT_REMOVED`.
 
 ## Listing and metadata
 
-<details>
-<summary>Folder listings, name search and single-item actions</summary>
-
-| Method and route | Access | Body/query | Success |
+| Method and route | Access | Purpose | Notes and errors |
 | --- | --- | --- | --- |
-| `POST /api/getDirectory` | Owner or valid folder share | `{"path":"/","auth":null}` | `{"status":"ok","data":<directory>,"auth_home_path":null}`. |
-| `GET /api/v1/nodes` | Owner | `parent_id=/&offset=0&limit=100&sort=name` | `{"items":[...],"total":42,"offset":0}`. |
-| `GET /api/v1/trash` | Owner only | `q=report` (optional, up to 255 characters) | `{"data":{"contents":{...}}}`; top-level Trash items include `parent_names` for their source folder; pending deletions are hidden, failed deletions reappear; never includes live files. |
-| `GET /api/v1/search` | Owner only | `q=report&offset=0&limit=100&sort=name&order=asc` | `{"items":[...],"query":"report","has_more":false,"next_offset":null}`. |
-| `POST /api/createNewFolder` | Owner | `{"path":"/","name":"Photos"}` | `{"status":"ok"}`; refresh listing for new ID. |
-| `POST /api/renameFileFolder` | Owner | `{"path":"/<id>","name":"New name"}` | `{"status":"ok"}`. |
-| `POST /api/trashFileFolder` | Owner | `{"path":"/<id>","trash":true}` | Trash; false restores. Prefer v1 bulk for exposure confirmation. |
-| `POST /api/deleteFileFolder` | Owner | `{"path":"/<id>"}` | `202 {"status":"ok","id":"<deletion-job-id>"}`; top-level Trash entry required. |
+| `POST /api/getDirectory` | Owner, Share | `{"path", "auth"}`: folder contents keyed by child ID | Special paths: `/trash`, `/search_<q>` (max 500 results), `/share_<folder-id>` |
+| `GET /api/v1/nodes` | Owner | `parent_id`, `offset`, `limit` (1–500), `sort` (`name`, `size`, `type`, `date`) | `{items, total, offset}` |
+| `GET /api/v1/search` | Owner | `q` (1–255), `offset`, `limit` (1–200), `sort`, `order` | Name-only, literal match, excludes Trash; `{items, has_more, next_offset}` |
+| `GET /api/v1/trash` | Owner | Top-level Trash items, optional `q` | Pending deletions are hidden |
+| `POST /api/createNewFolder` | Owner | `{"path", "name"}` | |
+| `POST /api/renameFileFolder` | Owner | `{"path", "name"}` | |
+| `POST /api/trashFileFolder` | Owner | `{"path", "trash": bool}` | No exposure check; prefer the bulk route |
+| `POST /api/deleteFileFolder` | Owner | `{"path"}` of a top-level Trash item | `202` with a deletion job ID |
 
-Special getDirectory paths are `/trash` (owner-only top-level Trash),
-`/search_<query>` (owner-only search), and `/share_<folder-id-path>` with `auth`
-(shared folder). Shared requests resolve the final ID's current location and
-check capability scope. `auth_home_path` supplies the shared-navigation boundary.
-
-- Listed nodes contain id, name, type (folder/file), path, upload_date and size.
-- File rows also include part_count (1 for ordinary storage, more for logical parts);
-  they do not expose part message IDs or checksums.
-- Folder size is stored as zero; listing records do not expose a trashed flag.
-- Internal file lookup includes remote metadata.
-- Directories have `contents`, an object keyed by child ID.
-- Listings do not recursively transfer payloads.
-
-For v1 listing, limit is 1–500, offset is nonnegative, and sort is name/size/type/date.
-Folders come first, values ascend, ID breaks ties. It currently materializes
-and sorts a folder before slicing; this is not database cursor pagination.
-
-- Search trims/NFC-normalizes q (1–255 characters), uses literal Unicode-casefolded
-  partial name matching and excludes every trashed descendant.
-- Percent signs, underscores and quotes do not become wildcard/query operators.
-- Results include files and folders across the owner's active drive, with parent_names
-  containing human-readable ancestor names; path remains the opaque ID ancestry.
-- Public share tokens cannot authorize global search.
-- Limit is 1–200 (default 100), offset is nonnegative, and sort is name/date/size.
-- Optional `order=asc|desc` sets the primary direction for every sort field. Omitting
-  it preserves the original defaults: name ascending, date-added newest first, size
-  largest first. Folders always come first; equal primary values use ascending
-  casefolded name and ID ties.
-- The catalog sorts the full matching snapshot before offset/limit
-  pagination, so changing direction affects the global result order.
-- Search pages have no computed total count.
-- The compatibility /search_ directory path is bounded to 500 results; use v1 paging for
-  a complete matching listing.
-
-</details>
+Folders sort first. File rows include `part_count` but never message IDs or checksums.
 
 ## Atomic folder preparation
 
-<details>
-<summary>Folder-tree request, response and retry rules</summary>
+`POST /api/v1/folders/tree` (**Owner**) creates a new upload root and all its
+subfolders in one step, before any file is sent:
 
-`POST /api/v1/folders/tree` is owner-only. It creates a fresh upload root and
-its relative descendants atomically, before any file receipts are started:
-
-~~~json
+```json
 {
   "destination": "/<destination-id>",
   "root_name": "Project",
   "folders": [["alpha"], ["beta"], ["beta", "deep"]],
-  "client_request_id": "<persisted-16-to-128-character-safe-id>"
+  "client_request_id": "<16-128 safe characters>"
 }
-~~~
+```
 
-- The request ID accepts letters, digits, underscore and hyphen; the web client uses a
-  UUID.
-- Persist it before dispatch and reuse it with the same payload on an uncertain
-  response. `folders` excludes the root, includes every ancestor and has any
-  number of entries at any depth.
-- Extra fields are rejected; name normalization is NFC with normalized sibling collision
-  checks.
-
-A `201` response contains `root:<DriveItem>` and
-`folders:{"":"/<new-root-id>","alpha":"/<new-root-id>/<alpha-id>",...}`.
-The root's `path` remains its parent path; map values are full opaque paths.
-Map keys exclude the root name and use NFC names separated by /. The root uses
-keep-both naming; descendants are strict. It never silently merges with or
-overwrites an existing sibling.
-
-Same request ID/payload returns the same prepared IDs after restart. Changed
-payload or a prepared hierarchy that was moved, renamed, trashed, deleted or
-otherwise changed returns `409`, `code:FOLDER_TREE_CONFLICT`, rather than
-creating a replacement. Adding file contents to the intact prepared folders
-does not invalidate replay.
-
-- The API prepares metadata only.
-- A successful tree request does not queue file bytes, promise all subsequent file
-  uploads succeed, or discover local empty directories.
-- The web picker skips empty/over-cap files, validates root-prefixed file paths, and then queues each accepted file against
-  its mapped destination.
-- A cancelled/lost response can leave an empty prepared tree; retry the original
-  request, not a new ID.
-- The current web dialog holds its preparation plan/key in memory; closing or reloading
-  before queuing does not restore that dialog.
-- Selecting again creates a new preparation.
-- Queued per-file batch metadata is persisted separately.
-- Destination ancestor shares apply as with ordinary uploads.
-
-</details>
+`201` returns the `root` item and a `folders` map from relative path to full ID
+path. The root uses keep-both naming and never merges with an existing folder.
+Repeating the same ID and payload returns the same folders, even after a
+restart. A changed payload or a moved, renamed or trashed tree returns
+`409 FOLDER_TREE_CONFLICT`. Persist the request ID before sending and reuse it
+after an uncertain response.
 
 ## Move and bulk actions
 
-<details>
-<summary>Request examples, conflicts and partial remote effects</summary>
+| Method and route | Access | Body | Notes and errors |
+| --- | --- | --- | --- |
+| `POST /api/v1/nodes/move` | Owner | `paths`, `destination`, `conflict` (`keep_both` or `skip`), `allow_public_exposure` | Cycles rejected; no overwrite |
+| `POST /api/v1/nodes/bulk` | Owner | `paths`, `action` (`trash`, `restore`, `delete`), `allow_public_exposure` | Delete returns `202` with job IDs; poll them |
 
-`POST /api/v1/nodes/move`:
-
-~~~json
-{
-  "paths": ["/<folder-id>/<file-id>"],
-  "destination": "/<destination-folder-id>",
-  "conflict": "keep_both",
-  "allow_public_exposure": false
-}
-~~~
-
-Conflict is `keep_both` or `skip`; there is no overwrite option. Results contain
-original path, status (moved/skipped), and item where available. Cycles and moves
-into oneself are rejected. The destination must be a visible folder.
-
-`POST /api/v1/nodes/bulk`:
-
-~~~json
-{
-  "paths": ["/<item-id>"],
-  "action": "trash",
-  "allow_public_exposure": false
-}
-~~~
-
-Action is trash/restore/delete. Both routes accept any number of paths and collapse
-duplicate/overlapping selections. Trash/restore returns `200` with
-`results: [{path,status}]`, where status is trashed/restored. Delete returns
-`202` with result job IDs and status deleting. Poll retained jobs for completion.
-Acceptance is not database-removal confirmation. Delete requires Trash entries;
-permanent-deletion jobs cannot be cancelled.
-
-Move into a shared destination, or restore into a shared parent, can return
-`409` with code `PUBLIC_EXPOSURE_CONFIRMATION_REQUIRED` and a human-readable
-detail. After informed owner confirmation, repeat with
-`allow_public_exposure:true`. Destination folder shares can grant inherited access.
-
-Move, trash and restore run in one MongoDB transaction per request. A later
-invalid item or database failure rolls back earlier changes, revision increments
-and share revocations. Public-exposure checks belong to that same transaction.
-Skipped move conflicts remain explicit successful results.
-
-Permanent deletion validates the whole selection before scheduling, then journals
-independently durable catalog-removal intents. Accepted pending roots disappear
-from Trash listings, including `/api/getDirectory` with `/trash`; failures
-reappear for retry. One backup protection check covers the bulk request before
-its newly started jobs remove records; individual retries and restart recovery
-check protection again. Each job removes its database
-subtree and shares atomically, retaining original Telegram messages for every
-file age. Completed intents no longer retain message references. This is TGDrive's
-catalog-only deletion policy; see
-[permanent deletion](usage.md#why-permanent-deletion-keeps-the-telegram-files).
-Retain/poll each accepted job and refresh actual state after an interrupted
-response; selected items do not complete atomically as one batch. Retried deletion jobs also use catalog-only removal. The single-item
-routes do not provide the `/api/v1` exposure-confirmation flow.
-
-</details>
+Move, trash and restore succeed or roll back together per request. Moving or
+restoring into a shared folder returns `409 PUBLIC_EXPOSURE_CONFIRMATION_REQUIRED`;
+repeat with `allow_public_exposure: true` after the owner confirms. Permanent
+deletion removes catalog records only and can't be cancelled; see
+[why Telegram files are kept](usage.md#why-permanent-deletion-keeps-the-telegram-files).
 
 ## Performance, cache inventory and preparation
 
-<details>
-<summary>Performance preferences, telemetry and preload endpoints</summary>
+All routes are **Owner**. Field meanings and limits are in
+[Performance](performance.md) and [reading the Performance page](performance-tuning.md#read-the-performance-page).
 
-These are owner-session endpoints; public shares do not grant operator access.
-Responses expose bounded operational state rather than credentials or raw
-Telegram authorization references. Mutations use the usual same-origin checks.
-
-| Method and route | Purpose |
-| --- | --- |
-| `GET /api/v1/settings/performance` | Saved live performance preferences, revision, read-only built-in defaults, and configuration guide link. |
-| `PATCH /api/v1/settings/performance` | Partial lowercase preferences, with returned revision in `If-Match`; persist and apply to new work. |
-| `GET /api/v1/performance` | Account activity, bounded live queues/history, request pacing/cooldowns and cache diagnostics. |
-| `GET /api/v1/performance/history?start=UNIX&end=UNIX` | Owner-only measured history within the last 31 days and persisted lifetime traffic totals; at most 360 bins. |
-| `GET /api/v1/preloads` | Owner cache/preparation inventory, current coverage, and bounded job state. |
-| `POST /api/v1/preloads` | `{"path":"/<file-id>"}`; prepare an authorized file within effective capacity. |
-| `POST /api/v1/preloads/clear` | `{"file_id":"<inventory-id>"}` evicts one file; `{}` clears cached bytes. |
-| `POST /api/v1/preloads/{id}/cancel` | Cancel the named preparation, preserving work other subscribers still need. |
-
-Preference fields use the lowercase names corresponding to the environment
-table, such as `cache_disk_bytes`, `telegram_request_limit` and `auto_preload`.
-Unknown fields are rejected. Keep and send the returned revision when editing
-from multiple tabs; a stale update returns a conflict rather than silently
-overwriting another edit.
-
-The same performance endpoint saves upload-storage fields: `max_file_size`,
-`staging_budget_bytes` and `min_free_bytes`. File size and temporary budget are
-integers from 1 byte through 2 TiB; a save requires the budget to cover the file
-maximum and all current upload reservations. Saving an upload-storage change
-also requires a free-space reserve of at least 64 MiB. These fields are separate
-from `/api/v1/settings/uploads`, which only changes uploads per bot. See the
-[upload-storage controls](configuration.md#transfer-limits).
-
-Inventory reports current ready-byte coverage with half-open intervals
-`[start, end)`, including observed ordinary downloads. A ready preparation is
-not an indefinite pin. The effective memory limit can be below configuration;
-current cache coverage, active reservations and integrity overhead decide
-whether a preparation fits.
-
-Queue wait estimates are nullable until recent duration samples exist. They
-are explicitly estimates, can change with cooldowns or connection changes,
-and do not promise completion time. Queue snapshots are bounded rather than a
-permanent telemetry database. Public request-specific queue status must not
-expose unrelated visitors' identifiers.
-
-The performance snapshot's `traffic` object counts HTTP body bytes and request
-activity on `/file` and resumable-upload endpoints. Sent/received counters
-include cached file responses and receipt protocol bodies, and exclude settings
-polling/assets. Directional account request counters describe Telegram origin
-traffic separately. Both histories are process-local and reset on restart;
-derived rates are differences between measured samples.
-The application samples both histories every three seconds without dashboard
-polling. Histories are capped at 120 entries and five minutes, and reset after a
-gap longer than 30 seconds or a backward clock jump. `traffic` exposes nullable
-`download_bytes_per_second` and `upload_bytes_per_second`; an initial missing
-baseline is not a measured zero. `server.process_rss_bytes` reports current Linux
-process resident memory when available; `process_peak_rss_bytes` remains a peak.
-`server.cpu.percent` is nullable current cgroup CPU utilization, normalized to
-available cores/quota, or labelled host busy CPU when cgroup counters are unavailable.
-`server.network` exposes the selected default interface, monitor-session
-`received_bytes`/`sent_bytes`, and nullable per-second rates. These include URL
-imports and Telegram traffic that are outside the narrower `traffic` HTTP counters.
-Linux interface counters include protocol overhead; they are not per-file accounting.
-`server.history` retains measured timestamped CPU percentage/scope, current cgroup
-memory/limit, interface receive/send rates and interface name. It follows the same
-three-second/five-minute bounds. Unknown readings are null; an unlimited cgroup
-memory limit is null rather than zero. The dashboard splits plots at missing
-samples or measurement-scope changes and supports keyboard/touch sample inspection.
-
-The historical endpoint is separate from those live process histories. It validates
-finite Unix-second `start < end`, a past interval no older/wider than 31 days,
-and returns `422` for invalid bounds or a redacted retryable `503` if storage is
-unavailable. It returns actual minute-aligned boundary intervals: `start`, `end`,
-`bucket_seconds`, `retention_seconds`, `earliest_at`, `tracked_since`,
-`last_updated`, `available`, `samples`, and `totals`. Samples include `end_at`
-and per-metric `coverage_seconds`. Rates/gauges are weighted by valid observed
-seconds; null gaps are not counted as zero. Mixed interfaces or CPU scopes do
-not become a false continuous series. Long ranges are downsampled, so a bin's
-average is not its peak. The UI keeps Now readings separate from interval averages.
-
-Lifetime `totals` keys are `network_received_bytes`, `network_sent_bytes`,
-`http_upload_bytes`, `http_download_bytes`, `http_requests`, `http_errors`,
-`telegram_upload_bytes`, and `telegram_download_bytes`. Unobserved sources are
-null. These overlapping accounting layers must not be summed together. Totals
-survive process restarts and 31-day chart pruning, but only describe activity
-since `tracked_since`; no pre-installation history can be recovered.
-Laptop and hosted deployments use MongoDB `telemetry_minutes`/`telemetry_state`. Minute checkpoints and clean shutdown persist
-state; an abrupt crash may lose the latest uncheckpointed statistics. Telemetry
-is excluded from encrypted catalog backups and never gates file service.
-
-The preparation queue and ordinary media queues have separate bounds.
-Cancelling/clearing a preparation leaves originals intact and does not abort
-shared work belonging to other authorized subscribers. See
-[cache behavior](performance.md#prepare-a-file-before-sharing).
-
-</details>
+| Method and route | Purpose | Notes and errors |
+| --- | --- | --- |
+| `GET /api/v1/settings/performance` | Saved preferences, revision and defaults | |
+| `PATCH /api/v1/settings/performance` | Partial lowercase preferences, including `max_file_size`, `staging_budget_bytes`, `min_free_bytes` | Send the revision in `If-Match`; stale edits conflict; unknown fields rejected |
+| `GET /api/v1/performance` | Live accounts, queues, `traffic`, `server` readings and `tuning` | Process-local; resets on restart |
+| `GET /api/v1/performance/history` | `start`, `end` (Unix seconds, within 31 days): up to 360 bins plus lifetime `totals` | `422` bad range; `503` storage unavailable. Don't add the totals together |
+| `GET /api/v1/preloads` | Cached files, coverage as `[start, end)` intervals and jobs | |
+| `POST /api/v1/preloads` | `{"path"}`: preload a file | Rejected if it can't fit RAM or disk cache |
+| `POST /api/v1/preloads/clear` | `{"file_id"}` evicts one file; `{}` clears all cached bytes | Originals stay in Telegram |
+| `POST /api/v1/preloads/{job_id}/cancel` | Cancel a preload | Keeps work other readers still need |
 
 <a id="zip-archive-jobs"></a>
 
 ## Archive jobs
 
-Archive routes require the owner session; public share links cannot start jobs.
-See the [user workflow and supported suffixes](usage.md#create-zips-and-extract-archives).
+| Method and route | Access | Body | Result |
+| --- | --- | --- | --- |
+| `POST /api/v1/archives` | Owner | `paths`, `destination`, `name` | `{id, job}` for a ZIP job |
+| `POST /api/v1/archives/extract` | Owner | `path`, `destination`, `folder_name` (`null` extracts in place) | `{id, job}` for an extract job |
 
-| Route | JSON request | Result |
-| --- | --- | --- |
-| `POST /api/v1/archives` | `paths`: selected file/folder paths, `destination`: existing folder path, `name`: ZIP filename | Accepted job identity and snapshot: `{id, job}`. |
-| `POST /api/v1/archives/extract` | `path`: supported archive/compressed-file path, `destination`: existing folder path, `folder_name`: new folder name or `null` to extract here | Accepted job identity and snapshot: `{id, job}`. |
+Both accept `allow_public_exposure`. Follow and control the job with the
+[job routes](#jobs). Supported formats are listed in
+[the user guide](usage.md#create-zips-and-extract-archives).
 
-Both accept `allow_public_exposure`, default `false`, to acknowledge a publicly
-shared destination. Poll and control the returned identity through the existing
-[job routes](#jobs). Job kinds are `archive` and `extract`; progress reports bytes
-for the current phase. Created ZIPs use the ordinary file download route.
+| Limit | Value |
+| --- | --- |
+| ZIP creation | Stored entries, no recompression |
+| Extraction formats | ZIP (Stored, Deflate, BZIP2, LZMA), 7z, RAR/RAR5, TAR, gzip/bzip2/xz/Zstandard |
+| Rejected | Encrypted or split archives, unsafe or duplicate paths, links, empty regular files |
+| Disk space | Shares `STAGING_BUDGET_BYTES` and `MIN_FREE_BYTES` with uploads; extraction needs the archive and its output together |
+| Worker | Separate process, no memory or CPU cap; the kernel stops it first under memory pressure |
 
-<details>
-<summary>Formats, storage and recovery boundaries</summary>
-
-- ZIP creation stores entries without recompression. This prioritizes predictable
-  resource use and bundles already compressed media without adding compression
-  settings. Folder names and relative structure are retained.
-- Extraction accepts ZIP, 7z, RAR/RAR5, TAR and gzip/bzip2/xz/Zstandard-compressed
-  TAR or single files. ZIP supports Stored, Deflate, BZIP2 and LZMA entries.
-  Encrypted and split-volume archives are unsupported; some RAR features remain
-  unsupported by the installed native reader. Archives can hold any number of
-  entries at any depth. Extraction validates paths,
-  sizes and available archive-provided integrity checks before creating output
-  folders or files. TAR has no payload checksum, so it cannot detect every
-  same-size content change.
-  Absolute/traversal paths, encrypted entries, symlinks/special files, duplicate
-  paths and empty regular files are rejected. Empty directories are retained.
-  Decoded TAR streams may use the remaining staging budget plus 8 MiB for
-  headers and padding; larger decoded tails are rejected.
-  Compressed streams are checked through EOF, and native-reader warnings fail
-  the job before catalog publication.
-- Temporary workspace shares `STAGING_BUDGET_BYTES` and `MIN_FREE_BYTES` with
-  uploads and imports. Creation reserves the ZIP bytes plus headers; extraction
-  needs space for the source archive and its expanded files together. Defaults are
-  16 GiB of shared staging and a 1 GiB free-disk reserve. Normal logical-file
-  upload limits still apply.
-- Source files are read from Telegram, including multipart files, using bounded
-  reads directly into the ZIP writer. Extraction runs the native reader in a
-  separate worker with no memory or CPU-time limit. If the server runs out of
-  memory, the kernel stops that worker first, not TGDrive. Cancellation kills and
-  reaps the worker before workspace cleanup. Outputs use the normal upload,
-  catalog and protection pipeline. Existing files are never overwritten.
-- Accepted jobs are server-owned. Retry/restart reuse persisted job identities;
-  cancellation does not roll back files already committed to the drive. Preserve
-  `CACHE_DIR` across restarts. ZIP creation can regenerate missing bytes before
-  its upload plan is recorded; later missing ZIP bytes or uncommitted extracted
-  files require cancellation and a new job. Completed children and catalogued
-  outputs can finalize without staged bytes. Deleting or trashing a source before
-  staging, or the destination before commit, can block further work.
-- Failed jobs retain staged bytes and their storage reservation for retry.
-  Cancel an unwanted failed job to release that space. Completed/cancelled jobs
-  remove temporary workspace after their internal upload workers finish cleanup;
-  files already committed to the drive remain.
-
-</details>
+Failed jobs keep their staged bytes for **Retry**; cancel to release the space.
+Files already saved stay in the drive. Pipeline details:
+[archive jobs](architecture.md#archive-jobs).
 
 ## Resumable browser receipts
 
-<details>
-<summary>Chunk upload protocol and recovery rules</summary>
+All routes are **Owner**. This is TGDrive's own chunk protocol, not tus. Durability
+and reconciliation are in [the transfer pipeline](architecture.md#from-a-browser-to-one-drive-file).
 
-All receipt routes are owner-only. See [transfers](architecture.md#transfer-pipeline) for persistence
-and reconciliation boundaries. This is a TGDrive protocol, not tus compliance.
-
-| Route | Request | Success |
+| Method and route | Purpose | Notes and errors |
 | --- | --- | --- |
-| `POST /api/v1/uploads` | `{"name":"example.bin","parent_id":"/","total_size":8388647}` | `201` receipt. |
-| `GET /api/v1/uploads/{upload_id}` | None | Full current receipt including chunk checksums. |
-| `HEAD /api/v1/uploads/{upload_id}` | None | Upload-Offset and Upload-Length headers. |
-| `PATCH /api/v1/uploads/{upload_id}` | Raw bytes, Content-Type application/octet-stream, Upload-Offset header. | `204` and acknowledged new Upload-Offset. |
-| `POST /api/v1/uploads/{upload_id}/complete` | `{}` | `202 {"id":"<job-id>","job":{...}}`. |
-| `POST /api/v1/uploads/{upload_id}/cancel` | `{}` | Updated receipt; queued work delegates to its job. |
+| `POST /api/v1/uploads` | `name`, `parent_id`, `total_size`, optional `folder_upload`: create a receipt | `201`; `413` too large; `507` no staging space |
+| `GET /api/v1/uploads/{upload_id}` | Current receipt with chunk checksums | `410` expired |
+| `HEAD /api/v1/uploads/{upload_id}` | `Upload-Offset`, `Upload-Length` headers | |
+| `PATCH /api/v1/uploads/{upload_id}` | Raw `application/octet-stream` chunk with `Upload-Offset` | `204`; `409 UPLOAD_OFFSET_CHANGED`; `415`; `422` |
+| `POST /api/v1/uploads/{upload_id}/complete` | Hand the file to a server job | `202 {id, job}`; repeats return the same job |
+| `POST /api/v1/uploads/{upload_id}/cancel` | Cancel the receipt | |
 
-The receipt contains:
-
-~~~json
-{
-  "id": "<32-lowercase-hex-characters>",
-  "name": "example.bin",
-  "parent_id": "/",
-  "parent_node_id": "root",
-  "total_size": 8388647,
-  "offset": 8388608,
-  "checksums": [
-    {"offset": 0, "size": 8388608, "sha256": "<64-hex-digest>"}
-  ],
-  "chunk_size": 8388608,
-  "state": "receiving",
-  "expires_at": 1792100000.0
-}
-~~~
-
-parent_id is the current resolved hierarchy path; additive parent_node_id binds
-the stable folder identity. GET/HEAD, append and complete refresh the path after
-ancestor moves. New request paths must identify an existing visible mutable
-folder. A trashed/deleting/missing folder blocks receipt writes/completion while
-retaining acknowledged bytes for restore/cancel.
-
-Create checks the current logical-file limit, folder, staging budget and free disk.
-Folder uploads may also send `folder_upload: {id, name, root_path, created_at}`
-on creation. `id` is a stable 16–128 character URL-safe selection identity,
-`name` is at most 255 characters, `root_path` identifies the uploaded root, and
-`created_at` is finite nonnegative Unix seconds. The destination must belong to
-that root. The metadata follows the receipt into job polling and archived history;
-ordinary file selections and URL imports remain separate tasks.
-Send exactly chunk_size bytes except for a smaller final chunk. Empty/oversized
-chunks and offsets different from the server's are rejected. Wait for each
-acknowledgment. After a lost response, GET/HEAD the authoritative offset before
-retransmitting. The final chunk journal is verified against staged bytes.
-An offset mismatch returns HTTP `409` with code `UPLOAD_OFFSET_CHANGED`; clients
-may recheck the receipt and resume. Other `409` failures are not offset conflicts.
-The browser uses [bounded automatic retries](architecture.md#bounds-and-retries)
-for temporary failures after it knows the receipt ID; creation without a returned
-ID still requires manual retry.
-
-- Call complete only after offset equals total_size.
-- Repeated completion returns the existing retained job rather than creating another
-  file.
-- Then poll its job: a complete browser receipt is not yet a completed protected upload.
-- The job commits file metadata and durable transfer state in MongoDB, then reports
-  completed and releases staging.
-- State values include receiving/queued/cancelling/finished/cancelled.
-- Append refreshes receipt expiry; inactive receiving sessions expire after
-  UPLOAD_SESSION_TTL_SECONDS.
-
-A re-selected file must match the committed prefix's checksums. Bytes never
-received cannot yet be verified. There is no trust-this-checksum override.
-Already accepted receipts retain append eligibility after optional account loss.
-A persisted part plan retains dispatched sender identities; retry may still need
-the recorded sender restored even though a new file could use other bots.
-
-Typical receipt failures: `409` state/offset conflict, `410` expiry/history lost,
-`413` size, `415` content type, `422` chunk shape/fields, `429` active receipt
-capacity, `507` disk/staging budget. HTTP chunking is the browser receipt layer.
-After receipt, the server chooses one Telegram document or ordered file parts
-within the logical file limit. Full download and one byte range transparently
-reconstruct the selected logical interval.
-
-</details>
+Send exactly `chunk_size` bytes (8 MiB) per request, except a smaller last chunk,
+and wait for each acknowledgment. After a lost response, read the offset with
+`GET` or `HEAD` before resending. Call `complete` only when the offset equals
+`total_size`, then poll the job. Receipts expire after
+`UPLOAD_SESSION_TTL_SECONDS` without new chunks (default 24 hours). `429` means
+too many active receipts.
 
 ## Previews and media
 
-<details>
-<summary>Preview descriptors, bounds and quality selection</summary>
+Access is **Owner** or **Share**; pass `path` and optional `auth` as for `/file`.
 
-Owner cookie or scoped file/folder capability required; supply `path` and optional
-`auth` as for `/file`.
+| Method and route | Purpose | Notes and errors |
+| --- | --- | --- |
+| `GET /api/v1/preview` | `kind`: `text`, `pdf`, `video`, `book` or `unsupported` | Text is at most 256 KiB |
+| `GET /api/v1/books` | Book index, or one chapter or page with `entry` | [Reader limits](architecture.md#book-reader-internals) |
+| `GET /api/v1/media` | Original plus real stored variants | `/file?quality=<id>` picks one; unknown IDs `404` |
+| `GET /api/v1/thumbnail` | Cover JPEG up to 128 KiB | `204` none; `304` unchanged; `503 THUMBNAIL_BUSY` with `Retry-After: 5` |
+| `GET /api/v1/poster` | Stored video poster up to 1 MiB | `204` none; `304`; `503 POSTER_BUSY` with `Retry-After: 5` |
+| `GET /api/v1/file-status` | `request_id`: queue estimate, size, `phase`, `retry_after` | `TELEGRAM_QUEUE_FULL` matches a `503` from `/file` |
+| `GET /api/v1/settings/thumbnails/rebuild` | Owner: latest rebuild run | |
+| `POST /api/v1/settings/thumbnails/rebuild` | Owner: `{"confirmed": true}` starts a rebuild | `202`; reuses a running one |
+| `POST /api/v1/settings/thumbnails/rebuild/cancel` | Owner: stop the rebuild | |
 
-| Route | Response |
-| --- | --- |
-| GET /api/v1/books | path, optional auth and entry. Without entry: book index with format, title and ordered entries. With entry: passive EPUB chapter JSON or raster page bytes. See [reader limits](architecture.md#book-reader-internals). |
-| GET /api/v1/preview | name, size and kind:text/pdf/video/book/unsupported. Text includes text, language, truncated and preview_bytes; PDF includes an authorized local URL; unsupported includes a reason. |
-| GET /api/v1/media | original descriptor and variants list from the actual stored message. Each descriptor has id, label, is_original, size, mime_type, width, height and duration where applicable. |
-| GET /api/v1/thumbnail | TGDrive-generated JPEG cover when cached, otherwise a provider JPEG/PNG/WebP thumbnail, at most 128 KiB; optional `If-None-Match` can return `304`. |
-| GET /api/v1/poster | Authorized `path` and optional `auth`; stored video-poster JPEG up to 1 MiB, `204` when unavailable, or conditional `304`. Fetches only the referenced image, never the original video. |
-| GET /api/v1/file-status | Authorized `path`, opaque `request_id`, optional `auth`; request-specific queue estimate, logical size, phase and retry guidance, without listing other callers. |
-
-`file-status` returns `queue`, `size`, `phase`, `code` and `retry_after`. Phase is
-`checking_file`, `waiting_for_telegram`, `receiving`, `retry_wait`, `error`, or
-`null` when no current phase is known. The initial file check includes metadata
-waits even when there is no origin queue entry. Queue positions count operations
-and can change as download requests take turns; they are not a file/user order
-or a completion ETA.
-
-A queue-full failure records `retry_wait`, `code: TELEGRAM_QUEUE_FULL` and
-remaining `retry_after` seconds, matching the response's `503`/`Retry-After`
-guidance. A new GET with that request ID clears the previous failure. Other
-errors expose no private exception details. Status is bound to the authorized
-file, held in a bounded in-memory registry, and may be absent before the GET,
-after eviction or after restart. For overlapping GETs with the same ID, phase
-reflects the latest GET while the queue estimate aggregates that ID's operations.
-
-**Posters:** authorize before and after reads, cache hits and `304`, using
-`Cache-Control: private, no-cache`, `Vary: Cookie` and an ETag. Missing/invalid
-optional images allow the player's on-demand fallback. Temporary poster reads
-or checksum failures can return `503 POSTER_BUSY`, `Retry-After: 5`; real file,
-share and recovery errors remain distinct. [Poster policy](thumbnails.md#video-posters).
-
-Portable file records may include a `poster` object with `message_id`, `size`,
-`sha256` and optional `document_id`, all referring to an image in the file's
-storage channel. It is not an original byte part and does not change logical
-file size or part count.
-
-**Thumbnails:** authorize before and after asynchronous reads, including cache hits
-and `304`. Responses use `Cache-Control: private, no-cache`, `Vary: Cookie` and an
-ETag. Generated covers precede provider thumbnails; multipart uses the first part.
-The grid never fetches original Telegram payloads. [Cached-cover repair](thumbnails.md#existing-files-and-fallback)
-retains its size/time bounds and rechecks access/source identity without changing
-Telegram or catalog data. Positive covers are reused; new cached data allows
-previous misses to be reconsidered.
-`204 No Content` means an optional thumbnail is unavailable and the client should
-keep its file icon. Missing originals and authorization failures retain their HTTP
-errors. Temporary thumbnail failures return `503 THUMBNAIL_BUSY`, `Retry-After: 5`. See [generation limits](thumbnails.md).
-
-**Thumbnail rebuild:** owner-only `GET /api/v1/settings/thumbnails/rebuild`
-returns the latest run. `POST` to that route requires `{"confirmed": true}` and
-returns **202** immediately, reusing an active run rather than starting duplicates.
-`POST /api/v1/settings/thumbnails/rebuild/cancel` stops it. Public demo sessions
-can read status but cannot start/cancel management work. Snapshots include `status`,
-`phase`, `total`, `processed`, `generated`, `skipped`, `failed`, `source_bytes`,
-current filename/read bytes and up to five recent issues. Byte counts include
-cache reads, not measured network traffic. See [rebuild policy](thumbnails.md#rebuild-existing-thumbnails).
-
-**Text:** allowlisted formats return at most 256 KiB with a truncation marker.
-HTML/XML stay text. UTF-8 (optional BOM) and BOM-marked UTF-16 are supported;
-invalid/binary content falls back to download. SVG uses a passive image in the UI;
-the descriptor may expose its XML. Ambiguous `.ts`/`.mts` require repeated MPEG
-packet evidence to become video; valid TypeScript and `.cts` remain source text.
-The source-byte cap does not bound all internal Telegram transfer bytes.
-
-Book raster pages are checked against the [reader dimension limits](architecture.md#book-reader-internals)
-before delivery; an oversized or malformed image returns a preview error without
-changing its original download.
-
-**PDF:** at most 256 MiB source, lazy authorized ranges without a cumulative
-session-byte cap or automatic whole-file preparation. Local PDF.js disables
-streaming/full-file prefetch; closing aborts requests. Normal range-cache and
-multipart mapping apply. [Reader limits](architecture.md#book-reader-internals) define request,
-buffer and parser budgets for PDF/EPUB/CBZ/CBR; they are not total browser-memory
-guarantees. Failed previews retain original download.
-
-**Representations:** `/file?quality=<opaque-descriptor-id>` chooses an actual
-message-bound variant; it never grants access. Unknown variants return `404`.
-Range/HEAD describe the selected representation. `download=1` always selects the
-original attachment, overriding `quality`. Arbitrary Telegram locations are rejected.
-
-Browser uploads remain byte-preserving documents (`force_file=True`). Telegram-native
-messages may offer real video variants/photo sizes; a photo's original means its
-best stored representation, not guaranteed camera bytes. No invented transcodes
-or resolutions are exposed. See [video behavior](usage.md#open-preview-and-download)
-and [viewer notices/source](../website/public/third-party/README.txt).
-
-</details>
+Thumbnails and posters recheck access on every request, including cache hits
+and `304`, and use `Cache-Control: private, no-cache`. They never download an
+original video. Cover and poster rules: [Thumbnails](thumbnails.md).
 
 ## Jobs
 
-<details>
-<summary>Progress, retry, cancellation and retention</summary>
+All routes are **Owner**.
 
-All routes below require the owner.
-
-| Route | Request | Success |
+| Method and route | Purpose | Notes and errors |
 | --- | --- | --- |
-| `GET /api/v1/jobs` | None | `{"jobs":[...]}`. |
-| `GET /api/v1/jobs/{job_id}` | None | One job. |
-| `POST /api/v1/jobs/{job_id}/cancel` | `{}` | Updated job; remote reconciliation may keep cancellation pending. |
-| `POST /api/v1/jobs/{job_id}/retry` | `{}` | Updated/restarted job; invalid transitions return `409`. |
+| `GET /api/v1/jobs` | All retained jobs, including finished ones and `history_cleared` markers | |
+| `GET /api/v1/jobs/{job_id}` | One job | `404` |
+| `POST /api/v1/jobs/{job_id}/cancel` | Cancel | May stay `cancelling` while Telegram work settles |
+| `POST /api/v1/jobs/{job_id}/retry` | Retry with the same operation identity | `409` for invalid transitions |
+| `POST /api/v1/jobs/{job_id}/torrent-files` | `{"files": [indexes]}`: choose torrent files | `422` for empty, duplicate or out-of-range indexes |
 
-- A v1 job contains id/status/phase/current/total/error and
-  name/kind/destination/retry_at.
-- It also includes created_at, updated_at, started_at, finished_at, progress_updated_at
-  (Unix seconds), elapsed_seconds, speed_bytes_per_second and eta_seconds.
-- `queue` adds request-specific origin admission state and nullable wait estimates;
-  it is not a reserved start time or a multi-stage completion deadline.
-- The UI does not show an elapsed clock for wholly queued uploads.
-- Rate/ETA are nullable current-phase estimates, not total multi-stage completion
-  promises; paused/non-byte/deletion/stale progress has no invented rate.
-- Samples are phase-local and stale after 15 seconds without progress.
-- Job retry_at is the effective provider deadline for uploads or database-copy
-  publication; the private lineage_retry_at context survives restart.
-- A pre-send cancellation can wake a lineage wait.
-- Kinds include upload/remote/delete.
-- A URL import retains `remote` origin through local staging and Telegram
-  upload, including after a restart. A URL job is not a browser file receipt.
-- Statuses are queued, running, cancelling, completed, error, cancelled.
-- Phase gives detail such as uploading, finalizing, retry_wait, waiting_for_telegram or
-  cleanup_pending; clients must tolerate new phases.
-- The compatibility phase backup_pending is short MongoDB commit finalization, not a
-  wait for an encrypted Telegram safety copy.
-- The job retains its stable operation identity across an interrupted commit/journal
-  handoff.
-
-Live job records are limited by retention/capacity. Unresolved send/cleanup
-effects are protected from ordinary eviction. Do not treat this as a permanent
-audit log. Retry retains operation identities. See [transfers](architecture.md#transfer-pipeline).
-
-`GET /api/v1/jobs` includes all retained records, including terminal results and
-`history_cleared` markers. The owner interface adapts its request cadence to
-activity and visibility; see [browser checks](performance.md#browser-progress-and-health-checks).
-
-Live job snapshots include `telegram_parts: {total, stored}`. `stored` counts
-confirmed messages; byte progress includes in-flight uploads. Sender identities
-and the recovery journal remain private.
-
-</details>
+A job has `id`, `kind` (`upload`, `remote`, `delete`, `archive`, `extract`, …),
+`status` (`queued`, `running`, `cancelling`, `completed`, `error`, `cancelled`),
+`phase`, `current`/`total`, timestamps, nullable `speed_bytes_per_second` and
+`eta_seconds`, `queue` and `telegram_parts`. Treat unknown phases as normal; rates
+and ETAs cover only the current phase. The live list is bounded; use
+[transfer history](#transfer-history) for older work. Lifecycle:
+[the transfer pipeline](architecture.md#transfer-pipeline).
 
 ## Transfer history
 
-<details>
-<summary>Owner-only task pages, filters and indexed cursors</summary>
+All routes are **Owner** and `no-store`. Storage: [finished history](architecture.md#finished-history).
 
-The Transfers UI uses `POST /api/v1/transfers/history/tasks`:
+| Method and route | Purpose | Notes |
+| --- | --- | --- |
+| `POST /api/v1/transfers/history/tasks` | `status`, `page`, `limit` (1–200), `q`, optional `offset` and `exclude_folders`: numbered task pages | Folder uploads group into one task |
+| `GET /api/v1/transfers/history` | `page` for numbered pages, or `before` + `before_id` cursors; `status`, `limit`, `q` | Page and cursor together is invalid |
+| `DELETE /api/v1/transfers/history` | `{"exclude_folders": []}`: clear finished history | `{"cleared": N}`; running work and stored files are kept |
+| `POST /api/v1/transfers/location` | `transfer_id`, `destination`, `completed`: find a transfer's folder and item | `available: false` if moved to Trash or missing |
 
-```json
-{"status":"finished","page":1,"limit":20,"q":""}
-```
-
-Owner-only `DELETE /api/v1/transfers/history` with JSON
-`{"exclude_folders":[]}` clears completed/error/cancelled history across every
-page and search. It returns `{"cleared":N}` (individual server records, not
-folder task count) and `Cache-Control: no-store`. `exclude_folders` accepts up
-to 2,000 folder selection IDs for browser work still waiting to reach the server.
-Queued/running jobs and their folder members are always kept. Archived summaries
-are deleted; terminal live jobs are hidden without removing recovery contexts.
-Deletion jobs and stored files are unaffected. The action is safe to repeat;
-already cleared records are not counted again. Retrying/resuming a hidden job
-makes it visible again. Live job polling includes `history_cleared:true` so
-clients can settle progress and dismiss finished rows. Existing backups may
-still contain older history.
-
-The response includes `jobs`, `page`, `page_size`, `total_tasks`, `total_pages`,
-`has_more`, `offset` and `next_offset`. `jobs` contains every member of each
-selected task, so its row count can exceed `limit`. Only explicit folder uploads
-group together; ordinary files and URL imports each count once. Grouping, status
-and search matching precede pagination. Status precedence is running, queued,
-failed, then cancelled or entirely successful. Matching a folder name or one of
-its files returns the whole task. A page beyond the end clamps to the last page.
-
-| Body field | Value |
-| --- | --- |
-| `status` | Same statuses as the cursor API below; default `all` |
-| `page`, `limit` | Page starts at 1; limit 1–200, default 20 |
-| `q` | Normalized case-insensitive substring, at most 255 characters |
-| `offset` | Optional nonnegative task offset; overrides page slicing for browser-only finished tasks; callers handle page clamping |
-| `exclude_folders` | Up to 2,000 selection IDs omitted from server task totals/results while the browser owns the remaining folder work |
-
-Grouping uses saved folder-selection metadata. This owner-only request allows up
-to 256 KiB of JSON. Exact task counts scan archive summaries in bounded
-batches; see [history storage](architecture.md#finished-history).
-
-`GET /api/v1/transfers/history?page=1&limit=20` also returns numbered task pages,
-without browser exclusions. Supplying a page and cursor together is invalid.
-Omitting `page` selects the indexed cursor protocol:
-
-`GET /api/v1/transfers/history` accepts:
-
-| Query | Value |
-| --- | --- |
-| `status` | `all` (default), `queued`, `running`, `finished`, `completed`, `error`, `cancelled`; finished combines completed/error/cancelled |
-| `limit` | 1–200; default 50 |
-| `q` | Optional file-name substring, up to 255 characters; Unicode-normalized case-insensitive search across live and archived transfers before pagination |
-| `before` and `before_id` | Both cursor values from the previous page, or neither |
-
-The response contains `jobs`, `has_more`, `next_before` and `next_before_id`.
-Rows use public job fields plus `retained`: whether the live job still exists.
-`running` includes cancelling work; deletion jobs are excluded.
-
-Pages sort by creation time and ID descending. Live progress replaces duplicate
-archived IDs. Reading old history never restores a job to the active queue.
-The response requires owner authentication and uses `Cache-Control: no-store`.
-
-Resolved jobs evicted from the live registry become compact summaries. MongoDB
-keeps these in archived `jobs` documents, without the private recovery context;
-startup excludes them from live registry loading. These summaries are included
-in complete encrypted database backups. They have no automatic history TTL;
-**Clear history** removes them manually.
-Existing records are visible; history already deleted before this feature
-cannot be reconstructed.
-
-The floating panel's **Clear finished** dismisses browser rows, preserving server
-history and files. Per-job dismissals survive reload and merge across open tabs.
-The panel shows this browser's work; history also shows other devices' server jobs.
-Browser-only queued work becomes durable server history only after a job exists.
-[History controls](usage.md#transfer-history).
-
-Owner-only `POST /api/v1/transfers/location` accepts `transfer_id`, `destination` and `completed`. It resolves the current folder and exact saved item without mutation; missing/trashed items return `available:false`.
-
-</details>
+Statuses: `all`, `queued`, `running`, `finished`, `completed`, `error`,
+`cancelled`. `finished` covers the last three.
 
 ## Starred items
 
-<details>
-<summary>Owner stars and move/restore behavior</summary>
-
-| Route | Request | Response |
+| Method and route | Access | Purpose |
 | --- | --- | --- |
-| `GET /api/v1/starred?q=...` | Optional literal filename query | `{data:{contents:{<id>:<item>}}}` with current paths and parent names. |
-| `PATCH /api/v1/starred` | `{path:"/<id-path>",starred:true}` (strict boolean) | `{item:<updated item>}`; idempotent when already set. |
+| `GET /api/v1/starred` | Owner | Starred items, optional `q` filter |
+| `PATCH /api/v1/starred` | Owner | `{"path", "starred": bool}`; repeating is harmless |
 
-Owner-only, no-store. Stars follow node moves/renames, hide with trashed subtrees
-and reappear after restore. Unstarring never deletes or moves the original.
-Snapshots preserve annotations; the drive root cannot be starred.
-
-</details>
+Stars follow moves and renames, hide while in Trash and return on restore. The
+root can't be starred.
 
 ## Shares, downloads, and ranges
 
-<details>
-<summary>Share tokens and exact download/range behavior</summary>
-
-| Route | Access | Request | Success |
+| Method and route | Access | Purpose | Notes and errors |
 | --- | --- | --- | --- |
-| `GET /api/v1/shares` | Owner | None | `{"shares":[...]}` includes active and expired entries, IDs, current path/name/type/size, folder_path/folder_label, created_at/expires_at, optional label and copyable. No bearer tokens. |
-| `POST /api/v1/shares` | Owner | `{"path":"/<id>","label":"Alex","expires_in_days":7}`; optional ISO `expires_at` overrides the days. | `201 {"auth":"<bearer-token>","id":"<share-id>","path":"...","expires_at":"<ISO-date>","label":"Alex"}`. Adds an independent link. |
-| `POST /api/v1/shares/link` | Owner | `{"share_id":"<share-id>"}` or `{"path":"/<id>"}` (including `/` for the drive root). | Existing active link auth/path/type/node_id; no rotation. `409` if unrecoverable, `410` if expired/revoked. Path selection returns `409` when multiple links exist. No-store response. |
-| `PATCH /api/v1/shares` | Owner | `{"share_id":"<share-id>","label":"Alex","expires_at":"<future ISO-date>"}`; omitted fields stay unchanged; explicit null expiry means never. | Updated link metadata; changes only this link. |
-| `POST /api/v1/download-links` | Owner | `{"path":"/<id>"}` | Signed attachment `url`, canonical `path`, and `expires_at`; reuse an active copyable file share labelled `Download link` or create one expiring in one day. Other recipient links are left alone. Visible in Shared Links; no-store response. |
-| `DELETE /api/v1/shares` | Owner | `{"share_id":"<share-id>"}` | `{"status":"ok"}`. Revokes one link. Alternate `{"path":"/<id>"}` revokes all direct links for that node; `/` selects the drive root. |
-| `POST /api/getFolderShareAuth` | Owner | `{"path":"/<folder-id>"}` | Alternate creation: status and auth. |
-| `POST /api/getFileShareAuth` | Owner | `{"path":"/<file-id>"}` | Same, for a file. |
-| `GET /api/v1/embed` | Valid scoped capability, including a parent folder share | Required `path` (1–4096 characters) and `auth` (1–512 characters). | File viewer metadata: `{id,name,type:"file",size,upload_date,path:""}`. No parent hierarchy or Telegram storage metadata. |
-| `GET /file`, `HEAD /file` | Owner or scoped capability | Required path, optional auth/Range; quality selects a discovered preview, preview=1 marks a preview (including the supported PDF path and original media playback), download=1 forces the original attachment. | Bytes/headers or access/not-found error. |
+| `GET /api/v1/shares` | Owner | All links, active and expired | Never returns tokens |
+| `POST /api/v1/shares` | Owner | `path`, optional `label`, `expires_in_days` (1–3650, default 7) or `expires_at` | `201` with `auth`; up to 100 links per item |
+| `POST /api/v1/shares/link` | Owner | Copy an existing link by `share_id` or `path` | `409` unrecoverable or ambiguous; `410` expired |
+| `PATCH /api/v1/shares` | Owner | Change `label` or `expires_at` (`null` = never) | |
+| `DELETE /api/v1/shares` | Owner | Revoke one link by `share_id`, or all direct links by `path` | |
+| `POST /api/v1/download-links` | Owner | Signed one-day attachment URL for a download manager | Reuses an active "Download link" share |
+| `POST /api/getFileShareAuth`, `/api/getFolderShareAuth` | Owner | Older link-creation routes | |
+| `GET /api/v1/embed` | Share | File metadata for the embed viewer | Token required even with an owner cookie |
+| `GET`, `HEAD /file` | Owner, Share | File bytes; `Range`, `quality`, `preview=1`, `download=1` | `206`, `304`, `416`, `503` with `Retry-After` |
 
-Share expiry accepts 1–3650 days (default 7), null for no expiry, or a future
-ISO `expires_at`. Labels are optional, at most 80 characters, and cannot contain
-control characters. Labels are organizational, not recipient authentication.
-Each item permits up to 100 independent links; reaching the limit rejects the
-new link without evicting existing ones. Link creation also appends.
-New capabilities are HMAC-SHA256
-of a random share ID under the persistent SESSION_SECRET, with the
-`tgdrive/share-link/v1` domain separator. Only the capability hash is stored
-in the catalog; the owner-only copy endpoint reconstructs it and checks that
-the stored hash matches. Listing never includes the token. Preserve SESSION_SECRET
-to retain re-copy capability across installations; changing it does not invalidate
-previously issued links, but those links then require their original URL or explicit
-creation of a separate new link. Store list_shares defaults to active entries
-for access/exposure checks; the owner listing opts into expired entries.
-The Shared Links page copies by share ID and never creates a replacement link.
-Unavailable/expired links keep a disabled copy control with an explanation. Labels
-are shown only when supplied; creation time and expiry distinguish separate rows.
-Portable backup schema is 4, with optional share
-labels and `starred: true` on bookmarked nodes. Trash
-revokes subtree shares; explicit
-complete MongoDB restore revokes owner browser sessions and preserves share scope/expiry.
+URL formats:
 
-File URL: `/file?path=<encoded-id-path>&auth=<encoded-token>`.
-Generated folder UI URL: `/?path=%2Fshare_<folder-id>&auth=<encoded-token>`.
-The UI creates links from the stable folder ID alone; nested shared browsing
-can use ID paths beneath that root.
-Authorization resolves stable final IDs after a move; inherited folder access
-depends on the new location.
+| Use | URL |
+| --- | --- |
+| File | `/file?path=<id-path>&auth=<token>` |
+| Shared folder | `/?path=%2Fshare_<folder-id>&auth=<token>` |
+| Embed | `/embed?path=%2F<file-id>&auth=<token>` or `/embed?path=%2Fshare_<folder-id>&auth=<token>` |
 
-Embed URLs use `/embed?path=%2F<file-id>&auth=<encoded-token>` for files and
-`/embed?path=%2Fshare_<folder-id>&auth=<encoded-token>` for folders. Both copy
-actions reuse the selected share capability; no extra share or expiry is created.
-The embed entry renders only the public viewer, never the owner interface. File
-metadata requires an explicit nonempty token even with an owner cookie; folder
-browsing uses the existing shared-directory authorization and navigation boundary.
-Preview and download requests continue to enforce their own capability checks.
-See [embedding steps and iframe example](usage.md#embed-a-file-or-folder-in-a-website).
+- `/file` supports one range per request (`bytes=0-1023`, `bytes=1024-`,
+  `bytes=-1024`). Multi-range or malformed headers get the full file with `200`.
+- `If-Range` needs the strong ETag from a `GET`; otherwise the full file is sent.
+- A supplied `auth` must be valid even with an owner cookie. Revocation and expiry
+  apply to cached bytes too, but can't recall bytes already sent.
+- Share tokens are HMACs of the share ID under `SESSION_SECRET`; only their hash is
+  stored. Keep `SESSION_SECRET` to copy links again on a new installation.
 
-An owner-only file URL without `auth` needs the owner session cookie. Copying
-it into another browser or a download tool does not make it public. The owner's
-**Copy download link** action explicitly creates or reuses a share capability;
-a newly created link lasts one day, carries the `Download link` label and is
-visible/revocable in Shared Links. It does not reuse a separately labelled recipient link.
-
-When `auth` is supplied, it must be valid for the requested scope even if an
-owner cookie is also present. Warm caches do not bypass expiry or revocation.
-Active shared streams check access again before future blocks; already sent
-or browser-buffered bytes cannot be recalled.
-
-- Downloads support full `200` and a single `206` range: `bytes=0-1023`, `bytes=1024-`,
-  `bytes=-1024`.
-- Download managers may issue several separate single-range requests in parallel
-  or resume only missing intervals. Each response returns exactly its requested
-  bytes, including across Telegram document boundaries. Cache hits and shared
-  in-flight fills avoid duplicate Telegram payload reads where possible.
-- Valid ends beyond EOF are clamped.
-- Malformed or multi-range headers are ignored, as RFC 9110 allows, so those
-  clients receive the full file with `200`.
-- Viewers that stop reading keep at most one buffered block each. A request
-  that waits 30 seconds for streaming memory gets `503` with `Retry-After`
-  instead of waiting forever.
-- Unsatisfiable ranges return `416` with `Content-Range: bytes */<size>`.
-- HEAD has the corresponding headers and no body.
-- Conditional requests support `If-None-Match` and return `304` after access
-  checks. `If-Range` requires a matching strong ETag; a stale/weak tag or date
-  returns a full `200` response so the client can restart safely. A catalog-only
-  HEAD for a single-document file has a weak ETag; use the strong ETag from an
-  actual GET when resuming.
-- Read-ahead for downloads remains inside the requested range. A cold boundary
-  can still fetch an entire aligned Telegram block (up to 1 MiB). These requests
-  do not start unrelated background preloads; manual **Preload file** remains
-  an explicit whole-file operation.
-- Cold origin work uses bounded shared admission; cached delivery still uses
-  server bandwidth and requires valid access.
-- Active document types are attachments; selected images/audio/video may render inline.
-
-</details>
+Embedding steps: [the user guide](usage.md#embed-a-file-or-folder-in-a-website).
+Caching and read-ahead: [Performance](performance.md#shared-download-load-and-queues).
 
 ## URL imports and transfer routes
 
-<details>
-<summary>Application endpoints and their limits</summary>
+All routes are **Owner** `POST`.
 
-All these POST routes are owner-only.
-
-| Route | JSON body | Result |
+| Route | Body | Result |
 | --- | --- | --- |
-| `/api/getFileInfoFromUrl` | `{"url":"https://example.org/file.bin"}` | status/data with file_name, file_size, content_type; size -1 means unknown. |
-| `/api/startFileDownloadFromUrl` | `{"url":"https://example.org/file.bin","path":"/","filename":null,"singleThreaded":false,"client_request_id":"<unique-safe-id>"}` | status/id. |
-| `/api/getTransferByRequest` | `{"client_request_id":"..."}` | status/id/data compatibility start snapshot. |
-| `/api/getTransferProgress` | `{"id":"<job-id>"}` | status/data base job snapshot. |
-| `/api/cancelUpload` | Either id or client_request_id, never both. | status/id/data cancellation snapshot. |
+| `/api/getFileInfoFromUrl` | `{"url"}` | Name, size (`-1` unknown), content type |
+| `/api/startFileDownloadFromUrl` | `url`, `path`, `filename`, `singleThreaded`, `client_request_id` | Job `id` |
+| `/api/getTransferByRequest` | `{"client_request_id"}` | Job snapshot |
+| `/api/getTransferProgress` | `{"id"}` | Job snapshot |
+| `/api/cancelUpload` | `id` or `client_request_id`, not both | Cancellation snapshot |
+| `/api/upload` | Multipart `file`, `path`, optional `client_request_id` | One-shot upload without resume |
 
-`singleThreaded` defaults to `false` for adaptive parallel ranges with safe
-single-stream fallback. `true` forces one stream. Starting a URL import creates a
-job before contacting the source: authentication and destination errors remain
-HTTP errors, while DNS/response/size/storage checks run in that job. Its initial
-phase is `checking_source`. Temporary failures use `source_retry_wait`,
-`retry_at`, `source_attempt` and `source_max_attempts` for a visible automatic retry.
-Snapshots may include `download_mode` of `queued`,
-`warm`, `full` or `waiting_storage`; queued/waiting intake has no completion ETA.
-See [URL intake](performance.md#url-import-intake) for exact bounds.
-
-Optional `client_request_id` is 16–128 letters/digits/underscore/hyphen. Reusing
-it for a different URL, destination, filename or connection mode fails with `409`. This bounded compatibility mapping is **process memory**, not the
-restart-durable receipt ID protocol. Prefer job-ID APIs after job creation.
-
-`POST /api/upload` accepts multipart fields file and path, optionally
-client_request_id. It is owner-authenticated and bounded, but receives a whole
-multipart request rather than the durable offset/checksum receipt protocol.
-
-</details>
+Source, size and storage checks run inside the job, so they show as job errors,
+not HTTP errors. Reusing a `client_request_id` with different values returns
+`409`. That ID mapping lives in memory and is lost on restart; keep the job ID.
+Retry phases and bounds: [URL import intake](performance.md#url-import-intake).
 
 ## Torrent imports
 
-`POST /api/startTorrentDownload` is owner-only and accepts
-`{"url":"magnet:?xt=urn:btih:...","path":"/","client_request_id":"<unique-safe-id>"}`.
-`url` also accepts a public HTTP(S) `.torrent` URL; authentication and destination
-checks precede job creation. It returns `{"status":"ok","id":"<job-id>"}`;
-use the existing job progress, cancellation and retry routes. Request IDs use
-the same process-local compatibility mapping described above; retain the job ID
-for recovery across server restarts. Public snapshots omit the source link.
+`POST /api/startTorrentDownload` (**Owner**) takes
+`{"url": "magnet:?…" or a public .torrent URL, "path", "client_request_id"}` and
+returns a job `id`. Use the [job routes](#jobs) for progress, file choice,
+cancel and retry. The source link is never shown in snapshots.
 
-| Policy | Behavior |
+| Policy | Value |
 | --- | --- |
-| Engine | `aria2c` must be on the server's `PATH`; bundled in Docker. |
-| Concurrency | At most `MAX_CONCURRENT_TRANSFERS` torrent engines (default 2), independently of local receive/fingerprinting work; Telegram uploading uses its existing admission. |
-| Sources | BitTorrent v1 metadata, including a compatible v1 part in hybrid torrents; v2-only torrents are unsupported. |
-| Metadata | `.torrent` files fetched by URL are at most 256 MiB; magnet discovery times out after 120 seconds. |
-| Contents | Any number of nonempty files and folders at any depth. |
-| File choice | The web client starts multi-file torrents with `select_files: true`. After metadata, the job waits in phase `torrent_select` with `torrent_choice: [{path,size}]`; nothing is downloaded or reserved. `POST /api/v1/jobs/{id}/torrent-files` with `{"files": [0-based indexes]}` (non-empty, distinct, in range; otherwise `422`) records the choice in the job, so restart and retry keep it, and continues. aria2c downloads only those files (`select-file`); folders with no chosen file are not created. Single-file torrents and API calls without `select_files` import everything. |
-| Paths | Unsafe names, traversal, symlinks, duplicate names and file/folder collisions are rejected before payload downloading. |
-| Storage | Each file must fit the upload limit; the entire torrent reserves the shared staging budget and free-space reserve. Failed partial data keeps its storage claim. |
-| Peer discovery | IPv4 DHT and public UDP trackers. HTTP(S) trackers, web seeds and magnet auxiliary source URLs are ignored; HTTP-only private torrents cannot import. |
-| Network | Local peer discovery is disabled. Peers still see the server IP; peer traffic does not inherit the HTTP downloader's private-address filter. Outbound peer access must suit the host's network policy. |
-| Timeout | A torrent with no byte progress for five minutes fails with a retry action. |
-| Retry | Pieces already on disk are kept: aria2c re-checks them and downloads only what is missing, and progress shows the verified bytes instead of restarting at 0%. Files already uploaded to Telegram are skipped. Cancelling deletes the staged pieces. |
-| Seeding | Pieces may upload while downloading; seeding stops after download completion. |
+| Engine | `aria2c` on `PATH`; included in Docker |
+| Concurrency | `MAX_CONCURRENT_TRANSFERS` engines (default 2) |
+| Sources | BitTorrent v1 (including hybrid); v2-only unsupported |
+| Metadata | `.torrent` up to 256 MiB; magnet lookup times out after 120 seconds |
+| File choice | With `select_files: true`, the job waits in `torrent_select` with `torrent_choice`; send indexes to `/torrent-files` |
+| Peers | IPv4 DHT and public UDP trackers; HTTP trackers and web seeds are ignored |
+| Stall | Five minutes without progress fails with a retry option |
+| Retry | Verified pieces and already uploaded files are kept |
 
-The job uses `torrent_metadata`, `downloading`, then `torrent_uploading` phases.
-Progress resets between source downloading and Telegram uploading;
-`torrent_files: {total, completed}` counts files saved during the latter stage.
-One parent task appears in Transfers; its internal upload jobs use the normal
-splitting, catalog commit and protection rules.
-
-Validated metadata is cached and pinned to the original info hash for retries.
-Interrupted torrent downloads can reuse retained pieces after hash checking;
-after downloading, retries use staged files and skip completed uploads. Normal
-restart recovery resumes active jobs; failed jobs remain available for **Retry**.
-Preserve the cache volume and job journal. Missing staging, unavailable peers,
-changed destinations or broken Telegram credentials can still prevent recovery.
-Cancellation stops unfinished work and reclaims safe temporary data; files
-already catalogued remain in the drive. A folder import can therefore leave a
-partially populated folder after failure or cancellation.
+Phases run `torrent_metadata`, `downloading`, then `torrent_uploading`, with
+`torrent_files: {total, completed}`. Cancelling keeps files already saved, so a
+folder import can be partly filled. User steps:
+[the user guide](usage.md#import-a-torrent-or-magnet-link).
 
 ## Errors and retry discipline
 
-<details>
-<summary>HTTP statuses and safe retry actions</summary>
+Errors usually carry `detail` and sometimes a stable `code`, such as
+`PUBLIC_EXPOSURE_CONFIRMATION_REQUIRED`, `FOLDER_TREE_CONFLICT`,
+`UPLOAD_OFFSET_CHANGED`, `BACKUP_PENDING` or `RECOVERY_REQUIRED`. Match on codes,
+not on message text.
 
-There is no universal versioned error envelope today. Drive/remote errors often
-have status/detail; HTTP/auth errors use detail; receipt errors add
-`code:"UPLOAD_ERROR"`. Exposure confirmation, prepared-tree conflicts and
-committed-upload cancellation have explicit codes
-(`PUBLIC_EXPOSURE_CONFIRMATION_REQUIRED`, `FOLDER_TREE_CONFLICT`, `BACKUP_PENDING`,
-`RECOVERY_REQUIRED`). Do not parse
-every error phrase as a stable enum.
+| Status | Meaning | What to do |
+| --- | --- | --- |
+| 400 | Bad path, range, action or blocked URL | Fix the request |
+| 401 | Not signed in or wrong password | Sign in |
+| 403 | Share out of scope, foreign origin or demo restriction | Check access |
+| 404 | Missing item, job, receipt or Telegram data | Refresh state |
+| 409 | Conflict or confirmation needed | Read current state, then decide |
+| 410 | Receipt or history expired | Start again |
+| 413 | Too large | Use a smaller file or chunk |
+| 415 | Wrong chunk content type | Send `application/octet-stream` |
+| 422 | Invalid fields or empty file | Fix the request |
+| 429 | Login throttle or receipt capacity | Wait for `Retry-After` |
+| 502 | Remote source failed | Retry later |
+| 503 | Not ready or queue full | Wait for `Retry-After` |
+| 507 | Not enough staging space | Free space or wait |
 
-| Status | Meaning/action |
-| --- | --- |
-| 400 | Invalid path/range/action or blocked URL; correct input. |
-| 401 | Missing/expired owner session or wrong password; log in. |
-| 403 | Invalid/out-of-scope share or foreign-origin mutation. |
-| 404 | Missing node, job, receipt, or Telegram payload. |
-| 409 | Conflict/pending state/exposure confirmation; inspect current state. |
-| 410 | Receipt or retained history expired. |
-| 413 | Body/file/chunk too large. |
-| 415 | Wrong chunk content type. |
-| 422 | Schema, empty file, or chunk-shape error. |
-| 429 | Login throttling/receipt capacity; observe Retry-After where supplied. |
-| 502 | Remote-source/network/protocol failure. |
-| 503 | Runtime not ready or compatibility request capacity full. |
-| 507 | Insufficient staging budget/free space. |
+A client timeout does not mean server work stopped. After a timeout, read state
+before replaying: the receipt offset for uploads, the job for completions and
+deletions, the listing for bulk actions. Never log cookies, share tokens or
+signed URLs.
 
-The shared browser API client has a 60-second deadline, including response-body
-reading, even when navigation supplies a cancellation signal. Resource-history
-and thumbnail controls use 15 seconds; channel status uses 20 seconds; connection
-saves, Premium verification and channel-copy actions allow 120 seconds. A client
-timeout does not prove that server work stopped.
-
-After a bulk timeout, refresh before replay. After a chunk timeout, read the
-server offset. After uncertain completion, reattach to the same receipt/job.
-For permanent deletion, retry its retained job rather than submitting another
-intent. Do not log cookies, share queries, or signed remote URLs.
-
-Implementation: [app.py](../tgdrive/web/app.py), [api_v1.py](../tgdrive/web/api_v1.py),
-[request schemas](../tgdrive/web/schemas.py),
-[frontend client](../website/src/shared/api.ts). Update schemas, client types, this
-page and relevant tests together when a contract changes. Proposed routes
-belong in [the roadmap](roadmap.md), not in this implemented API reference.
-
-</details>
-
+Source of truth: [app.py](../tgdrive/web/app.py), [api_v1.py](../tgdrive/web/api_v1.py),
+[request schemas](../tgdrive/web/schemas.py) and the
+[frontend client](../website/src/shared/api.ts). Change them, this page and their
+tests together.
