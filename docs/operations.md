@@ -188,21 +188,12 @@ bytes still need their originals.
 
 For hosting, use [Coolify](setup.md#coolify) or [server Compose](setup.md#docker-compose-on-a-server). Retain surviving persistent volumes. If Atlas paused the cluster, [resume it](https://www.mongodb.com/docs/atlas/pause-terminate-cluster/) first.
 
-## Encrypted Telegram backups
+## Backups and database restore
 
-Save one encrypted recovery file and its separate key through
-**Storage & Backups → Backups & recovery**. The same file restores lost database
-data or rebuilds a lost main channel from an independent surviving backup.
-Follow [Backup & recovery](backup-recovery.md) for setup and recovery steps.
-Live MongoDB and confirmed Telegram backups are separate.
-
-## Emergency database restore
-
-[Restore a lost database](backup-recovery.md#restore-after-losing-mongodb)
-using the confirmed recovery file, its matching key, a surviving recorded channel
-and a reachable empty replacement database. A normal reinstall reopens the
-existing database instead. Keep the surviving channel intact while recovery is
-verified, and switch only through explicit activation.
+Recovery files, backup channels and database restore are covered in
+[Backup & recovery](backup-recovery.md). A normal reinstall reopens the existing
+database; restore only when MongoDB is lost, and switch only through explicit
+activation.
 
 ## Connection changes
 
@@ -377,18 +368,17 @@ Do not run an older app against an incompatible database format. Restore a compa
 | Revoked share still plays | Already received/buffered bytes cannot be recalled. |
 | URL import asks for local file | Find/retry the original server job in Transfers. |
 
-## Disposable media cache and preloads
+## Media cache and slow installations
 
-Use owner controls to inspect coverage, cancel preloads, evict files or clear disposable bytes. A completed preload does not pin bytes forever; budgets, headroom and eviction can reduce coverage. See [cache policy and defaults](performance.md).
+The media cache is disposable: when TGDrive is stopped, `DATA_DIR/media-cache`
+can be removed and rebuilt on demand. Use **Monitor → Preloads** to inspect,
+cancel or evict cached files.
 
-When stopped, `DATA_DIR/media-cache` can be removed and rebuilt on demand. **Never clear upload receipts, staged payloads or backup sources as cache.** Host access can expose cache contents; HTTP cache hits still require current authorization.
+> [!WARNING]
+> Never clear upload receipts, staged payloads or backup sources as cache.
 
-### Tune a busy installation
-
-Use the [load and capacity guide](performance-tuning.md) to investigate queues,
-cache reuse and server/bot capacity before increasing limits.
-
-Check headroom and queues first, stop unnecessary preloads, then change one limit at a time. Compare warm/cold and shared/unrelated-file reads. Supported web preferences and Connections apply live; environment changes require recreation.
+For queues, cache reuse and server or bot capacity, follow the
+[load and capacity guide](performance-tuning.md).
 
 ## HTTP delivery and proxy configuration
 

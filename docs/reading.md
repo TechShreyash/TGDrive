@@ -100,9 +100,9 @@ through that link; it cannot recall delivered bytes or revoke independent links.
 
 Raster bytes cross the parser boundary as bounded binary output without base64
 expansion. Header checks do not decode or resize images. JPEG dimensions must
-appear within the first 1 MiB; excessive/malformed headers are rejected. The
-pixel limit is about 61 MiB for one RGBA frame, with decoder, GPU and animation
-memory additional. Unsafe/duplicate archive names and extreme compression ratios
+appear within the first 1 MiB; excessive/malformed headers are rejected. There
+is no pixel limit, so very large images depend on the browser's decoder, GPU and
+memory. Unsafe/duplicate archive names and extreme compression ratios
 fail. Solid CBR may exhaust its read budget before a page; busy readers receive
 retry guidance. Budgets apply per operation and allow cached-data reuse.
 

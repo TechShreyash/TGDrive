@@ -173,9 +173,9 @@ and cannot write files. It has no CPU-time or memory cap; instead it sets
 before TGDrive. The renderer then falls back to the cover/icon.
 Forced demuxers and file/pipe-only local inputs block playlist/network loads.
 
+</details>
+
 ## Container dependencies
 
 Docker includes FFmpeg and Poppler's `pdftoppm`; no host installation is needed.
 Keep the deployment image updated. Resource limits are not an OS security sandbox.
-
-</details>

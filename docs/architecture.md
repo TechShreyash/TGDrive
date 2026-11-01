@@ -669,4 +669,4 @@ secret with domain-separated HMAC-SHA256, then verifies against the stored hash.
 MongoDB retains 31 days of bounded minute aggregates; lifetime traffic checkpoints
 are separate. Missing samples remain gaps. Telemetry is disposable, excluded
 from encrypted catalog backups, and never required for file operations.
-See [reading the Performance page](performance.md#read-the-performance-page).
+See [reading the Performance page](performance-tuning.md#read-the-performance-page).

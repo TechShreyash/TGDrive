@@ -9,6 +9,7 @@ Telegram accounts help at different stages; higher limits can lengthen queues.
 **Contents**
 
 - [Start with the website stats](#start-with-the-website-stats)
+- [Read the Performance page](#read-the-performance-page)
 - [How cache helps](#how-cache-helps)
   - [Cache capacity and preloading](#cache-capacity-and-preloading)
 - [Find the bottleneck](#find-the-bottleneck)
@@ -43,7 +44,39 @@ Telegram accounts help at different stages; higher limits can lengthen queues.
 
 Server-network, HTTP-file and Telegram counters overlap: **do not add their
 totals together**. For history, measurement scopes and retention, see
-[reading Performance](performance.md#read-the-performance-page).
+[reading the Performance page](#read-the-performance-page).
+
+## Read the Performance page
+
+**Monitor → Performance** separates server network, TGDrive HTTP file traffic
+and Telegram origin activity. They overlap: **do not add their totals**. Network
+counts include protocol/other interface traffic; Docker normally measures its
+container interface. Blue is **Download to server**; dashed is **Upload from server**.
+Hover or use the keyboard/touch sample scrubber. **Now** always means current.
+
+<details>
+<summary>History, totals and resource measurement</summary>
+
+- Live: five minutes of three-second samples. Recorded: 31 days of minute
+  aggregates, at most 360 plotted points. Presets include Last Month (30 days).
+- Averages cover observed seconds only. Missing/offline periods remain gaps;
+  incompatible scopes are not joined and earlier periods are not backfilled.
+  Custom inputs use UTC; the applied interval uses the configured timezone.
+- All-time totals are separate persistent checkpoints **since the displayed
+  tracking start date**. Network, Telegram and HTTP totals stay separate.
+  HTTP covers `/file` and resumable-upload bodies, including cached delivery
+  and receipt messages; it excludes assets/settings polling. Detailed process
+  counters reset on restart.
+- MongoDB stores history/totals without another metrics service. Checkpoints run
+  each minute and at clean shutdown; abrupt crashes can lose roughly a minute.
+  Diagnostic outages can lose observations without affecting file data. Telemetry
+  is excluded from encrypted backups.
+- CPU uses 0–100% of available container cores/quota. RAM uses cgroup usage and
+  a finite limit where present; otherwise its observed scale is explicit.
+  Host CPU is a labelled fallback. Load average is not CPU percentage; process,
+  container, host-available and cache memory are different measurements.
+
+</details>
 
 ## How cache helps
 

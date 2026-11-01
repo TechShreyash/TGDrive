@@ -13,7 +13,7 @@ needs them.
 
 | Topic | Read |
 | --- | --- |
-| Where time is spent | [Data path](#follow-the-data-path) · [Automatic tuning](#automatic-tuning) · [Performance stats](#read-the-performance-page) |
+| Where time is spent | [Data path](#follow-the-data-path) · [Automatic tuning](#automatic-tuning) · [Performance stats](performance-tuning.md#read-the-performance-page) |
 | Cached access and sharing | [Cache limits](#cache-limits) · [Read-ahead](#automatic-read-ahead) · [Preloading](#prepare-a-file-before-sharing) · [Queues](#shared-download-load-and-queues) |
 | Transfer throughput | [URL imports](#url-import-intake) · [Device intake](#device-upload-receipts) · [Telegram uploads](#upload-pipeline-and-smaller-splits) · [Archives](#archive-work) |
 | Playback and browser behavior | [Video](#video-controls-and-startup) · [Playback buffer](#browser-playback-buffer) · [Background updates](#browser-progress-and-health-checks) |
@@ -265,8 +265,9 @@ Before waiting, TGDrive drains writers, deletes the unpublished partial, and
 releases source slots and staging claims. The retry rejoins normal admission and
 checks storage again, then restarts at byte zero. It never combines bytes across
 attempts or sends a partial original to Telegram. Cancellation interrupts the wait.
-The existing total timeout includes retries and backoff. Server restart starts a
-fresh cycle, honoring a saved source retry deadline; no browser tab is required.
+There is no overall time limit: a source that sends no new bytes for
+`REMOTE_READ_TIMEOUT` (120 seconds) counts as stalled and is retried. Server
+restart starts a fresh cycle, honoring a saved source retry deadline; no browser tab is required.
 Only exhausted attempts or permanent errors need user action.
 Neither mode can exceed the source, route or server capacity.
 
@@ -546,55 +547,7 @@ The grey timeline shows approximate loaded coverage; hovering shows an image
 and time without adding a second filled range that could resemble a buffer.
 Neither the grey range nor a preview image guarantees decoded readiness.
 
-## Operator checklist
-
-Follow the [website-stats investigation](performance-tuning.md#start-with-the-website-stats)
-to compare cold and cached reads, inspect the affected stage and change one
-setting at a time. Keep the workload comparable before judging an improvement.
-
-### Read the Performance page
-
-**Monitor → Performance** separates server network, TGDrive HTTP file traffic
-and Telegram origin activity. They overlap: **do not add their totals**. Network
-counts include protocol/other interface traffic; Docker normally measures its
-container interface. Blue is **Download to server**; dashed is **Upload from server**.
-Hover or use the keyboard/touch sample scrubber. **Now** always means current.
-
-<details>
-<summary>History, totals and resource measurement</summary>
-
-- Live: five minutes of three-second samples. Recorded: 31 days of minute
-  aggregates, at most 360 plotted points. Presets include Last Month (30 days).
-- Averages cover observed seconds only. Missing/offline periods remain gaps;
-  incompatible scopes are not joined and earlier periods are not backfilled.
-  Custom inputs use UTC; the applied interval uses the configured timezone.
-- All-time totals are separate persistent checkpoints **since the displayed
-  tracking start date**. Network, Telegram and HTTP totals stay separate.
-  HTTP covers `/file` and resumable-upload bodies, including cached delivery
-  and receipt messages; it excludes assets/settings polling. Detailed process
-  counters reset on restart.
-- MongoDB stores history/totals without another metrics service. Checkpoints run
-  each minute and at clean shutdown; abrupt crashes can lose roughly a minute.
-  Diagnostic outages can lose observations without affecting file data. Telemetry
-  is excluded from encrypted backups.
-- CPU uses 0–100% of available container cores/quota. RAM uses cgroup usage and
-  a finite limit where present; otherwise its observed scale is explicit.
-  Host CPU is a labelled fallback. Load average is not CPU percentage; process,
-  container, host-available and cache memory are different measurements.
-
-</details>
-
-### Investigate a slowdown
-
-Use the [bottleneck table](performance-tuning.md#find-the-bottleneck) to choose
-between reducing work, changing cache, adding Telegram capacity or upgrading
-the host. A completed import can have zero current rate; inspect its historical
-interval and lifetime receive total instead.
-
-Compare graphs over the same interval. Account/request details are current/recent
-state, not a month-long request log. Cache hits/misses count lookups, not saved
-bytes. **Preloads** shows current verified coverage and jobs; clearing cached
-bytes requires confirmation and leaves originals intact.
+## Delivery edge cases
 
 ### Browser transport with a full cache
 

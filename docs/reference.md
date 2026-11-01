@@ -438,7 +438,8 @@ that prevent startup are explained in container logs. See
   annotations do not execute. Selected images/audio/video can render inline;
   active document types download as attachments. See [preview contracts](api.md#previews-and-media).
 - **Remote imports:** public-address and redirect validation, no URL credentials,
-  identity encoding, no inherited environment proxy, bounded time/bytes/disk.
+  identity encoding, no inherited environment proxy, bounded bytes and disk.
+  There is no overall time limit; stalled sources are retried.
   `ALLOW_PRIVATE_REMOTE_URLS` explicitly broadens reachability. Signed source URLs
   may persist in private jobs.
 - **Backups/deletion:** recovery files use AES-256-GCM before disk or Telegram
