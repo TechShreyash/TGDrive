@@ -18,20 +18,19 @@ for access while your computer is off. [Compare self-hosting options](hosting.md
 
 ## Before you start
 
-Install Docker with **Compose 2.24+ and Buildx**, then start it:
+Install Docker with **Compose 2.24 or newer**, then start it:
 
 | System | Install | Terminal |
 | --- | --- | --- |
 | Windows | [Docker Desktop](https://docs.docker.com/desktop/setup/install/windows-install/), default WSL 2 backend, **Linux containers** | PowerShell |
 | macOS | [Docker Desktop](https://docs.docker.com/desktop/setup/install/mac-install/) | Terminal |
-| Linux | [Docker Engine](https://docs.docker.com/engine/install/), [Compose plugin](https://docs.docker.com/compose/install/linux/) and [Buildx](https://docs.docker.com/build/concepts/overview/) | Your usual terminal |
+| Linux | [Docker Engine](https://docs.docker.com/engine/install/) and the [Compose plugin](https://docs.docker.com/compose/install/linux/) | Your usual terminal |
 
 These commands must work before continuing:
 
 ~~~bash
 docker info
 docker compose version
-docker buildx version
 ~~~
 
 Use `docker compose` with a space. For Linux permission errors, follow Docker's
@@ -186,7 +185,8 @@ docker compose ps
 `pull` downloads the published image `ghcr.io/techshreyash/tgdrive` for amd64
 or arm64, so nothing is built on your machine. Set `TGDRIVE_VERSION` in `.env`
 (for example `2.3.0`) to pin a release; the default is `latest`. To run your own
-changes instead, use `docker compose build`, which tags the local build with the
+changes instead, use `docker compose build` (needs
+[Buildx](https://docs.docker.com/build/concepts/overview/), included in Docker Desktop), which tags the local build with the
 same image name. `config --quiet` checks syntax, not credentials; plain
 `docker compose config` prints secrets.
 

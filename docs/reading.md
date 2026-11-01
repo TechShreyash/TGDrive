@@ -1,6 +1,6 @@
 # Reading books and comics
 
-[Docs home](README.md) · [All previews](usage.md#open-preview-and-download)
+[Docs home](README.md) · [User guide](usage.md) · [Previews](usage.md#open-preview-and-download)
 
 Open a PDF, EPUB, CBZ or CBR from **My Files** or a shared folder. Use the toolbar
 to navigate and adjust the display; EPUB/comics also offer **Reading options**.

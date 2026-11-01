@@ -1,6 +1,6 @@
 # Backup & recovery
 
-[Docs home](README.md) · [Operations](operations.md)
+[Docs home](README.md) · [Operations](operations.md) · [Configuration](configuration.md)
 
 TGDrive keeps your whole drive in MongoDB and your files in Telegram. Backups
 are encrypted with your `ENCRYPTION_KEY` and pinned in your storage channel, so

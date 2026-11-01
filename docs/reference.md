@@ -1,6 +1,6 @@
 # Configuration and security reference
 
-[Docs home](README.md) · [Settings guide](configuration.md) · [Development](development.md)
+[Docs home](README.md) · [Configuration](configuration.md) · [API reference](api.md)
 
 Use this page to look up exact deployment settings and security boundaries;
 HTTP endpoints are in the [API reference](api.md). For website tasks,

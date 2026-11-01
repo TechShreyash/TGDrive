@@ -95,7 +95,7 @@ to the unfinished work you confirm; completed files and later uploads remain.
 TGDrive splits large files automatically and presents them as one file for
 playback/download. Premium is optional. Defaults allow **16 GiB per file**, subject
 to available temporary upload space; every account uses Telegram documents of at
-most **2000 MiB**. Keep the catalog and every part for recovery.
+most **2000 MiB**. Keep the [catalog](reference.md#terms-used-here) and every part for recovery.
 [Change upload limits](configuration.md#transfer-limits).
 
 ### Upload speed and queue

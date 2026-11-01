@@ -1,6 +1,6 @@
 # Streaming, caching and transfer performance
 
-[Docs home](README.md) · [Using TGDrive](usage.md) · [Configuration](configuration.md)
+[Docs home](README.md) · [Capacity guide](performance-tuning.md) · [Architecture](architecture.md)
 
 For a slow drive, start with the [capacity guide](performance-tuning.md).
 This page explains the policies behind its advice: cache retention, request

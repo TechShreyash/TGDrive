@@ -1,6 +1,6 @@
 # Status and roadmap
 
-[Docs home](README.md) · [Development](development.md)
+[Docs home](README.md) · [Architecture](architecture.md) · [Development](development.md)
 
 TGDrive is a single-owner, self-hosted drive. This page separates available
 features from remaining validation and known limits.

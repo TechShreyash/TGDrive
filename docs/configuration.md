@@ -1,6 +1,6 @@
 # Configuration and safe tuning
 
-[Docs home](README.md) · [Setup](setup.md) · [Performance diagnostics](performance.md)
+[Docs home](README.md) · [Setup](setup.md) · [Configuration reference](reference.md)
 
 TGDrive sets its own cache sizes, storage budgets and Telegram concurrency from
 the server's memory, CPU, disk and Telegram's responses, and keeps adjusting

@@ -1,6 +1,6 @@
 # Thumbnails and video posters
 
-[Docs home](README.md) · [Browse files](usage.md#browse-and-organize)
+[Docs home](README.md) · [User guide](usage.md) · [Browse files](usage.md#browse-and-organize)
 
 TGDrive creates covers during upload without changing originals. A file-type icon
 usually means no usable cover was available; it does not prove the file is damaged.

@@ -1,6 +1,6 @@
 # Run, protect and recover TGDrive
 
-[Docs home](README.md) · [Backup guide](backup-recovery.md)
+[Docs home](README.md) · [Backup & recovery](backup-recovery.md) · [Configuration](configuration.md)
 
 > [!IMPORTANT]
 > Keep **one app instance and one worker per drive**. Preserve the database, secrets and persistent volumes across restarts and updates.
@@ -77,7 +77,7 @@ Start the **same deployment**, then check **Transfers**, **Connections** and **S
 
 | Interrupted work | Next step |
 | --- | --- |
-| Completed file | Its MongoDB catalog and Telegram documents survive a normal restart. |
+| Completed file | Its MongoDB [catalog](reference.md#terms-used-here) and Telegram documents survive a normal restart. |
 | Browser upload | Resume the existing transfer; reselect the same original if asked. A closed browser cannot send remaining bytes. |
 | Telegram upload | Preserve both volumes and retry the existing job; recovery uses staged bytes and confirmed work. |
 | URL import | Retry its server job in Transfers. Remote downloading may restart; expired URLs need replacement. |
