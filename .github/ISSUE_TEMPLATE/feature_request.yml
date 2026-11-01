@@ -1,0 +1,17 @@
+name: Feature request
+description: Suggest something TGDrive should do.
+labels: [enhancement]
+body:
+  - type: markdown
+    attributes:
+      value: Check the [roadmap](https://github.com/TechShreyash/TGDrive/blob/main/docs/roadmap.md) first.
+  - type: textarea
+    id: problem
+    attributes:
+      label: What problem would this solve?
+    validations:
+      required: true
+  - type: textarea
+    id: idea
+    attributes:
+      label: What would you like to happen?

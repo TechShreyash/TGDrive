@@ -601,7 +601,7 @@ bytes requires confirmation and leaves originals intact.
 A ready cache removes origin payload work, not viewer transport. Browser HTTP/3
 can differ from curl/Python HTTP/1.1 or HTTP/2. TGDrive clears alternative-service
 advertisements by default. Check [proxy configuration](operations.md#http-delivery-and-proxy-configuration)
-and [fresh-browser validation](streaming-validation-2026-10-18.md) before attributing
+before attributing
 warm-cache stalls to Telegram or raising budgets.
 
 ### Distant video seeks

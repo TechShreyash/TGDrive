@@ -226,7 +226,7 @@ after Docker starts, set `TGDRIVE_RESTART_POLICY=unless-stopped` and recreate.
 
 You're ready to [upload files](usage.md#upload-files-or-folders). Keep originals
 until **Completed**; interrupted browser uploads may need them again.
-Before large imports, review [upload and disk budgets](configuration.md#upload-size-and-available-disk-space).
+Before large imports, review [upload and disk budgets](configuration.md#transfer-limits).
 
 ## Apply updates to an existing drive
 

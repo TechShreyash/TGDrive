@@ -79,7 +79,7 @@ and discussion.
 ## Contribute
 
 [Report a bug or request a feature](https://github.com/TechShreyash/TGDrive/issues),
-or use the [development guide](docs/development.md) and [contributor guidance](AGENTS.md).
+or read the [contributing guide](CONTRIBUTING.md). Report security issues privately per [SECURITY.md](SECURITY.md).
 Include your version and reproduction steps; remove credentials and private links.
 
 [MIT License](LICENSE)

@@ -1,0 +1,49 @@
+name: Bug report
+description: Something in TGDrive doesn't work as documented.
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Security problem? Don't file it here; follow [SECURITY.md](https://github.com/TechShreyash/TGDrive/blob/main/SECURITY.md).
+        Never paste bot tokens, session strings, `ENCRYPTION_KEY` or other secrets.
+  - type: input
+    id: version
+    attributes:
+      label: TGDrive version
+      description: The release tag or `TGDRIVE_VERSION` you run, or the commit for a source checkout.
+      placeholder: 2.3.0
+    validations:
+      required: true
+  - type: dropdown
+    id: install
+    attributes:
+      label: How do you run it?
+      options:
+        - Docker Compose on my computer
+        - Coolify
+        - Docker Compose on a server
+        - Other
+    validations:
+      required: true
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened, and what did you expect?
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. Open …
+        2. Click …
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs or screenshots
+      description: Relevant `docker compose logs --tail=100 app` lines. Review them and remove secrets first.
+      render: text

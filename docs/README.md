@@ -4,7 +4,7 @@ New to TGDrive? [Start with the essentials](new-user-guide.md),
 [try the demo](usage.md#try-the-public-demo), or go straight to [Setup](setup.md).
 Pick the guide for your task; you do not need to read everything.
 
-These guides cover TGDrive 2.2.1 with MongoDB. Install from stable `main` or a
+These guides cover TGDrive 2.3 with MongoDB. Install from stable `main` or a
 published release tag; `dev` may be unstable.
 
 | I want to… | Read |
@@ -33,10 +33,8 @@ For specific tasks: [ebooks and comics](reading.md), [thumbnails and video poste
 | Source layout, frontend contracts, builds and validation | [Development](development.md) |
 | Source artifacts and release checks | [Release verification](release.md) |
 | Implemented features and remaining gaps | [Roadmap](roadmap.md) |
-| Dated playback measurements | [Streaming validation](streaming-validation-2026-10-18.md) |
 | Record or replace screenshots and videos | [Media capture guide](assets/README.md) |
 
-Follow [contributor guidance](../AGENTS.md). [Validation evidence](development.md#ci-and-release-evidence)
-records what was actually tested.
+Start with the [contributing guide](../CONTRIBUTING.md). AI coding agents also follow [AGENTS.md](../AGENTS.md).
 
 </details>

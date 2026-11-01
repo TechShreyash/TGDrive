@@ -1,134 +1,83 @@
-# TGDrive contributor guidance
+# TGDrive agent guide
 
-**Project rule: Make sure you are documenting important features and workings of TGDrive.**
+TGDrive is a self-hosted drive that stores files in Telegram channels. The
+backend is Python 3.14.8 (ASGI app `tgdrive.web.app:create_app`) in `tgdrive/`,
+the frontend is React + Mantine + Vite in `website/`, and MongoDB holds the
+catalog. Human contributor rules live in [CONTRIBUTING.md](CONTRIBUTING.md);
+the full developer guide is [docs/development.md](docs/development.md).
 
-## Collaborate with independent judgment
+## Owner approval rules
 
-Treat the user's proposed approaches as suggestions open to discussion. If you
-disagree or see a better approach, say so plainly, explain the tradeoff and
-recommend it. Distinguish suggestions and questions from explicit requests to
-change something; do not implement every idea automatically. Continue to honor
-explicit requirements, constraints and approval boundaries.
+These always apply in this repository.
 
-## Keep documentation current with the implementation
+- **Checks:** do not run tests, typechecks, builds, linters, benchmarks or browser
+  checks unless the owner asked for them for the current work. Otherwise propose
+  the smallest useful check, say why, and wait. Earlier approval does not carry
+  over; reuse results that still apply.
+- **Pushes:** do not push commits, branches or tags unless the owner asked for
+  that specific push. Finish locally, name the remote and branch, and wait.
+- **Reporting:** report only checks you actually ran, and say what was not tested.
+- **Judgment:** treat the owner's proposed approaches as suggestions. If you see
+  a better one, say so and explain the tradeoff. Answer questions without
+  changing code.
 
-When adding or changing an important feature, workflow, default, limit, recovery
-guarantee or architectural decision, update its documentation in the same change.
-Documentation is part of completing the feature. Internal refactors that preserve
-documented behavior do not need artificial documentation changes.
+## Requirements and commands
 
-Explain the user experience, how data and work move through TGDrive, why the
-policy exists, and its practical limits. Include relevant defaults, configuration,
-failure/retry behavior and when work can continue without the browser. Keep
-user-facing instructions practical; put detailed thresholds and correctness
-rules in the technical documentation.
+Docker with Compose 2.24+ runs TGDrive, the test MongoDB and release builds.
+Editing also needs uv and Node 24.22+ (below 25). Linux and macOS work natively;
+on Windows, develop inside WSL Ubuntu with the checkout in the Linux filesystem.
 
-Keep documentation small and easy to scan. Lead with the steps or facts readers
-need, remove repetition, and link to the canonical explanation. Use GitHub-flavored
-Markdown tables, task lists and fenced code blocks where useful. Put optional
-troubleshooting, implementation detail and long examples in `<details>` sections
-with a clear `<summary>` and blank lines around Markdown content. Collapsing text
-is not a substitute for shortening it; do not hide essential steps or warnings.
+```bash
+uv sync --frozen --all-groups --python 3.14.8
+npm ci --prefix website
+npm run dev --prefix website        # Vite on 5173, proxies to the app on 8000
+uv run --frozen --all-groups python -m pytest -q tests/<area>
+npm run typecheck --prefix website
+npm test --prefix website
+```
 
-The root README is a product showcase: clear benefits, screenshots/demo media and
-links to the guides. Keep installation steps and commands in `docs/setup.md`.
-Write for readers who do not yet know Telegram or earlier TGDrive versions.
-Use normal links rather than footnotes, and label unfinished media slots clearly.
-Keep screenshot/demo replacement instructions in `docs/assets/README.md`.
+Run the app, sample-content preview, full checks and the opt-in MongoDB and
+Chromium suites as described in [docs/development.md](docs/development.md).
+Browser tests need `TGDRIVE_E2E=1`; MongoDB tests need `TGDRIVE_MONGO_TESTS=1`
+and a disposable `TGDRIVE_TEST_MONGODB_URI`, never the real database.
 
-Verify claims against the implementation. Keep settings, API contracts, limits
-and recovery guarantees consistent with the code. Distinguish automated tests,
-synthetic browser checks and live validation; never claim unrun checks, deployment
-or universal device/network performance. Keep private evidence and credentials
-out of public documentation.
+## Layout
 
-## Choose a clear home for each topic
-
-Use the existing structure when it fits:
-
-| Information | Maintain here |
+| Path | Contents |
 | --- | --- |
-| Feature overview and discovery | `README.md`, `docs/README.md` |
-| User workflows and status meanings | `docs/usage.md` |
-| Components, data flow, scheduling and durability | `docs/architecture.md` |
-| Performance policy and bottlenecks | `docs/performance.md` |
-| Settings, defaults, limits and API contracts | `docs/configuration.md`, `docs/reference.md` |
-| Restart, failures, backup and recovery | `docs/operations.md`, `docs/backup-recovery.md` |
-| Relevant validation commands and evidence | `docs/development.md` |
+| `tgdrive/<domain>/` | Backend packages ([code map](docs/architecture.md#components)) |
+| `website/src/app/`, `features/`, `shared/` | Shell, feature UI, shared client and theme |
+| `tests/<domain>/` | Python tests by backend domain; `tests/browser/` is Chromium |
+| `scripts/` | Release packaging, viewer vendoring, brand assets |
+| `docs/` | Public guides; new guides go in `PUBLIC_DOCS` in `scripts/build_release.py` |
 
-Prefer updating an existing guide. Create a focused file in `docs/` only when a
-distinct subject needs its own explanation and would make that guide unwieldy.
-These pages are a starting structure, not a fixed list.
-Use a descriptive filename, link the page from `docs/README.md` and relevant
-guides, and update the root README when feature discovery warrants it. Add public
-guides to `PUBLIC_DOCS` in `scripts/build_release.py` so source releases include
-them; keep private notes outside that allowlist.
+## Code rules
 
-Give each subject one canonical explanation and cross-link it instead of copying
-the same details across guides. Update or remove obsolete text, examples and
-links when behavior changes. Check affected links and documented commands.
+- Python follows Ruff in `pyproject.toml` (88 columns). TypeScript is strict with
+  Prettier at 80 columns.
+- Import concrete modules; no barrel or forwarding modules. Put units in names
+  for time, bytes and limits.
+- Transfer and recovery code must keep cancellation, request identity and
+  durable-state ordering ([architecture](docs/architecture.md)).
+- Keep lockfiles. Never commit secrets, `.env`, `data/` or `cache/`.
 
-## Ask before running tests or validation
+## Gotchas
 
-Do not run tests, typechecks, builds, linters, benchmarks or browser validation
-unless the user explicitly requests those checks for the current work or approves
-the specific proposed validation. Do not run unnecessary checks after every
-message. A fix request, clarification, status question, documentation edit or
-commit request alone is not permission to start or repeat testing.
+- Run one server per drive. Avoid reloads during real uploads.
+- The app links to `docs/configuration.md`, `docs/backup-recovery.md` and
+  `docs/usage.md#preload-a-file-for-smoother-playback-and-downloads`. Keep those
+  paths and anchors.
+- `docs/request-tracker.md` is private and gitignored. Never publish it.
 
-Reuse existing results while they remain applicable. Earlier permission to test
-is not standing permission for later runs. Before additional validation, explain
-the smallest useful check and why it is needed, then wait for approval. Stay
-within the approved scope; do not broaden it or repeat passing checks without
-asking. Ordinary code reading and Git status/diff inspection may continue.
+## Documentation
 
-Report checks actually performed and remaining limitations. Never imply a change
-was tested when validation was not requested or approved.
+Update the relevant guide in the same change as any feature, default, limit or
+recovery behavior. Follow the [documentation rules](CONTRIBUTING.md#documentation).
 
-## Ask before pushing
+## Commits and releases
 
-Do not push commits, branches or tags to any remote unless the user explicitly
-requests the current push or approves that specific proposed push. Earlier push
-permission applies only to that requested action; it is not standing permission
-for later changes. Requests to edit, fix, continue work or commit do not authorize
-a push.
-
-When the current push is not explicitly authorized, finish the local work first,
-summarize what would be pushed and name the remote and branch, then ask and wait
-for approval. Keep the changes local until the user answers. Do not bypass this
-rule with scripts, automation or another tool that publishes the local commits.
-
-## Version every published update
-
-Every update published to `main` must belong to a new semantic version, starting
-with `2.0.0`. Use patch versions for fixes, documentation and maintenance, and
-minor versions for features, including breaking changes; document their upgrade
-steps in `docs/operations.md`. Change the major version only when the owner
-explicitly asks. When the owner names a target version, use it.
-Development commits may accumulate for one upcoming release.
-`main` receives stable updates after review and required checks; `dev` is ongoing
-development and may be unstable. Point user-facing documentation links to `main`
-and release downloads to their version tags. Use `dev` links only for development
-instructions.
-
-Keep `pyproject.toml` authoritative and synchronize the runtime version, frontend
-package and lockfile, Python lockfile project entry, and Docker image label.
-Name the target version in the release PR. After merging, create an immutable
-annotated `vX.Y.Z` tag on the final `main` commit and link the PR and commit in the
-GitHub release. Cloning is sufficient; custom ZIP/checksum assets are optional.
-Never move a published tag; corrections require a new version. Follow
-[the release procedure](docs/release.md).
-The testing and push approval rules above still apply.
-
-## Write useful commit titles and descriptions
-
-When committing, use a concise, specific title describing the resulting change
-in the imperative, such as `Adapt device upload concurrency to measured throughput`.
-Include a meaningful description explaining the problem and purpose, important
-behavior or architecture changes, validation actually performed, and any material
-limitations, compatibility or migration requirements. Scale the detail to the
-change; avoid vague titles, file lists and transcripts of the work.
-
-Use Git commit titles and descriptions for change history. Do not maintain or
-recreate `CHANGELOG.md`. Project documentation describes how TGDrive currently
-works; commit messages explain what changed and why.
+- Titles are specific and imperative, such as `Adapt device upload concurrency
+  to measured throughput`. The body explains the problem, the change, checks
+  actually run and any limits or migration steps. Do not create `CHANGELOG.md`.
+- Versions, tags and release PRs follow [docs/release.md](docs/release.md) and the
+  `tgdrive-release` skill. Change the major version only when the owner asks.

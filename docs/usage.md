@@ -10,7 +10,7 @@ Start in **My Files**: upload a small file, open it, then try sharing it.
 | Add files | [Upload](#upload-files-or-folders) · [Resume an upload](#can-i-close-the-tab) |
 | Find or use files | [Browse](#browse-and-organize) · [Preview and download](#open-preview-and-download) |
 | Give someone access | [Share links](#share-and-revoke) · [Embed](#embed-a-file-or-folder-in-a-website) |
-| Other ways to import | [URL](#import-from-a-url) · [Torrent](#import-a-torrent-or-magnet-link) · [Telegram bot](#optional-telegram-bot-interface) |
+| Other ways to import | [URL](#import-from-a-url) · [Torrent](#import-a-torrent-or-magnet-link) · [Telegram bot](#upload-through-your-telegram-bot) |
 | Manage work | [Transfers](#transfer-history) · [Preloads](#preload-a-file-for-smoother-playback-and-downloads) · [Settings](#settings-and-connections) |
 
 ## Upload files or folders
@@ -96,7 +96,7 @@ TGDrive splits large files automatically and presents them as one file for
 playback/download. Premium is optional. Defaults allow **16 GiB per file**, subject
 to available temporary upload space; every account uses Telegram documents of at
 most **2000 MiB**. Keep the catalog and every part for recovery.
-[Change upload limits](configuration.md#upload-size-and-available-disk-space).
+[Change upload limits](configuration.md#transfer-limits).
 
 ### Upload speed and queue
 
@@ -451,10 +451,7 @@ run hourly without an independent channel; independent protection batches change
 Each backup is pinned in your channel and opens with your `ENCRYPTION_KEY`. Reuse
 the same `.env` and MongoDB after losing a local installation. [Backup setup and restore](backup-recovery.md).
 
-<a name="optional-telegram-bot-interface"></a>
-
-<details>
-<summary>Upload through your Telegram bot</summary>
+## Upload through your Telegram bot
 
 Standard setup enables the main bot for Telegram users listed in
 `TELEGRAM_ADMIN_IDS`. Use its **private chat**:
@@ -496,8 +493,6 @@ and **/set_folder** links to the website setting. The website address is remembe
 when saved; `PUBLIC_URL` can supply it earlier. Installations using only
 `BOT_TOKENS` must configure a main bot/allowed IDs and restart to enable this.
 [Bot settings](reference.md#telegram-accounts) · [Known recovery gaps](roadmap.md#known-correctness-and-recovery-gaps)
-
-</details>
 
 ## Try the public demo
 

@@ -401,6 +401,6 @@ Traefik can append its own advertisement, so the Compose middleware ensures the 
 
 Remove temporary custom rules once the updated app/Compose supplies the policy. Redundant routers can break when domains/services change. Coolify watches dynamic files; main proxy Compose edits need restart and must be saved through its UI.
 
-The default follows one reproduced HTTP/3 delivery slowdown, not a universal QUIC claim: see the [validation report](streaming-validation-2026-10-18.md). References: [Coolify Traefik](https://coolify.io/docs/core/networking/proxy/traefik/overview), [Traefik HTTP/3](https://doc.traefik.io/traefik/reference/install-configuration/entrypoints/#http3), [Alt-Svc specification](https://www.rfc-editor.org/rfc/rfc7838.html#section-3.1).
+The default follows one reproduced slowdown, not a universal QUIC claim: on 18 October 2026 the same 17.8 MB MP4 took 93.7 seconds over HTTP/3 and 1.0 second over HTTP/2 on the tested connection. References: [Coolify Traefik](https://coolify.io/docs/core/networking/proxy/traefik/overview), [Traefik HTTP/3](https://doc.traefik.io/traefik/reference/install-configuration/entrypoints/#http3), [Alt-Svc specification](https://www.rfc-editor.org/rfc/rfc7838.html#section-3.1).
 
 </details>

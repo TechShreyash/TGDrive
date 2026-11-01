@@ -407,7 +407,7 @@ then record its message ID, name and size in MongoDB. Their operation identity
 includes the bot account, source chat and incoming message ID: token rotation for
 the same account preserves it; replacing the bot account uses a separate identity.
 Reprocessing the same message reuses its identity; a new forward
-is a separate import with [keep-both naming](usage.md#optional-telegram-bot-interface).
+is a separate import with [keep-both naming](usage.md#upload-through-your-telegram-bot).
 
 Once catalog writing starts, errors preserve the Telegram copy because a lost
 acknowledgement can follow a successful commit. Earlier failures delete the copy

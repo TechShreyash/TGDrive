@@ -5,8 +5,8 @@
 For maintainers publishing **2.0.0** and later releases. For installation, use
 [Setup](setup.md); cloning is sufficient and custom ZIP assets are optional.
 
-Follow [contributor approval rules](../AGENTS.md): get authorization for checks
-and for each specific push. Building an artifact does not publish it.
+Agents follow the [approval rules](../AGENTS.md#owner-approval-rules): get authorization
+for checks and for each specific push. Building an artifact does not publish it.
 
 **Contents**
 
@@ -197,8 +197,7 @@ evidence out of public docs and reports.
   is enabled, verify its completed restore point and recovery flow separately.
 
 Automated tests and synthetic browser checks do not certify real Telegram,
-Coolify, DNS/TLS, every codec/device or sustained throughput. See the
-[dated evidence](development.md#ci-and-release-evidence) and
+Coolify, DNS/TLS, every codec/device or sustained throughput. Record what was actually checked in the release PR. See the
 [validation boundaries](roadmap.md#before-public-release). A documented release
 procedure is not a claim that publication or all live checks have occurred.
 

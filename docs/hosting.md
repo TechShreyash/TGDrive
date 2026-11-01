@@ -54,7 +54,7 @@ Create these in accounts you control:
 
 Extra storage bots, Premium and a separate backup channel are optional.
 Use TGDrive's normal authorization flow if you choose Premium.
-[Bot uploads](usage.md#optional-telegram-bot-interface) ·
+[Bot uploads](usage.md#upload-through-your-telegram-bot) ·
 [Additional bots and Premium](setup.md#additional-bots-and-premium-accounts)
 
 Never post credentials in an issue, screenshot or repository. Credential
@@ -80,7 +80,7 @@ or Telegram clients to the bottleneck shown by your workload.
 
 New uploads default to a **16 GiB file limit and 16 GiB temporary upload budget**.
 Larger files need both settings raised and enough free server disk, even though
-TGDrive splits them in Telegram. See [upload storage settings](configuration.md#upload-size-and-available-disk-space)
+TGDrive splits them in Telegram. See [upload storage settings](configuration.md#transfer-limits)
 and [exact file/catalog limits](reference.md#file-capacity-staging-and-work-limits).
 
 Larger servers help when server resources are the bottleneck. They do not
@@ -107,5 +107,5 @@ work stop until TGDrive is reachable again.
 Contributions, feedback, bug reports and feature requests are welcome from
 everyone.
 [Open a GitHub issue](https://github.com/TechShreyash/TGDrive/issues) or follow the
-[development guide](development.md) and [contributor guidance](../AGENTS.md).
+[development guide](development.md) and [contributing guide](../CONTRIBUTING.md).
 Keep credentials and private links out of public reports.

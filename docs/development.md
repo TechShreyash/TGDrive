@@ -2,12 +2,11 @@
 
 [Docs home](README.md) · [Architecture](architecture.md) · [Release verification](release.md)
 
-Contributor commands run **inside WSL Ubuntu**, using the Linux checkout and
-[supported runtimes](#version-baseline-and-dependency-policy). Develop on `dev`;
-normal installations use stable `main` or a published tag through [Setup](setup.md).
-
-Run tests, builds and other validation only when authorized for the current work,
-as required by [contributor guidance](../AGENTS.md#ask-before-running-tests-or-validation).
+Development needs Docker with Compose 2.24+ plus the
+[supported runtimes](#version-baseline-and-dependency-policy). Linux and macOS work
+natively; on Windows, use WSL Ubuntu with the checkout in the Linux filesystem.
+Develop on `dev`; normal installations use stable `main` or a published tag
+through [Setup](setup.md). How to propose changes: [CONTRIBUTING.md](../CONTRIBUTING.md).
 
 | Task | Start here |
 | --- | --- |
@@ -16,7 +15,6 @@ as required by [contributor guidance](../AGENTS.md#ask-before-running-tests-or-v
 | Find the code | [Repository/test map](#repository-map-and-test-map) · [Code conventions](#code-conventions) |
 | Preserve behavior | [Frontend](#frontend-contracts) · [Channel backups](#independent-channel-backup-contracts) · [Readers](#selective-book-pages-and-shared-pdf-resources) |
 | Prepare a release | [CI](#when-github-checks-run) · [Source artifacts](#source-releases) · [Release procedure](release.md) |
-| Understand earlier checks | [Feature snapshots](#latest-validation) · [CI/release evidence](#recorded-results) |
 | Update guides or captures | [Documentation policy](#documentation-maintenance) · [Media guide](assets/README.md) |
 
 ## Install the development environment
@@ -44,7 +42,7 @@ COOKIE_SECURE=false uv run --frozen python -m uvicorn tgdrive.web.app:create_app
   --timeout-graceful-shutdown 45 --no-access-log
 ```
 
-In another WSL terminal:
+In another terminal:
 
 ```bash
 npm run dev --prefix website
@@ -71,80 +69,11 @@ without Telegram credentials. Restart resets it. CBR needs
 16 GiB file cap; ordinary browser tests use 32 MiB. Never publicly deploy the
 fixture or its `/__test__` endpoints.
 
-## Latest validation
-
-These are historical results for the tested snapshots, **not a passing status for
-this checkout**. Focused runs reused applicable passing cases; counts from separate
-runs do not describe one final full-suite run. Synthetic Telegram/browser fixtures
-exercise behavior without proving provider throughput or physical-device support.
-For release evidence, use [CI and release evidence](#ci-and-release-evidence).
-
-<details>
-<summary>28 October snapshots: recovery, imports, playback and UI</summary>
-
-| Snapshot | Recorded checks and coverage | Limits |
-| --- | --- | --- |
-| Durable video posters · 2026-10-28 · working tree with Movi `.2` | 222 focused Python cases, 71 frontend cases, 53 viewer checks and 18 applicable Chromium cases passed across initial and targeted runs; typecheck/build passed. Real FFmpeg checks cover dimensions, no upscaling and paired outputs. Coverage includes upload reply loss/restart/cancellation, poster authorization/cache, SQLite migration, purge, replica/restore mapping, sharp stored images, URL cleanup and saved positions. Browser checks exposed a late representative-frame reset; the ownership fix passed held-seek early Play/Continue/seek and desktop/touch quality restoration. | Telegram and MongoDB transports use fixtures; browser checks use a local synthetic origin. No live poster publication, deployment, full-suite rerun, lint, physical-device or cold-network benchmark. A concurrent `.3` dependency upgrade began after these checks and is not covered. Earlier applicable passing cases were reused; counts do not describe one final full-suite run. |
-| Opening-frame previews · 2026-10-28 · `c9ebf7c` plus local repairs | Typecheck/build, 53 viewer checks, 653 frontend tests and 70 applicable synthetic Chromium cases passed across the main run and targeted reruns. Live Chrome showed a sharp paused MP4 opening frame; two MKVs, including the originally reported file, rendered one black opening frame while paused. MP4 Play, Continue and completion worked. The initial Python run passed 2,243 cases plus 36 subtests; two stale test contracts were repaired and their 57-case modules passed. | Python had 87 skips; the full suite was not repeated after fixture repairs. Repository-wide Ruff/Prettier checks still fail; checks for the repaired Python fixtures and new opening-frame test passed. A transient missing-build browser failure passed on rerun. The separate share-copy focus fix passed locally and was not deployed. No physical-phone, Safari/Firefox or universal network/codec guarantee. |
-| Background permanent deletion · 2026-10-28 · `9861924` | 112 metadata/job/API cases, six backup-barrier cases and ten isolated MongoDB cases passed across overlapping runs. Eleven frontend and two synthetic Chromium cases, typecheck/build and focused formatting checks passed. Live Chrome: three disposable folders, including a 61-byte file, stayed hidden through reload and tab closure, then completed. Synthetic desktop/320 px captures cover pending, failure and retry states. | Final cleanup was observed about 4½ minutes after confirmation while backup verification ran; this is one observation, not a speed guarantee. No live outage/server-restart injection, physical-phone test, full suite or benchmark. Whole-file Ruff still reports unrelated backup/torrent/recovery issues. |
-| Unified recovery files · 2026-10-28 | Initial focused run: 407 passing Python cases; 21 affected/new cases and two final malformed-content/free-space cases passed after repairs. Frontend typecheck and 28 backup UI cases passed. Covers database/channel consistency, legacy retries, replacement credentials, rebuilding, activation and matching file/key exports. | Synthetic fixtures; five opt-in MongoDB activation cases skipped. No live recovery, browser check, production build, deployment or full suite. |
-| Unified recovery verification · 2026-10-28 · deployed `c9ebf7c` plus local repairs | Final focused backend group passed 460 cases across its run and one fixture rerun; 46 isolated real MongoDB cases passed, including full v2 restoration and transaction rollback. After the startup-key fix, 30 focused runtime/key/publication cases passed. Production frontend build/typecheck, 39 backup UI units and ten synthetic Chromium cases passed across focused runs. Live checks passed readiness, anonymous/visitor export denial, secret-free status, manual checkpoint creation, file/key download and decryption. The downloaded production snapshot restored matching catalog/settings/history into an isolated MongoDB without replaying unsafe work. All 159 parts in each channel verified for the latest point; three byte/checksum samples matched at an earlier point. | The final synthetic run skipped seven real Mongo cases already exercised separately. Demo mode correctly rejects restore imports; production failover or activation was not induced. Local fixes cover restore-mode reload, startup key durability, confirmed-file retention, stale safety-copy dates and explicit demo restore limits and require deployment. Telegram's verification cooldown was respected before completing the latest check. No full repository run or physical-device guarantee. |
-| Backup database retry safety · 2026-10-28 · `a452dae` | 350 offline cases, five isolated MongoDB activation cases and seven synthetic Chromium cases passed, plus typecheck/build and focused Ruff. Live deployment readiness and anonymous-access rejection passed; **Back Up Now** confirmed an encrypted Telegram archive, and **Sync now** reverified the existing independent restore point with no pending revisions. | Existing data/settings retained. No induced production outage or full live failover/restore; isolated faults do not establish recovery from every provider failure. |
-| Video Continue · 2026-10-28 | 57 video unit and 55 synthetic Chromium cases passed. A live 17.01 MiB video retained positions across reopen/reload in Chrome and the in-app browser; Continue, ordinary Play, completion cleanup, fullscreen Enter and separate profiles worked. Desktop and 320/390 px portrait/740 px landscape layouts were inspected. Later hour-formatting checks passed 23 units, typecheck and build. | Initial checks reused the prior build and used a short clip. Quality switching/storage failures were offline; no physical phones, Safari/Firefox or native-player resume. Long-video verification is recorded next. |
-| Video hour-format deployment · 2026-10-28 | 77 video units, typecheck/build and 43 synthetic Chromium cases passed across focused runs. A live 93-minute video showed **1:00:00**, **1:00:57** and **1:17:15**; the last position survived reopen/reload. Fullscreen Space resumed playback through **1:18:28**. The long label fit 320 px portrait/740 px landscape with a 44 px target. Browser-profile positions remained independent; no console errors were captured. | Two initial browser starts lost assets during a concurrent rebuild; both failed cases passed from an isolated build snapshot. No full repository suite, physical phones, Safari/Firefox, whole-film playback or live hour-long PiP check. |
-| Imports/history · 2026-10-28 · `46ffce7` | Null-name history fix passed 23 Python cases. Live magnet, torrent-folder, device-upload, URL and ZIP roundtrips preserved checked bytes; details below. Access/origin rejection, folder idempotency and 320/390 px layouts worked. aria2 1.37.0 startup/RPC/shutdown and a local 362,017-byte magnet retrieval passed. | One small swarm observation; no speed guarantee, restart/outage/disk-pressure test or physical phone. Video integrity sampled head/tail ranges, not the full file. |
-| Multi-format extraction · 2026-10-28 | Applicable focused results: 94 service/format/API, 45 frontend and 16 synthetic Chromium cases; typecheck/build on Node 24.22.0. Real local fixtures cover supported suffixes, RAR4/5, ZIP codecs, unsafe entries, corruption, memory/staging limits and repeated cancellation. Desktop/320 px screenshots inspected. | Service tests use fake Telegram; browsers use stubbed jobs and do not verify native codecs. No live multi-format deployment, container/lint/full-suite check or benchmark. Earlier ZIP evidence does not establish deployment of new formats. |
-| Multi-format extraction live · 2026-10-28 | All 17 advertised suffixes plus RAR5 and ZIP BZIP2/LZMA passed 20 format/codec cases through real Telegram, with output names and downloaded bytes checked. ZIP roundtrips, Unicode/empty folders, extract-here conflicts, retry identity, cancellation and rejection before publication passed. Desktop UI extraction continued after tab closure; its output preview and bulk-created ZIP were verified. Corruption feedback and browser console checks passed. | Tiny fixtures; API payload traffic including cleanup was about 349 KiB, excluding headers and browser traffic. Only disposable data moved to recoverable Trash; existing root items stayed unchanged. Terminal test history remains because selective clearing is unsupported. No large-archive/load, live restart/outage/disk-pressure or physical-phone check; no full-suite rerun. |
-| ZIP creation/extraction · 2026-10-28 · `0c76e03` | Final focused run: 57 backend and 72 frontend cases, typecheck/build and Ruff on 11 Python files. Eight Chromium cases passed across focused runs. Live tiny-fixture creation/extraction preserved names/bytes, empty folders and conflict handling; unsafe paths, empty files and damaged CRCs failed before output. Retry identity, cancellation, anonymous denial and Show in Folder worked. An accepted ZIP finished after its tab closed. | Synthetic browser/service checks and tiny live fixtures; no large-archive stress, server restart, disk pressure, outage, throughput or full-suite test. |
-| Torrent/magnet imports · 2026-10-28 | 76 Python, 80 frontend and four synthetic Chromium cases passed, plus typecheck/build. A later 24-case backend run covered hash-check disk accounting and device uploads while torrent slots were busy. | Initial runs used mocked torrent/Telegram transports; later live results are recorded separately above. No full suite, lint or container run for this feature. |
-| Idle polling/thumbnail reuse · 2026-10-28 | 168 frontend cases, production build/typecheck and three Chromium cases passed. Coverage includes hidden/idle polling, auth transitions, cross-tab recovery and thumbnail reuse at 1440/390/320 px. | Mocked requests/synthetic backend; no full suite, lint, live providers, benchmark or deployment. |
-
-Builds above retained existing viewer CommonJS and bundle-size warnings.
-
-</details>
-
-<details>
-<summary>Live import integrity recorded on 46ffce7</summary>
-
-| Path | Verified result |
-| --- | --- |
-| Magnet import | 362,017-byte EPUB completed; full original-download SHA-256 matched. |
-| Torrent URL/folder | All 11 Sintel names/sizes matched the 129,302,391-byte manifest; ten non-video files matched full hashes. Video HEAD and 65,536-byte head/tail ranges matched source bytes and headers. |
-| Device upload | 8,389,120-byte file matched full SHA-256; 8 MiB receipt offset persisted, stale offset returned 409, completion replay kept the same job. Uploading continued while two torrent metadata jobs occupied download slots. |
-| Direct URL | 1,101-byte license downloaded from Telegram matched its public source. |
-| ZIP | 363,456-byte ZIP had expected entries, valid CRCs and matching member hashes; both extracted files matched. |
-
-The EPUB rendered/changed chapters and the video played. Finished history showed
-one folder-torrent task and **Show in Folder** opened its root. Cancellation
-settled both test jobs, removed staging and left no aria2 processes. Existing
-files/settings were preserved. These observations do not establish universal
-throughput or full-video integrity.
-
-</details>
-
-<details>
-<summary>Earlier snapshots · 23–27 October 2026</summary>
-
-| Snapshot | Recorded results | Scope and limits |
-| --- | --- | --- |
-| Upload responsiveness · 2026-10-27 | 168 Python, 123 frontend and five Chromium cases; typecheck/build. | Offline journals, progress, catalog statistics, navigation reuse and share invalidation; no full suite, lint, live providers, benchmark or deployment. |
-| Reader HTTP compression · 2026-10-26 | 12 `bookImage.test.ts` cases. | Mocked Fetch: decoded compression, unknown totals, truncation and 64 MiB cancellation; no browser/proxy check, full suite, typecheck or build. |
-| Durability/concurrency audit · 2026-10-26 | 1,930 offline cases + 36 subtests, 78 opt-in skips; repaired fixture's 12-case module and ten extra journal cases passed. MongoDB parity: 98 cases. Four Chromium cases, build/typecheck, Ruff on 264 Python files and edited frontend formatting passed. | Isolated/synthetic data, including disposable MongoDB; no deployment, live Telegram or hard-kill recovery. Complete offline run included Vitest through the Python bridge. |
-| Repository/viewer/settings cleanup · 2026-10-26 | 1,908 offline cases + 36 subtests; fixture repairs and an extra authorization regression passed. 287 Chromium cases across full/focused reruns; 103 MongoDB cases including 43 live database cases. Build, 28 viewer cases, Ruff on 267 files, formatting, Bandit, lock/dependency audits and local link checks passed. AMD64 Docker/offline smoke checks and 522 source-manifest hashes passed; clean extraction installed/built. | Node 24.22.0/Python 3.14.8; 78 opt-in skips checked separately. Applicable passes reused after repairs. No live Telegram, production startup/deployment, ARM64 or physical devices. Viewer packages came from integrity-checked upstream archives. |
-| MongoDB-only startup/archive recovery · 2026-10-26 | 257 backend cases across initial/failure reruns; 11 archive-form/transport frontend cases and TypeScript passed. | Synthetic startup, preserved-state and archive validation; no live MongoDB, browser, Docker/Coolify, full suite or release build. Frontend used Node 24.21.0, below minimum; repeat on supported runtime before release. |
-| URL intake/progress · 2026-10-23 | 156 backend + 24 subtests, 88 frontend and a corrected 15-case metrics module; typecheck, focused Ruff and Prettier passed. | Synthetic ranges, fallback, cancellation, admission, pacing, storage windows and lost responses; no live downloads, benchmark, production build, browser check or deployment. |
-| Shared Links/owner sessions · 2026-10-23 | 201 backend, 335 frontend and ten Chromium cases; typecheck/build. | Synthetic UI and legacy SQLite/mocked-MongoDB session fixtures: independent logins/logout, link scope/expiry/edit/revoke and recovery confirmation. No live deployment or universal browser/device coverage. |
-| Authentication/shares/outbound requests · 2026-10-23 | 170 focused cases + 24 subtests, focused Ruff, Bandit and locked Python/npm audits passed. | Automated SQLite/mocked-MongoDB checks, including IP/redirect validation; no live database, HTTPS/proxy/provider check or independent penetration test. |
-| Adaptive read-ahead/Preloads | 1,479 offline Python (55 skipped, 15 subtests), 179 strict backend, 321 frontend and eight Chromium workflows; typecheck/build and focused Ruff passed. | Fake Telegram/synthetic ranges, cache races and responsive UI; no live-speed measurement or evidence for later artifacts. |
-
-</details>
-
 ## Validation commands
 
 Run relevant checks for a small change. Before release, run full validation and
 [artifact verification](release.md). Coverage requires opt-in isolated MongoDB;
 offline tests alone do not sufficiently exercise the production database.
-Get approval for the current checks under [contributor guidance](../AGENTS.md#ask-before-running-tests-or-validation).
 Commands below record no pass. Mocked requests and synthetic backends do not
 measure live Telegram/MongoDB throughput or certify deployment.
 
@@ -245,8 +174,7 @@ docker compose --env-file .env.example config --no-env-resolution --quiet
 ```
 
 Keep the 80% coverage floor. Compose validation checks syntax, not placeholder
-credential validity. See the [recorded results](#latest-validation) for the
-environments, coverage and known limitations of earlier runs.
+credential validity.
 
 </details>
 
@@ -267,7 +195,7 @@ TGDRIVE_E2E=1 uv run --frozen --group e2e python -m pytest \
   tests/browser/test_browser_player_resume.py
 ```
 
-Install Chromium/libraries inside WSL. Evidence stays in ignored `cache/browser-e2e`
+On Windows, install Chromium and its libraries inside WSL. Evidence stays in ignored `cache/browser-e2e`
 and feature folders. These render real UI against a test backend, without proving
 live Telegram transfers. Only dedicated tests generate image-heavy PDF fixtures.
 
@@ -331,7 +259,7 @@ Use disposable channels/test credentials and owner-authorized message mutations.
 Record sizes, original-download checksums, rendered previews and confirmed remote
 outcomes privately. Never commit credentials or traces.
 
-## CI and release evidence
+## CI checks
 
 ### When GitHub checks run
 
@@ -388,27 +316,6 @@ source candidates are retained as Actions artifacts for 14 days.
 
 This avoids rebuilding Docker images and extracted releases for every push
 while keeping installation and packaging verification available before shipping.
-
-### Recorded results
-
-These records describe earlier revisions. Validate the exact release commit and,
-when distributing an archive, its clean extraction; retain its checksum with the
-record. Workflow definitions do not prove execution.
-
-<details>
-<summary>CI repairs and release evidence · 23–26 October 2026</summary>
-
-| Record | Result and boundary |
-| --- | --- |
-| Failed CI · 2026-10-26 | Pushes `7a4ecc7`, `2321915`, `acd9ca5` passed frontend/Python checks but failed Bandit B105 on optional `MAIN_BOT_TOKEN=None`. A narrow suppression fixed the false positive locally; unused-suppression warnings remained. `a5a8b1c` later [failed Ruff](https://github.com/TechShreyash/TGDrive/actions/runs/40373319271/job/121749557834); local lint/format then passed on 270 files. No GitHub rerun verified those repairs. Browser/container/source jobs were skipped; Bandit failure prevented later audit/security steps. |
-| Focused repair checks · 2026-10-26 | 253 affected Python and three previously failing Chromium cases passed, plus Ruff, Bandit, Python/npm audits and production build. Two MongoDB receipt tests skipped; Python audit passed with locked `filelock` 4.2.4. No full GitHub/Python, Docker or extracted-release run; `actionlint` unavailable. Existing media build and stale-suppression warnings remained. |
-| Self-hosting snapshot · 2026-10-23 | 1,394 Python cases with isolated MongoDB/84.07% coverage, 255 frontend and 53 Chromium cases passed, plus container/runtime/certificate checks, encrypted-archive restore into an empty database and lint/security audits. No live Coolify deployment or real Telegram credentials. |
-| Separate live original-byte evidence | A 4,562,805,302-byte file reconstructed from three Telegram documents with matching SHA-256 and boundary ranges. This establishes the tested original-byte path, not universal playback speed. |
-
-Physical devices, multi-architecture execution, outages and Premium speedups need
-[separate evidence](roadmap.md#before-public-release).
-
-</details>
 
 ## Version baseline and dependency policy
 
@@ -618,23 +525,6 @@ playback is busy. Keep the existing keyboard/mobile/fullscreen chapter regressio
 These are synthetic local-origin checks; remote uncached preview latency and
 physical-device GPU/memory behaviour need separate measurements.
 
-Revision `.2` validation on 2026-10-28 passed 49 player recipe checks, 77 distinct
-focused frontend unit tests, 20 selected Chromium browser cases and 17 source
-release-packaging checks; the frontend typecheck/build also passed. Real images
-were inspected for hover and chapter previews. The cached fixture needed zero
-additional file payload reads for previews. An isolated software-decoder check
-presented all 120 B-frame fixture pictures and retained forward/backward playback
-with the new queue admission. These checks used local synthetic origins, without
-live Telegram or real GPU/mobile calibration; no independent WASM rebuild ran.
-
-Revision `.3` validation on 2026-10-28 passed 65 player/cache recipe checks,
-95 video unit tests, 12 focused synthetic Chromium cases and 17 release-package
-checks; the frontend typecheck/build passed. Browser cases include hover and
-chapter pixels, keyboard opening with the pointer over the seek bar, native
-dragging, pause/resume, track changes, real buffered ranges and close cleanup.
-The build used an isolated output directory to avoid other development builds.
-No `.3` live deployment, remote bandwidth benchmark or physical-device check ran.
-
 </details>
 
 ### Shared-links interface
@@ -737,11 +627,8 @@ execution; small files and receipt crashes do not establish near-limit/send reco
 
 ## Documentation maintenance
 
-Follow [AGENTS.md](../AGENTS.md): update important behavior with its implementation,
-keep one canonical explanation, link focused public guides from Docs home and add
-them to `PUBLIC_DOCS` in `scripts/build_release.py`. Keep guides brief, put technical
-detail in collapsible sections, and record change history in meaningful Git commits.
-Update each guide's **Contents** links when adding, renaming or moving sections.
+Follow the [documentation rules](../CONTRIBUTING.md#documentation). Update each
+guide's **Contents** links when adding, renaming or moving sections.
 
 ## Agent skills
 

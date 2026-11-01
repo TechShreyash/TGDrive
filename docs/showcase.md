@@ -181,7 +181,7 @@ The rebuild was not started. [Rebuild instructions and bandwidth limits](thumbna
 ## Workflows beyond these recordings
 
 Use the written guides for [sharing](usage.md#share-and-revoke),
-[Telegram bot uploads](usage.md#optional-telegram-bot-interface), Premium sign-in,
+[Telegram bot uploads](usage.md#upload-through-your-telegram-bot), Premium sign-in,
 [multiple devices](usage.md#use-several-devices) and [recovery](backup-recovery.md).
 [Setup](setup.md) and [Operations](operations.md) cover installation and moving hosts.
 The media illustrates the interface; it does not certify provider throughput,
