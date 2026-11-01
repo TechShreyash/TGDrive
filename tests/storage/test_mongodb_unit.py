@@ -673,3 +673,38 @@ def test_owner_renewal_waits_for_open_catalog_transactions():
     backend._renew_loop()
     assert held == [True] and not backend._lost
     backend.client.close()
+
+
+async def test_scheduled_backup_skips_when_nothing_changed(snapshot_source):
+    from tgdrive.core import encryption
+
+    service, store, backend = snapshot_source
+    assert not service._unchanged()  # No confirmed backup yet.
+    key = bytes.fromhex(encryption.backup_key())
+    confirmed = {
+        "_id": "b1",
+        "status": "confirmed",
+        "created_at": "2026-11-01T00:00:00+00:00",
+        "source": service._source(key),
+    }
+    backend.db.backups.insert_one(confirmed)
+    assert service._unchanged()
+    # Catalog, settings and transfer changes each need a new backup.
+    store.create_folder("/", "New work")
+    assert not service._unchanged()
+    backend.db.backups.update_one(
+        {"_id": "b1"}, {"$set": {"source": service._source(key)}}
+    )
+    assert service._unchanged()
+    backend.db.settings.insert_one({"_id": "probe", "document": {"x": 1}})
+    assert not service._unchanged()
+    backend.db.backups.update_one(
+        {"_id": "b1"}, {"$set": {"source": service._source(key)}}
+    )
+    backend.db.jobs.insert_one({"_id": "job"})
+    assert not service._unchanged()
+    backend.db.backups.update_one(
+        {"_id": "b1"}, {"$set": {"source": service._source(key)}}
+    )
+    backend.db.backups.insert_one({"_id": "b2", "status": "pending"})
+    assert not service._unchanged()  # A pending upload must still finish.

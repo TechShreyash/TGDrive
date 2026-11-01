@@ -281,6 +281,7 @@ class MongoProtection:
                 directory = self.settings.resolved_cache_dir / "mongo-backups"
                 directory.mkdir(mode=0o700, parents=True, exist_ok=True)
                 path = directory / (identity + ".tgdb")
+                source = await asyncio.to_thread(self._source, key)
                 export = asyncio.create_task(
                     asyncio.to_thread(
                         write_recovery_snapshot, backend, path, key, self.settings
@@ -316,6 +317,7 @@ class MongoProtection:
                     "counts": counts,
                     "format": "tgdrive-backup-v2",
                     "key_sha256": hashlib.sha256(key).hexdigest(),
+                    "source": source,
                 }
                 await asyncio.to_thread(backend.db.backups.insert_one, row)
                 pending = row
@@ -475,6 +477,48 @@ class MongoProtection:
                 "the new backup remains confirmed"
             )
 
+    def _source(self, key):
+        """A cheap fingerprint of what a backup covers.
+
+        Catalog writes bump the drive revision. Settings and bot folders are
+        small, so they are hashed whole; transfer state is summarized by
+        counts. Browser sessions are left out: a restore signs the owner in
+        again anyway.
+        """
+        db = self.backend.db
+        catalog = db.catalog.find_one({"_id": "catalog"}, {"revision": 1}) or {}
+        small = hashlib.sha256()
+        for name in ("settings", "bot_folders"):
+            for row in db[name].find({}).sort("_id", 1):
+                small.update(repr(sorted(row.items())).encode())
+        return {
+            "revision": catalog.get("revision"),
+            "settings_sha256": small.hexdigest(),
+            "counts": {
+                name: db[name].count_documents({})
+                for name in ("jobs", "receipts", "identities", "operations")
+            },
+            "key_sha256": hashlib.sha256(key).hexdigest(),
+            "channel_id": self.settings.storage_channel,
+        }
+
+    def _unchanged(self):
+        """True when the latest confirmed backup already holds this drive state.
+
+        Scheduled backups skip then, so an idle drive does not reread and
+        resend the whole database every interval (the free Atlas tier allows
+        10 GB of transfer per week). Manual backups always run.
+        """
+        from tgdrive.core import encryption
+
+        latest = self.backend.db.backups.find_one(
+            {"status": "confirmed"}, sort=[("created_at", -1)]
+        )
+        if latest is None or self.backend.db.backups.find_one({"status": "pending"}):
+            return False
+        current = self._source(bytes.fromhex(encryption.backup_key()))
+        return latest.get("source") == current
+
     def start(self, store):
         if self._task is None:
             self._task = asyncio.create_task(self._loop(store), name="mongodb-backup")
@@ -520,6 +564,10 @@ class MongoProtection:
             try:
                 replica = getattr(self, "replica", None)
                 if replica is not None and replica.status().get("enabled"):
+                    delay = self.settings.mongodb_backup_seconds
+                    continue
+                if await asyncio.to_thread(self._unchanged):
+                    logger.debug("Scheduled backup skipped: nothing changed")
                     delay = self.settings.mongodb_backup_seconds
                     continue
                 await self.snapshot_now(store)
