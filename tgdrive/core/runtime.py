@@ -46,7 +46,6 @@ class Runtime:
             timeouts=RemoteTimeouts(
                 connect=settings.remote_connect_timeout,
                 read=settings.remote_read_timeout,
-                total=settings.remote_total_timeout,
             ),
         )
         self.registry = TransferRegistry(ttl_seconds=settings.transfer_ttl_seconds)

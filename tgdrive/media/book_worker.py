@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import base64
+import contextlib
 import io
 import json
 import posixpath
@@ -22,9 +23,8 @@ MAX_ENTRY = 16 * BLOCK
 MAX_PAGE = 64 * BLOCK
 MAX_PAGE_READ = 96 * BLOCK
 MAX_TEXT = 2 * BLOCK
+# Bounds loops over malformed image headers; not a limit on archive size.
 MAX_ENTRIES = 10000
-MAX_IMAGE_PIXELS = 16_000_000
-MAX_IMAGE_EDGE = 32768
 IMAGES = {".png", ".jpg", ".jpeg", ".gif", ".webp", ".avif"}
 
 
@@ -198,8 +198,8 @@ def open_zip(source):
         ):
             raise BookError("Invalid ZIP64 directory.")
         count, length, offset = record[7:10]
-    if count > MAX_ENTRIES or length > 2 * BLOCK or offset + length > source.size:
-        raise BookError("This book has too many resources for the reader.")
+    if offset + length > source.size:
+        raise BookError("This is not a readable ZIP book.")
     archive = ZipFile(source)
     names = set()
     for entry in archive.infolist():
@@ -477,16 +477,6 @@ def image_result(data, *, raw_images):
             "This page has invalid or overly complex image dimensions. "
             "Download the original to open it in another reader."
         ) from None
-    if any(
-        width > MAX_IMAGE_EDGE
-        or height > MAX_IMAGE_EDGE
-        or width * height > MAX_IMAGE_PIXELS
-        for width, height in dimensions
-    ):
-        raise BookError(
-            "This page exceeds the 16 million pixel or 32768-pixel edge limit. "
-            "Download the original to open it in another reader."
-        )
     return {
         "kind": "image",
         "mime": mime,
@@ -672,7 +662,7 @@ def epub_index(archive):
                         "label": labels.get(name) or posixpath.basename(name),
                     }
                 )
-    if not entries or len(entries) > 5000:
+    if not entries:
         raise BookError("This EPUB has no supported reading order.")
     return {"kind": "epub", "title": title, "entries": entries}
 
@@ -736,11 +726,9 @@ def read_book(source, fmt, entry=None, *, raw_images=False):
     with libarchive.stream_reader(
         SafeRarSource(source), filter_name="none", block_size=65536
     ) as archive:
-        for i, member in enumerate(archive):
+        for member in archive:
             if source.failure:
                 raise source.failure
-            if i >= MAX_ENTRIES:
-                raise BookError("This comic has too many resources.")
             name = str(member.pathname)
             safe_name(name)
             if not member.isfile or posixpath.splitext(name)[1].lower() not in IMAGES:
@@ -780,11 +768,13 @@ def run():
     try:
         import resource
 
-        resource.setrlimit(resource.RLIMIT_AS, (384 * BLOCK, 384 * BLOCK))
-        resource.setrlimit(resource.RLIMIT_CPU, (10, 10))
+        # No memory or CPU cap; the parser timeout in books.py stops hangs.
         resource.setrlimit(resource.RLIMIT_FSIZE, (0, 0))
     except ImportError:
         pass
+    # Under memory pressure the kernel kills this worker, not TGDrive.
+    with contextlib.suppress(OSError), open("/proc/self/oom_score_adj", "w") as oom:
+        oom.write("1000")
     request = json.loads(sys.stdin.readline())
 
     def fetch(offset, length):

@@ -143,11 +143,17 @@ type SessionFactory = Callable[
 @dataclass(frozen=True, slots=True)
 class RemoteTimeouts:
     connect: float = 10.0
+    # Seconds without new bytes before a source counts as stalled.
     read: float = 30.0
-    total: float = 60.0 * 60.0
+    # No overall deadline by default: slow sources run as long as bytes arrive.
+    total: float | None = None
 
     def __post_init__(self) -> None:
-        if self.connect <= 0 or self.read <= 0 or self.total <= 0:
+        if (
+            self.connect <= 0
+            or self.read <= 0
+            or (self.total is not None and self.total <= 0)
+        ):
             raise ValueError("remote timeouts must be positive")
 
     def to_aiohttp(self) -> aiohttp.ClientTimeout:

@@ -84,11 +84,11 @@ guarantee a complex PDF will fit every device's memory.
 | --- | --- |
 | Index/chapter/thumbnail operation | 32 MiB fetched; aligned 1 MiB reads and a four-block parser cache |
 | One selected original raster image | 64 MiB encoded image; up to 96 MiB source reads without loading unrelated ZIP entries |
-| Raster dimensions | 16 million pixels and 32,768 pixels per edge, including declared animation frames; checked before bytes leave the parser |
-| Archive | 10,000 entries; 2 MiB ZIP directory; stored/deflate ZIP methods |
-| EPUB / entries | 5,000 spine entries; 2 MiB/text entry; 16 MiB thumbnail-source image, separate from the 64 MiB reader-page limit |
+| Raster images | Headers are validated before bytes leave the parser; no pixel or edge limit |
+| Archive | Stored/deflate ZIP methods; no entry-count limit |
+| EPUB / entries | 2 MiB/text entry; 16 MiB thumbnail-source image, separate from the 64 MiB reader-page limit |
 | Parser work | Two simultaneous operations, 16 pending requests, 45-second parser timeout; 55-second total route deadline including shared-result waits |
-| Linux container parser process | 384 MiB address space and 10 CPU-seconds on every supported host |
+| Linux container parser process | No memory or CPU cap; the kernel ends the parser, not TGDrive, under memory pressure |
 
 The server caches extracted pages and parsed chapters/indexes for up to **five
 minutes**, bounded to **64 MiB and 16 results**. Concurrent requests for the same

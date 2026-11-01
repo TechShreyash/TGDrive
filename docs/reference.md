@@ -332,8 +332,7 @@ retry and cancellation rules.
 | --- | --- | --- |
 | `ALLOW_PRIVATE_REMOTE_URLS` | false | Enables private/internal destinations only when explicitly true. It broadens what the authenticated owner can reach. |
 | `REMOTE_CONNECT_TIMEOUT` | 20 | Seconds, greater than 0. |
-| `REMOTE_READ_TIMEOUT` | 120 | Seconds, greater than 0; individual read timeout. |
-| `REMOTE_TOTAL_TIMEOUT` | 21600 | Seconds, greater than 0; total operation budget. |
+| `REMOTE_READ_TIMEOUT` | 120 | Seconds, greater than 0. A source that sends no new bytes for this long counts as stalled and is retried; imports have no overall time limit. |
 | `REMOTE_MAX_REDIRECTS` | 5 | Integer 0-20 inclusive; manually validated redirect count. |
 
 URL requests validate destinations and redirects, request identity encoding,

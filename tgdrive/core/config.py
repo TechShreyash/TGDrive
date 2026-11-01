@@ -135,9 +135,6 @@ class Settings(BaseSettings):
         default=2, alias="REMOTE_DOWNLOAD_CONCURRENCY", ge=1
     )
     remote_read_timeout: float = Field(default=120.0, alias="REMOTE_READ_TIMEOUT", gt=0)
-    remote_total_timeout: float = Field(
-        default=21600.0, alias="REMOTE_TOTAL_TIMEOUT", gt=0
-    )
     remote_max_redirects: int = Field(default=5, alias="REMOTE_MAX_REDIRECTS", ge=0)
     transfer_ttl_seconds: int = Field(default=3600, alias="TRANSFER_TTL_SECONDS", ge=60)
     max_concurrent_transfers: int = Field(

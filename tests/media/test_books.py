@@ -119,13 +119,6 @@ def test_bounded_raster_headers_preserve_original_bytes(kind, suffix, mime, raw_
 
 
 @pytest.mark.parametrize("kind,suffix,_mime", RASTER_HEADERS)
-def test_compressed_page_dimensions_are_bounded_before_delivery(kind, suffix, _mime):
-    data = book_page(raster_header(kind, 4001, 4000), suffix)
-    with pytest.raises(BookError, match=r"16 million pixel.*Download"):
-        read_book(source(data)[0], "cbz", "page" + suffix, raw_images=True)
-
-
-@pytest.mark.parametrize("kind,suffix,_mime", RASTER_HEADERS)
 def test_truncated_raster_headers_are_rejected(kind, suffix, _mime):
     image = raster_header(kind, 48, 72)
     image = image[:10] if kind.startswith("jpeg") else image[:-1]
@@ -133,10 +126,10 @@ def test_truncated_raster_headers_are_rejected(kind, suffix, _mime):
         read_book(source(book_page(image, suffix))[0], "cbz", "page" + suffix)
 
 
-@pytest.mark.parametrize("width,height", [(0, 720), (480, 0), (32769, 1)])
-def test_impossible_or_extreme_page_edges_are_rejected(width, height):
+@pytest.mark.parametrize("width,height", [(0, 720), (480, 0)])
+def test_impossible_page_edges_are_rejected(width, height):
     data = book_page(raster_header("png", width, height), ".png")
-    with pytest.raises(BookError, match=r"dimensions|32768-pixel edge"):
+    with pytest.raises(BookError, match="dimensions"):
         read_book(source(data)[0], "epub", "page.png", raw_images=True)
 
 
@@ -149,48 +142,20 @@ def test_jpeg_standalone_tem_marker_preserves_original_bytes():
     assert result["content"] == image
 
 
-@pytest.mark.parametrize(
-    "kind,suffix", [("png", ".png"), ("gif", ".gif"), ("webp", ".webp")]
-)
-def test_small_canvas_cannot_hide_an_oversized_frame(kind, suffix):
-    if kind == "png":
-        image = raster_header("png", 480, 720)
-        frame = struct.pack(">IIIIIHHBB", 0, 4001, 4000, 0, 0, 1, 10, 0, 0)
-        chunk = (
-            struct.pack(">I", len(frame))
-            + b"fcTL"
-            + frame
-            + struct.pack(">I", zlib.crc32(b"fcTL" + frame))
-        )
-        image = image[:33] + chunk + image[33:]
-    elif kind == "gif":
-        image = bytearray(raster_header("gif", 48, 72))
-        struct.pack_into("<HH", image, 18, 4001, 4000)
-        image = bytes(image)
-    else:
-        image = bytearray(raster_header("webp-extended", 48, 72))
-        image += raster_header("webp-lossless", 4001, 4000)[12:]
-        struct.pack_into("<I", image, 4, len(image) - 8)
-        image = bytes(image)
-    with pytest.raises(BookError, match="16 million pixel"):
-        read_book(source(book_page(image, suffix))[0], "cbz", "page" + suffix)
-
-
-@pytest.mark.parametrize("raw_images", [False, True])
-async def test_worker_reports_pixel_limit_without_emitting_image(raw_images):
-    data = book_page(raster_header("png", 4001, 4000), ".png")
+@pytest.mark.parametrize("kind,suffix,mime", RASTER_HEADERS)
+async def test_very_large_page_dimensions_open_without_a_pixel_limit(
+    kind, suffix, mime
+):
+    image = raster_header(kind, 40000, 30000)
+    data = book_page(image, suffix)
 
     async def fetch(start, count):
         return data[start : start + count]
 
-    with pytest.raises(HTTPException, match="16 million pixel") as error:
-        await parse_book(
-            {"name": "oversized.cbz", "size": len(data)},
-            fetch,
-            "page.png",
-            raw_images=raw_images,
-        )
-    assert error.value.status_code == 422
+    result = await parse_book(
+        {"name": "huge.cbz", "size": len(data)}, fetch, "page" + suffix, raw_images=True
+    )
+    assert result["mime"] == mime and result["content"] == image
 
 
 def test_epub_index_and_selected_chapter_do_not_download_unused_payload():
