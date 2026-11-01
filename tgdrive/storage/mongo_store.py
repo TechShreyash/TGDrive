@@ -757,6 +757,7 @@ class MongoStore:
         after=None,
         group=None,
         share_token=None,
+        around=None,
     ):
         """One indexed page of a folder; folders first, then the sort field.
 
@@ -766,6 +767,10 @@ class MongoStore:
         ``group`` keeps one file type (see ``GROUPS``). With ``share_token`` the
         folder must be inside that share; ``share_home`` then names the shared
         folder so callers can hide everything above it.
+        ``around`` is a child's ID: the page then starts at that child and
+        ``index`` gives its position under this sort and filter. Pages that do
+        not continue a cursor also return ``folder`` (the getDirectory record
+        with breadcrumbs, trimmed to the share for shared listings).
         """
         fields = {
             "name": "name_key",
@@ -781,8 +786,10 @@ class MongoStore:
             raise ValidationError("Invalid type filter")
         field = fields[sort]
         start = None if after is None else _decode_cursor(after, sort)
-        if start is not None and offset:
-            raise ValidationError("Use either offset or a cursor")
+        if sum((start is not None, bool(offset), around is not None)) > 1:
+            raise ValidationError("Use only one of offset, cursor or around")
+        if around is not None:
+            _validate_id(around)
         with self._transaction():
             node, path, chain = self._resolve(path)
             if node["kind"] != "folder":
@@ -812,16 +819,33 @@ class MongoStore:
             )
             total = self.db.nodes.count_documents(query, session=self._session)
 
-            def after_row(kind, value, identity):
+            before = "$lt" if beyond == "$gt" else "$gt"
+
+            def after_row(kind, value, identity, *, earlier=False, inclusive=False):
+                """Rows after (or ``earlier``: before) a position in page order."""
+                operator = before if earlier else beyond
+                id_operator = operator + "e" if inclusive else operator
                 rest = dict(query, kind=kind)
                 if field == "_id":
-                    rest["_id"] = {beyond: identity}
+                    rest["_id"] = {id_operator: identity}
                 else:
                     rest["$or"] = [
-                        {field: {beyond: value}},
-                        {field: value, "_id": {beyond: identity}},
+                        {field: {operator: value}},
+                        {field: value, "_id": {id_operator: identity}},
                     ]
                 return rest
+
+            index = None
+            if around is not None:
+                target = self._one(
+                    "nodes", dict(query, _id=around), {"kind": 1, field: 1}
+                )
+                if target is None:
+                    raise NotFoundError("Item not found in this folder")
+                start = (target["kind"], target[field], target["_id"])
+                index = self.db.nodes.count_documents(
+                    after_row(*start, earlier=True), session=self._session
+                ) + (folders if target["kind"] == "file" else 0)
 
             items, last = [], None
             kinds = ("folder", "file")
@@ -831,7 +855,9 @@ class MongoStore:
                 if len(items) >= limit:
                     break
                 if start is not None and kind == start[0]:
-                    selection, skip = after_row(*start), 0
+                    # ``around`` starts at the target itself, a cursor after it.
+                    selection = after_row(*start, inclusive=around is not None)
+                    skip = 0
                 else:
                     selection = dict(query, kind=kind)
                     skip = 0 if start is not None else offset
@@ -862,6 +888,25 @@ class MongoStore:
                 "offset": offset,
                 "next_cursor": following,
             }
+            if index is not None:
+                result["index"] = index
+            if after is None:
+                folder = self._record(node, path)
+                trail = [
+                    {
+                        "id": row["_id"],
+                        "name": row["name"],
+                        "path": self._chain_path(chain[: i + 1]),
+                    }
+                    for i, row in enumerate(chain)
+                ]
+                if home is not None:
+                    home_id = home.rstrip("/").rsplit("/", 1)[-1] or ROOT_ID
+                    ids = [crumb["id"] for crumb in trail]
+                    trail = trail[ids.index(home_id) :] if home_id in ids else []
+                    folder.pop("starred", None)
+                folder["breadcrumbs"] = trail
+                result["folder"] = folder
             if home is not None:
                 result["share_home"] = home
             return result

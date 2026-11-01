@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from datetime import UTC, datetime
 
 import pytest
@@ -7,7 +8,7 @@ from fastapi.testclient import TestClient
 
 from tests.support.app_fixtures import FakeRuntime, make_settings
 from tests.support.mongo_fixtures import new_store
-from tgdrive.core.errors import ValidationError
+from tgdrive.core.errors import NotFoundError, ValidationError
 from tgdrive.storage.mongo_store import MongoStore
 from tgdrive.web.app import create_app
 
@@ -459,3 +460,80 @@ def test_shared_folder_pages_need_the_share_and_hide_starred(search_client):
     owner(client)
     mine = client.get("/api/v1/nodes", params={"type": "media"}).json()
     assert [row["name"] for row in mine["items"]] == ["private.jpg"]
+
+
+@pytest.mark.parametrize("sort", ["name", "size", "date", "type"])
+@pytest.mark.parametrize("order", ["asc", "desc"])
+@pytest.mark.parametrize("group", [None, "media"])
+def test_around_starts_at_the_item_and_reports_its_index(store, sort, order, group):
+    for index in range(3):
+        store.create_folder("/", f"Folder {index}")
+    for index in range(8):
+        store.add_file("/", f"clip {index}.mp4", index + 1, index % 3)
+    store.add_file("/", "notes.txt", 20, 5)
+    every = store.list_page("/", limit=100, sort=sort, order=order, group=group)
+    ids = [row["id"] for row in every["items"]]
+    for position, identity in enumerate(ids):
+        page = store.list_page(
+            "/", limit=3, sort=sort, order=order, group=group, around=identity
+        )
+        assert page["index"] == position
+        assert [row["id"] for row in page["items"]] == ids[position : position + 3]
+        rest, cursor = [], page["next_cursor"]
+        while cursor:
+            more = store.list_page(
+                "/", limit=3, sort=sort, order=order, group=group, after=cursor
+            )
+            rest.extend(row["id"] for row in more["items"])
+            cursor = more["next_cursor"]
+        assert rest == ids[position + 3 :]
+
+
+def test_first_page_carries_the_folder_and_breadcrumbs(store):
+    parent = store.create_folder("/", "Parent")
+    child = store.create_folder(full(parent), "Child")
+    store.add_file(full(child), "a.txt", 1, 1)
+    page = store.list_page(full(child), limit=1)
+    assert page["folder"]["id"] == child["id"] and page["folder"]["name"] == "Child"
+    assert [crumb["name"] for crumb in page["folder"]["breadcrumbs"]] == [
+        "/",
+        "Parent",
+        "Child",
+    ]
+    assert (
+        page["folder"]["breadcrumbs"] == store.get_directory(full(child))["breadcrumbs"]
+    )
+    store.add_file(full(child), "b.txt", 2, 1)
+    first = store.list_page(full(child), limit=1)
+    assert "folder" not in store.list_page(
+        full(child), limit=1, after=first["next_cursor"]
+    )
+    assert "folder" in store.list_page(full(child), around=first["items"][0]["id"])
+    with pytest.raises(ValidationError):
+        store.list_page(full(child), offset=1, around=first["items"][0]["id"])
+    with pytest.raises(NotFoundError):
+        store.list_page("/", around=first["items"][0]["id"])  # Not in this folder.
+
+
+def test_shared_pages_trim_breadcrumbs_to_the_share(search_client):
+    client, store, _ = search_client
+    above = store.create_folder("/", "Private parent")
+    shared = store.create_folder(full(above), "Public")
+    inner = store.create_folder(full(shared), "Inner")
+    item = store.add_file(full(inner), "photo.jpg", 1, 1)
+    token = store.create_share(full(shared))
+    body = client.get(
+        "/api/v1/shared/nodes",
+        params={"auth": token, "parent_id": full(inner), "around": item["id"]},
+    ).json()
+    assert body["index"] == 0 and body["items"][0]["id"] == item["id"]
+    assert [crumb["name"] for crumb in body["folder"]["breadcrumbs"]] == [
+        "Public",
+        "Inner",
+    ]
+    assert "Private parent" not in json.dumps(body)
+    outside = client.get(
+        "/api/v1/shared/nodes",
+        params={"auth": token, "parent_id": full(above), "around": shared["id"]},
+    )
+    assert outside.status_code == 403

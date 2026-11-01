@@ -337,6 +337,7 @@ def register_routes(
         order: Literal["asc", "desc"] = "asc",
         cursor: str | None = Query(default=None, max_length=1024),
         type: Literal["folder", "media", "docs", "audio", "other"] | None = None,
+        around: str | None = Query(default=None, max_length=64),
     ) -> dict[str, Any]:
         return describe(
             await folder_page(
@@ -348,6 +349,7 @@ def register_routes(
                 order=order,
                 after=cursor,
                 group=type,
+                around=around,
             )
         )
 
@@ -363,6 +365,7 @@ def register_routes(
         order: Literal["asc", "desc"] = "asc",
         cursor: str | None = Query(default=None, max_length=1024),
         type: Literal["folder", "media", "docs", "audio", "other"] | None = None,
+        around: str | None = Query(default=None, max_length=64),
     ) -> dict[str, Any]:
         """A paged folder listing inside a share, authorized by its token."""
         response.headers["Cache-Control"] = "private, no-store"
@@ -381,6 +384,7 @@ def register_routes(
                 order=order,
                 after=cursor,
                 group=type,
+                around=around,
             )
         except ShareDenied, NotFoundError, NotDirectoryError, TrashedItemError:
             # One answer for "no such folder" and "not shared": IDs stay secret.
