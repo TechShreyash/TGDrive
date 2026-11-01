@@ -97,3 +97,16 @@ def test_provider_logging_respects_stricter_global_level(tmp_path: Path):
     assert "provider warning" not in content
     assert "provider error" in content
     configure_logging("INFO")
+
+
+def test_uvicorn_errors_use_redacting_root_handlers(tmp_path: Path) -> None:
+    log_path = tmp_path / "server.log"
+    server = logging.getLogger("uvicorn.error")
+    server.addHandler(logging.StreamHandler())
+    server.propagate = False
+    configure_logging("INFO", log_path)
+    assert not server.handlers and server.propagate
+    server.error("Exception in ASGI application password=hunter2")
+    content = flush_logs(log_path)
+    assert "Exception in ASGI application" in content
+    assert "hunter2" not in content

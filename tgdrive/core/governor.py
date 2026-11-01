@@ -184,8 +184,21 @@ class Governor:
                 },
                 raised_at=now,
             )
+        before = self.state["values"]
         self.state = decide(self.measurements, self.state, self.signals(), now)
         values = dict(self.state["values"])
+        changed = sorted(k for k, v in values.items() if before.get(k) != v)
+        if changed:
+            # Routine one-step raises every cooldown would flood INFO logs.
+            routine = all(
+                str(self.state["reasons"].get(k, "")).startswith("raised")
+                for k in changed
+            )
+            logger.log(
+                logging.DEBUG if routine else logging.INFO,
+                "Automatic tuning: %s",
+                "; ".join(f"{k}: {self.state['reasons'].get(k)}" for k in changed),
+            )
         uploads = values.pop("telegram_uploads_per_bot")
         if any(getattr(self.settings, k, None) != v for k, v in values.items()):
             async with service._lock:

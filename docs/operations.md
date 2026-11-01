@@ -54,6 +54,7 @@ routine byte updates and successful polling are quiet.
 | `Transfer started`, `Transfer finished` | Bytes, time before first processing and total job lifetime, including waits. |
 | `Transfer retry scheduled` or `Transfer waiting` | The cooldown or unavailable Telegram client, automatic retry policy and suggested action. Unchanged waits are not repeated. |
 | `Transfer failed` | Job ID, phase, exception type, stable failure category and suggested repair. Inspect the user-facing error in Transfers. |
+| `Automatic tuning` | A cache size, disk budget or concurrency value changed, and why (for example halved after FloodWait). Routine one-step raises log only at DEBUG. |
 
 </details>
 

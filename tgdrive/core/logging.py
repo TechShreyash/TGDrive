@@ -64,6 +64,13 @@ def configure_logging(level: str = "INFO", log_file: Path | None = None) -> None
     # its own handler, outside the root redaction filter, so disable that unsafe
     # raw-query log at the source.
     logging.getLogger("uvicorn.access").disabled = True
+    # Uvicorn installs its own unredacted handlers (including the one that logs
+    # unhandled request exceptions); route them through ours instead.
+    for name in ("uvicorn", "uvicorn.error"):
+        server = logging.getLogger(name)
+        for handler in server.handlers[:]:
+            server.removeHandler(handler)
+        server.propagate = True
     # Telethon's routine update/difference messages can dominate a busy drive's
     # logs. Keep provider warnings/errors visible; DEBUG deliberately restores
     # its connection/update diagnostics for a short troubleshooting session.
