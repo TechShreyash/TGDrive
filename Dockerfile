@@ -36,7 +36,7 @@ LABEL org.opencontainers.image.title="TGDrive" \
     org.opencontainers.image.description="Self-hosted Telegram-backed personal file drive" \
     org.opencontainers.image.source="https://github.com/TechShreyash/TGDrive" \
     org.opencontainers.image.licenses="MIT" \
-    org.opencontainers.image.version="2.2.1"
+    org.opencontainers.image.version="3.0.0"
 
 WORKDIR /app
 

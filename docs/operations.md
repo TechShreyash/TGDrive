@@ -326,9 +326,11 @@ updates. `dev` contains ongoing work and may be unstable. Follow
 1. Finish work, save a confirmed backup off-host, then stop safely.
 
 > [!WARNING]
-> Drives created before encryption cannot be opened by this version. Start with
-> a new empty MongoDB database, a new private storage channel and a new
-> `ENCRYPTION_KEY`, and move files over by downloading and uploading them.
+> TGDrive 3.0 cannot open a 2.x drive or restore a 2.x recovery file. Download
+> the files you want to keep, then start 3.0 with a new empty MongoDB database, a
+> new private storage channel (recommended, so old messages are not mixed in)
+> and a new `ENCRYPTION_KEY`, and upload them again. Keep the 2.x database until
+> you have checked the new drive.
 2. Record the running version and source commit; review the new version's requirements.
 3. Set `TGDRIVE_VERSION` in `.env` to the new release (or keep `latest`), then
    run `docker compose pull && docker compose up -d`, keeping server `-f`
