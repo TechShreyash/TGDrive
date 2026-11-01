@@ -7,6 +7,10 @@ open the screenshots for a closer look. Public-demo captures use disposable
 samples; monitoring, configuration and recovery screens use a labelled local demo.
 [Provenance and coverage](assets/README.md).
 
+> [!NOTE]
+> These captures predate the 2.3 interface redesign. Layout, colors and the
+> reader toolbar have changed; the workflows shown still apply.
+
 ## Watch the feature tour
 
 [![Watch TGDrive's current features: torrents, archives, Continue and recovery](assets/video-continue.jpg)](assets/current-features.mp4)

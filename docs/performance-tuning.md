@@ -48,10 +48,17 @@ totals together**. For history, measurement scopes and retention, see
 
 ## Read the Performance page
 
+**Overview** shows, from top to bottom: a health line (**Healthy**, **Degraded**
+or **Failing**, with the reason), the live strip, **Network traffic**, **What
+limits speed** (per-account transfer slots, flood waits, CPU, memory and cache
+disk), **Automatic tuning** and **All-time totals**. The **Accounts** and
+**Resources** tabs hold the detail.
+
 **Monitor → Performance** separates server network, TGDrive HTTP file traffic
 and Telegram origin activity. They overlap: **do not add their totals**. Network
 counts include protocol/other interface traffic; Docker normally measures its
-container interface. Blue is **Download to server**; dashed is **Upload from server**.
+container interface. In **Network traffic**, the solid line is **Download to
+server** and the dashed line is **Upload from server**.
 Hover or use the keyboard/touch sample scrubber. **Now** always means current.
 
 <details>

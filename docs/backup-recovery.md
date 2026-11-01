@@ -18,7 +18,7 @@ you never manage a separate recovery key or file.
 | --- | --- |
 | The server | Deploy anywhere with the **same `.env`** and **same `MONGODB_URI`**. Everything opens as before, including backup-channel settings and progress. |
 | MongoDB | Deploy with the **same `.env`** and an **empty** MongoDB. TGDrive finds the pinned backup in your storage channel and shows **Restore drive**. One click restores it. |
-| MongoDB and the main channel | Same `.env` plus the **backup channel ID and its bot token**, entered on the restore screen. Needs an [independent backup channel](#add-a-backup-channel). |
+| MongoDB and the main channel | Same `.env` plus the **surviving backup channel ID and bot token**, entered on the restore screen. Needs an [independent backup channel](#add-a-backup-channel). |
 | `ENCRYPTION_KEY` | Nothing. Files and backups stay unreadable. Store the key in a password manager. |
 
 Same env + same MongoDB is never a restore: the drive simply opens.
@@ -83,7 +83,8 @@ for up to 60 seconds. Encrypted files stay encrypted in the copy.
 ### Main channel lost
 
 1. On the recovery screen, open **Main channel lost: restore from the backup
-   channel**, enter the backup channel ID and its bot token, then **Find backup**.
+   channel**, enter **Surviving backup channel ID** and **Surviving backup bot
+   token**, then **Find backup**.
 2. Create an empty private main channel. Add the backup bot and a separate main
    bot as administrators. Enter the new channel ID and main bot token, confirm,
    then **Copy to new main channel**.

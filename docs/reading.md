@@ -11,18 +11,25 @@ If a preview fails,
 
 | Format | Controls | How it loads |
 | --- | --- | --- |
-| PDF, up to 256 MiB | Scroll, zoom, Fit width, Fit page, selectable text | Sections of the file as needed |
-| EPUB | Chapters, text size/font, image-page fit, right-to-left | Book details, selected chapter and images |
-| CBZ / CBR | Pages, fit, right-to-left | Selected image; solid RAR may also need earlier compressed data |
+| PDF, up to 256 MiB | Page box, zoom menu (Fit width, Fit page, 50–200%), selectable text | Sections of the file as needed |
+| EPUB | Page box, chapter list, Reading options (text size, font, page fit, direction) | Book details, selected chapter and images |
+| CBZ / CBR | Page box, Reading options (page fit, direction) | Selected image; solid RAR may also need earlier compressed data |
 
 EPUB and comics remember your place for up to 50 books **in this browser**.
 EPUB text preferences are saved here too. Internal book links navigate to their
 target chapter or position. Resource filenames appear as readable cover,
 illustration or section labels.
 
-For manga or image-only EPUB chapters, choose **Fit width** for readable panels
-or **Fit page** for a whole page. **Right to left** reverses arrow-key navigation;
-it does not reorder the book. Prose EPUBs use a narrower serif column by default.
+To jump to a page, type its number in the page box and press Enter; numbers out
+of range go to the first or last page. PDFs open at **Fit width**, capped at a
+960 px page width, so there is no sideways scrolling until you zoom in. Comic pages
+use the same cap. On narrow windows and phones, the magnifier button opens the
+zoom controls.
+
+For manga or image-only EPUB chapters, open **Reading options** and choose
+**Fit width** for readable panels or **Fit page** for a whole page. **Right to
+left** reverses arrow-key navigation; it does not reorder the book. Prose EPUBs
+use a narrower serif column by default.
 
 Arrow keys navigate while focused. **Enter Fullscreen** is available where the
 browser supports it; Escape or browser Back closes the reader.

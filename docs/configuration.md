@@ -69,7 +69,8 @@ Environment variables such as `CACHE_MEMORY_BYTES`, `STAGING_BUDGET_BYTES` or
 ## Timezone
 
 The default is **Asia/Kolkata (IST)**. Use a valid timezone name such as
-`Europe/London` or `UTC`, then choose **Save changes**. This controls displayed
+`Europe/London` or `UTC`, then choose **Save changes**. A live **Current time** preview shows the entered
+timezone before you save. This controls displayed
 dates and share expiry across the installation; stored timestamps remain UTC.
 
 ## Deployment-only settings

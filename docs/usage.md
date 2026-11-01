@@ -114,9 +114,10 @@ help some workloads but do not bypass Telegram waits or guarantee more speed.
 | Create a folder | **New → New folder** |
 | Rename, move or trash | Item menu or selection actions |
 | Sort/change view | Name, Date Added or File Size; List/Grid; **View and sort** on phones |
+| Filter by type | Chips above the list: **All**, **Photos & videos**, **Documents**, **Audio**, **Other** |
 
-Folders stay first when sorting; click an active column to reverse order. View
-choice is remembered. Name conflicts offer **keep both** or **skip**.
+Folders stay first when sorting; click an active column to reverse order. A new
+browser opens in Grid; your view choice is remembered after that. Name conflicts offer **keep both** or **skip**.
 
 Supported uploads generate covers automatically. For missing covers or a full
 rebuild, see [thumbnails](thumbnails.md).
@@ -143,11 +144,11 @@ a file, download it for a suitable app.
 | File | Preview |
 | --- | --- |
 | Images, including SVG | Image viewer |
-| PDF up to 256 MiB | Scroll, zoom, Fit width and Fit page |
+| PDF up to 256 MiB | Page box, zoom menu with Fit width and Fit page |
 | Video/audio | Player with available track and subtitle controls |
 | Supported text/code | Read-only text, first 256 KiB |
-| EPUB | Chapters, text size and saved reading position |
-| CBZ/CBR | Comic pages, fit and right-to-left navigation |
+| EPUB | Chapters, Reading options and saved reading position |
+| CBZ/CBR | Comic pages, page fit and right-to-left reading |
 | Unsupported formats | Original download |
 
 Videos open paused. Choose **Continue from…** for a saved position or **Play** to
@@ -311,7 +312,8 @@ cancelling and starting again, keeping earlier outputs.
 
 1. Choose **My Files → file ⋯ → Preload file**.
 2. Follow **Monitor → Preloads**. **Ready** with full coverage means the original
-   is fully cached on the server; blue segments show partial coverage.
+   is fully cached on the server; **Partial** rows show a small coverage bar.
+   Files cached without a name show as **Unnamed file · message N**.
 3. Play, download or share normally. Recheck coverage before relying on it.
 
 Preloading uses server disk/bandwidth and continues with the tab closed while

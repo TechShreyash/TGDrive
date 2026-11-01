@@ -54,7 +54,7 @@ imports, ZIP jobs, extraction, video Continue, player settings and the recovery 
 | :---: | :---: |
 | [<img src="docs/assets/video-continue.jpg" alt="Video player offering Continue; opens the feature tour" width="560">](docs/assets/current-features.mp4) | <img src="docs/assets/mobile-drive.jpg" alt="TGDrive file browser in a phone-sized window" width="240"> |
 
-Captured on 28 October 2026. The phone view is emulated and the tour's recovery
+Captured on 28 October 2026, before the 2.3 interface redesign. The phone view is emulated and the tour's recovery
 screen is a local demo. [Full gallery](docs/showcase.md)
 
 ## Get started

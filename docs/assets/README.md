@@ -8,6 +8,15 @@ It illustrates features, not throughput, physical-device compatibility or
 successful recovery. Some sample files show an earlier **Added** date; that is
 not the screenshot date.
 
+> [!NOTE]
+> These captures predate the 2.3 interface redesign. Layout, colors and the
+> reader toolbar have changed; the workflows shown still apply.
+
+| Status | Files |
+| --- | --- |
+| Outdated (whole interface changed) | `drive-overview`, `drive-list`, `mobile-drive`, `new-menu`, `file-actions`, `create-zip`, `extract-archive`, `archive-result`, `url-import`, `torrent-import`, `image-preview`, `audio-preview`, `pdf-reader`, `epub-reader`, `comic-reader`, `cache-settings`, `transfer-settings`, `performance-overview`, `performance-resources`, `preloads`, `recovery-file`, `thumbnail-rebuild`, `current-features.mp4` |
+| Header only changed | `media-preview`, `video-settings`, `video-continue` |
+
 <a id="readme-banner"></a>
 
 ## README lead image
