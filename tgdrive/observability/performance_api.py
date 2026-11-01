@@ -81,6 +81,20 @@ def system_snapshot(settings):
     }
 
 
+def database_snapshot(runtime):
+    """MongoDB data plus index size; the database, not TGDrive, caps the drive."""
+    try:
+        stats = runtime.mongo.db.command("dbStats")
+    except Exception:
+        return None
+    return {
+        "used_bytes": int(stats.get("totalSize") or 0),
+        "index_bytes": int(stats.get("indexSize") or 0),
+        "objects": int(stats.get("objects") or 0),
+        "volume_total_bytes": int(stats.get("fsTotalSize") or 0),
+    }
+
+
 def register_performance_routes(
     app, settings, *, require_admin, get_runtime, get_store
 ):
@@ -184,6 +198,7 @@ def register_performance_routes(
         statistics = getattr(store, "statistics", None)
         drive = await asyncio.to_thread(statistics) if callable(statistics) else {}
         governor = getattr(runtime, "governor", None)
+        database = await asyncio.to_thread(database_snapshot, runtime)
         return response(
             {
                 "tuning": governor.snapshot() if governor is not None else None,
@@ -211,6 +226,7 @@ def register_performance_routes(
                 "server": (await asyncio.to_thread(system_snapshot, settings))
                 | request.app.state.traffic.resources.value,
                 "drive": drive,
+                "database": database,
                 "traffic": request.app.state.traffic.snapshot(),
                 "history_scope": (
                     "Last 5 minutes; sampled every 3 seconds; resets on restart."

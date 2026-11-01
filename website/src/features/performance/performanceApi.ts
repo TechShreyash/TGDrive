@@ -270,6 +270,12 @@ export interface PerformanceSnapshot {
         staging_budget_bytes: number;
     };
     drive: { files: number; folders: number; total_bytes: number };
+    database?: {
+        used_bytes: number;
+        index_bytes: number;
+        objects: number;
+        volume_total_bytes: number;
+    } | null;
     history_scope?: string;
 }
 export interface ResourceSample {

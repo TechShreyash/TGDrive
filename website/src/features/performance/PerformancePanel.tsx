@@ -1673,6 +1673,24 @@ export default function PerformancePanel({
                                         ) + " free on the cache volume"
                                     }
                                 />
+                                {snapshot.database && (
+                                    <UsageMeter
+                                        label="MongoDB"
+                                        used={snapshot.database.used_bytes}
+                                        total={
+                                            snapshot.database.volume_total_bytes
+                                        }
+                                        unavailableLabel={formatBytes(
+                                            snapshot.database.used_bytes,
+                                        )}
+                                        detail={
+                                            formatBytes(
+                                                snapshot.database.index_bytes,
+                                            ) +
+                                            " of it is search and listing indexes"
+                                        }
+                                    />
+                                )}
                                 <UsageMeter
                                     label="RAM cache"
                                     used={snapshot.cache.memory.bytes}

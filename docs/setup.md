@@ -77,6 +77,13 @@ MongoDB stores your file index and settings; Telegram stores file contents.
 is the simplest option. Self-hosted MongoDB must be a **replica set**, not a
 standalone container. TGDrive's Compose files do not include MongoDB.
 
+> [!NOTE]
+> MongoDB size, not TGDrive, limits how many items a drive holds. A local test
+> with 20,000 files used about 1.8 KB per item, most of it search and listing
+> indexes, so the free 512 MB Atlas tier holds roughly 250,000 files and folders.
+> **Performance → Storage & cache** shows current MongoDB use; move to a larger
+> plan before it fills.
+
 1. Create an Atlas cluster and a **database user** with read/write access.
 2. In **Network Access**, allow your TGDrive machine's public IP.
 3. Open **Connect → Drivers**, copy the URI and replace its password placeholder.

@@ -16,7 +16,7 @@ from tests.observability.test_performance_preferences import (
 from tests.support.app_fixtures import FakeRuntime, login, make_settings
 from tests.support.mongo_fixtures import new_store
 from tgdrive.core.runtime import Runtime
-from tgdrive.observability.performance_api import system_snapshot
+from tgdrive.observability.performance_api import database_snapshot, system_snapshot
 from tgdrive.settings.managed_settings import SettingsProblem
 from tgdrive.settings.performance_preferences import PerformanceSettings
 from tgdrive.web.app import create_app
@@ -173,3 +173,17 @@ def test_prepare_rejects_catalog_generation_change_before_origin_work(
     finally:
         runtime.transfers.registry.close()
         store.close()
+
+
+def test_database_snapshot_reports_size_and_tolerates_failures():
+    stats = {"totalSize": 300, "indexSize": 100, "objects": 7, "fsTotalSize": 900}
+    runtime = SimpleNamespace(mongo=SimpleNamespace(db=Mock()))
+    runtime.mongo.db.command.return_value = stats
+    assert database_snapshot(runtime) == {
+        "used_bytes": 300,
+        "index_bytes": 100,
+        "objects": 7,
+        "volume_total_bytes": 900,
+    }
+    runtime.mongo.db.command.side_effect = RuntimeError("not authorized")
+    assert database_snapshot(runtime) is None
