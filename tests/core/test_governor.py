@@ -126,3 +126,39 @@ def test_tick_applies_through_performance_settings(monkeypatch):
     assert uploads == [1] and settings.telegram_uploads_per_bot == 1
     # The largest accepted file follows the staging budget; no fixed cap.
     assert applied[0]["max_file_size"] == applied[0]["staging_budget_bytes"]
+
+
+def test_slow_mongodb_halves_concurrency_once_per_cooldown_then_recovers():
+    fast = measurements() | {"mongo_latency_ms": 20.0}
+    slow = measurements() | {"mongo_latency_ms": 900.0}
+    result = decide(fast, state(), None, 0)
+    assert result["mongo_baseline_ms"] == 20.0
+    result = decide(slow, result, None, 5)
+    assert result["values"]["telegram_upload_pipeline"] == 2
+    assert "MongoDB slowed to 900 ms" in result["reasons"]["telegram_upload_pipeline"]
+    # Still slow inside the cooldown: hold, do not halve again.
+    result = decide(slow, result, None, 10)
+    assert result["values"]["telegram_upload_pipeline"] == 2
+    result = decide(slow, result, None, 70)
+    assert result["values"]["telegram_upload_pipeline"] == 1
+    # A slow database never lowers the learned baseline.
+    assert result["mongo_baseline_ms"] < 21
+    # Fast again: normal throughput raises resume after the cooldown.
+    result = result | {"signals": signals(70)}
+    result = decide(fast, result, signals(75, sent=100), 131)
+    assert result["values"]["telegram_upload_pipeline"] == 2
+
+
+def test_tick_measures_mongodb_ping(monkeypatch):
+    clock = iter([1.0, 1.25, 2.0, 2.5])
+    monkeypatch.setattr(governor.time, "perf_counter", lambda: next(clock))
+    runtime = SimpleNamespace(
+        mongo=SimpleNamespace(db=SimpleNamespace(command=lambda _name: {"ok": 1}))
+    )
+    assert Governor(SimpleNamespace(), runtime)._mongo_latency_ms() == 250.0
+
+    def down(_name):
+        raise RuntimeError("unreachable")
+
+    runtime.mongo.db.command = down
+    assert Governor(SimpleNamespace(), runtime)._mongo_latency_ms() is None

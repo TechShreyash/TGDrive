@@ -14,6 +14,10 @@ logger = logging.getLogger(__name__)
 GIB = 1024**3
 INTERVAL_SECONDS = 5
 COOLDOWN_SECONDS = 60
+# MongoDB counts as slow above both bounds; the free Atlas tier throttles
+# bursts this way, and backing off keeps catalog writes from timing out.
+MONGO_SLOW_MS = 250
+MONGO_SLOW_FACTOR = 4
 CONCURRENCY = (
     "telegram_uploads_per_bot",
     "telegram_upload_pipeline",
@@ -110,7 +114,29 @@ def decide(measurements: dict, previous: dict, signals: dict | None, now: float)
             values[key], reasons[key] = target, f"{why} ({_gib(target)})"
     last, raised_at = previous.get("signals"), previous["raised_at"]
     throughput = previous.get("throughput", 0.0)
-    if last is not None and signals is not None:
+    latency = m.get("mongo_latency_ms")
+    baseline = previous.get("mongo_baseline_ms")
+    mongo_slow = False
+    if latency is not None:
+        mongo_slow = baseline is not None and latency > max(
+            MONGO_SLOW_MS, baseline * MONGO_SLOW_FACTOR
+        )
+        # The usual latency is the lowest seen, drifting up 1% per tick so a
+        # moved database is relearned.
+        baseline = latency if baseline is None else min(latency, baseline * 1.01)
+    backoff_at = previous.get("mongo_backoff_at")
+    if mongo_slow and (backoff_at is None or now - backoff_at >= COOLDOWN_SECONDS):
+        backoff_at = now
+        for key in CONCURRENCY:
+            values[key] = max(1, values[key] // 2)
+            reasons[key] = (
+                f"halved: MongoDB slowed to {latency:.0f} ms "
+                f"(usually {baseline:.0f} ms) ({values[key]})"
+            )
+        raised_at = now
+    elif mongo_slow:
+        raised_at = now  # Still slow: hold values, no raises.
+    elif last is not None and signals is not None:
         elapsed = max(1e-9, signals["at"] - last["at"])
         current = max(0, signals["bytes"] - last["bytes"]) / elapsed
         if signals["floods"] > last["floods"] or signals["timeouts"] > last["timeouts"]:
@@ -140,6 +166,8 @@ def decide(measurements: dict, previous: dict, signals: dict | None, now: float)
         signals=signals,
         throughput=throughput,
         raised_at=raised_at,
+        mongo_baseline_ms=baseline,
+        mongo_backoff_at=backoff_at,
     )
 
 
@@ -154,6 +182,17 @@ class Governor:
         from tgdrive.settings.performance_preferences import get_performance_settings
 
         return get_performance_settings(self.settings, self.runtime)
+
+    def _mongo_latency_ms(self) -> float | None:
+        db = getattr(getattr(self.runtime, "mongo", None), "db", None)
+        if db is None:
+            return None
+        started = time.perf_counter()
+        try:
+            db.command("ping")
+        except Exception:
+            return None  # Connectivity failures are handled by ownership checks.
+        return (time.perf_counter() - started) * 1000
 
     def signals(self) -> dict | None:
         slots = getattr(getattr(self.runtime, "pool", None), "_slots", ())
@@ -175,6 +214,9 @@ class Governor:
         service = self._service()
         directory = self.settings.resolved_data_dir
         self.measurements = await asyncio.to_thread(measure, directory)
+        latency = await asyncio.to_thread(self._mongo_latency_ms)
+        if latency is not None:
+            self.measurements["mongo_latency_ms"] = latency
         now = time.monotonic() if now is None else now
         if self.state is None:
             self.state = dict(
