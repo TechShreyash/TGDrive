@@ -768,7 +768,7 @@ identified separately in activity messages.
 
 Explicit **Sync now** requests an earlier check but cannot bypass a saved deadline.
 A failed check's saved retry time governs the next attempt. Destructive Telegram
-operations need a fresh checkpoint check; the hourly idle check does not satisfy
+operations need a fresh checkpoint check; the hourly health check does not satisfy
 that barrier. Browser status refresh remains read-only.
 
 **Pause** and **Disable** remain effective after an in-flight failure; the retry
