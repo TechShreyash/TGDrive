@@ -56,12 +56,12 @@ def key_record(key) -> dict:
 
 
 def check_drive_key(backend, key) -> None:
-    """Open only drives created with this key; older TGDrive drives are refused."""
+    """Open only drives created with this key (2.2 drives get it when upgraded)."""
     row = backend.db.settings.find_one({"_id": "encryption"})
     if row is None:
         raise EncryptionKeyMismatch(
-            "This database was created by an older TGDrive and cannot be opened. "
-            "Use a new empty MongoDB database and a new storage channel."
+            "This database has no encryption-key check. Restore it from a backup "
+            "or start TGDrive with an empty database."
         )
     if row["document"]["fingerprint"] != fingerprint(key):
         raise EncryptionKeyMismatch(

@@ -202,8 +202,9 @@ class MongoStore:
             )
         if metadata.get("schema_version") != SCHEMA_VERSION:
             raise CorruptStoreError(
-                "This database belongs to an older TGDrive version. "
-                "Use a new MongoDB database and storage channel."
+                "This database uses an unsupported TGDrive catalog version. "
+                "TGDrive upgrades 2.0-2.2 drives automatically at startup; "
+                "check the startup log for the upgrade error."
             )
         self._metadata = metadata
         try:

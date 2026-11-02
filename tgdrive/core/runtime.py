@@ -99,6 +99,10 @@ class Runtime:
                 if getattr(self, "_activation_unavailable", False):
                     raise ActivationError("Recovery activation requires review")
                 await asyncio.to_thread(apply_activation, self.settings, self.mongo)
+                from tgdrive.storage.upgrade import upgrade
+
+                # A 2.0-2.2 drive is upgraded in place; its files stay where they are.
+                await asyncio.to_thread(upgrade, self.mongo, self.settings)
                 if await self._offer_backup_restore():
                     return
                 created = await asyncio.to_thread(

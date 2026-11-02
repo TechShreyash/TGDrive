@@ -43,7 +43,7 @@ def test_drive_opens_only_with_its_own_key():
 def test_database_from_an_older_tgdrive_is_refused():
     backend = FakeMongoBackend()
     backend.db.nodes.insert_one({"_id": "root"})
-    with pytest.raises(encryption.EncryptionKeyMismatch, match="older TGDrive"):
+    with pytest.raises(encryption.EncryptionKeyMismatch, match="no encryption-key check"):
         encryption.check_drive_key(backend, KEY)
     assert backend.db.settings.find_one({"_id": "encryption"}) is None
 

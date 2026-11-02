@@ -105,7 +105,12 @@ def _apply(row, update):
     for field, value in update.get("$set", {}).items():
         row[field] = copy.deepcopy(value)
     for field in update.get("$unset", {}):
-        row.pop(field, None)
+        *parents, leaf = field.split(".")
+        target = row
+        for part in parents:
+            target = target.get(part) if isinstance(target, dict) else None
+        if isinstance(target, dict):
+            target.pop(leaf, None)
     for field, value in update.get("$inc", {}).items():
         row[field] = row.get(field, 0) + value
     for field, value in update.get("$max", {}).items():

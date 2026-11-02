@@ -412,3 +412,14 @@ def test_environment_template_contains_only_required_bootstrap_values():
         "ADMIN_PASSWORD",
         "ENCRYPTION_KEY",
     }
+
+
+def test_secrets_saved_by_tgdrive_2_2_keep_their_session_secret(tmp_path):
+    saved = tmp_path / "deployment-secrets.json"
+    secret = "s" * 48
+    saved.write_text(
+        json.dumps({"SESSION_SECRET": secret, "MONGODB_BACKUP_KEY": "a" * 64})
+    )
+    saved.chmod(0o600)
+    values = installation_secrets(tmp_path, {}, existing_drive=True)
+    assert values == {"SESSION_SECRET": secret}

@@ -44,6 +44,9 @@ def installation_secrets(
                     raise ValueError
                 with os.fdopen(descriptor, "r", closefd=False) as source:
                     saved = json.load(source)
+                if isinstance(saved, dict):
+                    # TGDrive 2.0-2.2 also saved a backup key that 2.3 derives.
+                    saved.pop("MONGODB_BACKUP_KEY", None)
                 if not isinstance(saved, dict) or set(saved) != set(SECRET_FIELDS):
                     raise ValueError
                 if (
