@@ -623,6 +623,10 @@ def create_app(
         client_key = request.client.host if request.client else "unknown"
         decision = limiter.check(client_key)
         if not decision.allowed:
+            logger.warning(
+                "Owner login blocked after repeated failures; retry in %s s",
+                decision.retry_after,
+            )
             return JSONResponse(
                 status_code=429,
                 headers={"Retry-After": str(decision.retry_after)},
@@ -652,8 +656,11 @@ def create_app(
                 valid = demo_admin
         if not valid:
             limiter.failure(client_key)
+            # No address: proxies make it meaningless and it is personal data.
+            logger.warning("Owner login failed: wrong password")
             return _json_error("Invalid password", 401)
         limiter.success(client_key)
+        logger.info("Owner signed in%s", " (demo administrator)" if demo_admin else "")
         response = JSONResponse({"status": "ok"})
         response.set_cookie(
             SESSION_COOKIE,

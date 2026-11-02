@@ -406,6 +406,11 @@ class MongoProtection:
                     self._prune_confirmed_files, previous_files, pending["id"]
                 )
                 self._last_error = None
+                logger.info(
+                    "Drive backup saved to Telegram: revision %s, %s bytes",
+                    pending.get("revision"),
+                    path.stat().st_size,
+                )
                 return True
             except Exception as exc:
                 seconds = getattr(exc, "seconds", None)
@@ -567,16 +572,20 @@ class MongoProtection:
                     delay = self.settings.mongodb_backup_seconds
                     continue
                 if await asyncio.to_thread(self._unchanged):
-                    logger.debug("Scheduled backup skipped: nothing changed")
+                    logger.info("Scheduled backup skipped: nothing changed")
                     delay = self.settings.mongodb_backup_seconds
                     continue
                 await self.snapshot_now(store)
                 delay = self.settings.mongodb_backup_seconds
             except asyncio.CancelledError:
                 raise
-            except Exception:
+            except Exception as error:
                 self._last_error = (
                     "The encrypted Telegram backup will retry automatically."
+                )
+                logger.warning(
+                    "Drive backup failed (%s); retrying in 60 seconds",
+                    type(error).__name__,
                 )
                 delay = 60
 

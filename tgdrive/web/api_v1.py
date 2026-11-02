@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import unicodedata
 from dataclasses import asdict
 from datetime import UTC, datetime, timedelta
@@ -104,6 +105,7 @@ class ShareUpdate(BaseModel):
     expires_at: datetime | None = None
 
 
+logger = logging.getLogger(__name__)
 # Fixed choices keep pages predictable; the cap of 1,000 matches is 10 pages.
 SEARCH_PAGE_SIZES = (25, 50, 100)
 
@@ -745,10 +747,15 @@ def register_routes(
                     "label": row["label"],
                 }
 
+        created = await asyncio.to_thread(create)
+        # Never log the link token; the share ID identifies it.
+        logger.info(
+            "Share link created id=%s expires=%s",
+            created["id"],
+            created["expires_at"] or "never",
+        )
         return JSONResponse(
-            await asyncio.to_thread(create),
-            status_code=201,
-            headers={"Cache-Control": "no-store"},
+            created, status_code=201, headers={"Cache-Control": "no-store"}
         )
 
     @app.patch("/api/v1/shares", dependencies=admin)
@@ -832,6 +839,7 @@ def register_routes(
                 raise HTTPException(422, "A link ID or item path is required.")
 
         await asyncio.to_thread(revoke)
+        logger.info("Share link revoked id=%s", payload.share_id or "all for an item")
         return {"status": "ok"}
 
     def public_destination(store: Any, path: str) -> bool:
@@ -900,6 +908,7 @@ def register_routes(
             for path in selected:
                 await asyncio.to_thread(store.validate_deletion, path)
             records = await get_manager(request).start_deletions(selected)
+            logger.info("Permanent deletion started for %d item(s)", len(selected))
             for path, record in zip(selected, records, strict=True):
                 results.append({"path": path, "id": record.id, "status": "deleting"})
         else:
@@ -937,6 +946,12 @@ def register_routes(
                 return None
 
             response = await asyncio.to_thread(apply_metadata)
+            if response is None:
+                logger.info(
+                    "%s %d item(s)",
+                    "Trashed" if payload.action == "trash" else "Restored",
+                    len(selected),
+                )
             if response is not None:
                 return response
         return JSONResponse(

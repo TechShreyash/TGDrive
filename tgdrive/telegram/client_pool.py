@@ -347,6 +347,14 @@ class ClientPool:
 
             await self._drop_duplicates()
             self._state = PoolState.RUNNING
+            healthy = [s.name for s in self._slots if s.started and s.healthy]
+            failed = [s.name for s in self._slots if not (s.started and s.healthy)]
+            logger.info(
+                "Telegram connected: %d of %d accounts%s",
+                len(healthy),
+                len(self._slots),
+                f"; not connected: {', '.join(failed)}" if failed else "",
+            )
             return self
 
     async def _drop_duplicates(self) -> None:
@@ -471,6 +479,16 @@ class ClientPool:
                 if slot.error is not None and slot.needs_stop:
                     await asyncio.gather(self._stop_slot(slot), return_exceptions=True)
             await self._drop_duplicates()
+            for slot in slots:
+                if slot.started and slot.healthy:
+                    logger.info("Telegram %s connected: %s", slot.kind, slot.name)
+                else:
+                    logger.warning(
+                        "Telegram %s could not connect: %s (%s)",
+                        slot.kind,
+                        slot.name,
+                        type(slot.error).__name__,
+                    )
         finally:
             for slot in slots:
                 slot.starting = False
@@ -482,6 +500,7 @@ class ClientPool:
                 await self._leases.wait_for(lambda: slot.active == 0)
             if slot.needs_stop:
                 await self._stop_slot(slot)
+            logger.info("Telegram %s removed: %s", slot.kind, slot.name)
         except Exception:
             logger.warning("A removed Telegram client did not disconnect cleanly")
         finally:

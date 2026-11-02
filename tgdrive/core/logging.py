@@ -80,7 +80,8 @@ def configure_logging(level: str = "INFO", log_file: Path | None = None) -> None
         else max(root.level, logging.WARNING)
     )
     logging.getLogger("telethon").setLevel(diagnostic_level)
-    logging.getLogger("httpx").setLevel(diagnostic_level)
+    for name in ("httpx", "httpx2"):
+        logging.getLogger(name).setLevel(diagnostic_level)
     logging.getLogger("httpcore").setLevel(diagnostic_level)
     formatter = RedactingFormatter(
         "%(asctime)s %(levelname)s %(name)s: %(message)s",
