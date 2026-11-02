@@ -845,14 +845,19 @@ class MongoStore:
             if group is not None:
                 # One group is one kind, so folders-first ordering still holds.
                 query["group"] = group
-            folders = (
-                0
-                if group not in (None, "folder")
-                else self.db.nodes.count_documents(
-                    dict(query, kind="folder"), session=self._session
+            # Both counts in one round trip; the $match uses the listing index.
+            counts = {
+                row["_id"]: row["n"]
+                for row in self.db.nodes.aggregate(
+                    [
+                        {"$match": query},
+                        {"$group": {"_id": "$kind", "n": {"$sum": 1}}},
+                    ],
+                    session=self._session,
                 )
-            )
-            total = self.db.nodes.count_documents(query, session=self._session)
+            }
+            folders = counts.get("folder", 0)
+            total = sum(counts.values())
 
             before = "$lt" if beyond == "$gt" else "$gt"
 
@@ -889,6 +894,8 @@ class MongoStore:
             for kind in kinds:
                 if len(items) >= limit:
                     break
+                if not counts.get(kind):
+                    continue  # Known empty: skip the round trip.
                 if start is not None and kind == start[0]:
                     # ``around`` starts at the target itself, a cursor after it.
                     selection = after_row(*start, inclusive=around is not None)
@@ -912,9 +919,13 @@ class MongoStore:
             following = None
             if last is not None and len(items) == limit:
                 position = (last["kind"], last[field], last["_id"])
-                more = self._one("nodes", after_row(*position), {"_id": 1}) or (
-                    last["kind"] == "folder" and total > folders
-                )
+                if start is None:
+                    # Offset paging knows its position, so no extra lookup.
+                    more = offset + len(items) < total
+                else:
+                    more = self._one("nodes", after_row(*position), {"_id": 1}) or (
+                        last["kind"] == "folder" and total > folders
+                    )
                 if more:
                     following = _encode_cursor(sort, position)
             result = {

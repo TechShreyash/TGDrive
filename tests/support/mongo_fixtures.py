@@ -192,6 +192,13 @@ class Collection:
                         frontier, depth = following, depth + 1
                     result.append(dict(copy.deepcopy(row), **{spec["as"]: found}))
                 rows = result
+            elif "$group" in stage:
+                spec = stage["$group"]
+                key = spec["_id"].removeprefix("$")
+                grouped = {}
+                for row in rows:
+                    grouped[row.get(key)] = grouped.get(row.get(key), 0) + 1
+                rows = [{"_id": value, "n": count} for value, count in grouped.items()]
             elif "$project" in stage:
                 rows = [_project(row, stage["$project"]) for row in rows]
             else:
