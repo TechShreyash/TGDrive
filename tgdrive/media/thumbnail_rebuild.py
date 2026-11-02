@@ -35,6 +35,7 @@ from tgdrive.media.thumbnail_worker import (
     OFFICE_FORMATS,
     VIDEO_FORMATS,
 )
+from tgdrive.storage import pacing
 
 BLOCK = 1024**2
 SOURCE_BUDGET = 64 * BLOCK
@@ -77,6 +78,7 @@ class RebuildSource:
         self.runner = None
 
     async def authorize(self):
+        await pacing.background.wait(2)  # resolve_id + get_file
         store = self.owner.runtime().store
         current = store.get_file(store.resolve_id(self.data["id"]))
         if store.drive_id != self.owner.drive_id or file_identity(
@@ -379,6 +381,7 @@ class ThumbnailRebuild:
                     continue
                 visited.add(path)
                 try:
+                    await pacing.background.wait(2)
                     rows = await asyncio.to_thread(
                         self.runtime().store.list_directory, path
                     )
@@ -396,6 +399,7 @@ class ThumbnailRebuild:
             await self.persist()
             for item_id in sorted(files):
                 try:
+                    await pacing.background.wait(2)
                     store = self.runtime().store
                     data = store.get_file(store.resolve_id(item_id))
                 except NotFoundError, NotFileError, TrashedItemError:

@@ -634,6 +634,9 @@ class PreloadManager:
                 if hi <= lo:
                     continue
                 if authorize is not None:
+                    from tgdrive.storage import pacing
+
+                    await pacing.background.wait(2)
                     await authorize()
                 async with self.pool.lease(
                     priority="preload", respect_cooldown=True
