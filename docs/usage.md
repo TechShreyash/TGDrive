@@ -126,6 +126,13 @@ is fully loaded. A new browser opens in Grid; your view choice is remembered aft
 Supported uploads generate covers automatically. For missing covers or a full
 rebuild, see [thumbnails](thumbnails.md).
 
+### Recent
+
+**Recent** lists files you uploaded or opened, newest first. Opening counts
+previews, playback and downloads by the owner, at most once per file every 10
+minutes. Share-link and embed visitors are never recorded. Files in Trash are
+left out.
+
 ### Starred files and folders
 
 Choose **Add to Starred / Remove from Starred** in the item menu. Stars are
@@ -459,7 +466,7 @@ unfinished uploads are complete. **Temporary storage** holds unfinished work on
 server disk, not your total Telegram storage.
 
 **Back Up Now** creates one encrypted recovery file. Automatic copies normally
-run hourly without an independent channel; independent protection batches changes.
+run daily without an independent channel, skipped when nothing changed; independent protection batches changes.
 Each backup is pinned in your channel and opens only with your encryption key.
 [Backup setup and restore](backup-recovery.md).
 

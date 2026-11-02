@@ -258,7 +258,7 @@ For lost drive data, follow [backup recovery](backup-recovery.md).
 | `MONGODB_URI` | Required | Secret URI beginning mongodb:// or mongodb+srv://. Missing/invalid configuration or failed database access rejects startup; no local database fallback. |
 | `ENCRYPTION_KEY` | Required, secret | 64 hex characters. Encrypts every document TGDrive uploads (AES-256-CTR). Never stored in MongoDB, backups or logs. The drive remembers a fingerprint; startup stops if the key differs. [Encryption](#stored-file-encryption). |
 | `MONGODB_DATABASE` | tgdrive | 1–63 ASCII letters/digits, underscores or hyphens; dedicated to one drive. |
-| `MONGODB_BACKUP_SECONDS` | 1 hour (`3600`) | Integer 60–604800 seconds between successful automatic standalone safety copies. A scheduled copy is skipped when files, folders, shares, settings, jobs and the key are unchanged since the last confirmed backup; manual backups always run. Separate standalone publication pauses while independent channel protection is enabled. |
+| `MONGODB_BACKUP_SECONDS` | 1 day (`86400`) | Integer 60–604800 seconds between successful automatic standalone safety copies. A scheduled copy is skipped when files, folders, shares, settings, jobs and the key are unchanged since the last confirmed backup; manual backups always run. Separate standalone publication pauses while independent channel protection is enabled. |
 | `DATA_DIR` | data | Persistent generated keys, Telegram sessions, helper locks, recovery/activation state and media cache. MongoDB holds the live catalog and durable job/receipt records. |
 | `CACHE_DIR` | cache | Persistent unfinished upload payloads and encrypted temporary database backup files. Keep unfinished bytes. |
 | `LOG_LEVEL` | INFO | DEBUG, INFO, WARNING, ERROR or CRITICAL. |

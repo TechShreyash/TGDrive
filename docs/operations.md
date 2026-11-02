@@ -54,6 +54,7 @@ routine byte updates and successful polling are quiet.
 | `Transfer started`, `Transfer finished` | Bytes, time before first processing and total job lifetime, including waits. |
 | `Transfer retry scheduled` or `Transfer waiting` | The cooldown or unavailable Telegram client, automatic retry policy and suggested action. Unchanged waits are not repeated. |
 | `Transfer failed` | Job ID, phase, exception type, stable failure category and suggested repair. Inspect the user-facing error in Transfers. |
+| Backups, connections, logins, shares, Trash | Saved, skipped or failed backups; which Telegram accounts connected; failed or blocked logins; share links created or revoked (by ID, never token); items trashed, restored or queued for deletion. Passwords and client addresses are never logged. |
 | `Automatic tuning` | A cache size, disk budget or concurrency value changed, and why (for example halved after FloodWait). Routine one-step raises log only at DEBUG. |
 
 </details>
@@ -355,6 +356,8 @@ Do not run an older app against an incompatible database format. Restore a compa
    The log shows `Upgrading the TGDrive 2.2 catalog` and then
    `TGDrive 2.2 catalog upgrade finished`.
 4. Check a few files, folders, shares and **Connections**.
+5. If 2.2 had an independent backup channel, set it up again in
+   [Storage & Backups](backup-recovery.md#add-a-backup-channel).
 
 | What happens | Detail |
 | --- | --- |
@@ -362,6 +365,7 @@ Do not run an older app against an incompatible database format. Restore a compa
 | Kept | Files, folders, Trash, stars, shares, connections, settings, sessions and share links. `SESSION_SECRET` is kept, so old links still work. |
 | Added | Search words, type groups, drive totals, record expiry and the encryption-key check. |
 | Removed | The 2.2 `MONGODB_BACKUP_KEY`, now derived from `ENCRYPTION_KEY`, and an unused index. |
+| Backup channel | 2.2's independent channel progress can't be read by 2.3, so it starts from scratch. Its messages stay in Telegram; the old files are renamed `channel-backup.sqlite3.2.2-unused` and `replica-bootstrap.json.2.2-unused`. |
 | Telegram files | Not touched. Files uploaded by 2.2 stay unencrypted and readable; new uploads are encrypted. |
 | Interrupted | The version is raised last, so the upgrade runs again on the next start. On an upgraded drive it does nothing. |
 

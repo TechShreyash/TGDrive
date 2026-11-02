@@ -26,6 +26,7 @@ per-person accounts or OpenAPI pages, and response fields may grow over time.
 - [Previews and media](#previews-and-media)
 - [Jobs](#jobs)
 - [Transfer history](#transfer-history)
+- [Recent files](#recent-files)
 - [Starred items](#starred-items)
 - [Shares, downloads, and ranges](#shares-downloads-and-ranges)
 - [URL imports and transfer routes](#url-imports-and-transfer-routes)
@@ -279,6 +280,12 @@ All routes are **Owner** and `no-store`. Storage: [finished history](architectur
 
 Statuses: `all`, `queued`, `running`, `finished`, `completed`, `error`,
 `cancelled`. `finished` covers the last three.
+
+## Recent files
+
+| Method and route | Access | Purpose | Notes and errors |
+| --- | --- | --- | --- |
+| `GET /api/v1/recent` | Owner | `limit` (`25`, `50` or `100`), `cursor`, optional `type`: files by last upload or owner open | `{items, next_cursor}`; items add `path`, `parent_names`, `active_at`. `422` for other limits |
 
 ## Starred items
 

@@ -25,7 +25,7 @@ Same env + same MongoDB is never a restore: the drive simply opens.
 
 ## How backups work
 
-- TGDrive saves a backup every hour (`MONGODB_BACKUP_SECONDS`) and when you choose
+- TGDrive saves a backup once a day (`MONGODB_BACKUP_SECONDS`) and when you choose
   **Storage & Backups → Back Up Now**. A scheduled backup is skipped when nothing
   has changed since the last confirmed one; **Back Up Now** always runs.
 - Each backup is one file: every MongoDB collection, compressed and encrypted
