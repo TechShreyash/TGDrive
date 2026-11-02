@@ -209,13 +209,11 @@ function FolderPicker({
         setLoadError("");
         setFolders([]);
         void api
-            .directory(path, "", controller.signal)
+            .folders(path, controller.signal)
             .then((result) => {
                 if (!controller.signal.aborted)
                     setFolders(
-                        Object.values(result.data.contents)
-                            .filter((item) => item.type === "folder")
-                            .sort((a, b) => a.name.localeCompare(b.name)),
+                        result.sort((a, b) => a.name.localeCompare(b.name)),
                     );
             })
             .catch((cause) => {

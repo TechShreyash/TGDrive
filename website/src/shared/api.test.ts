@@ -35,7 +35,7 @@ describe("request transport failures", () => {
             vi.stubGlobal("fetch", fetcher);
 
             await expect(
-                api.directory("/", "", controller.signal),
+                api.trash("", controller.signal),
             ).rejects.toMatchObject({ status: 408, code: "REQUEST_TIMEOUT" });
             expect(deadline).toHaveBeenCalledOnce();
             expect(controller.signal.aborted).toBe(false);

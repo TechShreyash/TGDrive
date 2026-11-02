@@ -10,6 +10,7 @@ if os.environ.get("TGDRIVE_E2E") != "1":
     pytest.skip("Set TGDRIVE_E2E=1 for Chromium checks", allow_module_level=True)
 
 import tests.browser.test_browser_e2e as fixtures
+from tests.browser.node_pages import NODES, fetch_with_rows, is_listing
 from tests.browser.test_browser_e2e import ARTIFACTS, expect, login, upload
 
 browser, desktop, server = fixtures.browser, fixtures.desktop, fixtures.server
@@ -27,24 +28,25 @@ def test_phone_browsing_drawer_and_upload_use_separate_surfaces(
     page.add_init_script("localStorage.setItem('tgdrive.appearance','" + theme + "')")
 
     def listing(route):
-        response = route.fetch()
-        payload = response.json()
-        if route.request.post_data_json["path"] == "/":
-            payload["data"]["contents"].update(
+        if not is_listing(route.request, "/"):
+            route.fallback()
+            return
+        response, payload = fetch_with_rows(
+            route,
+            [
                 {
-                    f"phone-{i}": {
-                        "id": f"phone-{i}",
-                        "name": f"Project notes {i:03}.txt",
-                        "type": "file",
-                        "path": "/",
-                        "size": 1024,
-                    }
-                    for i in range(60)
+                    "id": f"phone-{i}",
+                    "name": f"Project notes {i:03}.txt",
+                    "type": "file",
+                    "path": "/",
+                    "size": 1024,
                 }
-            )
+                for i in range(60)
+            ],
+        )
         route.fulfill(response=response, json=payload)
 
-    page.route("**/api/getDirectory", listing)
+    page.route(NODES, listing)
     login(page, server.url)
     ARTIFACTS.mkdir(parents=True, exist_ok=True)
     expect(page.locator("#compact-new-button")).to_be_visible()

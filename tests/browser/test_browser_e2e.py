@@ -27,6 +27,15 @@ if os.environ.get("TGDRIVE_E2E") != "1":
     )
 
 playwright = pytest.importorskip("playwright.sync_api")
+from tests.browser.node_pages import (  # noqa: E402
+    NODES,
+    ROOT_FOLDER,
+    fetch_with_rows,
+    is_listing,
+    node_page,
+    node_query,
+)
+
 expect = playwright.expect
 ROOT = Path(__file__).resolve().parents[2]
 PASSWORD = "offline browser test password"
@@ -857,13 +866,13 @@ def test_move_folder_navigation_clears_failed_listing_and_recovers(
     failed = []
 
     def directory(route):
-        if route.request.post_data_json["path"] == folder and not failed:
+        if is_listing(route.request, folder) and not failed:
             failed.append(True)
             route.fulfill(status=503, json={"detail": "Folder listing interrupted"})
         else:
             route.continue_()
 
-    page.route("**/api/getDirectory", directory)
+    page.route(NODES, directory)
     page.get_by_label("Actions for Private folder", exact=True).click()
     page.get_by_role("button", name="Move", exact=True).click()
     dialog = page.get_by_role("dialog")
@@ -1329,8 +1338,8 @@ def test_mouse_double_click_and_mobile_tap_preserve_focus(
     page.on(
         "request",
         lambda request: (
-            directory_requests.append(request.post_data_json["path"])
-            if request.url.endswith("/api/getDirectory")
+            directory_requests.append(node_query(request)["parent_id"])
+            if is_listing(request)
             else None
         ),
     )
@@ -1957,27 +1966,28 @@ def test_folder_upload_refresh_keeps_table_selection_page_and_scroll(
     hold = False
 
     def listing(route: Any) -> None:
-        response = route.fetch()
-        payload = response.json()
-        if route.request.post_data_json["path"] == "/":
-            payload["data"]["contents"].update(
+        if not is_listing(route.request, "/"):
+            route.fallback()
+            return
+        response, payload = fetch_with_rows(
+            route,
+            [
                 {
-                    f"stable-{i}": {
-                        "id": f"stable-{i}",
-                        "name": f"stable-{i:03}.txt",
-                        "type": "file",
-                        "path": "/",
-                        "size": 10,
-                    }
-                    for i in range(130)
+                    "id": f"stable-{i}",
+                    "name": f"stable-{i:03}.txt",
+                    "type": "file",
+                    "path": "/",
+                    "size": 10,
                 }
-            )
+                for i in range(130)
+            ],
+        )
         if hold:
             held.append((route, response, payload))
         else:
             route.fulfill(response=response, json=payload)
 
-    page.route("**/api/getDirectory", listing)
+    page.route(NODES, listing)
     login(page, server.url)
     directory = tmp_path / "Stable upload"
     directory.mkdir()
@@ -2059,7 +2069,7 @@ def test_background_listing_failure_preserves_files_and_navigation_loads_normall
     expect(primary).to_be_visible()
     select_item(page, "資料")
     page.route(
-        "**/api/getDirectory",
+        NODES,
         lambda route: route.fulfill(
             status=503, json={"detail": "Temporary test failure"}
         ),
@@ -2071,9 +2081,9 @@ def test_background_listing_failure_preserves_files_and_navigation_loads_normall
     expect(page.get_by_role("heading", name="Could Not Load Your Files")).to_have_count(
         0
     )
-    page.unroute("**/api/getDirectory")
+    page.unroute(NODES)
     held: list[Any] = []
-    page.route("**/api/getDirectory", lambda route: held.append(route))
+    page.route(NODES, lambda route: held.append(route))
     try:
         page.get_by_role("button", name="Done", exact=True).click()
         primary.press("Enter")
@@ -2082,7 +2092,7 @@ def test_background_listing_failure_preserves_files_and_navigation_loads_normall
     finally:
         for route in held:
             route.continue_()
-        page.unroute("**/api/getDirectory")
+        page.unroute(NODES)
     expect(page.get_by_role("button", name="résumé #1.txt", exact=True)).to_be_visible()
 
 
@@ -4295,9 +4305,11 @@ def test_selection_mixed_state_and_next_page_scroll_position(server, desktop):
         for index in range(105)
     }
     page.route(
-        "**/api/getDirectory",
+        NODES,
         lambda route: route.fulfill(
-            json={"status": "ok", "data": {"name": "/", "contents": contents}}
+            json=node_page(
+                list(contents.values()), node_query(route.request), ROOT_FOLDER
+            )
         ),
     )
     login(page, server.url)

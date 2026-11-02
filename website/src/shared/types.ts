@@ -21,6 +21,27 @@ export interface Directory {
     breadcrumbs?: Breadcrumb[];
     contents: Record<string, DriveItem>;
 }
+export type NodeType = "folder" | "media" | "docs" | "audio" | "other";
+export interface NodeQuery {
+    parent_id: string;
+    limit: number;
+    sort?: "name" | "size" | "type" | "date";
+    order?: "asc" | "desc";
+    type?: NodeType;
+    cursor?: string;
+    offset?: number;
+    around?: string;
+}
+/** One page of `GET /api/v1/nodes` or `/api/v1/shared/nodes`. */
+export interface NodePage {
+    items: DriveItem[];
+    total: number;
+    offset: number;
+    next_cursor: string | null;
+    folder?: DriveItem & { breadcrumbs: Breadcrumb[] };
+    index?: number;
+    share_home?: string;
+}
 /** Short link to an item: its own ID, independent of folder depth. */
 export function itemLink(path: string): string {
     if (path === "/") return "/";
@@ -333,6 +354,10 @@ export interface SearchResults {
     query: string;
     has_more: boolean;
     next_offset: number | null;
+    /** Matches found, at most 1,000. */
+    total?: number;
+    /** More than 1,000 names matched; only the first 1,000 are ranked. */
+    capped?: boolean;
 }
 
 /** A shared unit keeps precise progress counters compact in narrow columns. */

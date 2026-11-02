@@ -740,14 +740,13 @@ function MoveDialog({
         setExposure(false);
         setAllow(false);
         void api
-            .directory(path)
+            .folders(path)
             .then((result) => {
                 if (!ignore) {
                     setError("");
                     setFolders(
-                        Object.values(result.data.contents).filter(
+                        result.filter(
                             (item) =>
-                                item.type === "folder" &&
                                 !items.some(
                                     (selected) =>
                                         itemPath(item) === itemPath(selected) ||

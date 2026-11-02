@@ -1550,3 +1550,13 @@
         height: 28px;
     }
 }
+
+/* Search stops ranking at 1,000 matches; say so instead of paging forever. */
+.search-capped {
+    margin: 12px 0 0;
+    padding: 10px 14px;
+    border-radius: 12px;
+    background: var(--surface-subtle);
+    color: var(--muted);
+    font-size: 13px;
+}

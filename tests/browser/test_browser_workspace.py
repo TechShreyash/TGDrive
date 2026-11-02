@@ -12,6 +12,7 @@ if os.environ.get("TGDRIVE_E2E") != "1":
     pytest.skip("Set TGDRIVE_E2E=1 to run Chromium checks", allow_module_level=True)
 
 import tests.browser.test_browser_e2e as fixtures
+from tests.browser.node_pages import NODES, fetch_with_rows
 from tests.browser.test_browser_e2e import ARTIFACTS, expect, login
 
 browser = fixtures.browser
@@ -30,11 +31,10 @@ def test_directory_controls_stay_visible_while_only_files_scroll(
     page.set_viewport_size({"width": width, "height": 844})
 
     def listing(route):
-        response = route.fetch()
-        payload = response.json()
-        payload["data"]["contents"].update(
-            {
-                f"scroll-{i}": {
+        response, payload = fetch_with_rows(
+            route,
+            [
+                {
                     "id": f"scroll-{i}",
                     "name": f"scroll-{i:03}.txt",
                     "type": "file",
@@ -42,11 +42,11 @@ def test_directory_controls_stay_visible_while_only_files_scroll(
                     "size": 10,
                 }
                 for i in range(80)
-            }
+            ],
         )
         route.fulfill(response=response, json=payload)
 
-    page.route("**/api/getDirectory", listing)
+    page.route(NODES, listing)
     login(page, server.url)
     page.get_by_role("button", name="Select", exact=True).click()
     page.get_by_label("Select scroll-000.txt", exact=True).check()

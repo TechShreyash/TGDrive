@@ -23,26 +23,20 @@ describe("embedded shared items", () => {
         },
     );
 
-    it("loads folder contents through the existing capability-scoped directory route", async () => {
-        const directory = { name: "Shared", contents: {} };
-        const fetch = vi.fn(async () => Response.json({ data: directory }));
+    it("loads the first folder page through the share-scoped paged route", async () => {
+        const page = { items: [], total: 0, offset: 0, next_cursor: null };
+        const fetch = vi.fn(async () => Response.json(page));
         vi.stubGlobal("fetch", fetch);
         await expect(
             loadEmbeddedShare(
-                "/share_folder-id",
+                "/share_parent-id/folder-id",
                 "share-token",
                 new AbortController().signal,
             ),
-        ).resolves.toEqual({ directory });
+        ).resolves.toEqual({ page });
         expect(fetch).toHaveBeenCalledWith(
-            "/api/getDirectory",
-            expect.objectContaining({
-                method: "POST",
-                body: JSON.stringify({
-                    path: "/share_folder-id",
-                    auth: "share-token",
-                }),
-            }),
+            "/api/v1/shared/nodes?parent_id=%2Ffolder-id&limit=200&auth=share-token",
+            expect.objectContaining({ method: "GET" }),
         );
     });
 

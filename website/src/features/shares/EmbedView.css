@@ -210,3 +210,8 @@
         transition: none;
     }
 }
+.embed-items li.embed-more {
+    justify-content: space-between;
+    padding: 12px 0;
+    border-bottom: 0;
+}

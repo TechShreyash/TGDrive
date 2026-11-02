@@ -5,6 +5,7 @@ import {
     useCallback,
     useEffect,
     useLayoutEffect,
+    useMemo,
     useRef,
     useState,
     useSyncExternalStore,
@@ -45,6 +46,7 @@ import {
     setTimezone,
     type DriveItem,
     type Directory,
+    type NodeQuery,
     type View,
 } from "../shared/types";
 import { transfers, type Transfer } from "../features/transfers/transfers";
@@ -58,6 +60,17 @@ import {
     reconcileDirectory,
     reconcileDriveItems,
 } from "../features/files/listingUpdates";
+import {
+    applyPage,
+    emptyFolderPages,
+    folderComplete,
+    loadPrefix,
+    pageRequest,
+    reconcilePages,
+    removeRows,
+    type FetchPage,
+    type FolderPages,
+} from "../features/files/folderPages";
 import { Modal, Spinner, ToastNotice as Toast } from "../shared/components";
 import Login from "./Login";
 import SharesView from "../features/shares/SharesView";
@@ -67,7 +80,7 @@ import SettingsManagement from "../features/settings/SettingsManagement";
 import PerformanceSettings from "../features/performance/PerformanceSettings";
 import Preloads from "../features/performance/Preloads";
 import PerformancePanel from "../features/performance/PerformancePanel";
-import FileBrowser from "../features/files/FileBrowser";
+import FileBrowser, { type FileFilter } from "../features/files/FileBrowser";
 import { COMPACT_LAYOUT_QUERY } from "../shared/responsive";
 import type { FileSort } from "../features/files/SortMenu";
 import type { SortOrder } from "../features/files/fileSorting";
@@ -128,6 +141,17 @@ const TOOL_VIEWS: View[] = [
     "storage",
 ];
 const ROOT_CRUMB = { path: "/", name: "My Files" };
+function folderDirectory(pages: FolderPages): Directory {
+    const folder = pages.folder;
+    return {
+        name: folder?.name,
+        read_only: folder?.read_only,
+        breadcrumbs: folder?.breadcrumbs,
+        contents: Object.fromEntries(
+            pages.rows.flatMap((item) => (item ? [[item.id, item]] : [])),
+        ),
+    };
+}
 const ADMIN_SETTING_TITLES: Record<string, string> = {
     cache: "Cache & preloading",
     transfers: "Uploads & Telegram",
@@ -183,7 +207,26 @@ export default function App() {
             setConfigLoad("error");
         }
     }, []);
-    const [directory, setDirectory] = useState<Directory>({ contents: {} });
+    const [plainDirectory, setDirectory] = useState<Directory>({
+        contents: {},
+    });
+    const [pages, setPages] = useState<FolderPages>(emptyFolderPages);
+    // The listing the cached pages belong to; stale while another one loads.
+    const [pagesKey, setPagesKey] = useState("");
+    const pagesRef = useRef(pages);
+    pagesRef.current = pages;
+    // The current folder listing's page fetcher; null while it first loads.
+    const pageSource = useRef<{
+        fetch: FetchPage;
+        pending: Set<string>;
+    } | null>(null);
+    const folderPage = useRef(0);
+    const [folderSort, setFolderSort] = useState<FileSort>("name");
+    const [folderOrder, setFolderOrder] = useState<SortOrder>("asc");
+    const [folderFilterState, setFolderFilterState] = useState<{
+        path: string;
+        filter: FileFilter;
+    }>({ path: "", filter: "all" });
     const [loading, setLoading] = useState(true);
     const [loadError, setLoadError] = useState("");
     const [refresh, setRefresh] = useState(0);
@@ -196,6 +239,7 @@ export default function App() {
     const [searchSort, setSearchSort] = useState<FileSort>("name");
     const [searchOrder, setSearchOrder] = useState<SortOrder>("asc");
     const [searchMore, setSearchMore] = useState(false);
+    const [searchCapped, setSearchCapped] = useState(false);
     const [searchItems, setSearchItems] = useState<DriveItem[]>([]);
     const [nextSearchOffset, setNextSearchOffset] = useState<number | null>(
         null,
@@ -373,6 +417,16 @@ export default function App() {
         if (requested.select) input.select();
     }, [searchExpanded, mobile, query, searchLabel]);
     const isFiles = view === "files" || view === "trash" || view === "starred";
+    const isPaged = view === "files" && !isSearch;
+    // A type filter belongs to the folder it was chosen in.
+    const folderFilter =
+        folderFilterState.path === currentPath + location.auth
+            ? folderFilterState.filter
+            : "all";
+    const directory = useMemo(
+        () => (isPaged ? folderDirectory(pages) : plainDirectory),
+        [isPaged, pages, plainDirectory],
+    );
     const listingKey = JSON.stringify([
         authenticated,
         view,
@@ -382,6 +436,7 @@ export default function App() {
         isSearch ? searchSort : "",
         isSearch ? searchOrder : "",
         ["trash", "starred"].includes(view) ? scopedQuery : "",
+        isPaged ? [folderSort, folderOrder, folderFilter] : "",
     ]);
     const loadedListing = useRef<string | null>(null);
     const listingRefresh = useRef<ReturnType<
@@ -686,56 +741,123 @@ export default function App() {
             if (!background) loadedListing.current = null;
             setLoading(!background);
             setLoadError("");
+            if (isPaged) {
+                pageSource.current = background ? pageSource.current : null;
+                const base = {
+                    parent_id: isPublic
+                        ? "/" +
+                          (currentPath
+                              .slice(7)
+                              .split("/")
+                              .filter(Boolean)
+                              .at(-1) || "")
+                        : currentPath,
+                    sort: folderSort === "modified" ? "date" : folderSort,
+                    order: folderOrder,
+                    type: folderFilter === "all" ? undefined : folderFilter,
+                } satisfies Omit<NodeQuery, "limit">;
+                const fetchPage: FetchPage = (request) =>
+                    isPublic
+                        ? api.sharedNodes(
+                              { ...base, ...request },
+                              location.auth,
+                              controller.signal,
+                          )
+                        : api.nodes({ ...base, ...request }, controller.signal);
+                const loadFolder = async () => {
+                    let next = await loadPrefix(
+                        background ? pagesRef.current : emptyFolderPages,
+                        fetchPage,
+                    );
+                    const target = location.highlightId;
+                    let wanted = background ? folderPage.current : 0;
+                    if (
+                        !background &&
+                        target &&
+                        !next.rows.some((item) => item?.id === target)
+                    ) {
+                        // "Show in folder" for an item beyond the first rows.
+                        const found = await fetchPage({
+                            around: target,
+                            limit: 1,
+                        }).catch(() => null);
+                        if (found?.index !== undefined)
+                            wanted = Math.floor(found.index / 100);
+                    }
+                    const request = pageRequest(next, wanted);
+                    if (request)
+                        next = applyPage(
+                            next,
+                            request,
+                            await fetchPage(request),
+                        );
+                    return next;
+                };
+                return await loadFolder()
+                    .then((next) => {
+                        if (controller.signal.aborted) return false;
+                        loadedListing.current = listingKey;
+                        setToast((current) =>
+                            current?.message === retryNotice ? null : current,
+                        );
+                        const merged = reconcilePages(pagesRef.current, next);
+                        pagesRef.current = merged;
+                        setPages(merged);
+                        setPagesKey(listingKey);
+                        pageSource.current = {
+                            fetch: fetchPage,
+                            pending: new Set(),
+                        };
+                        return true;
+                    })
+                    .catch((error) => failed(error, background))
+                    .finally(() => {
+                        if (!controller.signal.aborted) setLoading(false);
+                    });
+            }
             const resultPromise =
                 view === "starred"
                     ? api.starred(scopedQuery, controller.signal)
                     : view === "trash"
                       ? api.trash(scopedQuery, controller.signal)
-                      : isSearch && !isPublic
-                        ? api
-                              .search(
-                                  currentPath.slice(8),
-                                  searchOffset,
-                                  searchSort === "modified"
-                                      ? "date"
-                                      : searchSort,
-                                  controller.signal,
-                                  searchOrder,
-                              )
-                              .then((result) => {
-                                  if (!controller.signal.aborted) {
-                                      setSearchMore(result.has_more);
-                                      setNextSearchOffset(result.next_offset);
-                                      setSearchItems((previous) =>
-                                          reconcileDriveItems(
-                                              previous,
-                                              result.items,
-                                          ),
-                                      );
-                                      if (
-                                          !result.items.length &&
-                                          searchOffset > 0
-                                      )
-                                          setSearchOffset(0);
-                                  }
-                                  return {
-                                      data: {
-                                          name: "Search Results",
-                                          contents: Object.fromEntries(
-                                              result.items.map((item) => [
-                                                  item.id,
-                                                  item,
-                                              ]),
-                                          ),
-                                      } as Directory,
-                                      auth_home_path: undefined,
-                                  };
-                              })
-                        : api.directory(
-                              currentPath,
-                              location.auth,
-                              controller.signal,
-                          );
+                      : api
+                            .search(
+                                currentPath.slice(8),
+                                searchOffset,
+                                searchSort === "modified" ? "date" : searchSort,
+                                controller.signal,
+                                searchOrder,
+                            )
+                            .then((result) => {
+                                if (!controller.signal.aborted) {
+                                    setSearchMore(result.has_more);
+                                    setSearchCapped(Boolean(result.capped));
+                                    setNextSearchOffset(result.next_offset);
+                                    setSearchItems((previous) =>
+                                        reconcileDriveItems(
+                                            previous,
+                                            result.items,
+                                        ),
+                                    );
+                                    if (
+                                        !result.items.length &&
+                                        searchOffset > 0
+                                    )
+                                        setSearchOffset(0);
+                                }
+                                return {
+                                    data: {
+                                        name: "Search Results",
+                                        contents: Object.fromEntries(
+                                            result.items.map((item) => [
+                                                item.id,
+                                                item,
+                                            ]),
+                                        ),
+                                    } as Directory,
+                                    auth_home_path: undefined,
+                                };
+                            });
             return await resultPromise
                 .then((result) => {
                     if (controller.signal.aborted) return false;
@@ -748,44 +870,48 @@ export default function App() {
                     );
                     return true;
                 })
-                .catch((error) => {
-                    if (controller.signal.aborted) return false;
-                    if (error.name !== "AbortError") {
-                        if (
-                            background &&
-                            (!error.status ||
-                                error.status === 408 ||
-                                error.status === 429 ||
-                                error.status >= 500)
-                        ) {
-                            notify(retryNotice, true);
-                            retryTimer = setTimeout(reload, 3000);
-                            return false;
-                        }
-                        loadedListing.current = null;
-                        if (isSearch) {
-                            setSearchItems([]);
-                            setSearchMore(false);
-                            setNextSearchOffset(null);
-                        }
-                        setLoadError(
-                            isPublic &&
-                                (error.status === 401 || error.status === 403)
-                                ? "This link has expired, was revoked, or is not valid. Ask the owner for a new link."
-                                : errorMessage(error),
-                        );
-                        setDirectory({ contents: {} });
-                    }
-                    return false;
-                })
+                .catch((error) => failed(error, background))
                 .finally(() => {
                     if (!controller.signal.aborted) setLoading(false);
                 });
         });
+        const failed = (error: ApiError, background: boolean) => {
+            if (controller.signal.aborted) return false;
+            if (error.name !== "AbortError") {
+                if (
+                    background &&
+                    (!error.status ||
+                        error.status === 408 ||
+                        error.status === 429 ||
+                        error.status >= 500)
+                ) {
+                    notify(retryNotice, true);
+                    retryTimer = setTimeout(reload, 3000);
+                    return false;
+                }
+                loadedListing.current = null;
+                if (isSearch) {
+                    setSearchItems([]);
+                    setSearchMore(false);
+                    setSearchCapped(false);
+                    setNextSearchOffset(null);
+                }
+                setLoadError(
+                    isPublic && (error.status === 401 || error.status === 403)
+                        ? "This link has expired, was revoked, or is not valid. Ask the owner for a new link."
+                        : errorMessage(error),
+                );
+                setDirectory({ contents: {} });
+                pagesRef.current = emptyFolderPages;
+                setPages(emptyFolderPages);
+            }
+            return false;
+        };
         listingRefresh.current = queue;
         queue.request();
         return () => {
             controller.abort();
+            pageSource.current = null;
             queue.dispose();
             if (listingRefresh.current === queue) listingRefresh.current = null;
             clearTimeout(retryTimer);
@@ -805,7 +931,65 @@ export default function App() {
         notify,
         config.recovery_only,
         reload,
+        isPaged,
+        folderSort,
+        folderOrder,
+        folderFilter,
     ]);
+    const ensurePage = useCallback(
+        (page: number) => {
+            folderPage.current = page;
+            const source = pageSource.current;
+            const request = source && pageRequest(pagesRef.current, page);
+            if (!source || !request) return;
+            const key = JSON.stringify(request);
+            if (source.pending.has(key)) return;
+            source.pending.add(key);
+            void source
+                .fetch(request)
+                .then((result) => {
+                    if (pageSource.current === source)
+                        setPages((current) =>
+                            applyPage(current, request, result),
+                        );
+                })
+                .catch((error) => {
+                    if (pageSource.current === source)
+                        notify(errorMessage(error), true);
+                })
+                .finally(() => source.pending.delete(key));
+        },
+        [notify],
+    );
+    const highlightLookup = useRef("");
+    useEffect(() => {
+        // "Show in folder" while this folder is already open: no reload runs, so
+        // find the item's page here when it is beyond the loaded rows.
+        const target = location.highlightId;
+        const source = pageSource.current;
+        const lookup = listingKey + target;
+        if (
+            !target ||
+            loading ||
+            !isPaged ||
+            !source ||
+            highlightLookup.current === lookup ||
+            pages.rows.some((item) => item?.id === target)
+        )
+            return;
+        highlightLookup.current = lookup;
+        void source
+            .fetch({ around: target, limit: 1 })
+            .then((found) => {
+                if (
+                    highlightLookup.current === lookup &&
+                    found.index !== undefined
+                )
+                    ensurePage(Math.floor(found.index / 100));
+            })
+            .catch(() => {});
+    }, [location.highlightId, listingKey, loading, isPaged, pages, ensurePage]);
+    const previewLookup = useRef("");
     useEffect(() => {
         if (!isFiles || isSearch || view === "trash" || view === "starred")
             return;
@@ -829,10 +1013,37 @@ export default function App() {
             ]);
     }, [directory.breadcrumbs, isPublic, isFiles, isSearch, view]);
     useEffect(() => {
+        if (!location.previewId) previewLookup.current = "";
         if (!location.previewId || loading || view !== "files") return;
         const item = directory.contents[location.previewId];
         if (item?.type === "file") setDialog({ type: "preview", item });
-    }, [location.previewId, directory.contents, loading, view]);
+        const source = pageSource.current;
+        const lookup = listingKey + location.previewId;
+        if (item || !isPaged || !source || previewLookup.current === lookup)
+            return;
+        // A preview link to an item beyond the loaded rows.
+        previewLookup.current = lookup;
+        void source
+            .fetch({ around: location.previewId, limit: 1 })
+            .then((page) => {
+                const found = page.items[0];
+                // A refresh replaces the page source, so match the request instead.
+                if (
+                    previewLookup.current === lookup &&
+                    found?.id === location.previewId &&
+                    found.type === "file"
+                )
+                    setDialog({ type: "preview", item: found });
+            })
+            .catch(() => {});
+    }, [
+        location.previewId,
+        directory.contents,
+        loading,
+        view,
+        isPaged,
+        listingKey,
+    ]);
     const closeDialog = () => {
         if (dialog?.type !== "preview") {
             if (
@@ -1016,6 +1227,11 @@ export default function App() {
                         .filter((result) => result.id)
                         .map((result) => result.path),
                 );
+                const next = removeRows(pagesRef.current, (item) =>
+                    accepted.has(itemPath(item)),
+                );
+                pagesRef.current = next;
+                setPages(next);
                 setDirectory((current) => ({
                     ...current,
                     contents: Object.fromEntries(
@@ -1902,6 +2118,7 @@ export default function App() {
                                     ? {
                                           offset: searchOffset,
                                           hasMore: searchMore,
+                                          capped: searchCapped,
                                           onPrevious: () =>
                                               setSearchOffset(
                                                   Math.max(
@@ -1919,6 +2136,34 @@ export default function App() {
                                     : undefined
                             }
                             searchItems={isSearch ? searchItems : undefined}
+                            paging={
+                                isPaged
+                                    ? {
+                                          rows: pages.rows,
+                                          total: pages.total,
+                                          complete:
+                                              pagesKey === listingKey &&
+                                              folderComplete(pages),
+                                          folderKey:
+                                              currentPath + location.auth,
+                                          sort: folderSort,
+                                          order: folderOrder,
+                                          filter: folderFilter,
+                                          onSort: (sort, order) => {
+                                              setFolderSort(sort);
+                                              setFolderOrder(order);
+                                          },
+                                          onFilter: (filter) =>
+                                              setFolderFilterState({
+                                                  path:
+                                                      currentPath +
+                                                      location.auth,
+                                                  filter,
+                                              }),
+                                          onPage: ensurePage,
+                                      }
+                                    : undefined
+                            }
                             searchSort={isSearch ? searchSort : undefined}
                             searchOrder={isSearch ? searchOrder : undefined}
                             onSearchOrder={(value) => {

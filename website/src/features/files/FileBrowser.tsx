@@ -43,6 +43,7 @@ import {
     formatShortDate,
     type DriveItem,
     type Directory,
+    type NodeType,
     type Share,
 } from "../../shared/types";
 import { api } from "../../shared/api";
@@ -89,7 +90,7 @@ function positionItemMenu(details: HTMLDetailsElement) {
         ) + "px";
 }
 
-type FileFilter = "all" | "folder" | "media" | "docs" | "audio" | "other";
+export type FileFilter = "all" | NodeType;
 const FILE_FILTERS: [FileFilter, string, typeof Folder | null][] = [
     ["all", "All", null],
     ["folder", "Folders", Folder],
@@ -98,6 +99,13 @@ const FILE_FILTERS: [FileFilter, string, typeof Folder | null][] = [
     ["audio", "Audio", Music],
     ["other", "Other", Archive],
 ];
+const EMPTY_FILTER_TITLES: Record<NodeType, string> = {
+    folder: "No Folders Here",
+    media: "No Photos or Videos Here",
+    docs: "No Documents Here",
+    audio: "No Audio Here",
+    other: "No Other Files Here",
+};
 function filterGroup(item: DriveItem): FileFilter {
     const kind = fileKind(item.name, item.type === "folder");
     if (kind === "folder") return "folder";
@@ -152,6 +160,7 @@ export default function FileBrowser({
     searchItems,
     header,
     searchQuery = "",
+    paging,
 }: {
     directory: Directory;
     listingKey: string;
@@ -174,6 +183,7 @@ export default function FileBrowser({
     searchPagination?: {
         offset: number;
         hasMore: boolean;
+        capped?: boolean;
         onPrevious: () => void;
         onNext: () => void;
     };
@@ -184,6 +194,19 @@ export default function FileBrowser({
     searchItems?: DriveItem[];
     header?: ReactNode;
     searchQuery?: string;
+    /** Server-paged folder: rows sit at their absolute position, in server order. */
+    paging?: {
+        rows: (DriveItem | undefined)[];
+        total: number;
+        complete: boolean;
+        folderKey: string;
+        sort: FileSort;
+        order: SortOrder;
+        filter: FileFilter;
+        onSort: (sort: FileSort, order: SortOrder) => void;
+        onFilter: (filter: FileFilter) => void;
+        onPage: (page: number) => void;
+    };
 }) {
     const [activeShares, setActiveShares] = useState<Share[]>([]);
     useEffect(() => {
@@ -246,10 +269,11 @@ export default function FileBrowser({
             return "grid";
         }
     });
-    const sort = searchSort || localSort;
-    const order = searchOrder || localOrder;
+    const sort = paging?.sort || searchSort || localSort;
+    const order = paging?.order || searchOrder || localOrder;
     const setOrder = (value: SortOrder) => {
-        if (searchPagination) onSearchOrder?.(value);
+        if (paging) paging.onSort(sort, value);
+        else if (searchPagination) onSearchOrder?.(value);
         else setLocalOrder(value);
         setPage(0);
     };
@@ -262,7 +286,8 @@ export default function FileBrowser({
                 : value === sort
                   ? order
                   : defaultSortOrder(value);
-        if (searchPagination) {
+        if (paging) paging.onSort(value, direction);
+        else if (searchPagination) {
             onSearchSort?.(value);
             onSearchOrder?.(direction);
         } else {
@@ -328,11 +353,26 @@ export default function FileBrowser({
         return () => document.removeEventListener("keydown", escape);
     }, []);
     const allItems = useMemo(() => {
+        if (paging)
+            return paging.rows.filter((item): item is DriveItem =>
+                Boolean(item),
+            );
         const items = (
             searchItems || Object.values(directory.contents || {})
         ).slice();
         return searchPagination ? items : sortDriveItems(items, sort, order);
-    }, [directory.contents, searchItems, searchPagination, sort, order]);
+    }, [
+        paging?.rows,
+        directory.contents,
+        searchItems,
+        searchPagination,
+        sort,
+        order,
+    ]);
+    const onPage = paging?.onPage;
+    const pagedRows = paging?.rows;
+    // Rows also change after refreshes, which may drop a page loaded by offset.
+    useEffect(() => onPage?.(page), [onPage, page, pagedRows]);
     useEffect(() => {
         // Retain browsing state on refresh, dropping only selections that disappeared.
         const ids = new Set(allItems.map((item) => item.id));
@@ -343,10 +383,13 @@ export default function FileBrowser({
         setPage((current) =>
             Math.min(
                 current,
-                Math.max(0, Math.ceil(allItems.length / 100) - 1),
+                Math.max(
+                    0,
+                    Math.ceil((paging?.total ?? allItems.length) / 100) - 1,
+                ),
             ),
         );
-    }, [allItems]);
+    }, [allItems, paging?.total]);
     useEffect(() => {
         const list = document.querySelector<HTMLElement>(".file-list-scroll");
         const scroller = window.matchMedia(COMPACT_LAYOUT_QUERY).matches
@@ -365,7 +408,9 @@ export default function FileBrowser({
             layout,
         ]);
         if (highlighted.current === target) return;
-        const index = allItems.findIndex((item) => item.id === highlightId);
+        const index = (paging?.rows || allItems).findIndex(
+            (item) => item?.id === highlightId,
+        );
         if (index < 0) return;
         setPage(Math.floor(index / 100));
         setSelected(new Set([highlightId]));
@@ -383,9 +428,20 @@ export default function FileBrowser({
             });
         });
         return () => cancelAnimationFrame(frame);
-    }, [allItems, listingKey, highlightId, loading, sort, order, layout]);
-    const [filter, setFilter] = useState<FileFilter>("all");
-    useEffect(() => setFilter("all"), [listingKey]);
+    }, [
+        allItems,
+        paging?.rows,
+        listingKey,
+        highlightId,
+        loading,
+        sort,
+        order,
+        layout,
+    ]);
+    const [localFilter, setLocalFilter] = useState<FileFilter>("all");
+    useEffect(() => setLocalFilter("all"), [listingKey]);
+    const filter = paging?.filter || localFilter;
+    const setFilter = paging?.onFilter || setLocalFilter;
     const filterCounts = useMemo(() => {
         const counts = new Map<FileFilter, number>();
         for (const item of allItems) {
@@ -394,11 +450,41 @@ export default function FileBrowser({
         }
         return counts;
     }, [allItems]);
+    // Counts need every row; a partly loaded folder offers every type and
+    // remembers the types it found when it was last fully loaded.
+    const knownGroups = useRef<{
+        key: string;
+        counts: Map<FileFilter, number>;
+    } | null>(null);
+    if (paging?.complete && paging.filter === "all")
+        knownGroups.current = { key: paging.folderKey, counts: filterCounts };
+    const chipCounts = !paging
+        ? filterCounts
+        : knownGroups.current?.key === paging.folderKey
+          ? knownGroups.current.counts
+          : null;
     const filteredItems =
-        filter === "all"
+        paging || filter === "all"
             ? allItems
             : allItems.filter((item) => filterGroup(item) === filter);
-    const visibleItems = filteredItems.slice(page * 100, (page + 1) * 100);
+    const itemCount = paging ? paging.total : filteredItems.length;
+    const pageSlots = paging
+        ? Array.from(
+              {
+                  length: Math.max(
+                      0,
+                      Math.min(itemCount, (page + 1) * 100) - page * 100,
+                  ),
+              },
+              (_, index) => paging.rows[page * 100 + index],
+          )
+        : [];
+    const pageMissing = pageSlots.some((item) => !item);
+    const visibleItems = paging
+        ? pageMissing
+            ? []
+            : (pageSlots as DriveItem[])
+        : filteredItems.slice(page * 100, (page + 1) * 100);
     const chosen = allItems.filter((item) => selected.has(item.id));
     const recentItems = useMemo(
         () =>
@@ -668,10 +754,8 @@ export default function FileBrowser({
                                               ? " · More available"
                                               : "")
                                         : "No Results"
-                                    : allItems.length +
-                                      (allItems.length === 1
-                                          ? " item"
-                                          : " items")}
+                                    : itemCount +
+                                      (itemCount === 1 ? " item" : " items")}
                                 {isPublic ? " · Read-only" : ""}
                             </span>
                             <div className="file-toolbar-actions">
@@ -744,33 +828,40 @@ export default function FileBrowser({
                     and try changes.
                 </p>
             )}
-            {!loading && !error && filterCounts.size > 1 && (
-                <div
-                    className="file-filters"
-                    role="group"
-                    aria-label="Filter by type"
-                >
-                    {FILE_FILTERS.filter(
-                        ([value]) => value === "all" || filterCounts.has(value),
-                    ).map(([value, label, Icon]) => (
-                        <button
-                            key={value}
-                            type="button"
-                            className="file-filter-chip"
-                            aria-pressed={filter === value}
-                            onClick={() =>
-                                withViewTransition(() => {
-                                    setFilter(value);
-                                    setPage(0);
-                                })
-                            }
-                        >
-                            {Icon && <Icon size={15} aria-hidden="true" />}
-                            {label}
-                        </button>
-                    ))}
-                </div>
-            )}
+            {/* Server filters reload the list; keep their chips in place meanwhile. */}
+            {(!loading || (paging && (filter !== "all" || chipCounts))) &&
+                !error &&
+                (!chipCounts || chipCounts.size > 1 || filter !== "all") && (
+                    <div
+                        className="file-filters"
+                        role="group"
+                        aria-label="Filter by type"
+                    >
+                        {FILE_FILTERS.filter(
+                            ([value]) =>
+                                value === "all" ||
+                                !chipCounts ||
+                                chipCounts.has(value) ||
+                                value === filter,
+                        ).map(([value, label, Icon]) => (
+                            <button
+                                key={value}
+                                type="button"
+                                className="file-filter-chip"
+                                aria-pressed={filter === value}
+                                onClick={() =>
+                                    withViewTransition(() => {
+                                        setFilter(value);
+                                        setPage(0);
+                                    })
+                                }
+                            >
+                                {Icon && <Icon size={15} aria-hidden="true" />}
+                                {label}
+                            </button>
+                        ))}
+                    </div>
+                )}
             <div
                 className={
                     "file-list-scroll" +
@@ -797,7 +888,7 @@ export default function FileBrowser({
                             {refreshing ? "Refreshing…" : "Try Again"}
                         </button>
                     </div>
-                ) : loading ? (
+                ) : loading || pageMissing ? (
                     <div
                         className="loading-state file-skeleton"
                         data-layout={layout}
@@ -818,6 +909,12 @@ export default function FileBrowser({
                                 </span>
                             ),
                         )}
+                    </div>
+                ) : paging && filter !== "all" && !paging.total ? (
+                    <div className="empty-state">
+                        <Folder size={46} />
+                        <h2>{EMPTY_FILTER_TITLES[filter]}</h2>
+                        <p>Choose All to see everything in this folder.</p>
                     </div>
                 ) : allItems.length === 0 ? (
                     <div className="empty-state">
@@ -866,6 +963,7 @@ export default function FileBrowser({
                             !isTrash &&
                             !isStarred &&
                             !isPublic &&
+                            (!paging || paging.complete) &&
                             recentItems.length >= 4 &&
                             allItems.length >= 12 &&
                             recentItems.some(
@@ -1707,6 +1805,12 @@ export default function FileBrowser({
                                 </CollectionBody>
                             </Collection>
                         </div>
+                        {searchPagination?.capped && (
+                            <p className="search-capped" role="note">
+                                More than 1,000 matches. Add a word to narrow
+                                the search.
+                            </p>
+                        )}
                         {searchPagination &&
                             (searchPagination.offset > 0 ||
                                 searchPagination.hasMore) && (
@@ -1734,15 +1838,12 @@ export default function FileBrowser({
                                     </button>
                                 </div>
                             )}
-                        {!searchPagination && filteredItems.length > 100 && (
+                        {!searchPagination && itemCount > 100 && (
                             <div className="pagination">
                                 <span>
                                     Showing {page * 100 + 1}–
-                                    {Math.min(
-                                        (page + 1) * 100,
-                                        filteredItems.length,
-                                    )}{" "}
-                                    of {filteredItems.length}
+                                    {Math.min((page + 1) * 100, itemCount)} of{" "}
+                                    {itemCount}
                                 </span>
                                 <button
                                     className="icon-button"
@@ -1757,9 +1858,7 @@ export default function FileBrowser({
                                 </button>
                                 <button
                                     className="icon-button"
-                                    disabled={
-                                        (page + 1) * 100 >= filteredItems.length
-                                    }
+                                    disabled={(page + 1) * 100 >= itemCount}
                                     aria-label="Next Page"
                                     onClick={() => {
                                         setPage(page + 1);

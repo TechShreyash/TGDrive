@@ -8,6 +8,7 @@ from urllib.parse import urlencode
 
 import pytest
 
+from tests.browser.node_pages import NODES, fetch_with_rows, is_listing, node_query
 from tests.browser.test_browser_e2e import Server, expect, fixture_nodes, login
 from tests.browser.test_browser_e2e import browser as browser_fixture
 from tests.browser.test_browser_e2e import desktop as desktop_fixture
@@ -28,8 +29,8 @@ def test_folder_navigation_does_not_fetch_current_listing_for_breadcrumbs(
     page.on(
         "request",
         lambda request: (
-            requests.append(request.post_data_json["path"])
-            if request.url.endswith("/api/getDirectory")
+            requests.append(node_query(request)["parent_id"])
+            if is_listing(request)
             else None
         ),
     )
@@ -67,14 +68,14 @@ def test_breadcrumbs_come_with_the_listing_and_obsolete_requests_cancel(
     held: list[Any] = []
 
     def directory(route: Any) -> None:
-        path = route.request.post_data_json["path"]
+        path = node_query(route.request)["parent_id"]
         requests.append(path)
         if navigate_away and path == "/" + child["id"]:
             held.append(route.request)
         else:
             route.continue_()
 
-    page.route("**/api/getDirectory", directory)
+    page.route(NODES, directory)
     # The URL carries only the folder's own ID, at any depth.
     page.goto(server.url + "/?" + urlencode({"path": "/" + child["id"]}))
     if navigate_away:
@@ -119,9 +120,7 @@ def test_upload_refreshes_skip_shares_but_metadata_changes_refresh_badges(
     expect(page.get_by_label("Shared by Link", exact=True)).to_have_count(1)
     before = len(shares)
     for _ in range(3):
-        with page.expect_response(
-            lambda response: response.url.endswith("/api/getDirectory")
-        ):
+        with page.expect_response(lambda response: is_listing(response.request)):
             page.evaluate("window.dispatchEvent(new Event('tgdrive:files-changed'))")
         page.evaluate("""async () => {
           await new Promise(resolve => requestAnimationFrame(
@@ -215,3 +214,56 @@ def test_deep_folder_opens_from_a_short_url_with_its_full_breadcrumb(
     expect(crumbs).to_contain_text("Depth 0")
     crumbs.get_by_role("link", name="Depth 100", exact=True).click()
     expect(page.get_by_role("heading", name="Depth 100", exact=True)).to_be_visible()
+
+
+def test_links_reach_items_beyond_the_loaded_pages(
+    server: Server, desktop: tuple[Any, Any]
+) -> None:
+    _, page = desktop
+    login(page, server.url)
+    roots = page.request.get(server.url + "/api/v1/nodes?parent_id=/&limit=500")
+    samples = "/" + next(
+        item["id"]
+        for item in roots.json()["items"]
+        if item["name"] == "Preview samples"
+    )
+    extra = [
+        {
+            "id": f"bulk-{i}",
+            "name": f"bulk-{i:03}.txt",
+            "type": "file",
+            "path": samples,
+            "size": 1000 + i,
+            "upload_date": "2026-10-01T00:00:00",
+        }
+        for i in range(450)
+    ]
+
+    def listing(route: Any) -> None:
+        if not is_listing(route.request, samples):
+            route.fallback()
+            return
+        response, body = fetch_with_rows(route, extra)
+        route.fulfill(response=response, json=body)
+
+    page.route(NODES, listing)
+    page.evaluate("localStorage.setItem('tgdrive.file-view', 'list')")
+    # A preview link opens an item the first 200-row page does not contain.
+    page.goto(server.url + "/?" + urlencode({"path": samples, "preview": "bulk-420"}))
+    preview = page.locator("dialog.file-preview[open]")
+    expect(preview).to_contain_text("bulk-420.txt")
+    page.keyboard.press("Escape")
+    expect(preview).to_have_count(0)
+    # "Show in folder" lands on the page that holds the item and selects it.
+    page.evaluate(
+        """path => {
+          history.pushState({tgdriveHighlight: 'bulk-420', tgdriveReveal: true}, '',
+            '/?path=' + path);
+          dispatchEvent(new PopStateEvent('popstate', {state: history.state}));
+        }""",
+        samples,
+    )
+    expect(page.locator(".pagination span").first).to_have_text(
+        "Showing 401\u2013466 of 466"
+    )
+    expect(page.locator("tr.selected .file-name")).to_have_text("bulk-420.txt")

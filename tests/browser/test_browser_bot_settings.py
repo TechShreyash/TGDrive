@@ -9,6 +9,7 @@ pytestmark = pytest.mark.e2e
 if os.environ.get("TGDRIVE_E2E") != "1":
     pytest.skip("Set TGDRIVE_E2E=1 for Chromium tests", allow_module_level=True)
 
+from tests.browser.node_pages import NODES  # noqa: E402
 from tests.browser.test_browser_e2e import (  # noqa: E402
     ARTIFACTS,
     browser,  # noqa: F401
@@ -73,7 +74,7 @@ def test_folder_picker_read_failure_does_not_save_an_accidental_destination(
     _, page = desktop
     login(page, server.url + "/?view=settings&section=transfers#bot-mode")
     page.route(
-        "**/api/getDirectory",
+        NODES,
         lambda route: route.fulfill(
             status=503, json={"detail": "Folder list unavailable"}
         ),
@@ -84,7 +85,7 @@ def test_folder_picker_read_failure_does_not_save_an_accidental_destination(
     expect(
         dialog.get_by_role("button", name="Use this folder", exact=True)
     ).to_be_disabled()
-    page.unroute("**/api/getDirectory")
+    page.unroute(NODES)
     dialog.get_by_role("button", name="Try again", exact=True).click()
     expect(
         dialog.get_by_role("button", name="Use this folder", exact=True)

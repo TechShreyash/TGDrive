@@ -13,6 +13,14 @@ from urllib.parse import parse_qs, urlparse
 import pytest
 
 import tests.browser.test_browser_e2e as fixtures
+from tests.browser.node_pages import (
+    NODES,
+    ROOT_FOLDER,
+    fetch_with_rows,
+    is_listing,
+    node_page,
+    node_query,
+)
 from tests.browser.test_browser_e2e import ARTIFACTS, expect, login
 
 browser, desktop, server = fixtures.browser, fixtures.desktop, fixtures.server
@@ -27,7 +35,7 @@ class ArchiveRequests:
         self.requests: list[dict[str, Any]] = []
         self.jobs: list[dict[str, Any]] = []
         self.reject: tuple[int, dict[str, str]] | None = None
-        page.route("**/api/getDirectory", self.directory)
+        page.route(NODES, self.directory)
         page.route(
             "**/api/v1/jobs", lambda route: route.fulfill(json={"jobs": self.jobs})
         )
@@ -37,17 +45,19 @@ class ArchiveRequests:
         page.route("**/api/v1/archives/extract", self.start)
 
     def directory(self, route: Any) -> None:
-        response = route.fetch()
-        body = response.json()
-        parent = route.request.post_data_json.get("path")
-        if response.ok and parent:
-            body["data"]["contents"][ZIP_ID] = {
-                "id": ZIP_ID,
-                "path": parent,
-                "name": self.source_name,
-                "type": "file",
-                "size": 4096,
-            }
+        parent = node_query(route.request).get("parent_id", "/")
+        response, body = fetch_with_rows(
+            route,
+            [
+                {
+                    "id": ZIP_ID,
+                    "path": parent,
+                    "name": self.source_name,
+                    "type": "file",
+                    "size": 4096,
+                }
+            ],
+        )
         route.fulfill(response=response, json=body)
 
     def start(self, route: Any) -> None:
@@ -331,28 +341,27 @@ def test_completed_extraction_opens_its_new_output_folder(server, desktop):
         )
 
     def output_directory(route):
-        if route.request.post_data_json["path"] != destination:
+        if not is_listing(route.request, destination):
             route.fallback()
             return
-        route.fulfill(
-            json={
-                "data": {
-                    "name": "Unpacked project",
-                    "contents": {
-                        "extracted-note": {
-                            "id": "extracted-note",
-                            "path": destination,
-                            "name": "Extracted note.txt",
-                            "type": "file",
-                            "size": 8192,
-                        }
-                    },
-                }
-            }
-        )
+        note = {
+            "id": "extracted-note",
+            "path": destination,
+            "name": "Extracted note.txt",
+            "type": "file",
+            "size": 8192,
+        }
+        output = {
+            **folder,
+            "breadcrumbs": [
+                *ROOT_FOLDER["breadcrumbs"],
+                {"id": folder["id"], "name": folder["name"], "path": destination},
+            ],
+        }
+        route.fulfill(json=node_page([note], node_query(route.request), output))
 
     page.route("**/api/v1/transfers/location", locate)
-    page.route("**/api/getDirectory", output_directory)
+    page.route(NODES, output_directory)
     item_action(page, ZIP_NAME, "Extract archive")
     dialog = page.get_by_role("dialog", name="Extract archive", exact=True)
     dialog.get_by_label("New folder name", exact=True).fill("Unpacked project")

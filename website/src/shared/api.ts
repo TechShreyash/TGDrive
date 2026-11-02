@@ -1,5 +1,8 @@
 import type {
     Directory,
+    DriveItem,
+    NodePage,
+    NodeQuery,
     FolderTreeRequest,
     FolderTreeResponse,
     Job,
@@ -126,6 +129,13 @@ export interface BotUploadSettings {
     encrypt: boolean;
     settings_url: string | null;
 }
+function nodeParams(query: NodeQuery & { auth?: string }) {
+    return new URLSearchParams(
+        Object.entries(query).flatMap(([key, value]) =>
+            value === undefined ? [] : [[key, String(value)]],
+        ),
+    );
+}
 export interface TransferHistoryContext {
     exclude_folders?: string[];
     offset?: number;
@@ -200,12 +210,30 @@ export const api = {
         sessionGeneration++;
         return result;
     },
-    directory: (path: string, auth = "", signal?: AbortSignal) =>
-        request<{ data: Directory; auth_home_path?: string }>(
-            "/api/getDirectory",
-            { path, auth: auth || null },
+    nodes: (query: NodeQuery, signal?: AbortSignal) =>
+        request<NodePage>("/api/v1/nodes?" + nodeParams(query), undefined, {
+            signal,
+        }),
+    sharedNodes: (query: NodeQuery, auth: string, signal?: AbortSignal) =>
+        request<NodePage>(
+            "/api/v1/shared/nodes?" + nodeParams({ ...query, auth }),
+            undefined,
             { signal },
         ),
+    /** Every subfolder of a folder; folder lists are small, so follow the cursor. */
+    folders: async (parent_id: string, signal?: AbortSignal) => {
+        const folders: DriveItem[] = [];
+        let cursor: string | undefined;
+        do {
+            const page = await api.nodes(
+                { parent_id, limit: 500, type: "folder", cursor },
+                signal,
+            );
+            folders.push(...page.items);
+            cursor = page.next_cursor ?? undefined;
+        } while (cursor);
+        return folders;
+    },
     trash: (query = "", signal?: AbortSignal) =>
         request<{ data: Directory; auth_home_path?: string }>(
             "/api/v1/trash?" + new URLSearchParams({ q: query }),

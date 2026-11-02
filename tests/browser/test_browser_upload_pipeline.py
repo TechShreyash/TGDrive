@@ -9,6 +9,7 @@ from urllib.parse import urlencode
 
 import pytest
 
+from tests.browser.node_pages import NODES, fetch_with_rows, is_listing
 from tests.browser.test_browser_e2e import (
     ARTIFACTS,
     UPLOAD_RECOVERY_RECORDS,
@@ -210,34 +211,34 @@ def test_slow_listing_refresh_coalesces_upload_bursts_without_unmounting_rows(
     hold = False
 
     def listing(route: Any) -> None:
-        response = route.fetch()
-        payload = response.json()
-        root = route.request.post_data_json["path"] == "/"
-        if root:
-            payload["data"]["contents"].update(
+        if not is_listing(route.request, "/"):
+            route.fallback()
+            return
+        response, payload = fetch_with_rows(
+            route,
+            [
                 {
-                    f"stable-{index}": {
-                        "id": f"stable-{index}",
-                        "name": f"stable-{index:03}.txt",
-                        "type": "file",
-                        "path": "/",
-                        "size": 10,
-                    }
-                    for index in range(130)
+                    "id": f"stable-{index}",
+                    "name": f"stable-{index:03}.txt",
+                    "type": "file",
+                    "path": "/",
+                    "size": 10,
                 }
-            )
-            if recording:
-                refresh_requests.append(route.request)
-        if root and hold:
+                for index in range(130)
+            ],
+        )
+        if recording:
+            refresh_requests.append(route.request)
+        if hold:
             held.append((route, response, payload))
         else:
             route.fulfill(response=response, json=payload)
 
     def failed(request: Any) -> None:
-        if recording and request.url.endswith("/api/getDirectory"):
+        if recording and is_listing(request):
             failed_requests.append(request.failure or "Listing failed")
 
-    page.route("**/api/getDirectory", listing)
+    page.route(NODES, listing)
     page.on("requestfailed", failed)
     login(page, server.url)
     names = [f"zz-upload-{index}.txt" for index in range(6)]

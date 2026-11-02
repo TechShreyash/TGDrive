@@ -6,8 +6,8 @@ import {
     fileUrl,
     formatBytes,
     itemPath,
-    type Directory,
     type DriveItem,
+    type NodePage,
 } from "../../shared/types";
 import Preview from "../previews/Preview";
 import "./EmbedView.css";
@@ -22,8 +22,13 @@ export async function loadEmbeddedShare(
             "This embed link is incomplete. Ask the owner for a new link.",
         );
     if (path.startsWith("/share_")) {
-        const result = await api.directory(path, auth, signal);
-        return { directory: result.data };
+        const id = path.slice(7).split("/").filter(Boolean).at(-1) || "";
+        const page = await api.sharedNodes(
+            { parent_id: "/" + id, limit: 200 },
+            auth,
+            signal,
+        );
+        return { page };
     }
     const file = await request<DriveItem>(
         "/api/v1/embed?" + new URLSearchParams({ path, auth }),
@@ -34,13 +39,16 @@ export async function loadEmbeddedShare(
 }
 
 export default function EmbedView() {
-    const [params] = useState(() => new URLSearchParams(window.location.search));
+    const [params] = useState(
+        () => new URLSearchParams(window.location.search),
+    );
     const auth = params.get("auth") || "";
     const root = params.get("path") || "";
     const folder = root.startsWith("/share_");
     const [trail, setTrail] = useState([{ path: root, name: "Shared Folder" }]);
     const current = trail[trail.length - 1];
-    const [directory, setDirectory] = useState<Directory | null>(null);
+    const [listing, setListing] = useState<NodePage | null>(null);
+    const [more, setMore] = useState<"idle" | "loading" | "error">("idle");
     const [preview, setPreview] = useState<DriveItem | null>(null);
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState("");
@@ -49,7 +57,8 @@ export default function EmbedView() {
         const controller = new AbortController();
         setLoading(true);
         setError("");
-        setDirectory(null);
+        setListing(null);
+        setMore("idle");
         setPreview(null);
         void loadEmbeddedShare(current.path, auth, controller.signal)
             .then((result) => {
@@ -58,8 +67,8 @@ export default function EmbedView() {
                     setPreview(result.file);
                     document.title = result.file.name + " · TGDrive";
                 } else {
-                    const data = result.directory;
-                    setDirectory(data);
+                    const data = result.page.folder || { name: "" };
+                    setListing(result.page);
                     setTrail((previous) =>
                         previous.map((crumb) =>
                             crumb.path === current.path
@@ -79,11 +88,33 @@ export default function EmbedView() {
             });
         return () => controller.abort();
     }, [current.path, auth, attempt]);
-    const items = Object.values(directory?.contents || {}).sort(
-        (a, b) =>
-            Number(b.type === "folder") - Number(a.type === "folder") ||
-            a.name.localeCompare(b.name, undefined, { numeric: true }),
-    );
+    const items = listing?.items || [];
+    const showMore = async () => {
+        if (!listing?.next_cursor) return;
+        setMore("loading");
+        try {
+            const id = current.path.slice(7).split("/").filter(Boolean).at(-1);
+            const next = await api.sharedNodes(
+                {
+                    parent_id: "/" + id,
+                    limit: 500,
+                    cursor: listing.next_cursor,
+                },
+                auth,
+            );
+            setListing((previous) =>
+                previous
+                    ? {
+                          ...next,
+                          items: [...previous.items, ...next.items],
+                      }
+                    : previous,
+            );
+            setMore("idle");
+        } catch {
+            setMore("error");
+        }
+    };
     return (
         <main className="embed-view" id="main-content" tabIndex={-1}>
             {folder && (
@@ -137,8 +168,8 @@ export default function EmbedView() {
                     <h1>Embed unavailable</h1>
                     <ErrorNotice message={error} />
                     <p>
-                        The link may have expired, been revoked, or the item
-                        may be unavailable.
+                        The link may have expired, been revoked, or the item may
+                        be unavailable.
                     </p>
                     <button
                         className="secondary-button"
@@ -192,6 +223,24 @@ export default function EmbedView() {
                             )}
                         </li>
                     ))}
+                    {listing?.next_cursor && (
+                        <li className="embed-more">
+                            <button
+                                type="button"
+                                className="secondary-button"
+                                disabled={more === "loading"}
+                                onClick={() => void showMore()}
+                            >
+                                {more === "loading" && <Spinner />}
+                                {more === "error"
+                                    ? "Could not load more. Try Again"
+                                    : "Show more"}
+                            </button>
+                            <span className="embed-item-size">
+                                {items.length} of {listing.total}
+                            </span>
+                        </li>
+                    )}
                 </ul>
             ) : null}
             {preview && (
