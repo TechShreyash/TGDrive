@@ -107,8 +107,13 @@ standalone container. TGDrive's Compose files do not include MongoDB.
 > words and listing indexes take most of each item's space.
 > **Performance → Storage & cache** shows current MongoDB use; move to a larger
 > plan before it fills.
+>
+> The cheapest big win needs no code: put the Atlas cluster in the same cloud
+> region as the TGDrive server. Most of each operation's time is network round
+> trips of 35–58 ms, so a nearby cluster makes everything several times faster.
 
-1. Create an Atlas cluster and a **database user** with read/write access.
+1. Create an Atlas cluster in the **same cloud region as your TGDrive server**,
+   and a **database user** with read/write access.
 2. In **Network Access**, allow your TGDrive machine's public IP.
 3. Open **Connect → Drivers**, copy the URI and replace its password placeholder.
    [Encode reserved password characters](https://www.mongodb.com/docs/manual/reference/connection-string/).
