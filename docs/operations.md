@@ -316,12 +316,10 @@ updates. `dev` contains ongoing work and may be unstable. Follow
 
 1. Finish work, save a confirmed backup off-host, then stop safely.
 
-> [!WARNING]
-> TGDrive 2.3 cannot open a drive or restore a recovery file from 2.2 or earlier. Download
-> the files you want to keep, then start 2.3 with a new empty MongoDB database, a
-> new private storage channel (recommended, so old messages are not mixed in)
-> and a new `ENCRYPTION_KEY`, and upload them again. Keep the 2.x database until
-> you have checked the new drive.
+> [!IMPORTANT]
+> **Upgrading from 2.0–2.2:** add `ENCRYPTION_KEY` to `.env` first; 2.2 had none.
+> Keep the same MongoDB, channel and volumes. On first start, 2.3 upgrades the
+> drive in place: see [what the 2.2 upgrade changes](#upgrade-from-22-or-earlier).
 2. Record the running version and source commit; review the new version's requirements.
 3. Set `TGDRIVE_VERSION` in `.env` to the new release (or keep `latest`), then
    run `docker compose pull && docker compose up -d`, keeping server `-f`
@@ -347,6 +345,28 @@ before continuing.
 Native installs need `aria2c` for torrent imports; Docker includes it.
 
 Do not run an older app against an incompatible database format. Restore a compatible backup into a separate empty database for a data rollback.
+
+### Upgrade from 2.2 or earlier
+
+1. Save a confirmed 2.2 backup off the server, then stop 2.2.
+2. Generate a key with `openssl rand -hex 32`, add it as `ENCRYPTION_KEY` in
+   `.env` and [save a copy off the server](setup.md#save-your-encryption-key).
+3. Start 2.3 with the same `.env`, MongoDB, channel and Compose project name.
+   The log shows `Upgrading the TGDrive 2.2 catalog` and then
+   `TGDrive 2.2 catalog upgrade finished`.
+4. Check a few files, folders, shares and **Connections**.
+
+| What happens | Detail |
+| --- | --- |
+| Safety copy first | Every collection is written to `DATA_DIR/upgrade-2.2-<time>.json.gz` (owner-only) before anything changes. Keep it until you have checked the drive. |
+| Kept | Files, folders, Trash, stars, shares, connections, settings, sessions and share links. `SESSION_SECRET` is kept, so old links still work. |
+| Added | Search words, type groups, drive totals, record expiry and the encryption-key check. |
+| Removed | The 2.2 `MONGODB_BACKUP_KEY`, now derived from `ENCRYPTION_KEY`, and an unused index. |
+| Telegram files | Not touched. Files uploaded by 2.2 stay unencrypted and readable; new uploads are encrypted. |
+| Interrupted | The version is raised last, so the upgrade runs again on the next start. On an upgraded drive it does nothing. |
+
+The upgrade has been tested on a drive written by v2.2.0 against a local MongoDB,
+not against live Telegram or a 2.2 backup channel.
 
 ## Troubleshooting
 

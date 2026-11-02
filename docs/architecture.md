@@ -95,8 +95,8 @@ shares, operation IDs, jobs and receipts, deletion intents, private settings and
 sessions, backup records and the runtime ownership lease.
 
 **TGDrive sets no limit on items, folder depth or catalog size.** MongoDB's
-storage is the limit. On the free 512 MB Atlas tier that is roughly 300,000
-items, because names, word tokens and three-letter search pieces are indexed.
+storage is the limit; names and their search words are indexed. For current
+per-item sizes, see [MongoDB capacity](setup.md#1-prepare-mongodb).
 
 | Query | How MongoDB answers it |
 | --- | --- |
@@ -116,9 +116,13 @@ hidden through it. Permanent deletion walks the subtree in batches.
   offsets, sizes and checksums. Public listings hide those locations.
 - Schema version 5 tracks revision and commit generation.
 
-TGDrive 2.3 starts only on a new database. A database from an earlier version
-is refused at startup, so it can never be overwritten. Channel recovery accepts
-only schema 5 files.
+A schema 4 database from TGDrive 2.0–2.2 is upgraded in place at startup, before
+the drive opens: a gzip safety copy of every collection is written to `DATA_DIR`,
+the 2.3 fields and the encryption-key check are added, and the schema version is
+raised last, so an interrupted upgrade resumes on the next start
+([upgrade steps](operations.md#upgrade-from-22-or-earlier)). Telegram parts without a
+nonce are read as plain bytes. Restoring a recovery file or activating a channel
+copy still requires schema 5.
 
 ### How a write becomes visible
 

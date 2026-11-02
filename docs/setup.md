@@ -9,6 +9,8 @@ For self-hosting or setup help, ask in the [support group](https://t.me/TechZBot
 Docker Compose supplies Python, the website and preview/import tools. You do not
 need to install Python or Node separately. For a **new v2 drive**, use an empty
 MongoDB database and a new private Telegram channel; v1 catalogs are not imported.
+**Already running 2.0–2.2?** Don't start over: add `ENCRYPTION_KEY` and follow
+[upgrade from 2.0–2.2](operations.md#upgrade-from-22-or-earlier).
 
 <details>
 <summary>Contents</summary>
@@ -101,9 +103,8 @@ is the simplest option. Self-hosted MongoDB must be a **[replica set](reference.
 standalone container. TGDrive's Compose files do not include MongoDB.
 
 > [!NOTE]
-> MongoDB size, not TGDrive, limits how many items a drive holds. A local test
-> with 20,000 files used about 1.8 KB per item, most of it search and listing
-> indexes, so the free 512 MB Atlas tier holds roughly 250,000 files and folders.
+> MongoDB size, not TGDrive, limits how many items a drive holds. Names, search
+> words and listing indexes take most of each item's space.
 > **Performance → Storage & cache** shows current MongoDB use; move to a larger
 > plan before it fills.
 
@@ -255,7 +256,9 @@ Before large imports, review [upload and disk budgets](configuration.md#transfer
 ## Apply updates to an existing drive
 
 Follow [upgrade and rollback](operations.md#upgrade-and-rollback). Preserve the
-database, channel, `.env`, project name and volumes. Use stable `main` or a
+database, channel, `.env`, project name and volumes. Coming from 2.0–2.2, add
+`ENCRYPTION_KEY` to `.env` first; 2.3 upgrades the drive on its first start
+([steps](operations.md#upgrade-from-22-or-earlier)). Use stable `main` or a
 published release tag; keep the same Compose files for server updates.
 
 ## If setup stops

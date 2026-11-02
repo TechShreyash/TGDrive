@@ -116,8 +116,12 @@ help some workloads but do not bypass Telegram waits or guarantee more speed.
 | Sort/change view | Name, Date Added or File Size; List/Grid; **View and sort** on phones |
 | Filter by type | Chips above the list: **All**, **Photos & videos**, **Documents**, **Audio**, **Other** |
 
-Folders stay first when sorting; click an active column to reverse order. A new
-browser opens in Grid; your view choice is remembered after that. Name conflicts offer **keep both** or **skip**.
+Folders stay first when sorting; click an active column to reverse order. Large
+folders load 200 items first and more as you page. Sort and type filters apply
+to the whole folder and return to page 1. Until a folder is fully loaded, every
+type chip stays visible; a filter with no matches shows **Choose All to see
+everything in this folder**, and **Recently added** appears only once the folder
+is fully loaded. A new browser opens in Grid; your view choice is remembered after that. Name conflicts offer **keep both** or **skip**.
 
 Supported uploads generate covers automatically. For missing covers or a full
 rebuild, see [thumbnails](thumbnails.md).
@@ -130,7 +134,13 @@ on restore; removing a star keeps the file.
 
 ### Search
 
-Search finds names, not document contents. **My Files** searches the whole drive;
+Search finds names, not document contents. It matches the **start of words**,
+ignoring case and accents: `frie` finds *Frieren*. Names split at spaces,
+punctuation, camelCase and letter/digit changes, so `s04e03`, `1080` and `x265`
+work, and numbers match without leading zeros (`3` finds `03`). The best matches
+come first: exact name, then names starting with your words, then whole words
+in order; newest first among equals. When more than 1,000 names match, TGDrive
+says so; add a word to narrow the search. **My Files** searches the whole drive;
 other pages search their own items. **Transfers** includes all history pages.
 Press Enter to search, Escape to clear, or **/** / **Ctrl/Cmd+K** to focus search
 outside a text field. Switching pages clears the query. On phones, use the search icon.
@@ -244,7 +254,7 @@ For example, replace the URL here with your copied link:
 ```
 
 Files open in the viewer; folders allow browsing, previews and downloads without
-owner login. TGDrive must remain reachable. The embed uses the same share's
+owner login, showing 200 items at a time with **Show more**. TGDrive must remain reachable. The embed uses the same share's
 access, expiry and revocation; copying it creates no additional link.
 Anyone viewing the containing page can obtain the link.
 
