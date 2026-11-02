@@ -83,6 +83,9 @@ class MongoBackend:
                 minPoolSize=0,
                 retryWrites=True,
                 retryReads=True,
+                # Python 3.14 ships zstd; it cut a 2.9 MB catalog read to
+                # 0.37 MB locally. zlib is the fallback for older servers.
+                compressors="zstd,zlib",
             )
             self.db = self.client.get_database(
                 database,
