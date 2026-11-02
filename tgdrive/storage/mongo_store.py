@@ -200,6 +200,7 @@ class MongoStore:
         self._lock = threading.RLock()
         self._local = threading.local()
         self._closed = False
+        self._pending_roots = None
         metadata = backend.db.catalog.find_one({"_id": "catalog"})
         if metadata is None:
             raise CorruptStoreError(
@@ -426,14 +427,9 @@ class MongoStore:
                     yield session
                     if self._local.changed:
                         self.backend.fence(session)
-                        self._local.metadata = self.db.catalog.find_one_and_update(
-                            {"_id": "catalog"},
-                            {"$inc": {"generation": 1}},
-                            session=session,
-                            return_document=True,
-                        )
                 except BaseException:
                     self._local.metadata = None
+                    self._pending_roots = None  # A rolled-back write may have set it.
                     raise
                 finally:
                     self._local.session = None
@@ -452,13 +448,18 @@ class MongoStore:
         return self.backend.db
 
     def _bump(self, **counters):
-        changes = {"revision": 1}
+        changes = {"revision": 1, "backed_up_revision": 1}
+        if not self._local.changed:
+            changes["generation"] = 1  # Once per committing transaction.
         for name, value in counters.items():
             if value:
                 changes[name] = value
-        changes["backed_up_revision"] = 1
-        self.db.catalog.update_one(
-            {"_id": "catalog"}, {"$inc": changes}, session=self._session
+        # One round trip updates the totals and returns them for publishing.
+        self._local.metadata = self.db.catalog.find_one_and_update(
+            {"_id": "catalog"},
+            {"$inc": changes},
+            session=self._session,
+            return_document=True,
         )
         self._local.changed = True
 
@@ -622,12 +623,16 @@ class MongoStore:
             return False
 
     def _active_deletion_roots(self):
-        return [
-            row["root_id"]
-            for row in self._find(
-                "deletions", {"state": {"$ne": "completed"}}, {"root_id": 1}
-            )
-        ]
+        # Read once per process; every deletion write below clears it. Another
+        # process cannot write this drive: the MongoDB owner lease excludes it.
+        if self._pending_roots is None:
+            self._pending_roots = [
+                row["root_id"]
+                for row in self._find(
+                    "deletions", {"state": {"$ne": "completed"}}, {"root_id": 1}
+                )
+            ]
+        return self._pending_roots
 
     def _mutable(self, chain, *, descendants=False):
         self._demo_mutable(chain, descendants=descendants)
@@ -1921,6 +1926,7 @@ class MongoStore:
                 "pending_message_ids": messages.copy(),
             }
             self.db.deletions.insert_one(row, session=self._session)
+            self._pending_roots = None
             self._revoke_under(node["_id"])
             self._bump()
             return self._deletion(row)
@@ -1987,6 +1993,7 @@ class MongoStore:
                 self._demo_mutable(chain, descendants=True)
                 files, _folders, size = self._subtree_totals(row["root_id"])
                 self._remove_subtree(row["root_id"])
+                self._pending_roots = None
                 self.db.deletions.update_one(
                     {"_id": intent_id},
                     {

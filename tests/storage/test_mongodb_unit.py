@@ -708,3 +708,27 @@ async def test_scheduled_backup_skips_when_nothing_changed(snapshot_source):
     )
     backend.db.backups.insert_one({"_id": "b2", "status": "pending"})
     assert not service._unchanged()  # A pending upload must still finish.
+
+
+def test_writes_reuse_the_pending_deletion_list_until_a_deletion_changes():
+    from tests.support.mongo_fixtures import new_store
+
+    store = new_store()
+    reads = []
+    original = store.db.deletions.find
+
+    def find(*args, **kwargs):
+        if args[1:] == ({"root_id": 1},):  # The pending-roots list query.
+            reads.append(args)
+        return original(*args, **kwargs)
+
+    store.db.deletions.find = find
+    folder = store.create_folder("/", "A")
+    store.create_folder("/", "B")
+    store.create_folder("/", "C")
+    assert len(reads) == 1  # One read, reused by later writes.
+    store.set_trashed("/" + folder["id"], True)
+    store.begin_deletion("/" + folder["id"])
+    store.create_folder("/", "D")
+    assert len(reads) == 2  # The new deletion forced a fresh read.
+    store.close()
