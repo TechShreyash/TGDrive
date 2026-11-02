@@ -103,7 +103,7 @@ per-item sizes, see [MongoDB capacity](setup.md#1-prepare-mongodb).
 | Folder page | Index on parent, trash state and the sort field |
 | Duplicate name | Unique index on parent and case-folded name |
 | Location, breadcrumbs, share scope, Trash state | One `$graphLookup` up the parent chain |
-| Search | Word-start tokens and three-letter pieces, both indexed |
+| Search | Indexed word-start tokens; matching folders resolved in one batched `$graphLookup`; at most 1,000 matches ranked |
 | Drive totals | Counters updated inside each write transaction |
 | Old deletions, folder preparations, expired links | TTL indexes remove them after 7 or 30 days |
 
