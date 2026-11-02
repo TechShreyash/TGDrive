@@ -132,7 +132,13 @@ def server(tmp_path: Path) -> Iterator[Server]:
 @pytest.fixture(scope="module")
 def browser():
     with playwright.sync_playwright() as engine:
-        chromium = engine.chromium.launch(headless=True, channel="chromium")
+        # A slow PulseAudio server (WSLg's bridge took 5-20 s per AudioContext)
+        # stalls every video open; tests need no sound output.
+        chromium = engine.chromium.launch(
+            headless=True,
+            channel="chromium",
+            env={**os.environ, "PULSE_SERVER": "unix:/nonexistent"},
+        )
         yield chromium
         chromium.close()
 
