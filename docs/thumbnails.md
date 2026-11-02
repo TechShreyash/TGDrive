@@ -82,8 +82,10 @@ thumbnail failure never fails an original upload.
    recent issues on that page. You can close the browser and return later.
 
 **Rebuilding can read substantial data from Telegram.** It includes files that
-already have covers. **Cancel rebuild** stops further work and keeps generated
-covers. The source-byte counter includes cache reads, so it is not a network meter.
+already have covers. While it runs, TGDrive limits its own database work so
+browsing and search stay responsive, so a large rebuild takes longer.
+**Cancel rebuild** stops further work and keeps generated covers. The source-byte
+counter includes cache reads, so it is not a network meter.
 
 [See the rebuild control](assets/thumbnail-rebuild.jpg). This capture shows its
 entry point, not a completed full-library rebuild.

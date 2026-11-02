@@ -51,7 +51,9 @@ The catalog maps files/folders to their Telegram messages. Local persistent stor
 holds keys, sessions, unfinished upload bytes and disposable cache. Background
 backups send encrypted recovery files to Telegram; they exclude unfinished bytes.
 The MongoDB connection is compressed with zstd, falling back to zlib, which cuts the
-data counted against the free Atlas tier's weekly transfer limit.
+data counted against the free Atlas tier's weekly transfer limit. Background catalog
+work, such as thumbnail rebuilds and preload re-checks, is paced below the database's
+operation budget, so owner requests never wait.
 
 Run **one installation and one FastAPI worker per drive**. Background work runs
 inside that process without Redis or a separate task broker. Accepted server

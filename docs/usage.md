@@ -128,10 +128,16 @@ rebuild, see [thumbnails](thumbnails.md).
 
 ### Recent
 
-**Recent** lists files you uploaded or opened, newest first. Opening counts
-previews, playback and downloads by the owner, at most once per file every 10
-minutes. Share-link and embed visitors are never recorded. Files in Trash are
-left out.
+**Recent** sits between **My Files** and **Starred** (in the **More** drawer on
+phones). It lists files you uploaded or opened, newest first, 50 at a time.
+**More available** shows while older files remain. Rows show their folder and
+the last open or upload time under **Activity**, and the item menu's **Show in
+Folder** opens that folder with the file selected. Type chips filter the list;
+sort, search and upload are hidden here.
+
+Opening counts previews, playback and downloads by the owner, at most once per
+file every 10 minutes. Share-link and embed visitors are never recorded. Files in
+Trash are left out.
 
 ### Starred files and folders
 
@@ -434,7 +440,7 @@ links when they need only selected files. For access while your laptop is off,
 
 | Page | Purpose |
 | --- | --- |
-| **My Files / Starred / Trash** | Browse, bookmark or restore files |
+| **My Files / Recent / Starred / Trash** | Browse, reopen, bookmark or restore files |
 | **Transfers / Shared Links** | Follow work or manage access |
 | **Monitor → Performance / Preloads** | Inspect resources or prepare cached files |
 | **Management → Connections / Storage & Backups** | Manage accounts, saved data and recovery |
