@@ -61,8 +61,10 @@ class Settings(BaseSettings):
     mongodb_database: str = Field(
         default="tgdrive", alias="MONGODB_DATABASE", pattern=r"^[A-Za-z0-9_-]{1,63}$"
     )
+    # Daily by default: each backup reads the whole database, which counts
+    # toward the free Atlas tier's weekly transfer. Backup now runs any time.
     mongodb_backup_seconds: int = Field(
-        default=3600, alias="MONGODB_BACKUP_SECONDS", ge=60
+        default=86400, alias="MONGODB_BACKUP_SECONDS", ge=60
     )
     encryption_key: SecretStr = Field(alias="ENCRYPTION_KEY")
 
