@@ -99,8 +99,9 @@ shares, operation IDs, jobs and receipts, deletion intents, private settings and
 sessions, backup records and the runtime ownership lease.
 
 **TGDrive sets no limit on items, folder depth or catalog size.** MongoDB's
-storage is the limit; names and their search words are indexed. For current
-per-item sizes, see [MongoDB capacity](setup.md#1-prepare-mongodb).
+storage is the limit; names and their search words are indexed. A file record uses
+~601 B on Atlas (data + indexes), so the free 512 MB Atlas tier holds roughly
+**850,000 files and folders** (see [database benchmarks and capacity](setup.md#1-prepare-mongodb)).
 
 | Query | How MongoDB answers it |
 | --- | --- |

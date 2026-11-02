@@ -108,9 +108,31 @@ standalone container. TGDrive's Compose files do not include MongoDB.
 > **Performance → Storage & cache** shows current MongoDB use; move to a larger
 > plan before it fills.
 >
-> The cheapest big win needs no code: put the Atlas cluster in the same cloud
+> The cheapest speed-up needs no code: put the Atlas cluster in the same cloud
 > region as the TGDrive server. Most of each operation's time is network round
-> trips of 35–58 ms, so a nearby cluster makes everything several times faster.
+> trips (54–190 ms ping on remote clusters vs <1 ms locally).
+>
+> **Atlas Free Tier M0 (512 MB limit) capacity:**
+> - **Total storage per file:** ~601 B (data + indexes) on Atlas (795 B with full sample text locally).
+> - **Catalog limit:** Holds roughly **850,000 files and folders** (up from ~750,000 in 2.2).
+> - **Performance history:** 31 days takes 4.1 MB (4,992 rows; 3 days minute-detail, then hourly).
+> - **Wire compression:** zstd cut transfer over 85% (~0.37 MB vs 2.90 MB per 5,000 records).
+> - **Background operations:** Capped at 30 ops/s, leaving 70+ ops/s reserved for the owner on Atlas's 100 ops/s limit.
+
+### Measured database latency (2.3 vs 2.2)
+
+Tested with a 2,000-item folder against Local MongoDB 8.0 and MongoDB Atlas Free M0 (ping 54–190 ms; paid Atlas tiers not measured):
+
+| Operation | Round trips (2.2) | Round trips (2.3) | Local 8.0 (2.3) | Atlas M0 (2.2) | Atlas M0 (2.3) | Atlas win |
+| --- | --- | --- | --- | --- | --- | --- |
+| Create folder (warm) | 8 | 6 | ~2 ms | 307–325 ms | 191–199 ms | ~38% faster |
+| Upload commit (add file) | 8 | 6 | ~2 ms | 293–338 ms | 234–242 ms | ~25% faster |
+| Rename | 8 | 6 | ~2 ms | 285 ms | 253 ms | ~11% faster |
+| Folder page (100 items) | 5 | 3 | ~2 ms | 334–426 ms | 123–129 ms | ~65% faster |
+| Folder cursor page | 5 | 4 | ~2 ms | 305 ms | 169 ms | ~45% faster |
+| Search query (warm, ≤1,000 matches) | 4 | 4 | ~15 ms | 2,010–2,237 ms | 348–421 ms | ~5× faster |
+
+*Note: Folder pages with both folders and files use 4 round trips (was 5). First-time folder creation on a cold connection takes longer due to Atlas TLS/connection setup.*
 
 1. Create an Atlas cluster in the **same cloud region as your TGDrive server**,
    and a **database user** with read/write access.
