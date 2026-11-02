@@ -102,6 +102,12 @@ _LIGHT = {"parts": 0, "poster": 0, "tokens": 0, "fold": 0}
 MAX_SEARCH_MATCHES = 1000
 
 
+def _activity_now():
+    # MongoDB keeps dates to the millisecond; match it so values round-trip.
+    now = datetime.now(UTC)
+    return now.replace(microsecond=now.microsecond // 1000 * 1000)
+
+
 def _expiry_date(timestamp):
     return datetime.fromisoformat(timestamp.replace("Z", "+00:00"))
 
@@ -298,6 +304,12 @@ class MongoStore:
                 ("name_key", 1),
                 ("_id", 1),
             ]
+        )
+        # Recent: files the owner opened or uploaded, newest activity first.
+        nodes.create_index(
+            [("active_at", -1), ("_id", -1)],
+            partialFilterExpression={"active_at": {"$exists": True}},
+            name="recent_activity",
         )
         # Nodes written before the field existed get it once; later writes set it.
         missing = nodes.find({"group": {"$exists": False}}, {"name": 1, "kind": 1})
@@ -1018,6 +1030,8 @@ class MongoStore:
                 row["parts"] = copy.deepcopy(parts)
             if poster:
                 row["poster"] = copy.deepcopy(poster)
+            if kind == "file":
+                row["active_at"] = _activity_now()  # Shows in Recent.
             self.db.nodes.insert_one(row, session=self._session)
             if operation_id is not None:
                 self.db.operations.insert_one(
@@ -1260,6 +1274,96 @@ class MongoStore:
                 if not self._hidden(chain):
                     results[node["_id"]] = self._listed(node, chain)
             return results
+
+    # -------------------------------------------------------------- recent
+
+    def mark_opened(self, item_id):
+        """Record that the owner opened a file, for Recent.
+
+        Not a catalog change: it neither bumps the drive revision nor waits
+        for a transaction, so watching files never triggers a backup. Callers
+        throttle it (see ``RECENT_WRITE_SECONDS`` in the web app).
+        """
+        self.db.nodes.update_one(
+            {"_id": item_id, "kind": "file"},
+            {"$set": {"active_at": _activity_now()}},
+        )
+
+    def list_recent(self, *, limit=50, after=None, group=None):
+        """Files by latest activity (opened or uploaded), one cursor page."""
+        if type(limit) is not int or limit not in (25, 50, 100):
+            raise ValidationError("Results per page must be 25, 50 or 100")
+        if group is not None and group not in GROUPS:
+            raise ValidationError("Invalid type filter")
+        query = {"active_at": {"$exists": True}, "trashed": False, "kind": "file"}
+        if group is not None:
+            query["group"] = group
+        if after is not None:
+            try:
+                if not isinstance(after, str) or len(after) > 256:
+                    raise ValueError
+                raw = base64.urlsafe_b64decode(after + "=" * (-len(after) % 4))
+                stamp, identity = json.loads(raw)
+                if type(stamp) is not str or type(identity) is not str:
+                    raise ValueError
+                moment = datetime.fromisoformat(stamp)
+            except ValueError, TypeError:
+                raise ValidationError("Invalid cursor") from None
+            query["$or"] = [
+                {"active_at": {"$lt": moment}},
+                {"active_at": moment, "_id": {"$lt": identity}},
+            ]
+        items, last = [], None
+        with self._transaction():
+            cursor = iter(
+                self._find("nodes", query, _LIGHT).sort(
+                    [("active_at", -1), ("_id", -1)]
+                )
+            )
+            # Files inside trashed folders are skipped, so read in batches until
+            # the page is full; each batch's folder paths come from one query.
+            while len(items) < limit:
+                batch = []
+                for row in cursor:
+                    batch.append(row)
+                    if len(batch) == limit:
+                        break
+                if not batch:
+                    break
+                chains = self._chains({node["parent_id"] for node in batch})
+                for node in batch:
+                    last = node
+                    chain = chains.get(node["parent_id"])
+                    if chain is None or any(item["trashed"] for item in chain):
+                        continue
+                    record = self._record(
+                        node, _join_path(self._chain_path(chain), node["_id"])
+                    )
+                    record["parent_names"] = [item["name"] for item in chain[1:]]
+                    record["active_at"] = (
+                        node["active_at"].isoformat().replace("+00:00", "Z")
+                    )
+                    items.append(record)
+                    if len(items) == limit:
+                        break
+                if len(batch) < limit:
+                    break
+            following = None
+            if len(items) == limit and last is not None:
+                position = [last["active_at"].isoformat(), last["_id"]]
+                following = (
+                    base64.urlsafe_b64encode(json.dumps(position).encode())
+                    .decode()
+                    .rstrip("=")
+                )
+                probe = dict(query)
+                probe["$or"] = [
+                    {"active_at": {"$lt": last["active_at"]}},
+                    {"active_at": last["active_at"], "_id": {"$lt": last["_id"]}},
+                ]
+                if self._one("nodes", probe, {"_id": 1}) is None:
+                    following = None
+            return {"items": items, "next_cursor": following}
 
     # -------------------------------------------------------------- search
 

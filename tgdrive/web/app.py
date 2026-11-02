@@ -120,6 +120,7 @@ from tgdrive.web.schemas import (
 )
 
 logger = logging.getLogger(__name__)
+RECENT_WRITE_SECONDS = 600
 PROJECT_DIR = Path(__file__).resolve().parents[2]
 WEBSITE_DIR = PROJECT_DIR / "website"
 STATIC_DIR = (
@@ -1025,8 +1026,25 @@ def create_app(
             snapshot = (await cancel(payload.id)).as_dict()
         return {"status": "ok", "id": snapshot["id"], "data": snapshot}
 
+    # Recent: at most one write per file per this many seconds, so a long video
+    # (many range requests) costs one database write.
+    opened_at: dict[str, float] = {}
+
+    def record_opened(store, item_id):
+        now = time.monotonic()
+        if now - opened_at.get(item_id, -1e9) < RECENT_WRITE_SECONDS:
+            return
+        opened_at[item_id] = now
+        if len(opened_at) > 10_000:
+            opened_at.pop(next(iter(opened_at)))
+        try:
+            store.mark_opened(item_id)
+        except Exception:
+            # Recent is a convenience; opening the file must not fail over it.
+            logger.debug("Could not record a file open", exc_info=True)
+
     def authorized_file(
-        request: Request, path: str, auth: str | None
+        request: Request, path: str, auth: str | None, *, opened: bool = False
     ) -> tuple[str, dict[str, Any]]:
         store = _store(request)
         if getattr(
@@ -1045,7 +1063,10 @@ def create_app(
                 authorized = False
             if not authorized:
                 raise HTTPException(status_code=403, detail="Invalid share link")
-        return path, store.get_file(path)
+        data = store.get_file(path)
+        if opened and auth is None:
+            record_opened(store, data["id"])  # Owner activity only, never shares.
+        return path, data
 
     @app.get("/api/v1/embed")
     async def embed_file(
@@ -1064,7 +1085,9 @@ def create_app(
         path: Annotated[str, Query(min_length=1)],
         auth: Annotated[str | None, Query(max_length=512)] = None,
     ) -> dict[str, Any]:
-        path, file_data = await asyncio.to_thread(authorized_file, request, path, auth)
+        path, file_data = await asyncio.to_thread(
+            authorized_file, request, path, auth, opened=True
+        )
         try:
             result = await describe_preview(
                 pool=_runtime(request).pool,
@@ -1090,7 +1113,9 @@ def create_app(
     ) -> Response:
         from tgdrive.media.books import BookCache, parse_book, read_range
 
-        path, data = await asyncio.to_thread(authorized_file, request, path, auth)
+        path, data = await asyncio.to_thread(
+            authorized_file, request, path, auth, opened=True
+        )
         cache = getattr(app.state, "book_cache", None)
         if cache is None:
             cache = app.state.book_cache = BookCache()
@@ -1338,7 +1363,9 @@ def create_app(
         path: Annotated[str, Query(min_length=1)],
         auth: Annotated[str | None, Query(max_length=512)] = None,
     ) -> dict[str, Any]:
-        _path, file_data = await asyncio.to_thread(authorized_file, request, path, auth)
+        _path, file_data = await asyncio.to_thread(
+            authorized_file, request, path, auth, opened=True
+        )
         try:
             result = await describe_media(
                 pool=_runtime(request).pool,
@@ -1365,7 +1392,9 @@ def create_app(
             str | None, Query(max_length=128, pattern=r"^[A-Za-z0-9_-]+$")
         ] = None,
     ) -> Response:
-        path, file_data = await asyncio.to_thread(authorized_file, request, path, auth)
+        path, file_data = await asyncio.to_thread(
+            authorized_file, request, path, auth, opened=request.method == "GET"
+        )
 
         pool = _runtime(request).pool
         progress = None

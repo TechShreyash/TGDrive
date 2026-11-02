@@ -285,6 +285,30 @@ def register_routes(
         except DriveValidationError as error:
             raise HTTPException(422, str(error)) from None
 
+    @app.get("/api/v1/recent", dependencies=admin)
+    async def recent_items(
+        request: Request,
+        response: Response,
+        limit: int = 50,
+        cursor: str | None = Query(default=None, max_length=256),
+        type: Literal["folder", "media", "docs", "audio", "other"] | None = None,
+    ) -> dict[str, Any]:
+        """Files the owner opened or uploaded, newest activity first."""
+        response.headers["Cache-Control"] = "no-store"
+        if limit not in SEARCH_PAGE_SIZES:
+            raise HTTPException(422, "Results per page must be 25, 50 or 100")
+        try:
+            return describe(
+                await asyncio.to_thread(
+                    get_store(request).list_recent,
+                    limit=limit,
+                    after=cursor,
+                    group=type,
+                )
+            )
+        except DriveValidationError as error:
+            raise HTTPException(422, str(error)) from None
+
     @app.get("/api/v1/starred", dependencies=admin)
     async def starred_items(
         request: Request,
