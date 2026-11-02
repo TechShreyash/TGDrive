@@ -341,3 +341,35 @@ def test_history_api_requires_owner_bounds_results_and_hides_storage_errors(
     finally:
         runtime.transfers.registry.close()
         store.close()
+
+
+def test_old_minutes_are_merged_into_hourly_rows_without_changing_averages(tmp_path):
+    from tgdrive.observability.telemetry_history import MINUTE_DETAIL_SECONDS
+
+    history = TelemetryHistory(tmp_path)
+    start = 36000  # An hour boundary.
+    for offset in range(0, 3600 + 30, 30):  # One hour plus one sample, every 30 s.
+        cpu = 10 if offset < 1800 else 30
+        history.observe(sample(start + offset, cpu=cpu), counters(offset))
+    history.flush(force=True, now=start + 3700)
+    rows = history.storage.read(start, start + 3600)
+    assert len(rows) == 60
+    before = history.query(start, start + 3600, now=start + 3700)
+    now = start + 3600 + MINUTE_DETAIL_SECONDS + 3600
+    history.flush(force=True, now=now)
+    rows = history.storage.read(start, start + 3600)
+    assert len(rows) == 1 and rows[0]["hour"] is True
+    after = history.query(start, start + 3600, now=now)
+    assert after["bucket_seconds"] == 3600
+    weighted = sum(
+        point["cpu_percent"] * point["coverage_seconds"]["cpu_percent"]
+        for point in before["samples"]
+        if point["cpu_percent"] is not None
+    ) / sum(point["coverage_seconds"]["cpu_percent"] for point in before["samples"])
+    assert after["samples"][0]["cpu_percent"] == pytest.approx(weighted)
+    assert after["samples"][0]["coverage_seconds"]["cpu_percent"] == 3600
+    assert sum(
+        s["coverage_seconds"]["cpu_percent"] or 0 for s in before["samples"]
+    ) == pytest.approx(3600)
+    history.flush(force=True, now=now + 60)  # Merging again changes nothing.
+    assert len(history.storage.read(start, start + 3600)) == 1

@@ -13,6 +13,10 @@ import time
 from pathlib import Path
 
 RETENTION_SECONDS = 31 * 86400
+# Minute rows older than this are merged into hourly rows (about 44,600 rows
+# a month become about 3,000). Charts over more than 3 days already show
+# buckets of 12 minutes or more.
+MINUTE_DETAIL_SECONDS = 3 * 86400
 MAX_POINTS = 360
 METRICS = (
     "cpu_percent",
@@ -97,11 +101,47 @@ class HistoryStorage:
         )
         self.mongo.db.telemetry_minutes.delete_many({"at": {"$lt": cutoff}})
 
+    def compact(self, now):
+        """Merge each finished hour older than the minute window into one row."""
+        collection = self.mongo.db.telemetry_minutes
+        boundary = math.floor((now - MINUTE_DETAIL_SECONDS) / 3600) * 3600
+        # Hourly rows carry "hour": True, so only minute rows are picked up.
+        minutes = list(
+            collection.find({"at": {"$lt": boundary}, "hour": {"$ne": True}}).sort(
+                "at", 1
+            )
+        )
+        if not minutes:
+            return
+        from pymongo import DeleteOne, ReplaceOne
+
+        hours = {}
+        for row in minutes:
+            hour = math.floor(row["at"] / 3600) * 3600
+            hours.setdefault(hour, []).append(row)
+        operations = []
+        for hour, rows in hours.items():
+            # The first minute of an hour shares the hour's _id; only an earlier
+            # merged hour row counts as existing.
+            existing = collection.find_one({"_id": hour, "hour": True})
+            merged = _merge([existing, *rows] if existing else rows, hour)
+            operations.append(ReplaceOne({"_id": hour}, merged, upsert=True))
+            operations.extend(
+                DeleteOne({"_id": row["_id"]}) for row in rows if row["_id"] != hour
+            )
+        # Replace before delete in one ordered batch: a crash in between leaves
+        # minutes that are merged again next time, never a gap.
+        collection.bulk_write(operations, ordered=True)
+
     def read(self, start, end):
         self.initialize()
         return list(
             self.mongo.db.telemetry_minutes.find(
-                {"at": {"$gte": math.floor(start / 60) * 60, "$lt": end}}
+                # An hourly row can start before ``start`` and still overlap it.
+                {
+                    "at": {"$gte": math.floor(start / 3600) * 3600, "$lt": end},
+                    "last": {"$gt": start},
+                }
             )
             .sort("at", 1)
             .limit(31 * 1440 + 2)
@@ -111,6 +151,27 @@ class HistoryStorage:
         self.initialize()
         row = self.mongo.db.telemetry_minutes.find_one({}, sort=[("at", 1)])
         return row["first"] if row else None
+
+
+def _merge(rows, hour):
+    """Sum time-weighted minute rows; the result reads exactly like a minute row."""
+    values, sources = {}, {}
+    for row in rows:
+        for key, (total, seconds) in row["values"].items():
+            pair = values.setdefault(key, [0.0, 0.0])
+            pair[0] += total
+            pair[1] += seconds
+        for key, source in row["sources"].items():
+            sources[key] = source if sources.get(key, source) == source else "mixed"
+    return {
+        "_id": hour,
+        "at": hour,
+        "hour": True,
+        "values": values,
+        "sources": sources,
+        "first": min(row["first"] for row in rows),
+        "last": max(row["last"] for row in rows),
+    }
 
 
 class TelemetryHistory:
@@ -271,6 +332,9 @@ class TelemetryHistory:
                 state,
                 math.floor((now - RETENTION_SECONDS) / 60) * 60,
             )
+            compact = getattr(self.storage, "compact", None)
+            if callable(compact):
+                compact(now)
             current = math.floor(now / 60) * 60
             self._minutes = {k: v for k, v in self._minutes.items() if k >= current}
 
@@ -288,9 +352,11 @@ class TelemetryHistory:
                 {k: v for k, v in self._minutes.items() if k < end and k + 60 > start}
             )
             bucket = max(60, math.ceil((end - start) / MAX_POINTS / 60) * 60)
+            if start < now - MINUTE_DETAIL_SECONDS:
+                bucket = max(bucket, 3600)  # Older history is hourly.
             accumulators = [({}, {}) for _ in range(math.ceil((end - start) / bucket))]
             for row in rows.values():
-                index = int((row["at"] - start) // bucket)
+                index = int((max(row["at"], start) - start) // bucket)
                 if not 0 <= index < len(accumulators):
                     continue
                 values, source_sets = accumulators[index]
