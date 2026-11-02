@@ -13,6 +13,7 @@ import {
 } from "react";
 import {
     Star,
+    Clock,
     FolderClosed,
     ArrowDownUp,
     ChartNoAxesCombined,
@@ -107,6 +108,7 @@ function getLocation() {
           ? "trash"
           : [
                   "activity",
+                  "recent",
                   "starred",
                   "shares",
                   "connections",
@@ -416,13 +418,14 @@ export default function App() {
         input.focus();
         if (requested.select) input.select();
     }, [searchExpanded, mobile, query, searchLabel]);
-    const isFiles = view === "files" || view === "trash" || view === "starred";
-    const isPaged = view === "files" && !isSearch;
+    const isRecent = view === "recent";
+    const isFiles =
+        view === "files" || view === "trash" || view === "starred" || isRecent;
+    const isPaged = (view === "files" && !isSearch) || isRecent;
+    const folderKey = view + currentPath + location.auth;
     // A type filter belongs to the folder it was chosen in.
     const folderFilter =
-        folderFilterState.path === currentPath + location.auth
-            ? folderFilterState.filter
-            : "all";
+        folderFilterState.path === folderKey ? folderFilterState.filter : "all";
     const directory = useMemo(
         () => (isPaged ? folderDirectory(pages) : plainDirectory),
         [isPaged, pages, plainDirectory],
@@ -756,18 +759,33 @@ export default function App() {
                     order: folderOrder,
                     type: folderFilter === "all" ? undefined : folderFilter,
                 } satisfies Omit<NodeQuery, "limit">;
+                // shortcut: Recent ignores offset and around (it has neither);
+                // its pages are only ever reached by continuing the cursor.
                 const fetchPage: FetchPage = (request) =>
-                    isPublic
-                        ? api.sharedNodes(
-                              { ...base, ...request },
-                              location.auth,
+                    isRecent
+                        ? api.recent(
+                              {
+                                  type: base.type,
+                                  cursor: request.cursor,
+                                  limit: request.cursor ? 100 : 50,
+                              },
                               controller.signal,
                           )
-                        : api.nodes({ ...base, ...request }, controller.signal);
+                        : isPublic
+                          ? api.sharedNodes(
+                                { ...base, ...request },
+                                location.auth,
+                                controller.signal,
+                            )
+                          : api.nodes(
+                                { ...base, ...request },
+                                controller.signal,
+                            );
                 const loadFolder = async () => {
                     let next = await loadPrefix(
                         background ? pagesRef.current : emptyFolderPages,
                         fetchPage,
+                        isRecent ? 50 : undefined,
                     );
                     const target = location.highlightId;
                     let wanted = background ? folderPage.current : 0;
@@ -1069,32 +1087,35 @@ export default function App() {
     const title =
         view === "starred"
             ? "Starred"
-            : view === "preloads"
-              ? "Preloads"
-              : view === "performance"
-                ? "Performance"
-                : view === "trash"
-                  ? "Trash"
-                  : view === "activity"
-                    ? "Transfers"
-                    : view === "shares"
-                      ? "Shared Links"
-                      : view === "connections"
-                        ? "Connections"
-                        : view === "storage"
-                          ? "Storage & Backups"
-                          : view === "settings"
-                            ? ADMIN_SETTING_TITLES[location.settingsSection] ||
-                              "Settings"
-                            : isSearch
-                              ? "Search Results"
-                              : isPublic
-                                ? directory.name && directory.name !== "/"
-                                    ? directory.name
-                                    : "Shared Files"
-                                : currentPath === "/"
-                                  ? "My Files"
-                                  : directory.name || "Folder";
+            : isRecent
+              ? "Recent"
+              : view === "preloads"
+                ? "Preloads"
+                : view === "performance"
+                  ? "Performance"
+                  : view === "trash"
+                    ? "Trash"
+                    : view === "activity"
+                      ? "Transfers"
+                      : view === "shares"
+                        ? "Shared Links"
+                        : view === "connections"
+                          ? "Connections"
+                          : view === "storage"
+                            ? "Storage & Backups"
+                            : view === "settings"
+                              ? ADMIN_SETTING_TITLES[
+                                    location.settingsSection
+                                ] || "Settings"
+                              : isSearch
+                                ? "Search Results"
+                                : isPublic
+                                  ? directory.name && directory.name !== "/"
+                                      ? directory.name
+                                      : "Shared Files"
+                                  : currentPath === "/"
+                                    ? "My Files"
+                                    : directory.name || "Folder";
     useEffect(() => {
         document.title =
             (config.recovery_only ? "Storage recovery" : title) + " · TGDrive";
@@ -1389,6 +1410,7 @@ export default function App() {
                     !isSearch &&
                     view !== "trash" &&
                     view !== "starred" &&
+                    !isRecent &&
                     crumbs.length > 1 && (
                         <nav className="breadcrumbs" aria-label="Breadcrumb">
                             {crumbs.slice(0, -1).map((crumb, index, shown) =>
@@ -1743,6 +1765,11 @@ export default function App() {
                             icon: FolderClosed,
                         })}
                         {navigationLink({
+                            view: "recent",
+                            label: "Recent",
+                            icon: Clock,
+                        })}
+                        {navigationLink({
                             view: "starred",
                             label: "Starred",
                             icon: Star,
@@ -2074,6 +2101,22 @@ export default function App() {
                             isPublic={isPublic}
                             isTrash={view === "trash"}
                             isStarred={view === "starred"}
+                            isRecent={isRecent}
+                            onLocate={
+                                isRecent
+                                    ? (item) =>
+                                          navigate(
+                                              item.path,
+                                              "files",
+                                              "",
+                                              false,
+                                              {
+                                                  tgdriveHighlight: item.id,
+                                                  tgdriveReveal: true,
+                                              },
+                                          )
+                                    : undefined
+                            }
                             onStar={(item) => {
                                 void api
                                     .star(itemPath(item), !item.starred)
@@ -2144,20 +2187,23 @@ export default function App() {
                                           complete:
                                               pagesKey === listingKey &&
                                               folderComplete(pages),
-                                          folderKey:
-                                              currentPath + location.auth,
-                                          sort: folderSort,
-                                          order: folderOrder,
+                                          folderKey,
+                                          // Recent has one fixed order, newest activity first.
+                                          sort: isRecent
+                                              ? "modified"
+                                              : folderSort,
+                                          order: isRecent
+                                              ? "desc"
+                                              : folderOrder,
                                           filter: folderFilter,
                                           onSort: (sort, order) => {
+                                              if (isRecent) return;
                                               setFolderSort(sort);
                                               setFolderOrder(order);
                                           },
                                           onFilter: (filter) =>
                                               setFolderFilterState({
-                                                  path:
-                                                      currentPath +
-                                                      location.auth,
+                                                  path: folderKey,
                                                   filter,
                                               }),
                                           onPage: ensurePage,

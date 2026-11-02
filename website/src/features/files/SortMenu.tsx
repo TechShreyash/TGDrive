@@ -34,6 +34,7 @@ export default function SortMenu({
     onOrderChange,
     view,
     onViewChange,
+    fixedSort = false,
 }: {
     value: FileSort;
     onChange: (value: FileSort) => void;
@@ -41,6 +42,8 @@ export default function SortMenu({
     onOrderChange: (value: SortOrder) => void;
     view?: "list" | "grid";
     onViewChange?: (value: "list" | "grid") => void;
+    /** The listing has one order: offer only the phone view switch. */
+    fixedSort?: boolean;
 }) {
     const [open, setOpen] = useState(false);
     const [mobile, setMobile] = useState(
@@ -147,6 +150,7 @@ export default function SortMenu({
         event.preventDefault();
         options[next]?.focus();
     };
+    if (fixedSort && !combined) return null;
     return (
         <>
             <button
@@ -238,84 +242,97 @@ export default function SortMenu({
                                 ))}
                             </div>
                         )}
-                        <div role="group" aria-label="Sort field">
-                            {SORT_OPTIONS.map((option) => (
-                                <button
-                                    key={option.value}
-                                    type="button"
-                                    role="menuitemradio"
-                                    tabIndex={-1}
-                                    aria-checked={value === option.value}
-                                    onClick={() => {
-                                        onChange(option.value);
-                                        close();
-                                    }}
+                        {!fixedSort && (
+                            <>
+                                <div role="group" aria-label="Sort field">
+                                    {SORT_OPTIONS.map((option) => (
+                                        <button
+                                            key={option.value}
+                                            type="button"
+                                            role="menuitemradio"
+                                            tabIndex={-1}
+                                            aria-checked={
+                                                value === option.value
+                                            }
+                                            onClick={() => {
+                                                onChange(option.value);
+                                                close();
+                                            }}
+                                        >
+                                            <span>{option.label}</span>
+                                            <Check
+                                                size={16}
+                                                aria-hidden="true"
+                                                className={
+                                                    value === option.value
+                                                        ? ""
+                                                        : "sort-check-hidden"
+                                                }
+                                            />
+                                        </button>
+                                    ))}
+                                </div>
+                                <div
+                                    className="sort-direction-group"
+                                    role="group"
+                                    aria-label="Sort direction"
                                 >
-                                    <span>{option.label}</span>
-                                    <Check
-                                        size={16}
-                                        aria-hidden="true"
-                                        className={
-                                            value === option.value
-                                                ? ""
-                                                : "sort-check-hidden"
-                                        }
-                                    />
-                                </button>
-                            ))}
-                        </div>
-                        <div
-                            className="sort-direction-group"
-                            role="group"
-                            aria-label="Sort direction"
-                        >
-                            {(["asc", "desc"] as const).map((direction) => (
-                                <button
-                                    key={direction}
-                                    type="button"
-                                    role="menuitemradio"
-                                    tabIndex={-1}
-                                    aria-checked={order === direction}
-                                    aria-label={
-                                        direction === "asc"
-                                            ? "Ascending"
-                                            : "Descending"
-                                    }
-                                    onClick={() => {
-                                        onOrderChange(direction);
-                                        close();
-                                    }}
-                                >
-                                    <span>
-                                        {direction === "asc"
-                                            ? "Ascending"
-                                            : "Descending"}
-                                        <small>
-                                            {value === "name"
-                                                ? direction === "asc"
-                                                    ? "A–Z"
-                                                    : "Z–A"
-                                                : value === "size"
-                                                  ? direction === "asc"
-                                                      ? "Smallest first"
-                                                      : "Largest first"
-                                                  : direction === "asc"
-                                                    ? "Oldest first"
-                                                    : "Newest first"}
-                                        </small>
-                                    </span>
-                                    <Check
-                                        size={16}
-                                        aria-hidden="true"
-                                        className={
-                                            order === direction
-                                                ? ""
-                                                : "sort-check-hidden"
-                                        }
-                                    />
-                                </button>
-                            ))}
-                        </div>
+                                    {(["asc", "desc"] as const).map(
+                                        (direction) => (
+                                            <button
+                                                key={direction}
+                                                type="button"
+                                                role="menuitemradio"
+                                                tabIndex={-1}
+                                                aria-checked={
+                                                    order === direction
+                                                }
+                                                aria-label={
+                                                    direction === "asc"
+                                                        ? "Ascending"
+                                                        : "Descending"
+                                                }
+                                                onClick={() => {
+                                                    onOrderChange(direction);
+                                                    close();
+                                                }}
+                                            >
+                                                <span>
+                                                    {direction === "asc"
+                                                        ? "Ascending"
+                                                        : "Descending"}
+                                                    <small>
+                                                        {value === "name"
+                                                            ? direction ===
+                                                              "asc"
+                                                                ? "A–Z"
+                                                                : "Z–A"
+                                                            : value === "size"
+                                                              ? direction ===
+                                                                "asc"
+                                                                  ? "Smallest first"
+                                                                  : "Largest first"
+                                                              : direction ===
+                                                                  "asc"
+                                                                ? "Oldest first"
+                                                                : "Newest first"}
+                                                    </small>
+                                                </span>
+                                                <Check
+                                                    size={16}
+                                                    aria-hidden="true"
+                                                    className={
+                                                        order === direction
+                                                            ? ""
+                                                            : "sort-check-hidden"
+                                                    }
+                                                />
+                                            </button>
+                                        ),
+                                    )}
+                                </div>
+                            </>
+                        )}
                     </div>,
                     document.body,
                 )}

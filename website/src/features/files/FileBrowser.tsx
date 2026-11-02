@@ -33,6 +33,7 @@ import {
     Image,
     FileText,
     Music,
+    FolderOpen,
 } from "lucide-react";
 import type { ActionDialogState } from "./ActionDialog";
 import {
@@ -144,6 +145,8 @@ export default function FileBrowser({
     isPublic,
     isTrash,
     isStarred = false,
+    isRecent = false,
+    onLocate,
     onStar,
     isSearch,
     auth,
@@ -172,6 +175,8 @@ export default function FileBrowser({
     isPublic: boolean;
     isTrash: boolean;
     isStarred?: boolean;
+    isRecent?: boolean;
+    onLocate?: (item: DriveItem) => void;
     onStar?: (item: DriveItem) => void;
     isSearch: boolean;
     auth: string;
@@ -754,8 +759,16 @@ export default function FileBrowser({
                                               ? " · More available"
                                               : "")
                                         : "No Results"
-                                    : itemCount +
-                                      (itemCount === 1 ? " item" : " items")}
+                                    : isRecent
+                                      ? allItems.length +
+                                        (allItems.length === 1
+                                            ? " item"
+                                            : " items") +
+                                        (paging?.complete
+                                            ? ""
+                                            : " · More available")
+                                      : itemCount +
+                                        (itemCount === 1 ? " item" : " items")}
                                 {isPublic ? " · Read-only" : ""}
                             </span>
                             <div className="file-toolbar-actions">
@@ -780,6 +793,7 @@ export default function FileBrowser({
                                     </button>
                                 )}
                                 <SortMenu
+                                    fixedSort={isRecent}
                                     value={sort}
                                     order={order}
                                     onChange={(value) => setSort(value)}
@@ -839,10 +853,12 @@ export default function FileBrowser({
                     >
                         {FILE_FILTERS.filter(
                             ([value]) =>
-                                value === "all" ||
-                                !chipCounts ||
-                                chipCounts.has(value) ||
-                                value === filter,
+                                // Recent lists only files.
+                                !(isRecent && value === "folder") &&
+                                (value === "all" ||
+                                    !chipCounts ||
+                                    chipCounts.has(value) ||
+                                    value === filter),
                         ).map(([value, label, Icon]) => (
                             <button
                                 key={value}
@@ -914,45 +930,57 @@ export default function FileBrowser({
                     <div className="empty-state">
                         <Folder size={46} />
                         <h2>{EMPTY_FILTER_TITLES[filter]}</h2>
-                        <p>Choose All to see everything in this folder.</p>
+                        <p>
+                            {isRecent
+                                ? "Choose All to see every recent file."
+                                : "Choose All to see everything in this folder."}
+                        </p>
                     </div>
                 ) : allItems.length === 0 ? (
                     <div className="empty-state">
                         <Folder size={46} />
                         <h2>
-                            {isStarred
-                                ? searchQuery
-                                    ? "No Matching Starred Items"
-                                    : "No Starred Items Yet"
-                                : isTrash && searchQuery
-                                  ? "No Matching Trashed Items"
-                                  : isTrash
-                                    ? "Trash Is Empty"
-                                    : isSearch
-                                      ? "No Matching Files or Folders"
-                                      : "Nothing Here Yet"}
+                            {isRecent
+                                ? "No Recent Files Yet"
+                                : isStarred
+                                  ? searchQuery
+                                      ? "No Matching Starred Items"
+                                      : "No Starred Items Yet"
+                                  : isTrash && searchQuery
+                                    ? "No Matching Trashed Items"
+                                    : isTrash
+                                      ? "Trash Is Empty"
+                                      : isSearch
+                                        ? "No Matching Files or Folders"
+                                        : "Nothing Here Yet"}
                         </h2>
                         <p>
-                            {isStarred
-                                ? "Star a file or folder from its actions menu to find it here."
-                                : isTrash && searchQuery
-                                  ? "Try another name or clear the search. This search stays in Trash."
-                                  : isTrash
-                                    ? "Items you trash stay here until you restore or permanently delete them."
-                                    : isSearch
-                                      ? "Try another file or folder name."
-                                      : isPublic
-                                        ? "The owner has not added any files to this folder."
-                                        : "Upload your first file or create a folder to get started."}
+                            {isRecent
+                                ? "Files you open or upload appear here."
+                                : isStarred
+                                  ? "Star a file or folder from its actions menu to find it here."
+                                  : isTrash && searchQuery
+                                    ? "Try another name or clear the search. This search stays in Trash."
+                                    : isTrash
+                                      ? "Items you trash stay here until you restore or permanently delete them."
+                                      : isSearch
+                                        ? "Try another file or folder name."
+                                        : isPublic
+                                          ? "The owner has not added any files to this folder."
+                                          : "Upload your first file or create a folder to get started."}
                         </p>
-                        {!isPublic && !isTrash && !isSearch && !isStarred && (
-                            <button
-                                className="primary-button"
-                                onClick={onUpload}
-                            >
-                                <Upload size={17} /> Upload Files
-                            </button>
-                        )}
+                        {!isPublic &&
+                            !isTrash &&
+                            !isSearch &&
+                            !isStarred &&
+                            !isRecent && (
+                                <button
+                                    className="primary-button"
+                                    onClick={onUpload}
+                                >
+                                    <Upload size={17} /> Upload Files
+                                </button>
+                            )}
                     </div>
                 ) : (
                     <>
@@ -962,6 +990,7 @@ export default function FileBrowser({
                             !isSearch &&
                             !isTrash &&
                             !isStarred &&
+                            !isRecent &&
                             !isPublic &&
                             (!paging || paging.complete) &&
                             recentItems.length >= 4 &&
@@ -1120,6 +1149,7 @@ export default function FileBrowser({
                                                         type="button"
                                                         className="column-sort-button"
                                                         aria-label="Sort by Name"
+                                                        disabled={isRecent}
                                                         onClick={() => {
                                                             setSort(
                                                                 "name",
@@ -1158,7 +1188,12 @@ export default function FileBrowser({
                                                 <button
                                                     type="button"
                                                     className="column-sort-button"
-                                                    aria-label="Sort by Date Added"
+                                                    aria-label={
+                                                        isRecent
+                                                            ? undefined
+                                                            : "Sort by Date Added"
+                                                    }
+                                                    disabled={isRecent}
                                                     onClick={() => {
                                                         setSort(
                                                             "modified",
@@ -1167,7 +1202,9 @@ export default function FileBrowser({
                                                         setPage(0);
                                                     }}
                                                 >
-                                                    Added
+                                                    {isRecent
+                                                        ? "Activity"
+                                                        : "Added"}
                                                 </button>
                                             </th>
                                             <th
@@ -1185,6 +1222,7 @@ export default function FileBrowser({
                                                     type="button"
                                                     className="column-sort-button"
                                                     aria-label="Sort by File Size"
+                                                    disabled={isRecent}
                                                     onClick={() => {
                                                         setSort("size", true);
                                                         setPage(0);
@@ -1379,7 +1417,8 @@ export default function FileBrowser({
                                                         </span>
                                                         {(isSearch ||
                                                             isTrash ||
-                                                            isStarred) && (
+                                                            isStarred ||
+                                                            isRecent) && (
                                                             <span
                                                                 className="search-result-location"
                                                                 title={[
@@ -1408,7 +1447,10 @@ export default function FileBrowser({
                                                 </div>
                                             </Cell>
                                             <Cell className="date-cell">
-                                                {formatDate(item.upload_date)}
+                                                {formatDate(
+                                                    item.active_at ||
+                                                        item.upload_date,
+                                                )}
                                             </Cell>
                                             <Cell className="size-cell">
                                                 {item.type === "folder"
@@ -1421,7 +1463,8 @@ export default function FileBrowser({
                                                         <span className="file-grid-date">
                                                             {" · " +
                                                                 formatShortDate(
-                                                                    item.upload_date,
+                                                                    item.active_at ||
+                                                                        item.upload_date,
                                                                 )}
                                                         </span>
                                                     )}
@@ -1644,6 +1687,26 @@ export default function FileBrowser({
                                                                             </button>
                                                                         </>
                                                                     )}
+                                                                    {onLocate && (
+                                                                        <button
+                                                                            onClick={() => {
+                                                                                closeItemMenus();
+                                                                                onLocate(
+                                                                                    item,
+                                                                                );
+                                                                            }}
+                                                                        >
+                                                                            <FolderOpen
+                                                                                size={
+                                                                                    16
+                                                                                }
+                                                                                aria-hidden="true"
+                                                                            />{" "}
+                                                                            Show
+                                                                            in
+                                                                            Folder
+                                                                        </button>
+                                                                    )}
                                                                     {onStar && (
                                                                         <button
                                                                             onClick={() => {
@@ -1842,8 +1905,8 @@ export default function FileBrowser({
                             <div className="pagination">
                                 <span>
                                     Showing {page * 100 + 1}–
-                                    {Math.min((page + 1) * 100, itemCount)} of{" "}
-                                    {itemCount}
+                                    {Math.min((page + 1) * 100, itemCount)}
+                                    {isRecent ? "" : " of " + itemCount}
                                 </span>
                                 <button
                                     className="icon-button"

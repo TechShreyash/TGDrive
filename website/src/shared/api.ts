@@ -3,6 +3,7 @@ import type {
     DriveItem,
     NodePage,
     NodeQuery,
+    NodeType,
     FolderTreeRequest,
     FolderTreeResponse,
     Job,
@@ -129,7 +130,7 @@ export interface BotUploadSettings {
     encrypt: boolean;
     settings_url: string | null;
 }
-function nodeParams(query: NodeQuery & { auth?: string }) {
+function nodeParams(query: Partial<NodeQuery> & { auth?: string }) {
     return new URLSearchParams(
         Object.entries(query).flatMap(([key, value]) =>
             value === undefined ? [] : [[key, String(value)]],
@@ -214,6 +215,15 @@ export const api = {
         request<NodePage>("/api/v1/nodes?" + nodeParams(query), undefined, {
             signal,
         }),
+    recent: (
+        query: { type?: NodeType; cursor?: string; limit: 25 | 50 | 100 },
+        signal?: AbortSignal,
+    ) =>
+        request<Pick<NodePage, "items" | "next_cursor">>(
+            "/api/v1/recent?" + nodeParams(query),
+            undefined,
+            { signal },
+        ),
     sharedNodes: (query: NodeQuery, auth: string, signal?: AbortSignal) =>
         request<NodePage>(
             "/api/v1/shared/nodes?" + nodeParams({ ...query, auth }),

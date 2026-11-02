@@ -21,7 +21,9 @@ export interface PageRequest {
     offset?: number;
     around?: string;
 }
-export type FetchPage = (request: PageRequest) => Promise<NodePage>;
+/** Recent pages carry only `items` and `next_cursor`. */
+type ListingPage = Pick<NodePage, "items" | "next_cursor"> & Partial<NodePage>;
+export type FetchPage = (request: PageRequest) => Promise<ListingPage>;
 
 export const emptyFolderPages: FolderPages = {
     rows: [],
@@ -61,7 +63,7 @@ export function pageRequest(
 export function applyPage(
     state: FolderPages,
     request: PageRequest,
-    page: NodePage,
+    page: ListingPage,
 ): FolderPages {
     // A refresh replaced the prefix while this cursor page was in flight.
     if (request.cursor !== undefined && request.cursor !== state.cursor)
@@ -78,7 +80,9 @@ export function applyPage(
     const extended = start <= state.loaded && end > state.loaded;
     return {
         rows,
-        total: page.total,
+        // shortcut: without a server total, count one more row while a cursor
+        // remains so Next Page stays on; show a real total if Recent gets one.
+        total: page.total ?? end + (page.next_cursor ? 1 : 0),
         loaded: extended ? end : state.loaded,
         cursor: extended ? page.next_cursor : state.cursor,
         folder: page.folder ?? state.folder,
@@ -89,8 +93,9 @@ export function applyPage(
 export async function loadPrefix(
     previous: FolderPages,
     fetch: FetchPage,
+    first = FIRST_LIMIT,
 ): Promise<FolderPages> {
-    const target = Math.max(previous.loaded, FIRST_LIMIT);
+    const target = Math.max(previous.loaded, first);
     let state = emptyFolderPages;
     let request: PageRequest | null = {
         offset: 0,
