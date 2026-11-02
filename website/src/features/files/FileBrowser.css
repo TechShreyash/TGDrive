@@ -868,6 +868,13 @@
     height: 44px;
     stroke-width: 1.5;
 }
+.file-grid .file-tile-preview[data-kind="folder"] {
+    background: color-mix(
+        in srgb,
+        var(--kind, var(--kind-folder)) 8%,
+        var(--surface)
+    );
+}
 .file-grid .file-tile-preview[data-kind="folder"] .file-icon {
     width: 72px;
     height: 72px;
@@ -876,6 +883,7 @@
     width: 60px;
     height: 60px;
     stroke-width: 1.4;
+    fill: color-mix(in srgb, var(--kind, var(--kind-folder)) 22%, transparent);
 }
 @media (hover: hover) {
     .file-grid .file-row:hover .file-tile-preview .file-icon {
@@ -954,12 +962,15 @@
 }
 .file-grid .file-name,
 .file-list-scroll .file-grid .file-name {
-    display: block;
-    min-height: 0;
-    padding: 0;
-    white-space: nowrap;
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+    white-space: normal;
     overflow: hidden;
     text-overflow: ellipsis;
+    overflow-wrap: anywhere;
+    min-height: 20px;
+    max-height: 40px;
     font-size: 13.5px;
     font-weight: 600;
     line-height: 20px;
@@ -997,27 +1008,30 @@
     border-radius: 9px;
 }
 
-/* Star and shared: round icon-only badges on the tile; the text stays for assistive tech. */
+/* Star and shared: micro icon-only badges on the tile; the text stays for assistive tech. */
 .file-grid .file-title-line .file-item-status {
     position: absolute;
-    top: 12px;
-    right: 12px;
+    top: 10px;
+    right: 10px;
     display: flex;
-    gap: 6px;
+    gap: 4px;
     padding: 0;
     pointer-events: none;
+    z-index: 1;
 }
 .file-grid .file-status-label,
 .file-grid .file-status-label + .file-status-label {
     position: relative;
     display: block;
-    width: 30px;
-    height: 30px;
+    width: 24px;
+    height: 24px;
     padding: 0;
-    border: 0;
-    border-radius: 50%;
-    background: var(--surface);
-    box-shadow: 0 1px 3px light-dark(#1d232a26, #0009);
+    border: 1px solid var(--line-subtle);
+    border-radius: 6px;
+    background: color-mix(in srgb, var(--surface) 88%, transparent);
+    backdrop-filter: blur(8px);
+    -webkit-backdrop-filter: blur(8px);
+    box-shadow: 0 1px 2px light-dark(#1d232a18, #0004);
     overflow: hidden;
     color: transparent;
     font-size: 0;
@@ -1025,7 +1039,7 @@
 .file-grid .file-status-label::after {
     content: "";
     position: absolute;
-    inset: 7px;
+    inset: 4px;
     background: currentColor;
     -webkit-mask: var(--badge-icon) center / contain no-repeat;
     mask: var(--badge-icon) center / contain no-repeat;
@@ -1109,13 +1123,16 @@
         height: 40px;
     }
     .file-grid .file-title-line .file-item-status {
-        top: 10px;
-        right: 10px;
+        top: 8px;
+        right: 8px;
     }
     .file-grid .file-status-label,
     .file-grid .file-status-label + .file-status-label {
-        width: 28px;
-        height: 28px;
+        width: 22px;
+        height: 22px;
+    }
+    .file-grid .file-status-label::after {
+        inset: 3px;
     }
     .file-grid .file-grid-date {
         display: none;
@@ -1511,6 +1528,9 @@
 .file-grid .file-tile-preview {
     height: auto;
     aspect-ratio: 16 / 11;
+}
+.file-grid .file-tile-preview[data-kind="folder"] {
+    aspect-ratio: 16 / 9.5;
 }
 .skeleton-block {
     height: auto;
