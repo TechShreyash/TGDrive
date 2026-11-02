@@ -4,7 +4,7 @@ from tgdrive.core.errors import DriveError, TrashedItemError
 
 
 def location_record(node, path, chain, *, stored):
-    is_item = stored and node["id"] != "root"
+    is_item = stored and node["_id"] != "root"
     folders = chain[:-1] if is_item else chain
     folder_path = (path.rsplit("/", 1)[0] or "/") if is_item else path
     folder_label = " / ".join(["My Files", *(row["name"] for row in folders[1:])])
@@ -12,7 +12,7 @@ def location_record(node, path, chain, *, stored):
         "available": True,
         "folder_path": folder_path,
         "folder_label": folder_label,
-        "item_id": node["id"] if is_item else None,
+        "item_id": node["_id"] if is_item else None,
         "item_name": node["name"] if is_item else None,
         "display_path": folder_label + (" / " + node["name"] if is_item else ""),
     }

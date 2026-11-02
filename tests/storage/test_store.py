@@ -430,7 +430,7 @@ def test_database_load_rejects_inconsistent_indexes_and_overlapping_deletions(
     store = new_store(database)
     folder = store.create_folder("/", "Folder")
     for row in store.backend.db.nodes.rows:
-        if row["id"] == folder["id"]:
+        if row["_id"] == folder["id"]:
             row["name_key"] = "wrong"
     # Startup reads no full catalog; every backup export validates it instead.
     with pytest.raises(CorruptStoreError, match="identity or index"):

@@ -96,7 +96,7 @@ def test_filename_only_search_prunes_entire_trash_branch_and_builds_human_parent
 def set_upload_date(store, value, identities=None):
     """Rewrite stored timestamps directly; reads always come from MongoDB."""
     for row in store.backend.db.nodes.rows:
-        if identities is None or row["id"] in identities:
+        if identities is None or row["_id"] in identities:
             row["upload_date"] = value
 
 

@@ -135,7 +135,7 @@ def upgrade(backend, settings) -> str | None:
     )
     nodes.update_one(
         {"parent_id": None},
-        {"$set": {"fold": "", "tokens": [], "group": "folder"}},
+        {"$set": {"tokens": [], "group": "folder"}},
     )
     later = datetime.now(UTC) + _RECORD_RETENTION
     _bulk(

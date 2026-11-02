@@ -97,7 +97,7 @@ def _group(name, kind):
     return _EXTENSION_GROUP.get(name.rsplit(".", 1)[-1].lower(), "other")
 
 
-_LIGHT = {"parts": 0, "poster": 0, "tokens": 0, "fold": 0}
+_LIGHT = {"parts": 0, "poster": 0, "tokens": 0}
 # Search ranks at most this many matches; broader queries are told to narrow.
 MAX_SEARCH_MATCHES = 1000
 
@@ -306,6 +306,11 @@ class MongoStore:
                 ("_id", 1),
             ]
         )
+        # Every node used to repeat its ID in "id" and a folded name in "fold";
+        # both are derived on read now. Drop them once to save space.
+        old_fields = {"$or": [{"id": {"$exists": True}}, {"fold": {"$exists": True}}]}
+        if nodes.find_one(old_fields, {"_id": 1}):
+            nodes.update_many(old_fields, {"$unset": {"id": "", "fold": ""}})
         # Recent: files the owner opened or uploaded, newest activity first.
         nodes.create_index(
             [("active_at", -1), ("_id", -1)],
@@ -367,14 +372,11 @@ class MongoStore:
 
     @staticmethod
     def _node(identity, parent, name, kind, **values):
-        fold = _fold(name) if parent is not None else ""
         return {
             "_id": identity,
-            "id": identity,
             "parent_id": parent,
             "name": name,
             "name_key": _name_key(name),
-            "fold": fold,
             "tokens": _tokens(name) if parent is not None else [],
             "kind": kind,
             "group": _group(name, kind),
@@ -389,11 +391,9 @@ class MongoStore:
 
     @staticmethod
     def _names(name, kind):
-        fold = _fold(name)
         return {
             "name": name,
             "name_key": _name_key(name),
-            "fold": fold,
             "tokens": _tokens(name),
             "group": _group(name, kind),
         }
@@ -1420,7 +1420,8 @@ class MongoStore:
         clauses = []
         if not words:
             # Only punctuation (for example "%"): a literal match on the name.
-            clauses.append({"fold": {"$regex": re.escape(folded)}})
+            # No letters to fold, so a case-insensitive name match is exact.
+            clauses.append({"name": {"$regex": re.escape(query), "$options": "i"}})
         for word in words:
             # Words match the start of a word in the name; numbers also match
             # without leading zeros, so "3" finds "- 03" and "1080" finds "1080p".
@@ -1454,7 +1455,7 @@ class MongoStore:
                 "size": 1,
                 "upload_date": 1,
                 "parent_id": 1,
-                "fold": 1,
+                "name": 1,
                 "trashed": 1,
                 "tokens": 1,
             }
@@ -1482,7 +1483,7 @@ class MongoStore:
                     node["trashed"] or any(row["trashed"] for row in chain)
                 ):
                     continue
-                fold, tokens = node["fold"], node["tokens"]
+                fold, tokens = _fold(node["name"]), node["tokens"]
                 stem = fold.rsplit(".", 1)[0] if node["kind"] == "file" else fold
                 whole = all(
                     word in tokens or (_number(word) or word) in tokens
@@ -2030,7 +2031,7 @@ class MongoStore:
             portable, parents = {}, {}
             for row in nodes:
                 key = row["_id"]
-                if row.get("id") != key or row.get("name_key") != _name_key(
+                if row.get("id", key) != key or row.get("name_key") != _name_key(
                     row["name"]
                 ):
                     raise CorruptStoreError("Catalog node identity or index is invalid")
