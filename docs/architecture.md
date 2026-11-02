@@ -50,6 +50,8 @@ flowchart LR
 The catalog maps files/folders to their Telegram messages. Local persistent storage
 holds keys, sessions, unfinished upload bytes and disposable cache. Background
 backups send encrypted recovery files to Telegram; they exclude unfinished bytes.
+The MongoDB connection is compressed with zstd, falling back to zlib, which cuts the
+data counted against the free Atlas tier's weekly transfer limit.
 
 Run **one installation and one FastAPI worker per drive**. Background work runs
 inside that process without Redis or a separate task broker. Accepted server
@@ -801,7 +803,8 @@ secret with domain-separated HMAC-SHA256, then verifies against the stored hash.
 
 ## Diagnostic history
 
-MongoDB retains 31 days of bounded minute aggregates; lifetime traffic checkpoints
+MongoDB retains 31 days of performance history: minute rows for 3 days, merged
+into hourly rows after that; lifetime traffic checkpoints
 are separate. Missing samples remain gaps. Telemetry is disposable, excluded
 from encrypted catalog backups, and never required for file operations.
 See [reading the Performance page](performance-tuning.md#read-the-performance-page).
