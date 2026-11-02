@@ -174,3 +174,23 @@ def test_upgrade_runs_once_and_resumes_after_interruption(tmp_path, monkeypatch)
     assert upgrade(backend, settings(tmp_path)) is not None
     assert upgrade(backend, settings(tmp_path)) is None
     assert MongoStore(backend).statistics()["files"] == 1
+
+
+def test_upgrade_drops_the_2_2_backup_channel_so_it_can_be_set_up_again(tmp_path):
+    from tgdrive.replication.replica_state import ReplicaJournal
+
+    backend = drive_2_2()
+    backend.db.replica_state.insert_one({"_id": "config", "length": 2})
+    backend.db.replica_chunks.insert_one({"_id": "c", "key": "config", "data": "{}"})
+    backend.db.replica_copies.insert_one({"_id": "part", "message_id": 9})
+    (tmp_path / "channel-backup.sqlite3").write_bytes(b"2.2 journal")
+    (tmp_path / "replica-bootstrap.json").write_text("{}")
+    upgrade(backend, settings(tmp_path))
+    for name in ("replica_state", "replica_chunks", "replica_copies"):
+        assert backend.db[name].rows == []
+    assert not (tmp_path / "channel-backup.sqlite3").exists()
+    assert (tmp_path / "channel-backup.sqlite3.2.2-unused").read_bytes() == (
+        b"2.2 journal"
+    )
+    assert (tmp_path / "replica-bootstrap.json.2.2-unused").exists()
+    assert ReplicaJournal(tmp_path, backend).get("config") is None

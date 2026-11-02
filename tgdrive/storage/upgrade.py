@@ -45,7 +45,13 @@ def _save_copy(backend, directory) -> str:
         os.fdopen(descriptor, "wb") as raw,
         gzip.GzipFile(fileobj=raw, mode="wb") as target,
     ):
-        for name in (*COLLECTIONS, "runtime", "replica_state", "replica_copies"):
+        for name in (
+            *COLLECTIONS,
+            "runtime",
+            "replica_state",
+            "replica_chunks",
+            "replica_copies",
+        ):
             for row in backend.db[name].find({}):
                 target.write(
                     json_util.dumps({"collection": name, "document": row}).encode()
@@ -165,6 +171,24 @@ def upgrade(backend, settings) -> str | None:
     backend.db.settings.update_one(
         {"_id": "bootstrap"}, {"$unset": {"document.MONGODB_BACKUP_KEY": ""}}
     )
+    # 2.2 kept its independent backup channel's progress in DATA_DIR SQLite,
+    # which 2.3 cannot read. Start that channel from scratch: the owner sets it
+    # up again in Storage & Backups. The old channel's messages are not touched.
+    for name in ("replica_state", "replica_chunks", "replica_copies"):
+        backend.check_owner()
+        backend.db[name].delete_many({})
+    old_journal = settings.resolved_data_dir / "channel-backup.sqlite3"
+    if old_journal.is_file() and not old_journal.is_symlink():
+        old_journal.rename(old_journal.with_name(old_journal.name + ".2.2-unused"))
+        logger.warning(
+            "The 2.2 independent backup channel is not carried over; set it up "
+            "again in Storage & Backups. Its old messages stay in Telegram."
+        )
+    bootstrap_file = settings.resolved_data_dir / "replica-bootstrap.json"
+    if bootstrap_file.is_file() and not bootstrap_file.is_symlink():
+        bootstrap_file.rename(
+            bootstrap_file.with_name(bootstrap_file.name + ".2.2-unused")
+        )
     if "parent_id_1" in nodes.index_information():
         # 2.3's listing indexes all start with parent_id, so this one is waste.
         nodes.drop_index("parent_id_1")
