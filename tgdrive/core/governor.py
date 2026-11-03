@@ -236,10 +236,20 @@ class Governor:
                 str(self.state["reasons"].get(k, "")).startswith("raised")
                 for k in changed
             )
+            # Format concise summaries for disk/memory budgets and concurrency changes
+            parts = []
+            for k in changed:
+                reason = str(self.state["reasons"].get(k, ""))
+                if k in BYTES and "(" in reason:
+                    # e.g. "cache_disk_bytes: 16.62 GiB" instead of full tooltip formula
+                    val_str = reason.rsplit("(", 1)[-1].rstrip(")")
+                    parts.append(f"{k}: {val_str}")
+                else:
+                    parts.append(f"{k}: {reason}")
             logger.log(
                 logging.DEBUG if routine else logging.INFO,
                 "Automatic tuning: %s",
-                "; ".join(f"{k}: {self.state['reasons'].get(k)}" for k in changed),
+                "; ".join(parts),
             )
         uploads = values.pop("telegram_uploads_per_bot")
         if any(getattr(self.settings, k, None) != v for k, v in values.items()):
