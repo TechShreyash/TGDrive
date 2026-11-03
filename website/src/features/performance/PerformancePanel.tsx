@@ -31,38 +31,137 @@ const TUNING_LABELS: Record<string, string> = {
     remote_download_concurrency: "Full-speed URL downloads",
     preload_max_jobs: "Concurrent preloads",
 };
+
+const TUNING_CATEGORIES = [
+    {
+        title: "Cache Storage",
+        description:
+            "Memory and disk allocations for media streaming and quick file access.",
+        keys: [
+            "cache_memory_bytes",
+            "cache_disk_bytes",
+            "cache_min_free_bytes",
+        ],
+    },
+    {
+        title: "Upload Staging & Disk Safety",
+        description:
+            "Disk space for staging Telegram uploads and maximum supported file sizes.",
+        keys: ["staging_budget_bytes", "max_file_size", "min_free_bytes"],
+    },
+    {
+        title: "Transfer & Network Concurrency",
+        description:
+            "Active pipelines, bot connections, and parallel download limits.",
+        keys: [
+            "telegram_uploads_per_bot",
+            "telegram_upload_pipeline",
+            "telegram_request_limit",
+            "telegram_media_per_bot",
+            "remote_download_concurrency",
+            "preload_max_jobs",
+        ],
+    },
+] as const;
+
+const TUNING_DESCRIPTIONS: Record<string, string> = {
+    cache_memory_bytes: "Fast RAM for active media streams and thumbnails",
+    cache_disk_bytes:
+        "Local disk reserved for preloaded files and media chunks",
+    cache_min_free_bytes:
+        "Safety margin preserved before cache eviction triggers",
+    staging_budget_bytes: "Space to assemble and encrypt outbound uploads",
+    max_file_size: "Largest single file supported by current staging capacity",
+    min_free_bytes: "Unassigned disk floor protected from uploads",
+    telegram_uploads_per_bot: "Parallel file uploads per bot connection",
+    telegram_upload_pipeline: "Simultaneous chunk delivery pipelines",
+    telegram_request_limit: "Safe API requests allowed per Telegram account",
+    telegram_media_per_bot: "Concurrent media streams and downloads",
+    remote_download_concurrency: "Simultaneous URL and torrent piece downloads",
+    preload_max_jobs: "Background preload tasks running simultaneously",
+};
+
 function AutomaticTuning({
     tuning,
 }: {
     tuning: NonNullable<PerformanceSnapshot["tuning"]>;
 }) {
+    const categorized = new Set<string>(
+        TUNING_CATEGORIES.flatMap((c) => c.keys),
+    );
+    const otherKeys = Object.keys(tuning.values).filter(
+        (key) => !categorized.has(key),
+    );
+    const groups = [
+        ...TUNING_CATEGORIES.map((cat) => ({
+            title: cat.title,
+            description: cat.description,
+            keys: cat.keys.filter((k) => k in tuning.values),
+        })).filter((group) => group.keys.length > 0),
+        ...(otherKeys.length > 0
+            ? [
+                  {
+                      title: "Other Parameters",
+                      description: "Additional dynamic tuning settings.",
+                      keys: otherKeys,
+                  },
+              ]
+            : []),
+    ];
+
     return (
         <section
-            className="performance-section"
+            className="performance-section tuning-section"
             aria-labelledby="automatic-tuning-heading"
         >
             <div className="performance-section-title">
                 <h3 id="automatic-tuning-heading">Automatic tuning</h3>
             </div>
-            <dl className="performance-facts">
-                {Object.entries(TUNING_LABELS)
-                    .filter(([key]) => key in tuning.values)
-                    .map(([key, label]) => (
-                        <div key={key}>
-                            <dt>{label}</dt>
-                            <dd title={tuning.reasons[key]}>
-                                {key.endsWith("_bytes") ||
-                                key === "max_file_size"
-                                    ? formatBytes(tuning.values[key])
-                                    : tuning.values[key].toLocaleString()}
-                            </dd>
-                        </div>
-                    ))}
-            </dl>
-            <p className="settings-help">
+            <p className="tuning-intro">
                 {tuning.running
-                    ? "TGDrive measures memory, CPU, disk and Telegram responses every few seconds and sets these values itself. To cap TGDrive on a shared server, set Docker memory and CPU limits."
+                    ? "TGDrive continuously calibrates caches, storage budgets, and Telegram concurrency based on available server hardware and live response speeds."
                     : "Automatic tuning starts with the drive."}
+            </p>
+            <div className="tuning-groups">
+                {groups.map((group) => (
+                    <div key={group.title} className="tuning-group-card">
+                        <div className="tuning-group-header">
+                            <h4>{group.title}</h4>
+                            <p>{group.description}</p>
+                        </div>
+                        <dl className="performance-facts tuning-facts">
+                            {group.keys.map((key) => {
+                                const label = TUNING_LABELS[key] || key;
+                                const val =
+                                    key.endsWith("_bytes") ||
+                                    key === "max_file_size"
+                                        ? formatBytes(tuning.values[key])
+                                        : tuning.values[key].toLocaleString();
+                                const reason = tuning.reasons[key];
+                                const fallback = TUNING_DESCRIPTIONS[key];
+                                return (
+                                    <div key={key} className="tuning-fact-item">
+                                        <div className="tuning-fact-top">
+                                            <dt>{label}</dt>
+                                            <dd title={reason}>{val}</dd>
+                                        </div>
+                                        {(reason || fallback) && (
+                                            <small className="tuning-fact-detail">
+                                                {reason
+                                                    ? `${fallback ? fallback + " · " : ""}${reason}`
+                                                    : fallback}
+                                            </small>
+                                        )}
+                                    </div>
+                                );
+                            })}
+                        </dl>
+                    </div>
+                ))}
+            </div>
+            <p className="settings-help">
+                To set a hard ceiling on a shared server, configure Docker
+                memory and CPU limits.
             </p>
         </section>
     );

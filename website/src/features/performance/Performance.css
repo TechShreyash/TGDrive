@@ -154,6 +154,84 @@
 .performance-section {
     margin-top: 28px;
 }
+
+/* Automatic tuning categorized cards */
+.tuning-intro {
+    color: var(--muted);
+    font-size: 13.5px;
+    line-height: 1.5;
+    margin: -4px 0 16px;
+    max-width: 72ch;
+}
+.tuning-groups {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(min(100%, 340px), 1fr));
+    gap: 16px;
+    margin-block: 16px 20px;
+}
+.tuning-group-card {
+    display: flex;
+    flex-direction: column;
+    padding: 18px 20px;
+    border: 1px solid var(--line-subtle);
+    border-radius: 14px;
+    background: var(--surface);
+    box-shadow: 0 1px 3px light-dark(#1d232a06, #0004);
+}
+.tuning-group-header {
+    margin-bottom: 14px;
+    padding-bottom: 10px;
+    border-bottom: 1px solid var(--line-subtle);
+}
+.tuning-group-header h4 {
+    margin: 0 0 4px;
+    font-size: 14px;
+    font-weight: 650;
+    color: var(--ink);
+}
+.tuning-group-header p {
+    margin: 0;
+    font-size: 12px;
+    color: var(--muted);
+    line-height: 1.45;
+}
+.tuning-facts {
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+    margin: 0;
+    padding: 0;
+    border: 0;
+}
+.tuning-fact-item {
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+}
+.tuning-fact-top {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 12px;
+}
+.tuning-fact-top dt {
+    font-size: 13px;
+    font-weight: 550;
+    color: var(--ink);
+    margin: 0;
+}
+.tuning-fact-top dd {
+    font-size: 13.5px;
+    font-weight: 650;
+    color: var(--ink);
+    font-variant-numeric: tabular-nums;
+    margin: 0;
+}
+.tuning-fact-detail {
+    font-size: 11.5px;
+    color: var(--muted);
+    line-height: 1.45;
+}
 .performance-section h3 {
     font-size: 16px;
     margin-bottom: 14px;
