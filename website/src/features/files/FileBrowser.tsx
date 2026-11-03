@@ -758,7 +758,9 @@ export default function FileBrowser({
                                           (searchPagination.hasMore
                                               ? " · More available"
                                               : "")
-                                        : "No Results"
+                                        : loading
+                                          ? "Searching…"
+                                          : "No Results"
                                     : isRecent
                                       ? allItems.length +
                                         (allItems.length === 1
