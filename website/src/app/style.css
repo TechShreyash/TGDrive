@@ -1,4 +1,32 @@
 @font-face {
+    font-family: Fraunces;
+    src: url("/static/fonts/fraunces.woff2") format("woff2");
+    font-weight: 300 700;
+    font-style: normal;
+    font-display: swap;
+}
+@font-face {
+    font-family: Fraunces;
+    src: url("/static/fonts/fraunces-italic.woff2") format("woff2");
+    font-weight: 300 600;
+    font-style: italic;
+    font-display: swap;
+}
+@font-face {
+    font-family: "Instrument Sans";
+    src: url("/static/fonts/instrument.woff2") format("woff2");
+    font-weight: 400 700;
+    font-style: normal;
+    font-display: swap;
+}
+@font-face {
+    font-family: "Instrument Sans";
+    src: url("/static/fonts/instrument-italic.woff2") format("woff2");
+    font-weight: 400 600;
+    font-style: italic;
+    font-display: swap;
+}
+@font-face {
     font-family: InterVariable;
     src: url("/static/fonts/InterVariable.woff2") format("woff2");
     font-style: normal;
@@ -6,7 +34,7 @@
     font-display: swap;
 }
 :root {
-    font-family: InterVariable, Inter, ui-sans-serif, system-ui, sans-serif;
+    font-family: var(--font-ui);
     font-feature-settings:
         "calt" 1,
         "liga" 1;
@@ -16,93 +44,97 @@
     line-height: 1.5;
     font-synthesis: none;
     text-rendering: optimizeLegibility;
-    --canvas: #f5f7f9;
-    --surface: #ffffff;
+    --font-display: Fraunces, ui-serif, Georgia, serif;
+    --font-ui: "Instrument Sans", InterVariable, Inter, system-ui, sans-serif;
+    --canvas: #f7f3ea;
+    --surface: #fdfbf7;
     --surface-raised: #ffffff;
-    --surface-subtle: #f5f7f9;
-    --ink: #20252b;
-    --muted: #616b76;
-    --line: #dce1e6;
-    --line-subtle: #e9edf1;
-    --input-line: #b7c0ca;
-    --action: #0877b8;
-    --on-action: #ffffff;
-    --action-hover: #06669f;
-    --action-soft: #e1f0fb;
-    --action-soft-hover: #d4eafa;
-    --on-action-soft: #075e95;
-    --selected: #e6f2fb;
-    --selected-hover: #dbedf9;
-    --hover: #eff2f5;
-    --search: #eaf0f5;
-    --selection: #c8e6fa;
-    --icon: #6b7683;
-    --scrollbar: #b9c1ca;
-    --danger: #b32635;
+    --surface-subtle: #f1ebdf;
+    --ink: #1c1f1a;
+    --muted: #596157;
+    --line: rgba(28, 31, 26, 0.12);
+    --line-subtle: rgba(28, 31, 26, 0.08);
+    --input-line: rgba(28, 31, 26, 0.22);
+    --action: #2b5a43;
+    --on-action: #fbf8f0;
+    --action-hover: #234a37;
+    --action-soft: #dfe9e0;
+    --action-soft-hover: #d2e2d4;
+    --on-action-soft: #1f4232;
+    --selected: #dfe9e0;
+    --selected-hover: #d2e2d4;
+    --hover: rgba(28, 31, 26, 0.05);
+    --search: #f1ebdf;
+    --selection: #dfe9e0;
+    --icon: #596157;
+    --scrollbar: #c9cfc6;
+    --danger: #93382c;
     --on-danger: #ffffff;
-    --danger-hover: #96202e;
-    --danger-soft: #fff0f1;
-    --danger-soft-ink: #971e30;
-    --success: #237344;
-    --success-soft: #eef7f1;
-    --warning-soft: #fff5e3;
-    --violet: #7352b6;
-    --violet-soft: #f1ecfa;
-    --warning: #b45309;
-    --toast-surface: #2c3239;
-    --toast-ink: #ffffff;
-    --file-pdf: #c5423e;
-    --file-image: #25845e;
-    --file-video: #8864c0;
-    --file-document: #287bb3;
-    --menu-shadow: 0 8px 28px #20252b24;
-    --dialog-shadow: 0 18px 64px #20252b38;
-    --scrim: #18212b66;
+    --danger-hover: #7d2e23;
+    --danger-soft: #f4e3df;
+    --danger-soft-ink: #7d2e23;
+    --success: #2b5a43;
+    --success-soft: #eaf0e8;
+    --warning-soft: #faeedb;
+    --violet: #5c4e75;
+    --violet-soft: #ece8f2;
+    --warning: #85531b;
+    --toast-surface: #1c1f1a;
+    --toast-ink: #f7f3e8;
+    --file-pdf: #a34235;
+    --file-image: #2b5a43;
+    --file-video: #5c4e75;
+    --file-document: #35536c;
+    --menu-shadow: 0 4px 12px rgba(42, 35, 22, 0.08), 0 16px 36px -12px rgba(42, 35, 22, 0.22);
+    --dialog-shadow: 0 12px 36px rgba(30, 25, 15, 0.12), 0 32px 72px -20px rgba(30, 25, 15, 0.35);
+    --scrim: rgba(27, 24, 17, 0.42);
     color-scheme: light;
 }
 :root[data-theme="dark"] {
-    --canvas: #1c1d1f;
-    --surface: #242527;
-    --surface-raised: #2d2f32;
-    --surface-subtle: #2a2c2f;
-    --ink: #e8eaed;
-    --muted: #b0b4bc;
-    --line: #414449;
-    --line-subtle: #35373b;
-    --input-line: #71767e;
-    --action: #8acbff;
-    --on-action: #092e47;
-    --action-hover: #a8d8ff;
-    --action-soft: #293e4d;
-    --action-soft-hover: #324c5f;
-    --on-action-soft: #b0dcff;
-    --selected: #2c3e4b;
-    --selected-hover: #334957;
-    --hover: #303236;
-    --search: #303236;
-    --selection: #3e5e75;
-    --icon: #adb5bf;
-    --scrollbar: #686d74;
-    --danger: #ffabb2;
-    --on-danger: #4c111d;
-    --danger-hover: #ffc4c8;
-    --danger-soft: #48282d;
-    --danger-soft-ink: #ffc6cc;
-    --success: #8ed9aa;
-    --success-soft: #253a30;
-    --warning-soft: #3b3424;
-    --violet: #b8a4e4;
-    --violet-soft: #342e40;
-    --warning: #f0cd83;
-    --toast-surface: #e3e5e8;
-    --toast-ink: #25272b;
-    --file-pdf: #f5aaa4;
-    --file-image: #8bd0b0;
-    --file-video: #c8adf0;
-    --file-document: #8acbff;
-    --menu-shadow: 0 8px 28px #0006;
-    --dialog-shadow: 0 18px 64px #0008;
-    --scrim: #0009;
+    --font-display: Fraunces, ui-serif, Georgia, serif;
+    --font-ui: "Instrument Sans", InterVariable, Inter, system-ui, sans-serif;
+    --canvas: #141713;
+    --surface: #191d18;
+    --surface-raised: #1e241d;
+    --surface-subtle: #161a15;
+    --ink: #ece7da;
+    --muted: #a6ad9f;
+    --line: rgba(236, 231, 218, 0.13);
+    --line-subtle: rgba(236, 231, 218, 0.08);
+    --input-line: rgba(236, 231, 218, 0.24);
+    --action: #a6cab1;
+    --on-action: #102016;
+    --action-hover: #bad8c3;
+    --action-soft: #243329;
+    --action-soft-hover: #2d3f33;
+    --on-action-soft: #cfe2d4;
+    --selected: #243329;
+    --selected-hover: #2d3f33;
+    --hover: rgba(236, 231, 218, 0.06);
+    --search: #1a1e19;
+    --selection: #2b3d31;
+    --icon: #a6ad9f;
+    --scrollbar: #41483e;
+    --danger: #e7a99b;
+    --on-danger: #3b1713;
+    --danger-hover: #f0bcb0;
+    --danger-soft: #382420;
+    --danger-soft-ink: #f4c2b8;
+    --success: #a6cab1;
+    --success-soft: #1d2a21;
+    --warning-soft: #383020;
+    --violet: #b6a6d4;
+    --violet-soft: #2e263a;
+    --warning: #d9b87b;
+    --toast-surface: #eae4d6;
+    --toast-ink: #1b1e19;
+    --file-pdf: #e7a99b;
+    --file-image: #a6cab1;
+    --file-video: #b6a6d4;
+    --file-document: #9bc0db;
+    --menu-shadow: 0 8px 24px rgba(0, 0, 0, 0.6);
+    --dialog-shadow: 0 16px 48px rgba(0, 0, 0, 0.75);
+    --scrim: rgba(0, 0, 0, 0.6);
     color-scheme: dark;
 }
 @media (prefers-color-scheme: dark) {
@@ -164,7 +196,7 @@ body,
     stroke-width: 2;
 }
 body {
-    font-family: InterVariable, Inter, ui-sans-serif, system-ui, sans-serif;
+    font-family: var(--font-ui);
     color: var(--ink);
     background: var(--canvas);
     margin: 0;
@@ -335,18 +367,24 @@ form > select {
     display: flex;
     align-items: center;
     justify-content: center;
-    gap: 10px;
+    gap: 9px;
     background: var(--action);
     color: var(--on-action);
-    height: 44px;
-    min-width: 112px;
-    font-size: 14px;
-    font-weight: 600;
-    border-radius: 10px;
+    height: 42px;
+    min-width: 116px;
+    font-size: 13.5px;
+    font-weight: 650;
+    letter-spacing: 0.01em;
+    border-radius: 999px;
     padding: 0 18px;
     align-self: flex-start;
     flex-shrink: 0;
-    margin: 0 4px 14px;
+    margin: 0 4px 16px;
+    box-shadow: var(--shadow-sm, 0 1px 2px rgba(42, 35, 22, 0.06));
+    transition: background 0.15s ease, transform 0.1s ease;
+}
+.new-button:active {
+    transform: scale(0.985);
 }
 .new-button:hover {
     background: var(--action-hover);
@@ -387,7 +425,11 @@ form > select {
 .settings-link[aria-current] {
     color: var(--on-action-soft);
     background: var(--selected);
-    font-weight: 600;
+    font-weight: 620;
+}
+.drive-nav a[aria-current] > svg,
+.settings-link[aria-current] > svg {
+    color: var(--action);
 }
 .nav-count {
     margin-left: auto;
@@ -585,14 +627,15 @@ form > select {
     align-items: center;
     gap: 8px;
     background: var(--search);
-    border: 1px solid transparent;
-    border-radius: 12px;
+    border: 1px solid var(--line-subtle);
+    border-radius: 10px;
     max-width: 640px;
     width: 100%;
     min-width: 0;
-    padding: 0 6px 0 10px;
-    height: 44px;
+    padding: 0 6px 0 12px;
+    height: 42px;
     color: var(--muted);
+    transition: background 0.14s ease, border-color 0.14s ease, box-shadow 0.14s ease;
 }
 .search-form input {
     border: 0 !important;
@@ -1294,17 +1337,22 @@ progress::-moz-progress-bar {
 .login-form {
     background: var(--surface);
     padding: 38px 40px;
-    border-radius: 16px;
+    border-radius: 18px;
+    border: 1px solid var(--line);
     width: 420px;
     max-width: 100%;
-    box-shadow: 0 8px 40px #263b6b09;
+    box-shadow: var(--dialog-shadow);
 }
 .login-symbol {
     color: var(--action);
     margin-bottom: 24px;
 }
 .login-form h1 {
-    font-size: 25px;
+    font-family: var(--font-display);
+    font-size: 28px;
+    font-weight: 540;
+    letter-spacing: -0.025em;
+    line-height: 1.15;
     margin-bottom: 10px;
 }
 .login-form > p {
@@ -3534,9 +3582,17 @@ textarea,
     margin-bottom: 0;
 }
 .demo-marker {
-    font-size: 12px;
-    font-weight: 400;
+    display: inline-flex;
+    align-items: center;
+    padding: 2px 7px;
+    border: 1px solid var(--line);
+    border-radius: 999px;
+    font-size: 10px;
+    font-weight: 650;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
     color: var(--muted);
+    background: var(--surface-subtle);
 }
 
 .preview-fullscreen-surface {

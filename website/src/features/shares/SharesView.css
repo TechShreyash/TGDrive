@@ -42,9 +42,11 @@
     display: grid;
     grid-template-columns: 24px minmax(0, 1fr);
     gap: 8px 12px;
-    padding: 12px 0;
+    padding: 12px 14px;
     border-bottom: 1px solid var(--line-subtle);
+    border-radius: 8px;
     align-items: center;
+    transition: background 0.12s ease;
 }
 .share-row:hover {
     background: var(--hover);

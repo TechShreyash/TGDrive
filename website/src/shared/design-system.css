@@ -43,8 +43,11 @@
     line-height: 1.55;
 }
 .page-heading h1 {
-    font-size: 24px;
+    font-family: var(--font-display);
+    font-size: 28px;
+    font-weight: 540;
     letter-spacing: -0.025em;
+    line-height: 1.15;
 }
 .performance-settings > .performance-section-heading {
     align-items: center;
@@ -466,9 +469,8 @@
 /* Static theme variables work under the application's strict stylesheet CSP. */
 :root[data-mantine-color-scheme] {
     --mantine-scale: 1.1428571428571428;
-    --mantine-font-family:
-        InterVariable, Inter, ui-sans-serif, system-ui, sans-serif;
-    --mantine-font-family-headings: var(--mantine-font-family);
+    --mantine-font-family: var(--font-ui);
+    --mantine-font-family-headings: var(--font-display);
     --mantine-font-size-xs: 12px;
     --mantine-font-size-sm: 13px;
     --mantine-font-size-md: 14px;
@@ -494,7 +496,7 @@ button,
 input,
 select,
 textarea {
-    font-family: InterVariable, Inter, ui-sans-serif, system-ui, sans-serif;
+    font-family: var(--font-ui);
 }
 .drive-nav a:hover:not([aria-current]) {
     background: var(--hover);

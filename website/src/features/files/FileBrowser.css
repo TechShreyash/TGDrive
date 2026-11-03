@@ -249,6 +249,16 @@
 }
 .file-row {
     touch-action: manipulation;
+    transition: background 0.12s ease;
+}
+.file-table:not(.file-grid) tr.file-row:hover {
+    background: var(--hover);
+}
+.file-table:not(.file-grid) tr.file-row.selected {
+    background: var(--selected);
+}
+.file-table:not(.file-grid) tr.file-row.selected:hover {
+    background: var(--selected-hover);
 }
 @media (max-width: 720px),
     (max-width: 1000px) and (max-height: 600px) and (pointer: coarse) {
@@ -286,13 +296,16 @@
     display: inline-flex;
     flex: 0 0 auto;
     border: 1px solid var(--line);
-    border-radius: 6px;
+    border-radius: 8px;
     padding: 2px;
+    background: var(--surface-subtle);
 }
 .file-view-toggle .icon-button {
-    width: 36px;
-    height: 36px;
-    border-radius: 4px;
+    width: 34px;
+    height: 34px;
+    border-radius: 6px;
+    color: var(--muted);
+    transition: color 0.12s ease, background 0.12s ease;
 }
 .file-view-toggle button[aria-pressed="true"] {
     background: var(--selected);
@@ -304,8 +317,8 @@
 }
 .file-grid > ul {
     display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(168px, 1fr));
-    gap: 12px;
+    grid-template-columns: repeat(auto-fill, minmax(148px, 1fr));
+    gap: 11px;
     list-style: none;
     margin: 0;
     padding: 0;
@@ -341,8 +354,9 @@
     justify-content: center;
     aspect-ratio: 16 / 10;
     overflow: hidden;
-    background: var(--canvas);
+    background: var(--surface-subtle);
     border-radius: 7px 7px 0 0;
+    border-bottom: 1px solid var(--line-subtle);
 }
 .file-tile-preview img {
     width: 100%;
@@ -1536,8 +1550,8 @@
 /* Denser, slightly landscape cards (the demo's proportions). */
 .file-grid > ul,
 .file-skeleton[data-layout="grid"] {
-    grid-template-columns: repeat(auto-fill, minmax(168px, 1fr));
-    gap: 12px;
+    grid-template-columns: repeat(auto-fill, minmax(148px, 1fr));
+    gap: 11px;
 }
 .file-grid .file-tile-preview {
     height: auto;

@@ -39,11 +39,12 @@
     padding-top: 1px;
 }
 .modal-header h2 {
+    font-family: var(--font-display);
     margin: 0;
-    font-size: 18px;
-    line-height: 26px;
-    font-weight: 680;
-    letter-spacing: -0.012em;
+    font-size: 20px;
+    line-height: 1.25;
+    font-weight: 560;
+    letter-spacing: -0.015em;
 }
 .modal .modal-description {
     margin: 3px 0 0;

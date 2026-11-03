@@ -4,17 +4,17 @@
  * Loaded last so it can retune tokens and shell styles in one place.
  */
 :root:is([data-theme], :not([data-theme])) {
-    --canvas: light-dark(#eceff3, #121316);
-    --surface: light-dark(#ffffff, #1b1d20);
-    --surface-raised: light-dark(#ffffff, #24272b);
-    --surface-subtle: light-dark(#f5f7f9, #202326);
-    --line: light-dark(#dfe4e9, #33363b);
-    --line-subtle: light-dark(#ebeef2, #2a2d31);
-    --hover: light-dark(#f0f3f6, #262a2e);
-    --search: light-dark(#f0f3f6, #24272b);
-    --selected: light-dark(#e3f0fb, #1f3345);
-    --selected-hover: light-dark(#d7e9f8, #253d52);
-    --action-soft: light-dark(#e1f0fb, #1f3345);
+    --canvas: light-dark(#f7f3ea, #141713);
+    --surface: light-dark(#fdfbf7, #191d18);
+    --surface-raised: light-dark(#ffffff, #1e241d);
+    --surface-subtle: light-dark(#f1ebdf, #161a15);
+    --line: light-dark(rgba(28, 31, 26, 0.12), rgba(236, 231, 218, 0.13));
+    --line-subtle: light-dark(rgba(28, 31, 26, 0.08), rgba(236, 231, 218, 0.08));
+    --hover: light-dark(rgba(28, 31, 26, 0.05), rgba(236, 231, 218, 0.06));
+    --search: light-dark(#f1ebdf, #1a1e19);
+    --selected: light-dark(#dfe9e0, #243329);
+    --selected-hover: light-dark(#d2e2d4, #2d3f33);
+    --action-soft: light-dark(#dfe9e0, #243329);
     --menu-shadow:
         0 16px 40px -12px light-dark(#141a2340, #000c),
         0 2px 8px light-dark(#141a2312, #0006);
