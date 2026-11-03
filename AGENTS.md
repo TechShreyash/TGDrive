@@ -68,6 +68,9 @@ and a disposable `TGDRIVE_TEST_MONGODB_URI`, never the real database.
   `docs/usage.md#preload-a-file-for-smoother-playback-and-downloads`. Keep those
   paths and anchors.
 - `docs/request-tracker.md` is private and gitignored. Never publish it.
+- For ad hoc browser work (checking UI, screenshots, exploratory QA), use the
+  `agent-browser` skill with headless Chromium (`agent-browser.json`), not other
+  browser tools. The browser test suite in `tests/browser/` stays on Playwright.
 
 ## Documentation
 

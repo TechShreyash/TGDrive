@@ -48,7 +48,6 @@ test-results/
 testfiles/
 
 # Agent skills are tracked; local design state and downloaded binaries are not
-.agents/skills/impeccable/scripts/bin/
 !.agents/skills/*/scripts/data/
 .impeccable/
 

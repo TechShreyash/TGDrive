@@ -1,0 +1,256 @@
+{
+  "name": "ui-taste",
+  "version": "uizze-design-v14",
+  "designStack": {
+    "version": "4.6.0",
+    "commit": "8a0e198da34ebc5b936a9d5975fb7a3b1cf353b7",
+    "license": "Apache-2.0"
+  },
+  "designAuthority": "uizze",
+  "evidenceMode": "concrete-need-only",
+  "uizzeGuidance": [
+    "references/uizze-reference-policy.md",
+    "references/uizze-image-to-ui.md",
+    "references/uizze-visual-verification.md"
+  ],
+  "included": [
+    "reference/new-work.md",
+    "reference/operate.md",
+    "reference/polish.md",
+    "reference/distill.md",
+    "reference/audit.md",
+    "reference/audit.native.md",
+    "reference/ios.md",
+    "reference/craft.md",
+    "reference/overdrive.md",
+    "reference/research.md",
+    "reference/anti-slop-craft.md",
+    "reference/mobile-controls.md",
+    "reference/mobile-state-performance.md",
+    "reference/image-assets.md",
+    "reference/native-verification.md"
+  ],
+  "origins": [
+    {
+      "path": "reference/new-work.md",
+      "relationship": "adapted",
+      "repository": "https://github.com/pbakaus/impeccable",
+      "commit": "8a0e198da34ebc5b936a9d5975fb7a3b1cf353b7",
+      "sourcePath": ".agent/skills/impeccable/reference/new-work.md",
+      "sourceBlob": "2bf012c4e075a9446745e909131d6951d81a81e6",
+      "licenseEvidenceURL": "https://github.com/pbakaus/impeccable/blob/8a0e198da34ebc5b936a9d5975fb7a3b1cf353b7/LICENSE",
+      "sourceURL": "https://github.com/pbakaus/impeccable/blob/8a0e198da34ebc5b936a9d5975fb7a3b1cf353b7/.agent/skills/impeccable/reference/new-work.md",
+      "license": "Apache-2.0",
+      "additionalSources": [
+        {
+          "sourcePath": ".agent/skills/impeccable/reference/mode-persuade.md",
+          "sourceBlob": "9c152d67064fb8453a7eaa89de20c35fc115b085",
+          "sourceURL": "https://github.com/pbakaus/impeccable/blob/8a0e198da34ebc5b936a9d5975fb7a3b1cf353b7/.agent/skills/impeccable/reference/mode-persuade.md"
+        },
+        {
+          "sourcePath": ".agent/skills/impeccable/reference/mode-operate.md",
+          "sourceBlob": "833775ba85f03bf65a4c1b23e39192f7653414e6",
+          "sourceURL": "https://github.com/pbakaus/impeccable/blob/8a0e198da34ebc5b936a9d5975fb7a3b1cf353b7/.agent/skills/impeccable/reference/mode-operate.md"
+        },
+        {
+          "sourcePath": ".agent/skills/impeccable/reference/mode-read.md",
+          "sourceBlob": "b30c4c9139e3094bd35c60738decb6109326153f",
+          "sourceURL": "https://github.com/pbakaus/impeccable/blob/8a0e198da34ebc5b936a9d5975fb7a3b1cf353b7/.agent/skills/impeccable/reference/mode-read.md"
+        }
+      ]
+    },
+    {
+      "path": "reference/operate.md",
+      "relationship": "adapted",
+      "repository": "https://github.com/pbakaus/impeccable",
+      "commit": "8a0e198da34ebc5b936a9d5975fb7a3b1cf353b7",
+      "sourcePath": ".agent/skills/impeccable/reference/operate.md",
+      "sourceBlob": "524f2c3ae9fa497284e9699f3ca5320cce5d05cf",
+      "licenseEvidenceURL": "https://github.com/pbakaus/impeccable/blob/8a0e198da34ebc5b936a9d5975fb7a3b1cf353b7/LICENSE",
+      "sourceURL": "https://github.com/pbakaus/impeccable/blob/8a0e198da34ebc5b936a9d5975fb7a3b1cf353b7/.agent/skills/impeccable/reference/operate.md",
+      "license": "Apache-2.0"
+    },
+    {
+      "path": "reference/polish.md",
+      "relationship": "adapted",
+      "repository": "https://github.com/pbakaus/impeccable",
+      "commit": "8a0e198da34ebc5b936a9d5975fb7a3b1cf353b7",
+      "sourcePath": ".agent/skills/impeccable/reference/polish.md",
+      "sourceBlob": "3805a28c014b4d1d44e9fd82fca9d1cf74eda96a",
+      "licenseEvidenceURL": "https://github.com/pbakaus/impeccable/blob/8a0e198da34ebc5b936a9d5975fb7a3b1cf353b7/LICENSE",
+      "sourceURL": "https://github.com/pbakaus/impeccable/blob/8a0e198da34ebc5b936a9d5975fb7a3b1cf353b7/.agent/skills/impeccable/reference/polish.md",
+      "license": "Apache-2.0"
+    },
+    {
+      "path": "reference/distill.md",
+      "relationship": "adapted",
+      "repository": "https://github.com/pbakaus/impeccable",
+      "commit": "8a0e198da34ebc5b936a9d5975fb7a3b1cf353b7",
+      "sourcePath": ".agent/skills/impeccable/reference/distill.md",
+      "sourceBlob": "6eb4f19b31060949d04882a0c514ac592d8a42cf",
+      "licenseEvidenceURL": "https://github.com/pbakaus/impeccable/blob/8a0e198da34ebc5b936a9d5975fb7a3b1cf353b7/LICENSE",
+      "sourceURL": "https://github.com/pbakaus/impeccable/blob/8a0e198da34ebc5b936a9d5975fb7a3b1cf353b7/.agent/skills/impeccable/reference/distill.md",
+      "license": "Apache-2.0"
+    },
+    {
+      "path": "reference/audit.md",
+      "relationship": "adapted",
+      "repository": "https://github.com/pbakaus/impeccable",
+      "commit": "8a0e198da34ebc5b936a9d5975fb7a3b1cf353b7",
+      "sourcePath": ".agent/skills/impeccable/reference/audit.md",
+      "sourceBlob": "b3e1d7c98646501fcf150fb722f56f5d0eb38c2a",
+      "licenseEvidenceURL": "https://github.com/pbakaus/impeccable/blob/8a0e198da34ebc5b936a9d5975fb7a3b1cf353b7/LICENSE",
+      "sourceURL": "https://github.com/pbakaus/impeccable/blob/8a0e198da34ebc5b936a9d5975fb7a3b1cf353b7/.agent/skills/impeccable/reference/audit.md",
+      "license": "Apache-2.0"
+    },
+    {
+      "path": "reference/audit.native.md",
+      "relationship": "adapted",
+      "repository": "https://github.com/pbakaus/impeccable",
+      "commit": "8a0e198da34ebc5b936a9d5975fb7a3b1cf353b7",
+      "sourcePath": ".agent/skills/impeccable/reference/audit.native.md",
+      "sourceBlob": "fbccb56f6e6fe64fc6b24d82977f392a6285848e",
+      "licenseEvidenceURL": "https://github.com/pbakaus/impeccable/blob/8a0e198da34ebc5b936a9d5975fb7a3b1cf353b7/LICENSE",
+      "sourceURL": "https://github.com/pbakaus/impeccable/blob/8a0e198da34ebc5b936a9d5975fb7a3b1cf353b7/.agent/skills/impeccable/reference/audit.native.md",
+      "license": "Apache-2.0"
+    },
+    {
+      "path": "reference/ios.md",
+      "relationship": "adapted",
+      "repository": "https://github.com/pbakaus/impeccable",
+      "commit": "8a0e198da34ebc5b936a9d5975fb7a3b1cf353b7",
+      "sourcePath": ".agent/skills/impeccable/reference/ios.md",
+      "sourceBlob": "c6244dfe32176e5718d86211b7d1eb5601eb0860",
+      "licenseEvidenceURL": "https://github.com/pbakaus/impeccable/blob/8a0e198da34ebc5b936a9d5975fb7a3b1cf353b7/LICENSE",
+      "sourceURL": "https://github.com/pbakaus/impeccable/blob/8a0e198da34ebc5b936a9d5975fb7a3b1cf353b7/.agent/skills/impeccable/reference/ios.md",
+      "license": "Apache-2.0 AND MIT",
+      "attribution": "Platform Design Skills by ehmo, via Impeccable; see NOTICE",
+      "attributionEvidenceURL": "https://github.com/pbakaus/impeccable/blob/8a0e198da34ebc5b936a9d5975fb7a3b1cf353b7/NOTICE.md",
+      "originalRepository": "https://github.com/ehmo/platform-design-skills",
+      "originalRevision": null,
+      "originalRevisionStatus": "not-recorded-by-intermediary",
+      "originalLicenseEvidenceURL": "https://github.com/ehmo/platform-design-skills/blob/dc2be825d8b439caea78e9eaa8fb3ac23b0ff3e9/LICENSE"
+    },
+    {
+      "path": "reference/craft.md",
+      "relationship": "adapted",
+      "repository": "https://github.com/pbakaus/impeccable",
+      "commit": "8a0e198da34ebc5b936a9d5975fb7a3b1cf353b7",
+      "sourcePath": ".agent/skills/impeccable/reference/craft-floor.md",
+      "sourceBlob": "9653b980895fa343127982ba575085c31726eecc",
+      "licenseEvidenceURL": "https://github.com/pbakaus/impeccable/blob/8a0e198da34ebc5b936a9d5975fb7a3b1cf353b7/LICENSE",
+      "sourceURL": "https://github.com/pbakaus/impeccable/blob/8a0e198da34ebc5b936a9d5975fb7a3b1cf353b7/.agent/skills/impeccable/reference/craft-floor.md",
+      "license": "Apache-2.0"
+    },
+    {
+      "path": "reference/overdrive.md",
+      "relationship": "adapted",
+      "repository": "https://github.com/pbakaus/impeccable",
+      "commit": "8a0e198da34ebc5b936a9d5975fb7a3b1cf353b7",
+      "sourcePath": ".agent/skills/impeccable/reference/overdrive.md",
+      "sourceBlob": "76953e24e6dd06b62415fdfe71c7caa9756bd981",
+      "licenseEvidenceURL": "https://github.com/pbakaus/impeccable/blob/8a0e198da34ebc5b936a9d5975fb7a3b1cf353b7/LICENSE",
+      "sourceURL": "https://github.com/pbakaus/impeccable/blob/8a0e198da34ebc5b936a9d5975fb7a3b1cf353b7/.agent/skills/impeccable/reference/overdrive.md",
+      "license": "Apache-2.0"
+    },
+    {
+      "path": "reference/research.md",
+      "relationship": "adapted",
+      "repository": "https://github.com/Appllama/appllama-skills",
+      "commit": "dd5caaec3d5d50ad7fc0324da238119c6b7c3707",
+      "sourcePath": "skills/appllama-usage/references/research-methods.md",
+      "sourceBlob": "5fe10d3d33e0056f7df2e1f0054a1d6ee88bcbe4",
+      "sourceURL": "https://github.com/Appllama/appllama-skills/blob/dd5caaec3d5d50ad7fc0324da238119c6b7c3707/skills/appllama-usage/references/research-methods.md",
+      "licenseEvidenceURL": "https://github.com/Appllama/appllama-skills/blob/dd5caaec3d5d50ad7fc0324da238119c6b7c3707/LICENSE",
+      "license": "MIT",
+      "additionalSources": [
+        {
+          "sourcePath": "skills/appllama-usage/references/build-from-scratch.md",
+          "sourceBlob": "608daaf6c3b4ab3650e9cd3c764fa59c2d9d12ee",
+          "sourceURL": "https://github.com/Appllama/appllama-skills/blob/dd5caaec3d5d50ad7fc0324da238119c6b7c3707/skills/appllama-usage/references/build-from-scratch.md"
+        },
+        {
+          "sourcePath": "skills/appllama-usage/references/improve-a-screen.md",
+          "sourceBlob": "9603e2b102d81b37bbd1fa377b9dc0cb122204cc",
+          "sourceURL": "https://github.com/Appllama/appllama-skills/blob/dd5caaec3d5d50ad7fc0324da238119c6b7c3707/skills/appllama-usage/references/improve-a-screen.md"
+        }
+      ]
+    },
+    {
+      "path": "reference/anti-slop-craft.md",
+      "relationship": "adapted",
+      "repository": "https://github.com/Appllama/appllama-skills",
+      "commit": "dd5caaec3d5d50ad7fc0324da238119c6b7c3707",
+      "sourcePath": "skills/appllama-app-design-skill/SKILL.md",
+      "sourceBlob": "eccc4e8708709a9dba0563e5a5fcadb1ffa88e58",
+      "sourceURL": "https://github.com/Appllama/appllama-skills/blob/dd5caaec3d5d50ad7fc0324da238119c6b7c3707/skills/appllama-app-design-skill/SKILL.md",
+      "licenseEvidenceURL": "https://github.com/Appllama/appllama-skills/blob/dd5caaec3d5d50ad7fc0324da238119c6b7c3707/LICENSE",
+      "license": "MIT"
+    },
+    {
+      "path": "reference/mobile-controls.md",
+      "relationship": "adapted",
+      "repository": "https://github.com/Appllama/appllama-skills",
+      "commit": "dd5caaec3d5d50ad7fc0324da238119c6b7c3707",
+      "sourcePath": "skills/appllama-app-design-skill/references/native-controls.md",
+      "sourceBlob": "53d34a7913b66048c0e2663a779be2f66d84a9c3",
+      "sourceURL": "https://github.com/Appllama/appllama-skills/blob/dd5caaec3d5d50ad7fc0324da238119c6b7c3707/skills/appllama-app-design-skill/references/native-controls.md",
+      "licenseEvidenceURL": "https://github.com/Appllama/appllama-skills/blob/dd5caaec3d5d50ad7fc0324da238119c6b7c3707/LICENSE",
+      "license": "MIT",
+      "additionalSources": [
+        {
+          "sourcePath": "skills/appllama-app-design-skill/SKILL.md",
+          "sourceBlob": "eccc4e8708709a9dba0563e5a5fcadb1ffa88e58",
+          "sourceURL": "https://github.com/Appllama/appllama-skills/blob/dd5caaec3d5d50ad7fc0324da238119c6b7c3707/skills/appllama-app-design-skill/SKILL.md"
+        }
+      ]
+    },
+    {
+      "path": "reference/mobile-state-performance.md",
+      "relationship": "adapted",
+      "repository": "https://github.com/Appllama/appllama-skills",
+      "commit": "dd5caaec3d5d50ad7fc0324da238119c6b7c3707",
+      "sourcePath": "skills/appllama-app-design-skill/references/performance.md",
+      "sourceBlob": "931ebe565cc4b6bf66fb08ca6904198478a48531",
+      "sourceURL": "https://github.com/Appllama/appllama-skills/blob/dd5caaec3d5d50ad7fc0324da238119c6b7c3707/skills/appllama-app-design-skill/references/performance.md",
+      "licenseEvidenceURL": "https://github.com/Appllama/appllama-skills/blob/dd5caaec3d5d50ad7fc0324da238119c6b7c3707/LICENSE",
+      "license": "MIT",
+      "additionalSources": [
+        {
+          "sourcePath": "skills/appllama-app-design-skill/SKILL.md",
+          "sourceBlob": "eccc4e8708709a9dba0563e5a5fcadb1ffa88e58",
+          "sourceURL": "https://github.com/Appllama/appllama-skills/blob/dd5caaec3d5d50ad7fc0324da238119c6b7c3707/skills/appllama-app-design-skill/SKILL.md"
+        }
+      ]
+    },
+    {
+      "path": "reference/image-assets.md",
+      "relationship": "adapted",
+      "repository": "https://github.com/Appllama/appllama-skills",
+      "commit": "dd5caaec3d5d50ad7fc0324da238119c6b7c3707",
+      "sourcePath": "skills/appllama-app-design-skill/references/image-assets.md",
+      "sourceBlob": "93ab9d4e1038c32a3beca7b55350f1a2634ad588",
+      "sourceURL": "https://github.com/Appllama/appllama-skills/blob/dd5caaec3d5d50ad7fc0324da238119c6b7c3707/skills/appllama-app-design-skill/references/image-assets.md",
+      "licenseEvidenceURL": "https://github.com/Appllama/appllama-skills/blob/dd5caaec3d5d50ad7fc0324da238119c6b7c3707/LICENSE",
+      "license": "MIT"
+    },
+    {
+      "path": "reference/native-verification.md",
+      "relationship": "adapted",
+      "repository": "https://github.com/Appllama/appllama-skills",
+      "commit": "dd5caaec3d5d50ad7fc0324da238119c6b7c3707",
+      "sourcePath": "skills/appllama-app-design-skill/references/simulator-loop.md",
+      "sourceBlob": "b06ca813304d2890b794fd82c2729d386a170b3a",
+      "sourceURL": "https://github.com/Appllama/appllama-skills/blob/dd5caaec3d5d50ad7fc0324da238119c6b7c3707/skills/appllama-app-design-skill/references/simulator-loop.md",
+      "licenseEvidenceURL": "https://github.com/Appllama/appllama-skills/blob/dd5caaec3d5d50ad7fc0324da238119c6b7c3707/LICENSE",
+      "license": "MIT",
+      "additionalSources": [
+        {
+          "sourcePath": "skills/appllama-app-design-skill/references/motion.md",
+          "sourceBlob": "af69711594771d21f52411a26b3b4d105d1cc4a4",
+          "sourceURL": "https://github.com/Appllama/appllama-skills/blob/dd5caaec3d5d50ad7fc0324da238119c6b7c3707/skills/appllama-app-design-skill/references/motion.md"
+        }
+      ]
+    }
+  ]
+}

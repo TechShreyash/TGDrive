@@ -1,17 +1,17 @@
 {
   "version": 1,
   "skills": {
+    "agent-browser": {
+      "source": "vercel-labs/agent-browser",
+      "sourceType": "github",
+      "skillPath": "skills/agent-browser/SKILL.md",
+      "computedHash": "e32e16db6b9f84f5c7a250485540d002953284a9e9f7d95e43ed56a7c6c43646"
+    },
     "async-python-patterns": {
       "source": "wshobson/agents",
       "sourceType": "github",
       "skillPath": "plugins/python-development/skills/async-python-patterns/SKILL.md",
       "computedHash": "35bc80697c3ba879e32cee7e2728ed2db0d16499875bb718736fd1160fddc2d6"
-    },
-    "emil-design-eng": {
-      "source": "emilkowalski/skills",
-      "sourceType": "github",
-      "skillPath": "skills/emil-design-eng/SKILL.md",
-      "computedHash": "51f2537e04d15911b41d78e2de24c36a0e26d41beae15e82a954fe5496a5eda9"
     },
     "fastapi": {
       "source": "fastapi/fastapi",
@@ -19,29 +19,11 @@
       "skillPath": "fastapi/.agents/skills/fastapi/SKILL.md",
       "computedHash": "2f0ff30756b435168276e1a7eb78c07856118575ea174535de7ed86dc88c9be4"
     },
-    "impeccable": {
-      "source": "pbakaus/impeccable",
+    "improve-codebase-architecture": {
+      "source": "mattpocock/skills",
       "sourceType": "github",
-      "skillPath": ".agents/skills/impeccable/SKILL.md",
-      "computedHash": "43cbaccaaa6d60becd67d63577da8f7053cb5f0262c772e892f15e7242cada21"
-    },
-    "mantine-combobox": {
-      "source": "mantinedev/skills",
-      "sourceType": "github",
-      "skillPath": "skills/mantine-combobox/SKILL.md",
-      "computedHash": "93749f2dbfc3cd9bbc0238b057843b6f42f0a39e7641dc33c7eeb38efc2a8c99"
-    },
-    "mantine-custom-components": {
-      "source": "mantinedev/skills",
-      "sourceType": "github",
-      "skillPath": "skills/mantine-custom-components/SKILL.md",
-      "computedHash": "eb1dff7e3a2d6cf38a2444a474682bc88e1b8395896a68e29ca0dd848564552c"
-    },
-    "mantine-form": {
-      "source": "mantinedev/skills",
-      "sourceType": "github",
-      "skillPath": "skills/mantine-form/SKILL.md",
-      "computedHash": "3de4989c48fc109299ab2d728ff2360903c5f7c6b2138813a859b35d9f15857a"
+      "skillPath": "skills/engineering/improve-codebase-architecture/SKILL.md",
+      "computedHash": "f768cb44209e0d30e3449b8f95ea3dc8293093f73cfe02127d530db43412cf76"
     },
     "mongodb-query-optimizer": {
       "source": "mongodb/agent-skills",
@@ -67,6 +49,13 @@
       "skillPath": "skills/systematic-debugging/SKILL.md",
       "computedHash": "276fb0aadb002ab930cc2a56de89e16995a2e3e70b33587652bf0a5fb123148d"
     },
+    "ui-taste": {
+      "source": "uizze.sh",
+      "sourceUrl": "https://uizze.sh/",
+      "sourceType": "well-known",
+      "computedHash": "9a37107c51b6bf6e3bdc2675d559094619b1b03092f8466c32ffc8e0cb9c1d4a",
+      "wellKnownDigest": "sha256:f26d607ceb3f3a6fa8c98f8dbcb2b1aeb0392de1953e826bb8893d9e49983bf9"
+    },
     "uv": {
       "source": "astral-sh/claude-code-plugins",
       "sourceType": "github",
@@ -78,12 +67,6 @@
       "sourceType": "github",
       "skillPath": "skills/react-best-practices/SKILL.md",
       "computedHash": "ca7b0c0c6e5f2750043f7f0cd72d16ac4e2abc48f9b5500d047a4b77a2506212"
-    },
-    "web-design-guidelines": {
-      "source": "vercel-labs/agent-skills",
-      "sourceType": "github",
-      "skillPath": "skills/web-design-guidelines/SKILL.md",
-      "computedHash": "f3bc47f890f42a44db1007ab390709ec368e4b8c089baee6b0007182236ac474"
     }
   }
 }
