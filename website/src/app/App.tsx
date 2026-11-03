@@ -736,13 +736,22 @@ export default function App() {
         const controller = new AbortController();
         // Keep the current table mounted when uploads update the same listing.
         let retryTimer: ReturnType<typeof setTimeout> | undefined;
+        let loadingTimer: ReturnType<typeof setTimeout> | undefined;
         const retryNotice =
             "Could not update your files. Retrying automatically.";
         const queue = createListingRefreshQueue(async () => {
             clearTimeout(retryTimer);
+            clearTimeout(loadingTimer);
             const background = loadedListing.current === listingKey;
-            if (!background) loadedListing.current = null;
-            setLoading(!background);
+            if (!background) {
+                loadedListing.current = null;
+                // Delay loading indicator by 180ms to eliminate flashes on fast page changes.
+                loadingTimer = setTimeout(() => {
+                    setLoading(true);
+                }, 180);
+            } else {
+                setLoading(false);
+            }
             setLoadError("");
             if (isPaged) {
                 pageSource.current = background ? pageSource.current : null;
@@ -830,6 +839,7 @@ export default function App() {
                     })
                     .catch((error) => failed(error, background))
                     .finally(() => {
+                        clearTimeout(loadingTimer);
                         if (!controller.signal.aborted) setLoading(false);
                     });
             }
@@ -890,6 +900,7 @@ export default function App() {
                 })
                 .catch((error) => failed(error, background))
                 .finally(() => {
+                    clearTimeout(loadingTimer);
                     if (!controller.signal.aborted) setLoading(false);
                 });
         });
@@ -928,11 +939,12 @@ export default function App() {
         listingRefresh.current = queue;
         queue.request();
         return () => {
+            clearTimeout(retryTimer);
+            clearTimeout(loadingTimer);
             controller.abort();
             pageSource.current = null;
             queue.dispose();
             if (listingRefresh.current === queue) listingRefresh.current = null;
-            clearTimeout(retryTimer);
         };
     }, [
         authenticated,
@@ -1640,9 +1652,17 @@ export default function App() {
                     </button>
                 </>
             ) : (
-                <p>
-                    <Spinner /> Loading configuration…
-                </p>
+                <div
+                    className="config-skeleton"
+                    role="status"
+                    aria-label="Loading configuration"
+                >
+                    <span className="sr-only">Loading configuration…</span>
+                    <span
+                        className="skeleton-block"
+                        style={{ height: "80px", borderRadius: "10px" }}
+                    />
+                </div>
             )}
         </div>
     );
@@ -1651,7 +1671,8 @@ export default function App() {
             <div className="startup" role="status">
                 <BrandLogo size="large" />
                 <span className="startup-status">
-                    <Spinner /> Opening TGDrive…
+                    <span className="startup-pulse" />
+                    <span className="sr-only">Opening TGDrive…</span>
                 </span>
             </div>
         );

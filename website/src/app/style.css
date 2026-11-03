@@ -943,7 +943,7 @@ form > select {
     max-width: 430px;
     margin: 0 0 10px;
 }
-.loading-state {
+.loading-state:not(.file-skeleton) {
     padding: 90px 20px;
     display: flex;
     gap: 12px;

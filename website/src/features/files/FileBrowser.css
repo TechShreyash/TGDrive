@@ -1330,17 +1330,21 @@
 }
 
 /* Skeleton loading in the shape of the coming layout. */
-.file-skeleton {
-    display: grid;
-    gap: 14px;
-    padding: 0;
+.file-skeleton,
+.loading-state.file-skeleton {
+    display: grid !important;
+    gap: 12px;
+    padding: 12px 0;
     justify-content: stretch;
+    width: 100%;
     animation: none;
 }
 .file-skeleton[data-layout="grid"] {
-    grid-template-columns: repeat(auto-fill, minmax(184px, 1fr));
+    grid-template-columns: repeat(auto-fill, minmax(168px, 1fr)) !important;
 }
 .file-skeleton[data-layout="list"] {
+    display: flex !important;
+    flex-direction: column !important;
     gap: 4px;
 }
 .skeleton-item {
@@ -1350,6 +1354,8 @@
     padding: 6px 6px 12px;
     border: 1px solid var(--line-subtle);
     border-radius: 16px;
+    background: var(--surface);
+    box-shadow: 0 1px 3px light-dark(#1d232a08, #0004);
 }
 .file-skeleton[data-layout="list"] .skeleton-item {
     display: grid;
@@ -1359,34 +1365,39 @@
     height: 56px;
     padding: 0 12px;
     border: 0;
+    border-radius: 8px;
 }
 .skeleton-block,
 .skeleton-line {
     display: block;
-    border-radius: 10px;
+    border-radius: 8px;
     background: linear-gradient(
             90deg,
-            transparent 25%,
-            color-mix(in srgb, var(--ink) 6%, transparent) 50%,
-            transparent 75%
+            color-mix(in srgb, var(--line) 40%, transparent) 0%,
+            color-mix(in srgb, var(--ink) 8%, var(--hover)) 50%,
+            color-mix(in srgb, var(--line) 40%, transparent) 100%
         )
-        0 0 / 300% 100% var(--hover);
-    animation: skeleton-shimmer 1.3s linear infinite;
+        0 0 / 200% 100%;
+    animation: skeleton-shimmer 1.5s ease-in-out infinite;
 }
 .skeleton-block {
-    height: 132px;
+    height: auto;
+    aspect-ratio: 16 / 11;
+    border-radius: 11px;
 }
 .file-skeleton[data-layout="list"] .skeleton-block {
     width: 36px;
     height: 36px;
+    aspect-ratio: 1;
 }
 .skeleton-line {
-    height: 12px;
-    width: 72%;
+    height: 14px;
+    width: 75%;
     margin-inline: 6px;
 }
 .skeleton-line.short {
-    width: 40%;
+    width: 45%;
+    height: 12px;
 }
 .file-skeleton[data-layout="list"] .skeleton-line {
     width: auto;
@@ -1427,8 +1438,11 @@
     }
 }
 @keyframes skeleton-shimmer {
-    to {
-        background-position: -150% 0;
+    0% {
+        background-position: 200% 0;
+    }
+    100% {
+        background-position: -200% 0;
     }
 }
 ::view-transition-old(root),

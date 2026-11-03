@@ -123,14 +123,173 @@ progress::-webkit-progress-value {
     }
 }
 
+/* Button & interactive press micro-interactions */
+.primary-button,
+.secondary-button,
+.danger-button,
+.new-button,
+.text-button {
+    transition:
+        background-color var(--dur-1, 120ms) var(--ease-out, ease-out),
+        border-color var(--dur-1, 120ms) var(--ease-out, ease-out),
+        box-shadow var(--dur-2, 200ms) var(--ease-out, ease-out),
+        transform var(--dur-1, 120ms) var(--ease-out, ease-out);
+}
+.primary-button:active:not(:disabled),
+.secondary-button:active:not(:disabled),
+.danger-button:active:not(:disabled),
+.new-button:active:not(:disabled) {
+    transform: scale(0.97);
+}
+.drive-nav a:active {
+    transform: scale(0.98);
+}
+
+/* Popover & action menus smooth entrance */
+.action-menu[popover],
+.new-menu {
+    animation: menu-pop 160ms cubic-bezier(0.16, 1, 0.3, 1) backwards;
+    transform-origin: top right;
+}
+
+@keyframes menu-pop {
+    from {
+        opacity: 0;
+        transform: scale(0.95);
+    }
+    to {
+        opacity: 1;
+        transform: scale(1);
+    }
+}
+
+/* Modal dialog smooth entrance */
+.modal,
+dialog[open] {
+    animation: modal-enter 220ms cubic-bezier(0.16, 1, 0.3, 1) backwards;
+}
+
+@keyframes modal-enter {
+    from {
+        opacity: 0;
+        transform: scale(0.96) translateY(6px);
+    }
+    to {
+        opacity: 1;
+        transform: scale(1) translateY(0);
+    }
+}
+
+/* Startup screen pulse */
+.startup-status {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    margin-top: 12px;
+}
+.startup-pulse {
+    display: inline-block;
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    background: var(--action);
+    box-shadow: 0 0 0 0 color-mix(in srgb, var(--action) 60%, transparent);
+    animation: startup-glow 1.4s ease-out infinite;
+}
+@keyframes startup-glow {
+    0% {
+        box-shadow: 0 0 0 0 color-mix(in srgb, var(--action) 60%, transparent);
+    }
+    70% {
+        box-shadow: 0 0 0 12px transparent;
+    }
+    100% {
+        box-shadow: 0 0 0 0 transparent;
+    }
+}
+
+/* Transfer & Shares skeleton rows */
+.transfer-skeleton-list,
+.share-skeleton-list {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    padding: 12px 0;
+    width: 100%;
+}
+.transfer-skeleton-row,
+.share-skeleton-row {
+    display: grid;
+    grid-template-columns: 36px 1fr 90px;
+    align-items: center;
+    gap: 12px;
+    padding: 12px 14px;
+    border: 1px solid var(--line-subtle);
+    border-radius: 12px;
+    background: var(--surface);
+    box-shadow: 0 1px 3px light-dark(#1d232a08, #0004);
+}
+.transfer-skeleton-icon,
+.share-skeleton-icon {
+    width: 36px;
+    height: 36px;
+    border-radius: 8px;
+}
+.transfer-skeleton-info,
+.share-skeleton-details {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+.transfer-skeleton-badge,
+.share-skeleton-badge {
+    width: 80px;
+    height: 24px;
+    border-radius: 6px;
+    justify-self: end;
+}
+
+/* Settings & Storage skeletons */
+.settings-skeleton-panel {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    padding: 16px 0;
+    width: 100%;
+}
+.settings-skeleton-card {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    padding: 20px;
+    border: 1px solid var(--line-subtle);
+    border-radius: 12px;
+    background: var(--surface-subtle);
+}
+.storage-skeleton-dl,
+.config-skeleton {
+    padding: 16px 0;
+    width: 100%;
+}
+
 @media (prefers-reduced-motion: reduce) {
     :is(.transfer-item, .transfer-batch, .preload-job)
         progress::-webkit-progress-value,
     .performance-page .performance-chart-now::before,
+    .startup-pulse,
+    .action-menu[popover],
+    .new-menu,
+    .modal,
+    dialog[open],
     input[type="checkbox"]:checked {
         animation: none;
     }
-    .icon-button:active:not(:disabled) {
+    .icon-button:active:not(:disabled),
+    .primary-button:active:not(:disabled),
+    .secondary-button:active:not(:disabled),
+    .danger-button:active:not(:disabled),
+    .new-button:active:not(:disabled),
+    .drive-nav a:active {
         transform: none;
     }
 }

@@ -318,8 +318,31 @@ export default function SharesView({
                 </div>
             )}
             {loading && !shares.length ? (
-                <div className="loading-state" role="status">
-                    <Spinner /> Loading shared links…
+                <div
+                    className="share-skeleton-list"
+                    role="status"
+                    aria-label="Loading shared links"
+                >
+                    <span className="sr-only">Loading shared links…</span>
+                    {Array.from({ length: 4 }, (_, i) => (
+                        <div
+                            key={i}
+                            className="share-skeleton-row"
+                            aria-hidden="true"
+                        >
+                            <span className="share-skeleton-icon skeleton-block" />
+                            <div className="share-skeleton-details">
+                                <span
+                                    className="skeleton-line"
+                                    style={{
+                                        width: `${55 - (i % 3) * 10}%`,
+                                    }}
+                                />
+                                <span className="skeleton-line short" />
+                            </div>
+                            <span className="share-skeleton-badge skeleton-block" />
+                        </div>
+                    ))}
                 </div>
             ) : error && !shares.length ? null : !visible.length ? (
                 <div className="empty-state">

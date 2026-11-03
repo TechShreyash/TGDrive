@@ -330,9 +330,20 @@ export default function StorageView({
                     </dl>
                 ) : (
                     !usageError && (
-                        <p role="status">
-                            <Spinner /> Loading usage…
-                        </p>
+                        <div
+                            className="storage-skeleton-dl"
+                            role="status"
+                            aria-label="Loading usage"
+                        >
+                            <span className="sr-only">Loading usage…</span>
+                            <span
+                                className="skeleton-block"
+                                style={{
+                                    height: "120px",
+                                    borderRadius: "12px",
+                                }}
+                            />
+                        </div>
                     )
                 )}
             </section>

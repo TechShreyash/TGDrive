@@ -521,8 +521,23 @@ export default function SettingsManagement({
         >
             {demoMode && <DemoModeNotice />}
             {loading && (
-                <div className="loading-state" role="status">
-                    <Spinner /> Loading connections…
+                <div
+                    className="settings-skeleton-panel"
+                    role="status"
+                    aria-label="Loading connections"
+                >
+                    <span className="sr-only">Loading connections…</span>
+                    <div className="settings-skeleton-card">
+                        <span
+                            className="skeleton-line"
+                            style={{ width: "30%", height: "20px" }}
+                        />
+                        <span className="skeleton-line short" />
+                        <span
+                            className="skeleton-block"
+                            style={{ height: "64px" }}
+                        />
+                    </div>
                 </div>
             )}
             {error && (

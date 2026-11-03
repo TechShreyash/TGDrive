@@ -222,9 +222,30 @@ export default function TransferHistory({
         </div>
     );
     const empty = loading ? (
-        <p className="transfer-history-loading" role="status">
-            <Spinner /> Loading finished transfers…
-        </p>
+        <div
+            className="transfer-skeleton-list"
+            role="status"
+            aria-label="Loading finished transfers"
+        >
+            <span className="sr-only">Loading finished transfers…</span>
+            {Array.from({ length: 4 }, (_, i) => (
+                <div
+                    key={i}
+                    className="transfer-skeleton-row"
+                    aria-hidden="true"
+                >
+                    <span className="transfer-skeleton-icon skeleton-block" />
+                    <div className="transfer-skeleton-info">
+                        <span
+                            className="skeleton-line"
+                            style={{ width: `${65 - (i % 3) * 12}%` }}
+                        />
+                        <span className="skeleton-line short" />
+                    </div>
+                    <span className="transfer-skeleton-badge skeleton-block" />
+                </div>
+            ))}
+        </div>
     ) : !error ? (
         <div className="empty-state">
             <Upload size={32} />
