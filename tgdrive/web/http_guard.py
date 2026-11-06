@@ -72,15 +72,21 @@ class ApiBodyGuardMiddleware:
                 scope, receive, send, "Not authenticated", 401
             )
             return
-        # Requests that need no session stay small, so strangers cannot make the
-        # server buffer large bodies. A signed-in owner's requests (folder trees,
-        # large selections, recovery files) have no fixed size.
-        body_limit = (
-            self.body_limit
-            if path in self._PUBLIC_POST_PATHS
-            and not _authenticated(scope, self.sessions)
-            else None
-        )
+        if path == "/api/v1/replica/import":
+            # The binary recovery handler streams to disk under its own budget.
+            await self.app(scope, receive, send)
+            return
+        body_limit = self.body_limit
+        if path in {
+            "/api/v1/folders/tree",
+            "/api/v1/nodes/bulk",
+            "/api/v1/nodes/move",
+            "/api/v1/archives",
+        }:
+            # Lists of paths and folder components need more room than controls.
+            body_limit = max(body_limit, 4 * 1024**2)
+        elif path == "/api/v1/transfers/history/tasks":
+            body_limit = max(body_limit, 256 * 1024)
         lengths = [
             value
             for key, value in scope.get("headers", [])
@@ -96,7 +102,7 @@ class ApiBodyGuardMiddleware:
                     scope, receive, send, "Invalid Content-Length", 400
                 )
                 return
-            if body_limit is not None and parsed[0] > body_limit:
+            if parsed[0] > body_limit:
                 await UploadGuardMiddleware._reject(
                     scope, receive, send, "API request body is too large", 413
                 )
@@ -110,7 +116,7 @@ class ApiBodyGuardMiddleware:
             message = await receive()
             if message["type"] == "http.request":
                 count += len(message.get("body", b""))
-                if body_limit is not None and count > body_limit:
+                if count > body_limit:
                     too_large = True
                     raise HTTPException(413, "API request body is too large")
             return message

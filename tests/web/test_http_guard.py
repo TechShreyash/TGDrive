@@ -13,9 +13,39 @@ from starlette.responses import JSONResponse
 
 from tgdrive.core.security import SESSION_COOKIE, SessionManager
 from tgdrive.web.http_guard import (
+    ApiBodyGuardMiddleware,
     SecurityHeadersMiddleware,
     UploadGuardMiddleware,
 )
+
+
+@pytest.mark.parametrize("declared", [False, True])
+@pytest.mark.parametrize("path", ["/api/checkPassword", "/api/getDirectory"])
+async def test_authenticated_demo_json_is_bounded(path, declared):
+    sessions = SessionManager(b"s" * 48, 3600)
+    headers = [(b"cookie", f"{SESSION_COOKIE}={sessions.create()}".encode())]
+    if declared:
+        headers.append((b"content-length", b"33"))
+
+    async def app(scope, receive, send):
+        try:
+            await Request(scope, receive).body()
+        except HTTPException as error:
+            await JSONResponse({}, status_code=error.status_code)(scope, receive, send)
+        else:
+            pytest.fail("Oversized authenticated JSON reached decoding")
+
+    guard = ApiBodyGuardMiddleware(app, sessions=sessions, body_limit=32)
+
+    async def selected_route(scope, receive, send):
+        scope["path"] = path
+        await guard(scope, receive, send)
+
+    messages, reads = await invoke(
+        selected_route, headers=headers, chunks=[b"x" * 16, b"x" * 17]
+    )
+    assert messages[0]["status"] == 413
+    assert reads == (0 if declared else 2)
 
 
 async def invoke(
