@@ -2,7 +2,7 @@
 
 [Docs home](../README.md) · [Gallery and video chapters](../showcase.md) · [Project README](../../README.md)
 
-All current media was captured on **28 October 2026** from TGDrive's current UI.
+The media was captured on **28 October 2026** from the interface at that revision.
 The collection contains **25 JPEG screenshots** and one **62-second silent tour**.
 It illustrates features, not throughput, physical-device compatibility or
 successful recovery. Some sample files show an earlier **Added** date; that is
@@ -10,7 +10,9 @@ not the screenshot date.
 
 > [!NOTE]
 > These captures predate the 2.3 interface redesign. Layout, colors and the
-> reader toolbar have changed; the workflows shown still apply.
+> reader toolbar have changed. Recovery and configuration controls also differ;
+> use the written guides for current steps. The recovery-file/key form and
+> manual-budget controls are obsolete illustrations.
 
 | Status | Files |
 | --- | --- |
@@ -36,7 +38,7 @@ filename changes, update the README, gallery and `PUBLIC_DOCS` in
 | `pdf-reader`, `epub-reader`, `comic-reader` | Document, ebook and comic readers |
 | `preloads`, `performance-overview`, `performance-resources` | Local demo cache coverage and illustrative resource/traffic readings |
 | `cache-settings`, `transfer-settings`, `thumbnail-rebuild` | Local demo configuration and rebuild confirmation |
-| `recovery-file` | Local demo of the unified recovery-file/key form |
+| `recovery-file` | Obsolete local demo recovery-file/key form; not current restore instructions |
 
 The file-browser, import/archive, player and reader captures use disposable
 original samples in the public demo's **Showcase** workspace. Configuration,
@@ -60,7 +62,7 @@ footage; encoding at 30 fps does not add captured motion. No simulated cursor wa
 | --- | --- |
 | ZIP creation | Notes.zip was created from disposable public-demo samples; the job completed and the ZIP appeared in the drive. |
 | Torrent and extraction dialogs | Their setup/options were opened; neither operation was submitted. |
-| Continue and player settings | The sample video was played, paused and reopened; Continue was chosen. Settings show the current built-in menu. |
+| Continue and player settings | The sample video was played, paused and reopened; Continue was chosen. Settings show the built-in menu at capture time. |
 | Recovery, configuration and monitoring | Local demo screens only. No recovery began, no key was exported and no thumbnail rebuild started. |
 
 ## Replace or extend a capture

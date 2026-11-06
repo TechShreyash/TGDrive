@@ -2,14 +2,15 @@
 
 [Docs home](README.md) · [User guide](usage.md) · [Live demo and password](usage.md#try-the-public-demo)
 
-Current screens, captured **28 October 2026**. Start with the short tour, then
+Historical screens, captured **28 October 2026**. Start with the short tour, then
 open the screenshots for a closer look. Public-demo captures use disposable
 samples; monitoring, configuration and recovery screens use a labelled local demo.
 [Provenance and coverage](assets/README.md).
 
 > [!NOTE]
 > These captures predate the 2.3 interface redesign. Layout, colors and the
-> reader toolbar have changed; the workflows shown still apply.
+> reader toolbar have changed. Recovery and configuration controls also differ;
+> use the written guides for current steps.
 
 ## Watch the feature tour
 
@@ -28,7 +29,7 @@ the local recovery form. It does not perform a torrent import, extraction or rec
 | 0:26 | Archive extraction choices |
 | 0:38 | Continue from a saved video position |
 | 0:47 | Built-in player settings |
-| 0:52 | Local demo: recovery file and key form |
+| 0:52 | Obsolete local demo: recovery file and key form |
 
 ## Import torrents and work with archives
 
@@ -85,16 +86,16 @@ Preview support depends on the file and browser. The original remains downloadab
 
 ## Connections and backups
 
-Save one encrypted recovery file and its separate key. The file restores saved
+Save a confirmed backup and retain the original `ENCRYPTION_KEY`. The file restores saved
 database data using surviving Telegram files; an optional independent channel
 copy supports rebuilding a lost main channel.
 [Backup and recovery](backup-recovery.md) · [Connections](usage.md#settings-and-connections)
 
 ![Unified recovery file and key form in a local demo](assets/recovery-file.jpg)
 
-**Local demo:** this screen illustrates the current form. No recovery was started
-and no key was exported during capture. Follow the guide to confirm and save your
-own backup before relying on it.
+**Obsolete local demo:** this form predates recovery with `ENCRYPTION_KEY` and
+does not show current restore steps. No recovery ran during capture. Follow the
+[current recovery guide](backup-recovery.md).
 
 ## Browse and organize
 
@@ -166,8 +167,9 @@ metrics, not deployment performance.
 
 ## Configure your drive
 
-Adjust cache, transfer limits and timezone in **Configuration**. Start with the
-defaults and save one category at a time. [Settings and defaults](configuration.md)
+Choose playback preloading, file split size, bot uploads and timezone in
+**Configuration**. Resource budgets are automatic and appear under
+**Performance → Automatic tuning**. [Settings and defaults](configuration.md)
 
 <details>
 <summary>Cache, transfers and thumbnail rebuild — local demo</summary>
@@ -178,7 +180,9 @@ defaults and save one category at a time. [Settings and defaults](configuration.
 
 ![Thumbnail rebuild confirmation in the local demo](assets/thumbnail-rebuild.jpg)
 
-The rebuild was not started. [Rebuild instructions and bandwidth limits](thumbnails.md#rebuild-existing-thumbnails)
+These settings captures show obsolete manual budgets; use the current
+Configuration guide and Performance tuning cards. The rebuild was not started.
+[Rebuild instructions and bandwidth limits](thumbnails.md#rebuild-existing-thumbnails)
 
 </details>
 
