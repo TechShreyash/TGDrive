@@ -25,6 +25,7 @@ import { itemPath, formatTimestamp, type DriveItem } from "../../shared/types";
 import { transfers } from "../transfers/transfers";
 import { Modal, ErrorNotice, Spinner } from "../../shared/components";
 import { embedUrl } from "../shares/embedLinks";
+import { shareUrl } from "../shares/SharesView";
 import "./ActionDialog.css";
 import ArchiveDialog, { type ArchiveDialogState } from "./ArchiveDialog";
 export type ActionDialogState =
@@ -327,7 +328,7 @@ export default function ActionDialog({
                         Anyone with the link can{" "}
                         {dialog.item.type === "folder"
                             ? "view and download this folder’s current and future contents"
-                            : "download this file"}
+                            : "view and download this file"}
                         . They cannot edit your drive.
                     </>
                 }
@@ -348,20 +349,12 @@ export default function ActionDialog({
                                         ? new Date(customExpiry).toISOString()
                                         : undefined,
                                 );
-                                const params = new URLSearchParams({
-                                    path:
-                                        dialog.item.type === "folder"
-                                            ? "/share_" + dialog.item.id
-                                            : itemPath(dialog.item),
-                                    auth: result.auth,
-                                });
                                 setLink(
-                                    window.location.origin +
-                                        (dialog.item.type === "folder"
-                                            ? "/"
-                                            : "/file") +
-                                        "?" +
-                                        params,
+                                    shareUrl(
+                                        result.auth,
+                                        dialog.item.id,
+                                        dialog.item.type === "folder",
+                                    ),
                                 );
                                 setExpiry(result.expires_at);
                             });
@@ -444,18 +437,28 @@ export default function ActionDialog({
                             readOnly
                             onFocus={(event) => event.target.select()}
                         />
-                        <label htmlFor="embed-link">Embed Link</label>
-                        <input
-                            id="embed-link"
-                            value={embedUrl(link)}
-                            readOnly
-                            onFocus={(event) => event.target.select()}
-                        />
-                        <p className="muted">
-                            Use the embed link as an iframe source on your
-                            website. It has the same access and expiry as this
-                            share link.
-                        </p>
+                        {dialog.item.type === "folder" && (
+                            <>
+                                <label htmlFor="embed-link">Embed Link</label>
+                                <input
+                                    id="embed-link"
+                                    value={embedUrl(link)}
+                                    readOnly
+                                    onFocus={(event) => event.target.select()}
+                                />
+                                <p className="muted">
+                                    Use the embed link as an iframe source on
+                                    your website. It has the same access and
+                                    expiry as this share link.
+                                </p>
+                            </>
+                        )}
+                        {dialog.item.type === "file" && (
+                            <p className="muted">
+                                This link opens the file viewer and can also be
+                                used as an iframe source.
+                            </p>
+                        )}
                         <p className="muted">
                             {expiry
                                 ? "Expires " + formatTimestamp(expiry) + "."
@@ -470,24 +473,26 @@ export default function ActionDialog({
                             >
                                 Done
                             </button>
-                            <button
-                                className="secondary-button"
-                                onClick={() =>
-                                    void run(async () => {
-                                        if (!navigator.clipboard)
-                                            throw new Error(
-                                                "Clipboard access is unavailable. Select and copy the embed link above.",
+                            {dialog.item.type === "folder" && (
+                                <button
+                                    className="secondary-button"
+                                    onClick={() =>
+                                        void run(async () => {
+                                            if (!navigator.clipboard)
+                                                throw new Error(
+                                                    "Clipboard access is unavailable. Select and copy the embed link above.",
+                                                );
+                                            await navigator.clipboard.writeText(
+                                                embedUrl(link),
                                             );
-                                        await navigator.clipboard.writeText(
-                                            embedUrl(link),
-                                        );
-                                        onNotice("Embed Link copied.");
-                                    })
-                                }
-                            >
-                                <Code size={16} aria-hidden="true" /> Copy Embed
-                                Link
-                            </button>
+                                            onNotice("Embed Link copied.");
+                                        })
+                                    }
+                                >
+                                    <Code size={16} aria-hidden="true" /> Copy
+                                    Embed Link
+                                </button>
+                            )}
                             <button
                                 className="primary-button"
                                 onClick={() =>

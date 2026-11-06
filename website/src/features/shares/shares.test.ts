@@ -1,5 +1,24 @@
-import { describe, expect, it } from "vitest";
-import { shareExpired } from "./SharesView";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { shareExpired, shareUrl } from "./SharesView";
+
+afterEach(() => vi.unstubAllGlobals());
+
+it.each([true, false])(
+    "opens a %s folder share in its authorized viewer",
+    (folder) => {
+        vi.stubGlobal("window", {
+            location: { origin: "https://drive.example" },
+        });
+        const url = new URL(
+            shareUrl("token+with/symbols=", "nested-id", folder),
+        );
+        expect(url.pathname).toBe(folder ? "/" : "/embed");
+        expect(url.searchParams.get("path")).toBe(
+            folder ? "/share_nested-id" : "/nested-id",
+        );
+        expect(url.searchParams.get("auth")).toBe("token+with/symbols=");
+    },
+);
 
 describe("shared link expiry", () => {
     const base = { path: "/file", created_at: "2026-01-01T00:00:00Z" };

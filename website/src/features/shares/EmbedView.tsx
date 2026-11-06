@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { ChevronRight, Download, RefreshCw } from "lucide-react";
 import { api, errorMessage, request } from "../../shared/api";
 import { ErrorNotice, FileIcon, Spinner } from "../../shared/components";
@@ -53,8 +53,10 @@ export default function EmbedView() {
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState("");
     const [attempt, setAttempt] = useState(0);
+    const activeLoad = useRef<AbortController | null>(null);
     useEffect(() => {
         const controller = new AbortController();
+        activeLoad.current = controller;
         setLoading(true);
         setError("");
         setListing(null);
@@ -90,7 +92,15 @@ export default function EmbedView() {
     }, [current.path, auth, attempt]);
     const items = listing?.items || [];
     const showMore = async () => {
-        if (!listing?.next_cursor) return;
+        const controller = activeLoad.current;
+        if (
+            !listing?.next_cursor ||
+            !controller ||
+            controller.signal.aborted ||
+            more === "loading"
+        )
+            return;
+        const cursor = listing.next_cursor;
         setMore("loading");
         try {
             const id = current.path.slice(7).split("/").filter(Boolean).at(-1);
@@ -98,12 +108,15 @@ export default function EmbedView() {
                 {
                     parent_id: "/" + id,
                     limit: 500,
-                    cursor: listing.next_cursor,
+                    cursor,
                 },
                 auth,
+                controller.signal,
             );
+            if (controller.signal.aborted || activeLoad.current !== controller)
+                return;
             setListing((previous) =>
-                previous
+                previous?.next_cursor === cursor
                     ? {
                           ...next,
                           items: [...previous.items, ...next.items],
@@ -112,7 +125,8 @@ export default function EmbedView() {
             );
             setMore("idle");
         } catch {
-            setMore("error");
+            if (!controller.signal.aborted && activeLoad.current === controller)
+                setMore("error");
         }
     };
     return (
@@ -165,7 +179,7 @@ export default function EmbedView() {
                 </p>
             ) : error ? (
                 <div className="embed-message">
-                    <h1>Embed unavailable</h1>
+                    <h1>Shared Item Unavailable</h1>
                     <ErrorNotice message={error} />
                     <p>
                         The link may have expired, been revoked, or the item may

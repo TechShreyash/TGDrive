@@ -13,7 +13,7 @@ if os.environ.get("TGDRIVE_E2E") != "1":
     pytest.skip("Set TGDRIVE_E2E=1 for Chromium checks", allow_module_level=True)
 
 import tests.browser.test_browser_e2e as fixtures
-from tests.browser.test_browser_e2e import ARTIFACTS, expect, fixture_nodes, login
+from tests.browser.test_browser_e2e import ARTIFACTS, ROOT, expect, fixture_nodes, login
 
 browser, desktop, server = fixtures.browser, fixtures.desktop, fixtures.server
 pytestmark = pytest.mark.e2e
@@ -40,19 +40,32 @@ def test_embed_copy_reuses_popup_share_in_shared_links(
     page.locator(f'summary[aria-label="Actions for {name}"]').click()
     page.get_by_role("button", name="Share Link", exact=True).click()
     page.get_by_role("button", name="Create Share Link", exact=True).click()
-    link = page.get_by_label("Embed Link", exact=True)
+    link = page.get_by_label(
+        "Embed Link" if kind == "folder" else "Share Link", exact=True
+    )
     expect(link).to_be_visible()
     embed_url = link.input_value()
     share_url = page.get_by_label("Share Link", exact=True).input_value()
     assert urlsplit(embed_url).path == "/embed"
     assert parse_qs(urlsplit(embed_url).query) == parse_qs(urlsplit(share_url).query)
-    page.get_by_role("button", name="Copy Embed Link", exact=True).click()
+    page.get_by_role(
+        "button",
+        name="Copy Embed Link" if kind == "folder" else "Copy Link",
+        exact=True,
+    ).click()
     if clipboard:
-        expect(page.get_by_text("Embed Link copied.", exact=True)).to_be_visible()
+        expect(
+            page.get_by_text(
+                "Embed Link copied." if kind == "folder" else "Share Link copied.",
+                exact=True,
+            )
+        ).to_be_visible()
         assert page.evaluate("navigator.clipboard.readText()") == embed_url
     else:
         expect(page.get_by_role("alert")).to_contain_text(
             "Select and copy the embed link above."
+            if kind == "folder"
+            else "Select and copy the link above."
         )
         link.focus()
         assert link.evaluate(
@@ -69,14 +82,23 @@ def test_embed_copy_reuses_popup_share_in_shared_links(
     page.get_by_role("button", name="Done", exact=True).click()
     page.get_by_role("link", name="Shared Links", exact=True).click()
     row = page.locator(f'[data-share-id="{before[0]["id"]}"]')
-    copy = row.locator(".share-embed-copy")
+    copy = row.locator(".share-embed-copy" if kind == "folder" else ".share-copy")
     copy.click()
     if clipboard:
-        expect(copy).to_have_attribute("aria-label", re.compile("^Embed link copied"))
+        expect(copy).to_have_attribute(
+            "aria-label",
+            re.compile("^Embed link copied" if kind == "folder" else "^Link copied"),
+        )
         shared_url = page.evaluate("navigator.clipboard.readText()")
     else:
-        dialog = page.get_by_role("dialog", name="Copy Embed Link", exact=True)
-        shared_input = dialog.get_by_label("Embed Link", exact=True)
+        dialog = page.get_by_role(
+            "dialog",
+            name="Copy Embed Link" if kind == "folder" else "Copy Share Link",
+            exact=True,
+        )
+        shared_input = dialog.get_by_label(
+            "Embed Link" if kind == "folder" else "Share Link", exact=True
+        )
         expect(shared_input).to_be_visible()
         shared_url = shared_input.input_value()
         dialog.get_by_role("button", name="Done", exact=True).click()
@@ -88,6 +110,119 @@ def test_embed_copy_reuses_popup_share_in_shared_links(
         == ("/share_" if kind == "folder" else "/") + path.rsplit("/", 1)[-1]
     )
     assert page.request.get(server.url + "/api/v1/shares").json()["shares"] == before
+
+
+def test_ordinary_video_share_uses_rich_tracks_and_preserves_original_download(
+    server, desktop
+):
+    _, page = desktop
+    login(page, server.url)
+    folder = server.control()["seed"]["preview_folder"]
+    page.goto(server.url + "/?" + urlencode({"path": folder}))
+    page.get_by_label("Actions for multitrack.mkv", exact=True).click()
+    page.get_by_role("button", name="Share Link", exact=True).click()
+    page.get_by_role("button", name="Create Share Link", exact=True).click()
+    url = page.get_by_label("Share Link", exact=True).input_value()
+    assert urlsplit(url).path == "/embed"
+    params = parse_qs(urlsplit(url).query)
+    original = page.request.get(
+        server.url + "/file",
+        params={
+            "path": params["path"][0],
+            "auth": params["auth"][0],
+            "download": "1",
+        },
+    )
+    assert original.ok
+    assert original.body() == (ROOT / "tests/fixtures/multitrack.mkv").read_bytes()
+    page.goto(url)
+    player = page.locator("movi-player")
+    page.wait_for_function("()=>document.querySelector('movi-player')?.duration>4")
+    assert (
+        player.evaluate(
+            "el=>el.player.getMediaInfo().tracks.filter(t=>t.type==='audio').length"
+        )
+        >= 2
+    )
+    expect(page.get_by_role("button", name="Close Preview", exact=True)).to_have_count(
+        0
+    )
+    expect(
+        page.get_by_role("link", name="Download Original", exact=True)
+    ).to_be_visible()
+
+
+@pytest.mark.parametrize("change", ["navigate", "refresh"])
+def test_late_embed_continuation_cannot_replace_current_folder_or_cursor(
+    server, desktop, change
+):
+    _, page = desktop
+    held = []
+    child = {"id": "child", "name": "Child folder", "type": "folder", "path": "/root"}
+
+    def shared(route):
+        params = parse_qs(urlsplit(route.request.url).query)
+        if "cursor" in params:
+            held.append(route)
+            return
+        nested = params["parent_id"] == ["/child"]
+        route.fulfill(
+            json={
+                "items": [
+                    {
+                        "id": "current",
+                        "name": "Current file.txt",
+                        "type": "file",
+                        "path": "/child",
+                    }
+                ]
+                if nested
+                else [child],
+                "folder": {"name": "Child folder" if nested else "Root folder"},
+                "total": 1 if nested else 201,
+                "next_cursor": None if nested else "root-cursor",
+            }
+        )
+
+    page.route("**/api/v1/shared/nodes?*", shared)
+    page.goto(server.url + "/embed?path=%2Fshare_root&auth=token")
+    page.get_by_role("button", name="Show more", exact=True).click()
+    expect(page.get_by_role("button", name="Show more", exact=True)).to_be_disabled()
+    if change == "navigate":
+        page.get_by_role("button", name="Child folder Folder", exact=True).click()
+        expect(
+            page.get_by_role("button", name="Current file.txt", exact=False)
+        ).to_be_visible()
+    else:
+        page.get_by_role("button", name="Refresh shared folder", exact=True).click()
+        expect(page.get_by_role("button", name="Show more", exact=True)).to_be_enabled()
+    assert len(held) == 1
+    held[0].fulfill(
+        json={
+            "items": [
+                {
+                    "id": "obsolete",
+                    "name": "Wrong folder.txt",
+                    "type": "file",
+                    "path": "/root",
+                }
+            ],
+            "total": 201,
+            "next_cursor": "wrong-cursor",
+        }
+    )
+    page.evaluate(
+        "() => new Promise(resolve => requestAnimationFrame("
+        "() => requestAnimationFrame(resolve)))"
+    )
+    expect(page.get_by_text("Wrong folder.txt", exact=True)).to_have_count(0)
+    if change == "navigate":
+        expect(page.get_by_role("button", name="Show more", exact=True)).to_have_count(
+            0
+        )
+    else:
+        with page.expect_request(lambda request: "cursor=root-cursor" in request.url):
+            page.get_by_role("button", name="Show more", exact=True).click()
 
 
 @pytest.mark.parametrize(
@@ -188,7 +323,7 @@ def test_cross_origin_embed_renders_and_rejects_invalid_or_revoked_links(
                 "(node, url) => { node.src = url; }", failed_url
             )
         expect(
-            frame.get_by_role("heading", name="Embed unavailable", exact=True)
+            frame.get_by_role("heading", name="Shared Item Unavailable", exact=True)
         ).to_be_visible()
         expect(frame.get_by_role("alert")).to_contain_text("Invalid share link")
         expect(

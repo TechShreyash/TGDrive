@@ -66,7 +66,7 @@ function shareDescription(share: Share) {
 export function shareUrl(auth: string, nodeId: string, folder: boolean) {
     return (
         window.location.origin +
-        (folder ? "/" : "/file") +
+        (folder ? "/" : "/embed") +
         "?" +
         new URLSearchParams({
             path: folder ? "/share_" + nodeId : "/" + nodeId,
@@ -500,7 +500,10 @@ export default function SharesView({
                                         </time>
                                     </div>
                                     <div className="share-row-actions">
-                                        {[false, true].map((embed) => {
+                                        {(share.type === "folder"
+                                            ? [false, true]
+                                            : [false]
+                                        ).map((embed) => {
                                             const copying =
                                                 busy?.id === share.id &&
                                                 busy?.action ===
