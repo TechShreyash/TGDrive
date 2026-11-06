@@ -190,6 +190,7 @@ export default function BookPreview({
 }) {
     const [book, setBook] = useState<Book | null>(null);
     const [selected, setSelected] = useState("");
+    const [readyEntry, setReadyEntry] = useState("");
     const [nodes, setNodes] = useState<Node[]>([]);
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState("");
@@ -215,6 +216,7 @@ export default function BookPreview({
     const fragment = useRef("");
     useEffect(() => {
         const controller = new AbortController();
+        setReadyEntry("");
         setLoading(true);
         setError("");
         void bookJson(bookUrl(path, auth), controller.signal)
@@ -256,6 +258,7 @@ export default function BookPreview({
         content.current?.scrollTo({ top: 0 });
         if (book.kind !== "epub") return;
         const controller = new AbortController();
+        setReadyEntry("");
         setLoading(true);
         setError("");
         setNodes([]);
@@ -275,6 +278,7 @@ export default function BookPreview({
                 if (!controller.signal.aborted) {
                     setNodes(chapter);
                     setLoading(false);
+                    setReadyEntry(url);
                 }
             })
             .catch((cause) => {
@@ -296,18 +300,20 @@ export default function BookPreview({
     const index =
         book?.entries.findIndex((entry) => entry.name === selected) ?? 0;
     useEffect(() => {
-        if (!book || index < 0) return;
+        if (!book || index < 0 || readyEntry !== bookUrl(path, auth, selected))
+            return;
         const controller = new AbortController();
         const ahead = book.entries
-            .slice(index + 1, index + 1 + (book.kind === "comic" ? 3 : 1))
+            .slice(index + 1, index + 2)
             .map((entry) => bookUrl(path, auth, entry.name));
         void prefetchAhead(ahead, controller.signal, (url, signal) =>
             book.kind === "comic"
                 ? loadBookImage(url, signal, () => {})
                 : bookJson(url, signal),
         ).catch(() => {});
+        // shortcut: Next restarts pending prefetch; share reads if waste matters.
         return () => controller.abort();
-    }, [path, auth, book, index]);
+    }, [path, auth, book, index, selected, readyEntry]);
     useEffect(() => clearPrefetched, []);
     const move = (delta: number) => {
         if (!book) return;
@@ -572,6 +578,9 @@ export default function BookPreview({
                     <BookImage
                         key={selected + attempt}
                         eager
+                        onReady={() =>
+                            setReadyEntry(bookUrl(path, auth, selected))
+                        }
                         src={bookUrl(path, auth, selected)}
                         alt={
                             "Page " + (index + 1) + " of " + book.entries.length

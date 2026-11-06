@@ -317,12 +317,16 @@ export function videoBufferSnapshot(player: {
     };
 }
 const phaseCopy = {
-    player: "Loading video…",
-    opening: "Loading video…",
-    preparing: "Loading video…",
-    buffering: "Waiting for video…",
+    player: "Initializing video engine…",
+    opening: "Opening video…",
+    preparing: "Preparing media tracks…",
+    buffering: "Buffering video…",
     seeking: "Loading this part…",
 };
+/** Bytes alone do not prove that a decoder can make playback usable. */
+export function videoWaitAllowsRetry(idleMs: number, waitMs: number) {
+    return idleMs >= 15000 || waitMs >= 60000;
+}
 export default function AdvancedVideo({
     fileId,
     src,
@@ -381,6 +385,7 @@ export default function AdvancedVideo({
     const [attempt, setAttempt] = useState(0);
     const [slow, setSlow] = useState(false);
     const [waitSeconds, setWaitSeconds] = useState(0);
+    const [seekAttempt, setSeekAttempt] = useState(0);
     const [showStatus, setShowStatus] = useState(false);
     const [playbackError, setPlaybackError] = useState("");
     const [continueTime, setContinueTime] = useState(() =>
@@ -422,22 +427,41 @@ export default function AdvancedVideo({
     }, []);
     useEffect(() => {
         setWaitSeconds(0);
-        if (state.phase === "ready") return;
-        const began = performance.now();
-        const timer = window.setInterval(
-            () =>
-                setWaitSeconds(Math.floor((performance.now() - began) / 1000)),
-            1000,
-        );
-        return () => clearInterval(timer);
-    }, [state.phase, attempt]);
-    useEffect(() => {
         setSlow(false);
         if (state.phase === "ready") return;
-        // This only offers recovery. A long wait is never proof that playback failed.
-        const timer = window.setTimeout(() => setSlow(true), 8000);
-        return () => clearTimeout(timer);
-    }, [state.phase, attempt]);
+        const began = performance.now();
+        let activityAt = began;
+        let received = activePlayer.current
+            ? videoBufferSnapshot(activePlayer.current).received
+            : 0;
+        let time = activePlayer.current?.currentTime ?? 0;
+        let decoded = 0;
+        const timer = window.setInterval(() => {
+            const now = performance.now();
+            const player = activePlayer.current;
+            if (player) {
+                const sample = videoBufferSnapshot(player);
+                if (sample.received > received) activityAt = now;
+                if (
+                    sample.decodedSeconds > decoded ||
+                    videoIsAdvancing(
+                        time,
+                        player.currentTime,
+                        player.paused,
+                        player.seeking,
+                    )
+                ) {
+                    activityAt = now;
+                }
+                received = sample.received;
+                decoded = sample.decodedSeconds;
+                time = player.currentTime;
+            }
+            setWaitSeconds(Math.floor((now - began) / 1000));
+            setSlow(videoWaitAllowsRetry(now - activityAt, now - began));
+        }, 1000);
+        return () => clearInterval(timer);
+    }, [state.phase, attempt, fileId, src, seekAttempt]);
     useEffect(() => {
         let cancelled = false;
         let failed = false;
@@ -835,14 +859,18 @@ export default function AdvancedVideo({
                 listen("canplay", () => ready("canplay"));
                 listen("playing", () => ready("playing"));
                 listen("play", () => {
-                    if (representativePoster) player?.removeAttribute("postertime");
+                    if (representativePoster)
+                        player?.removeAttribute("postertime");
                     startWatching();
                     // A playing state is an intent; watch actual presented frames below.
                     latestProgressAt = performance.now();
                 });
                 listen("waiting", () => waiting("waiting"));
                 listen("stalled", () => waiting("waiting"));
-                listen("seeking", () => waiting("seeking"));
+                listen("seeking", () => {
+                    setSeekAttempt((value) => value + 1);
+                    waiting("seeking");
+                });
                 listen("seeked", () => {
                     observeResumePosition();
                     if (usable && player && player.currentTime > 0)
@@ -1011,7 +1039,14 @@ export default function AdvancedVideo({
             if (posterSource) URL.revokeObjectURL(posterSource);
         };
     }, [fileId, src, posterUrl, name, playback, attempt]);
-    const copy = state.phase !== "ready" ? phaseCopy[state.phase] : null;
+    const copy =
+        state.phase === "buffering" && transfer?.decodeBound
+            ? "Waiting for video decoding…"
+            : state.phase === "buffering" && transfer?.deliveryWaiting
+              ? "Waiting for video data…"
+              : state.phase !== "ready"
+                ? phaseCopy[state.phase]
+                : null;
     const loadingStatus =
         playbackError || (copy && showStatus) ? (
             <div

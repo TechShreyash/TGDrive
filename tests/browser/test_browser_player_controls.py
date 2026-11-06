@@ -555,3 +555,43 @@ def test_try_again_restores_position_without_starting_a_paused_video(
     )
     assert player.evaluate("el=>el.paused") is True
     expect(page.get_by_role("alert")).to_have_count(0)
+
+
+@pytest.mark.parametrize("network", ["growing", "stalled", "unavailable"])
+def test_retry_tracks_delivery_stalls_and_bounds_decode_waits(server, desktop, network):
+    _, page = desktop
+    login(page, server.url)
+    page.get_by_role("button", name="Preview samples", exact=True).dblclick()
+    page.get_by_role("button", name="multitrack.mkv", exact=True).dblclick()
+    player = page.locator("movi-player")
+    page.wait_for_function("()=>document.querySelector('movi-player')?.duration>4")
+    player.evaluate("el=>el.pause()")
+    page.wait_for_function("()=>document.querySelector('movi-player').paused")
+    expect(page.locator(".advanced-player-host")).to_have_attribute(
+        "aria-busy", "false"
+    )
+    page.clock.install()
+    player.evaluate(
+        """(el,network)=>{
+      const core=el.player, source=core.getSource(), began=performance.now();
+      core.pictureRunwaySeconds=()=>0;
+      source.getNetworkStats=()=>network==='unavailable'?{}:{
+        totalBytes:1000+(network==='growing'?performance.now()-began:0),
+        currentSpeed:network==='growing'?1000:0
+      };
+      el.dispatchEvent(new Event('seeking'));
+    }""",
+        network,
+    )
+    page.clock.run_for(17000)
+    retry = page.get_by_role("button", name="Try again", exact=True)
+    if network == "growing":
+        expect(retry).to_have_count(0)
+        page.clock.run_for(46000)
+    expect(retry).to_be_visible()
+    # Another seek gets its own wait even when the phase was already seeking.
+    player.evaluate("el=>el.dispatchEvent(new Event('seeking'))")
+    page.clock.run_for(1000)
+    expect(retry).to_have_count(0)
+    player.evaluate("el=>el.dispatchEvent(new Event('error'))")
+    expect(retry).to_be_visible()

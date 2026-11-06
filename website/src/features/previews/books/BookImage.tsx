@@ -8,11 +8,13 @@ export default function BookImage({
     src,
     alt,
     eager = false,
+    onReady,
 }: {
     id?: string;
     src: string;
     alt: string;
     eager?: boolean;
+    onReady?: () => void;
 }) {
     const container = useRef<HTMLSpanElement>(null);
     const [visible, setVisible] = useState(eager);
@@ -126,7 +128,10 @@ export default function BookImage({
                     alt={alt}
                     hidden={!ready}
                     decoding="async"
-                    onLoad={() => setReady(true)}
+                    onLoad={() => {
+                        setReady(true);
+                        onReady?.();
+                    }}
                     onError={() =>
                         setError(
                             "The browser could not decode this image. Download the original to open it in another reader.",

@@ -8,8 +8,24 @@ import {
     videoIsAdvancing,
     videoHasChapters,
     videoBufferSnapshot,
+    videoWaitAllowsRetry,
     type VideoLoadState,
 } from "./AdvancedVideo";
+
+describe("video wait recovery", () => {
+    it("waits through growing bytes but offers recovery for a real stall", () => {
+        expect(videoWaitAllowsRetry(1000, 14000)).toBe(false);
+        expect(videoWaitAllowsRetry(15000, 15000)).toBe(true);
+    });
+    it("keeps recovery available when bytes arrive without usable playback", () => {
+        expect(videoWaitAllowsRetry(0, 59999)).toBe(false);
+        expect(videoWaitAllowsRetry(0, 60000)).toBe(true);
+    });
+    it("bounds waits without network metrics and resets after progress or seek", () => {
+        expect(videoWaitAllowsRetry(15000, 15000)).toBe(true);
+        expect(videoWaitAllowsRetry(0, 0)).toBe(false);
+    });
+});
 
 describe("coordinated picture buffering", () => {
     function engine(state = "playing") {
@@ -47,7 +63,9 @@ describe("coordinated picture buffering", () => {
         expect(player.stateManager.setState).toHaveBeenCalledWith("buffering");
         expect(player.clock.pause).toHaveBeenCalledOnce();
         expect(player.audioRenderer.suspendForBuffering).toHaveBeenCalledOnce();
-        expect(player.videoRenderer.stopPresentationLoop).toHaveBeenCalledOnce();
+        expect(
+            player.videoRenderer.stopPresentationLoop,
+        ).toHaveBeenCalledOnce();
         expect(player.cancelBlackFrameWatchdog).toHaveBeenCalledOnce();
         expect(player.wasPlayingBeforeRebuffer).toBe(true);
         expect(player._bufferingEntryTime).toBe(2000);

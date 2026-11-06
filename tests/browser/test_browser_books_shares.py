@@ -320,8 +320,7 @@ def test_comic_image_error_details_and_automatic_recovery(server, desktop):
     expect(page.locator(".book-content > .book-image > img")).to_be_visible(
         timeout=15000
     )
-    # The busy first page is retried once; upcoming pages are prefetched once
-    # each, one request at a time alongside it.
+    # The visible page retries before one-page look-ahead is allowed to start.
     assert calls.count(calls[0]) == 2
     assert len(set(calls)) == len(calls) - 1
     page.unroute("**/api/v1/books?**", page_resource)
@@ -334,12 +333,49 @@ def test_comic_image_error_details_and_automatic_recovery(server, desktop):
         )
 
     page.route("**/api/v1/books?**entry=**", refused)
-    # Pages 2 and 3 were prefetched; page 1 was already shown, so going back
-    # requests it again and meets the refusal.
+    # Page 1 was already shown; going back requests it again and meets refusal.
     page.get_by_role("button", name="Next chapter or page", exact=True).click()
     page.get_by_role("button", name="Previous chapter or page", exact=True).click()
     expect(page.get_by_role("alert")).to_contain_text("64 MiB preview limit")
     expect(page.get_by_role("button", name="Retry image", exact=True)).to_be_visible()
+
+
+def test_comic_prefetch_waits_for_visible_page_and_yields_to_next(server, desktop):
+    _, page = desktop
+    login(page, server.url)
+    folder = page.request.post(server.url + "/__test__/books", headers=CONTROL).json()[
+        "path"
+    ]
+    page.goto(server.url + "/?path=" + folder)
+    held = []
+    entries = []
+
+    def resource(route):
+        if "entry=" not in route.request.url:
+            route.continue_()
+            return
+        entries.append(route.request.url)
+        if len(entries) <= 2:
+            held.append(route)
+        else:
+            route.continue_()
+
+    page.route("**/api/v1/books?**", resource)
+    page.get_by_role("button", name="Sample comic.cbz", exact=True).press("Enter")
+    expect(page.get_by_text("Loading page…", exact=True)).to_be_visible()
+    assert len(entries) == 1
+    with page.expect_request(
+        lambda request: "/api/v1/books?" in request.url and "entry=" in request.url
+    ):
+        held[0].continue_()
+    image = page.locator(".book-content > .book-image > img")
+    expect(image).to_be_visible()
+    assert len(held) == 2  # Only one upcoming page, held before any bytes arrive.
+    page.get_by_role("button", name="Next chapter or page", exact=True).click()
+    expect(image).to_be_visible()
+    expect(image).to_have_attribute("alt", "Page 2 of 3")
+    assert entries[1] == entries[2]  # Foreground restarts the cancelled speculation.
+    assert held[1].request.failure is not None
 
 
 def test_large_original_comic_page_renders_and_revalidates_without_resending(

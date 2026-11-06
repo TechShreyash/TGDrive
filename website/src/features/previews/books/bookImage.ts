@@ -164,8 +164,8 @@ export async function loadBookImage(
 // Prefetched, not yet opened reader data. Taking an entry removes it, so the
 // cache only ever holds upcoming pages.
 const prefetchedData = new Map<string, unknown>();
-// Three comic pages or one EPUB chapter ahead, plus one spare.
-const PREFETCH_ENTRIES = 4;
+// One upcoming comic page or EPUB chapter.
+const PREFETCH_ENTRIES = 1;
 export function rememberPrefetched(url: string, value: unknown) {
     prefetchedData.delete(url);
     prefetchedData.set(url, value);

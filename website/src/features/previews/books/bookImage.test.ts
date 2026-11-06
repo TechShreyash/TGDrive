@@ -200,23 +200,23 @@ describe("original book page downloads", () => {
 });
 describe("upcoming page prefetch", () => {
     afterEach(() => clearPrefetched());
-    it("hands a prefetched page to the reader once without refetching", async () => {
+    it("hands the next prefetched page to the reader once without refetching", async () => {
         const load = vi.fn(async (url: string) => "data:" + url);
-        await prefetchAhead(["a", "b"], new AbortController().signal, load);
-        await prefetchAhead(["b", "c"], new AbortController().signal, load);
-        expect(load.mock.calls.map(([url]) => url)).toEqual(["a", "b", "c"]);
+        await prefetchAhead(["b"], new AbortController().signal, load);
+        await prefetchAhead(["b"], new AbortController().signal, load);
+        expect(load.mock.calls.map(([url]) => url)).toEqual(["b"]);
         expect(takePrefetched("b")).toBe("data:b");
         expect(takePrefetched("b")).toBeUndefined();
     });
-    it("keeps only the newest four entries and clears on close", async () => {
+    it("keeps only one upcoming entry and clears on close", async () => {
         const urls = ["1", "2", "3", "4", "5", "6"];
         await prefetchAhead(urls, new AbortController().signal, async (u) => u);
         expect(urls.map(takePrefetched)).toEqual([
             undefined,
             undefined,
-            "3",
-            "4",
-            "5",
+            undefined,
+            undefined,
+            undefined,
             "6",
         ]);
         rememberPrefetched("x", 1);
