@@ -73,6 +73,60 @@ The regular variable WOFF2 is bundled unchanged under SIL OFL 1.1.
 Inter-OFL-1.1.txt preserves the copyright notice and complete license.
 Runtime font requests stay on this TGDrive origin; no font CDN is contacted.
 
+Fraunces 1.000 and Instrument Sans 1.000
+---------------------------------------
+These four Google Fonts Latin-subset variable WOFF2 files are bundled unchanged.
+Byte-for-byte upstream comparisons and embedded SFNT names were inspected on
+2026-11-06. FreeType reads the families, versions, copyright and OFL URL;
+Fontconfig's character maps confirm Latin coverage. Other scripts use the
+existing system fallbacks. Runtime requests remain on this TGDrive origin.
+
+Fraunces project: https://github.com/undercasetype/Fraunces
+Embedded version: Version 1.000;[b76b70a41]
+Embedded copyright: Copyright 2020 The Fraunces Project Authors
+(github.com/undercasetype/Fraunces)
+Google Fonts distribution: v38, Latin; optical size 9..144, normal 300..700,
+italic 300..600 (the ranges requested by TGDrive's font declarations).
+CSS source: https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,300..700;1,9..144,300..600&display=swap
+
+Local asset: /static/fonts/fraunces.woff2
+Source: https://fonts.gstatic.com/s/fraunces/v38/6NU78FyLNQOQZAnv9bYEvDiIdE9Ea92uemAk_WBq8U_9v0c2Wa0KxC9TeA.woff2
+Bytes: 67304
+SHA-256: 7234ed860a9cc83045413c4faee63c960a8f2d1917adcf728119307d56e0d783
+
+Local asset: /static/fonts/fraunces-italic.woff2
+Source: https://fonts.gstatic.com/s/fraunces/v38/6NU58FyLNQOQZAnv9ZwNjucMHVn85Ni7emAe9lKqZTnbB-gzTK0K1ChjeveQ.woff2
+Bytes: 81520
+SHA-256: 066710ce7ed235a339d3d6cdcc8b55c0bea5632232662d83aacea25852108271
+
+Fraunces-OFL-1.1.txt preserves the complete SIL OFL 1.1 license and the
+upstream notice (Copyright 2018 The Fraunces Project Authors).
+Notice source: https://raw.githubusercontent.com/google/fonts/581699fcc0df7715a0f944e28b1a18d38e4aad62/ofl/fraunces/OFL.txt
+Notice bytes: 4391
+Notice SHA-256: bdf4c22802eaf804f998195871c6b8938aac2ac14b2d78a8bd66a6f1eced833b
+
+Instrument Sans project: https://github.com/Instrument/instrument-sans
+Embedded version: Version 1.000;gftools[0.9.28]
+Copyright 2022 The Instrument Sans Project Authors
+(https://github.com/Instrument/instrument-sans)
+Google Fonts distribution: v4, Latin; normal 400..700, italic 400..600.
+CSS source: https://fonts.googleapis.com/css2?family=Instrument+Sans:ital,wght@0,400..700;1,400..600&display=swap
+
+Local asset: /static/fonts/instrument.woff2
+Source: https://fonts.gstatic.com/s/instrumentsans/v4/pxiTypc9vsFDm051Uf6KVwgkfoSxQ0GsQv8ToedPibnr0SZe1Q.woff2
+Bytes: 30092
+SHA-256: 2ee17598a98d8a59e4df8152d015bec9ab8e4d5672cc0ab42bef806b568e3971
+
+Local asset: /static/fonts/instrument-italic.woff2
+Source: https://fonts.gstatic.com/s/instrumentsans/v4/pxitypc9vsFDm051Uf6KVwgkfoSbSnNPooZAN0lInHGpCWNu15GR.woff2
+Bytes: 31828
+SHA-256: 77210cdde0281b5ecb0d592e063a98656f1bc36993a3b98f506eb91ff4a433a5
+
+InstrumentSans-OFL-1.1.txt preserves the complete copyright and SIL OFL 1.1.
+Notice source: https://raw.githubusercontent.com/google/fonts/2fc9491da70cf3e1bafd3c3da49244c5a496e9d5/ofl/instrumentsans/OFL.txt
+Notice bytes: 4403
+Notice SHA-256: 9e27a72ed30eb49a08678f6a5d6ed98ec7ba5368f541637ee0683ec9134ef966
+
 React, React DOM and Scheduler
 ------------------------------
 React 19.3.1, React DOM 19.3.1 and Scheduler 0.28.0 are bundled under MIT.
