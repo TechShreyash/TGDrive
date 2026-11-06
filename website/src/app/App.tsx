@@ -213,8 +213,9 @@ export default function App() {
         contents: {},
     });
     const [pages, setPages] = useState<FolderPages>(emptyFolderPages);
-    // The listing the cached pages belong to; stale while another one loads.
-    const [pagesKey, setPagesKey] = useState("");
+    // Rows and errors are displayed only under the listing that produced them.
+    const [displayedKey, setDisplayedKey] = useState("");
+    const [pageError, setPageError] = useState("");
     const pagesRef = useRef(pages);
     pagesRef.current = pages;
     // The current folder listing's page fetcher; null while it first loads.
@@ -318,10 +319,10 @@ export default function App() {
         return () => document.removeEventListener("keydown", keydown, true);
     }, [newOpen]);
     const [mobileNav, setMobileNav] = useState(false);
+    const navigationReturn = useRef<HTMLElement | null>(null);
     useEffect(() => {
         if (!mobileNav) return;
         const navigation = document.getElementById("drive-navigation");
-        const opener = document.getElementById("navigation-toggle");
         if (navigation) navigation.scrollTop = 0;
         const controls = () =>
             Array.from(
@@ -362,7 +363,8 @@ export default function App() {
         document.addEventListener("keydown", keydown, true);
         return () => {
             document.removeEventListener("keydown", keydown, true);
-            if (opener?.isConnected) opener.focus({ preventScroll: true });
+            const target = navigationReturn.current;
+            if (target?.isConnected) target.focus({ preventScroll: true });
         };
     }, [mobileNav]);
 
@@ -426,10 +428,6 @@ export default function App() {
     // A type filter belongs to the folder it was chosen in.
     const folderFilter =
         folderFilterState.path === folderKey ? folderFilterState.filter : "all";
-    const directory = useMemo(
-        () => (isPaged ? folderDirectory(pages) : plainDirectory),
-        [isPaged, pages, plainDirectory],
-    );
     const listingKey = JSON.stringify([
         authenticated,
         view,
@@ -441,6 +439,16 @@ export default function App() {
         ["trash", "starred"].includes(view) ? scopedQuery : "",
         isPaged ? [folderSort, folderOrder, folderFilter] : "",
     ]);
+    const listingPending = displayedKey !== listingKey;
+    const directory = useMemo(
+        () =>
+            listingPending
+                ? { contents: {} }
+                : isPaged
+                  ? folderDirectory(pages)
+                  : plainDirectory,
+        [listingPending, isPaged, pages, plainDirectory],
+    );
     const loadedListing = useRef<string | null>(null);
     const listingRefresh = useRef<ReturnType<
         typeof createListingRefreshQueue
@@ -570,6 +578,7 @@ export default function App() {
             setLocation(getLocation());
             setDialog(null);
             setNewOpen(false);
+            navigationReturn.current = document.getElementById("main-content");
             setMobileNav(false);
         },
         [],
@@ -736,23 +745,15 @@ export default function App() {
         const controller = new AbortController();
         // Keep the current table mounted when uploads update the same listing.
         let retryTimer: ReturnType<typeof setTimeout> | undefined;
-        let loadingTimer: ReturnType<typeof setTimeout> | undefined;
         const retryNotice =
             "Could not update your files. Retrying automatically.";
         const queue = createListingRefreshQueue(async () => {
             clearTimeout(retryTimer);
-            clearTimeout(loadingTimer);
             const background = loadedListing.current === listingKey;
-            if (!background) {
-                loadedListing.current = null;
-                // Delay loading indicator by 180ms to eliminate flashes on fast page changes.
-                loadingTimer = setTimeout(() => {
-                    setLoading(true);
-                }, 180);
-            } else {
-                setLoading(false);
-            }
+            if (!background) loadedListing.current = null;
+            setLoading(!background);
             setLoadError("");
+            setPageError("");
             if (isPaged) {
                 pageSource.current = background ? pageSource.current : null;
                 const base = {
@@ -776,7 +777,7 @@ export default function App() {
                               {
                                   type: base.type,
                                   cursor: request.cursor,
-                                  limit: request.cursor ? 100 : 50,
+                                  limit: 100,
                               },
                               controller.signal,
                           )
@@ -794,7 +795,7 @@ export default function App() {
                     let next = await loadPrefix(
                         background ? pagesRef.current : emptyFolderPages,
                         fetchPage,
-                        isRecent ? 50 : undefined,
+                        isRecent ? 100 : undefined,
                     );
                     const target = location.highlightId;
                     let wanted = background ? folderPage.current : 0;
@@ -830,7 +831,7 @@ export default function App() {
                         const merged = reconcilePages(pagesRef.current, next);
                         pagesRef.current = merged;
                         setPages(merged);
-                        setPagesKey(listingKey);
+                        setDisplayedKey(listingKey);
                         pageSource.current = {
                             fetch: fetchPage,
                             pending: new Set(),
@@ -839,7 +840,6 @@ export default function App() {
                     })
                     .catch((error) => failed(error, background))
                     .finally(() => {
-                        clearTimeout(loadingTimer);
                         if (!controller.signal.aborted) setLoading(false);
                     });
             }
@@ -890,6 +890,7 @@ export default function App() {
                 .then((result) => {
                     if (controller.signal.aborted) return false;
                     loadedListing.current = listingKey;
+                    setDisplayedKey(listingKey);
                     setToast((current) =>
                         current?.message === retryNotice ? null : current,
                     );
@@ -900,7 +901,6 @@ export default function App() {
                 })
                 .catch((error) => failed(error, background))
                 .finally(() => {
-                    clearTimeout(loadingTimer);
                     if (!controller.signal.aborted) setLoading(false);
                 });
         });
@@ -919,6 +919,7 @@ export default function App() {
                     return false;
                 }
                 loadedListing.current = null;
+                setDisplayedKey(listingKey);
                 if (isSearch) {
                     setSearchItems([]);
                     setSearchMore(false);
@@ -940,7 +941,6 @@ export default function App() {
         queue.request();
         return () => {
             clearTimeout(retryTimer);
-            clearTimeout(loadingTimer);
             controller.abort();
             pageSource.current = null;
             queue.dispose();
@@ -966,31 +966,27 @@ export default function App() {
         folderOrder,
         folderFilter,
     ]);
-    const ensurePage = useCallback(
-        (page: number) => {
-            folderPage.current = page;
-            const source = pageSource.current;
-            const request = source && pageRequest(pagesRef.current, page);
-            if (!source || !request) return;
-            const key = JSON.stringify(request);
-            if (source.pending.has(key)) return;
-            source.pending.add(key);
-            void source
-                .fetch(request)
-                .then((result) => {
-                    if (pageSource.current === source)
-                        setPages((current) =>
-                            applyPage(current, request, result),
-                        );
-                })
-                .catch((error) => {
-                    if (pageSource.current === source)
-                        notify(errorMessage(error), true);
-                })
-                .finally(() => source.pending.delete(key));
-        },
-        [notify],
-    );
+    const ensurePage = useCallback((page: number) => {
+        folderPage.current = page;
+        const source = pageSource.current;
+        const request = source && pageRequest(pagesRef.current, page);
+        if (!source || !request) return;
+        const key = JSON.stringify(request);
+        if (source.pending.has(key)) return;
+        source.pending.add(key);
+        setPageError("");
+        void source
+            .fetch(request)
+            .then((result) => {
+                if (pageSource.current === source)
+                    setPages((current) => applyPage(current, request, result));
+            })
+            .catch((error) => {
+                if (pageSource.current === source)
+                    setPageError(errorMessage(error));
+            })
+            .finally(() => source.pending.delete(key));
+    }, []);
     const highlightLookup = useRef("");
     useEffect(() => {
         // "Show in folder" while this folder is already open: no reload runs, so
@@ -1044,7 +1040,13 @@ export default function App() {
     }, [directory.breadcrumbs, isPublic, isFiles, isSearch, view]);
     useEffect(() => {
         if (!location.previewId) previewLookup.current = "";
-        if (!location.previewId || loading || view !== "files") return;
+        if (
+            !location.previewId ||
+            loading ||
+            listingPending ||
+            view !== "files"
+        )
+            return;
         const item = directory.contents[location.previewId];
         if (item?.type === "file") setDialog({ type: "preview", item });
         const source = pageSource.current;
@@ -1070,6 +1072,7 @@ export default function App() {
         location.previewId,
         directory.contents,
         loading,
+        listingPending,
         view,
         isPaged,
         listingKey,
@@ -1137,7 +1140,7 @@ export default function App() {
         if (!authenticated || isPublic) return;
         if (admissionPaused) {
             notify(
-                "Restart TGDrive to apply the saved connection changes before uploading.",
+                "File changes and new uploads are paused. You can still browse, preview and download.",
                 true,
             );
             return;
@@ -1154,7 +1157,7 @@ export default function App() {
         setNewOpen(false);
         if (admissionPaused) {
             notify(
-                "Restart TGDrive to apply the saved connection changes before uploading.",
+                "File changes and new uploads are paused. You can still browse, preview and download.",
                 true,
             );
             return;
@@ -1167,7 +1170,7 @@ export default function App() {
         if (!authenticated || isPublic) return;
         if (admissionPaused) {
             notify(
-                "Restart TGDrive to apply the saved connection changes before uploading.",
+                "File changes and new uploads are paused. You can still browse, preview and download.",
                 true,
             );
             return;
@@ -1233,6 +1236,11 @@ export default function App() {
             );
         } else {
             const url = new URL(window.location.href);
+            if (isRecent) {
+                url.search = new URLSearchParams({
+                    path: itemLink(item.path),
+                }).toString();
+            }
             url.searchParams.set("preview", item.id);
             window.history.pushState(
                 { ...window.history.state, tgdrivePreview: true },
@@ -1419,6 +1427,7 @@ export default function App() {
         <div className="page-heading">
             <div>
                 {isFiles &&
+                    !listingPending &&
                     !isSearch &&
                     view !== "trash" &&
                     view !== "starred" &&
@@ -1717,7 +1726,7 @@ export default function App() {
                                 demoMode={demoReadOnly}
                                 onNotice={notify}
                             />
-                            <StartNewDrive demoMode={demoReadOnly} />
+                            <StartNewDrive />
                         </>
                     ) : (
                         configGate
@@ -2007,7 +2016,11 @@ export default function App() {
                                 aria-controls="drive-navigation"
                                 aria-label="Toggle Navigation"
                                 aria-expanded={mobileNav}
-                                onClick={() => setMobileNav(!mobileNav)}
+                                onClick={(event) => {
+                                    navigationReturn.current =
+                                        event.currentTarget;
+                                    setMobileNav(!mobileNav);
+                                }}
                             >
                                 <Menu size={22} />
                             </button>
@@ -2110,15 +2123,11 @@ export default function App() {
                             }
                             directory={directory}
                             listingKey={listingKey}
-                            shareRefreshKey={JSON.stringify([
-                                view,
-                                isSearch ? "search" : currentPath,
-                                metadataRefresh,
-                            ])}
+                            shareRefreshKey={String(metadataRefresh)}
                             highlightId={location.highlightId}
-                            loading={loading}
+                            loading={loading || listingPending}
                             refreshing={listingRefreshAction.refreshing}
-                            error={loadError}
+                            error={listingPending ? "" : loadError}
                             isPublic={isPublic}
                             isTrash={view === "trash"}
                             isStarred={view === "starred"}
@@ -2199,14 +2208,27 @@ export default function App() {
                                       }
                                     : undefined
                             }
-                            searchItems={isSearch ? searchItems : undefined}
+                            searchItems={
+                                isSearch
+                                    ? listingPending
+                                        ? []
+                                        : searchItems
+                                    : undefined
+                            }
                             paging={
                                 isPaged
                                     ? {
-                                          rows: pages.rows,
-                                          total: pages.total,
+                                          rows: listingPending
+                                              ? []
+                                              : pages.rows,
+                                          total: listingPending
+                                              ? 0
+                                              : pages.total,
+                                          error: listingPending
+                                              ? ""
+                                              : pageError,
                                           complete:
-                                              pagesKey === listingKey &&
+                                              !listingPending &&
                                               folderComplete(pages),
                                           folderKey,
                                           // Recent has one fixed order, newest activity first.
@@ -2420,7 +2442,10 @@ export default function App() {
                             }
                             aria-controls="drive-navigation"
                             aria-expanded={mobileNav}
-                            onClick={() => setMobileNav(true)}
+                            onClick={(event) => {
+                                navigationReturn.current = event.currentTarget;
+                                setMobileNav(true);
+                            }}
                         >
                             <span className="mobile-tab-icon">
                                 <Menu size={21} aria-hidden="true" />

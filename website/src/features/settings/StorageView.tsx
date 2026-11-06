@@ -223,11 +223,11 @@ export default function StorageView({
                     </button>
                 </div>
                 <p className="backup-confirmation-date">
-                    Last Telegram Safety Copy:{" "}
+                    Last Confirmed Telegram Backup:{" "}
                     <strong>
                         {lastBackup && !Number.isNaN(lastBackup.getTime())
                             ? formatTimestamp(recovery?.last_success_at)
-                            : "Scheduled Automatically"}
+                            : "Not confirmed yet"}
                     </strong>
                 </p>
                 <p className="backup-safety-note">
@@ -411,7 +411,7 @@ export default function StorageView({
                     </button>
                 </section>
             )}
-            <StartNewDrive demoMode={demoMode} />
+            <StartNewDrive />
         </div>
     );
 }

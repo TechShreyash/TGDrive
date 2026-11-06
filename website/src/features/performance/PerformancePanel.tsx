@@ -76,8 +76,9 @@ const TUNING_DESCRIPTIONS: Record<string, string> = {
     telegram_uploads_per_bot: "Parallel file uploads per bot connection",
     telegram_upload_pipeline: "Simultaneous chunk delivery pipelines",
     telegram_request_limit: "Safe API requests allowed per Telegram account",
-    telegram_media_per_bot: "Concurrent media streams and downloads",
-    remote_download_concurrency: "Simultaneous URL and torrent piece downloads",
+    telegram_media_per_bot: "Concurrent Telegram media operations per account",
+    remote_download_concurrency:
+        "Full-speed URL imports running simultaneously",
     preload_max_jobs: "Background preload tasks running simultaneously",
 };
 
@@ -143,7 +144,7 @@ function AutomaticTuning({
                                     <div key={key} className="tuning-fact-item">
                                         <div className="tuning-fact-top">
                                             <dt>{label}</dt>
-                                            <dd title={reason}>{val}</dd>
+                                            <dd>{val}</dd>
                                         </div>
                                         {(reason || fallback) && (
                                             <small className="tuning-fact-detail">

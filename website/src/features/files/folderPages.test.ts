@@ -151,21 +151,19 @@ describe("cursor-only listings (Recent)", () => {
         const rows = Array.from({ length: 180 }, (_, index) => item(index));
         const fetch = vi.fn(async (request: PageRequest) => {
             const start = request.cursor ? Number(request.cursor) : 0;
-            const limit = request.cursor ? 100 : 50;
+            const limit = 100;
             const end = Math.min(rows.length, start + limit);
             return {
                 items: rows.slice(start, end),
                 next_cursor: end < rows.length ? String(end) : null,
             };
         });
-        let state = await loadPrefix(emptyFolderPages, fetch, 50);
-        expect([state.loaded, state.total]).toEqual([50, 51]);
-        let request = pageRequest(state, 0)!;
-        expect(request.cursor).toBe("50");
-        state = applyPage(state, request, await fetch(request));
-        expect([state.loaded, state.total]).toEqual([150, 151]);
-        request = pageRequest(state, 1)!;
-        expect(request.cursor).toBe("150");
+        let state = await loadPrefix(emptyFolderPages, fetch, 100);
+        expect([state.loaded, state.total]).toEqual([100, 101]);
+        expect(pageRequest(state, 0)).toBeNull();
+        expect(fetch).toHaveBeenCalledOnce();
+        const request = pageRequest(state, 1)!;
+        expect(request.cursor).toBe("100");
         state = applyPage(state, request, await fetch(request));
         expect([state.loaded, state.total, state.cursor]).toEqual([
             180,

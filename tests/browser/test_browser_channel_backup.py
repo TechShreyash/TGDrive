@@ -64,6 +64,43 @@ def capture(page, name):
     page.screenshot(path=ARTIFACTS / name, animations="disabled")
 
 
+@pytest.mark.parametrize("backup_error", [None, "Telegram pin could not be verified"])
+def test_database_protection_does_not_claim_a_telegram_backup(
+    server, desktop, backup_error
+):
+    _, page = desktop
+    page.route(
+        "**/api/v1/status",
+        lambda route: route.fulfill(
+            json={
+                "telegram_ready": True,
+                "admission_paused": False,
+                "recovery": {
+                    "state": "protected",
+                    "metadata_revision": 5,
+                    "protected_revision": 5,
+                    "last_success_at": None,
+                    "backup_error": backup_error,
+                },
+            }
+        ),
+    )
+    login(page, server.url)
+    open_storage(page)
+    database = page.get_by_role("region", name="Cloud Database", exact=True)
+    expect(database.get_by_role("status")).to_have_text("Saved to MongoDB")
+    expect(database).to_contain_text(
+        "Last Confirmed Telegram Backup: Not confirmed yet"
+    )
+    expect(database).not_to_contain_text("Scheduled Automatically")
+    if backup_error:
+        expect(database.get_by_role("alert")).to_have_text(backup_error)
+    reset = page.locator(".start-new-drive")
+    expect(reset.get_by_role("button")).to_be_disabled()
+    expect(reset).to_contain_text("In-place reset is temporarily unavailable")
+    expect(reset.locator("input,form")).to_have_count(0)
+
+
 @pytest.mark.parametrize(
     "width,theme", [(1440, "light"), (390, "dark"), (320, "light")]
 )

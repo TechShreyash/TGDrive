@@ -18,6 +18,55 @@ pytestmark = pytest.mark.e2e
 browser, desktop, server = browser_fixture, desktop_fixture, server_fixture
 
 
+@pytest.mark.parametrize("destination", ["folder", "starred", "search"])
+def test_pending_destination_never_exposes_previous_rows_or_counts(
+    server: Server, desktop: tuple[Any, Any], destination: str
+) -> None:
+    _, page = desktop
+    login(page, server.url)
+    expect(
+        page.get_by_role("button", name="Preview samples", exact=True)
+    ).to_be_visible()
+    held: list[Any] = []
+    pattern = NODES if destination == "folder" else f"**/api/v1/{destination}?*"
+    page.route(pattern, lambda route: held.append(route))
+    with page.expect_request(
+        lambda request: (
+            is_listing(request)
+            if destination == "folder"
+            else f"/api/v1/{destination}?" in request.url
+        )
+    ):
+        if destination == "folder":
+            page.get_by_role("button", name="Preview samples", exact=True).dblclick()
+        elif destination == "starred":
+            page.get_by_role("button", name="Select", exact=True).click()
+            page.get_by_role(
+                "checkbox", name="Select Preview samples", exact=True
+            ).check()
+            page.get_by_role("link", name="Starred", exact=True).click()
+        else:
+            search = page.get_by_role(
+                "searchbox", name="Search Files and Folders", exact=True
+            )
+            search.fill("no-match")
+            search.press("Enter")
+    # Read immediately: the previous 180 ms semantic delay must never apply.
+    assert page.locator("tr.file-row").count() == 0
+    assert page.locator(".file-item-count").inner_text() == (
+        "Searching…" if destination == "search" else "Loading files…"
+    )
+    assert (
+        page.locator(".file-toolbar")
+        .get_by_role("button", name="Trash", exact=True)
+        .count()
+        == 0
+    )
+    assert held
+    held[0].continue_()
+    expect(page.locator(".file-skeleton")).to_have_count(0)
+
+
 def test_folder_navigation_does_not_fetch_current_listing_for_breadcrumbs(
     server: Server, desktop: tuple[Any, Any]
 ) -> None:
@@ -26,6 +75,15 @@ def test_folder_navigation_does_not_fetch_current_listing_for_breadcrumbs(
     folder = page.get_by_role("button", name="Preview samples", exact=True)
     expect(folder).to_be_visible()
     requests: list[str] = []
+    share_requests: list[str] = []
+    page.on(
+        "request",
+        lambda request: (
+            share_requests.append(request.url)
+            if request.method == "GET" and request.url.endswith("/api/v1/shares")
+            else None
+        ),
+    )
     page.on(
         "request",
         lambda request: (
@@ -40,6 +98,7 @@ def test_folder_navigation_does_not_fetch_current_listing_for_breadcrumbs(
         "My Files"
     )
     assert len(requests) == 1
+    assert not share_requests
 
 
 @pytest.mark.parametrize("navigate_away", [False, True])

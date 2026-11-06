@@ -204,6 +204,7 @@ export default function FileBrowser({
         rows: (DriveItem | undefined)[];
         total: number;
         complete: boolean;
+        error: string;
         folderKey: string;
         sort: FileSort;
         order: SortOrder;
@@ -377,7 +378,9 @@ export default function FileBrowser({
     const onPage = paging?.onPage;
     const pagedRows = paging?.rows;
     // Rows also change after refreshes, which may drop a page loaded by offset.
-    useEffect(() => onPage?.(page), [onPage, page, pagedRows]);
+    useEffect(() => {
+        if (!loading) onPage?.(page);
+    }, [onPage, page, pagedRows, loading]);
     useEffect(() => {
         // Retain browsing state on refresh, dropping only selections that disappeared.
         const ids = new Set(allItems.map((item) => item.id));
@@ -748,29 +751,33 @@ export default function FileBrowser({
                     ) : (
                         <>
                             <span className="file-item-count">
-                                {searchPagination
-                                    ? allItems.length
-                                        ? "Showing " +
-                                          (searchPagination.offset + 1) +
-                                          "–" +
-                                          (searchPagination.offset +
-                                              allItems.length) +
-                                          (searchPagination.hasMore
-                                              ? " · More available"
-                                              : "")
-                                        : loading
-                                          ? "Searching…"
+                                {loading
+                                    ? isSearch
+                                        ? "Searching…"
+                                        : "Loading files…"
+                                    : searchPagination
+                                      ? allItems.length
+                                          ? "Showing " +
+                                            (searchPagination.offset + 1) +
+                                            "–" +
+                                            (searchPagination.offset +
+                                                allItems.length) +
+                                            (searchPagination.hasMore
+                                                ? " · More available"
+                                                : "")
                                           : "No Results"
-                                    : isRecent
-                                      ? allItems.length +
-                                        (allItems.length === 1
-                                            ? " item"
-                                            : " items") +
-                                        (paging?.complete
-                                            ? ""
-                                            : " · More available")
-                                      : itemCount +
-                                        (itemCount === 1 ? " item" : " items")}
+                                      : isRecent
+                                        ? allItems.length +
+                                          (allItems.length === 1
+                                              ? " item"
+                                              : " items") +
+                                          (paging?.complete
+                                              ? ""
+                                              : " · More available")
+                                        : itemCount +
+                                          (itemCount === 1
+                                              ? " item"
+                                              : " items")}
                                 {isPublic ? " · Read-only" : ""}
                             </span>
                             <div className="file-toolbar-actions">
@@ -905,6 +912,26 @@ export default function FileBrowser({
                             {refreshing && <Spinner />}
                             {refreshing ? "Refreshing…" : "Try Again"}
                         </button>
+                    </div>
+                ) : pageMissing && paging?.error ? (
+                    <div className="empty-state">
+                        <AlertCircle size={38} />
+                        <h2>Could Not Load This Page</h2>
+                        <p role="alert">{paging.error}</p>
+                        <button
+                            className="secondary-button"
+                            onClick={() => paging.onPage(page)}
+                        >
+                            Try Again
+                        </button>
+                        {page > 0 && (
+                            <button
+                                className="text-button"
+                                onClick={() => setPage(page - 1)}
+                            >
+                                Previous Page
+                            </button>
+                        )}
                     </div>
                 ) : loading || pageMissing ? (
                     <div

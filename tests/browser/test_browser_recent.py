@@ -7,7 +7,7 @@ from urllib.parse import parse_qs, urlparse
 
 import pytest
 
-from tests.browser.test_browser_e2e import Server, expect, login
+from tests.browser.test_browser_e2e import Server, expect, fixture_nodes, login
 from tests.browser.test_browser_e2e import browser as browser_fixture
 from tests.browser.test_browser_e2e import desktop as desktop_fixture
 from tests.browser.test_browser_e2e import server as server_fixture
@@ -56,7 +56,7 @@ def test_recent_lists_activity_filters_and_shows_the_folder(
     expect(
         page.locator(".search-result-location").filter(has_text="Preview samples")
     ).not_to_have_count(0)
-    assert requests[0] == {"limit": ["50"]}
+    assert requests[0] == {"limit": ["100"]}
     expect(page.get_by_role("button", name="Sort by Name")).to_be_disabled()
     expect(page.locator(".file-sort-trigger")).to_have_count(0)
     expect(page.get_by_role("button", name="Folders", exact=True)).to_have_count(0)
@@ -111,13 +111,12 @@ def test_recent_pages_by_cursor_and_shows_an_empty_state(
     page.route(RECENT, recent)
     page.goto(server.url + "/?view=recent")
     expect(page.locator("tr.file-row")).to_have_count(100)
-    expect(page.locator(".file-item-count")).to_have_text("150 items · More available")
-    assert seen[0] == {"limit": ["50"]}
-    assert seen[1] == {"cursor": ["50"], "limit": ["100"]}
+    expect(page.locator(".file-item-count")).to_have_text("100 items · More available")
+    assert seen == [{"limit": ["100"]}]
     page.get_by_role("button", name="Next Page", exact=True).click()
     expect(page.locator("tr.file-row")).to_have_count(60)
     expect(page.locator(".file-item-count")).to_have_text("160 items")
-    assert seen[-1] == {"cursor": ["150"], "limit": ["100"]}
+    assert seen[-1] == {"cursor": ["100"], "limit": ["100"]}
     assert not any("offset" in params for params in seen)
     expect(page.get_by_role("button", name="Next Page", exact=True)).to_be_disabled()
 
@@ -131,3 +130,82 @@ def test_recent_pages_by_cursor_and_shows_an_empty_state(
     ).to_be_visible()
     expect(page.get_by_text("Files you open or upload appear here.")).to_be_visible()
     expect(page.get_by_role("button", name="Upload Files", exact=True)).to_have_count(0)
+
+
+def test_recent_failed_page_has_retry_and_previous(server, desktop):
+    _, page = desktop
+    login(page, server.url)
+    calls = 0
+
+    def recent(route):
+        nonlocal calls
+        continuation = "cursor" in query(route.request)
+        if continuation:
+            calls += 1
+            if calls == 1:
+                route.fulfill(status=503, json={"detail": "Temporary listing failure"})
+                return
+        start = 100 if continuation else 0
+        route.fulfill(
+            json={
+                "items": [
+                    {
+                        "id": f"r{i}",
+                        "name": f"recent-{i:03}.txt",
+                        "path": "/",
+                        "type": "file",
+                    }
+                    for i in range(start, start + (1 if continuation else 100))
+                ],
+                "next_cursor": None if continuation else "100",
+            }
+        )
+
+    page.route(RECENT, recent)
+    page.get_by_role("link", name="Recent", exact=True).click()
+    expect(page.locator("tr.file-row")).to_have_count(100)
+    page.get_by_role("button", name="Next Page", exact=True).click()
+    expect(page.get_by_role("alert")).to_contain_text("Temporary listing failure")
+    expect(page.get_by_role("button", name="Previous Page", exact=True)).to_be_visible()
+    page.get_by_role("button", name="Try Again", exact=True).click()
+    expect(
+        page.get_by_role("button", name="recent-100.txt", exact=True)
+    ).to_be_visible()
+    assert calls == 2
+    page.get_by_role("button", name="Previous Page", exact=True).click()
+    expect(page.locator("tr.file-row")).to_have_count(100)
+
+
+def test_later_recent_preview_reloads_and_back_returns_to_recent(server, desktop):
+    _, page = desktop
+    login(page, server.url)
+    folder = server.control()["seed"]["folder"]
+    item = next(
+        row for row in fixture_nodes(page, server, folder) if row["type"] == "file"
+    )
+    first = [
+        {"id": f"r{i}", "name": f"recent-{i:03}.txt", "type": "file", "path": "/"}
+        for i in range(100)
+    ]
+    page.route(
+        RECENT,
+        lambda route: route.fulfill(
+            json={
+                "items": [item] if "cursor" in query(route.request) else first,
+                "next_cursor": None if "cursor" in query(route.request) else "100",
+            }
+        ),
+    )
+    page.get_by_role("link", name="Recent", exact=True).click()
+    page.get_by_role("button", name="Next Page", exact=True).click()
+    page.get_by_role("button", name=item["name"], exact=True).dblclick()
+    assert parse_qs(urlparse(page.url).query)["path"] == [
+        "/" + folder.rsplit("/", 1)[-1]
+    ]
+    assert "view=recent" not in page.url
+    page.reload()
+    preview = page.locator("dialog.file-preview[open]")
+    expect(preview).to_contain_text(item["name"])
+    page.get_by_role("button", name="Close Preview", exact=True).click()
+    expect(page).to_have_url(server.url + "/?view=recent")
+    expect(preview).to_have_count(0)
