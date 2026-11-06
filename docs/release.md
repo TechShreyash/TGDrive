@@ -36,6 +36,10 @@ commits can accumulate on `dev` for one release. Promote stable updates to `main
 after review and [required CI checks](development.md#when-github-checks-run).
 Use a published tag to reproduce a release; `dev` may be unstable.
 
+Find the preceding application release with
+`git describe --tags --abbrev=0 --match 'v[0-9]*.[0-9]*.[0-9]*'`; viewer-package
+tags do not define TGDrive's version or comparison range.
+
 | Change | Next version after `2.0.0` |
 | --- | --- |
 | Fixes, documentation or maintenance | `2.0.1` |
@@ -60,11 +64,13 @@ immutable: fix a release with a new version instead of moving its tag.
 User-facing GitHub documentation links point to `main`; release download links
 pin the corresponding tag. Reserve `dev` links for contributor instructions.
 
-Pushing the tag starts CI on it. When CI passes, the **Publish image** workflow
-builds amd64 and arm64 images on native runners and pushes
-`ghcr.io/techshreyash/tgdrive:X.Y.Z`, `:X.Y` and `:latest` with provenance and an
-SBOM. Check that the workflow succeeded and that `docker pull` works before
-announcing the release. The first time, set the package's visibility to
+Pushing the tag starts CI on it. The **Publish image** workflow defines native
+amd64 and arm64 builds and the image tags
+`ghcr.io/techshreyash/tgdrive:X.Y.Z`, `:X.Y` and `:latest`, with provenance and an
+SBOM. Before announcing pull-based setup, verify successful tag CI, the publisher
+result, public package access, both manifest architectures and the image's source revision;
+then confirm the documented Compose pull path works. These are release gates,
+not evidence of current image availability. The first time, set visibility to
 **Public** under GitHub → Packages → tgdrive → Package settings.
 
 The GitHub release must link its PR, exact commit and (after the first release)
@@ -90,7 +96,8 @@ Run these from the release checkout, with the development prerequisites from
 [Development](development.md).
 
 - [ ] Choose the release version using the policy above and synchronize all
-   version metadata. These examples use `2.2.0`. Review the user
+   version metadata. These examples use `2.3.0`; substitute the selected release.
+   They do not establish that the tag or image is published. Review the user
    guides against the implemented settings and defaults.
 - [ ] In **Actions → CI → Run workflow**, select the release branch and suite
    **`all`** against the exact release commit. Review quality/security,
@@ -101,8 +108,8 @@ Run these from the release checkout, with the development prerequisites from
 
 ```bash
 python3 scripts/build_release.py
-(cd dist && sha256sum --check tgdrive-2.2.0.zip.sha256)
-python3 -m zipfile -t dist/tgdrive-2.2.0.zip
+(cd dist && sha256sum --check tgdrive-2.3.0.zip.sha256)
+python3 -m zipfile -t dist/tgdrive-2.3.0.zip
 ```
 
 The builder includes source, public docs/media and a file-hash manifest. It
@@ -117,16 +124,16 @@ archive and manifest; retain [showcase assets](assets/README.md) in `PUBLIC_DOCS
    release revision, or the extracted archive if distributing one. Record the
    commit, commands, environment and results (and checksum for an archive).
 - [ ] After those checks, create the annotated tag on the final merged `main`
-   commit. For this release (substitute the next version for later ones):
+   commit. Example only; substitute the selected version:
 
 ```bash
 git switch main
 git pull --ff-only origin main
-python3 scripts/build_release.py --check-version --tag v2.2.0
-git tag -a v2.2.0 -m "Release TGDrive 2.2.0"
+python3 scripts/build_release.py --check-version --tag v2.3.0
+git tag -a v2.3.0 -m "Release TGDrive 2.3.0"
 ```
 
-- [ ] With approval for the specific tag push, push `v2.2.0` to `origin` and
+- [ ] With approval for the specific tag push, push the selected tag to `origin` and
    create its GitHub release. Attach matching ZIP and `.sha256` files together
    only if offering custom source assets.
    Tag-push CI also checks that the tag matches the metadata. Coolify users must
@@ -137,38 +144,38 @@ git tag -a v2.2.0 -m "Release TGDrive 2.2.0"
 
 ## Verify a downloaded source archive
 
-If the release offers custom assets, download **tgdrive-2.2.0.zip** and
-**tgdrive-2.2.0.zip.sha256** into one folder and open a terminal there. Substitute
+If the release offers custom assets, download **tgdrive-2.3.0.zip** and
+**tgdrive-2.3.0.zip.sha256** into one folder and open a terminal there. Substitute
 the actual version. GitHub's generated source ZIP has no companion checksum.
 
 **Windows PowerShell:**
 
 ```powershell
-$expectedHash = (Get-Content .\tgdrive-2.2.0.zip.sha256 -Raw).Split(' ')[0]
-if ((Get-FileHash .\tgdrive-2.2.0.zip -Algorithm SHA256).Hash -ne $expectedHash) {
+$expectedHash = (Get-Content .\tgdrive-2.3.0.zip.sha256 -Raw).Split(' ')[0]
+if ((Get-FileHash .\tgdrive-2.3.0.zip -Algorithm SHA256).Hash -ne $expectedHash) {
     throw 'Checksum mismatch. Download the release files again.'
 }
-Expand-Archive .\tgdrive-2.2.0.zip -DestinationPath .
-Set-Location .\tgdrive-2.2.0
+Expand-Archive .\tgdrive-2.3.0.zip -DestinationPath .
+Set-Location .\tgdrive-2.3.0
 ```
 
 **macOS Terminal:**
 
 ```bash
-shasum -a 256 -c tgdrive-2.2.0.zip.sha256
+shasum -a 256 -c tgdrive-2.3.0.zip.sha256
 ```
 
 **Linux/WSL terminal:**
 
 ```bash
-sha256sum --check tgdrive-2.2.0.zip.sha256
+sha256sum --check tgdrive-2.3.0.zip.sha256
 ```
 
 On macOS/Linux/WSL, continue **only after the checksum reports OK**, then extract:
 
 ```bash
-unzip tgdrive-2.2.0.zip
-cd tgdrive-2.2.0
+unzip tgdrive-2.3.0.zip
+cd tgdrive-2.3.0
 ```
 
 Your file manager can extract the ZIP if `unzip` is unavailable.
@@ -192,9 +199,19 @@ evidence out of public docs and reports.
   retry/reselection guidance, and server processing after browser acceptance.
 - [ ] **Channel protection:** verify required bot permissions and that public or
   auto-delete settings produce an actionable error. Restore the correct state.
-- [ ] **Recovery:** confirm an encrypted database backup, save its matching key,
-  and restore into a separate empty database. If independent channel protection
-  is enabled, verify its completed restore point and recovery flow separately.
+- [ ] **Recovery:** save a confirmed backup and its original `ENCRYPTION_KEY`
+  off-host. On a fresh host, use explicit owner credentials and an empty
+  disposable database to restore it. Deny pin permission, restore permission,
+  restart and check discovery of the intended restore point. Test a wrong key
+  before activation; confirm it cannot replace the destination. Verify
+  independent-channel recovery separately when enabled.
+- [ ] **Upgrade/rollback:** preserve a tagged-v2.2 archive and its matching old
+  key. Rehearse a version-compatible restore into isolated MongoDB, then upgrade
+  that surviving database and verify files/shares. Retain rollback material until
+  the new restore point verifies.
+- [ ] **Private reporting:** confirm that the entry point in
+  [SECURITY.md](../SECURITY.md) accepts private reports; a policy file alone does
+  not enable GitHub private vulnerability reporting.
 
 Automated tests and synthetic browser checks do not certify real Telegram,
 Coolify, DNS/TLS, every codec/device or sustained throughput. Record what was actually checked in the release PR. See the

@@ -14,7 +14,7 @@ description: Prepare a TGDrive release or version bump. Use when choosing the ne
 
 ## Steps
 
-1. Pick the version from changes since the last tag (`git describe --tags --abbrev=0`): patch for fixes/docs/maintenance, minor for features including breaking changes (document upgrade steps). Major only when the owner asks; a version the owner names wins.
+1. Pick the version from changes since the last application tag (`git describe --tags --abbrev=0 --match 'v[0-9]*.[0-9]*.[0-9]*'`): patch for fixes/docs/maintenance, minor for features including breaking changes (document upgrade steps). Major only when the owner asks; a version the owner names wins. Viewer-package tags are not application releases.
 2. Set it in `pyproject.toml` (the authority), then sync every copy:
    - `tgdrive/__init__.py`
    - `website/package.json`
