@@ -7,6 +7,12 @@ HTTP endpoints are in the [API reference](api.md). For website tasks,
 use the [user guide](usage.md); for settings you can change on screen, use
 [Configuration](configuration.md). Expand a section below when you need its details.
 
+<a id="http-api"></a>
+<a id="resumable-browser-receipts"></a>
+
+Moved API topics: [HTTP API](api.md) ·
+[Resumable browser receipts](api.md#resumable-browser-receipts).
+
 | I need to… | Look up |
 | --- | --- |
 | Set deployment values | [Configuration](#configuration) · [File syntax and secrets](#file-syntax-and-secret-handling) |
@@ -73,7 +79,7 @@ override permits localhost HTTP. [Docker environment details](https://docs.docke
 
 | Deployment flag | Default | Behavior |
 | --- | --- | --- |
-| `DEMO_MODE` | false | Give the usual password restricted visitor access; protect Demo Files and lock management writes/key exports. A separately configured demo administrator can bypass those restrictions. Requires container recreation/redeploy. See [public demo mode](configuration.md#public-demo-mode). |
+| `DEMO_MODE` | false | Give the usual password restricted visitor access; protect Demo Files and lock management writes/backup downloads. A separately configured demo administrator can bypass those restrictions. Requires container recreation/redeploy. See [public demo mode](configuration.md#public-demo-mode). |
 
 > [!IMPORTANT]
 > Keep real credentials private. Example placeholders are not working credentials.
@@ -147,23 +153,26 @@ connectivity, not merely a nonempty STRING_SESSIONS value. See
 <details>
 <summary>Live preferences, defaults and cache limits</summary>
 
-Cache memory and disk budgets, the cache free-space floor, upload staging,
-the largest accepted file, the upload free-space reserve and Telegram/URL/preload
-concurrency are chosen at runtime by the
-[resource governor](performance.md#automatic-tuning) and are not configurable.
-Their environment variables from earlier versions (`CACHE_MEMORY_BYTES`,
+Resource values are not editable dashboard preferences. Environment variables
+seed startup; the [governor](performance.md#automatic-tuning) can update cache
+and staging budgets, free-space reserves and the file ceiling. Configured
+concurrency ceilings remain; preloads also stay within 4 jobs per CPU and 8 total. Per-account Telegram
+cooldown/recovery is separate and survives resource-only updates.
+Pacing (`TELEGRAM_PARTS_PER_SECOND`), queue size (`TELEGRAM_MAX_QUEUE`) and cache
+retention (`CACHE_TTL_SECONDS`) keep their startup values.
+The managed variable names are `CACHE_MEMORY_BYTES`,
 `CACHE_DISK_BYTES`, `CACHE_MIN_FREE_BYTES`, `CACHE_TTL_SECONDS`, `PRELOAD_MAX_JOBS`,
 `TELEGRAM_UPLOAD_PIPELINE`, `TELEGRAM_REQUEST_LIMIT`, `TELEGRAM_PARTS_PER_SECOND`,
 `TELEGRAM_MEDIA_PER_BOT`, `TELEGRAM_MAX_QUEUE`, `TELEGRAM_UPLOADS_PER_BOT`,
 `REMOTE_DOWNLOAD_CONCURRENCY`, `MAX_FILE_SIZE`, `STAGING_BUDGET_BYTES`,
-`MIN_FREE_BYTES`) only seed the first values before the first measurement.
+`MIN_FREE_BYTES`.
 `PATCH /api/v1/settings/performance` rejects them with `422`; it accepts only
 the owner choices below, saved in MongoDB and applied immediately.
 
 | Variable | Default | Meaning and bounds |
 | --- | --- | --- |
 | `AUTO_PRELOAD` | true | Enable extra bounded warming after delivered original audio/video playback bytes. Explicit downloads and unclassified range clients stay within requested ranges. Disabling it leaves adaptive response read-ahead and manual **Preload file** available. |
-| `UPLOAD_SPLIT_MIB` | 2000 | Default and maximum document size for every account, including Premium; Telegram's document limit. Explicit 1–2000 values choose a smaller part size; 0 also uses 2000 MiB. Persisted plans keep their original boundaries. |
+| `UPLOAD_SPLIT_MIB` | 2000 | TGDrive's default and maximum document size for every account, including Premium. Explicit 1–2000 values choose a smaller part size; 0 also uses 2000 MiB. Persisted plans keep their original boundaries. |
 | `TIMEZONE` | Asia/Kolkata | Installation-wide display timezone for owner and public dates/share expiry. Use a valid IANA name; the default is IST. |
 
 RAM includes the asynchronous disk-write backlog. Active responses have a separate
@@ -256,9 +265,9 @@ For lost drive data, follow [backup recovery](backup-recovery.md).
 | Variable | Default | Validation and behavior |
 | --- | --- | --- |
 | `MONGODB_URI` | Required | Secret URI beginning mongodb:// or mongodb+srv://. Missing/invalid configuration or failed database access rejects startup; no local database fallback. |
-| `ENCRYPTION_KEY` | Required, secret | 64 hex characters. Encrypts every document TGDrive uploads (AES-256-CTR). Never stored in MongoDB, backups or logs. The drive remembers a fingerprint; startup stops if the key differs. [Encryption](#stored-file-encryption). |
+| `ENCRYPTION_KEY` | Required, secret | 64 hex characters. Protects new encrypted Telegram documents (AES-256-CTR); current backup-file keys derive from it. Never stored in MongoDB, backups or logs. The drive remembers a fingerprint; startup stops if the key differs. [Coverage and exceptions](#stored-file-encryption). |
 | `MONGODB_DATABASE` | tgdrive | 1–63 ASCII letters/digits, underscores or hyphens; dedicated to one drive. |
-| `MONGODB_BACKUP_SECONDS` | 1 day (`86400`) | Integer 60–604800 seconds between successful automatic standalone safety copies. A scheduled copy is skipped when files, folders, shares, settings, jobs and the key are unchanged since the last confirmed backup; manual backups always run. Separate standalone publication pauses while independent channel protection is enabled. |
+| `MONGODB_BACKUP_SECONDS` | 1 day (`86400`) | Integer 60–604800 seconds between successful automatic standalone safety copies. Check the confirmed-backup date and errors rather than assuming a new point exists. Separate standalone publication pauses while independent channel protection is enabled. |
 | `DATA_DIR` | data | Persistent generated keys, Telegram sessions, helper locks, recovery/activation state and media cache. MongoDB holds the live catalog and durable job/receipt records. |
 | `CACHE_DIR` | cache | Persistent unfinished upload payloads and encrypted temporary database backup files. Keep unfinished bytes. |
 | `LOG_LEVEL` | INFO | DEBUG, INFO, WARNING, ERROR or CRITICAL. |
@@ -302,23 +311,24 @@ empty database or the untouched catalog created by automatic first setup.
 New documents use at most **2000 MiB (2,097,152,000 bytes)** for every account,
 including Premium. `UPLOAD_SPLIT_MIB=0` uses that cap. Larger logical files use
 ordered parts and appear as one item with original downloads and range seeking.
-The `/api/config` logical limit is the governor's staging budget: free disk
-after the reserve. Files split into
-any number of parts. TGDrive has no stored-byte quota and no limit on items or
-folder depth; MongoDB's storage is the limit.
+The `/api/config` logical limit follows the governor's total staging budget;
+new work still needs room after existing reservations and the disk reserve.
+TGDrive has no stored-byte quota or configured catalog
+item-count quota; MongoDB capacity, request/metadata bounds and recovery resources
+still constrain usable workloads.
 Premium is preferred when eligible; bot fallback and existing sender identities
 remain supported.
 
 Browser chunks are 8 MiB except the last. Unfinished receipts and browser
-batches have no count limit; staging space is the limit. Finished browser history
-keeps at most 30 tasks/2,000 rows, retaining unresolved tasks. Browser bounds
+batches have no count quota; staging space, browser memory and saved recovery
+storage still limit them. Finished browser history keeps at most 30 tasks/2,000
+rows, retaining unresolved tasks. Browser bounds
 are per controller; staging and Telegram account limits apply across callers.
 Allow disk headroom for URL work, logs, metadata and backups beyond receipt
 reservations.
 
 Device receives start at two concurrent files and adapt between one and four.
-Each accepted file queues immediately. Staging/account waits still apply; when
-the governor lowers Telegram concurrency, active uploads finish. See the canonical
+Each accepted file queues immediately. Staging/account waits still apply. See the canonical
 [transfer pipeline](architecture.md#transfer-pipeline) for adaptation, admission,
 retry and cancellation rules.
 
@@ -361,7 +371,7 @@ rejected alongside private, loopback, link-local, multicast and reserved ranges.
 | `PORT` | Local Compose's host port defaults to 8000; the supplied container command always listens on internal port 8000. |
 | `FORWARDED_ALLOW_IPS` | Optional explicit Uvicorn proxy trust override. The container launcher defaults to loopback plus the private IPs resolved from `TGDRIVE_PROXY_HOSTS`; the hosted Compose file sets that hostname to `coolify-proxy`. Unset or `auto` enables discovery. |
 | `TGDRIVE_PROXY_HOSTS` | Deployment-owned, comma-separated internal proxy hostnames. Only their resolved private IPs are trusted. A DNS failure retains loopback trust and logs an actionable warning; it never enables wildcard trust. |
-| `TGDRIVE_AUTO_SECRETS` | Standard Compose sets true in the container environment. Generates missing session/backup keys once for a new drive in persistent DATA_DIR. Existing drives must reuse their original keys. |
+| `TGDRIVE_AUTO_SECRETS` | Standard Compose sets true in the container environment. Generates a missing `SESSION_SECRET` once for a new drive in persistent DATA_DIR. It never generates `ENCRYPTION_KEY`; existing drives must reuse their original secrets. |
 | `TGDRIVE_RESTART_POLICY` | Compose interpolation only. Laptop override defaults to no, hosted/server mode to unless-stopped. Choose deliberately; restart policies do not restart a running container merely because it is unhealthy. |
 | --workers | Must remain 1. This is a launch argument, not an environment feature for scaling the drive. |
 
@@ -395,7 +405,7 @@ that prevent startup are explained in container logs. See
 | --- | --- |
 | Owner access | One shared drive; demo mode optionally separates visitor and full-access passwords. No built-in MFA/passkeys, public signup, teams or tenant isolation. |
 | Shared Links | Anyone with a valid scoped link can read its contents |
-| Encryption | Files TGDrive uploads to Telegram are encrypted with `ENCRYPTION_KEY`; bot-mode copies are encrypted unless that option is off. Local staging and caches are not. [Details](#stored-file-encryption) |
+| Encryption | New encrypted uploads, legacy plaintext parts, optional plaintext bot copies and local storage have different coverage. The server operator is trusted. [Details](#stored-file-encryption) |
 | Original file safety | A database record cannot recreate a deleted Telegram file |
 | Previews | Uploaded HTML/code is not executed; no external Office service receives files |
 | Malware | TGDrive does not scan files for malware |
@@ -417,8 +427,9 @@ that prevent startup are explained in container logs. See
   timeout. Sensitive settings and backup download accept an active owner
   session without a fresh password prompt.
 - **Requests:** mutations check Origin/Fetch Metadata; private routes authenticate
-  before body processing. Bodies of requests without a session are capped at 64 KiB;
-  signed-in requests have no fixed size, and receipt PATCH chunks are 8 MiB. Login allows five failures per client IP in five minutes and bounds
+  before body processing. JSON controls have [finite body limits](api.md#conventions-and-authentication)
+  even for signed-in/demo visitors; receipt PATCH chunks are 8 MiB. Login allows
+  five failures per client IP in five minutes and bounds
   expensive password verification to one concurrent check. The throttle resets
   after restart and does not stop distributed attempts. Add login rate limiting
   at a public deployment's trusted proxy; there are no per-share traffic quotas.
@@ -443,16 +454,17 @@ that prevent startup are explained in container logs. See
   There is no overall time limit; stalled sources are retried.
   `ALLOW_PRIVATE_REMOTE_URLS` explicitly broadens reachability. Signed source URLs
   may persist in private jobs.
-- **Backups/deletion:** recovery files use AES-256-GCM before disk or Telegram
-  storage and need their matching key, independently of login passwords. New
+- **Backups/deletion:** current recovery files use AES-256-GCM before disk or Telegram
+  storage and need the original `ENCRYPTION_KEY`, independently of login passwords. New
   files exclude logged-in browser/Telegram account sessions and unsent staging;
   they cannot recreate missing Telegram originals. Permanent deletion removes catalog
   references; it does not erase originals, caches, old backups or recipients'
   copies. Old backups may restore removed records.
 
 Keep `.env`, sessions, hashes, keys, metadata and private traces out of public
-reports. Disable raw query/cookie logging at proxies. TGDrive does not encrypt
-original payloads or local staging and does not scan for malware. See
+reports. Disable raw query/cookie logging at proxies. Local plaintext files and
+encryption limits are described [below](#stored-file-encryption); TGDrive does
+not scan for malware. See
 [Operations](operations.md), [Backup & recovery](backup-recovery.md) and
 [known gaps](roadmap.md).
 
@@ -468,13 +480,23 @@ original payloads or local staging and does not scan for malware. See
 | Uploaded parts, posters | AES-256-CTR with `ENCRYPTION_KEY` and a random 128-bit nonce per document, saved in the catalog part record. Sizes are unchanged, so range reads and seeking work. |
 | Telegram metadata | Random `<hex>.bin` name, `application/octet-stream`, no caption and no Telegram thumbnail. Previews come from TGDrive's local cover cache. |
 | Bot mode, encryption on (default) | The server downloads the forwarded file to `CACHE_DIR/bot-imports`, then uploads it encrypted through the normal upload queue. Slower; uses server bandwidth and disk. |
-| Bot mode, encryption off | Telegram copies the message instantly; that file stays readable to anyone with channel access. Set in **Configuration → Transfer limits → Bot uploads**. |
-| Unencrypted parts | Only bot-mode copies made with encryption off. They are read as plain bytes. |
-| Key check | MongoDB `settings._id = "encryption"` holds an HMAC fingerprint, never the key. It is written when the drive is created; startup refuses a different key and any database without the record. |
-| Integrity | Complete-part reads verify the plaintext SHA-256 already stored per part. Partial range reads are not authenticated. |
+| Bot mode, encryption off | Telegram copies the message without server download/re-upload; that file remains plaintext. Set in **Configuration → Transfer limits → Bot uploads**. |
+| Unencrypted parts | Legacy files uploaded by 2.2 and bot-mode copies made with encryption off have no nonce and are read as plain bytes. Upgrading does not re-encrypt them. |
+| Key check | MongoDB `settings._id = "encryption"` holds an HMAC fingerprint, never the key. New drives and the schema-4 upgrader write it; a different key or a missing record after upgrade stops startup. |
+| Integrity | Complete-part reads verify a stored plaintext SHA-256 when available; partial reads check document identity/size but have no authenticated block tag. AES-CTR does not authenticate ranges. |
 
-Local staging, media caches and generated covers stay on the server unencrypted.
-The media cache stores Telegram's ciphertext; decryption happens per read.
+The media cache keeps fetched Telegram bytes: ciphertext for encrypted documents,
+plaintext for legacy/plain documents. Decryption happens per read. Local upload
+staging, generated covers and parser/preview output can contain plaintext; these
+are not encrypted by `ENCRYPTION_KEY`. The host process holds the key and is a
+trusted party. HTTPS protects browser delivery; it does not remove that trust.
+`ENCRYPTION_KEY` does not encrypt the live MongoDB catalog; protect database
+access and private configuration separately.
+
+Losing `ENCRYPTION_KEY` prevents opening the drive, its encrypted documents and
+current backups, even when some older parts remain plaintext. Current backups
+use a separate derived AES-256-GCM key, not a separately exported secret. Keep
+the [off-host recovery material](backup-recovery.md#save-off-host-recovery-material).
 
 </details>
 

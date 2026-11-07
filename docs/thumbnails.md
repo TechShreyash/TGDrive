@@ -76,19 +76,19 @@ thumbnail failure never fails an original upload.
 
 ## Rebuild existing thumbnails
 
-1. Open **Tools & settings → Cache settings → Regenerate all thumbnails**.
+1. Open **Configuration → Cache settings → Regenerate all thumbnails**.
 2. Review the bandwidth/runtime warning, then choose **Start background rebuild**.
 3. Watch checked, regenerated, skipped and failed counts, the current file and
    recent issues on that page. You can close the browser and return later.
 
 **Rebuilding can read substantial data from Telegram.** It includes files that
-already have covers. While it runs, TGDrive limits its own database work so
-browsing and search stay responsive, so a large rebuild takes longer.
+already have covers. Selected database rechecks are paced to reduce competition
+with browsing; this does not reserve database capacity or guarantee response time.
 **Cancel rebuild** stops further work and keeps generated covers. The source-byte
 counter includes cache reads, so it is not a network meter.
 
-[See the rebuild control](assets/thumbnail-rebuild.jpg). This capture shows its
-entry point, not a completed full-library rebuild.
+[See the older rebuild control](assets/thumbnail-rebuild.jpg). This capture
+predates the current navigation and does not show a completed full-library rebuild.
 
 The worker handles one file at a time and waits while transfers or media requests
 are active. Reads use the lower-priority queue, paced to 2 MiB/s before block/cache
@@ -107,15 +107,16 @@ start or cancel rebuilding.
 
 ## Existing files and fallback
 
-New uploads attach the generated cover to their first Telegram part and cache
-it locally. To repair one older file with no provider cover:
+New encrypted uploads cache generated covers locally and do not attach plaintext
+Telegram thumbnails. Legacy plaintext uploads can have an attached provider
+cover. To repair one file with no provider cover:
 
 1. Choose **Preload file** and wait for full **Ready** coverage in **Preloads**.
 2. Return to its folder in Grid view.
 
 Repair needs a complete cached original no larger than **128 MiB**. It creates a
 disposable local JPEG, without changing the catalog or uploading a Telegram cover.
-Partial, cold, larger, unsupported, damaged, encrypted or overly complex sources
+Partial, cold, larger, unsupported, damaged or overly complex sources
 keep their provider cover/icon. A container such as MOV still needs a supported
 codec and decoding cost; a missing cover does not establish playback failure.
 
