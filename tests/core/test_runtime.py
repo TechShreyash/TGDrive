@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import shutil
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, Mock
 
 import pytest
@@ -105,6 +106,126 @@ class FakeBackup:
 
     async def stop(self, _store: MongoStore) -> None:
         self.stopped = True
+
+
+@pytest.mark.asyncio
+async def test_startup_tunes_restored_staging_before_transfer_or_bot_admission(
+    tmp_path, monkeypatch, mongo_backend
+):
+    from tgdrive.core import governor
+    from tgdrive.transfers.manager import TransferManager
+    from tgdrive.transfers.staging import check_staging, staging_usage
+
+    gib = governor.GIB
+    config = settings(tmp_path, PRELOAD_MAX_JOBS=8)
+    directory = config.resolved_cache_dir / "torrents" / "restored-job"
+    directory.mkdir(parents=True)
+    mongo_backend.db.jobs = Collection()
+    mongo_backend.db.jobs.insert_one(
+        {
+            "_id": "restored-job",
+            "data": {
+                "id": "restored-job",
+                "phase": "downloading",
+                "status": "queued",
+                "current": 4 * gib,
+                "total": 6 * gib,
+                "created_at": 1.0,
+                "updated_at": 1.0,
+                "context": {
+                    "kind": "torrent",
+                    "staging_directory": str(directory),
+                    "staging_size": 6 * gib,
+                    "staging_written": 4 * gib,
+                },
+            },
+        }
+    )
+    mongo_backend.db.receipts = Collection()
+    mongo_backend.db.receipts.insert_one(
+        {
+            "_id": "b" * 32,
+            "data": {
+                "id": "b" * 32,
+                "state": "receiving",
+                "total_size": 4 * gib,
+                "offset": 3 * gib,
+                "expires_at": 1e12,
+            },
+        }
+    )
+    runtime = Runtime(config, pool=FakePool())
+    runtime.backup = FakeBackup(new_store(tmp_path / "drive.json"))
+    runtime.remote = FakeRemote()
+    admissions = []
+
+    def measure(path, media_path):
+        assert path == config.resolved_cache_dir
+        assert media_path == config.resolved_data_dir / "media-cache"
+        return {
+            "memory_limit": None,
+            "memory_available": None,
+            "cpus": 1,
+            "disk_total": 100 * gib,
+            "disk_free": 8 * gib,
+        }
+
+    async def recover(manager):
+        assert manager is runtime.transfers
+        assert staging_usage(manager) == (10 * gib, 3 * gib)
+        assert config.staging_budget_bytes == config.max_file_size == 10 * gib
+        assert config.min_free_bytes == 5 * gib
+        assert config.preload_max_jobs == 4
+        check_staging(config, manager, 0)
+        assert (
+            runtime.governor.snapshot()["measurements"]["staging_allocated_bytes"]
+            == 7 * gib
+        )
+        admissions.append("recover")
+
+    def bot_client(_settings):
+        assert admissions == ["recover"]
+        assert config.staging_budget_bytes == 10 * gib
+        admissions.append("bot")
+
+    monkeypatch.setattr(governor, "measure", measure)
+    monkeypatch.setattr(governor.Governor, "start", lambda _: None)
+    monkeypatch.setattr(TransferManager, "recover", recover)
+    monkeypatch.setattr(runtime_module, "build_bot_mode_client", bot_client)
+    monkeypatch.setattr(
+        "tgdrive.transfers.staging.shutil.disk_usage",
+        lambda _: SimpleNamespace(free=8 * gib),
+    )
+    try:
+        await runtime.start()
+        assert runtime.ready
+        assert admissions == ["recover", "bot"]
+    finally:
+        await runtime.stop()
+
+
+@pytest.mark.asyncio
+async def test_failed_receipt_restore_preserves_error_and_closes_started_resources(
+    tmp_path, monkeypatch
+):
+    store = new_store(tmp_path / "drive.json")
+    store.close = Mock(wraps=store.close)
+    pool = FakePool()
+    remote = FakeRemote()
+    runtime = Runtime(settings(tmp_path), pool=pool)
+    runtime.backup = FakeBackup(store)
+    runtime.remote = remote
+
+    def fail(*_):
+        raise RuntimeError("receipt catalog unavailable")
+
+    monkeypatch.setattr("tgdrive.transfers.uploads.ResumableUploads", fail)
+    with pytest.raises(RuntimeError, match="receipt catalog unavailable"):
+        await runtime.start()
+    assert remote.closed and pool.stopped
+    store.close.assert_called_once_with()
+    assert runtime._owner_lock is None
+    assert not runtime._mongo_acquired
 
 
 @pytest.mark.asyncio

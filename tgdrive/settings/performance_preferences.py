@@ -101,7 +101,14 @@ class PerformanceSettings:
         )
 
     async def _apply(self, value):
-        for key, item in value.model_dump().items():
+        values = value.model_dump()
+        changed = {
+            key
+            for key, item in values.items()
+            if getattr(self.settings, key, None) != item
+            or getattr(self.value, key) != item
+        }
+        for key, item in values.items():
             setattr(self.settings, key, item)
         manager = getattr(self.runtime, "transfers", None)
         remote = getattr(manager, "remote", None) or getattr(
@@ -111,27 +118,37 @@ class PerformanceSettings:
             remote.max_bytes = self.settings.upload_limit
             remote.min_free_bytes = value.min_free_bytes
             scheduler = getattr(remote, "scheduler", None)
-            if scheduler is not None:
+            if scheduler is not None and (
+                not self._loaded or "remote_download_concurrency" in changed
+            ):
                 await scheduler.configure(value.remote_download_concurrency)
         pool = getattr(self.runtime, "pool", None)
         if pool is None or not hasattr(pool, "__dict__"):
+            self.value = value
             return
-        for method, argument in (
-            ("set_media_per_bot", value.telegram_media_per_bot),
-            ("set_media_queue_limit", value.telegram_max_queue),
+        for method, key in (
+            ("set_media_per_bot", "telegram_media_per_bot"),
+            ("set_media_queue_limit", "telegram_max_queue"),
         ):
             setter = getattr(pool, method, None)
-            if callable(setter):
-                await setter(argument)
-        for slot in getattr(pool, "_slots", ()):
-            client = getattr(slot, "client", None)
-            configure = getattr(client, "configure_transport", None)
-            if callable(configure):
-                configure(
-                    upload_pipeline=value.telegram_upload_pipeline,
-                    request_limit=value.telegram_request_limit,
-                    parts_per_second=value.telegram_parts_per_second,
-                )
+            if callable(setter) and (not self._loaded or key in changed):
+                await setter(getattr(value, key))
+        if not self._loaded or changed.intersection(
+            {
+                "telegram_upload_pipeline",
+                "telegram_request_limit",
+                "telegram_parts_per_second",
+            }
+        ):
+            for slot in getattr(pool, "_slots", ()):
+                client = getattr(slot, "client", None)
+                configure = getattr(client, "configure_transport", None)
+                if callable(configure):
+                    configure(
+                        upload_pipeline=value.telegram_upload_pipeline,
+                        request_limit=value.telegram_request_limit,
+                        parts_per_second=value.telegram_parts_per_second,
+                    )
         from tgdrive.media.media_reader import MediaReadCache
         from tgdrive.media.preloading import PreloadManager
 
@@ -149,8 +166,18 @@ class PerformanceSettings:
                 await cache.reconfigure(policy)
             pool._media_read_cache.deferred_writes = True
             self.runtime.preloads = PreloadManager(pool, policy=policy)
-        else:
+        elif not self._loaded or changed.intersection(
+            {
+                "cache_memory_bytes",
+                "cache_disk_bytes",
+                "cache_min_free_bytes",
+                "cache_ttl_seconds",
+                "preload_max_jobs",
+                "auto_preload",
+            }
+        ):
             await manager.reconfigure(policy)
+        self.value = value
 
     async def initialize(self):
         async with self._lock:
@@ -164,10 +191,19 @@ class PerformanceSettings:
                         "check MongoDB access and saved settings, then retry.",
                         status=503,
                     ) from None
-                self.value, self._loaded = value, True
+                self._loaded = True
 
     def etag(self):
-        raw = json.dumps(self.value.model_dump(), sort_keys=True).encode()
+        from tgdrive.core.governor import MANAGED
+
+        raw = json.dumps(
+            {
+                key: value
+                for key, value in self.value.model_dump().items()
+                if key not in MANAGED
+            },
+            sort_keys=True,
+        ).encode()
         return '"' + hashlib.sha256(raw).hexdigest() + '"'
 
     async def snapshot(self):
@@ -235,7 +271,6 @@ class PerformanceSettings:
                     "Restart the service to reconcile the saved policy."
                 )
                 raise SettingsProblem(detail, status=503) from None
-            self.value = value
         return await self.snapshot()
 
 

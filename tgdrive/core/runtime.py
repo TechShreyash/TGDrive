@@ -258,7 +258,15 @@ class Runtime:
                 check_upload_allowed=self._check_upload_allowed,
             )
             self.transfers._ensure_replica = self.replica.before_mutation
-            if self.replica.blocked:
+            from tgdrive.core.governor import Governor
+            from tgdrive.transfers.uploads import ResumableUploads
+
+            self.transfers.uploads = await asyncio.to_thread(
+                ResumableUploads, self.settings, self.transfers
+            )
+            self.governor = Governor(self.settings, self)
+            await self.governor.tick()
+            if await asyncio.to_thread(lambda: self.replica.blocked):
                 lineage_ready = False
             if lineage_ready:
                 try:
@@ -285,9 +293,6 @@ class Runtime:
             self.backup.start(self.store)
             self.replica.start()
             self.ready = True
-            from tgdrive.core.governor import Governor
-
-            self.governor = Governor(self.settings, self)
             self.governor.start()
             if not lineage_ready:
                 self._reconnector = asyncio.create_task(
@@ -508,7 +513,9 @@ class Runtime:
         try:
             if self.transfers is not None:
                 await self.transfers.close()
-                self.transfers.uploads.close()
+                uploads = getattr(self.transfers, "uploads", None)
+                if uploads is not None:
+                    uploads.close()
             self.registry.close()
             if self.store is not None:
                 self.store.close()
@@ -526,15 +533,16 @@ class Runtime:
         if not await asyncio.to_thread(database_is_empty, self.mongo):
             return False
         replica = ChannelReplica(self.settings, self)
-        candidate = replica.journal.get("candidate")
+        candidate = await asyncio.to_thread(replica.journal.get, "candidate")
         if candidate and candidate.get("discovered"):
             found = True
         else:
             try:
                 found = await replica.discover_backup()
-            except Exception:
+            except Exception as error:
                 # Never initialize over a backup we could not read.
                 logger.warning("A pinned backup could not be checked; opening recovery")
+                await asyncio.to_thread(replica._record_failure, error)
                 found = True
         if not found:
             await replica.close()

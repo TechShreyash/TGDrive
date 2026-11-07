@@ -1,7 +1,7 @@
 import re
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, Mock
 
 import pytest
 from fastapi.testclient import TestClient
@@ -243,5 +243,109 @@ async def test_owner_saves_choices_but_resource_values_are_automatic(
             {"_id": "performance-preferences"}
         )["document"]
         assert "cache_memory_bytes" not in document
+    finally:
+        await state.preloads.close()
+
+
+async def test_resource_updates_preserve_provider_feedback_and_owner_save_budgets(
+    tmp_path, mongo_backend
+):
+    from tgdrive.media.media_scheduler import MediaScheduler
+
+    settings = make_settings(tmp_path)
+    state = runtime(mongo_backend)
+    scheduler = MediaScheduler(limit=8, rate=48)
+
+    def configure_transport(**values):
+        scheduler.configure(
+            limit=values["request_limit"], rate=values["parts_per_second"]
+        )
+
+    client = SimpleNamespace(configure_transport=Mock(side_effect=configure_transport))
+    state.pool._slots = [SimpleNamespace(client=client)]
+    state.remote = SimpleNamespace(scheduler=SimpleNamespace(configure=AsyncMock()))
+    service = PerformanceSettings(settings, state)
+    await service.initialize()
+    try:
+        revision = service.etag()
+        await scheduler.flood(0)
+        assert scheduler.effective_limit == 4 and scheduler.effective_rate == 24
+        client.configure_transport.reset_mock()
+        state.remote.scheduler.configure.reset_mock()
+        state.pool.set_media_per_bot.reset_mock()
+        state.pool.set_media_queue_limit.reset_mock()
+        state.preloads.reconfigure = AsyncMock(wraps=state.preloads.reconfigure)
+        policy = service.value.model_copy(
+            update={
+                "cache_disk_bytes": 2 * 1024**3,
+                "staging_budget_bytes": 6 * 1024**3,
+                "max_file_size": 6 * 1024**3,
+            }
+        )
+        await service._apply(policy)
+        assert scheduler.effective_limit == 4 and scheduler.effective_rate == 24
+        assert service.etag() == revision
+        assert service.value == policy
+        await service.save({"timezone": "UTC"}, expected=revision)
+        assert (
+            service.value.staging_budget_bytes
+            == settings.staging_budget_bytes
+            == 6 * 1024**3
+        )
+        assert service.value.max_file_size == settings.max_file_size == 6 * 1024**3
+        client.configure_transport.assert_not_called()
+        state.remote.scheduler.configure.assert_not_awaited()
+        state.pool.set_media_per_bot.assert_not_awaited()
+        state.pool.set_media_queue_limit.assert_not_awaited()
+        state.preloads.reconfigure.assert_awaited_once()
+    finally:
+        await state.preloads.close()
+
+
+async def test_governor_retries_resource_policy_after_partial_apply_failure(
+    tmp_path, mongo_backend, monkeypatch
+):
+    from tgdrive.core import governor
+
+    settings = make_settings(tmp_path)
+    state = runtime(mongo_backend)
+    service = PerformanceSettings(settings, state)
+    state.performance_settings = service
+    await service.initialize()
+    previous = service.value
+    original = state.preloads.reconfigure
+    attempts = 0
+
+    async def reconfigure(policy):
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            raise OSError("temporary cache failure")
+        await original(policy)
+
+    state.preloads.reconfigure = AsyncMock(side_effect=reconfigure)
+    monkeypatch.setattr(
+        governor,
+        "measure",
+        lambda *_: {
+            "memory_available": None,
+            "cpus": 1,
+            "disk_total": 100 * governor.GIB,
+            "disk_free": 50 * governor.GIB,
+            "cache_disk_total": 20 * governor.GIB,
+            "cache_disk_free": 5 * governor.GIB,
+        },
+    )
+    item = governor.Governor(settings, state)
+    try:
+        with pytest.raises(OSError, match="temporary cache failure"):
+            await item.tick()
+        assert settings.cache_disk_bytes == 2 * governor.GIB
+        assert service.value == previous
+        await item.tick()
+        assert state.preloads.reconfigure.await_count == 2
+        assert service.value.cache_disk_bytes == settings.cache_disk_bytes
+        assert service.value.staging_budget_bytes == settings.staging_budget_bytes
+        assert state.preloads.policy.disk_max_bytes == 2 * governor.GIB
     finally:
         await state.preloads.close()

@@ -13,6 +13,54 @@ from tgdrive.transfers.tasks import TransferStatus
 from tgdrive.transfers.uploads import UploadError
 
 
+def test_governor_keeps_allocated_torrent_bytes_in_total_budget(tmp_path, monkeypatch):
+    from tgdrive.core.governor import CONCURRENCY, GIB, decide
+    from tgdrive.transfers.staging import StorageUnavailable, check_staging
+
+    job = SimpleNamespace(
+        id="torrent",
+        terminal=False,
+        task=None,
+        context={
+            "kind": "torrent",
+            "staging_size": 6 * GIB,
+            "staging_written": 0,
+            "staging_directory": str(tmp_path),
+        },
+    )
+    manager = SimpleNamespace(registry=SimpleNamespace(staging_records=lambda: [job]))
+    settings = SimpleNamespace(resolved_cache_dir=tmp_path)
+    sample = dict(
+        disk_total=100 * GIB,
+        disk_free=14 * GIB,
+        memory_available=GIB,
+        cpus=1,
+    )
+    previous = dict(values=dict.fromkeys(CONCURRENCY, 1))
+    free = sample["disk_free"]
+    monkeypatch.setattr(
+        "tgdrive.transfers.staging.shutil.disk_usage",
+        lambda _: SimpleNamespace(free=free),
+    )
+    for written in (0, 4 * GIB, 6 * GIB):
+        job.context["staging_written"] = written
+        reserved, remaining = staging_usage(manager)
+        free = sample["disk_free"] - written
+        previous = decide(
+            sample
+            | {"disk_free": free, "staging_allocated_bytes": reserved - remaining},
+            previous,
+        )
+        settings.staging_budget_bytes = previous["values"]["staging_budget_bytes"]
+        settings.min_free_bytes = previous["values"]["min_free_bytes"]
+        assert settings.staging_budget_bytes == 9 * GIB
+        check_staging(settings, manager, 6 * GIB, exclude=job.id, written=written)
+    # Other disk users can still exhaust space, including after payload completion.
+    free = 4 * GIB
+    with pytest.raises(StorageUnavailable, match="free disk space"):
+        check_staging(settings, manager, 6 * GIB, exclude=job.id, written=6 * GIB)
+
+
 @pytest.fixture(autouse=True)
 def mongo_backend(tmp_path, monkeypatch):
     return register_test_backend(monkeypatch, tmp_path / "data")

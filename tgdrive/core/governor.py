@@ -6,18 +6,12 @@ import asyncio
 import logging
 import os
 import shutil
-import time
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
 GIB = 1024**3
 INTERVAL_SECONDS = 5
-COOLDOWN_SECONDS = 60
-# MongoDB counts as slow above both bounds; the free Atlas tier throttles
-# bursts this way, and backing off keeps catalog writes from timing out.
-MONGO_SLOW_MS = 250
-MONGO_SLOW_FACTOR = 4
 CONCURRENCY = (
     "telegram_uploads_per_bot",
     "telegram_upload_pipeline",
@@ -53,17 +47,21 @@ def _words(path) -> list[str] | None:
 
 def memory(
     cgroup: str = "/sys/fs/cgroup", meminfo: str = "/proc/meminfo"
-) -> tuple[int, int]:
+) -> tuple[int | None, int | None]:
     """Return (limit, available) bytes; cgroup v2 first, then the host."""
     limit, current = _words(f"{cgroup}/memory.max"), _words(f"{cgroup}/memory.current")
     if limit and current and limit[0] != "max":
         return int(limit[0]), max(0, int(limit[0]) - int(current[0]))
     rows = {}
-    for line in Path(meminfo).read_text().splitlines():
+    try:
+        lines = Path(meminfo).read_text().splitlines()
+    except OSError:
+        return None, None
+    for line in lines:
         name, _, rest = line.partition(":")
         if rest.split():
             rows[name] = int(rest.split()[0]) * 1024
-    return rows["MemTotal"], rows["MemAvailable"]
+    return rows.get("MemTotal"), rows.get("MemAvailable")
 
 
 def cpus(path: str = "/sys/fs/cgroup/cpu.max") -> int:
@@ -73,15 +71,22 @@ def cpus(path: str = "/sys/fs/cgroup/cpu.max") -> int:
     return os.cpu_count() or 1
 
 
-def measure(directory) -> dict:
+def measure(directory, media_directory) -> dict:
     limit, available = memory()
     disk = shutil.disk_usage(directory)
+    media_directory = Path(media_directory)
+    # The disposable media cache need not exist before the first read.
+    while not media_directory.exists():
+        media_directory = media_directory.parent
+    media_disk = shutil.disk_usage(media_directory)
     return dict(
         memory_limit=limit,
         memory_available=available,
         cpus=cpus(),
         disk_total=disk.total,
         disk_free=disk.free,
+        cache_disk_total=media_disk.total,
+        cache_disk_free=media_disk.free,
     )
 
 
@@ -89,86 +94,51 @@ def _gib(value: int) -> str:
     return f"{value / GIB:.2f} GiB"
 
 
-def decide(measurements: dict, previous: dict, signals: dict | None, now: float):
-    """Return the next state: values, a reason per value, and AIMD bookkeeping."""
+def decide(measurements: dict, previous: dict):
+    """Size resource budgets while preserving the configured concurrency ceilings."""
     values, reasons = dict(previous["values"]), dict(previous.get("reasons", {}))
+    ceilings = previous.get("ceilings") or {key: values[key] for key in CONCURRENCY}
     m = measurements
     reserve = max(GIB, m["disk_total"] // 20)
-    # shortcut: free disk excludes space the cache and staging already use, so
-    # budgets settle below the true maximum; add usage back if that matters.
     room = max(0, m["disk_free"] - reserve)
+    staging_room = room + m.get("staging_allocated_bytes", 0)
+    cache_reserve = max(GIB, m.get("cache_disk_total", m["disk_total"]) // 20)
+    cache_room = max(0, m.get("cache_disk_free", m["disk_free"]) - cache_reserve)
     targets = {
-        # shortcut: cgroup memory.current counts page cache, so available memory
-        # is understated under file I/O; subtract inactive_file if caches stay small.
-        "cache_memory_bytes": (m["memory_available"] // 4, "25% of available memory"),
-        "cache_disk_bytes": (room // 2, "50% of free disk after the reserve"),
-        "cache_min_free_bytes": (reserve, "larger of 1 GiB and 5% of the disk"),
+        "cache_disk_bytes": (
+            cache_room // 2,
+            "50% of free media-cache disk after reserve",
+        ),
+        "cache_min_free_bytes": (
+            cache_reserve,
+            "larger of 1 GiB and 5% of the media-cache disk",
+        ),
         "min_free_bytes": (reserve, "larger of 1 GiB and 5% of the disk"),
-        "staging_budget_bytes": (max(1, room), "free disk after the reserve"),
+        "staging_budget_bytes": (
+            max(1, staging_room),
+            "free disk after reserve plus allocated staging",
+        ),
         # The largest file is whatever staging can hold; TGDrive adds no cap.
-        "max_file_size": (max(1, room), "fits in the staging budget"),
+        "max_file_size": (max(1, staging_room), "fits in the staging budget"),
     }
+    if m["memory_available"] is not None:
+        targets["cache_memory_bytes"] = (
+            m["memory_available"] // 4,
+            "25% of available memory",
+        )
     for key, (target, why) in targets.items():
         old = values.get(key) or 0
         if old == 0 or abs(target - old) > old / 10:
             values[key], reasons[key] = target, f"{why} ({_gib(target)})"
-    last, raised_at = previous.get("signals"), previous["raised_at"]
-    throughput = previous.get("throughput", 0.0)
-    latency = m.get("mongo_latency_ms")
-    baseline = previous.get("mongo_baseline_ms")
-    mongo_slow = False
-    if latency is not None:
-        mongo_slow = baseline is not None and latency > max(
-            MONGO_SLOW_MS, baseline * MONGO_SLOW_FACTOR
-        )
-        # The usual latency is the lowest seen, drifting up 1% per tick so a
-        # moved database is relearned.
-        baseline = latency if baseline is None else min(latency, baseline * 1.01)
-    backoff_at = previous.get("mongo_backoff_at")
-    if mongo_slow and (backoff_at is None or now - backoff_at >= COOLDOWN_SECONDS):
-        backoff_at = now
-        for key in CONCURRENCY:
-            values[key] = max(1, values[key] // 2)
-            reasons[key] = (
-                f"halved: MongoDB slowed to {latency:.0f} ms "
-                f"(usually {baseline:.0f} ms) ({values[key]})"
-            )
-        raised_at = now
-    elif mongo_slow:
-        raised_at = now  # Still slow: hold values, no raises.
-    elif last is not None and signals is not None:
-        elapsed = max(1e-9, signals["at"] - last["at"])
-        current = max(0, signals["bytes"] - last["bytes"]) / elapsed
-        if signals["floods"] > last["floods"] or signals["timeouts"] > last["timeouts"]:
-            for key in CONCURRENCY:
-                values[key] = max(1, values[key] // 2)
-                reasons[key] = f"halved after FloodWait or timeouts ({values[key]})"
-            raised_at = now
-        elif (
-            current > 0
-            and current >= throughput * 0.9
-            and now - raised_at >= COOLDOWN_SECONDS
-        ):
-            for key in CONCURRENCY:
-                values[key] += 1
-                reasons[key] = (
-                    f"raised: clean window, steady throughput ({values[key]})"
-                )
-            raised_at = now
-        throughput = current
+    for key, ceiling in ceilings.items():
+        values[key] = ceiling
+        reasons[key] = f"startup ceiling ({ceiling})"
     for key in CPU_BOUND:
-        if values[key] > m["cpus"] * 4:
-            values[key] = m["cpus"] * 4
-            reasons[key] = f"capped at 4 per CPU ({values[key]})"
-    return dict(
-        values=values,
-        reasons=reasons,
-        signals=signals,
-        throughput=throughput,
-        raised_at=raised_at,
-        mongo_baseline_ms=baseline,
-        mongo_backoff_at=backoff_at,
-    )
+        target = min(values[key], m["cpus"] * 4, 8)
+        if target != values[key]:
+            values[key] = target
+            reasons[key] = f"capped at 4 per CPU and 8 jobs ({target})"
+    return dict(values=values, reasons=reasons, ceilings=ceilings)
 
 
 class Governor:
@@ -183,59 +153,32 @@ class Governor:
 
         return get_performance_settings(self.settings, self.runtime)
 
-    def _mongo_latency_ms(self) -> float | None:
-        db = getattr(getattr(self.runtime, "mongo", None), "db", None)
-        if db is None:
-            return None
-        started = time.perf_counter()
-        try:
-            db.command("ping")
-        except Exception:
-            return None  # Connectivity failures are handled by ownership checks.
-        return (time.perf_counter() - started) * 1000
-
-    def signals(self) -> dict | None:
-        slots = getattr(getattr(self.runtime, "pool", None), "_slots", ())
-        rows = [
-            scheduler
-            for slot in slots
-            if (scheduler := getattr(slot.client, "_media_scheduler", None))
-        ]
-        if not rows:
-            return None
-        return dict(
-            at=time.monotonic(),
-            floods=sum(row.floods for row in rows),
-            timeouts=sum(row.timeouts for row in rows),
-            bytes=sum(row.bytes for row in rows),
-        )
-
-    async def tick(self, now: float | None = None) -> None:
+    async def tick(self) -> None:
         service = self._service()
-        directory = self.settings.resolved_data_dir
-        self.measurements = await asyncio.to_thread(measure, directory)
-        latency = await asyncio.to_thread(self._mongo_latency_ms)
-        if latency is not None:
-            self.measurements["mongo_latency_ms"] = latency
-        now = time.monotonic() if now is None else now
+        directory = self.settings.resolved_cache_dir
+        pool = getattr(self.runtime, "pool", None)
+        media_directory = getattr(pool, "media_cache_dir", None) or (
+            Path(self.settings.resolved_data_dir) / "media-cache"
+        )
+        self.measurements = await asyncio.to_thread(measure, directory, media_directory)
+        manager = getattr(self.runtime, "transfers", None)
+        if manager is not None:
+            from tgdrive.transfers.staging import staging_usage
+
+            reserved, remaining = staging_usage(manager)
+            self.measurements["staging_allocated_bytes"] = reserved - remaining
         if self.state is None:
             self.state = dict(
                 values={
                     k: getattr(service.value, k, None) or getattr(self.settings, k)
                     for k in CONCURRENCY + BYTES
                 },
-                raised_at=now,
             )
         before = self.state["values"]
-        self.state = decide(self.measurements, self.state, self.signals(), now)
+        self.state = decide(self.measurements, self.state)
         values = dict(self.state["values"])
         changed = sorted(k for k, v in values.items() if before.get(k) != v)
         if changed:
-            # Routine one-step raises every cooldown would flood INFO logs.
-            routine = all(
-                str(self.state["reasons"].get(k, "")).startswith("raised")
-                for k in changed
-            )
             # Format concise summaries for disk/memory budgets and concurrency changes
             parts = []
             for k in changed:
@@ -247,15 +190,17 @@ class Governor:
                 else:
                     parts.append(f"{k}: {reason}")
             logger.log(
-                logging.DEBUG if routine else logging.INFO,
+                logging.INFO,
                 "Automatic tuning: %s",
                 "; ".join(parts),
             )
         uploads = values.pop("telegram_uploads_per_bot")
-        if any(getattr(self.settings, k, None) != v for k, v in values.items()):
+        if any(
+            getattr(self.settings, k, None) != v or getattr(service.value, k, None) != v
+            for k, v in values.items()
+        ):
             async with service._lock:
                 await service._apply(service.value.model_copy(update=values))
-        pool = getattr(self.runtime, "pool", None)
         if uploads != self.settings.telegram_uploads_per_bot and hasattr(
             pool, "set_uploads_per_bot"
         ):
