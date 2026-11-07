@@ -46,6 +46,11 @@ per-person accounts or OpenAPI pages, and response fields may grow over time.
   one. There is no cross-origin integration mode.
 - Dates are ISO strings, except upload `expires_at` and job timestamps, which are
   Unix seconds.
+- JSON control bodies are capped at **64 KiB**, including signed-in/demo
+  requests. Folder-tree, bulk/move and ZIP-creation requests allow **4 MiB**;
+  numbered transfer-history requests allow **256 KiB**. Oversize bodies return
+  `413`, including streamed bodies without `Content-Length`. Multipart uploads,
+  receipt chunks and binary recovery imports use their own admission paths.
 
 ## Session, configuration, health, and assets
 
@@ -56,7 +61,7 @@ per-person accounts or OpenAPI pages, and response fields may grow over time.
 | `POST /api/logout` | Cookie | Revokes the session and clears the cookie | |
 | `GET /api/v1/session` | Public | `{"authenticated": bool}` plus demo permission fields | `no-store` |
 | `GET /api/v1/status` | Owner | Connections, capacity, catalog revision, latest backup, client health, `telegram_issues` | Does not query Telegram backup history |
-| `POST /api/v1/backup` | Owner | Creates a confirmed recovery file now | `503` if it can't be confirmed |
+| `POST /api/v1/backup` | Owner | Requests an immediate backup or retries pending publication | `409` during recovery or while independent protection is paused; `503` if it can't be confirmed |
 | `GET /health/live` | Public | `200` when HTTP answers | |
 | `GET /health/ready`, `GET /healthz` | Public | `200` when ready or in recovery mode | `503` otherwise |
 | `GET /`, `GET /stream`, `GET /embed` | Public | App, standalone player and embed shells | Data requests still check access |
@@ -78,12 +83,18 @@ verification are in [architecture](architecture.md#independent-backup-pacing-and
 | `GET /api/v1/replica` | Configuration, phase, revisions, progress, retry guidance and any recovery candidate | Never returns tokens or the key |
 | `POST /api/v1/replica/configure` | `channel_id`, `bot_token`, `independent_accounts: true`: set up a backup channel | Needs a separate private channel and bot |
 | `POST /api/v1/replica/action` | `action`: `sync`, `pause`, `resume`, `retry` or `disable` | |
-| `GET /api/v1/replica/file` | Download the latest confirmed `tgdrive-backup.tgdb` | `404` until one exists; denied in demo mode |
+| `GET /api/v1/replica/file` | Download a locally saved `tgdrive-backup.tgdb` | `404` if unavailable; denied in demo mode |
 | `GET /api/v1/replica/report` | Secret-free status report | May still contain private names and IDs |
-| `POST /api/v1/replica/import` | Raw recovery-file bytes; optional `X-TGDrive-Source-Channel`, `X-TGDrive-Bot-Token` | Returns a candidate; does not activate. Disabled in demo mode |
+| `POST /api/v1/replica/import` | Raw `application/octet-stream` recovery bytes; optional `X-TGDrive-Source-Channel`, `X-TGDrive-Bot-Token` | Returns a candidate; does not activate. `422` for failed key/file validation; `415` wrong content type. Disabled in demo mode |
 | `POST /api/v1/replica/restore` | Restore the backup found in the storage channel at startup | Restart when asked. Disabled in demo mode |
 | `POST /api/v1/replica/recover` | Three steps: `source_channel` + `bot_token` to inspect; `target_channel` + `target_bot_token` + `confirm_channel` (optional `catalog_only`) to copy; `activate: true` + `confirm_channel` to switch | Wrong confirmation or an incomplete candidate can't activate |
-| `POST /api/v1/start-new` | `confirm: "START NEW"` and `password`: erase this drive and start an empty one | `403` wrong password or demo mode; `409` already running; `422` missing confirmation. [What is erased](backup-recovery.md#start-a-new-drive) |
+| `POST /api/v1/start-new` | `confirm: "START NEW"` and `password`; in-place reset is temporarily unavailable | A valid request returns `409 START_NEW_UNAVAILABLE` without erasing the drive; `403` wrong password or demo mode; `422` invalid confirmation. [Fresh-drive procedure](backup-recovery.md#start-a-new-drive) |
+
+The status endpoint's `backup` list is latest-first and may be empty.
+`pin_verified_at` records a pin check at that time; `unverified` discovery does
+not establish archive corruption. Local download availability is reported
+separately by `backup_file_available` from the replica endpoint; do not infer it
+from discovery status alone.
 
 Database outages report `REPLICA_MONGODB_UNAVAILABLE` with a `retry_at`;
 configuration or ownership problems report `REPLICA_MONGODB_FAILED`. Neither
@@ -115,9 +126,9 @@ characters. Account errors include `TELEGRAM_CREDENTIALS_REVOKED`,
 | Method and route | Access | Purpose | Notes and errors |
 | --- | --- | --- | --- |
 | `POST /api/getDirectory` | Owner, Share | `{"path", "auth"}`: whole folder contents keyed by child ID | Older route; the website now uses the paged routes below. Special paths: `/trash`, `/search_<q>` (max 500 results), `/share_<folder-id>` |
-| `GET /api/v1/nodes` | Owner | `parent_id`, `limit` (1–500), `sort` (`name`, `size`, `type`, `date`), `order` (`asc`, `desc`), optional `type` filter, then one of `cursor` (up to 1024 characters), `offset` or `around` (an item ID, up to 64 characters) | `{items, total, offset, next_cursor}`, plus `folder` on pages that don't continue a cursor and `index` with `around`. `next_cursor` is `null` on the last page. `422` for an invalid cursor or mixed paging parameters; `404` if the `around` item isn't in the folder |
+| `GET /api/v1/nodes` | Owner | `parent_id` (default `/`), `limit` (1–500; default 100), `sort` (`name`, `size`, `type`, `date`; default `name`), `order` (`asc`, `desc`; default `asc`), optional `type` filter, then one of `cursor` (up to 16,384 characters), `offset` or `around` (an item ID, up to 64 characters) | `{items, total, offset, next_cursor}`, plus `folder` on pages that don't continue a cursor and `index` with `around`. `next_cursor` is `null` on the last page. `422` for an invalid cursor or mixed paging parameters; `404` if the `around` item isn't in the folder |
 | `GET /api/v1/shared/nodes` | Share | `auth` (1–512 characters) plus the same parameters as `/api/v1/nodes` | `{items, total, offset, next_cursor, share_home}` plus `folder` and `index` as above, without `starred`; breadcrumbs start at the shared folder; `private, no-store`. `403` invalid share, folder outside it or `around` item not in the folder; `409` during recovery; `422` bad paging |
-| `GET /api/v1/search` | Owner | `q` (1–255), `offset`, `limit` (`25`, `50` or `100`; default 50), `sort` (`name`, `date`, `size`), `order` | Word-start match, excludes Trash; ranks at most 1,000 matches. `{items, total, capped, has_more, next_offset}`; `422` for other limits |
+| `GET /api/v1/search` | Owner | `q` (1–255), `offset`, `limit` (`25`, `50` or `100`; default 50), `sort` (`name`, `date`, `size`), `order` | Word-start match, excludes Trash; ranks at most 1,000 candidates, not all global matches. `{items, total, capped, has_more, next_offset}`; `422` for other limits |
 | `GET /api/v1/trash` | Owner | Top-level Trash items, optional `q` | Pending deletions are hidden |
 | `POST /api/createNewFolder` | Owner | `{"path", "name"}` | |
 | `POST /api/renameFileFolder` | Owner | `{"path", "name"}` | |
@@ -128,8 +139,9 @@ characters. Account errors include `TELEGRAM_CREDENTIALS_REVOKED`,
 filter chips. `folder` is the folder's own record with `breadcrumbs`, as from
 `getDirectory`. `around` starts the page at that item, for links that open a file
 in a large folder, and `index` is its position under the current sort and filter.
-Pass `next_cursor` back as `cursor` to page large folders; it stays as fast as the
-first page, while deep `offset` pages slow down. Folders sort first. File rows include `part_count` but never message IDs or checksums.
+Pass `next_cursor` back as `cursor` to page large folders without a deep offset
+scan; counts and other database work still apply. Folders sort first. File rows
+include `part_count` but never message IDs or checksums.
 
 ## Atomic folder preparation
 
@@ -172,9 +184,9 @@ All routes are **Owner**. Field meanings and limits are in
 
 | Method and route | Purpose | Notes and errors |
 | --- | --- | --- |
-| `GET /api/v1/settings/performance` | Saved preferences, revision and defaults | |
-| `PATCH /api/v1/settings/performance` | Partial lowercase preferences, including `max_file_size`, `staging_budget_bytes`, `min_free_bytes` | Send the revision in `If-Match`; stale edits conflict; unknown fields rejected |
-| `GET /api/v1/performance` | Live accounts, queues, `traffic`, `server` readings and `tuning` | Process-local; resets on restart |
+| `GET /api/v1/settings/performance` | Owner preferences, revision and defaults; excludes managed resource values | Live managed values are under `/api/v1/performance` → `tuning` |
+| `PATCH /api/v1/settings/performance` | Only `timezone`, `auto_preload` and `upload_split_mib` | Optional revision in `If-Match`; stale edits return `409`. Managed keys (including `max_file_size`, `staging_budget_bytes`, `min_free_bytes`) and unknown fields return `422` |
+| `GET /api/v1/performance` | Live accounts, queues, `traffic`, `server`, `drive`/`database` readings and `tuning` | Live samples reset on restart; recorded history/totals use the history route |
 | `GET /api/v1/performance/history` | `start`, `end` (Unix seconds, within 31 days): up to 360 bins plus lifetime `totals` | `422` bad range; `503` storage unavailable. Don't add the totals together |
 | `GET /api/v1/preloads` | Cached files, coverage as `[start, end)` intervals and jobs | |
 | `POST /api/v1/preloads` | `{"path"}`: preload a file | Rejected if it can't fit RAM or disk cache |
@@ -200,7 +212,10 @@ Both accept `allow_public_exposure`. Follow and control the job with the
 | Extraction formats | ZIP (Stored, Deflate, BZIP2, LZMA), 7z, RAR/RAR5, TAR, gzip/bzip2/xz/Zstandard |
 | Rejected | Encrypted or split archives, unsafe or duplicate paths, links, empty regular files |
 | Disk space | Shares `STAGING_BUDGET_BYTES` and `MIN_FREE_BYTES` with uploads; extraction needs the archive and its output together |
-| Worker | Separate process, no memory or CPU cap; the kernel stops it first under memory pressure |
+| Entries | At most 1,000 files/folders, including implicit parent folders; applies to ZIP creation and extraction |
+| Paths | At most 64 components and 4,096 characters |
+| Metadata | 4 MiB manifest/job-plan bound; ZIP central directory at most 8 MiB, checked before allocating entry objects |
+| Worker | Separate process; 512 MiB virtual address-space and 600-second CPU-time limits where supported. Expensive valid archives may be rejected; originals remain downloadable |
 
 Failed jobs keep their staged bytes for **Retry**; cancel to release the space.
 Files already saved stay in the drive. Pipeline details:
@@ -216,7 +231,7 @@ and reconciliation are in [the transfer pipeline](architecture.md#from-a-browser
 | `POST /api/v1/uploads` | `name`, `parent_id`, `total_size`, optional `folder_upload`: create a receipt | `201`; `413` too large; `507` no staging space |
 | `GET /api/v1/uploads/{upload_id}` | Current receipt with chunk checksums | `410` expired |
 | `HEAD /api/v1/uploads/{upload_id}` | `Upload-Offset`, `Upload-Length` headers | |
-| `PATCH /api/v1/uploads/{upload_id}` | Raw `application/octet-stream` chunk with `Upload-Offset` | `204`; `409 UPLOAD_OFFSET_CHANGED`; `415`; `422` |
+| `PATCH /api/v1/uploads/{upload_id}` | Raw `application/octet-stream` chunk with `Upload-Offset` | `204`; `409 UPLOAD_OFFSET_CHANGED`; `413` chunk above 8 MiB; `415` wrong content type; `422` invalid offset/chunk |
 | `POST /api/v1/uploads/{upload_id}/complete` | Hand the file to a server job | `202 {id, job}`; repeats return the same job |
 | `POST /api/v1/uploads/{upload_id}/cancel` | Cancel the receipt | |
 
@@ -224,8 +239,9 @@ Send exactly `chunk_size` bytes (8 MiB) per request, except a smaller last chunk
 and wait for each acknowledgment. After a lost response, read the offset with
 `GET` or `HEAD` before resending. Call `complete` only when the offset equals
 `total_size`, then poll the job. Receipts expire after
-`UPLOAD_SESSION_TTL_SECONDS` without new chunks (default 24 hours). `429` means
-too many active receipts.
+`UPLOAD_SESSION_TTL_SECONDS` without new chunks (default 24 hours). Simultaneous
+chunk receivers wait for the receive-work bound; receipt count is not a `429`
+quota. Staging admission can still reject new work.
 
 ## Previews and media
 
@@ -285,7 +301,7 @@ Statuses: `all`, `queued`, `running`, `finished`, `completed`, `error`,
 
 | Method and route | Access | Purpose | Notes and errors |
 | --- | --- | --- | --- |
-| `GET /api/v1/recent` | Owner | `limit` (`25`, `50` or `100`), `cursor`, optional `type`: files by last upload or owner open | `{items, next_cursor}`; items add `path`, `parent_names`, `active_at`. `422` for other limits |
+| `GET /api/v1/recent` | Owner | `limit` (`25`, `50` or `100`; default 50), `cursor` (up to 256 characters), optional `type`: files by last upload or owner open | `{items, next_cursor}`; items add `path`, `parent_names`, `active_at`. `422` for other limits |
 
 ## Starred items
 
@@ -302,11 +318,11 @@ root can't be starred.
 | Method and route | Access | Purpose | Notes and errors |
 | --- | --- | --- | --- |
 | `GET /api/v1/shares` | Owner | All links, active and expired | Never returns tokens |
-| `POST /api/v1/shares` | Owner | `path`, optional `label`, `expires_in_days` (1–3650, default 7) or `expires_at` | `201` with `auth`; up to 100 links per item |
+| `POST /api/v1/shares` | Owner | `path`, optional `label`, `expires_in_days` (1–3650, default 7; `null` = never) or explicit `expires_at` | `201` with `auth`; up to 100 links per item |
 | `POST /api/v1/shares/link` | Owner | Copy an existing link by `share_id` or `path` | `409` unrecoverable or ambiguous; `410` expired |
-| `PATCH /api/v1/shares` | Owner | Change `label` or `expires_at` (`null` = never) | |
+| `PATCH /api/v1/shares` | Owner | Required `share_id`, plus `label` and/or `expires_at` (`null` = never) | Update by link ID, not item path |
 | `DELETE /api/v1/shares` | Owner | Revoke one link by `share_id`, or all direct links by `path` | |
-| `POST /api/v1/download-links` | Owner | Signed one-day attachment URL for a download manager | Reuses an active "Download link" share |
+| `POST /api/v1/download-links` | Owner | `path`: attachment URL plus `expires_at` for a download manager | Reuses a copyable "Download link" share with its current expiry; only a new share defaults to one day |
 | `POST /api/getFileShareAuth`, `/api/getFolderShareAuth` | Owner | Older link-creation routes | |
 | `GET /api/v1/embed` | Share | File metadata for the embed viewer | Token required even with an owner cookie |
 | `GET`, `HEAD /file` | Owner, Share | File bytes; `Range`, `quality`, `preview=1`, `download=1` | `206`, `304`, `416`, `503` with `Retry-After` |
@@ -315,9 +331,11 @@ URL formats:
 
 | Use | URL |
 | --- | --- |
-| File | `/file?path=<id-path>&auth=<token>` |
+| Shared file viewer | `/embed?path=%2F<file-id>&auth=<token>` |
 | Shared folder | `/?path=%2Fshare_<folder-id>&auth=<token>` |
 | Embed | `/embed?path=%2F<file-id>&auth=<token>` or `/embed?path=%2Fshare_<folder-id>&auth=<token>` |
+| Raw file bytes / older direct file links | `/file?path=<id-path>&auth=<token>` |
+| Attachment download | `/file?path=<id-path>&auth=<token>&download=1` |
 
 - `/file` supports one range per request (`bytes=0-1023`, `bytes=1024-`,
   `bytes=-1024`). Multi-range or malformed headers get the full file with `200`.
@@ -378,6 +396,9 @@ Errors usually carry `detail` and sometimes a stable `code`, such as
 `UPLOAD_OFFSET_CHANGED`, `BACKUP_PENDING` or `RECOVERY_REQUIRED`. Match on codes,
 not on message text.
 
+Settings failures use `{detail, code}` with their stated HTTP status, including
+`START_NEW_UNAVAILABLE`. Error envelopes vary across older routes.
+
 | Status | Meaning | What to do |
 | --- | --- | --- |
 | 400 | Bad path, range, action or blocked URL | Fix the request |
@@ -389,7 +410,7 @@ not on message text.
 | 413 | Too large | Use a smaller file or chunk |
 | 415 | Wrong chunk content type | Send `application/octet-stream` |
 | 422 | Invalid fields or empty file | Fix the request |
-| 429 | Login throttle or receipt capacity | Wait for `Retry-After` |
+| 429 | Login throttle or concurrent password-verification limit | Wait for `Retry-After` |
 | 502 | Remote source failed | Retry later |
 | 503 | Not ready or queue full | Wait for `Retry-After` |
 | 507 | Not enough staging space | Free space or wait |

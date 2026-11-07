@@ -41,7 +41,7 @@ TGDrive prevents conflicting writes. For everyday actions, use the
 ```mermaid
 flowchart LR
     Browser <-->|Files and API| Server["TGDrive server"]
-    Server <-->|Original file bytes| Telegram
+    Server <-->|Stored file bytes| Telegram
     Server <-->|Catalog and durable work| MongoDB
     Server -.->|Encrypted recovery files| Telegram
 ```
@@ -50,10 +50,10 @@ flowchart LR
 The catalog maps files/folders to their Telegram messages. Local persistent storage
 holds keys, sessions, unfinished upload bytes and disposable cache. Background
 backups send encrypted recovery files to Telegram; they exclude unfinished bytes.
-The MongoDB connection is compressed with zstd, falling back to zlib, which cuts the
-data counted against the free Atlas tier's weekly transfer limit. Background catalog
-work, such as thumbnail rebuilds and preload re-checks, is paced below the database's
-operation budget, so owner requests never wait.
+The MongoDB connection negotiates zstd or zlib compression where supported.
+Selected thumbnail and preload catalog rechecks share a process-local pacer to
+reduce competition with browsing. This is not a global database-operation cap
+or a reservation of capacity for owner requests.
 
 Run **one installation and one FastAPI worker per drive**. Background work runs
 inside that process without Redis or a separate task broker. Accepted server
@@ -91,17 +91,17 @@ and test layout is described in the
 
 ## Authoritative data and identity
 
-**MongoDB holds the catalog and answers every catalog query.** TGDrive keeps no
-copy of the catalog in its own memory, so server RAM does not grow with the
-number of files and startup does not load the drive. MongoDB caches frequently
-used data in its own memory. Collections hold nodes (with ordered file parts),
-shares, operation IDs, jobs and receipts, deletion intents, private settings and
+**MongoDB holds the catalog and answers catalog queries.** Normal folder browsing
+reads pages rather than retaining a whole-drive catalog. Migration, backups and
+recovery can still use memory proportional to the captured data. MongoDB also
+caches frequently used data in its own memory. Collections hold nodes (with
+ordered file parts), shares, operation IDs, jobs and receipts, deletion intents, private settings and
 sessions, backup records and the runtime ownership lease.
 
-**TGDrive sets no limit on items, folder depth or catalog size.** MongoDB's
-storage is the limit; names and their search words are indexed. A file record uses
-~601 B on Atlas (data + indexes), so the free 512 MB Atlas tier holds roughly
-**850,000 files and folders** (see [database benchmarks and capacity](setup.md#1-prepare-mongodb)).
+TGDrive has no configured item-count quota. Catalog size depends on names,
+search tokens, file parts, indexes and retained work; database and recovery
+resource limits still apply. Use provider quota monitoring rather than a fixed
+files-per-tier estimate ([MongoDB setup](setup.md#1-prepare-mongodb)).
 
 | Query | How MongoDB answers it |
 | --- | --- |
@@ -117,13 +117,13 @@ hidden through it. Permanent deletion walks the subtree in batches.
 
 - Paths use stable item IDs: moves and renames retain identity.
 - Names are Unicode-normalized with case-insensitive sibling uniqueness.
-- Files reference one Telegram document or any number of ordered parts with
+- Files reference one Telegram document or ordered parts with
   offsets, sizes and checksums. Public listings hide those locations.
 - Schema version 5 tracks revision and commit generation.
 
 A schema 4 database from TGDrive 2.0–2.2 is upgraded in place at startup, before
-the drive opens: a gzip safety copy of every collection is written to `DATA_DIR`,
-the 2.3 fields and the encryption-key check are added, and the schema version is
+the drive opens: a gzip safety copy is written to `DATA_DIR`, the 2.3 fields and
+the encryption-key check are added, and the schema version is
 raised last, so an interrupted upgrade resumes on the next start
 ([upgrade steps](operations.md#upgrade-from-22-or-earlier)). Telegram parts without a
 nonce are read as plain bytes. Restoring a recovery file or activating a channel
@@ -550,9 +550,9 @@ before revealing the correct list page.
 
 ## Telegram transport and file responses
 
-Every uploaded part is encrypted in `Client._upload_parts` as it streams; reads
-decrypt in `PartLease.read`, preloading checksum and cached-source thumbnail
-repair. The read cache keeps ciphertext. See
+`Client._upload_parts` encrypts nonce-bearing parts as they stream. Logical
+reads, preload checksum verification and cached-source thumbnail repair decrypt
+them. The read cache keeps fetched Telegram bytes, including ciphertext. See
 [stored file encryption](reference.md#stored-file-encryption).
 
 Telethon with cryptg uses MTProto, distinct from the hosted HTTP Bot API. Requests
@@ -618,11 +618,11 @@ guarantee a complex PDF will fit every device's memory.
 | --- | --- |
 | Index/chapter/thumbnail operation | 32 MiB fetched; aligned 1 MiB reads and a four-block parser cache |
 | One selected original raster image | 64 MiB encoded image; up to 96 MiB source reads without loading unrelated ZIP entries |
-| Raster images | Headers are validated before bytes leave the parser; no pixel or edge limit |
-| Archive | Stored/deflate ZIP methods; no entry-count limit |
+| Raster images | Headers validated before output; at most 64,000,000 pixels and a 32,768-pixel edge |
+| Archive | Stored/deflate ZIP methods; at most 10,000 entries and a 2 MiB central directory, checked before entry allocation |
 | EPUB / entries | 2 MiB/text entry; 16 MiB thumbnail-source image, separate from the 64 MiB reader-page limit |
 | Parser work | Two simultaneous operations, 16 pending requests, 45-second parser timeout; 55-second total route deadline including shared-result waits |
-| Linux container parser process | No memory or CPU cap; the kernel ends the parser, not TGDrive, under memory pressure |
+| Parser process | 384 MiB virtual address space and 10 seconds CPU time where OS resource limits are supported |
 
 The server caches extracted pages and parsed chapters/indexes for up to **five
 minutes**, bounded to **64 MiB and 16 results**. Concurrent requests for the same
@@ -635,8 +635,8 @@ through that link; it cannot recall delivered bytes or revoke independent links.
 Raster bytes cross the parser boundary as bounded binary output without base64
 expansion. Header checks do not decode or resize images. JPEG dimensions must
 appear within the first 1 MiB; excessive/malformed headers are rejected. There
-is no pixel limit, so very large images depend on the browser's decoder, GPU and
-memory. Unsafe/duplicate archive names and extreme compression ratios
+are pixel/edge bounds, but accepted images still use the browser's decoder, GPU
+and memory. Unsafe/duplicate archive names and extreme compression ratios
 fail. Solid CBR may exhaust its read budget before a page; busy readers receive
 retry guidance. Budgets apply per operation and allow cached-data reuse.
 
@@ -703,10 +703,11 @@ resources/archive-path extraction and force recognized raster bytes through the
 image decoder. Existing covers change only on new upload, explicit rebuild or
 eligible repair.
 
-The Linux renderer uses **one decoding/filter thread and 64 MiB per allocation**
-and cannot write files. It has no CPU-time or memory cap; instead it sets
-`oom_score_adj` to 1000 so under memory pressure the kernel kills the renderer
-before TGDrive. The renderer then falls back to the cover/icon.
+The renderer uses **one decoding/filter thread and 64 MiB per allocation** and
+cannot write files. Where supported, it has a **768 MiB virtual address-space
+limit and 30-second CPU-time limit**. Linux OOM-victim preference is best effort;
+it does not guarantee that the app survives host-wide memory pressure. Failed
+rendering retains the cover/icon fallback.
 Forced demuxers and file/pipe-only local inputs block playlist/network loads.
 
 ## Database safety copies and security
@@ -714,14 +715,22 @@ Forced demuxers and file/pipe-only local inputs block playlist/network loads.
 Each backup is one compressed AES-256-GCM `tgdrive-backup.tgdb` file. It holds one
 consistent MongoDB snapshot and source/backup message mappings; the portable
 catalog comes from that captured snapshot, not a later live read. Its key is an
-HMAC of `ENCRYPTION_KEY`, so nothing extra is stored or downloaded. The file is
-pinned in the storage channel (and the backup channel when configured).
+HMAC of `ENCRYPTION_KEY`, so no additional recovery secret needs exporting. The
+file is pinned in the storage channel (and the backup channel when configured).
+Standalone publication records the verified message ID before pinning and
+confirms only after reading back that pin. Pending publication retries the same
+message after restart with surviving MongoDB. Provider retry deadlines survive
+restart and delay both first-send and already-sent pin retries. Scheduled standalone backups run
+at the configured interval even when the catalog is unchanged.
 
 On startup with an empty MongoDB, TGDrive reads the storage channel's pin with the
 env bot tokens. A readable backup opens the recovery screen for one-click
-restore; no pin starts a new drive; a pin the key cannot open stops startup.
-A database without the `settings._id = "encryption"` record is from an older
-TGDrive and is refused.
+restore. Missing/unrecognized pins can lead to initialization; a recognized
+backup that cannot be opened leaves the app in owner recovery mode. Discovery
+does not search the full channel history. Keep a downloaded copy and the
+[off-host recovery material](backup-recovery.md#save-off-host-recovery-material).
+Schema-4 databases upgrade before the encryption-key check; a missing check
+record after that is an error, not an instruction to erase the database.
 
 Browser and Telegram user-account sessions are omitted. Recovery imports safe
 durable records and saved settings, rebases catalog locations to verified media,
@@ -732,8 +741,11 @@ before committing the recovered state, and requires a service restart. The
 surviving channel's documents remain intact.
 
 Recovery bytes are verified before confirmation; media and recovered mappings
-must verify before activation. A recovery file is one Telegram document, so
-Telegram's 2000 MiB document limit applies; TGDrive adds no other size limit.
+must verify before activation. A recovery file is one Telegram document, not a
+split media upload. Snapshot serialization/decode also needs server memory;
+fitting the transport limit does not establish support for a large catalog.
+Normal paged browsing does not establish that snapshot capture, validation or
+activation will fit the same host. See [recovery limits](backup-recovery.md#how-backups-work).
 Files omit original Telegram media and staged payloads. See
 [recovery steps](backup-recovery.md) and [security](reference.md#security-and-privacy).
 
