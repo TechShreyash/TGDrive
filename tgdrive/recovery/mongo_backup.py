@@ -6,6 +6,7 @@ import asyncio
 import copy
 import hashlib
 import logging
+import math
 import os
 import re
 import secrets
@@ -18,6 +19,7 @@ from tgdrive.recovery.backup import BackupError, RecoveryConflict
 from tgdrive.recovery.recovery_file import write_recovery_snapshot
 from tgdrive.storage.mongo_store import MongoStore
 from tgdrive.storage.store import ROOT_ID, SCHEMA_VERSION
+from tgdrive.transfers.tasks import _journalled
 
 logger = logging.getLogger(__name__)
 
@@ -37,6 +39,11 @@ COLLECTIONS = (
     "backups",
 )
 _HISTORY_UNAVAILABLE = "Encrypted Telegram backup history is temporarily unavailable."
+_PIN_UNVERIFIED = (
+    "The previous Telegram backup pin could not be verified. Its recovery file "
+    "is retained; a new backup will be scheduled."
+)
+_worker = _journalled(asyncio.to_thread)
 
 
 def file_checksum(path):
@@ -145,12 +152,49 @@ class MongoProtection:
         self._last_error = None
         try:
             latest = await asyncio.to_thread(self.history, limit=1)
+            if latest:
+                row = latest[0]
+                if (
+                    row.get("status") == "confirmed"
+                    and row.get("format") == "tgdrive-backup-v2"
+                    and not row.get("pin_verified_at")
+                ):
+                    await self._verify_historic_pin(row)
+                self._observe_backup(row)
+                if row.get("status") == "unverified":
+                    self._last_error = _PIN_UNVERIFIED
         except Exception:
             self._last_error = _HISTORY_UNAVAILABLE
-        else:
-            if latest:
-                self._observe_backup(latest[0])
         return store
+
+    async def _verify_historic_pin(self, row):
+        """Recheck old publication claims without replacing any channel pin."""
+        try:
+            message = row.get("message_id")
+            if (
+                type(message) is not int
+                or message <= 0
+                or row.get("channel_id") != self.settings.storage_channel
+            ):
+                raise BackupError("The historical backup has no valid pin receipt")
+            async with asyncio.timeout(10):
+                async with self.pool.lease(client_name=row.get("sender")) as client:
+                    if await client.get_pinned_message_id(row["channel_id"]) != message:
+                        raise BackupError(
+                            "The historical backup is not the current pin"
+                        )
+        except Exception:
+            values = {"status": "unverified"}
+        else:
+            values = {"pin_verified_at": datetime.now(UTC).isoformat()}
+        await _worker(
+            self.backend.write,
+            self.backend.db.backups,
+            "update_one",
+            {"_id": row["id"]},
+            {"$set": values},
+        )
+        row.update(values)
 
     def _observe_backup(self, row):
         if self._latest_backup is None or row.get(
@@ -161,7 +205,9 @@ class MongoProtection:
                 for key, value in row.items()
                 if key not in {"_id", "local_path"}
             }
-        if row.get("status") == "confirmed":
+        if row.get("status") == "confirmed" and (
+            row.get("format") != "tgdrive-backup-v2" or row.get("pin_verified_at")
+        ):
             confirmed_at = row.get("confirmed_at")
             if confirmed_at and (
                 self._last_success_at is None or confirmed_at > self._last_success_at
@@ -173,6 +219,13 @@ class MongoProtection:
         if self._latest_backup is None:
             return []
         return copy.deepcopy([self._latest_backup])
+
+    def local_archives(self):
+        """Iterate retained download candidates without hiding an older local file."""
+        return self.backend.db.backups.find(
+            {"status": {"$in": ["confirmed", "unverified"]}},
+            projection={"_id": 0, "id": 1, "created_at": 1, "sha256": 1, "status": 1},
+        ).sort("created_at", -1)
 
     def check_local_binding(self, store):
         if store.storage_channel_id not in (None, self.settings.storage_channel):
@@ -281,7 +334,6 @@ class MongoProtection:
                 directory = self.settings.resolved_cache_dir / "mongo-backups"
                 directory.mkdir(mode=0o700, parents=True, exist_ok=True)
                 path = directory / (identity + ".tgdb")
-                source = await asyncio.to_thread(self._source, key)
                 export = asyncio.create_task(
                     asyncio.to_thread(
                         write_recovery_snapshot, backend, path, key, self.settings
@@ -317,7 +369,6 @@ class MongoProtection:
                     "counts": counts,
                     "format": "tgdrive-backup-v2",
                     "key_sha256": hashlib.sha256(key).hexdigest(),
-                    "source": source,
                 }
                 await asyncio.to_thread(backend.db.backups.insert_one, row)
                 pending = row
@@ -329,25 +380,29 @@ class MongoProtection:
                 raise BackupError(
                     "Telegram backup is waiting before retry", retry_after=remaining
                 )
-            path = Path(pending["local_path"])
-            # A fresh host may have the database but not its previous temporary file.
-            # Do not resend changed bytes under an existing random_id.
-            if not path.is_file():
-                await asyncio.to_thread(
-                    backend.db.backups.update_one,
-                    {"_id": pending["_id"]},
-                    {"$set": {"status": "interrupted"}},
-                )
-                pending["status"] = "interrupted"
-                self._observe_backup(pending)
-                raise BackupError(
-                    "The previous backup file is unavailable; "
-                    "a new snapshot will be scheduled"
-                )
-            digest = await asyncio.to_thread(file_checksum, path)
-            if digest != pending["sha256"]:
-                raise BackupError("The staged backup checksum failed")
+            if pending.get("message_id") is None:
+                path = Path(pending["local_path"])
+                # A fresh host may lack the old temporary file. Never resend
+                # changed bytes under an existing random_id.
+                if not path.is_file():
+                    await asyncio.to_thread(
+                        backend.db.backups.update_one,
+                        {"_id": pending["_id"]},
+                        {"$set": {"status": "interrupted"}},
+                    )
+                    pending["status"] = "interrupted"
+                    self._observe_backup(pending)
+                    raise BackupError(
+                        "The previous backup file is unavailable; "
+                        "a new snapshot will be scheduled"
+                    )
+                digest = await asyncio.to_thread(file_checksum, path)
+                if digest != pending["sha256"]:
+                    raise BackupError("The staged backup checksum failed")
             try:
+                if pending.get("message_id") is not None:
+                    await self._publish(pending, previous_files)
+                    return True
                 async with self.pool.lease(client_name=pending["sender"]) as client:
                     if pending["sender"] is None:
                         pending["sender"] = client.name
@@ -388,33 +443,26 @@ class MongoProtection:
                         await iterator.aclose()
                     if remote_hash.hexdigest() != digest:
                         raise BackupError("Telegram backup verification failed")
-                confirmed_at = datetime.now(UTC).isoformat()
-                confirmed = {
-                    "status": "confirmed",
-                    "message_id": identity,
-                    "confirmed_at": confirmed_at,
-                }
+                # Persist verified-send evidence before pinning. A retry on a new
+                # host needs neither another upload nor the old temporary file.
                 await asyncio.to_thread(
                     backend.db.backups.update_one,
                     {"_id": pending["_id"]},
-                    {"$set": confirmed},
+                    {"$set": {"message_id": identity}},
                 )
-                pending.update(confirmed)
+                pending["message_id"] = identity
                 self._observe_backup(pending)
-                await self._pin(pending, identity)
-                await asyncio.to_thread(
-                    self._prune_confirmed_files, previous_files, pending["id"]
-                )
-                self._last_error = None
-                logger.info(
-                    "Drive backup saved to Telegram: revision %s, %s bytes",
-                    pending.get("revision"),
-                    path.stat().st_size,
-                )
+                await self._publish(pending, previous_files)
                 return True
             except Exception as exc:
-                seconds = getattr(exc, "seconds", None)
-                if isinstance(seconds, (int, float)) and seconds > 0:
+                seconds = getattr(exc, "retry_after", None)
+                if seconds is None:
+                    seconds = getattr(exc, "seconds", None)
+                if (
+                    type(seconds) in (int, float)
+                    and math.isfinite(seconds)
+                    and seconds > 0
+                ):
                     deadline = time.time() + seconds + 0.25
                     await asyncio.to_thread(
                         backend.db.backups.update_one,
@@ -425,20 +473,49 @@ class MongoProtection:
                     self._observe_backup(pending)
                     await self.pool.defer_channel(deadline)
                 self._last_error = (
-                    "The encrypted Telegram backup will retry automatically."
+                    str(exc)
+                    if isinstance(exc, BackupError)
+                    else ("The encrypted Telegram backup will retry automatically.")
                 )
                 raise
 
+    async def _publish(self, row, previous_files):
+        """Confirm recovery only after the verified ciphertext is discoverable."""
+        await self._pin(row, row["message_id"])
+        verified_at = datetime.now(UTC).isoformat()
+        confirmed = {
+            "status": "confirmed",
+            "confirmed_at": verified_at,
+            "pin_verified_at": verified_at,
+        }
+        await asyncio.to_thread(
+            self.backend.db.backups.update_one,
+            {"_id": row["_id"]},
+            {"$set": confirmed},
+        )
+        row.update(confirmed)
+        self._observe_backup(row)
+        await asyncio.to_thread(self._prune_confirmed_files, previous_files, row["id"])
+        self._last_error = None
+        logger.info("Drive backup saved and pinned: revision %s", row.get("revision"))
+
     async def _pin(self, row, message_id):
-        """Pin the confirmed file so a new server can find it with only the env."""
+        """Pin and verify discovery; leave failed publication pending for retry."""
         try:
             async with self.pool.lease(client_name=row["sender"]) as client:
                 await client.pin_message(self.settings.storage_channel, message_id)
-        except Exception:
-            logger.warning(
-                "Confirmed backup could not be pinned; grant the storage bot the "
-                "Edit Messages right so restore can find it automatically"
+                if await client.get_pinned_message_id(row["channel_id"]) != message_id:
+                    raise BackupError("The backup pin could not be verified")
+        except Exception as error:
+            self._last_error = (
+                "The backup is awaiting its recovery pin. Grant the storage bot "
+                "Edit Messages permission; publication will retry automatically."
             )
+            raise BackupError(
+                self._last_error,
+                retry_after=getattr(error, "retry_after", None)
+                or getattr(error, "seconds", None),
+            ) from error
 
     def _prune_confirmed_files(self, rows, current_id):
         """Remote copies and pending ciphertext outlive local download retention."""
@@ -481,48 +558,6 @@ class MongoProtection:
                 "Could not remove an older confirmed local recovery file; "
                 "the new backup remains confirmed"
             )
-
-    def _source(self, key):
-        """A cheap fingerprint of what a backup covers.
-
-        Catalog writes bump the drive revision. Settings and bot folders are
-        small, so they are hashed whole; transfer state is summarized by
-        counts. Browser sessions are left out: a restore signs the owner in
-        again anyway.
-        """
-        db = self.backend.db
-        catalog = db.catalog.find_one({"_id": "catalog"}, {"revision": 1}) or {}
-        small = hashlib.sha256()
-        for name in ("settings", "bot_folders"):
-            for row in db[name].find({}).sort("_id", 1):
-                small.update(repr(sorted(row.items())).encode())
-        return {
-            "revision": catalog.get("revision"),
-            "settings_sha256": small.hexdigest(),
-            "counts": {
-                name: db[name].count_documents({})
-                for name in ("jobs", "receipts", "identities", "operations")
-            },
-            "key_sha256": hashlib.sha256(key).hexdigest(),
-            "channel_id": self.settings.storage_channel,
-        }
-
-    def _unchanged(self):
-        """True when the latest confirmed backup already holds this drive state.
-
-        Scheduled backups skip then, so an idle drive does not reread and
-        resend the whole database every interval (the free Atlas tier allows
-        10 GB of transfer per week). Manual backups always run.
-        """
-        from tgdrive.core import encryption
-
-        latest = self.backend.db.backups.find_one(
-            {"status": "confirmed"}, sort=[("created_at", -1)]
-        )
-        if latest is None or self.backend.db.backups.find_one({"status": "pending"}):
-            return False
-        current = self._source(bytes.fromhex(encryption.backup_key()))
-        return latest.get("source") == current
 
     def start(self, store):
         if self._task is None:
@@ -571,17 +606,15 @@ class MongoProtection:
                 if replica is not None and replica.status().get("enabled"):
                     delay = self.settings.mongodb_backup_seconds
                     continue
-                if await asyncio.to_thread(self._unchanged):
-                    logger.info("Scheduled backup skipped: nothing changed")
-                    delay = self.settings.mongodb_backup_seconds
-                    continue
                 await self.snapshot_now(store)
                 delay = self.settings.mongodb_backup_seconds
             except asyncio.CancelledError:
                 raise
             except Exception as error:
                 self._last_error = (
-                    "The encrypted Telegram backup will retry automatically."
+                    str(error)
+                    if isinstance(error, BackupError)
+                    else ("The encrypted Telegram backup will retry automatically.")
                 )
                 logger.warning(
                     "Drive backup failed (%s); retrying in 60 seconds",

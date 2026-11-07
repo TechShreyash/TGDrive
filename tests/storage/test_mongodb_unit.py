@@ -318,6 +318,8 @@ async def test_backup_observation_confirms_only_after_verified_publication_and_c
             send_document=send_document,
             get_messages=get_messages,
             stream_media=stream_media,
+            pin_message=AsyncMock(),
+            get_pinned_message_id=AsyncMock(return_value=77),
         )
 
     service.pool.lease = lease
@@ -520,6 +522,8 @@ async def test_local_snapshot_retention_waits_for_durable_confirmation(
             send_document=send_document,
             get_messages=get_messages,
             stream_media=stream_media,
+            pin_message=AsyncMock(),
+            get_pinned_message_id=AsyncMock(return_value=77),
         )
 
     service.pool.lease = lease
