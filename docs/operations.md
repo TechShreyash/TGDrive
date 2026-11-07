@@ -55,7 +55,7 @@ routine byte updates and successful polling are quiet.
 | `Transfer retry scheduled` or `Transfer waiting` | The cooldown or unavailable Telegram client, automatic retry policy and suggested action. Unchanged waits are not repeated. |
 | `Transfer failed` | Job ID, phase, exception type, stable failure category and suggested repair. Inspect the user-facing error in Transfers. |
 | Backups, connections, logins, shares, Trash | Saved, skipped or failed backups; which Telegram accounts connected; failed or blocked logins; share links created or revoked (by ID, never token); items trashed, restored or queued for deletion. Passwords and client addresses are never logged. |
-| `Automatic tuning` | A cache size, disk budget or concurrency value changed, and why (for example halved after FloodWait). Routine one-step raises log only at DEBUG. |
+| `Automatic tuning` | A resource budget or CPU-based preload cap changed, and why. Telegram account cooldown/recovery is separate from resource sizing. |
 
 </details>
 
@@ -136,8 +136,8 @@ preserve its private configuration so you can reconnect safely.
 
 ### Save these somewhere separate
 
-Keep database access/name, owner login, private configuration, Telegram access,
-and your [confirmed recovery file and separate key](backup-recovery.md).
+Keep the [off-host recovery material](backup-recovery.md#save-off-host-recovery-material),
+including the original `ENCRYPTION_KEY` and a confirmed downloaded backup.
 Back up both volumes if unfinished work must survive losing the machine.
 The recovery file contains database data and channel locations, not original media.
 
@@ -148,11 +148,11 @@ Completed files can reopen elsewhere without re-uploading if their catalog and
 Telegram documents remain accessible.
 
 1. Keep your MongoDB database accessible. If it is on the old server, move
-   it or save a confirmed recovery file and its matching key before access ends.
+   it or save a confirmed recovery file and the original `ENCRYPTION_KEY` before access ends.
    If the database is lost, [restore a confirmed backup](backup-recovery.md#restore-after-losing-mongodb);
    only data captured in that restore point returns.
 2. Preserve Telegram channel/bot access, private deployment configuration,
-   original secrets and your off-server [recovery kit](backup-recovery.md#how-backups-work).
+   original secrets and your [off-host recovery material](backup-recovery.md#save-off-host-recovery-material).
 3. Stop the old instance, then run TGDrive on your laptop or a new server and
    [reopen the existing drive](#reopen-after-losing-the-local-installation).
    **Do not initialize a new catalog over it.**
@@ -178,6 +178,8 @@ bytes still need their originals.
    if configured. Older `BOT_TOKENS` configurations remain supported; do not
    replace an existing list just to reinstall. Saved Connections are reused.
 3. Remove the example password: set `ADMIN_PASSWORD=` and leave `ADMIN_PASSWORD_HASH` and `SESSION_SECRET` blank/omitted to reuse saved bootstrap credentials. Keep the original `ENCRYPTION_KEY`; do not generate a replacement.
+   This applies only while the original MongoDB survives. Empty-database recovery
+   needs an explicit owner password/hash; see the [recovery checklist](backup-recovery.md#save-off-host-recovery-material).
 4. Set `COOKIE_SECURE=false` for local HTTP, `true` for HTTPS. Start normally:
 
    ```bash
@@ -269,7 +271,10 @@ with `ADMIN_PASSWORD` empty. Verify the new login works and the old
 password/session fails. Restarts with unchanged credentials preserve sessions.
 Revoke shares separately in **Shared Links**.
 
-After exposure, rotate the affected provider credential and `SESSION_SECRET` as needed. Preserve old backup keys: rotation does not re-encrypt archives. Restores/rollbacks can reintroduce older credentials or shares.
+After exposure, rotate the affected provider credential and `SESSION_SECRET` as
+needed. Preserve `ENCRYPTION_KEY` and older archives' matching keys; changing a
+login or provider credential does not re-encrypt files. Restores/rollbacks can
+reintroduce older credentials or shares.
 
 Reusing an old owner credential together with its old `SESSION_SECRET` can make
 unexpired old cookies valid again. Choose a fresh signing secret when prior
@@ -322,7 +327,10 @@ updates. `dev` contains ongoing work and may be unstable. Follow
 > Keep the same MongoDB, channel and volumes. On first start, 2.3 upgrades the
 > drive in place: see [what the 2.2 upgrade changes](#upgrade-from-22-or-earlier).
 2. Record the running version and source commit; review the new version's requirements.
-3. Set `TGDRIVE_VERSION` in `.env` to the new release (or keep `latest`), then
+3. Update the source and Compose files to the selected release, preserving your
+   deployment changes. The first image-based upgrade needs the new Compose files;
+   changing `TGDRIVE_VERSION` in a 2.2 checkout is insufficient.
+   Once that release's image is published, set `TGDRIVE_VERSION` to it, then
    run `docker compose pull && docker compose up -d`, keeping server `-f`
    arguments, or redeploy in Coolify. Preserve volumes and start only one
    instance. Check database status, Connections and a representative file.
@@ -337,8 +345,8 @@ configuration with `.env.example`.
 
 **Git checkout:** Record `git rev-parse HEAD`. On `main`, use `git switch main`,
 then `git pull --ff-only origin main`. For a pinned version, use
-`git fetch origin --tags`, then `git switch --detach v2.2.0`, substituting the
-new published tag for later releases. If Git refuses, preserve local changes
+`git fetch origin --tags`, then `git switch --detach vX.Y.Z`, substituting the
+selected published application tag. If Git refuses, preserve local changes
 before continuing.
 
 **Coolify:** Select the published tag or `main`, retaining private variables and mounts.
@@ -349,7 +357,9 @@ Do not run an older app against an incompatible database format. Restore a compa
 
 ### Upgrade from 2.2 or earlier
 
-1. Save a confirmed 2.2 backup off the server, then stop 2.2.
+1. Save a confirmed 2.2 backup, its matching old recovery key and original
+   configuration off the server, then stop 2.2. Retain the old independent copy
+   until a new restore point is verified.
 2. Generate a key with `openssl rand -hex 32`, add it as `ENCRYPTION_KEY` in
    `.env` and [save a copy off the server](setup.md#save-your-encryption-key).
 3. Start 2.3 with the same `.env`, MongoDB, channel and Compose project name.
@@ -361,16 +371,19 @@ Do not run an older app against an incompatible database format. Restore a compa
 
 | What happens | Detail |
 | --- | --- |
-| Safety copy first | Every collection is written to `DATA_DIR/upgrade-2.2-<time>.json.gz` (owner-only) before anything changes. Keep it until you have checked the drive. |
+| Safety copy first | Supported recovery collections, runtime and replica records are written to `DATA_DIR/upgrade-2.2-<time>.json.gz` (owner-only) before mutation. It includes sensitive raw settings, omits optional telemetry and is not a `.tgdb` import. Keep it private; it does not replace an off-host 2.2 backup. |
 | Kept | Files, folders, Trash, stars, shares, connections, settings, sessions and share links. `SESSION_SECRET` is kept, so old links still work. |
 | Added | Search words, type groups, drive totals, record expiry and the encryption-key check. |
-| Removed | The 2.2 `MONGODB_BACKUP_KEY`, now derived from `ENCRYPTION_KEY`, and an unused index. |
+| Removed | The saved 2.2 `MONGODB_BACKUP_KEY` and an unused index. Current backup keys derive from `ENCRYPTION_KEY`; keep the old key for old archives. |
 | Backup channel | 2.2's independent channel progress can't be read by 2.3, so it starts from scratch. Its messages stay in Telegram; the old files are renamed `channel-backup.sqlite3.2.2-unused` and `replica-bootstrap.json.2.2-unused`. |
 | Telegram files | Not touched. Files uploaded by 2.2 stay unencrypted and readable; new uploads are encrypted. |
 | Interrupted | The version is raised last, so the upgrade runs again on the next start. On an upgraded drive it does nothing. |
 
-The upgrade has been tested on a drive written by v2.2.0 against a local MongoDB,
-not against live Telegram or a 2.2 backup channel.
+Do not run 2.2 against the upgraded database. For rollback, keep the original
+2.2 archive and matching key for a separate version-compatible restore. An
+isolated old-archive restore followed by upgrade still needs a disposable
+end-to-end rehearsal; [archive compatibility](backup-recovery.md#upgrade-or-restore-an-older-drive)
+is separate from the surviving-database upgrade.
 
 ## Troubleshooting
 
@@ -379,10 +392,10 @@ not against live Telegram or a 2.2 backup channel.
 | MongoDB cannot connect | URI/password, Atlas Network Access, cluster availability and permissions |
 | Startup exits; website unavailable | Correct MongoDB configuration, authentication, network access and replica-set transaction support. A pristine database initializes automatically; existing or incomplete state requires recovery. See [setup](setup.md). |
 | Another installation owns the database | Stop the old app and let its lease expire. |
-| Catalog missing | Verify database name and use [recovery](backup-recovery.md); preserve existing state. After deliberately emptying MongoDB, also clear the data volume (see [architecture](architecture.md)). |
+| Catalog missing | Verify database name and use [recovery](backup-recovery.md); preserve the database, volumes, secrets and unfinished bytes. Do not clear a volume to bypass recovery. |
 | Old transfer stuck after a fresh install | It is saved in this browser only. Cancel marks it cancelled when the server no longer knows it. |
 | A saved account shows an error | It could not connect. Fix the token, session or channel permissions, then use **Connections → Refresh**. |
-| Backup fails/decryption fails | Matching key, intact archive, posting access, disk and retry time |
+| Backup fails/decryption fails | Original `ENCRYPTION_KEY`, compatible intact archive, posting/pinning access, disk and retry time; old archives need their old key and version |
 | Upload cannot resume | Reselect its original in the existing transfer; missing staging may require re-upload. |
 | Archive job fails | Read its error in Transfers, free temporary server storage if needed, then retry the existing job. Unsupported, encrypted or damaged archives need a corrected source; non-Docker installations also need libarchive. Earlier committed outputs remain; see [archive workflow and limits](usage.md#create-zips-and-extract-archives). |
 | Video/download slow or fails | Check [performance](performance.md), connections and the Telegram document; unsupported codecs need original download. |
@@ -406,7 +419,10 @@ For queues, cache reuse and server or bot capacity, follow the
 
 ## HTTP delivery and proxy configuration
 
-TGDrive sends `Alt-Svc: clear`; supported Compose configurations apply it at the edge too. This clears cached alternative-service advertisements so browsers use normal origin HTTPS, ordinarily HTTP/2 through Coolify/Traefik. No extra variable or manual rule is needed.
+TGDrive sends `Alt-Svc: clear`; the supplied Compose middleware also sets it at
+the Coolify/Traefik edge to clear cached alternative-service advertisements.
+An external CDN can apply its own protocol policy. Inspect the browser's actual
+connection protocol; a response header alone does not establish it.
 
 <details>
 <summary>External proxies and existing custom rules</summary>
@@ -416,5 +432,20 @@ Traefik can append its own advertisement, so the Compose middleware ensures the 
 Remove temporary custom rules once the updated app/Compose supplies the policy. Redundant routers can break when domains/services change. Coolify watches dynamic files; main proxy Compose edits need restart and must be saved through its UI.
 
 The default follows one reproduced slowdown, not a universal QUIC claim: on 18 October 2026 the same 17.8 MB MP4 took 93.7 seconds over HTTP/3 and 1.0 second over HTTP/2 on the tested connection. References: [Coolify Traefik](https://coolify.io/docs/core/networking/proxy/traefik/overview), [Traefik HTTP/3](https://doc.traefik.io/traefik/reference/install-configuration/entrypoints/#http3), [Alt-Svc specification](https://www.rfc-editor.org/rfc/rfc7838.html#section-3.1).
+
+For a Cloudflare-proxied deployment with slow playback, compare the same ranges
+and cache state over HTTP/2 and HTTP/3, inspecting browser timing and origin
+logs. Cloudflare's [HTTP/3 setting](https://developers.cloudflare.com/speed/optimization/protocol/http3/)
+controls the visitor-to-Cloudflare connection, not HTTP/3 at the TGDrive origin.
+Change it only when that comparison identifies a problem.
+
+TGDrive's resumable uploads send **8 MiB per request**, below Cloudflare Free's
+documented **100 MB** ceiling. A lower configured body limit, rate limit or
+timeout can still reject them ([Cloudflare 413 guidance](https://developers.cloudflare.com/support/troubleshooting/http-status-codes/4xx-client-error/error-413/)).
+For failed uploads, inspect the failing response, Cloudflare Security Events and
+origin logs. If a specific WAF rule is responsible, scope any
+[exception](https://developers.cloudflare.com/waf/custom-rules/skip/) to that
+hostname, method and receipt path, keeping logging and login protection. Do not
+apply a blanket upload-path security bypass.
 
 </details>
