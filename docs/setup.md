@@ -67,6 +67,12 @@ the project in Ubuntu's filesystem; use the same terminal/folder consistently.
 
 ### Get the source
 
+This guide describes **2.3**. Use the setup guide and Compose files bundled with
+your chosen revision. For v2.2.0, follow its
+[versioned setup guide](https://github.com/TechShreyash/TGDrive/blob/v2.2.0/docs/setup.md):
+it uses source builds and the older backup-key model. Image-based commands below
+need the 2.3 Compose files and a matching published image; do not mix versions.
+
 With Git installed:
 
 ~~~bash
@@ -82,15 +88,16 @@ and open a terminal in `TGDrive-main`.
 <details>
 <summary>Pin an installation to a fixed release</summary>
 
-To install [v2.2.0](https://github.com/TechShreyash/TGDrive/releases/tag/v2.2.0),
-clone its immutable tag:
+Choose a published application release from the
+[release list](https://github.com/TechShreyash/TGDrive/releases). Replace `vX.Y.Z`
+below with its exact tag; viewer-package tags are not TGDrive releases.
 
 ~~~bash
-git clone --branch v2.2.0 --depth 1 https://github.com/TechShreyash/TGDrive.git
+git clone --branch vX.Y.Z --depth 1 https://github.com/TechShreyash/TGDrive.git
 cd TGDrive
 ~~~
 
-Or use the [tagged source ZIP](https://github.com/TechShreyash/TGDrive/archive/refs/tags/v2.2.0.zip).
+Use that revision's bundled setup guide and Compose files.
 For optional custom archives/checksums, see [release verification](release.md#verify-a-downloaded-source-archive).
 
 </details>
@@ -103,36 +110,11 @@ is the simplest option. Self-hosted MongoDB must be a **[replica set](reference.
 standalone container. TGDrive's Compose files do not include MongoDB.
 
 > [!NOTE]
-> MongoDB size, not TGDrive, limits how many items a drive holds. Names, search
-> words and listing indexes take most of each item's space.
-> **Performance → Storage & cache** shows current MongoDB use; move to a larger
-> plan before it fills.
->
-> The cheapest speed-up needs no code: put the Atlas cluster in the same cloud
-> region as the TGDrive server. Most of each operation's time is network round
-> trips (54–190 ms ping on remote clusters vs <1 ms locally).
->
-> **Atlas Free Tier M0 (512 MB limit) capacity:**
-> - **Total storage per file:** ~601 B (data + indexes) on Atlas (795 B with full sample text locally).
-> - **Catalog limit:** Holds roughly **850,000 files and folders** (up from ~750,000 in 2.2).
-> - **Performance history:** 31 days takes 4.1 MB (4,992 rows; 3 days minute-detail, then hourly).
-> - **Wire compression:** zstd cut transfer over 85% (~0.37 MB vs 2.90 MB per 5,000 records).
-> - **Background operations:** Capped at 30 ops/s, leaving 70+ ops/s reserved for the owner on Atlas's 100 ops/s limit.
-
-### Measured database latency (2.3 vs 2.2)
-
-Tested with a 2,000-item folder against Local MongoDB 8.0 and MongoDB Atlas Free M0 (ping 54–190 ms; paid Atlas tiers not measured):
-
-| Operation | Round trips (2.2) | Round trips (2.3) | Local 8.0 (2.3) | Atlas M0 (2.2) | Atlas M0 (2.3) | Atlas win |
-| --- | --- | --- | --- | --- | --- | --- |
-| Create folder (warm) | 8 | 6 | ~2 ms | 307–325 ms | 191–199 ms | ~38% faster |
-| Upload commit (add file) | 8 | 6 | ~2 ms | 293–338 ms | 234–242 ms | ~25% faster |
-| Rename | 8 | 6 | ~2 ms | 285 ms | 253 ms | ~11% faster |
-| Folder page (100 items) | 5 | 3 | ~2 ms | 334–426 ms | 123–129 ms | ~65% faster |
-| Folder cursor page | 5 | 4 | ~2 ms | 305 ms | 169 ms | ~45% faster |
-| Search query (warm, ≤1,000 matches) | 4 | 4 | ~15 ms | 2,010–2,237 ms | 348–421 ms | ~5× faster |
-
-*Note: Folder pages with both folders and files use 4 round trips (was 5). First-time folder creation on a cold connection takes longer due to Atlas TLS/connection setup.*
+> Catalog capacity depends on names, search tokens, file parts, indexes and saved
+> work; there is no reliable files-per-tier ceiling. Keep the database near the
+> TGDrive server to reduce network latency. Monitor the provider's storage,
+> traffic and operation quotas before they fill. TGDrive's database-size reading
+> is not Atlas's quota meter; see [Atlas limits and monitoring](https://www.mongodb.com/docs/atlas/reference/free-shared-limitations/).
 
 1. Create an Atlas cluster in the **same cloud region as your TGDrive server**,
    and a **database user** with read/write access.
@@ -150,8 +132,9 @@ Update the IP allowlist when your network changes; avoid allowing every IP.
    and save its **API ID** and **API hash**.
 3. Create a dedicated **private broadcast channel**, with no public username and
    message auto-delete **Off**. Do not use a group.
-4. Add the bot as a channel administrator with **Post Messages** and **Delete
-   Messages**. **Edit Messages** is needed only for independent backup recovery pins.
+4. Add the bot as a channel administrator with **Post Messages**, **Delete
+   Messages** and **Edit Messages**. Editing rights are required to pin database
+   backups for recovery, including without an independent backup channel.
    Leave unrelated administrator rights off.
 5. Send one identification message and use **Copy Message Link**. From a link
    like `https://t.me/c/1234567890/1`, your channel ID is `-1001234567890`:
@@ -198,9 +181,11 @@ existing drive's keys.**
 <a name="save-your-encryption-key"></a>
 
 > [!IMPORTANT]
-> `ENCRYPTION_KEY` encrypts every file TGDrive stores in Telegram. Store a copy
-> in a password manager, outside the server. **If you lose it, no file or backup
-> can be read, and nobody can recover them.** Never change it for an existing drive.
+> `ENCRYPTION_KEY` protects new encrypted uploads and current backups. Store it
+> in a password manager outside the server. Losing it prevents opening the drive,
+> its encrypted files and current backups. Never change it for an existing drive.
+> [Encryption coverage](reference.md#stored-file-encryption) ·
+> [Off-host recovery material](backup-recovery.md#save-off-host-recovery-material)
 
 <a name="find-your-telegram-user-id"></a>
 
@@ -234,12 +219,14 @@ docker compose up -d
 docker compose ps
 ~~~
 
-`pull` downloads the published image `ghcr.io/techshreyash/tgdrive` for amd64
-or arm64, so nothing is built on your machine. Set `TGDRIVE_VERSION` in `.env`
-(for example `2.3.0`) to pin a release; the default is `latest`. To run your own
-changes instead, use `docker compose build` (needs
-[Buildx](https://docs.docker.com/build/concepts/overview/), included in Docker Desktop), which tags the local build with the
-same image name. `config --quiet` checks syntax, not credentials; plain
+The pull path requires a published image for the selected release. Set
+`TGDRIVE_VERSION=X.Y.Z` in `.env` to match the checked-out application tag
+`vX.Y.Z`; the default is `latest`. Release maintainers must verify the amd64 and
+arm64 manifest before announcing image-based setup. An unreleased source
+revision may have no matching image; build it with `docker compose up -d --build`
+(requires [Buildx](https://docs.docker.com/build/concepts/overview/), included in
+Docker Desktop). This tags the local build with the same image name.
+`config --quiet` checks syntax, not credentials; plain
 `docker compose config` prints secrets.
 
 TGDrive initializes a new empty database or reopens an existing drive. Database
@@ -270,10 +257,11 @@ after Docker starts, set `TGDRIVE_RESTART_POLICY=unless-stopped` and recreate.
 1. Open [http://127.0.0.1:8000](http://127.0.0.1:8000) and sign in with your web password.
 2. Open **Connections → Refresh** and check your bot.
 3. Upload and download a small sample; stop/start TGDrive and confirm it still opens.
-4. Under **Storage & Backups → Backups & recovery**, choose **Back Up Now**.
-   After confirmation it is pinned in your channel. Optionally choose
-   **Download backup** for a copy outside Telegram; it opens with your
-   `ENCRYPTION_KEY`.
+4. Under **Storage & Backups**, choose **Back Up Now**.
+   Check **Last Confirmed Telegram Backup** and verify that the newest recovery file is actually
+   pinned in Telegram. Fix pin permissions before relying on automatic discovery.
+   Choose **Download backup** and keep the file outside Telegram with the
+   [off-host recovery material](backup-recovery.md#save-off-host-recovery-material).
    [Recovery guide](backup-recovery.md#how-backups-work).
 
 You're ready to [upload files](usage.md#upload-files-or-folders). Keep originals
@@ -286,7 +274,8 @@ Follow [upgrade and rollback](operations.md#upgrade-and-rollback). Preserve the
 database, channel, `.env`, project name and volumes. Coming from 2.0–2.2, add
 `ENCRYPTION_KEY` to `.env` first; 2.3 upgrades the drive on its first start
 ([steps](operations.md#upgrade-from-22-or-earlier)). Use stable `main` or a
-published release tag; keep the same Compose files for server updates.
+published release tag; update Compose files to that same revision while
+preserving local deployment changes.
 
 ## If setup stops
 
@@ -311,7 +300,8 @@ using the same MongoDB database. **Do not initialize it again.**
 
 After setup, add bots through **Management → Connections → Add storage bot**.
 First add each bot as a channel administrator with **Post Messages** and
-**Delete Messages** in the same channel.
+**Delete Messages** and **Edit Messages** in the same channel, including pin
+permission for any account that publishes backups.
 Save, and the change connects immediately. You can add accounts at any time; finish pending transfers before removing or replacing one.
 
 Premium is optional. Use **Connections → Connect Premium account** to sign in,
@@ -331,7 +321,9 @@ preparation above. For deployment choices, see [Self-hosting](hosting.md).
 on your Docker server. Its self-hosted edition is free; infrastructure costs remain.
 
 1. Create a public Git application from `https://github.com/TechShreyash/TGDrive`.
-   Select **`main`**, or **`v2.2.0`** to pin the release.
+   Select a published application tag matching this guide and its image, or
+   **`main`** once that release is merged. Use the selected revision's setup
+   guide; v2.2 uses the [older source-build procedure](https://github.com/TechShreyash/TGDrive/blob/v2.2.0/docs/setup.md#coolify).
 2. Under **General → Build pipeline**, choose **Compose**, **Base Directory** `/`
    and **Docker Compose Location** `/compose.yaml`.
 3. Enter the [required variables](#3-configure-your-drive) in **Environment Variables**.
@@ -387,7 +379,8 @@ Start with [Using TGDrive](usage.md) for uploads, sharing and bot imports.
 
 Under **Storage & Backups → Backups & recovery → Set up backup channel**, add
 a separate private channel and backup bot. Wait for **Backup confirmed**, then
-save the updated recovery file and its separate key. Follow
+download the updated recovery file and retain the original `ENCRYPTION_KEY`.
+Follow
 [backup-channel setup](backup-recovery.md#add-a-backup-channel)
 for account separation, permissions and recovery limits. Both channels still
 depend on Telegram.

@@ -48,7 +48,7 @@ Create these in accounts you control:
 | MongoDB Atlas | A cluster, dedicated database, database user with read/write access and connection URI. Allow the TGDrive server's IP in Network Access. [MongoDB steps](setup.md#1-prepare-mongodb) |
 | Telegram application | Your API ID and API hash from Telegram's application page. [Telegram steps](setup.md#2-prepare-telegram) |
 | Private Telegram channel | A dedicated private broadcast channel, its numeric ID, message auto-delete off, and no unrelated message management |
-| Main bot | A bot you create through BotFather and its token; add it as a channel administrator with **Post Messages** and **Delete Messages**. It initially provides storage and the private-chat upload interface. |
+| Main bot | A bot you create through BotFather and its token; add it as a channel administrator with **Post Messages**, **Delete Messages** and **Edit Messages** for backup pins. It initially provides storage and the private-chat upload interface. |
 | Allowed Telegram users | Your numeric Telegram user ID, plus any other users allowed to send files to your main bot. [Find your ID](setup.md#find-your-telegram-user-id) |
 | Owner sign-in | A private TGDrive web password, kept separately from the public demo password |
 
@@ -60,9 +60,8 @@ Use TGDrive's normal authorization flow if you choose Premium.
 Never post credentials in an issue, screenshot or repository. Credential
 changes can interrupt the drive; follow [connection maintenance](operations.md#connection-changes).
 
-Keep your server access, TGDrive login, MongoDB access and private
-deployment configuration. [Save a confirmed recovery file and its separate key](backup-recovery.md#how-backups-work)
-outside the server.
+Keep the [off-host recovery material](backup-recovery.md#save-off-host-recovery-material),
+including a confirmed backup and the original `ENCRYPTION_KEY`.
 
 ## Capacity and practical limits
 
@@ -78,8 +77,9 @@ or Telegram clients to the bottleneck shown by your workload.
 | Telegram and MongoDB access | Provider availability, account cooldowns, database capacity and connection health |
 | Device and viewer connections | Your upload connection and each recipient's download connection remain part of the path |
 
-The largest file you can upload is the server's free disk after a reserve, because
-each upload is staged on disk before TGDrive splits it in Telegram. See
+Each upload is staged on disk before TGDrive splits it in Telegram. Admission
+checks the file ceiling, other staging reservations and real free space after
+the reserve. See
 [transfer limits](configuration.md#transfer-limits)
 and [exact file/catalog limits](reference.md#file-capacity-staging-and-work-limits).
 
@@ -88,13 +88,13 @@ guarantee a speed or active-user count. See [performance factors](performance.md
 
 ## Keep control of your drive
 
-Keep Telegram access, MongoDB, private configuration and the recovery file/key
+Keep Telegram access, MongoDB, private configuration and the backup/`ENCRYPTION_KEY`
 under your control. [Where data is saved](operations.md#what-is-saved-where).
 
-Managing the server requires administrative access to its deployment credentials
-and data. TGDrive does not separately encrypt Telegram files, so the operator is
-a trusted party. Encryption of the recovery file does not encrypt your originals.
-See [privacy essentials](new-user-guide.md) and [recovery limits](backup-recovery.md).
+The server operator is trusted: the process holds `ENCRYPTION_KEY` and can read
+decrypted files and plaintext staging. Telegram payload encryption does not
+protect files from the host operator. See [encryption coverage and limits](reference.md#stored-file-encryption)
+and [recovery limits](backup-recovery.md).
 
 Before moving or shutting down a host, preserve your database and configuration.
 Completed Telegram files can reopen on another host with the matching catalog and channel access;

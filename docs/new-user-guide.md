@@ -27,8 +27,9 @@ keep the database or a usable backup too.
 1. Upload a non-private sample, wait for **Completed**, then download and open it.
 2. Try a share link in a signed-out browser, then revoke it. Share selected files
    instead of giving someone your owner password.
-3. [Save a confirmed recovery file and its matching key](backup-recovery.md#how-backups-work).
-   Keep the file outside the server and Telegram, and the key separately.
+3. [Save the off-host recovery material](backup-recovery.md#save-off-host-recovery-material),
+   including a confirmed backup outside Telegram and the original `ENCRYPTION_KEY`
+   kept separately.
 
 In the [public demo](usage.md#try-the-public-demo), use disposable files only:
 other visitors can change unprotected content.
@@ -45,8 +46,8 @@ other visitors can change unprotected content.
 - **Keep another copy of valuable files.** TGDrive has no total storage cap,
   but file-size, database, disk and provider limits apply. Permanent access is
   not guaranteed. A second Telegram channel still depends on the same provider.
-- **Keep recovery material usable.** Save a recovery file and its separate key
-  outside the server. [What a backup can and can't restore](backup-recovery.md).
+- **Keep recovery material usable.** Retain the original `ENCRYPTION_KEY` and an
+  up-to-date backup outside the server. [Recovery checklist](backup-recovery.md#save-off-host-recovery-material).
 - **Protect access.** The owner password grants full shared access. Anyone
   holding a valid share link can read its selected content. Use a unique
   password and HTTPS for remote access; keep credentials and keys private.
@@ -58,12 +59,11 @@ other visitors can change unprotected content.
 ## Common questions
 
 **Are my files private and encrypted?**  
-Yes, in Telegram. TGDrive encrypts every file it uploads with your
-`ENCRYPTION_KEY`, so channel members and Telegram see only unreadable data.
-Your server is still trusted: it holds the key, temporary uploads and caches
-unencrypted. Keep the key off the server too; losing it makes every file
-unreadable. Only open downloads you trust: TGDrive does not scan for malware.
-[Security details](reference.md#security-and-privacy).
+New uploads use your deployment's `ENCRYPTION_KEY`. Files from 2.2 and bot copies
+made with encryption off can remain plaintext. The host is trusted: it holds the
+key and can read files and temporary uploads. Losing the key blocks opening the
+drive, encrypted files and current backups. Keep it off-host too. TGDrive does
+not scan for malware. [Encryption coverage and limits](reference.md#stored-file-encryption).
 
 **Is TGDrive free?**  
 Yes. All app features are free. Run it on your computer or your own server;

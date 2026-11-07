@@ -31,9 +31,10 @@ TGDrive keeps the folders, previews and sharing on top.
 | **[Watch and read](docs/usage.md#open-preview-and-download)** | Stream video and audio and pick up where you left off. Open photos, PDFs, text, EPUB ebooks and CBZ/CBR comics in the browser. |
 | **[Archives](docs/usage.md#create-zips-and-extract-archives)** | Create ZIPs, or extract ZIP, 7z, RAR, TAR and compressed files, as background jobs. |
 | **[Share and embed](docs/usage.md#share-and-revoke)** | Create read-only links for files or folders with expiry and revocation, or embed a viewer in your website. |
-| **[Recover](docs/backup-recovery.md)** | Save one encrypted recovery file and its key. Restore after losing the database, or rebuild a lost channel from an optional backup channel. |
+| **[Recover](docs/backup-recovery.md)** | Save an encrypted backup and the original `ENCRYPTION_KEY` off-host. Restore after database loss, or rebuild a lost channel from a confirmed independent copy. |
 
-Files are encrypted before they reach Telegram, with a key only you hold.
+New uploads are encrypted before they reach Telegram using your deployment's
+`ENCRYPTION_KEY`; [legacy files and optional plaintext bot copies differ](docs/reference.md#stored-file-encryption).
 There is no fixed storage quota; file-size limits, server resources and Telegram
 availability still apply. [Learn the essentials →](docs/new-user-guide.md)
 
@@ -55,7 +56,7 @@ imports, ZIP jobs, extraction, video Continue, player settings and the recovery 
 | [<img src="docs/assets/video-continue.jpg" alt="Video player offering Continue; opens the feature tour" width="560">](docs/assets/current-features.mp4) | <img src="docs/assets/mobile-drive.jpg" alt="TGDrive file browser in a phone-sized window" width="240"> |
 
 Captured on 28 October 2026, before the 2.3 interface redesign. The phone view is emulated and the tour's recovery
-screen is a local demo. [Full gallery](docs/showcase.md)
+screen is an obsolete local demo, not current recovery instructions. [Full gallery](docs/showcase.md)
 
 ## Get started
 
