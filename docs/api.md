@@ -83,7 +83,7 @@ verification are in [architecture](architecture.md#independent-backup-pacing-and
 | `GET /api/v1/replica` | Configuration, phase, revisions, progress, retry guidance and any recovery candidate | Never returns tokens or the key |
 | `POST /api/v1/replica/configure` | `channel_id`, `bot_token`, `independent_accounts: true`: set up a backup channel | Needs a separate private channel and bot |
 | `POST /api/v1/replica/action` | `action`: `sync`, `pause`, `resume`, `retry` or `disable` | |
-| `GET /api/v1/replica/file` | Download a locally retained confirmed or unverified `tgdrive-backup.tgdb` | `404` if no local archive is eligible or it disappears before opening; `409` for unsafe opening/permissions or selected-file hash mismatch; denied in demo mode |
+| `GET /api/v1/replica/file` | Download a locally retained confirmed or unverified `tgdrive-backup.tgdb` | `404` if no local archive is eligible or it disappears before opening; `409` for symlinks, unsafe permissions/file types, other unsafe opens or selected-file hash mismatch; denied in demo mode |
 | `GET /api/v1/replica/report` | Secret-free status report | May still contain private names and IDs |
 | `POST /api/v1/replica/import` | Raw `application/octet-stream` recovery bytes; optional `X-TGDrive-Source-Channel`, `X-TGDrive-Bot-Token` | Returns a candidate; does not activate. `422` for failed key/file validation; `415` wrong content type. Disabled in demo mode |
 | `POST /api/v1/replica/restore` | Restore the backup found in the storage channel at startup | Restart when asked. Disabled in demo mode |
