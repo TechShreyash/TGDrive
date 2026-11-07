@@ -2,7 +2,7 @@ import { request } from "../../shared/api";
 
 export const MIB = 1024 ** 2;
 export const GIB = 1024 ** 3;
-/** Owner choices; cache, storage and transfer limits are tuned automatically. */
+/** Owner choices; cache and staging budgets follow server resources. */
 export interface PerformancePolicy {
     timezone: string;
     auto_preload: boolean;

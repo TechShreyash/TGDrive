@@ -261,7 +261,7 @@ export default function PerformanceSettings({
                             {
                                 cache: "Cache sizes are set automatically from server memory and disk; see Performance.",
                                 transfers:
-                                    "Upload limits and Telegram concurrency are set automatically; see Performance.",
+                                    "Upload capacity follows staging space. See Performance for concurrency limits and Telegram account cooldowns.",
                                 regional:
                                     "Choose the timezone used for dates and share expiry across this installation.",
                             }[category]

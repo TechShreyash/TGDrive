@@ -120,7 +120,7 @@ function AutomaticTuning({
             </div>
             <p className="tuning-intro">
                 {tuning.running
-                    ? "TGDrive continuously calibrates caches, storage budgets, and Telegram concurrency based on available server hardware and live response speeds."
+                    ? "Cache and staging budgets follow available server resources. Transfer concurrency uses configured limits, with a CPU cap for preloads. Telegram accounts manage their own cooldown and recovery."
                     : "Automatic tuning starts with the drive."}
             </p>
             <div className="tuning-groups">
