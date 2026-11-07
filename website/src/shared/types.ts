@@ -156,7 +156,7 @@ export interface ServerStatus {
     telegram_ready?: boolean;
     telegram_issues?: { code: string; detail: string }[];
     admission_paused?: boolean;
-    backup?: unknown;
+    backup?: { status: string }[];
     [key: string]: unknown;
 }
 export type View =

@@ -101,6 +101,71 @@ def test_database_protection_does_not_claim_a_telegram_backup(
     expect(reset.locator("input,form")).to_have_count(0)
 
 
+@pytest.mark.parametrize("download_available", [False, True])
+def test_unverified_discovery_preserves_local_backup_access(
+    server, desktop, download_available
+):
+    _, page = desktop
+    verified = False
+    response = page.request.post(
+        server.url + "/__test__/replica/protected", headers=CONTROL
+    )
+    assert response.ok
+
+    def status(route):
+        route.fulfill(
+            json={
+                "telegram_ready": True,
+                "backup": [{"status": "confirmed" if verified else "unverified"}],
+                "recovery": {
+                    "state": "protected",
+                    "metadata_revision": 5,
+                    "protected_revision": 5,
+                    "last_success_at": "2026-11-01T08:00:00Z" if verified else None,
+                    "backup_error": None
+                    if verified
+                    else "The recovery pin could not be checked",
+                },
+            }
+        )
+
+    def replica(route):
+        response = route.fetch()
+        payload = response.json()
+        payload["backup_file_available"] = download_available
+        route.fulfill(response=response, json=payload)
+
+    page.route("**/api/v1/status", status)
+    page.route("**/api/v1/replica", replica)
+    login(page, server.url)
+    section = open_storage(page)
+    database = page.get_by_role("region", name="Cloud Database", exact=True)
+    expect(database).to_contain_text("Backup discovery unverified")
+    expect(database).to_contain_text("does not establish that the archive is corrupt")
+    expect(database).to_contain_text("Not confirmed yet")
+    expect(
+        database.get_by_role("button", name="Back Up Now", exact=True)
+    ).to_be_enabled()
+    if download_available:
+        with page.expect_download() as download:
+            section.get_by_role("link", name="Download backup", exact=True).click()
+        assert (
+            Path(download.value.path()).read_bytes()
+            == b"synthetic encrypted recovery file"
+        )
+    else:
+        expect(
+            section.get_by_role("button", name="Download backup", exact=True)
+        ).to_be_disabled()
+        expect(section).not_to_contain_text("after the first backup is confirmed")
+    verified = True
+    page.get_by_role("button", name="Check Again", exact=True).click()
+    expect(database).not_to_contain_text("Backup discovery unverified")
+    expect(database.locator(".backup-confirmation-date")).not_to_contain_text(
+        "Not confirmed yet"
+    )
+
+
 @pytest.mark.parametrize(
     "width,theme", [(1440, "light"), (390, "dark"), (320, "light")]
 )

@@ -875,11 +875,11 @@ export default function ChannelBackup({
                         )}
                     </div>
                     <p className="channel-backup-key-help">
-                        The file is encrypted with your ENCRYPTION_KEY. Keep a
-                        copy outside the server; with the key, it restores your
-                        drive even if Telegram cannot.
+                        The file is encrypted with your ENCRYPTION_KEY. Keep
+                        both outside the server. Recovery also needs access to a
+                        channel that still holds your file data.
                         {!state.backup_file_available &&
-                            " A download is available after the first backup is confirmed."}
+                            " A download is available when an intact local recovery file is saved."}
                     </p>
                 </>
             )}

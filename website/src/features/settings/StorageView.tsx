@@ -1,3 +1,4 @@
+import { Alert } from "@mantine/core";
 import {
     useCallback,
     useEffect,
@@ -120,6 +121,7 @@ export default function StorageView({
     );
     const uploadProtection = uploadBackupState(uploadItems);
     const recovery = status?.recovery;
+    const unverifiedBackup = status?.backup?.[0]?.status === "unverified";
     const protectedDrive =
         !error &&
         !uploadProtection &&
@@ -235,6 +237,22 @@ export default function StorageView({
                     Encrypted recovery files are created in the background.
                     Unfinished uploads still need their local files.
                 </p>
+                {unverifiedBackup && (
+                    <Alert
+                        color="yellow"
+                        variant="light"
+                        title="Backup discovery unverified"
+                        icon={<AlertCircle size={18} aria-hidden="true" />}
+                        role="status"
+                    >
+                        TGDrive could not verify the latest backup as the
+                        channel’s current pin. This does not establish that the
+                        archive is corrupt. Keep existing backups and your
+                        ENCRYPTION_KEY. If a local copy is available, download
+                        it below. Use Back Up Now to publish a fresh recovery
+                        point.
+                    </Alert>
+                )}
                 <ErrorNotice
                     message={
                         backupError ||
