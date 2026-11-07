@@ -16,6 +16,7 @@ from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from tgdrive.storage.mongo_store import MongoStore, catalog_counters
 
 MAGIC = b"TGDRIVE-BACKUP-2\n"
+LEGACY_MAGICS = (b"TGDRIVE-MONGO-1\n", b"TGDRIVE-REPLICA-1\n")
 MAX_EXPANDED_BYTES = 16 * 1024**2
 MAX_RECOVERY_BYTES = MAX_EXPANDED_BYTES + 64 * 1024
 MAX_STAGED_RECOVERY_BYTES = 2000 * 1024**2
@@ -25,7 +26,14 @@ _TOKEN = re.compile(r"[1-9][0-9]{4,14}:[A-Za-z0-9_-]{20,}")
 
 
 class LegacyRecoveryFile(ValueError):
-    """An authenticated old drive needs its version-matched restore tool."""
+    """An older drive needs its version-matched restore tool."""
+
+    def __init__(self, detail=None):
+        super().__init__(
+            detail
+            or "This recovery format requires tagged v2.2 tooling. Preserve "
+            "the original archive and key; restore into isolated MongoDB, then upgrade."
+        )
 
 
 def sanitize_database(records):
@@ -281,6 +289,8 @@ def decode_recovery_file(content, key):
     from tgdrive.replication.replica_state import remap_catalog
     from tgdrive.storage.store import _validate_timestamp
 
+    if isinstance(content, bytes) and content.startswith(LEGACY_MAGICS):
+        raise LegacyRecoveryFile
     try:
         if (
             not isinstance(content, bytes)

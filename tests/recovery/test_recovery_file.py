@@ -182,6 +182,14 @@ def test_authenticated_schema_4_backup_requires_version_matched_restore(source):
         decode_bundle(seal_raw(json_util.dumps(raw).encode()), KEY)
 
 
+@pytest.mark.parametrize("signature", recovery_file.LEGACY_MAGICS)
+def test_legacy_signature_gives_version_matched_guidance_without_trusting_input(
+    signature,
+):
+    with pytest.raises(recovery_file.LegacyRecoveryFile, match=r"tagged v2\.2"):
+        decode_bundle(signature + b"opaque legacy bytes", KEY)
+
+
 def test_unified_file_has_one_catalog_copy_and_preserves_database_history(source):
     value = bundle(source)
     encrypted = encode_bundle(value, KEY)
