@@ -70,8 +70,8 @@ def test_repair_cannot_return_bytes_after_access_or_source_changes(
     original = store.get_file
     replaced = False
 
-    def file_data(value):
-        data = original(value)
+    def file_data(value, **kwargs):
+        data = original(value, **kwargs)
         return {**data, "message_id": 999} if replaced else data
 
     def change_during_repair():

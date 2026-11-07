@@ -185,8 +185,8 @@ def test_thumbnail_recovery_and_changed_file_abort_before_payload(
     original = store.get_file
     changed = False
 
-    def file_data(value):
-        data = original(value)
+    def file_data(value, **kwargs):
+        data = original(value, **kwargs)
         return {**data, "message_id": 999} if changed else data
 
     def replace_during_read():

@@ -320,12 +320,16 @@ def test_rar_rejects_volume_and_encryption_flags(tmp_path):
             rar_header(path)
 
 
-def test_manifest_has_no_depth_or_entry_count_limit():
+def test_manifest_admits_depth_and_total_entry_boundaries():
     deep = Manifest(1024, 1024)
-    deep.add("/".join(["a"] * 300), directory=False, size=1, index=0, container="tar")
-    assert len(deep.result()["folders"]) == 299
+    deep.add("/".join(["a"] * 64), directory=False, size=1, index=0, container="tar")
+    assert len(deep.result()["folders"]) == 63
+    with pytest.raises(WorkerError, match="64"):
+        deep.add(
+            "/".join(["a"] * 65), directory=False, size=1, index=1, container="tar"
+        )
     plan = Manifest(10_000, 10_000)
-    for index in range(1500):
+    for index in range(500):
         plan.add(
             f"folder{index}/data",
             directory=False,
@@ -333,7 +337,10 @@ def test_manifest_has_no_depth_or_entry_count_limit():
             index=index,
             container="7zip",
         )
-    assert len(plan.result()["files"]) == 1500
+    admitted = plan.result()
+    assert len(admitted["files"]) == len(admitted["folders"]) == 500
+    with pytest.raises(WorkerError, match="1000 files and folders"):
+        plan.add("overflow/data", directory=False, size=1, index=500, container="7zip")
 
 
 def test_native_warning_prevents_returning_a_publishable_manifest(

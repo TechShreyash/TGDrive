@@ -32,7 +32,9 @@ async def test_failed_live_policy_apply_restores_saved_policy_and_revision(
     runtime = performance_runtime(mongo_backend)
     service = PerformanceSettings(settings, runtime)
     before = await service.snapshot()
-    runtime.pool.set_media_per_bot = AsyncMock(side_effect=[OSError("temporary"), None])
+    media_applies = runtime.pool.set_media_per_bot.await_count
+    reconfigure = AsyncMock(side_effect=[OSError("temporary"), None])
+    runtime.preloads.reconfigure = reconfigure
     try:
         with pytest.raises(SettingsProblem) as failed:
             await service.save({"timezone": "UTC", "auto_preload": False})
@@ -46,6 +48,13 @@ async def test_failed_live_policy_apply_restores_saved_policy_and_revision(
         ]
         assert saved["timezone"] == before["timezone"]
         assert runtime.preloads.cache.policy.auto_preload == before["auto_preload"]
+        assert reconfigure.await_count == 2
+        assert reconfigure.await_args_list[0].args[0].auto_preload is False
+        assert (
+            reconfigure.await_args_list[1].args[0].auto_preload
+            == before["auto_preload"]
+        )
+        assert runtime.pool.set_media_per_bot.await_count == media_applies
     finally:
         await runtime.preloads.close()
 

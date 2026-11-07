@@ -211,8 +211,8 @@ def test_changed_file_or_recovery_pause_cannot_return_a_poster(app_client, monke
     )
     original = store.get_file
 
-    def get_file(value):
-        data = original(value)
+    def get_file(value, **kwargs):
+        data = original(value, **kwargs)
         if changed:
             data["poster"] = {**data["poster"], "message_id": 202}
         return data
