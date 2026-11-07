@@ -91,47 +91,62 @@ class HistoryStorage:
         # write outcome. The lifetime checkpoint is never incremented twice.
         from pymongo import ReplaceOne
 
-        if rows:
-            self.mongo.db.telemetry_minutes.bulk_write(
-                [ReplaceOne({"_id": r["at"]}, r, upsert=True) for r in rows],
-                ordered=False,
+        def checkpoint(session):
+            self.mongo.fence(session)
+            if rows:
+                self.mongo.db.telemetry_minutes.bulk_write(
+                    [ReplaceOne({"_id": r["at"]}, r, upsert=True) for r in rows],
+                    ordered=False,
+                    session=session,
+                )
+            self.mongo.db.telemetry_state.replace_one(
+                {"_id": "lifetime"}, state, upsert=True, session=session
             )
-        self.mongo.db.telemetry_state.replace_one(
-            {"_id": "lifetime"}, state, upsert=True
-        )
-        self.mongo.db.telemetry_minutes.delete_many({"at": {"$lt": cutoff}})
+            self.mongo.db.telemetry_minutes.delete_many(
+                {"at": {"$lt": cutoff}}, session=session
+            )
+
+        self.mongo.transaction(checkpoint)
 
     def compact(self, now):
         """Merge each finished hour older than the minute window into one row."""
         collection = self.mongo.db.telemetry_minutes
         boundary = math.floor((now - MINUTE_DETAIL_SECONDS) / 3600) * 3600
-        # Hourly rows carry "hour": True, so only minute rows are picked up.
-        minutes = list(
-            collection.find({"at": {"$lt": boundary}, "hour": {"$ne": True}}).sort(
-                "at", 1
+        # Bound catch-up work after downtime; every transaction holds one hour.
+        for _ in range(24):
+            first = collection.find_one(
+                {"at": {"$lt": boundary}, "hour": {"$ne": True}}, sort=[("at", 1)]
             )
-        )
-        if not minutes:
-            return
-        from pymongo import DeleteOne, ReplaceOne
+            if first is None:
+                return
+            hour = math.floor(first["at"] / 3600) * 3600
 
-        hours = {}
-        for row in minutes:
-            hour = math.floor(row["at"] / 3600) * 3600
-            hours.setdefault(hour, []).append(row)
-        operations = []
-        for hour, rows in hours.items():
-            # The first minute of an hour shares the hour's _id; only an earlier
-            # merged hour row counts as existing.
-            existing = collection.find_one({"_id": hour, "hour": True})
-            merged = _merge([existing, *rows] if existing else rows, hour)
-            operations.append(ReplaceOne({"_id": hour}, merged, upsert=True))
-            operations.extend(
-                DeleteOne({"_id": row["_id"]}) for row in rows if row["_id"] != hour
-            )
-        # Replace before delete in one ordered batch: a crash in between leaves
-        # minutes that are merged again next time, never a gap.
-        collection.bulk_write(operations, ordered=True)
+            def merge_hour(session, hour=hour):
+                self.mongo.fence(session)
+                query = {
+                    "at": {"$gte": hour, "$lt": hour + 3600},
+                    "hour": {"$ne": True},
+                }
+                rows = list(collection.find(query, session=session))
+                if not rows:
+                    return
+                existing = collection.find_one(
+                    {"_id": hour, "hour": True}, session=session
+                )
+                merged = _merge([existing, *rows] if existing else rows, hour)
+                collection.replace_one(
+                    {"_id": hour}, merged, upsert=True, session=session
+                )
+                collection.delete_many(
+                    {
+                        "_id": {
+                            "$in": [row["_id"] for row in rows if row["_id"] != hour]
+                        }
+                    },
+                    session=session,
+                )
+
+            self.mongo.transaction(merge_hour)
 
     def read(self, start, end):
         self.initialize()
@@ -332,11 +347,14 @@ class TelemetryHistory:
                 state,
                 math.floor((now - RETENTION_SECONDS) / 60) * 60,
             )
+            # Acknowledged minutes are durable even if a later hour's compaction
+            # fails. Retrying those old rows could resurrect already-merged
+            # minutes and count them twice; retain only the open minute in RAM.
+            current = math.floor(now / 60) * 60
+            self._minutes = {k: v for k, v in self._minutes.items() if k >= current}
             compact = getattr(self.storage, "compact", None)
             if callable(compact):
                 compact(now)
-            current = math.floor(now / 60) * 60
-            self._minutes = {k: v for k, v in self._minutes.items() if k >= current}
 
     def query(self, start, end, *, now=None):
         now = time.time() if now is None else now

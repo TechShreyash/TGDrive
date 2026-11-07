@@ -373,3 +373,87 @@ def test_old_minutes_are_merged_into_hourly_rows_without_changing_averages(tmp_p
     ) == pytest.approx(3600)
     history.flush(force=True, now=now + 60)  # Merging again changes nothing.
     assert len(history.storage.read(start, start + 3600)) == 1
+
+
+def test_compaction_rollback_cannot_count_minutes_twice(tmp_path, monkeypatch):
+    from tgdrive.observability.telemetry_history import MINUTE_DETAIL_SECONDS
+
+    history = TelemetryHistory(tmp_path)
+    for at in (36000, 36030, 36060, 36090):
+        history.observe(sample(at), counters())
+    history.flush(force=True, now=36100)
+    before = history.storage.read(36000, 39600)
+    collection = history.storage.mongo.db.telemetry_minutes
+    original = collection.delete_many
+
+    def interrupted(*_args, **_kwargs):
+        raise RuntimeError("interrupted between replacement and deletion")
+
+    monkeypatch.setattr(collection, "delete_many", interrupted)
+    now = 43200 + MINUTE_DETAIL_SECONDS
+    with pytest.raises(RuntimeError, match="interrupted"):
+        history.storage.compact(now)
+    assert history.storage.read(36000, 39600) == before
+    monkeypatch.setattr(collection, "delete_many", original)
+    history.storage.compact(now)
+    merged = history.storage.read(36000, 39600)
+    assert len(merged) == 1
+    assert merged[0]["values"]["cpu_percent"] == [1800, 90]
+    history.storage.compact(now)
+    assert history.storage.read(36000, 39600) == merged
+
+
+def test_flush_retry_does_not_resurrect_a_previously_compacted_minute(
+    tmp_path, monkeypatch
+):
+    from tgdrive.observability.telemetry_history import MINUTE_DETAIL_SECONDS
+
+    history = TelemetryHistory(tmp_path)
+    for at in (36000, 36030, 36060, 36090):
+        history.observe(sample(at), counters())
+    history.flush(force=True, now=36091)
+    for at in (39600, 39630, 39660, 39690):
+        history.observe(sample(at), counters())
+    collection = history.storage.mongo.db.telemetry_minutes
+    original = collection.delete_many
+    merged_hours = 0
+
+    def fail_second_hour(query, **kwargs):
+        nonlocal merged_hours
+        if "_id" in query:
+            merged_hours += 1
+            if merged_hours == 2:
+                raise OSError("Second hour compaction interrupted")
+        return original(query, **kwargs)
+
+    monkeypatch.setattr(collection, "delete_many", fail_second_hour)
+    now = 39691 + MINUTE_DETAIL_SECONDS + 7200
+    with pytest.raises(OSError, match="Second hour"):
+        history.flush(force=True, now=now)
+    assert collection.find_one({"_id": 36000})["hour"] is True
+    monkeypatch.setattr(collection, "delete_many", original)
+    history.flush(force=True, now=now + 60)
+    rows = history.storage.read(36000, 43200)
+    assert len(rows) == 2
+    assert [row["values"]["cpu_percent"] for row in rows] == [[1800, 90], [1800, 90]]
+
+
+def test_telemetry_checkpoint_refuses_lost_ownership_before_writing(
+    tmp_path, monkeypatch
+):
+    from tgdrive.storage.mongo import DatabaseUnavailable
+
+    history = TelemetryHistory(tmp_path)
+    history.observe(sample(960), counters())
+    history.observe(sample(963), counters(1))
+    backend = history.storage.mongo
+
+    def lost_owner(_session):
+        raise DatabaseUnavailable("Synthetic ownership loss")
+
+    monkeypatch.setattr(backend, "fence", lost_owner)
+    with pytest.raises(DatabaseUnavailable, match="ownership loss"):
+        history.flush(force=True, now=964)
+    assert list(backend.db.telemetry_minutes.find({})) == []
+    assert backend.db.telemetry_state.find_one({"_id": "lifetime"}) is None
+    assert history._minutes
