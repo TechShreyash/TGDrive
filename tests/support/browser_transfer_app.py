@@ -696,6 +696,12 @@ class FixtureReplica:
             prefix="tgdrive-recovery-fixture-"
         )
         self.directory = Path(self._temporary.name)
+        descriptor, filename = tempfile.mkstemp(
+            prefix="recovery-", suffix=".tgdb", dir=self.directory
+        )
+        self._download_path = Path(filename)
+        with os.fdopen(descriptor, "wb") as destination:
+            destination.write(b"synthetic encrypted recovery file")
         self.state = {
             "enabled": False,
             "configured": False,
@@ -777,7 +783,7 @@ class FixtureReplica:
             from tgdrive.settings.managed_settings import SettingsProblem
 
             raise SettingsProblem("Create and confirm a backup first.", status=404)
-        return b"synthetic encrypted recovery file"
+        return self._download_path
 
     async def inspect_file(self, path, key, source=None, token=None):
         if (
