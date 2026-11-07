@@ -30,6 +30,7 @@ from tgdrive.transfers.uploads import ResumableUploads
 MAX_METADATA_BYTES = 256 * 1024 * 1024
 METADATA_TIMEOUT = 120
 STALL_TIMEOUT = 300
+TORRENT_MAX_ATTEMPTS = 4
 _METADATA_DIRECTORY = ".tgdrive-torrent"
 _worker = ResumableUploads._owned_worker
 
@@ -40,6 +41,10 @@ class TorrentError(ValueError):
 
 class TorrentCancelled(TorrentError):
     pass
+
+
+class TorrentTransportError(TorrentError):
+    """A known transport interruption may retry without changing the source."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -380,7 +385,7 @@ class _Aria2:
                     try:
                         await self.call("getVersion")
                         return self
-                    except aiohttp.ClientConnectionError:
+                    except TorrentTransportError:
                         await asyncio.sleep(0.1)
         except BaseException:
             await self.__aexit__(None, None, None)
@@ -401,17 +406,22 @@ class _Aria2:
             await self.session.close()
 
     async def call(self, method, *params):
-        async with self.session.post(
-            self.url,
-            json={
-                "jsonrpc": "2.0",
-                "id": 1,
-                "method": f"aria2.{method}",
-                "params": [f"token:{self.secret}", *params],
-            },
-        ) as response:
-            response.raise_for_status()
-            result = await response.json()
+        try:
+            async with self.session.post(
+                self.url,
+                json={
+                    "jsonrpc": "2.0",
+                    "id": 1,
+                    "method": f"aria2.{method}",
+                    "params": [f"token:{self.secret}", *params],
+                },
+            ) as response:
+                response.raise_for_status()
+                result = await response.json()
+        except aiohttp.ClientConnectionError, TimeoutError:
+            raise TorrentTransportError(
+                "The torrent downloader connection was interrupted."
+            ) from None
         if "error" in result:
             raise TorrentError("The torrent downloader rejected this operation.")
         return result["result"]
@@ -435,6 +445,9 @@ class _Aria2:
                 await progress(received, int(state.get("totalLength", 0)) or None)
             if state["status"] == "complete":
                 return
+            if state["status"] == "error" and state.get("errorCode") in {"2", "6"}:
+                # aria2 errorCode uses its documented timeout/network exit codes.
+                raise TorrentTransportError("Torrent transport was interrupted.")
             if state["status"] in {"error", "removed"}:
                 raise TorrentError(
                     "Torrent download failed. Check available peers and retry."

@@ -6,9 +6,57 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
+import aiohttp
 import pytest
 
 from tgdrive.transfers import torrent
+
+
+@pytest.mark.parametrize(
+    "status,code,retryable",
+    [
+        ("error", "2", True),
+        ("error", "6", True),
+        ("error", "9", False),
+        ("error", "1", False),
+        ("removed", "6", False),
+    ],
+)
+async def test_only_known_aria2_transport_outcomes_are_retryable(
+    tmp_path, status, code, retryable
+):
+    engine = torrent._Aria2(tmp_path)
+    engine.call = AsyncMock(return_value={"status": status, "errorCode": code})
+    with pytest.raises(torrent.TorrentError) as caught:
+        await engine.wait("gid")
+    assert isinstance(caught.value, torrent.TorrentTransportError) is retryable
+
+
+@pytest.mark.parametrize("error", [TimeoutError(), aiohttp.ClientConnectionError()])
+async def test_rpc_transport_failure_has_a_safe_typed_error(tmp_path, error):
+    engine = torrent._Aria2(tmp_path)
+    engine.url = "http://127.0.0.1/jsonrpc"
+
+    def failed(*_args, **_kwargs):
+        raise error
+
+    engine.session = SimpleNamespace(post=failed)
+    with pytest.raises(
+        torrent.TorrentTransportError, match="connection was interrupted"
+    ):
+        await engine.call("tellStatus", "gid")
+
+
+async def test_no_peer_stall_is_terminal(tmp_path, monkeypatch):
+    engine = torrent._Aria2(tmp_path)
+    engine.call = AsyncMock(return_value={"status": "active", "connections": "0"})
+    clock = iter([0, 0, torrent.STALL_TIMEOUT + 1])
+    monkeypatch.setattr(torrent, "time", SimpleNamespace(monotonic=lambda: next(clock)))
+    with pytest.raises(
+        torrent.TorrentError, match="no progress for 5 minutes"
+    ) as caught:
+        await engine.wait("gid")
+    assert not isinstance(caught.value, torrent.TorrentTransportError)
 
 
 def metadata(files=None, **extra):

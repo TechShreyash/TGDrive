@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import asyncio
+import time
 from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 import pytest
 
@@ -24,9 +26,180 @@ from tgdrive.transfers.torrent import (
     TorrentError,
     TorrentFile,
     TorrentManifest,
+    TorrentTransportError,
 )
 
 SOURCE = "magnet:?xt=urn:btih:" + "a" * 40
+
+
+async def test_transient_download_retries_reuse_reservation_and_release_slot(
+    tmp_path, monkeypatch
+):
+    manager, ledger = await manager_for(tmp_path)
+    manifest = TorrentManifest("file.bin", (TorrentFile("file.bin", 4),), 4, False)
+    attempts, waits = [], []
+    monkeypatch.setattr("tgdrive.transfers.torrent.available", lambda: True)
+
+    async def download(source, directory, *, admit, **_kwargs):
+        attempts.append((source, directory))
+        await admit(manifest)
+        directory.mkdir(parents=True, exist_ok=True)
+        path = directory / "file.bin"
+        if len(attempts) == 1:
+            path.write_bytes(b"pa")
+            raise TorrentTransportError("Synthetic transport timeout")
+        assert path.read_bytes() == b"pa"
+        path.write_bytes(b"data")
+        return manifest
+
+    async def wait(delay, cancel_event):
+        parent = next(
+            job
+            for job in manager.registry.list()
+            if job.context.get("kind") == "torrent"
+        )
+        waits.append(delay)
+        assert (
+            manager._torrent_slots._value == manager.settings.max_concurrent_transfers
+        )
+        assert parent.status is TransferStatus.QUEUED
+        assert parent.phase == "source_retry_wait"
+        assert parent.as_dict()["source_attempt"] == 2
+        assert parent.as_dict()["retry_at"] > 0
+        durable = manager.registry._durable[parent.id]["context"]
+        assert durable["source_attempt"] == 2
+        assert durable["source_retry_at"] == parent.context["source_retry_at"]
+        assert staging_usage(manager)[0] == 4
+        assert not cancel_event.is_set()
+
+    manager.remote._wait_for_retry = wait
+    monkeypatch.setattr("tgdrive.transfers.torrent.download_torrent", download)
+    try:
+        record = await manager.start_torrent(source=SOURCE, destination="/")
+        await record.task
+        assert record.status is TransferStatus.COMPLETED, record.error
+        assert attempts == [(SOURCE, manager.cache_dir / "torrents" / record.id)] * 2
+        assert len(waits) == 1 and 14 <= waits[0] <= 15
+        assert len(ledger.messages) == 1
+    finally:
+        await dispose(manager)
+
+
+@pytest.mark.parametrize("transient", [False, True])
+async def test_permanent_failure_stops_and_transient_failures_use_three_retries(
+    tmp_path, monkeypatch, transient
+):
+    manager, ledger = await manager_for(tmp_path)
+    attempts = []
+    monkeypatch.setattr("tgdrive.transfers.torrent.available", lambda: True)
+
+    async def failed(*_args, **_kwargs):
+        attempts.append(True)
+        error = TorrentTransportError if transient else TorrentError
+        raise error("Synthetic source failure")
+
+    manager.remote._wait_for_retry = AsyncMock()
+    monkeypatch.setattr("tgdrive.transfers.torrent.download_torrent", failed)
+    try:
+        record = await manager.start_torrent(source=SOURCE, destination="/")
+        await record.task
+        assert record.status is TransferStatus.ERROR
+        assert len(attempts) == (4 if transient else 1)
+        assert manager.remote._wait_for_retry.await_count == (3 if transient else 0)
+        if transient:
+            delays = [
+                call.args[0] for call in manager.remote._wait_for_retry.await_args_list
+            ]
+            assert all(
+                expected - 1 <= actual <= expected
+                for actual, expected in zip(delays, [15, 30, 60], strict=True)
+            )
+        assert ledger.calls == []
+        assert not record.context.get("restart_retryable")
+    finally:
+        await dispose(manager)
+
+
+async def test_cancel_during_torrent_backoff_never_starts_another_attempt(
+    tmp_path, monkeypatch
+):
+    from tgdrive.transfers.remote import RemoteClient
+
+    manager, ledger = await manager_for(tmp_path)
+    manager.remote = RemoteClient()
+    waiting = asyncio.Event()
+    attempts = []
+    monkeypatch.setattr("tgdrive.transfers.torrent.available", lambda: True)
+
+    async def failed(*_args, **_kwargs):
+        attempts.append(True)
+        raise TorrentTransportError("Synthetic timeout")
+
+    original_wait = manager.remote._wait_for_retry
+
+    async def wait(delay, cancel_event):
+        waiting.set()
+        await original_wait(delay, cancel_event)
+
+    monkeypatch.setattr(manager.remote, "_wait_for_retry", wait)
+    monkeypatch.setattr("tgdrive.transfers.torrent.download_torrent", failed)
+    try:
+        record = await manager.start_torrent(source=SOURCE, destination="/")
+        await asyncio.wait_for(waiting.wait(), 2)
+        await manager.cancel_job(record.id)
+        await record.task
+        assert record.status is TransferStatus.CANCELLED
+        assert attempts == [True] and ledger.calls == []
+        assert (
+            manager._torrent_slots._value == manager.settings.max_concurrent_transfers
+        )
+    finally:
+        await dispose(manager)
+
+
+async def test_reopened_torrent_preserves_retry_deadline_and_remaining_budget(
+    tmp_path, monkeypatch
+):
+    manager, ledger = await manager_for(tmp_path)
+    record = await manager.registry.create(
+        "source_retry_wait",
+        context={
+            "kind": "torrent",
+            "source": SOURCE,
+            "destination": "/",
+            "source_attempt": 3,
+            "source_retry_at": time.time() + 30,
+        },
+    )
+    manager.registry = registry_for(tmp_path)
+    record = manager.registry.get(record.id)
+    attempts = []
+
+    async def failed(*_args, **_kwargs):
+        attempts.append(True)
+        raise TorrentTransportError("Synthetic timeout")
+
+    manager.remote._wait_for_retry = AsyncMock()
+    monkeypatch.setattr("tgdrive.transfers.torrent.download_torrent", failed)
+    try:
+        await manager._resume(record)
+        await record.task
+        assert record.status is TransferStatus.ERROR
+        assert len(attempts) == 2
+        delays = [
+            call.args[0] for call in manager.remote._wait_for_retry.await_args_list
+        ]
+        assert len(delays) == 2
+        assert 29 <= delays[0] <= 30 and 59 <= delays[1] <= 60
+        assert ledger.calls == []
+        manager.remote._wait_for_retry.reset_mock()
+        await manager.retry_job(record.id)
+        await record.task
+        assert record.status is TransferStatus.ERROR
+        assert len(attempts) == 6
+        assert manager.remote._wait_for_retry.await_count == 3
+    finally:
+        await dispose(manager)
 
 
 def torrent_source(monkeypatch, *, manifest=None):

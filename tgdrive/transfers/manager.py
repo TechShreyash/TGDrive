@@ -427,7 +427,9 @@ class TransferManager:
 
     async def _torrent_pipeline(self, record: TransferRecord) -> None:
         from tgdrive.transfers.torrent import (
+            TORRENT_MAX_ATTEMPTS,
             TorrentCancelled,
+            TorrentTransportError,
             download_torrent,
         )
 
@@ -551,18 +553,51 @@ class TransferManager:
                         checkpoint_progress=False,
                     )
 
-                async with self._torrent_slots:
+                while True:
                     if record.cancel_event.is_set():
                         raise TransferCancelled("Transfer cancelled")
-                    await self.registry.update(record.id, status=TransferStatus.RUNNING)
-                    await download_torrent(
-                        context["source"],
-                        directory,
-                        remote=self.remote,
-                        cancel_event=record.cancel_event,
-                        progress=progress,
-                        admit=admit,
-                    )
+                    remaining = context.get("source_retry_at", 0) - time.time()
+                    if remaining > 0:
+                        await self.registry.update(
+                            record.id,
+                            status=TransferStatus.QUEUED,
+                            phase="source_retry_wait",
+                        )
+                        await self.remote._wait_for_retry(
+                            remaining, record.cancel_event
+                        )
+                    context.pop("source_retry_at", None)
+                    try:
+                        async with self._torrent_slots:
+                            if record.cancel_event.is_set():
+                                raise TransferCancelled("Transfer cancelled")
+                            await self.registry.update(
+                                record.id,
+                                status=TransferStatus.RUNNING,
+                                phase="torrent_metadata",
+                            )
+                            await download_torrent(
+                                context["source"],
+                                directory,
+                                remote=self.remote,
+                                cancel_event=record.cancel_event,
+                                progress=progress,
+                                admit=admit,
+                            )
+                        break
+                    except TorrentTransportError:
+                        attempt = context.get("source_attempt", 1)
+                        if attempt >= TORRENT_MAX_ATTEMPTS:
+                            raise
+                        context.update(
+                            source_attempt=attempt + 1,
+                            source_retry_at=time.time() + 15 * 2 ** (attempt - 1),
+                        )
+                        await self.registry.update(
+                            record.id,
+                            status=TransferStatus.QUEUED,
+                            phase="source_retry_wait",
+                        )
                 context["torrent_downloaded"] = True
                 await self.registry.persist(record)
             manifest = context["torrent_manifest"]
@@ -678,7 +713,7 @@ class TransferManager:
                 total=manifest["total_size"],
             )
             await self.registry.persist(record)
-        except TorrentCancelled, TransferCancelled:
+        except TorrentCancelled, RemoteCancelled, TransferCancelled:
             record.cancel_event.set()
             await self.registry.update(
                 record.id,
@@ -1218,6 +1253,12 @@ class TransferManager:
         record = self.registry.get(job_id)
         if not record.terminal and record.task is not None and not record.task.done():
             return record
+        if record.context.get("kind") == "torrent" and record.status in {
+            TransferStatus.ERROR,
+            TransferStatus.QUEUED,
+        }:
+            record.context.pop("source_attempt", None)
+            record.context.pop("source_retry_at", None)
         record = await self.registry.retry(job_id)
         if record.context.get("cancel_requested"):
             record.cancel_event.set()
