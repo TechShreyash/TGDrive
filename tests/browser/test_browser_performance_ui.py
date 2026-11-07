@@ -23,6 +23,53 @@ from tests.browser.test_browser_e2e import (  # noqa: E402
 )
 
 
+def test_performance_explanation_without_backend_support(server, desktop):
+    _, page = desktop
+    login(page, server.url)
+    snapshot = page.request.get(server.url + "/api/v1/performance").json()
+    snapshot.pop("diagnosis", None)
+    page.route("**/api/v1/performance", lambda route: route.fulfill(json=snapshot))
+    page.goto(server.url + "/?view=performance")
+    explanation = page.get_by_role("region", name="Performance explanation", exact=True)
+    expect(explanation).to_contain_text("unavailable from this server")
+    expect(page.get_by_role("heading", name="Live file transfers")).to_be_visible()
+    summary = explanation.locator("summary")
+    summary.focus()
+    page.keyboard.press("Enter")
+    expect(explanation.get_by_text("Useful throughput", exact=False)).to_be_visible()
+    expect(explanation).to_contain_text("Low throughput alone cannot locate")
+    page.screenshot(
+        path=ARTIFACTS / "performance-explanation-desktop.png",
+        full_page=True,
+        animations="disabled",
+    )
+    page.set_viewport_size({"width": 390, "height": 844})
+    assert explanation.evaluate("node => node.scrollWidth <= node.clientWidth")
+    assert explanation.evaluate(
+        "node => node.getBoundingClientRect().right <= innerWidth"
+    )
+    explanation.screenshot(
+        path=ARTIFACTS / "performance-explanation-unavailable.png",
+        animations="disabled",
+    )
+
+
+def test_missing_request_history_does_not_imply_zero_errors(server, desktop):
+    _, page = desktop
+    login(page, server.url)
+    snapshot = page.request.get(server.url + "/api/v1/performance").json()
+    snapshot.pop("traffic", None)
+    page.route("**/api/v1/performance", lambda route: route.fulfill(json=snapshot))
+    page.goto(server.url + "/?view=performance")
+    status = page.get_by_role("region", name="Account and request status", exact=True)
+    expect(status).to_contain_text("recent request error history unavailable")
+    expect(status).not_to_contain_text("no recent failed requests")
+    expect(status).not_to_contain_text("Healthy")
+    expect(
+        page.get_by_role("heading", name="Network traffic", exact=True)
+    ).to_be_visible()
+
+
 def test_cache_inventory_filters_verified_coverage_and_clear_actions(server, desktop):
     _, page = desktop
     login(page, server.url)
@@ -346,7 +393,8 @@ def test_performance_views_keyboard_navigation_and_settings_groups(server, deskt
     expect(page.get_by_role("tabpanel", name="Overview")).to_be_visible()
     tuning = page.get_by_role("region", name="Automatic tuning", exact=True)
     expect(tuning.get_by_text("Memory cache", exact=True)).to_be_visible()
-    expect(tuning.get_by_title("Sized from free memory")).to_have_text("256 MB")
+    expect(tuning.get_by_role("definition")).to_have_text("256 MB")
+    expect(tuning).to_contain_text("Sized from free memory")
     expect(page.get_by_role("heading", name="Live file transfers")).to_be_visible()
     expect(page.get_by_text("3 MB/s", exact=True)).to_be_visible()
     expect(page.get_by_text("1 MB/s", exact=True)).to_be_visible()

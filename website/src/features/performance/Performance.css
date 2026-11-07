@@ -293,6 +293,13 @@
     grid-template-columns: repeat(2, minmax(0, 1fr));
     gap: 32px;
 }
+.performance-explanation {
+    grid-column: 1 / -1;
+}
+.performance-explanation p {
+    max-width: 75ch;
+    line-height: 1.6;
+}
 .performance-overview-grid .performance-facts {
     grid-template-columns: 1fr;
     gap: 16px;

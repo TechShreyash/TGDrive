@@ -5,6 +5,7 @@ import { errorMessage } from "../../shared/api";
 import { ErrorNotice, Spinner } from "../../shared/components";
 import { formatBytes, formatTimestamp, getTimezone } from "../../shared/types";
 import StreamMemoryFact from "./StreamMemoryFact";
+import PerformanceExplanation from "./PerformanceExplanation";
 import { cachedFileComplete } from "./Preloads";
 import { useManualRefresh } from "../../shared/useManualRefresh";
 import {
@@ -1019,10 +1020,13 @@ export default function PerformancePanel({
                   ),
               );
     const trafficHistory = traffic?.history || [];
-    const recentErrors = Math.max(
-        0,
-        (trafficHistory.at(-1)?.errors ?? 0) - (trafficHistory[0]?.errors ?? 0),
-    );
+    const recentErrors =
+        trafficHistory.length >= 2
+            ? Math.max(
+                  0,
+                  trafficHistory.at(-1)!.errors - trafficHistory[0].errors,
+              )
+            : null;
     const waiting =
         telegram?.accounts.filter(
             (account) =>
@@ -1054,12 +1058,14 @@ export default function PerformancePanel({
                   (accountCount === 1 ? " account" : " accounts") +
                   " in a Telegram flood wait"
                 : "All Telegram accounts ready",
-        recentErrors
-            ? recentErrors +
-              " failed " +
-              (recentErrors === 1 ? "request" : "requests") +
-              " in the last few minutes"
-            : "no recent failed requests",
+        recentErrors === null
+            ? "recent request error history unavailable"
+            : recentErrors
+              ? recentErrors +
+                " failed " +
+                (recentErrors === 1 ? "request" : "requests") +
+                " in the last few minutes"
+              : "no recent failed requests",
         queueFull ? "Telegram queue nearly full" : "",
         traffic ? traffic.errors.toLocaleString() + " failed this session" : "",
     ]
@@ -1253,17 +1259,20 @@ export default function PerformancePanel({
                         <section
                             className="performance-health"
                             data-health={health}
-                            aria-label="Health"
+                            aria-label="Account and request status"
                         >
                             <strong>
                                 {health === "ok"
-                                    ? "Healthy"
+                                    ? "Accounts ready"
                                     : health === "degraded"
-                                      ? "Degraded"
-                                      : "Failing"}
+                                      ? "Waits or request errors observed"
+                                      : error || !accountCount
+                                        ? "Accounts or readings unavailable"
+                                        : "All accounts waiting"}
                             </strong>
                             <span>{healthDetail}</span>
                         </section>
+                        <PerformanceExplanation />
                         {traffic && (
                             <section
                                 className="performance-section performance-live-traffic"
