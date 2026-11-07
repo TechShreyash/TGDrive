@@ -199,8 +199,8 @@ and [performance controls](performance.md#upload-pipeline-and-smaller-splits).
   sender and request ID on retry; undispatched parts may change sender.
 - Credential/channel failures quarantine the account and wake waiters. Reads try
   eligible accounts; dispatched uploads keep durable identities and report repair
-  errors. Verified channel repair can re-enable live clients; new credentials need
-  restart.
+  errors. Verified channel repair can re-enable live clients; save replacement
+  credentials through Connections to reconfigure the running pool.
 
 </details>
 
