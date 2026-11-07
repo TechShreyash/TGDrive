@@ -679,39 +679,328 @@ def test_owner_renewal_waits_for_open_catalog_transactions():
     backend.client.close()
 
 
-async def test_scheduled_backup_skips_when_nothing_changed(snapshot_source):
-    from tgdrive.core import encryption
-
+async def test_scheduled_backup_does_not_skip_in_place_job_changes(
+    snapshot_source, monkeypatch
+):
     service, store, backend = snapshot_source
-    assert not service._unchanged()  # No confirmed backup yet.
-    key = bytes.fromhex(encryption.backup_key())
-    confirmed = {
-        "_id": "b1",
-        "status": "confirmed",
-        "created_at": "2026-11-01T00:00:00+00:00",
-        "source": service._source(key),
-    }
-    backend.db.backups.insert_one(confirmed)
-    assert service._unchanged()
-    # Catalog, settings and transfer changes each need a new backup.
-    store.create_folder("/", "New work")
-    assert not service._unchanged()
-    backend.db.backups.update_one(
-        {"_id": "b1"}, {"$set": {"source": service._source(key)}}
-    )
-    assert service._unchanged()
-    backend.db.settings.insert_one({"_id": "probe", "document": {"x": 1}})
-    assert not service._unchanged()
-    backend.db.backups.update_one(
-        {"_id": "b1"}, {"$set": {"source": service._source(key)}}
+    backend.db.backups.insert_one(
+        {
+            "_id": "b1",
+            "status": "confirmed",
+            "created_at": "2026-11-01T00:00:00+00:00",
+        }
     )
     backend.db.jobs.insert_one({"_id": "job"})
-    assert not service._unchanged()
-    backend.db.backups.update_one(
-        {"_id": "b1"}, {"$set": {"source": service._source(key)}}
+    backend.db.jobs.update_one(
+        {"_id": "job"}, {"$set": {"data": {"phase": "finished"}}}
     )
-    backend.db.backups.insert_one({"_id": "b2", "status": "pending"})
-    assert not service._unchanged()  # A pending upload must still finish.
+
+    async def interval_elapsed(awaitable, timeout):
+        awaitable.close()
+        raise TimeoutError
+
+    async def snapshot(_store):
+        assert backend.db.jobs.find_one({})["data"]["phase"] == "finished"
+        service._stop.set()
+
+    service.snapshot_now = AsyncMock(side_effect=snapshot)
+    monkeypatch.setattr(
+        "tgdrive.recovery.mongo_backup.asyncio.wait_for", interval_elapsed
+    )
+    await service._loop(store)
+    service.snapshot_now.assert_awaited_once_with(store)
+
+
+async def test_verified_backup_retries_pin_after_restart_without_local_file(
+    snapshot_source,
+):
+    service, store, backend = snapshot_source
+    with pytest.raises(RuntimeError, match="Publication paused"):
+        await service.snapshot_now(store)
+    row = backend.db.backups.find_one({"status": "pending"})
+    # This is the durable boundary after successful ciphertext verification.
+    backend.db.backups.update_one({"_id": row["id"]}, {"$set": {"message_id": 77}})
+    Path(row["local_path"]).unlink()
+    restarted = MongoProtection(service.settings, service.pool, backend)
+    restarted._pin = AsyncMock(
+        side_effect=[PermissionError("Missing Edit Messages"), None]
+    )
+    with pytest.raises(PermissionError):
+        await restarted.snapshot_now(store)
+    assert backend.db.backups.find_one({"_id": row["id"]})["status"] == "pending"
+    assert restarted._last_success_at is None
+    assert await restarted.snapshot_now(store)
+    assert backend.db.backups.find_one({"_id": row["id"]})["status"] == "confirmed"
+    assert restarted._last_success_at
+    assert (
+        restarted._pin.await_args_list[0].args[1]
+        == restarted._pin.await_args_list[1].args[1]
+    )
+
+
+@pytest.mark.parametrize("cooldown", [False, True])
+async def test_actual_verified_send_and_pin_retry_share_durable_failure_handling(
+    snapshot_source, monkeypatch, cooldown
+):
+    service, store, backend = snapshot_source
+    clock = [1000]
+    monkeypatch.setattr(
+        "tgdrive.recovery.mongo_backup.time", SimpleNamespace(time=lambda: clock[0])
+    )
+    directory = service.settings.resolved_cache_dir / "mongo-backups"
+    directory.mkdir(parents=True)
+    previous = directory / "last-good.tgdb"
+    previous.write_bytes(b"last confirmed recovery file")
+    good = {
+        "_id": "last-good",
+        "id": "last-good",
+        "status": "confirmed",
+        "pin_verified_at": "2000-01-01T00:00:01+00:00",
+        "created_at": "2000-01-01T00:00:00+00:00",
+        "confirmed_at": "2000-01-01T00:00:01+00:00",
+        "format": "tgdrive-backup-v2",
+        "local_path": str(previous),
+    }
+    backend.db.backups.insert_one(good)
+    service._observe_backup(good)
+    payload = b""
+    failures = [
+        PermissionError("Missing Edit Messages"),
+        BackupError("Wait", retry_after=60),
+    ]
+    if cooldown:
+        failures[0] = RuntimeError("Telegram FloodWait")
+        failures[0].seconds = 30
+
+    async def send(_channel, path, **_kwargs):
+        nonlocal payload
+        payload = Path(path).read_bytes()
+        return SimpleNamespace(id=77)
+
+    async def stream(*_args, **_kwargs):
+        yield payload
+
+    async def pin(_channel, message):
+        pending = backend.db.backups.find_one({"status": "pending"})
+        # The receipt must already be durable, even for the first failed pin.
+        assert pending["message_id"] == message == 77
+        assert previous.is_file()
+        if failures:
+            raise failures.pop(0)
+
+    client = SimpleNamespace(
+        name="backup-bot",
+        send_document=AsyncMock(side_effect=send),
+        get_messages=AsyncMock(
+            side_effect=lambda *_args, **_kwargs: SimpleNamespace(
+                document=SimpleNamespace(file_size=len(payload))
+            )
+        ),
+        stream_media=stream,
+        pin_message=AsyncMock(side_effect=pin),
+        get_pinned_message_id=AsyncMock(return_value=77),
+    )
+    leased = []
+
+    @asynccontextmanager
+    async def lease(**kwargs):
+        leased.append(kwargs)
+        yield client
+
+    service.pool.lease = lease
+    service.pool.defer_channel = AsyncMock()
+    with pytest.raises(BackupError, match="awaiting its recovery pin"):
+        await service.snapshot_now(store)
+    row = backend.db.backups.find_one({"status": "pending"})
+    assert row["message_id"] == 77
+    assert service._last_success_at == good["confirmed_at"]
+    assert previous.is_file()
+    Path(row["local_path"]).unlink()
+    restarted = MongoProtection(service.settings, service.pool, backend)
+    if cooldown:
+        assert row["retry_at"] == 1030.25
+        leases_before_wait = len(leased)
+        with pytest.raises(BackupError, match="waiting before retry"):
+            await restarted.snapshot_now(store)
+        client.pin_message.assert_awaited_once()
+        client.send_document.assert_awaited_once()
+        assert len(leased) == leases_before_wait
+    clock[0] = 1040
+    with pytest.raises(BackupError, match="awaiting its recovery pin"):
+        await restarted.snapshot_now(store)
+    pending = backend.db.backups.find_one({"_id": row["_id"]})
+    assert pending["retry_at"] == 1100.25
+    assert restarted.latest_history()[0]["retry_at"] == pending["retry_at"]
+    assert previous.is_file()
+    clock[0] = 1110
+    assert await restarted.snapshot_now(store)
+    confirmed = backend.db.backups.find_one({"_id": row["_id"]})
+    assert confirmed["status"] == "confirmed"
+    assert confirmed["pin_verified_at"]
+    assert confirmed["random_id"] == row["random_id"]
+    assert confirmed["sender"] == "backup-bot" and confirmed["message_id"] == 77
+    assert client.send_document.await_count == 1
+    assert client.pin_message.await_count == 3
+    assert leased[0] == {"client_name": None}
+    assert all(lease == {"client_name": "backup-bot"} for lease in leased[1:])
+    assert not previous.exists()
+    assert backend.db.backups.find_one({"_id": "last-good"}) == good
+    assert service.pool.defer_channel.await_count == (2 if cooldown else 1)
+    service.pool.defer_channel.assert_awaited_with(1100.25)
+
+
+@pytest.mark.parametrize("pin", [77, 88, ConnectionError("Telegram unavailable")])
+async def test_restore_rechecks_historic_pin_without_repinning_or_losing_evidence(
+    snapshot_source, pin
+):
+    service, store, backend = snapshot_source
+    path = service.settings.resolved_cache_dir / "historic.tgdb"
+    path.write_bytes(b"historical ciphertext")
+    row = {
+        "_id": "historic",
+        "id": "historic",
+        "format": "tgdrive-backup-v2",
+        "status": "confirmed",
+        "created_at": "2000-01-01T00:00:00+00:00",
+        "confirmed_at": "2000-01-01T00:00:01+00:00",
+        "local_path": str(path),
+        "message_id": 77,
+        "sender": "backup-bot",
+        "channel_id": service.settings.storage_channel,
+    }
+    backend.db.backups.insert_one(row)
+    client = SimpleNamespace(
+        get_pinned_message_id=AsyncMock(
+            side_effect=pin if isinstance(pin, Exception) else None,
+            return_value=pin,
+        ),
+        pin_message=AsyncMock(),
+        send_document=AsyncMock(),
+    )
+
+    @asynccontextmanager
+    async def lease(**kwargs):
+        assert kwargs == {"client_name": "backup-bot"}
+        yield client
+
+    service.pool.lease = lease
+    reopened = await service.restore()
+    try:
+        observed = service.latest_history()[0]
+        saved = backend.db.backups.find_one({"_id": row["_id"]})
+        assert saved["confirmed_at"] == row["confirmed_at"]
+        assert path.read_bytes() == b"historical ciphertext"
+        assert saved["message_id"] == 77
+        assert reopened.revision == store.revision
+        if pin == 77:
+            assert saved["status"] == observed["status"] == "confirmed"
+            assert saved["pin_verified_at"] == observed["pin_verified_at"]
+            assert service._last_success_at == row["confirmed_at"]
+            assert service._last_error is None
+        else:
+            assert saved["status"] == observed["status"] == "unverified"
+            assert "pin_verified_at" not in saved
+            assert service._last_success_at is None
+            assert "new backup will be scheduled" in service._last_error
+        client.get_pinned_message_id.assert_awaited_once_with(row["channel_id"])
+        client.pin_message.assert_not_awaited()
+        client.send_document.assert_not_awaited()
+    finally:
+        reopened.close()
+    # A verified marker needs no extra provider read; an unverified row stays
+    # visibly unverified across another restart until a fresh backup succeeds.
+    reopened = await service.restore()
+    try:
+        client.get_pinned_message_id.assert_awaited_once()
+        if pin != 77:
+            assert service.latest_history()[0]["status"] == "unverified"
+            assert service._last_success_at is None
+            assert service._last_error
+    finally:
+        reopened.close()
+
+
+async def test_historic_pin_startup_check_is_bounded_and_does_not_block_drive_access(
+    snapshot_source, monkeypatch
+):
+    service, store, backend = snapshot_source
+    row = {
+        "_id": "historic",
+        "id": "historic",
+        "format": "tgdrive-backup-v2",
+        "status": "confirmed",
+        "created_at": "2000-01-01T00:00:00+00:00",
+        "confirmed_at": "2000-01-01T00:00:01+00:00",
+        "message_id": 77,
+        "sender": "backup-bot",
+        "channel_id": service.settings.storage_channel,
+    }
+    backend.db.backups.insert_one(row)
+    started = asyncio.Event()
+
+    async def blocked_pin(_channel):
+        started.set()
+        await asyncio.Event().wait()
+
+    client = SimpleNamespace(get_pinned_message_id=blocked_pin, pin_message=AsyncMock())
+
+    @asynccontextmanager
+    async def lease(**_kwargs):
+        yield client
+
+    service.pool.lease = lease
+    real_timeout = asyncio.timeout
+
+    def short_timeout(seconds):
+        assert seconds == 10
+        return real_timeout(0.01)
+
+    monkeypatch.setattr("tgdrive.recovery.mongo_backup.asyncio.timeout", short_timeout)
+    reopened = await asyncio.wait_for(service.restore(), 1)
+    try:
+        assert started.is_set()
+        assert reopened.revision == store.revision
+        assert service.latest_history()[0]["status"] == "unverified"
+        assert service.protection_status(reopened)["state"] == "protected"
+        assert service._last_success_at is None
+        assert service._last_error
+        client.pin_message.assert_not_awaited()
+    finally:
+        reopened.close()
+
+
+async def test_newer_verified_backup_leaves_older_historic_archives_unchanged(
+    snapshot_source,
+):
+    service, _store, backend = snapshot_source
+    old = {
+        "_id": "old",
+        "id": "old",
+        "format": "tgdrive-backup-v2",
+        "status": "confirmed",
+        "created_at": "2000-01-01T00:00:00+00:00",
+        "confirmed_at": "2000-01-01T00:00:01+00:00",
+        "message_id": 77,
+    }
+    current = dict(
+        old,
+        _id="current",
+        id="current",
+        created_at="2000-01-02T00:00:00+00:00",
+        confirmed_at="2000-01-02T00:00:01+00:00",
+        message_id=88,
+        pin_verified_at="2000-01-02T00:00:01+00:00",
+    )
+    backend.db.backups.insert_many([old, current])
+    reopened = await service.restore()
+    try:
+        assert backend.db.backups.find_one({"_id": old["id"]}) == old
+        assert service.latest_history()[0]["id"] == "current"
+        assert service._last_success_at == current["confirmed_at"]
+        assert service._last_error is None
+        service.pool.lease.assert_not_called()
+    finally:
+        reopened.close()
 
 
 def test_writes_reuse_the_pending_deletion_list_until_a_deletion_changes():
