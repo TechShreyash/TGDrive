@@ -8,7 +8,7 @@ upgrade simply continues on the next start. Files already in Telegram are
 never touched: parts without a nonce stay readable as plain bytes.
 
 Before changing anything it writes a copy of every collection to
-``DATA_DIR/upgrade-2.2-<time>.json.gz`` (owner-only permissions).
+``DATA_DIR/upgrade-2.2-<time>-<random>.json.gz`` (owner-only permissions).
 """
 
 from __future__ import annotations
@@ -16,6 +16,7 @@ from __future__ import annotations
 import gzip
 import logging
 import os
+import secrets
 from datetime import UTC, datetime
 from typing import Any
 
@@ -38,26 +39,59 @@ def _save_copy(backend, directory) -> str:
 
     directory.mkdir(parents=True, exist_ok=True, mode=0o700)
     stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
-    path = directory / f"upgrade-2.2-{stamp}.json.gz"
-    temporary = path.with_name("." + path.name + ".partial")
-    descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-    with (
-        os.fdopen(descriptor, "wb") as raw,
-        gzip.GzipFile(fileobj=raw, mode="wb") as target,
-    ):
-        for name in (
-            *COLLECTIONS,
-            "runtime",
-            "replica_state",
-            "replica_chunks",
-            "replica_copies",
+    prior = backend.db.catalog.find_one({"_id": "catalog"}).get("upgrade_copy")
+    if prior is not None:
+        if not isinstance(prior, str):
+            raise ValueError(
+                "Preserve and repair the original migration copy before retrying"
+            )
+        path = directory / prior
+        if (
+            not prior.startswith("upgrade-2.2-")
+            or path.name != prior
+            or path.is_symlink()
+            or not path.is_file()
+            or path.resolve().parent != directory.resolve()
+            or path.stat().st_mode & 0o077
         ):
-            for row in backend.db[name].find({}):
-                target.write(
-                    json_util.dumps({"collection": name, "document": row}).encode()
-                    + b"\n"
-                )
-    os.replace(temporary, path)
+            raise ValueError(
+                "Preserve and repair the original migration copy before retrying"
+            )
+        return str(path)
+    path = directory / f"upgrade-2.2-{stamp}-{secrets.token_hex(8)}.json.gz"
+    temporary = path.with_name("." + path.name + ".partial")
+    descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    try:
+        with os.fdopen(descriptor, "wb") as raw:
+            with gzip.GzipFile(fileobj=raw, mode="wb") as target:
+                for name in (
+                    *COLLECTIONS,
+                    "runtime",
+                    "replica_state",
+                    "replica_chunks",
+                    "replica_copies",
+                ):
+                    for row in backend.db[name].find({}):
+                        target.write(
+                            json_util.dumps(
+                                {"collection": name, "document": row}
+                            ).encode()
+                            + b"\n"
+                        )
+            raw.flush()
+            os.fsync(raw.fileno())
+        os.link(temporary, path)
+    finally:
+        temporary.unlink(missing_ok=True)
+    directory_fd = os.open(directory, os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        os.fsync(directory_fd)
+    finally:
+        os.close(directory_fd)
+    backend.check_owner()
+    backend.db.catalog.update_one(
+        {"_id": "catalog"}, {"$set": {"upgrade_copy": path.name}}
+    )
     return str(path)
 
 
