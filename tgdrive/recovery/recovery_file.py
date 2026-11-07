@@ -7,17 +7,25 @@ import json
 import math
 import re
 import secrets
-import shutil
 import zlib
-from datetime import UTC, datetime
+from functools import partial
 
-from bson import json_util
+from bson import BSON, json_util
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
 from tgdrive.storage.mongo_store import MongoStore, catalog_counters
 
 MAGIC = b"TGDRIVE-BACKUP-2\n"
+MAX_EXPANDED_BYTES = 16 * 1024**2
+MAX_RECOVERY_BYTES = MAX_EXPANDED_BYTES + 64 * 1024
+MAX_STAGED_RECOVERY_BYTES = 2000 * 1024**2
+MAX_DATABASE_BYTES = MAX_EXPANDED_BYTES // 2
+MAX_DATABASE_RECORDS = 10_000
 _TOKEN = re.compile(r"[1-9][0-9]{4,14}:[A-Za-z0-9_-]{20,}")
+
+
+class LegacyRecoveryFile(ValueError):
+    """An authenticated old drive needs its version-matched restore tool."""
 
 
 def sanitize_database(records):
@@ -43,6 +51,7 @@ def snapshot_catalog(records):
 
     if not isinstance(records, dict) or set(records) != set(COLLECTIONS):
         raise ValueError("Invalid recovery database collections")
+    size = count = 0
     for rows in records.values():
         if not isinstance(rows, list):
             raise ValueError("Invalid recovery database records")
@@ -53,6 +62,12 @@ def snapshot_catalog(records):
             if row["_id"] in identities:
                 raise ValueError("Duplicate recovery database identity")
             identities.add(row["_id"])
+            count += 1
+            size += len(BSON.encode(row))
+            if count > MAX_DATABASE_RECORDS or size > MAX_DATABASE_BYTES:
+                raise ValueError(
+                    "The recovery database exceeds its record or memory budget"
+                )
     return MongoStore.validate_snapshot_records(records)
 
 
@@ -61,10 +76,20 @@ def capture_database(backend):
     from tgdrive.recovery.mongo_backup import COLLECTIONS
 
     with backend.client.start_session(snapshot=True) as session:
-        records = {
-            name: list(backend.db[name].find({}, session=session))
-            for name in COLLECTIONS
-        }
+        records = {}
+        size = count = 0
+        for name in COLLECTIONS:
+            records[name] = []
+            if name == "sessions":
+                continue
+            for row in backend.db[name].find({}, session=session):
+                size += len(BSON.encode(row))
+                count += 1
+                if size > MAX_DATABASE_BYTES or count > MAX_DATABASE_RECORDS:
+                    raise ValueError(
+                        "The recovery database exceeds its record or memory budget"
+                    )
+                records[name].append(row)
     records = sanitize_database(records)
     snapshot_catalog(records)
     return records
@@ -209,9 +234,17 @@ def encode_recovery_file(payload, key):
         ):
             raise ValueError("Invalid recovery bot token")
         value["recovery_token"] = payload["recovery_token"]
-    raw = json.dumps(
-        value, default=json_util.default, allow_nan=False, separators=(",", ":")
-    ).encode()
+    raw = bytearray()
+    encoder = json.JSONEncoder(
+        default=json_util.default, allow_nan=False, separators=(",", ":")
+    )
+    for part in encoder.iterencode(value):
+        encoded = part.encode()
+        if len(raw) + len(encoded) > MAX_EXPANDED_BYTES:
+            raise ValueError(
+                "The recovery file exceeds the 16 MiB expanded metadata limit"
+            )
+        raw.extend(encoded)
     nonce = secrets.token_bytes(12)
     encrypted = (
         MAGIC
@@ -220,6 +253,8 @@ def encode_recovery_file(payload, key):
             nonce, zlib.compress(raw, level=6), MAGIC
         )
     )
+    if len(encrypted) > MAX_RECOVERY_BYTES:
+        raise ValueError("The encrypted recovery file exceeds its transport limit")
     return encrypted
 
 
@@ -250,6 +285,7 @@ def decode_recovery_file(content, key):
         if (
             not isinstance(content, bytes)
             or len(content) < len(MAGIC) + 28
+            or len(content) > MAX_RECOVERY_BYTES
             or not content.startswith(MAGIC)
             or not isinstance(key, str)
             or re.fullmatch(r"[a-fA-F0-9]{64}", key.strip()) is None
@@ -260,9 +296,13 @@ def decode_recovery_file(content, key):
             content[offset : offset + 12], content[offset + 12 :], MAGIC
         )
         decoder = zlib.decompressobj()
-        # AES-GCM authenticated these bytes, so they are TGDrive's own backup.
-        raw = decoder.decompress(compressed)
-        if not decoder.eof or decoder.unused_data or decoder.unconsumed_tail:
+        raw = decoder.decompress(compressed, MAX_EXPANDED_BYTES + 1)
+        if (
+            len(raw) > MAX_EXPANDED_BYTES
+            or not decoder.eof
+            or decoder.unused_data
+            or decoder.unconsumed_tail
+        ):
             raise ValueError
         value = json_util.loads(
             raw, object_pairs_hook=_object, parse_constant=_constant
@@ -288,6 +328,16 @@ def decode_recovery_file(content, key):
             raise ValueError
         _validate_timestamp(value["created_at"])
         database = value["database"]
+        if (
+            isinstance(database, dict)
+            and isinstance(database.get("catalog"), list)
+            and database["catalog"]
+            and database["catalog"][0].get("schema_version") == 4
+        ):
+            raise LegacyRecoveryFile(
+                "This is a TGDrive 2.2 recovery file. Preserve it and its original "
+                "key; restore with tagged v2.2 into isolated MongoDB, then upgrade."
+            )
         if sanitize_database(database) != database:
             raise ValueError
         original = snapshot_catalog(database)
@@ -332,6 +382,8 @@ def decode_recovery_file(content, key):
                 raise ValueError
             result["recovery_token"] = token
         return result
+    except LegacyRecoveryFile:
+        raise
     except Exception:
         raise ValueError(
             "Recovery key or file validation failed; nothing changed"
@@ -339,28 +391,19 @@ def decode_recovery_file(content, key):
 
 
 def write_recovery_snapshot(backend, path, key, settings):
-    from tgdrive.recovery.backup import BackupError
-    from tgdrive.recovery.mongo_backup import file_checksum
-    from tgdrive.replication.replica_settings import credentials_from_snapshot
-    from tgdrive.replication.replica_state import atomic_private
+    from tgdrive.recovery.snapshot_stream import write_recovery_snapshot as write_staged
+    from tgdrive.recovery.staged_snapshot import validate_snapshot
 
-    database = capture_database(backend)
-    catalog = snapshot_catalog(database)
-    payload = {
-        "catalog": catalog,
-        "replica_catalog": None,
-        "database": database,
-        "credentials": credentials_from_snapshot(settings, database),
-        "created_at": datetime.now(UTC).isoformat(timespec="seconds"),
-    }
-    content = encode_recovery_file(payload, key.hex())
-    if shutil.disk_usage(path.parent).free < len(content) + settings.min_free_bytes:
-        raise BackupError(
-            "Not enough temporary space to stage a recovery file; free space and retry"
-        )
-    atomic_private(path, content)
-    return (
-        catalog["revision"],
-        {name: len(rows) for name, rows in database.items()},
-        file_checksum(path),
+    return write_staged(
+        backend,
+        path,
+        key,
+        settings,
+        validate_snapshot=partial(
+            validate_snapshot, min_free_bytes=settings.min_free_bytes
+        ),
+        max_records=None,
+        max_database_bytes=None,
+        max_expanded_bytes=None,
+        max_recovery_bytes=MAX_STAGED_RECOVERY_BYTES,
     )

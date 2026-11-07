@@ -140,6 +140,48 @@ def seal_raw(raw):
     )
 
 
+def test_authenticated_compression_bomb_is_bounded_before_json_decode(monkeypatch):
+    monkeypatch.setattr(recovery_file, "MAX_EXPANDED_BYTES", 1024)
+    content = seal_raw(b" " * 1025)
+    monkeypatch.setattr(
+        recovery_file.json_util,
+        "loads",
+        lambda *_args, **_kwargs: pytest.fail("decoded oversize JSON"),
+    )
+    with pytest.raises(ValueError, match="validation failed"):
+        decode_bundle(content, KEY)
+
+
+def test_matching_expanded_boundary_round_trips_and_producer_refuses_excess(
+    source, monkeypatch
+):
+    value = bundle(source)
+    content = encode_bundle(value, KEY)
+    size = len(open_raw(content))
+    monkeypatch.setattr(recovery_file, "MAX_EXPANDED_BYTES", size)
+    assert decode_bundle(content, KEY)["catalog"] == value["catalog"]
+    monkeypatch.setattr(recovery_file, "MAX_EXPANDED_BYTES", size - 1)
+    with pytest.raises(ValueError, match="metadata limit"):
+        encode_bundle(value, KEY)
+
+
+def test_capture_stops_before_materializing_excess_database_records(
+    source, monkeypatch
+):
+    _, backend, _ = source
+    monkeypatch.setattr(recovery_file, "MAX_DATABASE_RECORDS", 1)
+    with pytest.raises(ValueError, match="record or memory budget"):
+        recovery_file.capture_database(backend)
+
+
+def test_authenticated_schema_4_backup_requires_version_matched_restore(source):
+    content = encode_bundle(bundle(source), KEY)
+    raw = json_util.loads(open_raw(content))
+    raw["database"]["catalog"][0]["schema_version"] = 4
+    with pytest.raises(recovery_file.LegacyRecoveryFile, match=r"tagged v2\.2"):
+        decode_bundle(seal_raw(json_util.dumps(raw).encode()), KEY)
+
+
 def test_unified_file_has_one_catalog_copy_and_preserves_database_history(source):
     value = bundle(source)
     encrypted = encode_bundle(value, KEY)
@@ -237,7 +279,9 @@ def test_capture_uses_one_shared_mongodb_snapshot_session(source, monkeypatch):
         monkeypatch.setattr(collection, "find", record)
     recovery_file.capture_database(backend)
     backend.client.start_session.assert_called_once_with(snapshot=True)
-    assert len(observed) == len(COLLECTIONS)
+    assert (
+        len(observed) == len(COLLECTIONS) - 1
+    )  # Browser sessions are omitted at capture.
     assert all(session is observed[0] for session in observed)
 
 
@@ -258,7 +302,8 @@ def test_standalone_recovery_file_keeps_free_space_reserve(
     configured, backend, _store = source
     path = tmp_path / "blocked-backup.tgdb"
     monkeypatch.setattr(
-        recovery_file.shutil, "disk_usage", lambda _path: SimpleNamespace(free=0)
+        "tgdrive.recovery.snapshot_stream.shutil.disk_usage",
+        lambda _path: SimpleNamespace(free=0),
     )
     with pytest.raises(BackupError, match="temporary space"):
         recovery_file.write_recovery_snapshot(
