@@ -805,6 +805,9 @@ removes older known confirmed files only after their replacement is durably
 confirmed; it preserves retry ciphertext and never purges remote restore points.
 Cleanup failure does not invalidate the new backup. Local staging enforces the
 free-space reserve; interrupted or older untracked files can still require review.
+Downloads hash the selected archive and stream from that same open file, so
+pruning its pathname does not interrupt the verified response. The descriptor
+is closed after completion or cancellation.
 See the [operator guide](backup-recovery.md#interruptions) for retry,
 credential replacement and key custody.
 
