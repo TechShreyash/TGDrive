@@ -251,6 +251,59 @@ def test_local_archive_selection_keeps_unverified_and_older_retained_files(tmp_p
         store.close()
 
 
+@pytest.mark.parametrize("kind", ["missing", "permissions", "symlink", "directory"])
+def test_local_archive_open_failures_are_structured(tmp_path, monkeypatch, kind):
+    from tgdrive.settings.managed_settings import SettingsProblem
+
+    _configured, store, _remote, replica, _ = setup(tmp_path)
+    path = tmp_path / "saved.tgdb"
+    path.write_bytes(b"saved archive")
+    path.chmod(0o600)
+    digest = hashlib.sha256(path.read_bytes()).hexdigest()
+    if kind == "permissions":
+        path.chmod(0o644)
+    elif kind == "symlink":
+        target = tmp_path / "target.tgdb"
+        path.rename(target)
+        path.symlink_to(target)
+    elif kind == "directory":
+        path.unlink()
+        path.mkdir()
+
+    def selection():
+        if kind == "missing":
+            path.unlink()
+        return path, digest
+
+    monkeypatch.setattr(replica, "_backup_selection", selection)
+    try:
+        with pytest.raises(SettingsProblem) as error:
+            replica.recovery_file()
+        assert error.value.status == (404 if kind == "missing" else 409)
+    finally:
+        store.close()
+
+
+def test_verified_archive_descriptor_survives_retention_unlink(tmp_path, monkeypatch):
+    _configured, store, _remote, replica, _ = setup(tmp_path)
+    path = tmp_path / "retained.tgdb"
+    path.write_bytes(b"verified encrypted archive")
+    path.chmod(0o600)
+    digest = hashlib.sha256(path.read_bytes()).hexdigest()
+    monkeypatch.setattr(replica, "_backup_selection", lambda: (path, digest))
+    try:
+        selected, source = replica.open_recovery_file()
+        try:
+            assert selected == path and source.tell() == 0
+            path.unlink()
+            assert source.read() == b"verified encrypted archive"
+        finally:
+            source.close()
+        assert source.closed
+    finally:
+        store.close()
+
+
 @pytest.mark.asyncio
 async def test_file_inspection_keeps_saved_provider_wait_before_new_requests(tmp_path):
     from tgdrive.settings.managed_settings import SettingsProblem

@@ -4,12 +4,12 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import re
 import secrets
 import shutil
 
 from fastapi import Depends, HTTPException, Request, Response
-from fastapi.responses import FileResponse
 from pydantic import Field, SecretStr, StrictBool
 
 from tgdrive.settings.managed_settings import PrivateModel, SettingsProblem
@@ -101,10 +101,43 @@ def register_replica_routes(app, settings, require_admin, get_runtime):
     @app.get("/api/v1/replica/file", dependencies=admin)
     async def backup_file(request: Request):
         current = service(request)
-        return FileResponse(
-            await asyncio.to_thread(current.recovery_file),
+        from tgdrive.media.streaming import _LeasedStreamingResponse
+
+        opened = []
+
+        def open_download():
+            acquire = getattr(current, "open_recovery_file", None)
+            if callable(acquire):
+                path, content = acquire()
+            else:
+                path = current.recovery_file()
+                content = path.open("rb")
+            opened.append(content)
+            return path, content
+
+        try:
+            _path, content = await ResumableUploads._owned_worker(open_download)
+        except BaseException:
+            for content in opened:
+                content.close()
+            raise
+
+        async def release():
+            content.close()
+
+        async def body():
+            while block := await ResumableUploads._owned_worker(
+                content.read, 64 * 1024
+            ):
+                yield block
+
+        return _LeasedStreamingResponse(
+            body(),
+            release=release,
+            authorize=lambda: require_admin(request),
             media_type="application/octet-stream",
             headers={
+                "Content-Length": str(os.fstat(content.fileno()).st_size),
                 "Cache-Control": "no-store",
                 "X-Content-Type-Options": "nosniff",
                 "Content-Disposition": 'attachment; filename="tgdrive-backup.tgdb"',

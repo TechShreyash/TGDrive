@@ -1,5 +1,6 @@
 """Recovery remains owner-only and reachable when the live catalog is missing."""
 
+import asyncio
 import hashlib
 import json
 from types import SimpleNamespace
@@ -398,7 +399,10 @@ def test_recovery_file_import_remains_available_during_recovery_and_connection_r
     )
 
 
-def test_recovery_file_download_is_private_and_not_cached(owner):
+@pytest.mark.parametrize("prune_after_open", [False, True])
+def test_recovery_file_download_is_private_and_not_cached(
+    owner, monkeypatch, prune_after_open
+):
     client, _, replica = owner
     from tgdrive.replication.replica_state import atomic_private
 
@@ -415,7 +419,19 @@ def test_recovery_file_download_is_private_and_not_cached(owner):
             "created_at": "2026-10-28T12:00:00+00:00",
         },
     )
+    acquire = replica.open_recovery_file
+    opened = []
+
+    def open_download():
+        selected, source = acquire()
+        opened.append(source)
+        if prune_after_open:
+            selected.unlink()
+        return selected, source
+
+    monkeypatch.setattr(replica, "open_recovery_file", open_download)
     assert client.get("/api/v1/replica/file").status_code == 401
+    assert opened == []
     login(client)
     response = client.get("/api/v1/replica/file")
     assert (
@@ -427,6 +443,53 @@ def test_recovery_file_download_is_private_and_not_cached(owner):
         response.headers["content-disposition"]
         == 'attachment; filename="tgdrive-backup.tgdb"'
     )
+    assert opened and all(source.closed for source in opened)
+
+
+def test_recovery_download_cancellation_closes_the_verified_file(owner, monkeypatch):
+    client, _, replica = owner
+    login(client)
+    path = replica.directory / "held-backup.tgdb"
+    path.write_bytes(b"encrypted archive" * 10000)
+    path.chmod(0o600)
+    opened = []
+
+    def acquire():
+        source = path.open("rb")
+        opened.append(source)
+        return path, source
+
+    monkeypatch.setattr(replica, "open_recovery_file", acquire)
+    request = client.build_request("GET", "/api/v1/replica/file")
+    assert "cookie" in request.headers
+    scope = {
+        "type": "http",
+        "asgi": {"version": "3.0", "spec_version": "2.4"},
+        "http_version": "1.1",
+        "method": "GET",
+        "scheme": "https",
+        "path": "/api/v1/replica/file",
+        "raw_path": b"/api/v1/replica/file",
+        "root_path": "",
+        "query_string": b"",
+        "headers": [(name.lower(), value) for name, value in request.headers.raw],
+        "client": ("127.0.0.1", 1),
+        "server": ("testserver", 443),
+    }
+
+    async def receive():
+        return {"type": "http.request", "body": b"", "more_body": False}
+
+    responses = []
+
+    async def send(message):
+        responses.append(message)
+        if opened and message["type"] == "http.response.body" and message.get("body"):
+            raise asyncio.CancelledError
+
+    with pytest.raises(asyncio.CancelledError):
+        asyncio.run(client.app(scope, receive, send))
+    assert opened and all(source.closed for source in opened), responses
 
 
 def test_recovery_file_download_and_import_are_denied_in_read_only_demo(owner):

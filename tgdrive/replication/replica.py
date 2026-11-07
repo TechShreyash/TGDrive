@@ -135,7 +135,7 @@ class ChannelReplica:
         saved = self.journal.get("backup_file")
         if saved and re.fullmatch(r"[a-f0-9]{64}", saved.get("digest", "")):
             path = self.directory / "replica-bundles" / (saved["digest"] + ".tgdb")
-            if path.is_file():
+            if path.exists() or path.is_symlink():
                 choices.append(
                     (
                         saved.get("created_at", "1970-01-01T00:00:00+00:00"),
@@ -160,7 +160,7 @@ class ChannelReplica:
                     / "mongo-backups"
                     / (identity + ".tgdb")
                 )
-                if path.is_file():
+                if path.exists() or path.is_symlink():
                     choice = (row["created_at"], path, row.get("sha256"))
                     if not choices or datetime.fromisoformat(
                         choice[0]
@@ -178,6 +178,12 @@ class ChannelReplica:
         return selected[0] if selected else None
 
     def recovery_file(self):
+        path, source = self.open_recovery_file()
+        source.close()
+        return path
+
+    def open_recovery_file(self):
+        """Return the verified open file; its caller owns closing that descriptor."""
         selected = self._backup_selection()
         if selected is None:
             raise SettingsProblem(
@@ -188,25 +194,46 @@ class ChannelReplica:
         import os
         import stat
 
-        descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
+        descriptor = None
+        source = None
         try:
+            descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
             info = os.fstat(descriptor)
             if not stat.S_ISREG(info.st_mode) or info.st_mode & 0o077:
                 raise SettingsProblem(
-                    "The saved recovery file is unsafe or exceeds its size limit.",
+                    "The saved recovery file has unsafe permissions or file type.",
                     status=409,
                 )
-            with os.fdopen(descriptor, "rb", closefd=False) as content:
-                digest = hashlib.file_digest(content, "sha256").hexdigest()
+            source = os.fdopen(descriptor, "rb")
+            descriptor = None
+            digest = hashlib.file_digest(source, "sha256").hexdigest()
+            if not expected or digest != expected:
+                raise SettingsProblem(
+                    "The saved recovery file changed. "
+                    "Create a fresh confirmed backup before downloading.",
+                    status=409,
+                )
+            source.seek(0)
+            return path, source
+        except BaseException as error:
+            if source is not None:
+                source.close()
+            if isinstance(error, FileNotFoundError):
+                raise SettingsProblem(
+                    "The saved recovery file is no longer available. "
+                    "Refresh and retry.",
+                    status=404,
+                ) from None
+            if isinstance(error, OSError):
+                raise SettingsProblem(
+                    "The saved recovery file cannot be opened safely. "
+                    "Check its permissions and retry.",
+                    status=409,
+                ) from None
+            raise
         finally:
-            os.close(descriptor)
-        if not expected or digest != expected:
-            raise SettingsProblem(
-                "The saved recovery file changed. "
-                "Create a fresh confirmed backup before downloading.",
-                status=409,
-            )
-        return path
+            if descriptor is not None:
+                os.close(descriptor)
 
     async def configure(self, channel, token, independent):
         if not independent or channel == self.settings.storage_channel or channel >= 0:
