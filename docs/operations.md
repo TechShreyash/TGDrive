@@ -371,13 +371,18 @@ Do not run an older app against an incompatible database format. Restore a compa
 
 | What happens | Detail |
 | --- | --- |
-| Safety copy first | Supported recovery collections, runtime and replica records are written to `DATA_DIR/upgrade-2.2-<time>.json.gz` (owner-only) before mutation. It includes sensitive raw settings, omits optional telemetry and is not a `.tgdb` import. Keep it private; it does not replace an off-host 2.2 backup. |
+| Safety copy first | Supported recovery collections, runtime and replica records are written to a unique `DATA_DIR/upgrade-2.2-<time>-<random>.json.gz` with mode `0600`. The file and directory are synced before migration; retries reuse the recorded original. It includes sensitive raw settings, omits optional telemetry and is not a `.tgdb` import. Keep it private; it does not replace an off-host 2.2 backup. |
 | Kept | Files, folders, Trash, stars, shares, connections, settings, sessions and share links. `SESSION_SECRET` is kept, so old links still work. |
 | Added | Search words, type groups, drive totals, record expiry and the encryption-key check. |
 | Removed | The saved 2.2 `MONGODB_BACKUP_KEY` and an unused index. Current backup keys derive from `ENCRYPTION_KEY`; keep the old key for old archives. |
 | Backup channel | 2.2's independent channel progress can't be read by 2.3, so it starts from scratch. Its messages stay in Telegram; the old files are renamed `channel-backup.sqlite3.2.2-unused` and `replica-bootstrap.json.2.2-unused`. |
 | Telegram files | Not touched. Files uploaded by 2.2 stay unencrypted and readable; new uploads are encrypted. |
 | Interrupted | The version is raised last, so the upgrade runs again on the next start. On an upgraded drive it does nothing. |
+
+If a retry reports a missing or unsafe migration copy, stop and preserve the
+database and volumes. Recover the original file at its recorded path with
+owner-only permissions before restarting. Do not replace it with a dump taken
+after a partial migration or remove the recorded copy name to bypass the error.
 
 Do not run 2.2 against the upgraded database. For rollback, keep the original
 2.2 archive and matching key for a separate version-compatible restore. An

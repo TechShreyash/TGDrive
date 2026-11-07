@@ -67,7 +67,8 @@ Hover or use the keyboard/touch sample scrubber. **Now** always means current.
 
 - Live: five minutes of three-second samples. Recorded: 31 days, at minute
   detail for the last 3 days and hourly before that; charts over more than 3
-  days use buckets of at least one hour, at most 360 plotted points. Presets include Last Month (30 days).
+  days, or any interval starting outside the last 3 days, use buckets of at
+  least one hour, at most 360 plotted points. Presets include Last Month (30 days).
 - Averages cover observed seconds only. Missing/offline periods remain gaps;
   incompatible scopes are not joined and earlier periods are not backfilled.
   Custom inputs use UTC; the applied interval uses the configured timezone.

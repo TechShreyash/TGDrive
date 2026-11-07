@@ -822,4 +822,7 @@ MongoDB retains 31 days of performance history: minute rows for 3 days, merged
 into hourly rows after that; lifetime traffic checkpoints
 are separate. Missing samples remain gaps. Telemetry is disposable, excluded
 from encrypted catalog backups, and never required for file operations.
+Checkpoints use ownership-fenced MongoDB transactions. Each hourly merge commits
+its aggregate and source-minute removal together; retrying does not add the same
+minutes twice.
 See [reading the Performance page](performance-tuning.md#read-the-performance-page).
