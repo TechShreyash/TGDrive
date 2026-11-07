@@ -83,7 +83,7 @@ verification are in [architecture](architecture.md#independent-backup-pacing-and
 | `GET /api/v1/replica` | Configuration, phase, revisions, progress, retry guidance and any recovery candidate | Never returns tokens or the key |
 | `POST /api/v1/replica/configure` | `channel_id`, `bot_token`, `independent_accounts: true`: set up a backup channel | Needs a separate private channel and bot |
 | `POST /api/v1/replica/action` | `action`: `sync`, `pause`, `resume`, `retry` or `disable` | |
-| `GET /api/v1/replica/file` | Download a locally saved `tgdrive-backup.tgdb` | `404` if unavailable; denied in demo mode |
+| `GET /api/v1/replica/file` | Download a locally retained confirmed or unverified `tgdrive-backup.tgdb` | `404` if no local archive is eligible; `409` for unsafe file permissions or selected-file hash mismatch; denied in demo mode |
 | `GET /api/v1/replica/report` | Secret-free status report | May still contain private names and IDs |
 | `POST /api/v1/replica/import` | Raw `application/octet-stream` recovery bytes; optional `X-TGDrive-Source-Channel`, `X-TGDrive-Bot-Token` | Returns a candidate; does not activate. `422` for failed key/file validation; `415` wrong content type. Disabled in demo mode |
 | `POST /api/v1/replica/restore` | Restore the backup found in the storage channel at startup | Restart when asked. Disabled in demo mode |
@@ -94,7 +94,10 @@ The status endpoint's `backup` list is latest-first and may be empty.
 `pin_verified_at` records a pin check at that time; `unverified` discovery does
 not establish archive corruption. Local download availability is reported
 separately by `backup_file_available` from the replica endpoint; do not infer it
-from discovery status alone.
+from discovery status alone. Availability and download use the same selection:
+a newer pending point or missing local file does not hide an older eligible
+archive. The selected archive is hashed against its own stored digest before
+delivery; it need not correspond to the first history row.
 
 Database outages report `REPLICA_MONGODB_UNAVAILABLE` with a `retry_at`;
 configuration or ownership problems report `REPLICA_MONGODB_FAILED`. Neither
@@ -126,7 +129,7 @@ characters. Account errors include `TELEGRAM_CREDENTIALS_REVOKED`,
 | Method and route | Access | Purpose | Notes and errors |
 | --- | --- | --- | --- |
 | `POST /api/getDirectory` | Owner, Share | `{"path", "auth"}`: whole folder contents keyed by child ID | Older route; the website now uses the paged routes below. Special paths: `/trash`, `/search_<q>` (max 500 results), `/share_<folder-id>` |
-| `GET /api/v1/nodes` | Owner | `parent_id` (default `/`), `limit` (1–500; default 100), `sort` (`name`, `size`, `type`, `date`; default `name`), `order` (`asc`, `desc`; default `asc`), optional `type` filter, then one of `cursor` (up to 16,384 characters), `offset` or `around` (an item ID, up to 64 characters) | `{items, total, offset, next_cursor}`, plus `folder` on pages that don't continue a cursor and `index` with `around`. `next_cursor` is `null` on the last page. `422` for an invalid cursor or mixed paging parameters; `404` if the `around` item isn't in the folder |
+| `GET /api/v1/nodes` | Owner | `parent_id` (default `/`), `limit` (1–500; default 100), `sort` (`name`, `size`, `type`, `date`; default `name`), `order` (`asc`, `desc`; default `asc`), optional `type` filter, then one of `cursor` (up to 1,024 characters), `offset` or `around` (an item ID, up to 64 characters) | `{items, total, offset, next_cursor}`, plus `folder` on pages that don't continue a cursor and `index` with `around`. `next_cursor` is `null` on the last page. `422` for an invalid cursor or mixed paging parameters; `404` if the `around` item isn't in the folder |
 | `GET /api/v1/shared/nodes` | Share | `auth` (1–512 characters) plus the same parameters as `/api/v1/nodes` | `{items, total, offset, next_cursor, share_home}` plus `folder` and `index` as above, without `starred`; breadcrumbs start at the shared folder; `private, no-store`. `403` invalid share, folder outside it or `around` item not in the folder; `409` during recovery; `422` bad paging |
 | `GET /api/v1/search` | Owner | `q` (1–255), `offset`, `limit` (`25`, `50` or `100`; default 50), `sort` (`name`, `date`, `size`), `order` | Word-start match, excludes Trash; ranks at most 1,000 candidates, not all global matches. `{items, total, capped, has_more, next_offset}`; `422` for other limits |
 | `GET /api/v1/trash` | Owner | Top-level Trash items, optional `q` | Pending deletions are hidden |

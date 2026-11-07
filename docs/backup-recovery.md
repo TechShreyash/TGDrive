@@ -82,7 +82,11 @@ old point; repair access and publish a fresh backup through the normal controls.
   confirmation also loses that retry state.
 - **Download backup** gives you an off-Telegram copy. Backups created by 2.3 need
   the original `ENCRYPTION_KEY`; old 2.2 archives need their old matching key.
-  Local download availability is reported separately from discovery status.
+  Intact locally retained confirmed or unverified archives are eligible. A newer
+  pending point or missing local file does not hide an older eligible copy.
+  Download availability is separate from discovery status; the selected file is
+  checked against its own stored digest before delivery. Keep Telegram access:
+  the archive contains metadata and locations, not the original file bytes.
 - MongoDB is still the live database. Keep database-native/provider backups too;
   available history and point-in-time restore depend on the provider and plan.
 
