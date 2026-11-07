@@ -1038,6 +1038,83 @@ def test_staged_activation_refuses_changed_or_unsafe_source_before_prepare(
     assert not (settings.resolved_data_dir / MANIFEST).exists()
 
 
+@pytest.mark.parametrize("relative", ["a" * 4097, "é" * 2049], ids=["ascii", "utf8"])
+def test_staged_descriptor_path_budget_precedes_derived_allocations(
+    settings, monkeypatch, relative
+):
+    import tgdrive.replication.replica_activation as module
+
+    class UnexpandedPath(str):
+        def split(self, *args, **kwargs):
+            pytest.fail("Split an oversized staged descriptor path")
+
+        def encode(self, *args, **kwargs):
+            assert len(self) <= 4096, "Encoded an oversized staged path"
+            return super().encode(*args, **kwargs)
+
+    monkeypatch.setattr(
+        module, "Path", lambda *_args: pytest.fail("Constructed an oversized Path")
+    )
+    descriptor = {"path": UnexpandedPath(relative), "sha256": "a" * 64}
+    with pytest.raises(ActivationError) as failure:
+        module._staged_source(settings, descriptor)
+    assert failure.value.code == "ACTIVATION_RESOURCE_LIMIT"
+    assert failure.value.status == 409
+    assert "4096 UTF-8 byte limit" in str(failure.value)
+
+
+@pytest.mark.parametrize("relative", ["a" * 4096, "é" * 2048], ids=["ascii", "utf8"])
+def test_staged_descriptor_path_budget_accepts_exact_utf8_boundary(
+    settings, monkeypatch, relative
+):
+    import tgdrive.replication.replica_activation as module
+
+    class PathValidationReached(Exception):
+        pass
+
+    def check_path(value):
+        assert value == relative
+        raise PathValidationReached
+
+    monkeypatch.setattr(module, "Path", check_path)
+    with pytest.raises(PathValidationReached):
+        module._staged_source(settings, {"path": relative, "sha256": "a" * 64})
+
+
+def test_pending_staged_descriptor_overflow_preserves_input_before_path_or_identity(
+    settings, monkeypatch
+):
+    import tgdrive.replication.replica_activation as module
+
+    value, index = staged_candidate(settings)
+    prepare_activation(settings, value)
+    path = settings.resolved_data_dir / MANIFEST
+    manifest = json_util.loads(read_private(path))
+    manifest["candidate"]["staged"]["path"] = "a/" * (3 * 1024**2 // 2) + "index"
+    original = module._raw(manifest)
+    module.atomic_private(path, original)
+    backend = for_settings(settings)
+    before = copy.deepcopy(backend.data)
+    digest = index.digest
+    monkeypatch.setattr(
+        module, "Path", lambda *_args: pytest.fail("Constructed the oversized Path")
+    )
+    monkeypatch.setattr(
+        module,
+        "_activation_identity",
+        lambda *_args: pytest.fail("Constructed the rejected activation identity"),
+    )
+    with pytest.raises(ActivationError) as failure:
+        module._load(settings)
+    assert failure.value.code == "ACTIVATION_RESOURCE_LIMIT"
+    assert failure.value.status == 409
+    assert "4096 UTF-8 byte limit" in str(failure.value)
+    assert path.read_bytes() == original
+    assert index.digest == digest
+    assert backend.data == before
+    assert not (path.parent / "recovery-archive").exists()
+
+
 def test_staged_activation_rechecks_index_and_replays_atomic_failure(settings):
     value, index = staged_candidate(settings)
     backend = for_settings(settings)

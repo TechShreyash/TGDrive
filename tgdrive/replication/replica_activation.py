@@ -43,6 +43,7 @@ from tgdrive.storage.mongo_store import MongoStore
 from tgdrive.storage.store import ROOT_ID, SCHEMA_VERSION
 
 MANIFEST = "channel-activation.json"
+_MAX_STAGED_PATH_BYTES = 4096
 _PHASES = {"prepared", "preserved", "installing", "catalog", "configured", "applied"}
 _MONGO_DOMAIN = ("nodes", "shares", "operations", "deletions", "preparations")
 _MONGO_ARCHIVE = (
@@ -200,6 +201,11 @@ def _staged_source(settings, descriptor):
     ):
         raise ValueError("Invalid staged recovery descriptor")
     relative = descriptor["path"]
+    if (
+        len(relative) > _MAX_STAGED_PATH_BYTES
+        or len(relative.encode("utf-8")) > _MAX_STAGED_PATH_BYTES
+    ):
+        raise _resource_error("Staged recovery path exceeds its 4096 UTF-8 byte limit")
     if (
         not relative
         or "\\" in relative
