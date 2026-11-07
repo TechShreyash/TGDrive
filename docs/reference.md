@@ -454,9 +454,11 @@ that prevent startup are explained in container logs. See
   There is no overall time limit; stalled sources are retried.
   `ALLOW_PRIVATE_REMOTE_URLS` explicitly broadens reachability. Signed source URLs
   may persist in private jobs.
-- **Backups/deletion:** current recovery files use AES-256-GCM before disk or Telegram
-  storage and need the original `ENCRYPTION_KEY`, independently of login passwords. New
-  files exclude logged-in browser/Telegram account sessions and unsent staging;
+- **Backups/deletion:** current `.tgdb` recovery files use AES-256-GCM and need the
+  original `ENCRYPTION_KEY`, independently of login passwords. Private recovery
+  staging can contain plaintext metadata and credentials; protect the host and
+  volumes. See [staging and recovery limits](backup-recovery.md#how-backups-work).
+  Backups exclude logged-in browser/Telegram account sessions and unsent staging;
   they cannot recreate missing Telegram originals. Permanent deletion removes catalog
   references; it does not erase originals, caches, old backups or recipients'
   copies. Old backups may restore removed records.

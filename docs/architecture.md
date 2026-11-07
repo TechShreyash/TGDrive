@@ -92,9 +92,10 @@ and test layout is described in the
 ## Authoritative data and identity
 
 **MongoDB holds the catalog and answers catalog queries.** Normal folder browsing
-reads pages rather than retaining a whole-drive catalog. Migration, backups and
-recovery can still use memory proportional to the captured data. MongoDB also
-caches frequently used data in its own memory. Collections hold nodes (with
+reads pages rather than retaining a whole-drive catalog. Current V2 recovery
+keeps staged records and validation/mapping indexes on disk; legacy inline
+compatibility and migration still need memory for admitted values and worklists.
+MongoDB also caches frequently used data in its own memory. Collections hold nodes (with
 ordered file parts), shares, operation IDs, jobs and receipts, deletion intents, private settings and
 sessions, backup records and the runtime ownership lease.
 
@@ -747,12 +748,26 @@ replacement channel. Explicit activation uses the existing fenced comparison
 before committing the recovered state, and requires a service restart. The
 surviving channel's documents remain intact.
 
-Recovery bytes are verified before confirmation; media and recovered mappings
-must verify before activation. A recovery file is one Telegram document, not a
-split media upload. Snapshot serialization/decode also needs server memory;
-fitting the transport limit does not establish support for a large catalog.
-Normal paged browsing does not establish that snapshot capture, validation or
-activation will fit the same host. See [recovery limits](backup-recovery.md#how-backups-work).
+Current V2 recovery authenticates the complete staged ciphertext before
+decompression or trusted parsing. Private SQLite indexes validate records,
+ancestry, duplicate identities and replica mappings without constructing a
+whole-drive catalog. MongoDB remains the authoritative catalog. Activation
+consumes validated rows in batches bounded by count and encoded bytes; one
+accepted record can exceed the normal batch target. Media and recovered
+mappings must verify before activation, with deployment-key checks before
+replacement and schema/identity checks retained.
+
+New activation manifests reference validated staged data. Retained version-1
+inline manifests and journal values use bounded compatibility decoding; new
+writes are preflighted for readability. A resource rejection preserves the
+input and stops initialization. See the exact limits and intact-archive
+procedure in [recovery guidance](backup-recovery.md#restore-after-losing-mongodb).
+Cleanup preserves indexes referenced by the durable activation manifest,
+including applied manifests, independently of its separate journal flag. An
+unreadable manifest prevents that cleanup.
+Disk capacity, individual-record bounds and legacy complexity limits still
+constrain recovery; a file below its transport ceiling is not a host-memory
+guarantee. [Backup admission and disk requirements](backup-recovery.md#how-backups-work).
 Files omit original Telegram media and staged payloads. See
 [recovery steps](backup-recovery.md) and [security](reference.md#security-and-privacy).
 

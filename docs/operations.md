@@ -402,6 +402,7 @@ separate from the surviving-database upgrade.
 | Old transfer stuck after a fresh install | It is saved in this browser only. Cancel marks it cancelled when the server no longer knows it. |
 | A saved account shows an error | It could not connect. Fix the token, session or channel permissions, then use **Connections → Refresh**. |
 | Backup fails/decryption fails | Original `ENCRYPTION_KEY`, compatible intact archive, posting/pinning access, disk and retry time; old archives need their old key and version |
+| `ACTIVATION_RESOURCE_LIMIT` | Preserve the rejected pending record, database, volumes and keys. Follow the separate-deployment procedure only with an intact compatible archive; [prerequisites and limits](backup-recovery.md#restore-after-losing-mongodb). |
 | Upload cannot resume | Reselect its original in the existing transfer; missing staging may require re-upload. |
 | Archive job fails | Read its error in Transfers, free temporary server storage if needed, then retry the existing job. Unsupported, encrypted or damaged archives need a corrected source; non-Docker installations also need libarchive. Earlier committed outputs remain; see [archive workflow and limits](usage.md#create-zips-and-extract-archives). |
 | Video/download slow or fails | Check [performance](performance.md), connections and the Telegram document; unsupported codecs need original download. |

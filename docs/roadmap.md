@@ -55,7 +55,7 @@ action. Remaining live validation:
 | Plaintext bot copies | Encryption-off copies have no automatic durable reconciliation after an uncertain catalog commit; check the drive before resending. Encrypted imports use the upload job pipeline. |
 | History | Compaction must preserve unresolved effects and retry identities. |
 | Large folders and search | Cursor pages avoid deep offset scans, but counts still cost work. Search ranks a bounded candidate set, not every match in an arbitrarily large drive. |
-| Large-catalog recovery | Paged browsing does not establish snapshot/recovery capacity. Bounded processing that preserves the current file format still needs complete compatibility, failure-path and small-host memory evidence; see [recovery limits](backup-recovery.md#how-backups-work). |
+| Large-catalog recovery | Current V2 uses disk staging and bounded records. Complete-pipeline and accepted/rejected legacy memory validation remains provisional; transport, record/complexity, disk and database limits still apply. See [recovery limits](backup-recovery.md#how-backups-work). |
 | Encryption | Legacy/plaintext copies stay readable without payload decryption; partial ranges have no authenticated block tag. Local plaintext staging and the trusted host remain outside payload encryption. |
 | Direct API clients | Some request mappings are process-local and error formats vary; follow the [documented API contracts](api.md). |
 | Storage channel changes | Require verified channel recovery; editing an ID does not move files. |

@@ -85,7 +85,7 @@ verification are in [architecture](architecture.md#independent-backup-pacing-and
 | `POST /api/v1/replica/action` | `action`: `sync`, `pause`, `resume`, `retry` or `disable` | |
 | `GET /api/v1/replica/file` | Download a locally retained confirmed or unverified `tgdrive-backup.tgdb` | `404` if no local archive is eligible or it disappears before opening; `409` for symlinks, unsafe permissions/file types, other unsafe opens or selected-file hash mismatch; denied in demo mode |
 | `GET /api/v1/replica/report` | Secret-free status report | May still contain private names and IDs |
-| `POST /api/v1/replica/import` | Raw `application/octet-stream` recovery bytes; optional `X-TGDrive-Source-Channel`, `X-TGDrive-Bot-Token` | Returns a candidate; does not activate. `422` for failed key/file validation; `415` wrong content type. Disabled in demo mode |
+| `POST /api/v1/replica/import` | Raw `application/octet-stream` recovery bytes; optional `X-TGDrive-Source-Channel`, `X-TGDrive-Bot-Token` | Returns a candidate; does not activate. `413` above 2000 MiB encrypted; `415` wrong content type; `422 RECOVERY_FILE_INVALID` for malformed metadata; `507` HTTP staging failure. Resource, recognized legacy and authentication failures use structured `409` codes. Disabled in demo mode |
 | `POST /api/v1/replica/restore` | Restore the backup found in the storage channel at startup | Restart when asked. Disabled in demo mode |
 | `POST /api/v1/replica/recover` | Three steps: `source_channel` + `bot_token` to inspect; `target_channel` + `target_bot_token` + `confirm_channel` (optional `catalog_only`) to copy; `activate: true` + `confirm_channel` to switch | Wrong confirmation or an incomplete candidate can't activate |
 | `POST /api/v1/start-new` | `confirm: "START NEW"` and `password`; in-place reset is temporarily unavailable | A valid request returns `409 START_NEW_UNAVAILABLE` without erasing the drive; `403` wrong password or demo mode; `422` invalid confirmation. [Fresh-drive procedure](backup-recovery.md#start-a-new-drive) |
@@ -98,6 +98,18 @@ from discovery status alone. Availability and download use the same selection:
 a newer pending point or missing local file does not hide an older eligible
 archive. The selected archive is hashed against its own stored digest before
 delivery; it need not correspond to the first history row.
+
+Saved activation/journal resource rejection uses `ACTIVATION_RESOURCE_LIMIT`.
+The replica status keeps its normal snapshot with `phase: "error"`, an error
+code/detail/action and preserved input; it does not initialize a fresh catalog
+over that state. The effective legacy whole-value limit and separate recovery
+prerequisites are in [recovery guidance](backup-recovery.md#restore-after-losing-mongodb).
+
+`BACKUP_KEY_MISMATCH` means the supplied key could not authenticate the file;
+altered ciphertext or an invalid authentication tag can also cause it.
+`RECOVERY_FILE_INVALID` (`422`) covers malformed recovery data, including
+structural truncation and authenticated invalid metadata. These categories do
+not distinguish every possible damaged ciphertext from a wrong key.
 
 Database outages report `REPLICA_MONGODB_UNAVAILABLE` with a `retry_at`;
 configuration or ownership problems report `REPLICA_MONGODB_FAILED`. Neither

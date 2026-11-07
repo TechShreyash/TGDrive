@@ -90,13 +90,48 @@ old point; repair access and publish a fresh backup through the normal controls.
 - MongoDB is still the live database. Keep database-native/provider backups too;
   available history and point-in-time restore depend on the provider and plan.
 
-Normal paged browsing does not establish that snapshot capture, recovery
-validation or activation will fit the same host. Monitor backup errors and keep
-independent MongoDB backups and original files. A failed publication does not
-replace the last confirmed backup; that older point cannot cover later changes.
-A second Telegram channel does not establish larger-catalog recovery capacity.
-Bounded larger-catalog recovery and its complete compatibility/failure-path and
-small-host memory evidence remain outstanding.
+Current V2 export, inspection, replica mapping and activation use private disk
+staging and bounded records. The former aggregate 10,000-record, 8 MiB database
+and 16 MiB expanded-metadata caps do not apply to this staged path.
+
+| Staged recovery boundary | Limit |
+| --- | --- |
+| Encrypted recovery file, including HTTP import and Telegram retrieval | 2000 MiB (2,097,152,000 bytes) |
+| One decoded BSON record | 16 MiB |
+| V2 token or whitespace interval | Nominal 32 MiB with up to 64 KiB buffered allowance: 33,619,968 bytes |
+| V2 parsed record/header value | Nominal 32 MiB with up to 128 KiB buffered allowance: 33,685,504 bytes |
+| Combined map fields and array entries | 65,536 recursively per parsed value/record |
+| Parser nesting | 128 levels |
+| Total records and expanded metadata | No fixed aggregate count/byte cap; physical disk admission still applies |
+
+The V2 byte figures are conservative buffered bounds; exact acceptance depends
+on chunk alignment and the other record guards. They are separate from the
+strict 32 MiB serialized-input ceiling for legacy inline values described below.
+
+Recovery verifies the complete authentication tag before decompressing or
+parsing records. It still needs room for the encrypted file, compressed
+plaintext, expanded JSON, validation/mapping indexes and the preserved
+pre-activation database copy. Several can coexist; allow for their expanded
+sizes and the disk reserve, rather than only the `.tgdb` size. Destination
+MongoDB also needs room for restored records, indexes and transaction overhead;
+local staging does not reserve provider quota.
+
+On a memory-constrained host, keep recovery staging in `DATA_DIR` and
+`CACHE_DIR` on disk-backed filesystems with enough free space. A tmpfs/RAM-disk
+mount consumes memory from the host/container budget; it is not extra disk
+headroom. Staging expanded JSON and validation indexes there can exhaust RAM
+despite bounded record processing.
+
+Temporary recovery metadata can contain credentials and plaintext. It uses
+private files but is not encrypted by `ENCRYPTION_KEY`; protect the host and
+volumes. The final `.tgdb` remains encrypted. Keep independent MongoDB backups
+and valuable originals. A failed snapshot/publication does not replace the last
+confirmed backup; that older point cannot cover later changes.
+
+Paged browsing and a file below these limits do not establish that recovery
+will fit a particular host. Small-host acceptance remains provisional pending
+complete-pipeline and accepted/rejected legacy memory evidence. A second
+Telegram channel does not remove these resource requirements.
 
 ## Restore after losing MongoDB
 
@@ -117,10 +152,17 @@ unrecognized pin can lead to an empty drive; that does not establish that no old
 drive or backup exists. Preserve state and inspect a downloaded backup if the
 expected restore point is missing. If a recognized backup cannot be opened,
 TGDrive opens owner recovery mode rather than initializing over it. Check the
-original key, channel access, format and metadata limits. Older archives need
+original key, channel access, format and metadata limits. `BACKUP_KEY_MISMATCH`
+means authentication failed; altered ciphertext or its tag can cause it too.
+Malformed structure or authenticated invalid metadata reports
+`RECOVERY_FILE_INVALID`. Resource rejection is a separate category and does not
+establish corruption. Older archives need
 [version-compatible recovery](#upgrade-or-restore-an-older-drive); do not erase
 the drive to clear the error. A wrong key on a surviving database stops startup
 before serving files.
+
+A known historical `drive.json` pin stops fresh initialization and directs
+version-compatible recovery. Recognizing its name does not validate its contents.
 
 <details>
 <summary>Restore from a downloaded file instead</summary>
@@ -131,6 +173,38 @@ changed?** and enter a working token for the surviving channel. Continue with th
 steps the screen shows.
 
 </details>
+
+**If an older pending activation is rejected with `ACTIVATION_RESOURCE_LIMIT`**,
+preserve it. Repeating inspection in the blocked deployment does not replace
+that record, and there is no in-place bypass for an unreadable activation phase.
+This resource rejection does not establish that the original archive is corrupt.
+
+The effective whole-value ceiling is **32 MiB (33,554,432 bytes)**, counted over
+the entire serialized UTF-8 value, including whitespace, before decoding. The
+separate **64 MiB compatibility admission ceiling** does not enlarge that limit.
+The **65,536-entry budget** counts every map field and array entry recursively
+across the whole legacy value; nesting is capped at **128**, and token guards
+also apply. These admission bounds do not establish the memory needed by
+accepted decoded objects and validation copies. Resource rejection stops
+startup before catalog initialization and preserves the input; normal controls
+do not clear the rejected record.
+
+1. Stop the old instance. Preserve its database, volumes, pending activation
+   record, recovery archives and original keys.
+2. Prepare a separate recovery deployment with fresh `DATA_DIR`/`CACHE_DIR`
+   volumes, a distinct Compose project name and an empty dedicated MongoDB
+   database. Use the original `ENCRYPTION_KEY`, an intact compatible recovery
+   file and working channel access. Supply explicit owner login credentials
+   (`ADMIN_PASSWORD` or `ADMIN_PASSWORD_HASH`) for the empty database.
+3. Inspect and restore the compatible `.tgdb` file through the staged recovery
+   path in that separate deployment, then restart when asked.
+4. Verify the restore point, representative original downloads, shares and
+   Connections before retiring any old resources. Retain the original recovery
+   material until recovery is verified.
+
+If the original archive is unavailable, this fallback is not established.
+Preserve the pending activation record and the old deployment; do not remove
+the record to force startup or assume that it can replace the missing archive.
 
 ## Add a backup channel
 
