@@ -129,6 +129,14 @@ class Runtime:
             ) as error:
                 self.recovery_only = True
                 await asyncio.to_thread(self.replica._record_failure, error)
+                if getattr(error, "code", None) != "ACTIVATION_RESOURCE_LIMIT":
+                    await asyncio.to_thread(
+                        self.replica.report,
+                        "error",
+                        "The MongoDB catalog is unavailable or requires explicit "
+                        "recovery. Existing data has been preserved; normal file "
+                        "operations are stopped.",
+                    )
                 self.replica.start()
                 logger.warning(
                     "Catalog unavailable: %s Owner web recovery is available; "

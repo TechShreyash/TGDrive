@@ -695,8 +695,9 @@ class ReplicaTransport:
         ]
         allowed = (filename,) if isinstance(filename, str) else filename
         if names not in ([name] for name in allowed):
-            if len(names) == 1 and re.fullmatch(
-                r"tgdrive-[A-Za-z0-9_-]+\.tgdb", names[0]
+            if len(names) == 1 and (
+                names[0] == "drive.json"
+                or re.fullmatch(r"tgdrive-[A-Za-z0-9_-]+\.tgdb", names[0])
             ):
                 raise ReplicaTransportError(
                     "An older TGDrive backup is pinned. Preserve the channel and "

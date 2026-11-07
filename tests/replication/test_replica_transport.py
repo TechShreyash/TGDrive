@@ -971,6 +971,26 @@ async def test_download_rejects_wrong_or_unbounded_capsules(tmp_path, bad):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("name", ["drive.json", "tgdrive-backup-v1.tgdb"])
+async def test_real_legacy_pin_markers_require_version_matched_recovery(tmp_path, name):
+    transport, native = await started()
+    native.messages[BACKUP, 901] = message(
+        901, BACKUP, document(len(native.body), name)
+    )
+    native.pins[BACKUP] = 901
+    destination = tmp_path / "legacy.tgdb"
+    try:
+        with pytest.raises(ReplicaTransportError) as error:
+            await transport.download(BACKUP, None, destination)
+        assert error.value.code == "LEGACY_BACKUP_REQUIRES_UPGRADE"
+        assert "tagged v2.2" in str(error.value)
+        assert not destination.exists()
+        assert not native.downloads
+    finally:
+        await transport.close()
+
+
+@pytest.mark.asyncio
 async def test_cancelled_download_removes_partial_file_and_can_resume(tmp_path):
     transport, native = await started()
     native.messages[BACKUP, 901] = message(

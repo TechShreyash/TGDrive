@@ -385,13 +385,24 @@ async def test_activation_resource_error_survives_web_setup_and_recovery_startup
     assert preserved.code == "ACTIVATION_RESOURCE_LIMIT"
     try:
         await runtime.start()
-        assert failures == [preserved]
+        assert len(failures) == 1
+        assert failures[0].code == preserved.code
+        assert str(failures[0]) == str(preserved)
         assert runtime.recovery_only and runtime.store is None
         assert runtime.transfers is None and not pool.started
         status = await asyncio.to_thread(runtime.replica.status)
         assert status["error"]["code"] == preserved.code
         assert status["error"]["detail"] == str(preserved)
         assert "64 MiB" in status["error"]["detail"]
+        from tgdrive.settings.managed_settings import SettingsProblem
+
+        for action in ("retry", "resume", "disable"):
+            with pytest.raises(SettingsProblem) as failure:
+                await runtime.replica.action(action)
+            assert failure.value.code == "ACTIVATION_RESOURCE_LIMIT"
+            assert failure.value.status == 409
+            after = await asyncio.to_thread(runtime.replica.status)
+            assert after["error"] == status["error"]
         assert path.stat().st_size == 64 * 1024**2 + 1
         assert not (path.parent / "recovery-archive").exists()
     finally:
@@ -446,6 +457,61 @@ async def test_oversize_legacy_journal_stops_startup_without_redecoding_or_erasu
             mongo_backend.db.replica_state.rows,
             mongo_backend.db.replica_chunks.rows,
         )
+        initialize.assert_not_called()
+    finally:
+        await runtime.stop()
+
+
+@pytest.mark.parametrize("filename", ["drive.json", "tgdrive-legacy.tgdb"])
+async def test_known_legacy_pin_stops_fresh_initialization(
+    tmp_path, monkeypatch, mongo_backend, filename
+):
+    from telethon.tl.types import DocumentAttributeFilename
+
+    from tgdrive.replication.replica import ChannelReplica
+    from tgdrive.replication.replica_transport import ReplicaTransport
+
+    class LegacyPin:
+        async def start(self):
+            pass
+
+        async def close(self):
+            pass
+
+        async def inspect(self, *_args, **_kwargs):
+            return {}
+
+        async def pinned_message(self, _channel):
+            return 77
+
+        async def download(self, *_args):
+            ReplicaTransport._capsule(
+                SimpleNamespace(
+                    size=123,
+                    attributes=[DocumentAttributeFilename(filename)],
+                )
+            )
+            raise AssertionError("Known legacy content must not be imported")
+
+    initialize = Mock(side_effect=AssertionError("Must preserve the legacy drive"))
+    monkeypatch.setattr("tgdrive.storage.mongo.initialize_if_empty", initialize)
+    monkeypatch.setattr("tgdrive.storage.mongo.database_is_empty", lambda *_: True)
+    monkeypatch.setattr("tgdrive.storage.upgrade.upgrade", lambda *_: None)
+    constructor = ChannelReplica.__init__
+
+    def replica_with_legacy_transport(self, *args, **kwargs):
+        constructor(self, *args, **kwargs, transport_factory=lambda *_: LegacyPin())
+
+    monkeypatch.setattr(ChannelReplica, "__init__", replica_with_legacy_transport)
+    monkeypatch.setattr(ChannelReplica, "start", lambda _self: None)
+    runtime = Runtime(settings(tmp_path), pool=FakePool())
+    runtime.remote = FakeRemote()
+    try:
+        await runtime.start()
+        assert runtime.recovery_only and runtime.store is None
+        assert runtime.transfers is None and not runtime.pool.started
+        status = await asyncio.to_thread(runtime.replica.status)
+        assert status["error"]["code"] == "LEGACY_BACKUP_REQUIRES_UPGRADE"
         initialize.assert_not_called()
     finally:
         await runtime.stop()

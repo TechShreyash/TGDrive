@@ -777,6 +777,137 @@ async def test_resource_rejection_status_and_controls_preserve_unreadable_state(
 
 
 @pytest.mark.asyncio
+async def test_manifest_resource_error_survives_controls_and_keeps_safe_download(
+    tmp_path, monkeypatch
+):
+    from tgdrive.replication.replica_activation import ActivationError, _resource_error
+
+    configured, store, remote, replica, config = setup(tmp_path)
+    try:
+        await replica._sync(config)
+        archive = replica.backup_file()
+        content = archive.read_bytes()
+        before = replica.journal.get_many({"config": None, "status": None})
+        error = _resource_error(
+            "Pending activation exceeds provisional decoding limits"
+        )
+        replica.runtime._activation_unavailable = error
+        get = replica.journal.get
+        reads = []
+
+        def bounded_selection_only(key, default=None):
+            reads.append(key)
+            assert key == "backup_file"
+            return get(key, default)
+
+        monkeypatch.setattr(replica.journal, "get", bounded_selection_only)
+        for _ in range(2):
+            state = replica.status()
+            assert state["error"]["code"] == "ACTIVATION_RESOURCE_LIMIT"
+            assert "preserve" in state["error"]["action"]
+            assert state["backup_file_available"]
+        path, source = replica.open_recovery_file()
+        with source:
+            assert path == archive and source.read() == content
+        for action in ("retry", "resume", "disable"):
+            with pytest.raises(ActivationError) as refused:
+                await replica.action(action)
+            assert refused.value.code == "ACTIVATION_RESOURCE_LIMIT"
+        assert replica.blocked is True
+        await replica._loop()
+        assert reads == ["backup_file"] * 3
+        monkeypatch.setattr(replica.journal, "get", get)
+        assert replica.journal.get_many({"config": None, "status": None}) == before
+        assert archive.read_bytes() == content
+        assert configured.storage_channel == store.storage_channel_id
+        assert len(remote.instances) == 1
+    finally:
+        await dispose(replica, store)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("apply_first", [False, True])
+async def test_manifest_without_journal_flag_keeps_staged_index_across_disable(
+    tmp_path, monkeypatch, apply_first
+):
+    from tgdrive.replication.replica_activation import _load, apply_activation
+
+    configured, store, remote, replica, config = setup(tmp_path)
+    enable_staged_capture(replica, store)
+    monkeypatch.setattr(replica, "start", lambda: None)
+    try:
+        await replica._sync(config)
+        await replica.inspect_file(replica.backup_file(), replica.key(), source=BACKUP)
+        await replica.recover_to(REPLACEMENT, "345678:" + "z" * 30, str(REPLACEMENT))
+        await replica._recover_copy(replica.journal.get("recovery"))
+        candidate = replica.journal.get("candidate")
+        index = replica._open_staged(candidate).path
+        set_value = replica.journal.set
+
+        def lose_activation_flag(key, value):
+            if key == "activation":
+                raise OSError("Injected activation flag transaction failure")
+            return set_value(key, value)
+
+        with monkeypatch.context() as context:
+            context.setattr(replica.journal, "set", lose_activation_flag)
+            with pytest.raises(OSError, match="flag transaction failure"):
+                await asyncio.to_thread(replica.activate)
+        assert replica.journal.get("activation") is None
+        manifest = _load(configured)
+        assert manifest["phase"] == "prepared"
+        if apply_first:
+            assert await asyncio.to_thread(
+                apply_activation, configured, replica.runtime.mongo
+            )
+            runtime = replica.runtime
+            await replica.close()
+            replica = ChannelReplica(
+                configured, runtime, transport_factory=remote.factory
+            )
+            replica.start = lambda: None
+        await replica.action("disable")
+        assert replica.journal.get("candidate") is None
+        assert replica.journal.get("recovery") is None
+        assert index.exists()
+        await asyncio.to_thread(replica._discard_staged, candidate)
+        assert index.exists()
+        assert _load(configured)["candidate"]["staged"] == candidate["staged"]
+        if not apply_first:
+            assert await asyncio.to_thread(
+                apply_activation, configured, replica.runtime.mongo
+            )
+        assert _load(configured)["phase"] == "applied"
+        await asyncio.to_thread(replica._discard_staged, candidate)
+        assert index.exists()
+    finally:
+        await dispose(replica, store)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("unreadable", [b"not JSON", b"[" + b"{}," * 65_537 + b"{}]"])
+async def test_unreadable_active_manifest_prevents_staged_cleanup(tmp_path, unreadable):
+    from tgdrive.replication.replica_activation import MANIFEST
+
+    configured, store, _remote, replica, _config = setup(tmp_path)
+    enable_staged_capture(replica, store)
+    try:
+        job = await asyncio.to_thread(replica._capture)
+        index = replica._open_staged(job).path
+        manifest = configured.resolved_data_dir / MANIFEST
+        manifest.write_bytes(unreadable)
+        manifest.chmod(0o600)
+        await asyncio.to_thread(replica._discard_staged, job)
+        assert index.exists()
+        assert manifest.read_bytes() == unreadable
+        manifest.unlink()
+        await asyncio.to_thread(replica._discard_staged, job)
+        assert not index.exists()
+    finally:
+        await dispose(replica, store)
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("guard_first", [False, True])
 async def test_first_resource_rejection_blocks_mutations_and_keeps_status_readable(
     tmp_path, monkeypatch, guard_first
@@ -1989,12 +2120,16 @@ async def test_database_only_restore_checks_existing_parts_without_payload_copie
 
 @pytest.mark.asyncio
 async def test_wrong_key_or_foreign_channel_does_not_replace_live_metadata(tmp_path):
+    from tgdrive.settings.managed_settings import SettingsProblem
+
     configured, store, remote, replica, config = setup(tmp_path)
     try:
         before = store.export()
         await replica._sync(config)
-        with pytest.raises(ValueError, match="nothing changed"):
+        with pytest.raises(SettingsProblem, match="nothing was changed") as error:
             await replica.inspect_recovery(BACKUP, TOKEN, "c2" * 32)
+        assert error.value.code == "BACKUP_KEY_MISMATCH"
+        assert error.value.status == 409
         assert replica.journal.get("candidate") is None
         assert store.export() == before
         encrypted = remote.messages[BACKUP, remote.pins[BACKUP]]
@@ -2293,5 +2428,126 @@ async def test_discovery_refuses_a_backup_the_key_cannot_open(tmp_path):
         with pytest.raises(SettingsProblem) as caught:
             await replica.discover_backup()
         assert caught.value.code == "BACKUP_KEY_MISMATCH"
+    finally:
+        await dispose(replica, store)
+
+
+@pytest.mark.asyncio
+async def test_discovery_stops_at_real_legacy_drive_json_marker(tmp_path):
+    from telethon import types
+
+    from tgdrive.replication.replica_transport import ReplicaTransport
+
+    configured, store, remote, replica, _config = setup(tmp_path)
+
+    class LegacyPinned(DiscoveryTransport):
+        async def download(self, _channel, _message, _destination):
+            ReplicaTransport._capsule(
+                SimpleNamespace(
+                    size=123,
+                    attributes=[types.DocumentAttributeFilename("drive.json")],
+                )
+            )
+
+    replica.factory = lambda settings, token: LegacyPinned(remote, settings, token)
+    remote.pins[configured.storage_channel] = 901
+    before = dict(remote.messages)
+    try:
+        with pytest.raises(ReplicaTransportError) as error:
+            await replica.discover_backup()
+        assert error.value.code == "LEGACY_BACKUP_REQUIRES_UPGRADE"
+        assert replica.status()["error"]["code"] == error.value.code
+        assert replica.journal.get("candidate") is None
+        assert remote.messages == before
+        assert not list(configured.resolved_data_dir.glob(".replica-discover-*"))
+    finally:
+        await dispose(replica, store)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("entrypoint", ["file", "remote", "discovery"])
+@pytest.mark.parametrize(
+    ("failure", "code", "status"),
+    [
+        ("resource", "ACTIVATION_RESOURCE_LIMIT", 409),
+        ("malformed", "RECOVERY_FILE_INVALID", 422),
+        ("truncated", "RECOVERY_FILE_INVALID", 422),
+        ("wrong_key", "BACKUP_KEY_MISMATCH", 409),
+    ],
+)
+async def test_recovery_admission_keeps_authenticated_resource_and_key_errors_distinct(
+    tmp_path, entrypoint, failure, code, status
+):
+    import secrets
+    import zlib
+
+    from bson import json_util
+    from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+
+    from tgdrive.recovery.recovery_file import MAGIC
+    from tgdrive.recovery.snapshot_stream import decrypt_snapshot
+    from tgdrive.replication.replica_state import atomic_private
+    from tgdrive.settings.managed_settings import SettingsProblem
+
+    configured, store, remote, replica, config = setup(tmp_path)
+    try:
+        await replica._sync(config)
+        before = store.export()
+        confirmed = replica.journal.get("restore_point")
+        plaintext = tmp_path / "fixture.json"
+        decrypt_snapshot(
+            replica.backup_file(),
+            plaintext,
+            replica.key(),
+            configured,
+            max_expanded_bytes=None,
+        )
+        payload = json_util.loads(plaintext.read_text())
+        if failure == "resource":
+            payload["database"]["identities"] = [
+                {"_id": "too-many-items", "values": [{}] * 65_537}
+            ]
+        elif failure == "malformed":
+            payload["version"] = 99
+        nonce = secrets.token_bytes(12)
+        key = bytes.fromhex("f" * 64 if failure == "wrong_key" else replica.key())
+        content = (
+            MAGIC
+            + nonce
+            + AESGCM(key).encrypt(
+                nonce, zlib.compress(json_util.dumps(payload).encode()), MAGIC
+            )
+        )
+        if failure == "truncated":
+            content = MAGIC + b"incomplete"
+        archive = tmp_path / "refused.tgdb"
+        atomic_private(archive, content)
+        instances = len(remote.instances)
+        with pytest.raises(SettingsProblem) as error:
+            if entrypoint == "file":
+                await replica.inspect_file(archive, replica.key())
+            elif entrypoint == "remote":
+                remote.messages[BACKUP, remote.pins[BACKUP]] = content
+                await replica.inspect_recovery(BACKUP, TOKEN, replica.key())
+            else:
+                remote.messages[
+                    configured.storage_channel, remote.pins[configured.storage_channel]
+                ] = content
+                replica.factory = lambda settings, token: DiscoveryTransport(
+                    remote, settings, token
+                )
+                await replica.discover_backup()
+        assert error.value.code == code
+        assert error.value.status == status
+        if entrypoint == "file":
+            assert len(remote.instances) == instances
+        replica._record_failure(error.value)
+        assert replica.status()["error"]["code"] == code
+        assert replica.journal.get("restore_point") == confirmed
+        assert replica.journal.get("candidate") is None
+        assert store.export() == before
+        assert archive.read_bytes() == content
+        staging = configured.resolved_data_dir / "recovery-staging"
+        assert not list(staging.glob("*"))
     finally:
         await dispose(replica, store)

@@ -25,6 +25,7 @@ from tgdrive.recovery.recovery_file import (
     LegacyRecoveryFile,
 )
 from tgdrive.replication.replica_state import (
+    PrivateRecoveryFileTooLarge,
     ReplicaJournal,
     atomic_private,
     decode_bundle,
@@ -141,12 +142,24 @@ class ChannelReplica:
         return bool(state["recovery"] or state["activation"])
 
     def _resource_error(self):
-        return getattr(self.journal, "resource_error", lambda: None)()
+        problem = getattr(self.journal, "resource_error", lambda: None)()
+        if problem:
+            return problem
+        activation_error = getattr(self.runtime, "_activation_unavailable", None)
+        if getattr(activation_error, "code", None) == "ACTIVATION_RESOURCE_LIMIT":
+            return {
+                "key": "activation",
+                "code": activation_error.code,
+                "detail": str(activation_error),
+            }
+        return None
 
     def _check_resources(self):
         problem = self._resource_error()
         if problem:
-            raise SettingsProblem(problem["detail"], code=problem["code"], status=409)
+            from tgdrive.replication.replica_activation import ActivationError
+
+            raise ActivationError(problem["detail"], code=problem["code"])
 
     def _check_saved_state(self):
         self._check_resources()
@@ -703,10 +716,16 @@ class ChannelReplica:
             path.unlink(missing_ok=True)
 
     def _read_bundle(self, path, key):
+        from cryptography.exceptions import InvalidTag
+
         from tgdrive.recovery.recovery_file import LEGACY_MAGICS, MAGIC
         from tgdrive.recovery.snapshot_stream import decrypt_snapshot
-        from tgdrive.recovery.staged_snapshot import stage_snapshot
+        from tgdrive.recovery.staged_snapshot import (
+            RecoveryResourceLimit,
+            stage_snapshot,
+        )
         from tgdrive.replication.replica_activation import (
+            _resource_error,
             _staged_catalog,
             check_recovery_key,
         )
@@ -716,8 +735,6 @@ class ChannelReplica:
         if prefix.startswith(LEGACY_MAGICS):
             raise LegacyRecoveryFile
         modern = prefix.startswith(MAGIC)
-        if not modern:
-            return decode_bundle(read_private(path), key)
         directory = self.directory / "recovery-staging"
         directory.mkdir(parents=True, exist_ok=True, mode=0o700)
         identity = secrets.token_hex(16)
@@ -725,7 +742,10 @@ class ChannelReplica:
             directory / (identity + ".json"),
             directory / (identity + ".sqlite"),
         )
+        authenticated = False
         try:
+            if not modern:
+                return decode_bundle(read_private(path), key)
             decrypt_snapshot(
                 path,
                 plaintext,
@@ -734,6 +754,7 @@ class ChannelReplica:
                 max_recovery_bytes=MAX_STAGED_RECOVERY_BYTES,
                 max_expanded_bytes=None,
             )
+            authenticated = True
             staged = stage_snapshot(
                 plaintext, index, min_free_bytes=self.settings.min_free_bytes
             )
@@ -760,13 +781,30 @@ class ChannelReplica:
             if staged.header.get("recovery_token"):
                 result["recovery_token"] = staged.header["recovery_token"]
             return result
+        except InvalidTag:
+            index.unlink(missing_ok=True)
+            raise SettingsProblem(
+                "ENCRYPTION_KEY cannot authenticate this recovery file. Use the "
+                "original deployment key; nothing was changed.",
+                code="BACKUP_KEY_MISMATCH",
+                status=409,
+            ) from None
+        except RecoveryResourceLimit, PrivateRecoveryFileTooLarge, MemoryError:
+            index.unlink(missing_ok=True)
+            raise _resource_error(
+                "Recovery metadata exceeds provisional resource admission limits"
+            ) from None
         except LegacyRecoveryFile, SettingsProblem, OSError:
             index.unlink(missing_ok=True)
             raise
         except Exception:
             index.unlink(missing_ok=True)
-            raise ValueError(
-                "Recovery key or file validation failed; nothing changed"
+            raise SettingsProblem(
+                "Authenticated recovery metadata is invalid; nothing changed."
+                if authenticated
+                else "The recovery file is malformed or incomplete; nothing changed.",
+                code="RECOVERY_FILE_INVALID",
+                status=422,
             ) from None
         finally:
             plaintext.unlink(missing_ok=True)
@@ -787,6 +825,16 @@ class ChannelReplica:
         if any(
             row and row.get("staged") == value["staged"] for row in references.values()
         ):
+            return
+        from tgdrive.replication.replica_activation import _load
+
+        try:
+            manifest = _load(self.settings)
+        except Exception:
+            # The durable manifest is authoritative even if its separate journal
+            # flag never committed. Preserve indexes when it cannot be inspected.
+            return
+        if manifest and manifest["candidate"].get("staged") == value["staged"]:
             return
         from tgdrive.recovery.snapshot_stream import _sync_directory
 
@@ -1688,14 +1736,6 @@ class ChannelReplica:
                 except LegacyRecoveryFile as error:
                     raise SettingsProblem(
                         str(error), code="LEGACY_BACKUP_REQUIRES_UPGRADE", status=409
-                    ) from None
-                except ValueError:
-                    raise SettingsProblem(
-                        "A TGDrive backup is pinned in the storage channel, but "
-                        "ENCRYPTION_KEY cannot open it. Start with the key that "
-                        "created this drive; nothing was changed.",
-                        code="BACKUP_KEY_MISMATCH",
-                        status=409,
                     ) from None
                 return await self._save_discovery(bundle, channel, token, key)
             except ReplicaTransportError as error:
