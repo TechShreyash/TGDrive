@@ -251,7 +251,9 @@ def test_local_archive_selection_keeps_unverified_and_older_retained_files(tmp_p
         store.close()
 
 
-@pytest.mark.parametrize("kind", ["missing", "permissions", "symlink", "directory"])
+@pytest.mark.parametrize(
+    "kind", ["missing", "permissions", "symlink", "directory", "fifo"]
+)
 def test_local_archive_open_failures_are_structured(tmp_path, monkeypatch, kind):
     from tgdrive.settings.managed_settings import SettingsProblem
 
@@ -269,6 +271,11 @@ def test_local_archive_open_failures_are_structured(tmp_path, monkeypatch, kind)
     elif kind == "directory":
         path.unlink()
         path.mkdir()
+    elif kind == "fifo":
+        import os
+
+        path.unlink()
+        os.mkfifo(path)
 
     def selection():
         if kind == "missing":

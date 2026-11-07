@@ -376,6 +376,7 @@ def test_recovery_file_import_streams_large_files_without_a_size_limit(owner):
     replica.inspect_file.assert_awaited_once()
 
 
+
 def test_recovery_file_import_remains_available_during_recovery_and_connection_repair(
     owner,
 ):
@@ -446,23 +447,45 @@ def test_recovery_file_download_is_private_and_not_cached(
     assert opened and all(source.closed for source in opened)
 
 
-def test_recovery_download_cancellation_closes_the_verified_file(owner, monkeypatch):
+def test_recovery_download_rechecks_session_after_verified_file_open(
+    owner, monkeypatch
+):
+    from tgdrive.core.security import SESSION_COOKIE
+    from tgdrive.replication.replica_state import atomic_private
+
     client, _, replica = owner
+    content = b"private encrypted recovery archive"
+    digest = hashlib.sha256(content).hexdigest()
+    path = replica.directory / "replica-bundles" / (digest + ".tgdb")
+    atomic_private(path, content)
+    replica.journal.set(
+        "backup_file",
+        {"digest": digest, "sha256": digest, "created_at": "2026-11-07T12:00:00Z"},
+    )
     login(client)
-    path = replica.directory / "held-backup.tgdb"
-    path.write_bytes(b"encrypted archive" * 10000)
-    path.chmod(0o600)
+    token = client.cookies.get(SESSION_COOKIE)
+    assert token
+    acquire = replica.open_recovery_file
     opened = []
 
-    def acquire():
-        source = path.open("rb")
+    def revoke_after_open():
+        selected, source = acquire()
         opened.append(source)
-        return path, source
+        client.app.state.sessions.revoke(token)
+        return selected, source
 
-    monkeypatch.setattr(replica, "open_recovery_file", acquire)
+    monkeypatch.setattr(replica, "open_recovery_file", revoke_after_open)
+    response = client.get("/api/v1/replica/file")
+    assert response.status_code == 401
+    assert "content-disposition" not in response.headers
+    assert content not in response.content
+    assert opened and all(source.closed for source in opened)
+
+
+def _download_scope(client):
     request = client.build_request("GET", "/api/v1/replica/file")
     assert "cookie" in request.headers
-    scope = {
+    return {
         "type": "http",
         "asgi": {"version": "3.0", "spec_version": "2.4"},
         "http_version": "1.1",
@@ -477,6 +500,23 @@ def test_recovery_download_cancellation_closes_the_verified_file(owner, monkeypa
         "server": ("testserver", 443),
     }
 
+
+def test_recovery_download_cancellation_closes_the_verified_file(owner, monkeypatch):
+    client, _, replica = owner
+    login(client)
+    path = replica.directory / "held-backup.tgdb"
+    path.write_bytes(b"encrypted archive" * 10000)
+    path.chmod(0o600)
+    opened = []
+
+    def acquire():
+        source = path.open("rb")
+        opened.append(source)
+        return path, source
+
+    monkeypatch.setattr(replica, "open_recovery_file", acquire)
+    scope = _download_scope(client)
+
     async def receive():
         return {"type": "http.request", "body": b"", "more_body": False}
 
@@ -490,6 +530,61 @@ def test_recovery_download_cancellation_closes_the_verified_file(owner, monkeypa
     with pytest.raises(asyncio.CancelledError):
         asyncio.run(client.app(scope, receive, send))
     assert opened and all(source.closed for source in opened), responses
+
+
+def test_recovery_download_cancel_during_open_drains_worker_and_closes_file(
+    owner, monkeypatch
+):
+    import threading
+
+    client, _, replica = owner
+    login(client)
+    path = replica.directory / "slow-backup.tgdb"
+    path.write_bytes(b"encrypted recovery archive")
+    path.chmod(0o600)
+    entered, release = threading.Event(), threading.Event()
+    opened = []
+
+    def acquire():
+        source = path.open("rb")
+        opened.append(source)
+        entered.set()
+        release.wait()
+        return path, source
+
+    monkeypatch.setattr(replica, "open_recovery_file", acquire)
+    scope = _download_scope(client)
+    responses = []
+
+    async def receive():
+        return {"type": "http.request", "body": b"", "more_body": False}
+
+    async def send(message):
+        responses.append(message)
+
+    async def request():
+        operation = asyncio.create_task(client.app(scope, receive, send))
+        try:
+            assert await asyncio.to_thread(entered.wait, 2)
+            operation.cancel()
+            await asyncio.sleep(0)
+            assert not operation.done()
+            assert opened and all(not source.closed for source in opened)
+            operation.cancel()
+            await asyncio.sleep(0)
+            assert not operation.done()
+            release.set()
+            with pytest.raises(asyncio.CancelledError):
+                await operation
+            assert all(source.closed for source in opened)
+            assert not responses
+        finally:
+            release.set()
+            if not operation.done():
+                operation.cancel()
+            await asyncio.gather(operation, return_exceptions=True)
+
+    asyncio.run(request())
 
 
 def test_recovery_file_download_and_import_are_denied_in_read_only_demo(owner):
