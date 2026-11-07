@@ -6,6 +6,11 @@ Use this guide when uploads, playback or shared downloads are slow. Find the
 busy stage first, then change one resource or account. Cache, server capacity and
 Telegram accounts help at different stages; higher limits can lengthen queues.
 
+Judge useful utilization by completed transfers, playback startup/seek delay and
+responsiveness during concurrent work. CPU and RAM do not need to stay full.
+Cached delivery, an idle workload or a provider wait can leave resources unused;
+raising limits just to fill a meter can add contention and speculative reads.
+
 **Contents**
 
 - [Start with the website stats](#start-with-the-website-stats)
@@ -37,6 +42,7 @@ Telegram accounts help at different stages; higher limits can lengthen queues.
 | --- | --- |
 | Container CPU | 100% means all available container cores/quota, not one core. A labelled host-CPU fallback has a different scope. |
 | Container RAM | Includes the whole container. Process memory and the retained RAM cache are separate measurements within it. |
+| Active stream memory | Transient payload reservations across streams, separate from retained cache and total process/container memory. A memory waiter reports admission pressure within this budget. |
 | Server network | **Download to server** is incoming traffic; **Upload from server** includes delivery to viewers and Telegram uploads. Compare with the bandwidth included in your server plan. |
 | Telegram accounts and queues | Look for busy upload/download slots, active and queued part requests, reduced effective limits and provider waits. A queue estimate is not a promised start time. |
 | RAM cache lookups | Hits and misses count block lookups, including preloading. A RAM miss can still hit disk; this is not a percentage of bandwidth saved. |
@@ -61,6 +67,11 @@ counts include protocol/other interface traffic; Docker normally measures its
 container interface. In **Network traffic**, the solid line is **Download to
 server** and the dashed line is **Upload from server**.
 Hover or use the keyboard/touch sample scrubber. **Now** always means current.
+
+Compare measurements over the same observation window, with the same workload,
+cache coverage and container limits. Check the observation time: stale, missing
+or insufficient samples cannot establish that the drive is idle or unconstrained.
+A quiet window cannot establish the speed available to a later busy workload.
 
 <details>
 <summary>History, totals and resource measurement</summary>
@@ -121,6 +132,14 @@ cached data; missing bytes need Telegram again. Cache is not a backup and does
 not keep a sleeping host available. [Cache defaults and retention](performance.md#cache-limits).
 
 ## Find the bottleneck
+
+An observed queue, cooldown, disk-admission refusal or stream-memory wait
+identifies work that is waiting. CPU or memory pressure is only a likely cause
+when sustained during relevant activity; one high sample is insufficient.
+Several constraints can coexist. HTTP delivery backpressure means the response
+cannot advance freely, but does not locate the cause at the viewer. Low
+throughput alone cannot distinguish Telegram, its network route, server egress
+or the viewer's connection; unmeasured capacity stays unknown.
 
 | What you observe | What to check or change |
 | --- | --- |

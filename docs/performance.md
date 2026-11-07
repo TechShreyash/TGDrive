@@ -104,6 +104,13 @@ Budgets cover the running installation and are separate from temporary upload
 storage. Units are binary (1 GiB = 1024 MiB). **Cache is temporary, not a backup.**
 Clearing it leaves Telegram originals and the catalog intact.
 
+**Active stream memory** measures transient payload reservations, separate from
+retained cache. Compare its current effective limit with waiting streams; a
+configured ceiling is not a measurement of free physical RAM. Neither this
+budget nor retained-cache bytes include all process, transport or container
+memory. Unused cache or stream capacity alone does not establish a throughput
+problem; interpret it alongside the workload and observed waits.
+
 <details>
 <summary>Memory, disk integrity and eviction</summary>
 
