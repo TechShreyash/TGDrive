@@ -26,6 +26,18 @@ MAIN = -1001234567890
 BACKUP = -1002234567890
 
 
+class UnexpandedPath(str):
+    def __getitem__(self, key):
+        value = super().__getitem__(key)
+        return type(self)(value) if isinstance(key, slice) else value
+
+    def split(self, *args, **kwargs):
+        raise AssertionError("recovery paths must not expand into component lists")
+
+    def strip(self, *args, **kwargs):
+        raise AssertionError("compare recovery path bounds without copying the path")
+
+
 @pytest.fixture
 def snapshot(tmp_path):
     backend = FakeMongoBackend()
@@ -346,6 +358,74 @@ def test_json_record_progress_is_bounded_between_small_tokens(
         stage(tmp_path, snapshot)
 
 
+@pytest.mark.parametrize("opening,closing", [(b"[", b"]"), (b'{"a":', b"}")])
+def test_json_record_progress_includes_closing_container_whitespace(
+    monkeypatch, opening, closing
+):
+    monkeypatch.setattr(staged_snapshot, "MAX_VALUE_BYTES", 64)
+    monkeypatch.setattr(staged_snapshot, "MAX_TOKEN_BYTES", 64)
+    monkeypatch.setattr(staged_snapshot, "READ_BYTES", 8)
+    prefix = opening * 4 + b"0"
+    expected = 0
+    for _ in range(4):
+        expected = [expected] if opening == b"[" else {"a": expected}
+    padding = (64 - len(prefix) - 4) // 4
+    near_boundary = prefix + (b" " * padding + closing) * 4
+    assert staged_snapshot._Parser(io.BytesIO(near_boundary)).value() == expected
+
+    oversized = prefix + (b" " * 48 + closing) * 4
+    with pytest.raises(staged_snapshot.RecoveryResourceLimit, match="record exceeds"):
+        staged_snapshot._Parser(io.BytesIO(oversized)).value()
+
+
+@pytest.mark.parametrize("chunk_bytes", [1, 7, 8])
+def test_json_record_limit_is_checked_after_a_map_key(monkeypatch, chunk_bytes):
+    monkeypatch.setattr(staged_snapshot, "MAX_VALUE_BYTES", 64)
+    monkeypatch.setattr(staged_snapshot, "MAX_TOKEN_BYTES", 128)
+    monkeypatch.setattr(staged_snapshot, "READ_BYTES", 8)
+
+    class Chunks(io.BytesIO):
+        def read(self, size=-1):
+            return super().read(min(size, chunk_bytes) if size >= 0 else chunk_bytes)
+
+    key = b"k" * 24
+    parser = staged_snapshot._Parser(
+        Chunks(b'{"a":0,' + b" " * 48 + b'"' + key + b'":0}')
+    )
+    events, read_event = [], parser.next
+
+    def observe():
+        event = read_event()
+        events.append(event)
+        return event
+
+    monkeypatch.setattr(parser, "next", observe)
+    with pytest.raises(staged_snapshot.RecoveryResourceLimit, match="record exceeds"):
+        parser.value()
+    assert events[-1] == ("map_key", key.decode())
+
+
+@pytest.mark.parametrize("record_bytes,accepted", [(79, True), (81, False)])
+def test_json_record_buffering_allowance_is_bounded(
+    monkeypatch, record_bytes, accepted
+):
+    monkeypatch.setattr(staged_snapshot, "MAX_VALUE_BYTES", 64)
+    monkeypatch.setattr(staged_snapshot, "MAX_TOKEN_BYTES", 128)
+    monkeypatch.setattr(staged_snapshot, "READ_BYTES", 8)
+    record = b"[0" + b" " * (record_bytes - 3) + b"]"
+    parser = staged_snapshot._Parser(io.BytesIO(b"[" + record + b"]"))
+    parser.expect("start_array")
+    first = parser.next()
+    if accepted:
+        assert parser.value(first) == [0]
+        parser.expect("end_array")
+    else:
+        with pytest.raises(
+            staged_snapshot.RecoveryResourceLimit, match="record exceeds"
+        ):
+            parser.value(first)
+
+
 def test_flat_catalog_is_streamed_without_a_total_record_ceiling(tmp_path, snapshot):
     source = tmp_path / "large.json"
     template = file_node(snapshot)
@@ -457,6 +537,105 @@ def test_preparation_receipts_validate_their_own_historical_ancestry(
     record["result"]["folders"]["Child"] = "/unrelated/child"
     with pytest.raises(ValueError):
         stage(tmp_path, snapshot)
+
+
+@pytest.mark.parametrize("field", ["deletion", "destination", "returned_folder"])
+def test_recovery_paths_validate_without_expanding_components(
+    tmp_path, snapshot, field
+):
+    from tgdrive.storage.store import _manifest_json
+
+    destination = "/a" * 4096
+    if field == "deletion":
+        record = {
+            "id": "historical-deletion",
+            "root_id": "gone",
+            "path": UnexpandedPath(destination + "/gone"),
+            "channel_id": MAIN,
+            "state": "completed",
+            "created_at": snapshot["created_at"],
+            "error": None,
+            "message_ids": [],
+            "pending_message_ids": [],
+        }
+        MongoStore._validate_deletion_record(record)
+        snapshot["database"]["deletions"] = [dict(record, _id=record["id"])]
+        assert stage(tmp_path, snapshot).file_count == 1
+        return
+
+    if field == "destination":
+        destination = UnexpandedPath(destination)
+    manifest = {
+        "destination": destination,
+        "root_name": "Prepared",
+        "folders": [["Child"]],
+    }
+    child_path = destination + "/prepared/child"
+    record = {
+        "request_id": "request-1234567890",
+        "fingerprint": hashlib.sha256(_manifest_json(manifest).encode()).hexdigest(),
+        "manifest": manifest,
+        "created_at": snapshot["created_at"],
+        "result": {
+            "root": {
+                "id": "prepared",
+                "name": "Prepared",
+                "path": destination,
+                "size": 0,
+                "type": "folder",
+                "upload_date": snapshot["created_at"],
+            },
+            "folders": {
+                "": destination + "/prepared",
+                "Child": UnexpandedPath(child_path)
+                if field == "returned_folder"
+                else child_path,
+            },
+        },
+    }
+    MongoStore._validate_folder_preparation(record)
+    snapshot["database"]["preparations"] = [dict(record, _id=record["request_id"])]
+    assert stage(tmp_path, snapshot).file_count == 1
+
+
+@pytest.mark.parametrize("extra_components", [False, True])
+def test_deletion_ancestry_compares_path_bounds_without_a_component_list(
+    tmp_path, snapshot, monkeypatch, extra_components
+):
+    folder = next(
+        row for row in snapshot["database"]["nodes"] if row["name"] == "Folder"
+    )
+    folder["trashed"] = True
+    path = ("/a" * 4096 if extra_components else "") + "/" + folder["_id"]
+    snapshot["database"]["deletions"] = [
+        {
+            "_id": "deletion",
+            "id": "deletion",
+            "root_id": folder["_id"],
+            "path": path,
+            "channel_id": MAIN,
+            "state": "pending",
+            "created_at": snapshot["created_at"],
+            "error": None,
+            "message_ids": [41],
+            "pending_message_ids": [41],
+        }
+    ]
+    unpack_row = staged_snapshot._unpack
+
+    def unpack(raw):
+        row = unpack_row(raw)
+        if "pending_message_ids" in row:
+            row["path"] = UnexpandedPath(row["path"])
+        return row
+
+    monkeypatch.setattr(staged_snapshot, "_unpack", unpack)
+    if extra_components:
+        with pytest.raises(ValueError, match="path does not match ancestry"):
+            stage(tmp_path, snapshot)
+        assert not (tmp_path / "snapshot.sqlite").exists()
+    else:
+        assert stage(tmp_path, snapshot).file_count == 1
 
 
 def test_stateless_node_cursor_can_advance_on_different_workers(tmp_path, snapshot):

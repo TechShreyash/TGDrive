@@ -65,6 +65,7 @@ from tgdrive.storage.store import (
     _validate_channel_id,
     _validate_file_rename,
     _validate_id,
+    _validate_path,
     _validate_share_hashes,
     _validate_timestamp,
     _validate_tree,
@@ -2386,7 +2387,7 @@ class MongoStore:
             raise ValidationError("invalid deletion intent")
         _validate_id(intent["id"])
         _validate_id(intent["root_id"])
-        _normalize_path(intent["path"])
+        _validate_path(intent["path"])
         created = _validate_timestamp(intent["created_at"])
         if intent["state"] not in {"pending", "failed", "completed"}:
             raise ValidationError("invalid deletion state")
@@ -2476,16 +2477,19 @@ class MongoStore:
         ids = {root["id"]}
         for segments in normalized["folders"]:
             relative = "/".join(segments)
-            parts, full_path = _normalize_path(mapping[relative])
+            full_path = _validate_path(mapping[relative])
             parent = mapping["/".join(segments[:-1])]
+            separator = full_path.rfind("/")
+            identity = full_path[separator + 1 :]
             if (
-                not parts
+                not identity
                 or full_path != mapping[relative]
-                or full_path != _join_path(parent, parts[-1])
-                or parts[-1] in ids
+                or separator != (0 if parent == "/" else len(parent))
+                or not full_path.startswith(parent)
+                or identity in ids
             ):
                 raise ValidationError("invalid prepared folder ancestry")
-            ids.add(parts[-1])
+            ids.add(identity)
         _validate_timestamp(record["created_at"])
         return record
 

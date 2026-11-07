@@ -339,7 +339,7 @@ def _validate_tree(root: _FolderNode) -> None:
                 pending.append(child)
 
 
-def _normalize_path(path: object) -> tuple[tuple[str, ...], str]:
+def _path_segments(path: object):
     if not isinstance(path, str) or not path:
         raise InvalidPathError("path must be a non-empty string")
     if not path.startswith("/"):
@@ -347,16 +347,32 @@ def _normalize_path(path: object) -> tuple[tuple[str, ...], str]:
     if "\\" in path or "\x00" in path or "//" in path:
         raise InvalidPathError("path contains a forbidden separator or NUL")
     if path == "/":
-        return (), "/"
-    normalized = path[:-1] if path.endswith("/") else path
-    parts = tuple(normalized[1:].split("/"))
-    if not parts or any(part in {"", ".", ".."} for part in parts):
-        raise InvalidPathError("path contains an empty or traversal component")
-    for part in parts:
+        return
+    end = len(path) - int(path.endswith("/"))
+    start = 1
+    while start < end:
+        stop = path.find("/", start, end)
+        if stop < 0:
+            stop = end
+        part = path[start:stop]
+        if part in {"", ".", ".."}:
+            raise InvalidPathError("path contains an empty or traversal component")
         if not _ID_RE.fullmatch(part):
             raise InvalidPathError("path components must be item ids")
         if part == ROOT_ID:
             raise InvalidPathError("root is represented by '/', not '/root'")
+        yield part
+        start = stop + 1
+
+
+def _validate_path(path: object) -> str:
+    for _ in _path_segments(path):
+        pass
+    return path[:-1] if path != "/" and path.endswith("/") else path
+
+
+def _normalize_path(path: object) -> tuple[tuple[str, ...], str]:
+    parts = tuple(_path_segments(path))
     return parts, "/" + "/".join(parts)
 
 
@@ -378,7 +394,7 @@ class FolderTreeConflictError(ValidationError):
 def _folder_manifest(
     destination: object, root_name: object, folders: object
 ) -> dict[str, Any]:
-    _, destination = _normalize_path(destination)
+    destination = _validate_path(destination)
     root_name = _normalize_name(root_name)
     if not isinstance(folders, list):
         raise ValidationError("folders must be a list")

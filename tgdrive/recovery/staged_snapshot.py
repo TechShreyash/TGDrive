@@ -244,6 +244,10 @@ class _Parser:
             raise ValueError("Invalid recovery JSON structure")
         return value
 
+    def _check_record_size(self, start):
+        if self.reader.position - start > MAX_VALUE_BYTES + READ_BYTES:
+            raise RecoveryResourceLimit("Recovery JSON record exceeds its limit")
+
     def value(self, first=None, *, depth=0, start=None, items=None):
         if depth >= MAX_NESTING:
             raise RecoveryResourceLimit("Recovery JSON nesting exceeds its limit")
@@ -252,12 +256,12 @@ class _Parser:
         if items is None:
             items = [0]
         event, value = first or self.next()
-        if self.reader.position - start > MAX_VALUE_BYTES + READ_BYTES:
-            raise RecoveryResourceLimit("Recovery JSON record exceeds its limit")
+        self._check_record_size(start)
         if event == "start_map":
             result = {}
             while True:
                 event, key = self.next()
+                self._check_record_size(start)
                 if event == "end_map":
                     break
                 if event != "map_key" or key in result:
@@ -273,6 +277,7 @@ class _Parser:
             result = []
             while True:
                 first = self.next()
+                self._check_record_size(start)
                 if first[0] == "end_array":
                     return result
                 items[0] += 1
@@ -562,19 +567,21 @@ def _validate_deletions(db, budget):
         if node is None or not node[1]:
             raise ValueError("Invalid active recovery deletion root")
         # Compare the recorded path backwards, avoiding a catalog-depth list.
-        segments = iter(reversed(intent["path"].strip("/").split("/")))
+        path = intent["path"]
+        end = len(path) - int(path.endswith("/"))
         identity = intent["root_id"]
         first = True
         while identity != ROOT_ID:
-            if next(segments, None) != identity:
+            start = path.rfind("/", 0, end)
+            if path[start + 1 : end] != identity:
                 raise ValueError("Recovery deletion path does not match ancestry")
             parent, trashed = db.execute(
                 "SELECT parent,trashed FROM nodes WHERE id=?", (identity,)
             ).fetchone()
             if not first and trashed:
                 raise ValueError("Recovery deletion has a trashed ancestor")
-            first, identity = False, parent
-        if next(segments, None) is not None:
+            first, identity, end = False, parent, start
+        if end != 0:
             raise ValueError("Recovery deletion path does not match ancestry")
         difference = db.execute(
             "WITH RECURSIVE subtree(id) AS (SELECT ? UNION ALL "
