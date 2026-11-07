@@ -386,9 +386,10 @@ after a partial migration or remove the recorded copy name to bypass the error.
 
 Do not run 2.2 against the upgraded database. For rollback, keep the original
 2.2 archive and matching key for a separate version-compatible restore. An
-isolated old-archive restore followed by upgrade still needs a disposable
-end-to-end rehearsal; [archive compatibility](backup-recovery.md#upgrade-or-restore-an-older-drive)
-is separate from the surviving-database upgrade.
+isolated old-archive restore uses tagged v2.2 and its original key before
+upgrading the restored database. Rehearse with the actual deployment versions;
+[archive recovery](backup-recovery.md#upgrade-or-restore-an-older-drive) is
+separate from the surviving-database upgrade.
 
 ## Troubleshooting
 

@@ -34,8 +34,9 @@ action. Remaining live validation:
 
 - [ ] Fresh laptop and hosted installs, persistent volumes, stop/start and recovery.
 - [ ] Live recovery: empty MongoDB one-click restore, replacement main channel, revoked bot access, wrong `ENCRYPTION_KEY` and interrupted activation.
-- [ ] Tagged v2.2 backup/old-key recovery followed by schema-4 upgrade in an
-  isolated database; retain rollback material until a new restore point verifies.
+- [ ] Historical-image/dependency and live recovery coverage for tagged v2.2
+  archives followed by schema-4 upgrade; retain rollback material until a new
+  restore point verifies.
 - [ ] Backup pin denial, permission repair and restart; confirm that the intended
   restore point is discoverable with MongoDB gone and explicit owner credentials.
 - [ ] Live encryption: streaming/seeking encrypted parts, bot-mode encrypted import, and the encryption toggle.

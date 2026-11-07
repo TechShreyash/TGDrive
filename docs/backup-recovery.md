@@ -206,8 +206,23 @@ the drive opens. Follow [upgrade and rollback](operations.md#upgrade-and-rollbac
 keeping the database, channel, volumes and old recovery material.
 
 Current archive/channel activation requires **schema 5** and the original
-`ENCRYPTION_KEY`. A v2.2 archive is not a current-format import. Keep its original
-archive, old key and version-matched source. Recovery through an isolated v2.2
-installation followed by database upgrade needs a disposable rehearsal before
-it is relied on; this guide does not establish that end-to-end path. Do not
-replace or reset the only recoverable copy to work around format incompatibility.
+`ENCRYPTION_KEY`. A v2.2 archive is not a current-format import. Recognized legacy
+backups report `LEGACY_BACKUP_REQUIRES_UPGRADE`; preserve the original archive
+and its old matching key. A validation/key error alone does not establish
+archive corruption.
+
+1. Keep the original archive/key and old deployment unchanged. Stop the old
+   instance before recovery work against its channels.
+2. Restore with **tagged v2.2.0** and its matching old key into an isolated empty
+   MongoDB database and separate private volumes. Use the tag's
+   [backup guide](https://github.com/TechShreyash/TGDrive/blob/v2.2.0/docs/backup-recovery.md)
+   and bundled setup instructions; it has the older backup-key model.
+3. Stop v2.2, then follow the [schema-4 upgrade procedure](operations.md#upgrade-from-22-or-earlier)
+   on that restored database. Keep the newly configured `ENCRYPTION_KEY` for the upgraded drive
+   as well as the original old archive/key for rollback.
+4. Verify files, shares, multipart work and a new confirmed restore point before
+   retiring old resources. Do not run v2.2 against the upgraded database.
+
+Rehearse with disposable copies and the actual deployment/dependency versions
+before relying on this as the only recovery path. Do not replace or reset the
+only recoverable copy to work around format incompatibility.
