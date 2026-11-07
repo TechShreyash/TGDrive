@@ -1716,8 +1716,9 @@ export default function App() {
                 <main id="main-content" className="channel-recovery-main">
                     <h1>Storage recovery</h1>
                     <p className="channel-recovery-intro">
-                        File changes are paused. Restore a backup below, or
-                        start a new drive if you do not need the old one.
+                        File changes are paused. Preserve your backups and
+                        ENCRYPTION_KEY. Review the recovery status and available
+                        actions below.
                     </p>
                     {configLoad === "ready" ? (
                         <>
