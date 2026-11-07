@@ -610,6 +610,15 @@ class PreloadManager:
             return dict(row)
 
     async def _run(self, row, channel_id, message_id, size, parts, authorize):
+        original_authorize = authorize
+        if original_authorize is not None:
+
+            async def authorize():
+                from tgdrive.storage import pacing
+
+                await pacing.background.wait(2)
+                await original_authorize()
+
         acquired = False
         try:
             async with self._condition:
@@ -634,9 +643,6 @@ class PreloadManager:
                 if hi <= lo:
                     continue
                 if authorize is not None:
-                    from tgdrive.storage import pacing
-
-                    await pacing.background.wait(2)
                     await authorize()
                 async with self.pool.lease(
                     priority="preload", respect_cooldown=True

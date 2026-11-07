@@ -1003,7 +1003,7 @@ async def test_newer_verified_backup_leaves_older_historic_archives_unchanged(
         reopened.close()
 
 
-def test_writes_reuse_the_pending_deletion_list_until_a_deletion_changes():
+def test_mutations_read_current_pending_deletions():
     from tests.support.mongo_fixtures import new_store
 
     store = new_store()
@@ -1019,9 +1019,61 @@ def test_writes_reuse_the_pending_deletion_list_until_a_deletion_changes():
     folder = store.create_folder("/", "A")
     store.create_folder("/", "B")
     store.create_folder("/", "C")
-    assert len(reads) == 1  # One read, reused by later writes.
+    assert len(reads) >= 3
     store.set_trashed("/" + folder["id"], True)
     store.begin_deletion("/" + folder["id"])
-    store.create_folder("/", "D")
-    assert len(reads) == 2  # The new deletion forced a fresh read.
+    # An unrelated read must not seed shared mutation state.
+    assert store._active_deletion_roots() == [folder["id"]]
+    from tgdrive.core.errors import ValidationError
+
+    with pytest.raises(ValidationError, match="pending permanent deletion"):
+        store.set_trashed("/" + folder["id"], False)
+    assert store._active_deletion_roots() == [folder["id"]]
     store.close()
+
+
+def test_deletion_finalization_refuses_a_restored_target():
+    from tests.support.mongo_fixtures import new_store
+    from tgdrive.core.errors import TrashedItemError
+
+    store = new_store()
+    folder = store.create_folder("/", "A")
+    path = "/" + folder["id"]
+    store.set_trashed(path, True)
+    intent = store.begin_deletion(path)
+    store.db.nodes.update_one({"_id": folder["id"]}, {"$set": {"trashed": False}})
+    with pytest.raises(TrashedItemError):
+        store.finish_deletion(intent["id"])
+    assert store.db.nodes.find_one({"_id": folder["id"]}) is not None
+    assert store.pending_deletions()[0]["state"] == "pending"
+    store.close()
+
+
+@pytest.mark.parametrize("name", ["漢" * 255, "ΐ" * 255, "😀" * 255])
+def test_long_unicode_cursor_round_trips(name):
+    from tests.support.mongo_fixtures import new_store
+
+    store = new_store()
+    store.create_folder("/", name)
+    store.create_folder("/", name[:-1] + "z")
+    page = store.list_page("/", limit=1)
+    after = store.list_page("/", limit=1, after=page["next_cursor"])
+    assert len(after["items"]) == 1
+    store.close()
+
+
+@pytest.mark.parametrize(
+    "kind,key,identity",
+    [
+        ("file", 2**63, "valid"),
+        ("file", -1, "valid"),
+        ([], 1, "valid"),
+        ("file", 1, "bad/id"),
+    ],
+)
+def test_cursor_rejects_invalid_query_keys(kind, key, identity):
+    from tgdrive.core.errors import ValidationError
+    from tgdrive.storage.mongo_store import _decode_cursor, _encode_cursor
+
+    with pytest.raises(ValidationError):
+        _decode_cursor(_encode_cursor("size", (kind, key, identity)), "size")

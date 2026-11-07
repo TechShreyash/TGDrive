@@ -12,6 +12,7 @@ from typing import Any, Literal
 from fastapi import Depends, HTTPException, Query, Request, Response
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, Field, StrictBool
+from starlette.requests import ClientDisconnect
 
 from tgdrive.core.errors import NotDirectoryError, NotFoundError, TrashedItemError
 from tgdrive.core.errors import ValidationError as DriveValidationError
@@ -25,7 +26,7 @@ from tgdrive.storage.demo_files import (
     restricted_writes,
     write_policy,
 )
-from tgdrive.storage.mongo_store import ShareDenied
+from tgdrive.storage.mongo_store import MAX_CURSOR_LENGTH, ShareDenied
 from tgdrive.storage.store import (
     MAX_NAME_LENGTH,
     ROOT_ID,
@@ -367,7 +368,7 @@ def register_routes(
         limit: int = 100,
         sort: str = "name",
         order: Literal["asc", "desc"] = "asc",
-        cursor: str | None = Query(default=None, max_length=1024),
+        cursor: str | None = Query(default=None, max_length=MAX_CURSOR_LENGTH),
         type: Literal["folder", "media", "docs", "audio", "other"] | None = None,
         around: str | None = Query(default=None, max_length=64),
     ) -> dict[str, Any]:
@@ -395,7 +396,7 @@ def register_routes(
         limit: int = 100,
         sort: str = "name",
         order: Literal["asc", "desc"] = "asc",
-        cursor: str | None = Query(default=None, max_length=1024),
+        cursor: str | None = Query(default=None, max_length=MAX_CURSOR_LENGTH),
         type: Literal["folder", "media", "docs", "audio", "other"] | None = None,
         around: str | None = Query(default=None, max_length=64),
     ) -> dict[str, Any]:
@@ -494,10 +495,14 @@ def register_routes(
             check_receipt(get_store(request), uploads(request).get_unchecked(upload_id))
         async with chunk_receivers:
             body = bytearray()
-            async for part in request.stream():
-                if len(body) + len(part) > CHUNK_SIZE:
-                    raise UploadError("Upload chunk is too large", 413)
-                body.extend(part)
+            try:
+                async for part in request.stream():
+                    if len(body) + len(part) > CHUNK_SIZE:
+                        raise UploadError("Upload chunk is too large", 413)
+                    body.extend(part)
+            except ClientDisconnect:
+                logger.debug("Client disconnected during upload chunk id=%s", upload_id)
+                return Response(status_code=499)
             await require_admin(request)
             check_receipt(get_store(request), uploads(request).get_unchecked(upload_id))
             item = await uploads(request).append(upload_id, offset, body)

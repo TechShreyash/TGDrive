@@ -9,8 +9,10 @@ import threading
 import weakref
 from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 import pytest
+from fastapi import FastAPI, Request
 from pydantic import SecretStr
 from pymongo.errors import ConnectionFailure
 
@@ -369,6 +371,103 @@ async def test_request_disconnect_waits_for_thread_and_records_committed_offset(
         release.set()
     assert uploads.get(item["id"])["offset"] == 3
     assert uploads.path(item["id"]).read_bytes() == b"one"
+
+
+async def test_asgi_chunk_disconnect_keeps_offset_and_releases_receiver_slot(
+    tmp_path, monkeypatch, caplog
+):
+    from tgdrive.web.api_v1 import register_routes
+
+    uploads, manager = make(tmp_path, max_concurrent_transfers=1)
+    uploads.settings.demo_mode = False
+    manager.uploads = uploads
+    item = uploads.create("one.bin", "/", 3)
+    original_append = uploads.append
+    append = AsyncMock(wraps=original_append)
+    monkeypatch.setattr(uploads, "append", append)
+    app = FastAPI()
+    authorizations = []
+
+    async def authorized(request: Request):
+        authorizations.append(request.url.path)
+
+    register_routes(
+        app,
+        uploads.settings,
+        require_admin=authorized,
+        is_admin=lambda _: True,
+        get_store=lambda _: manager.store,
+        get_manager=lambda _: manager,
+        get_runtime=lambda _: SimpleNamespace(pool=None),
+    )
+    path = "/api/v1/uploads/" + item["id"]
+
+    async def request(messages):
+        sent = []
+        queued = iter(messages)
+
+        async def receive():
+            return next(queued, {"type": "http.disconnect"})
+
+        async def send(message):
+            sent.append(message)
+
+        await asyncio.wait_for(
+            app(
+                {
+                    "type": "http",
+                    "http_version": "1.1",
+                    "method": "PATCH",
+                    "scheme": "https",
+                    "path": path,
+                    "raw_path": path.encode(),
+                    "query_string": b"",
+                    "headers": [
+                        (b"host", b"testserver"),
+                        (b"upload-offset", b"0"),
+                        (b"content-type", b"application/octet-stream"),
+                    ],
+                    "server": ("testserver", 443),
+                    "client": ("test", 123),
+                    "asgi": {"version": "3.0", "spec_version": "2.4"},
+                },
+                receive,
+                send,
+            ),
+            2,
+        )
+        return next(
+            message for message in sent if message["type"] == "http.response.start"
+        )
+
+    try:
+        with caplog.at_level(logging.DEBUG, logger="tgdrive.web.api_v1"):
+            disconnected = await request(
+                [
+                    {"type": "http.request", "body": b"pa", "more_body": True},
+                    {"type": "http.disconnect"},
+                ]
+            )
+        assert disconnected["status"] == 499
+        append.assert_not_awaited()
+        assert uploads.get(item["id"])["offset"] == 0
+        assert uploads.path(item["id"]).read_bytes() == b""
+        assert manager.enqueued == 0
+        assert all(record.exc_info is None for record in caplog.records)
+        assert "Traceback" not in caplog.text
+        retried = await request(
+            [{"type": "http.request", "body": b"one", "more_body": False}]
+        )
+        assert retried["status"] == 204
+        assert dict(retried["headers"])[b"upload-offset"] == b"3"
+        assert uploads.get(item["id"])["offset"] == 3
+        assert uploads.path(item["id"]).read_bytes() == b"one"
+        append.assert_awaited_once_with(item["id"], 0, bytearray(b"one"))
+        assert authorizations == [path, path, path]
+    finally:
+        uploads.close()
+        manager.registry.close()
+        manager.store.close()
 
 
 async def test_request_disconnect_during_verification_still_enqueues_receipt(

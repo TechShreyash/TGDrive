@@ -129,9 +129,9 @@ class _PrimedBody:
 
     async def __anext__(self):
         try:
-            if self.authorize is not None:
-                await self.authorize()
             if self.first is not None:
+                if self.authorize is not None:
+                    await self.authorize()
                 first, self.first = self.first, None
                 return first
             return await anext(self.iterator)

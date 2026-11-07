@@ -5,7 +5,7 @@ from __future__ import annotations
 import copy
 import re
 import threading
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 from types import SimpleNamespace
 
 from pymongo import DeleteOne, ReplaceOne, UpdateOne
@@ -312,6 +312,10 @@ class Database:
 class FakeMongoBackend:
     def __init__(self):
         self.db = Database()
+        # Snapshot-isolation interleavings are exercised against disposable MongoDB.
+        self.client = SimpleNamespace(
+            start_session=lambda **_kwargs: nullcontext(object())
+        )
         self._settings_lock = threading.RLock()
         self._settings_cached = False
         self._settings_document = None

@@ -150,7 +150,7 @@ def register_performance_routes(
             if getattr(getattr(runtime, "backup", None), "recovery_required", False):
                 raise HTTPException(409, "Drive recovery is required")
             current = await asyncio.to_thread(
-                store.get_file, store.resolve_id(data["id"]) if "id" in data else path
+                store.get_file, "/" + data["id"] if "id" in data else path
             )
             if any(
                 current.get(key) != data.get(key)

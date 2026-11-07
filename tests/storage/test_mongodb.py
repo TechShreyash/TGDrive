@@ -63,6 +63,130 @@ def path(row):
     return row["path"].rstrip("/") + "/" + row["id"]
 
 
+def test_pending_deletion_survives_an_unrelated_precommit_receipt_read(
+    store, backend, monkeypatch
+):
+    import threading
+    from concurrent.futures import ThreadPoolExecutor
+
+    target = store.create_folder("/", "Delete me")
+    other = store.create_folder("/", "Keep me")
+    store.add_file(path(target), "retained.txt", 77, 3)
+    store.set_trashed(path(target), True)
+    before = store.statistics()
+    entered, release = threading.Event(), threading.Event()
+    original = backend.fence
+
+    def hold_before_commit(session):
+        original(session)
+        entered.set()
+        assert release.wait(5), "The test did not release the committing deletion"
+
+    monkeypatch.setattr(backend, "fence", hold_before_commit)
+    with ThreadPoolExecutor(max_workers=1) as workers:
+        deletion = workers.submit(store.begin_deletion, path(target))
+        try:
+            assert entered.wait(3)
+            # Receipt destination inspection is read-only and sees the prior
+            # committed state while the deletion transaction is still open.
+            assert store.upload_destination(path(other))["id"] == other["id"]
+        finally:
+            release.set()
+        intent = deletion.result(timeout=3)
+    monkeypatch.setattr(backend, "fence", original)
+    with pytest.raises(ValidationError, match="pending permanent deletion"):
+        store.set_trashed(path(target), False)
+    assert store.statistics() == before
+    store.finish_deletion(intent["id"])
+    after = store.statistics()
+    assert after["files"] == after["trashed_files"] == after["trashed_bytes"] == 0
+    assert store.get_directory(path(other))["name"] == "Keep me"
+
+
+@pytest.mark.parametrize("mutation", ["move", "delete"])
+def test_search_hydration_uses_the_candidate_snapshot(store, monkeypatch, mutation):
+    import threading
+    from concurrent.futures import ThreadPoolExecutor
+
+    first = store.create_folder("/", "First")
+    second = store.create_folder("/", "Second")
+    item = store.add_file(path(first), "snapshot result.txt", 77, 3)
+    entered, release = threading.Event(), threading.Event()
+    original = store._find
+
+    def hold_hydration(collection, query, projection=None, **options):
+        if (
+            collection == "nodes"
+            and isinstance(query.get("_id"), dict)
+            and "$in" in query["_id"]
+        ):
+            entered.set()
+            assert release.wait(5), "The test did not release search hydration"
+        return original(collection, query, projection, **options)
+
+    monkeypatch.setattr(store, "_find", hold_hydration)
+    with ThreadPoolExecutor(max_workers=1) as workers:
+        search = workers.submit(store.search_page, "snapshot result")
+        try:
+            assert entered.wait(3)
+            if mutation == "move":
+                store.move(path(item), path(second))
+            else:
+                store.set_trashed(path(item), True)
+                intent = store.begin_deletion(path(item))
+                store.finish_deletion(intent["id"])
+        finally:
+            release.set()
+        result = search.result(timeout=3)
+    assert [row["id"] for row in result["items"]] == [item["id"]]
+    assert result["items"][0]["path"] == path(first)
+    assert result["items"][0]["parent_names"] == ["First"]
+    latest = store.search_page("snapshot result")["items"]
+    assert [row["path"] for row in latest] == (
+        [path(second)] if mutation == "move" else []
+    )
+
+
+def test_shared_page_cannot_read_private_rows_added_after_scope_changes(
+    store, monkeypatch
+):
+    import threading
+    from concurrent.futures import ThreadPoolExecutor
+
+    from tgdrive.storage.mongo_store import ShareDenied
+
+    shared = store.create_folder("/", "Shared")
+    child = store.create_folder(path(shared), "Child")
+    private = store.create_folder("/", "Private")
+    public_file = store.add_file(path(child), "public.txt", 77, 3)
+    secret = store.add_file(path(private), "secret.txt", 78, 4)
+    token = store.create_share(path(shared))
+    entered, release = threading.Event(), threading.Event()
+    original = store._authorized
+
+    def hold_after_authorization(chain, supplied):
+        result = original(chain, supplied)
+        if result is not None:
+            entered.set()
+            assert release.wait(5), "The test did not release shared page loading"
+        return result
+
+    monkeypatch.setattr(store, "_authorized", hold_after_authorization)
+    with ThreadPoolExecutor(max_workers=1) as workers:
+        listing = workers.submit(store.list_page, path(child), share_token=token)
+        try:
+            assert entered.wait(3)
+            moved = store.move(path(child), path(private))
+            store.move(path(secret), path(moved))
+        finally:
+            release.set()
+        result = listing.result(timeout=3)
+    assert [row["id"] for row in result["items"]] == [public_file["id"]]
+    assert all(row["id"] != secret["id"] for row in result["items"])
+    with pytest.raises(ShareDenied):
+        store.list_page("/" + child["id"], share_token=token)
+
+
 def test_performance_history_survives_restart_without_local_sqlite(
     backend, tmp_path, monkeypatch
 ):

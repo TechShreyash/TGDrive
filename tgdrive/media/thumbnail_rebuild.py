@@ -78,9 +78,9 @@ class RebuildSource:
         self.runner = None
 
     async def authorize(self):
-        await pacing.background.wait(2)  # resolve_id + get_file
+        await pacing.background.wait()
         store = self.owner.runtime().store
-        current = store.get_file(store.resolve_id(self.data["id"]))
+        current = await asyncio.to_thread(store.get_file, "/" + self.data["id"])
         if store.drive_id != self.owner.drive_id or file_identity(
             current
         ) != file_identity(self.data):
@@ -399,9 +399,9 @@ class ThumbnailRebuild:
             await self.persist()
             for item_id in sorted(files):
                 try:
-                    await pacing.background.wait(2)
+                    await pacing.background.wait()
                     store = self.runtime().store
-                    data = store.get_file(store.resolve_id(item_id))
+                    data = await asyncio.to_thread(store.get_file, "/" + item_id)
                 except NotFoundError, NotFileError, TrashedItemError:
                     self.state["skipped"] += 1
                     self.state["processed"] += 1

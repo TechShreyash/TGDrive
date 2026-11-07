@@ -387,6 +387,7 @@ def create_app(
                 connection_manager = getattr(app_runtime, "connection_manager", None)
                 if connection_manager is not None:
                     await connection_manager.close()
+                await asyncio.gather(*opened_tasks, return_exceptions=True)
                 await _app.state.thumbnail_rebuild.close()
                 await _app.state.thumbnails.close()
                 await _app.state.posters.close()
@@ -1029,22 +1030,37 @@ def create_app(
     # Recent: at most one write per file per this many seconds, so a long video
     # (many range requests) costs one database write.
     opened_at: dict[str, float] = {}
+    opened_pending: set[str] = set()
+    opened_tasks: set[asyncio.Task] = set()
 
     def record_opened(store, item_id):
         now = time.monotonic()
-        if now - opened_at.get(item_id, -1e9) < RECENT_WRITE_SECONDS:
+        if (
+            item_id in opened_pending
+            or opened_tasks
+            or now - opened_at.get(item_id, -1e9) < RECENT_WRITE_SECONDS
+        ):
             return
-        opened_at[item_id] = now
-        if len(opened_at) > 10_000:
-            opened_at.pop(next(iter(opened_at)))
-        try:
-            store.mark_opened(item_id)
-        except Exception:
-            # Recent is a convenience; opening the file must not fail over it.
-            logger.debug("Could not record a file open", exc_info=True)
+
+        async def write():
+            try:
+                await asyncio.to_thread(store.mark_opened, item_id)
+            except Exception:
+                logger.debug("Could not record a file open", exc_info=True)
+            else:
+                opened_at[item_id] = time.monotonic()
+                if len(opened_at) > 10_000:
+                    opened_at.pop(next(iter(opened_at)))
+            finally:
+                opened_pending.discard(item_id)
+
+        opened_pending.add(item_id)
+        task = asyncio.create_task(write(), name="record-file-open")
+        opened_tasks.add(task)
+        task.add_done_callback(opened_tasks.discard)
 
     def authorized_file(
-        request: Request, path: str, auth: str | None, *, opened: bool = False
+        request: Request, path: str, auth: str | None
     ) -> tuple[str, dict[str, Any]]:
         store = _store(request)
         if getattr(
@@ -1054,18 +1070,20 @@ def create_app(
                 "File access is paused until this installation is recovered. "
                 "Preserve local data and recover the latest Telegram checkpoint."
             )
+        from tgdrive.storage.mongo_store import ShareDenied
+
+        shared = auth is not None or not _is_admin(request)
         if path != "/":
-            path = store.resolve_id(path.rstrip("/").rsplit("/", 1)[-1])
-        if auth is not None or not _is_admin(request):
-            try:
-                authorized = store.authorize_file(path, auth or "")
-            except DriveError:
-                authorized = False
-            if not authorized:
-                raise HTTPException(status_code=403, detail="Invalid share link")
-        data = store.get_file(path)
-        if opened and auth is None:
-            record_opened(store, data["id"])  # Owner activity only, never shares.
+            path = "/" + path.rstrip("/").rsplit("/", 1)[-1]
+        try:
+            data = store.get_file(path, share_token=(auth or "") if shared else None)
+        except ShareDenied, DriveError:
+            if shared:
+                raise HTTPException(
+                    status_code=403, detail="Invalid share link"
+                ) from None
+            raise
+        path = data["path"].rstrip("/") + "/" + data["id"]
         return path, data
 
     @app.get("/api/v1/embed")
@@ -1085,9 +1103,9 @@ def create_app(
         path: Annotated[str, Query(min_length=1)],
         auth: Annotated[str | None, Query(max_length=512)] = None,
     ) -> dict[str, Any]:
-        path, file_data = await asyncio.to_thread(
-            authorized_file, request, path, auth, opened=True
-        )
+        path, file_data = await asyncio.to_thread(authorized_file, request, path, auth)
+        if auth is None:
+            record_opened(_store(request), file_data["id"])
         try:
             result = await describe_preview(
                 pool=_runtime(request).pool,
@@ -1099,7 +1117,7 @@ def create_app(
                 path=path,
                 auth=auth,
             )
-            authorized_file(request, path, auth)
+            await asyncio.to_thread(authorized_file, request, path, auth)
             return result
         except TelegramFileNotFound as exc:
             raise HTTPException(404, exc.public_detail) from exc
@@ -1113,9 +1131,9 @@ def create_app(
     ) -> Response:
         from tgdrive.media.books import BookCache, parse_book, read_range
 
-        path, data = await asyncio.to_thread(
-            authorized_file, request, path, auth, opened=True
-        )
+        path, data = await asyncio.to_thread(authorized_file, request, path, auth)
+        if auth is None:
+            record_opened(_store(request), data["id"])
         cache = getattr(app.state, "book_cache", None)
         if cache is None:
             cache = app.state.book_cache = BookCache()
@@ -1363,9 +1381,9 @@ def create_app(
         path: Annotated[str, Query(min_length=1)],
         auth: Annotated[str | None, Query(max_length=512)] = None,
     ) -> dict[str, Any]:
-        _path, file_data = await asyncio.to_thread(
-            authorized_file, request, path, auth, opened=True
-        )
+        _path, file_data = await asyncio.to_thread(authorized_file, request, path, auth)
+        if auth is None:
+            record_opened(_store(request), file_data["id"])
         try:
             result = await describe_media(
                 pool=_runtime(request).pool,
@@ -1392,9 +1410,9 @@ def create_app(
             str | None, Query(max_length=128, pattern=r"^[A-Za-z0-9_-]+$")
         ] = None,
     ) -> Response:
-        path, file_data = await asyncio.to_thread(
-            authorized_file, request, path, auth, opened=request.method == "GET"
-        )
+        path, file_data = await asyncio.to_thread(authorized_file, request, path, auth)
+        if auth is None and request.method == "GET":
+            record_opened(_store(request), file_data["id"])
 
         pool = _runtime(request).pool
         progress = None

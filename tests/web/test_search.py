@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import json
 from datetime import UTC, datetime
 
@@ -396,6 +397,56 @@ def test_api_folder_cursor_continues_listing(search_client):
     assert bad.status_code == 422
 
 
+@pytest.mark.parametrize("shared", [False, True])
+@pytest.mark.parametrize("letters", [("界", "龍"), ("ΐ", "ώ")])
+def test_api_accepts_its_maximum_unicode_name_cursor(search_client, shared, letters):
+    client, store, _ = search_client
+    folder = store.create_folder("/", "Parent")
+    first = store.add_file(full(folder), letters[0] * 255, 77, 1)
+    second = store.add_file(full(folder), letters[1] * 255, 78, 1)
+    owner(client)
+    endpoint = "/api/v1/shared/nodes" if shared else "/api/v1/nodes"
+    params = {"parent_id": full(folder), "limit": 1}
+    if shared:
+        params["auth"] = store.create_share(full(folder))
+    response = client.get(endpoint, params=params)
+    assert response.status_code == 200
+    page = response.json()
+    assert page["items"][0]["id"] == first["id"]
+    assert len(page["next_cursor"]) > 1024
+    following = client.get(endpoint, params=params | {"cursor": page["next_cursor"]})
+    assert following.status_code == 200
+    assert [row["id"] for row in following.json()["items"]] == [second["id"]]
+
+
+@pytest.mark.parametrize("shared", [False, True])
+@pytest.mark.parametrize(
+    "sort,key",
+    [
+        ("size", 2**63),
+        ("size", True),
+        ("date", "9999-12-31T23:59:59-23:59"),
+    ],
+)
+def test_api_rejects_cursor_values_before_constructing_mongodb_queries(
+    search_client, shared, sort, key
+):
+    client, store, _ = search_client
+    folder = store.create_folder("/", "Parent")
+    owner(client)
+    params = {
+        "parent_id": full(folder),
+        "sort": sort,
+        "cursor": base64.urlsafe_b64encode(
+            json.dumps([sort, "file", key, "item"]).encode()
+        ).decode(),
+    }
+    if shared:
+        params["auth"] = store.create_share(full(folder))
+    endpoint = "/api/v1/shared/nodes" if shared else "/api/v1/nodes"
+    assert client.get(endpoint, params=params).status_code == 422
+
+
 def test_folder_type_filter_matches_ui_groups_and_survives_rename(store):
     store.create_folder("/", "Albums")
     names = ["a.JPG", "b.mkv", "c.pdf", "d.epub", "e.flac", "f.zip", "g", "h.xlsx"]
@@ -625,6 +676,44 @@ def test_search_caps_matches_and_reports_the_total(store):
     assert len(last["items"]) == 100 and not last["has_more"]
     small = store.search_page("clip 7", limit=100)
     assert not small["capped"]
+
+
+def test_search_cap_is_deterministic_and_direct_trash_cannot_consume_it(store):
+    rows = []
+    for hidden in (True, False):
+        prefix = "aaa-hidden" if hidden else "zzz-visible"
+        rows.extend(
+            MongoStore._node(
+                f"{prefix}-{index:04}",
+                "root",
+                f"cap result {prefix} {index:04}",
+                "file",
+                message_id=index + 1,
+                size=1,
+                trashed=hidden,
+            )
+            for index in range(1005)
+        )
+    # Reverse insertion order so selection cannot accidentally rely on it.
+    store.db.nodes.insert_many(list(reversed(rows)))
+    first = store.search_page("cap result", limit=500)
+    second = store.search_page("cap result", limit=500)
+    assert first == second
+    assert first["capped"] and first["total"] == 1000
+    last = store.search_page("cap result", offset=500, limit=500)
+    assert [row["id"] for row in first["items"] + last["items"]] == [
+        f"zzz-visible-{index:04}" for index in range(1000)
+    ]
+
+
+def test_repeated_words_with_only_an_earlier_last_term_rank_out_of_order(store):
+    reverse = store.create_folder("/", "z " + "a " * 100 + "end")
+    ordered = store.create_folder("/", "a " * 40 + "z")
+    query = "a " * 40 + "z"
+    assert [item["id"] for item in store.search_page(query)["items"]] == [
+        ordered["id"],
+        reverse["id"],
+    ]
 
 
 def test_search_looks_up_all_matching_folders_in_one_query(store):

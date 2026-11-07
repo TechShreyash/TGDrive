@@ -100,6 +100,18 @@ def _group(name, kind):
 _LIGHT = {"parts": 0, "poster": 0, "tokens": 0}
 # Search ranks at most this many matches; broader queries are told to narrow.
 MAX_SEARCH_MATCHES = 1000
+# 255 characters, up to three case-folded characters each and JSON escapes.
+MAX_CURSOR_LENGTH = 16384
+
+
+def _ordered_words(name, patterns):
+    position = 0
+    for pattern in patterns:
+        match = pattern.search(name, position)
+        if match is None:
+            return False
+        position = match.end()
+    return True
 
 
 def _activity_now():
@@ -170,7 +182,7 @@ def _encode_cursor(sort, position):
 def _decode_cursor(value, sort):
     """Validate a client cursor; its values reach MongoDB queries."""
     try:
-        if not isinstance(value, str) or len(value) > 1024:
+        if not isinstance(value, str) or len(value) > MAX_CURSOR_LENGTH:
             raise ValueError
         raw = base64.urlsafe_b64decode(value + "=" * (-len(value) % 4))
         cursor_sort, kind, key, identity = json.loads(raw)
@@ -179,11 +191,24 @@ def _decode_cursor(value, sort):
     expected = int if sort == "size" else str
     if (
         cursor_sort != sort
+        or type(kind) is not str
         or kind not in {"folder", "file"}
         or type(key) is not expected
         or type(identity) is not str
     ):
         raise ValidationError("Invalid cursor")
+    _validate_id(identity)
+    if sort == "size" and not 0 <= key < 2**63:
+        raise ValidationError("Invalid cursor size")
+    if sort == "name" and len(key) > 3 * MAX_NAME_LENGTH:
+        raise ValidationError("Invalid cursor name")
+    if sort == "type":
+        _validate_id(key)
+    if sort == "date":
+        try:
+            _validate_timestamp(key)
+        except OverflowError:
+            raise ValidationError("Invalid cursor date") from None
     return kind, key, identity
 
 
@@ -200,7 +225,6 @@ class MongoStore:
         self._lock = threading.RLock()
         self._local = threading.local()
         self._closed = False
-        self._pending_roots = None
         metadata = backend.db.catalog.find_one({"_id": "catalog"})
         if metadata is None:
             raise CorruptStoreError(
@@ -408,7 +432,7 @@ class MongoStore:
         return getattr(self._local, "session", None)
 
     @contextmanager
-    def _transaction(self, *, write=False):
+    def _transaction(self, *, write=False, snapshot=False):
         if self._closed:
             raise DatabaseUnavailable("The catalog is closed")
         if self._session is not None:
@@ -416,7 +440,15 @@ class MongoStore:
             yield self._session
             return
         if not write:
-            yield None
+            if snapshot:
+                with self.backend.client.start_session(snapshot=True) as session:
+                    self._local.session = session
+                    try:
+                        yield session
+                    finally:
+                        self._local.session = None
+            else:
+                yield None
             return
         with self._lock:
             self.backend.check_owner()
@@ -429,7 +461,6 @@ class MongoStore:
                         self.backend.fence(session)
                 except BaseException:
                     self._local.metadata = None
-                    self._pending_roots = None  # A rolled-back write may have set it.
                     raise
                 finally:
                     self._local.session = None
@@ -623,16 +654,12 @@ class MongoStore:
             return False
 
     def _active_deletion_roots(self):
-        # Read once per process; every deletion write below clears it. Another
-        # process cannot write this drive: the MongoDB owner lease excludes it.
-        if self._pending_roots is None:
-            self._pending_roots = [
-                row["root_id"]
-                for row in self._find(
-                    "deletions", {"state": {"$ne": "completed"}}, {"root_id": 1}
-                )
-            ]
-        return self._pending_roots
+        return [
+            row["root_id"]
+            for row in self._find(
+                "deletions", {"state": {"$ne": "completed"}}, {"root_id": 1}
+            )
+        ]
 
     def _mutable(self, chain, *, descendants=False):
         self._demo_mutable(chain, descendants=descendants)
@@ -825,7 +852,7 @@ class MongoStore:
             raise ValidationError("Use only one of offset, cursor or around")
         if around is not None:
             _validate_id(around)
-        with self._transaction():
+        with self._transaction(snapshot=share_token is not None):
             node, path, chain = self._resolve(path)
             if node["kind"] != "folder":
                 raise NotDirectoryError("Not a directory")
@@ -957,11 +984,13 @@ class MongoStore:
                 result["share_home"] = home
             return result
 
-    def get_file(self, path, *, include_trashed=False):
+    def get_file(self, path, *, include_trashed=False, share_token=None):
         with self._transaction():
             node, path, chain = self._resolve(path, full=True)
             if node["kind"] != "file":
                 raise NotFileError("Not a file")
+            if share_token is not None and self._authorized(chain, share_token) is None:
+                raise ShareDenied("Invalid share link")
             self._visible(chain, include_trashed)
             return self._file(node, path)
 
@@ -1296,11 +1325,16 @@ class MongoStore:
     def mark_opened(self, item_id):
         """Record that the owner opened a file, for Recent.
 
-        Not a catalog change: it neither bumps the drive revision nor waits
-        for a transaction, so watching files never triggers a backup. Callers
+        Not a catalog change: it never bumps the drive revision. Callers
         throttle it (see ``RECENT_WRITE_SECONDS`` in the web app).
         """
-        self.db.nodes.update_one(
+        _validate_id(item_id)
+        if self._closed:
+            raise DatabaseUnavailable("The catalog is closed")
+        self.backend.check_owner()
+        self.backend.write(
+            self.db.nodes,
+            "update_one",
             {"_id": item_id, "kind": "file"},
             {"$set": {"active_at": _activity_now()}},
         )
@@ -1422,7 +1456,7 @@ class MongoStore:
             # Only punctuation (for example "%"): a literal match on the name.
             # No letters to fold, so a case-insensitive name match is exact.
             clauses.append({"name": {"$regex": re.escape(query), "$options": "i"}})
-        for word in words:
+        for word in dict.fromkeys(words):
             # Words match the start of a word in the name; numbers also match
             # without leading zeros, so "3" finds "- 03" and "1080" finds "1080p".
             number = _number(word)
@@ -1434,20 +1468,20 @@ class MongoStore:
                 clauses.append({"$or": options})
             else:
                 clauses.append({"tokens": number})
-        order_pattern = (
-            re.compile(
-                ".*?".join(
+        order_patterns = (
+            [
+                re.compile(
                     r"(?<!\d)0*" + re.escape(_number(word))
                     if _number(word)
                     else r"(?<![^\W_])" + re.escape(word)
-                    for word in words
                 )
-            )
+                for word in words
+            ]
             if len(words) > 1
-            else None
+            else []
         )
         direction = order or ("asc" if sort == "name" else "desc")
-        with self._transaction():
+        with self._transaction(snapshot=True):
             projection = {
                 "_id": 1,
                 "name_key": 1,
@@ -1459,12 +1493,14 @@ class MongoStore:
                 "trashed": 1,
                 "tokens": 1,
             }
-            # Index order puts whole-word matches ("report") before longer words
-            # ("reports"), so the capped set keeps the most relevant names.
+            # Deterministic bounded candidates; relevance is local to this set.
+            candidate_query = {"$and": clauses, "_id": {"$ne": ROOT_ID}}
+            if not include_trashed:
+                candidate_query["trashed"] = False
             candidates = list(
-                self._find("nodes", {"$and": clauses}, projection).limit(
-                    MAX_SEARCH_MATCHES + 1
-                )
+                self._find("nodes", candidate_query, projection)
+                .sort("_id", 1)
+                .limit(MAX_SEARCH_MATCHES + 1)
             )
             capped = len(candidates) > MAX_SEARCH_MATCHES
             candidates = [
@@ -1489,7 +1525,7 @@ class MongoStore:
                     word in tokens or (_number(word) or word) in tokens
                     for word in words
                 )
-                ordered = order_pattern is None or bool(order_pattern.search(fold))
+                ordered = _ordered_words(fold, order_patterns)
                 rank = (
                     0
                     if folded in (fold, stem)
@@ -1938,7 +1974,6 @@ class MongoStore:
                 "pending_message_ids": messages.copy(),
             }
             self.db.deletions.insert_one(row, session=self._session)
-            self._pending_roots = None
             self._revoke_under(node["_id"])
             self._bump()
             return self._deletion(row)
@@ -2003,9 +2038,12 @@ class MongoStore:
             if row["state"] != "completed":
                 chain = self._ancestors(row["root_id"])
                 self._demo_mutable(chain, descendants=True)
+                if not chain[-1]["trashed"] or self._hidden(chain[:-1]):
+                    raise TrashedItemError(
+                        "Permanent deletion requires a top-level trash item"
+                    )
                 files, _folders, size = self._subtree_totals(row["root_id"])
                 self._remove_subtree(row["root_id"])
-                self._pending_roots = None
                 self.db.deletions.update_one(
                     {"_id": intent_id},
                     {
