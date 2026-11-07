@@ -450,7 +450,7 @@ sections. The [checked-in captures](showcase.md) illustrate the interface.
 | Light, dark and system appearance | [theme.ts](../website/src/shared/theme.ts) |
 | Brand artwork | [SVG masters](../website/public/static/brand/) |
 
-- Reuse semantic tokens, self-hosted Inter and Lucide icons. Keep logo cobalt
+- Reuse semantic tokens, bundled typefaces and Lucide icons. Keep logo cobalt
   separate from interface action colors. Use tabular numerals for measurements.
 - Use `BrandLogo`; preserve the SVG masters' proportions, openings
   and clear space. Generate raster assets with `scripts/brand-assets.py`.
@@ -493,6 +493,10 @@ real WASM fixture, EAC3 output/track changes, subtitles, seek/close and external
 request/CSP checks. Inspect worker diagnostics as well as document CSP events.
 Keep controls reachable during startup/buffering; source coverage does not prove
 decoder readiness. Clean listeners/timers and test delayed media/reduced motion.
+Wait copy follows actual engine phases. Retry is immediate for an explicit error,
+or offered after 15 seconds without byte/playback progress or a 60-second
+unresolved phase wait. Source and seek changes reset the wait tracking. Preserve
+the fallback for decode-bound waits even while bytes arrive.
 
 Preserve full [third-party notices](../website/public/third-party/README.txt),
 including React/Scheduler/Lucide/Feather attribution and viewer/codec/font licenses.
@@ -536,6 +540,9 @@ Key per-link state by share ID, even when links target one item. Expired links
 never produce sharing indicators; public browsers never fetch owner share data.
 Keep indicators visible beside truncated names. Unreconstructable URLs offer
 **New Link**, never silent rotation. Refresh indicators after the share dialog closes.
+Ordinary file shares use the token-authorized `/embed` viewer and the same URL
+for an iframe; only folders need a separate embed control. Preserve older raw
+`/file` URLs and explicit attachment downloads in both share constructors.
 
 </details>
 
@@ -561,6 +568,13 @@ navigation label.
 - Background listing refresh preserves rows, scroll, pagination and selections;
   failures retain the last listing and show errors. Placeholders belong to new
   listings, not background refreshes.
+- Gate rows, actions, errors and counts by listing identity immediately when
+  navigating; animation delays must not leave stale actions enabled. Recent uses
+  100 rows initially and on continuation, canonical Files preview URLs and Back
+  to Recent. Failed pages retain Try Again and Previous Page controls.
+- Restore drawer focus to its actual opener, or to the main region after
+  navigation. Keep the temporarily unavailable reset entry disabled without
+  collecting a password/confirmation or expecting a successful reload.
 - Build batches before assigning sections/filters; retain every child and its
   status. Running precedes queued; terminal outcomes share Finished with All,
   Successful, Failed and Cancelled filters and server-authoritative pagination.
@@ -715,6 +729,12 @@ support additional character sets and image formats without an asset CDN. Keep
 sparse transport, page/image/pixel bounds and XFA/script restrictions intact.
 Password prompts pass only an in-memory value to PDF.js; passwords are never
 stored in browser preferences or sent to a TGDrive password endpoint.
+
+Comic and EPUB look-ahead starts only after the visible page/chapter is usable
+and retains one upcoming entry. Selection changes and close cancel speculative
+work. Next cancels/restarts an unfinished prefetch as foreground work; do not
+claim that pending reads are shared. Keep the 64 MiB raster response bound and
+verify request ordering, cancellation and cleanup when changing this behavior.
 
 `tests/media/test_books.py` covers unchanged large original page bytes and bounded result
 reuse. `tests/media/test_books_api.py` covers access checks on cached/conditional responses.

@@ -78,8 +78,9 @@ to the unfinished work you confirm; completed files and later uploads remain.
 
 - A folder creates a new root and preserves subfolders. Existing names are kept
   alongside it rather than merged or overwritten.
-- The picker accepts any number of files and folders at any depth. It skips
-  empty and oversized files; browser pickers omit empty folders.
+- There is no fixed batch-count quota, but browser memory, request metadata and
+  staging limits apply. Empty and oversized files are skipped; browser pickers
+  omit empty folders.
 - Keep the confirmation open during preparation. **Retry** there reuses the
   tree; closing early and choosing again can leave another empty root.
 - Once queued, resume the existing batch. Choose files individually if bulk matching fails.
@@ -93,9 +94,10 @@ to the unfinished work you confirm; completed files and later uploads remain.
 ### Files above 2 GB
 
 TGDrive splits large files automatically and presents them as one file for
-playback/download. Premium is optional. The largest file is whatever fits in the
-server's free disk after a reserve; every account uses Telegram documents of at
-most **2000 MiB**. Keep the [catalog](reference.md#terms-used-here) and every part for recovery.
+playback/download. Premium is optional. New work must fit the file ceiling,
+existing staging reservations and actual free disk after the reserve. Every
+account uses documents of at most **2000 MiB**. Keep the
+[catalog](reference.md#terms-used-here) and every part for recovery.
 [Transfer limits](configuration.md#transfer-limits).
 
 ### Upload speed and queue
@@ -123,13 +125,16 @@ type chip stays visible; a filter with no matches shows **Choose All to see
 everything in this folder**, and **Recently added** appears only once the folder
 is fully loaded. A new browser opens in Grid; your view choice is remembered after that. Name conflicts offer **keep both** or **skip**.
 
+If a page fails to load, choose **Try Again**. On later pages, **Previous Page**
+returns to loaded items.
+
 Supported uploads generate covers automatically. For missing covers or a full
 rebuild, see [thumbnails](thumbnails.md).
 
 ### Recent
 
 **Recent** sits between **My Files** and **Starred** (in the **More** drawer on
-phones). It lists files you uploaded or opened, newest first, 50 at a time.
+phones). It lists files you uploaded or opened, newest first, 100 at a time.
 **More available** shows while older files remain. Rows show their folder and
 the last open or upload time under **Activity**, and the item menu's **Show in
 Folder** opens that folder with the file selected. Type chips filter the list;
@@ -150,10 +155,11 @@ on restore; removing a star keeps the file.
 Search finds names, not document contents. It matches the **start of words**,
 ignoring case and accents: `frie` finds *Frieren*. Names split at spaces,
 punctuation, camelCase and letter/digit changes, so `s04e03`, `1080` and `x265`
-work, and numbers match without leading zeros (`3` finds `03`). The best matches
-come first: exact name, then names starting with your words, then whole words
-in order; newest first among equals. When more than 1,000 names match, TGDrive
-says so; add a word to narrow the search. **My Files** searches the whole drive;
+work, and numbers match without leading zeros (`3` finds `03`). Within the bounded
+candidate set, exact names rank first, then names starting with your words, then
+whole words in order; newest first among equals. TGDrive ranks at most 1,000
+candidates, so it does not promise the globally best matches in a larger set.
+When results are capped, add a word to narrow the search. **My Files** searches the whole drive;
 other pages search their own items. **Transfers** includes all history pages.
 Press Enter to search, Escape to clear, or **/** / **Ctrl/Cmd+K** to focus search
 outside a text field. Switching pages clears the query. On phones, use the search icon.
@@ -178,8 +184,8 @@ Videos open paused. Choose **Continue from…** for a saved position or **Play**
 start from the beginning. Positions belong to this site's browser profile;
 different devices watch independently, while people sharing a profile share
 positions. Finishing clears the position. Clearing site data, private browsing,
-unavailable local storage or an abrupt shutdown can lose progress. Standalone
-stream links use the browser's native player instead.
+unavailable local storage or an abrupt shutdown can lose progress. Older direct
+`/file` stream links use browser-native handling; shared viewer links use TGDrive's player.
 
 Videos use a sharp saved poster before playback when available. Older
 files or unavailable posters use a representative frame from halfway through
@@ -191,6 +197,14 @@ Image/audio previews retry a full Telegram queue at most twice while open; then
 use **Try Preview Again**. Other failures need manual retry. Downloads use the
 browser's controls and need it connected; they have no saved server queue position
 after restart. [Playback and delivery policy](performance.md#video-controls-and-startup).
+
+Some MKVs with ASS/SSA subtitles and embedded fonts need additional reads and
+initialization before playback. File layout, seek cues and selected tracks
+matter; there is no fixed startup-byte requirement ([Matroska ordering](https://www.matroska.org/technical/ordering.html)
+and [font attachments](https://www.matroska.org/technical/attachments.html)).
+[Preload file](#preload-a-file-for-smoother-playback-and-downloads) can help when
+Telegram retrieval is the bottleneck. Server delivery and browser decoding still
+take time; a fully cached file does not guarantee instant playback.
 
 PDFs, EPUB and comics request sections as needed rather than automatically
 preloading the whole file. [Reader controls and limits](reading.md).
@@ -229,6 +243,12 @@ playback even with a fast connection; use **Download Original** for another play
 2. Choose an expiry: one, seven or 30 days, no expiry, or a custom date/time.
 3. Copy the link. Review, edit, copy or revoke it later in **Shared Links**.
 
+New file shares open TGDrive's viewer at `/embed`; unsupported formats offer an
+original download. That file Share Link also works as an iframe source. Folder
+shares open the shared file browser and offer **Copy Embed Link** for an iframe.
+**Copy Download Link** creates an attachment URL for download managers. Older
+direct `/file` links remain usable for file bytes.
+
 **Anyone with the link can read its contents.** Folder links include accessible
 current and future descendants. Labels organize links; they do not restrict
 access to named people. Each item can have up to 100 independent links.
@@ -250,7 +270,8 @@ the URL private and manage it in **Shared Links**.
 
 ### Embed a file or folder in a website
 
-Create a share, choose **Copy Embed Link**, then use it as your iframe's `src`.
+For a file, use its ordinary **Share Link** as the iframe's `src`. For a folder,
+choose **Copy Embed Link**. Both use the existing share's access and expiry.
 For example, replace the URL here with your copied link:
 
 ```html
@@ -267,7 +288,8 @@ For example, replace the URL here with your copied link:
 ```
 
 Files open in the viewer; folders allow browsing, previews and downloads without
-owner login, showing 200 items at a time with **Show more**. TGDrive must remain reachable. The embed uses the same share's
+owner login. Folders load an initial page; **Show more** appends another batch.
+TGDrive must remain reachable. The embed uses the same share's
 access, expiry and revocation; copying it creates no additional link.
 Anyone viewing the containing page can obtain the link.
 

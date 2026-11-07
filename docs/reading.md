@@ -39,10 +39,10 @@ browser supports it; Escape or browser Back closes the reader.
 ## Bandwidth and compatibility
 
 Readers fetch requested sections through TGDrive's authorized cache rather than
-automatically preloading the whole book. While you read, comics fetch the next
-**three** pages and EPUBs the next chapter, one request at a time, and hold at
-most four of them in memory until opened, so turning forward displays without
-another request. Jumping elsewhere cancels the read-ahead; closing the reader
+automatically preloading the whole book. After the selected comic page is usable,
+the reader fetches **one next page**; EPUBs similarly prepare one next chapter
+after the current chapter loads. Turning forward can reuse that result.
+Jumping elsewhere cancels the read-ahead; closing the reader
 drops it. PDFs keep one page behind the visible one and use the rest of their
 five-page render window ahead. Small books can fit in one fetched block; solid
 RAR and complex PDFs may need more data before displaying a page.
