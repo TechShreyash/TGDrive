@@ -212,7 +212,7 @@ def register_replica_routes(app, settings, require_admin, get_runtime):
                                     "Not enough temporary space "
                                     "to open the recovery file",
                                 )
-                            await asyncio.to_thread(target.write, part)
+                            await ResumableUploads._owned_worker(target.write, part)
                     await require_admin(request)
                     return await invoke(
                         current.inspect_file(path, current.key(), source, token)

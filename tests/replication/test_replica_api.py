@@ -378,6 +378,93 @@ def test_recovery_file_import_accepts_replacement_channel_credentials(owner):
     assert not args[0].exists()
 
 
+def test_recovery_import_cancellation_drains_write_before_closing_or_unlinking(
+    owner, monkeypatch
+):
+    import threading
+    from pathlib import Path
+
+    client, _, replica = owner
+    login(client)
+    replica.inspect_file = AsyncMock()
+    scope = _download_scope(client)
+    scope.update(
+        method="POST",
+        path="/api/v1/replica/import",
+        raw_path=b"/api/v1/replica/import",
+    )
+    scope["headers"] += [(b"content-type", b"application/octet-stream")]
+    opened, entered, release, written = (
+        [],
+        threading.Event(),
+        threading.Event(),
+        threading.Event(),
+    )
+    original_open = Path.open
+
+    class HeldFile:
+        def __init__(self, path, source):
+            self.path, self.source = path, source
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            assert written.is_set(), "Closed the import before its worker drained"
+            self.source.close()
+
+        def write(self, content):
+            entered.set()
+            assert release.wait(3)
+            result = self.source.write(content)
+            written.set()
+            return result
+
+    def open_file(path, *args, **kwargs):
+        source = original_open(path, *args, **kwargs)
+        if path.name.startswith(".replica-import-"):
+            wrapped = HeldFile(path, source)
+            opened.append(wrapped)
+            return wrapped
+        return source
+
+    monkeypatch.setattr(Path, "open", open_file)
+    responses = []
+
+    async def receive():
+        return {"type": "http.request", "body": b"encrypted input", "more_body": False}
+
+    async def send(message):
+        responses.append(message)
+
+    async def request():
+        operation = asyncio.create_task(client.app(scope, receive, send))
+        try:
+            assert await asyncio.to_thread(entered.wait, 2)
+            operation.cancel()
+            await asyncio.sleep(0)
+            operation.cancel()
+            await asyncio.sleep(0)
+            assert not operation.done()
+            assert opened and all(item.path.exists() for item in opened)
+            assert all(not item.source.closed for item in opened)
+            assert replica.control.locked() and replica._operation.locked()
+            release.set()
+            with pytest.raises(asyncio.CancelledError):
+                await operation
+            assert all(item.source.closed and not item.path.exists() for item in opened)
+            assert not responses
+        finally:
+            release.set()
+            await asyncio.gather(operation, return_exceptions=True)
+            for item in opened:
+                item.source.close()
+
+    asyncio.run(request())
+    replica.inspect_file.assert_not_awaited()
+    assert not replica.control.locked() and not replica._operation.locked()
+
+
 @pytest.mark.parametrize(
     "headers,status",
     [
