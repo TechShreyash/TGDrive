@@ -9,12 +9,39 @@ on:
 permissions:
     contents: read
 
+concurrency:
+    group: publish-image
+    cancel-in-progress: false
+    queue: max
+
 jobs:
-    build:
-        name: Build ${{ matrix.platform }}
+    verify:
+        name: Verify trusted release
         if: >-
             github.event.workflow_run.conclusion == 'success' &&
-            startsWith(github.event.workflow_run.head_branch, 'v')
+            github.event.workflow_run.event == 'push' &&
+            github.event.workflow_run.head_repository.id == github.repository_id
+        runs-on: ubuntu-latest
+        outputs:
+            sha: ${{ steps.release.outputs.sha }}
+            version: ${{ steps.release.outputs.version }}
+            image: ${{ steps.release.outputs.image }}
+            promote_latest: ${{ steps.release.outputs.promote_latest }}
+            promote_minor: ${{ steps.release.outputs.promote_minor }}
+        steps:
+            - name: Check out trusted main policy
+              uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+              with:
+                  ref: main
+                  fetch-depth: 0
+                  persist-credentials: false
+            - name: Bind CI to the application tag and trusted history
+              id: release
+              run: python3 scripts/verify_image_release.py
+
+    build:
+        name: Build ${{ matrix.platform }}
+        needs: verify
         strategy:
             matrix:
                 include:
@@ -32,7 +59,8 @@ jobs:
             - name: Check out the tagged commit
               uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
               with:
-                  ref: ${{ github.event.workflow_run.head_sha }}
+                  ref: ${{ needs.verify.outputs.sha }}
+                  persist-credentials: false
 
             - name: Set up Docker Buildx
               uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
@@ -48,7 +76,7 @@ jobs:
                   platforms: ${{ matrix.platform }}
                   provenance: mode=max
                   sbom: true
-                  outputs: type=image,name=ghcr.io/${{ github.repository_owner }}/tgdrive,push-by-digest=true,name-canonical=true,push=true
+                  outputs: type=image,name=${{ needs.verify.outputs.image }},push-by-digest=true,name-canonical=true,push=true
                   cache-from: type=gha,scope=${{ matrix.platform }}
                   cache-to: type=gha,mode=max,scope=${{ matrix.platform }}
 
@@ -66,7 +94,7 @@ jobs:
 
     manifest:
         name: Tag multi-arch image
-        needs: build
+        needs: [verify, build]
         runs-on: ubuntu-latest
         permissions:
             contents: read
@@ -84,15 +112,17 @@ jobs:
             - name: Log in to GHCR
               run: echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
 
-            - name: Create version, minor and latest tags
+            - name: Create version and eligible moving tags
               env:
-                  TAG: ${{ github.event.workflow_run.head_branch }}
+                  VERSION: ${{ needs.verify.outputs.version }}
+                  IMAGE: ${{ needs.verify.outputs.image }}
+                  PROMOTE_LATEST: ${{ needs.verify.outputs.promote_latest }}
+                  PROMOTE_MINOR: ${{ needs.verify.outputs.promote_minor }}
               run: |
-                  version="${TAG#v}"
-                  image="ghcr.io/${{ github.repository_owner }}/tgdrive"
-                  image="${image,,}"
+                  tags=(-t "$IMAGE:$VERSION")
+                  if [ "$PROMOTE_MINOR" = true ]; then tags+=(-t "$IMAGE:${VERSION%.*}"); fi
+                  if [ "$PROMOTE_LATEST" = true ]; then tags+=(-t "$IMAGE:latest"); fi
                   cd /tmp/digests
                   docker buildx imagetools create \
-                    -t "$image:$version" -t "$image:${version%.*}" -t "$image:latest" \
-                    $(printf "$image@sha256:%s " *)
-                  docker buildx imagetools inspect "$image:$version"
+                    "${tags[@]}" $(printf "$IMAGE@sha256:%s " *)
+                  docker buildx imagetools inspect "$IMAGE:$VERSION"
