@@ -142,7 +142,8 @@ sort, search and upload are hidden here.
 
 Opening counts previews, playback and downloads by the owner, at most once per
 file every 10 minutes. Share-link and embed visitors are never recorded. Files in
-Trash are left out.
+Trash are left out. Recording an open is best effort and does not block file
+access; busy or failed tracking can leave an open out of Recent.
 
 ### Starred files and folders
 
@@ -398,7 +399,8 @@ valid authorization; network/Telegram delays and decoding can still buffer.
 Trash shows **Deleted from: My Files / …** to identify each item's source.
 
 - **Move to Trash** hides the item and revokes its shares, keeping Telegram files.
-- **Restore** brings it back, subject to name/access checks.
+- **Restore** brings it back, subject to name/access checks. An item pending
+  permanent deletion cannot be restored.
 - **Delete permanently** removes its database records, descendants and shares
   after confirmation. It cannot be cancelled or restored from Trash.
 
@@ -441,7 +443,10 @@ their nested folders; a folder torrent creates its own root.
 Transfers shows metadata discovery, downloading, then Telegram uploading.
 You can close the tab while TGDrive runs. The chosen files need temporary
 server space before Telegram uploading; downloads need reachable peers.
-Use **Retry** or **Cancel** on the existing transfer. Files already saved remain.
+Temporary timeout/network interruptions retry automatically with a countdown.
+After the attempt budget is exhausted, or for peer, disk or input errors, fix
+the cause and use **Retry** on the existing transfer. **Cancel** remains
+available; files already saved remain.
 [Torrent limits and restart behavior](api.md#torrent-imports).
 
 Peers can see the server's IP and receive downloaded pieces while downloading.

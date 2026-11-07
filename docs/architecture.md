@@ -108,12 +108,16 @@ files-per-tier estimate ([MongoDB setup](setup.md#1-prepare-mongodb)).
 | Folder page | Index on parent, trash state and the sort field |
 | Duplicate name | Unique index on parent and case-folded name |
 | Location, breadcrumbs, share scope, Trash state | One `$graphLookup` up the parent chain |
-| Search | Indexed word-start tokens; matching folders resolved in one batched `$graphLookup`; at most 1,000 matches ranked |
+| Search | Indexed word-start tokens; ancestry resolved in one batched `$graphLookup`; at most 1,000 deterministic candidates ranked |
 | Drive totals | Counters updated inside each write transaction |
 | Old deletions, folder preparations, expired links | TTL indexes remove them after 7 or 30 days |
 
 Trashing or restoring a folder updates that one document; items inside are
 hidden through it. Permanent deletion walks the subtree in batches.
+
+Search hydration and shared-folder pages read one MongoDB snapshot per request,
+so their scope checks and returned records use consistent state. Separate page
+requests can observe later catalog changes.
 
 - Paths use stable item IDs: moves and renames retain identity.
 - Names are Unicode-normalized with case-insensitive sibling uniqueness.
@@ -460,7 +464,10 @@ For folder torrents, idempotent tree preparation preserves hierarchy; stable
 per-file child jobs reuse normal upload splitting and catalog protection. The
 parent journals completed files and owns the shared staging reservation, avoiding
 duplicate byte claims and duplicate history rows. Browser closure does not stop
-server work. See [torrent limits and recovery](api.md#torrent-imports).
+server work. Typed timeout/network interruptions have a finite automatic retry
+budget; waiting releases the download slot while preserving staging, selection
+and request identity. Saved retry deadlines survive restart. See
+[torrent limits and recovery](api.md#torrent-imports).
 
 Permanent deletion journals all accepted intents before starting removal. Pending
 roots are hidden from Trash listings; failures return to the listing and retries

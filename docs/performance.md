@@ -276,9 +276,9 @@ restart starts a fresh cycle, honoring a saved source retry deadline; no browser
 Only exhausted attempts or permanent errors need user action.
 Neither mode can exceed the source, route or server capacity.
 
-Full-speed URL downloads start at **2** and are tuned by
-[automatic tuning](#automatic-tuning). Lowering it lets existing full-speed
-jobs finish. This limit covers source retrieval; Telegram upload has its own
+Full-speed URL downloads have a configured startup ceiling of **2** by default;
+[automatic resource sizing](#automatic-tuning) preserves that ceiling.
+This limit covers source retrieval; Telegram upload has its own
 scheduling. Eligible waiting jobs are promoted in arrival order. A job that cannot
 reserve its full staging requirement stays slow while another eligible job can run.
 

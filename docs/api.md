@@ -129,7 +129,7 @@ characters. Account errors include `TELEGRAM_CREDENTIALS_REVOKED`,
 | Method and route | Access | Purpose | Notes and errors |
 | --- | --- | --- | --- |
 | `POST /api/getDirectory` | Owner, Share | `{"path", "auth"}`: whole folder contents keyed by child ID | Older route; the website now uses the paged routes below. Special paths: `/trash`, `/search_<q>` (max 500 results), `/share_<folder-id>` |
-| `GET /api/v1/nodes` | Owner | `parent_id` (default `/`), `limit` (1–500; default 100), `sort` (`name`, `size`, `type`, `date`; default `name`), `order` (`asc`, `desc`; default `asc`), optional `type` filter, then one of `cursor` (up to 1,024 characters), `offset` or `around` (an item ID, up to 64 characters) | `{items, total, offset, next_cursor}`, plus `folder` on pages that don't continue a cursor and `index` with `around`. `next_cursor` is `null` on the last page. `422` for an invalid cursor or mixed paging parameters; `404` if the `around` item isn't in the folder |
+| `GET /api/v1/nodes` | Owner | `parent_id` (default `/`), `limit` (1–500; default 100), `sort` (`name`, `size`, `type`, `date`; default `name`), `order` (`asc`, `desc`; default `asc`), optional `type` filter, then one of `cursor` (up to 16,384 characters), `offset` or `around` (an item ID, up to 64 characters) | `{items, total, offset, next_cursor}`, plus `folder` on pages that don't continue a cursor and `index` with `around`. `next_cursor` is `null` on the last page. `422` for an invalid cursor or mixed paging parameters; `404` if the `around` item isn't in the folder |
 | `GET /api/v1/shared/nodes` | Share | `auth` (1–512 characters) plus the same parameters as `/api/v1/nodes` | `{items, total, offset, next_cursor, share_home}` plus `folder` and `index` as above, without `starred`; breadcrumbs start at the shared folder; `private, no-store`. `403` invalid share, folder outside it or `around` item not in the folder; `409` during recovery; `422` bad paging |
 | `GET /api/v1/search` | Owner | `q` (1–255), `offset`, `limit` (`25`, `50` or `100`; default 50), `sort` (`name`, `date`, `size`), `order` | Word-start match, excludes Trash; ranks at most 1,000 candidates, not all global matches. `{items, total, capped, has_more, next_offset}`; `422` for other limits |
 | `GET /api/v1/trash` | Owner | Top-level Trash items, optional `q` | Pending deletions are hidden |
@@ -145,6 +145,10 @@ in a large folder, and `index` is its position under the current sort and filter
 Pass `next_cursor` back as `cursor` to page large folders without a deep offset
 scan; counts and other database work still apply. Folders sort first. File rows
 include `part_count` but never message IDs or checksums.
+
+Search selects matching candidates in stable item-ID order, excluding directly
+trashed items before applying the cap. Descendants of trashed folders can still
+consume that cap before ancestry filtering, leaving fewer visible results.
 
 ## Atomic folder preparation
 
@@ -234,7 +238,7 @@ and reconciliation are in [the transfer pipeline](architecture.md#from-a-browser
 | `POST /api/v1/uploads` | `name`, `parent_id`, `total_size`, optional `folder_upload`: create a receipt | `201`; `413` too large; `507` no staging space |
 | `GET /api/v1/uploads/{upload_id}` | Current receipt with chunk checksums | `410` expired |
 | `HEAD /api/v1/uploads/{upload_id}` | `Upload-Offset`, `Upload-Length` headers | |
-| `PATCH /api/v1/uploads/{upload_id}` | Raw `application/octet-stream` chunk with `Upload-Offset` | `204`; `409 UPLOAD_OFFSET_CHANGED`; `413` chunk above 8 MiB; `415` wrong content type; `422` invalid offset/chunk |
+| `PATCH /api/v1/uploads/{upload_id}` | Raw `application/octet-stream` chunk with `Upload-Offset` | `204`; `409 UPLOAD_OFFSET_CHANGED`; `413` chunk above 8 MiB; `415` wrong content type; `422` invalid offset/chunk; empty `499` on a disconnected chunk body |
 | `POST /api/v1/uploads/{upload_id}/complete` | Hand the file to a server job | `202 {id, job}`; repeats return the same job |
 | `POST /api/v1/uploads/{upload_id}/cancel` | Cancel the receipt | |
 
@@ -245,6 +249,10 @@ and wait for each acknowledgment. After a lost response, read the offset with
 `UPLOAD_SESSION_TTL_SECONDS` without new chunks (default 24 hours). Simultaneous
 chunk receivers wait for the receive-work bound; receipt count is not a `429`
 quota. Staging admission can still reject new work.
+
+A disconnect while receiving a chunk leaves its durable offset unchanged. The
+`499` response may not reach the disconnected client; reconnect and query the
+offset before resending, following the lost-response procedure above.
 
 ## Previews and media
 
@@ -385,7 +393,8 @@ cancel and retry. The source link is never shown in snapshots.
 | File choice | With `select_files: true`, the job waits in `torrent_select` with `torrent_choice`; send indexes to `/torrent-files` |
 | Peers | IPv4 DHT and public UDP trackers; HTTP trackers and web seeds are ignored |
 | Stall | Five minutes without progress fails with a retry option |
-| Retry | Verified pieces and already uploaded files are kept |
+| Automatic retry | Typed timeout/network interruptions only; four total attempts with 15/30/60-second waits. Waiting releases the download slot while retaining staging and file selection |
+| Terminal failures / manual retry | No-peer stalls and permanent peer, disk or input errors need owner action. Verified pieces and already uploaded files are kept; manual retry starts a fresh attempt budget |
 
 Phases run `torrent_metadata`, `downloading`, then `torrent_uploading`, with
 `torrent_files: {total, completed}`. Cancelling keeps files already saved, so a
