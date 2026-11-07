@@ -41,6 +41,7 @@ Telegram accounts help at different stages; higher limits can lengthen queues.
 | Telegram accounts and queues | Look for busy upload/download slots, active and queued part requests, reduced effective limits and provider waits. A queue estimate is not a promised start time. |
 | RAM cache lookups | Hits and misses count block lookups, including preloading. A RAM miss can still hit disk; this is not a percentage of bandwidth saved. |
 | Cache filesystem / Temporary Storage | Cache and unfinished uploads can live on different volumes. Check the relevant free-space reading before changing either budget. |
+| MongoDB size | TGDrive shows `dbStats.totalSize`, indexes and filesystem capacity where available. These are not Atlas's logical quota; use the [provider's quota monitoring](https://www.mongodb.com/docs/atlas/reference/free-shared-limitations/) for plan capacity. |
 
 Server-network, HTTP-file and Telegram counters overlap: **do not add their
 totals together**. For history, measurement scopes and retention, see
@@ -105,7 +106,7 @@ metadata checks still apply, so even cached access can make Telegram requests.
 - RAM retains frequently reused bytes; disk can hold a larger collection. More
   capacity does not increase preload or Telegram request concurrency.
   Background preparation still shares resources with viewers and uploads.
-- Hardware upgrades raise cache budgets automatically; see [automatic tuning](performance.md#automatic-tuning).
+- Cache budgets follow measured memory and disk space; see [automatic tuning](performance.md#automatic-tuning).
   Leave room for the app, active streams, unfinished uploads and other processes;
   memory pressure can reduce the effective RAM budget.
 - A whole-file preload must fit either the effective RAM cache or disk cache,
@@ -138,15 +139,15 @@ not keep a sleeping host available. [Cache defaults and retention](performance.m
 | Resource | When it helps | Practical limit |
 | --- | --- | --- |
 | CPU / vCPU | Server processing is saturated: transfer checksums, encryption, thumbnail generation or document extraction compete for CPU. | Much video decoding runs in the viewer's browser. Additional server CPU does not fix every codec or viewer problem. |
-| RAM | The app and concurrent streams need more headroom, or a useful working set cannot remain in RAM cache. | Configure a suitable cache budget; TGDrive still reduces retention under memory pressure. More RAM does not make all reads immediate. |
+| RAM | The app and concurrent streams need more headroom, or a useful working set cannot remain in RAM cache. | The cache budget follows available memory automatically; leave room for the app and competing processes. More RAM does not make all reads immediate. |
 | Storage capacity | Popular cached content or unfinished uploads do not fit. | Cache and upload budgets follow free disk automatically, each after its reserve. |
 | Storage speed | Host measurements show disk reads/writes are limiting cached delivery or staging. Faster SSD/NVMe may help. | A disk-usage bar measures capacity, not I/O performance. The website does not report disk latency or IOPS; use host/provider monitoring. |
 | Network capacity and route | Server ingress/egress or its path to Telegram/viewers is the bottleneck. | Viewers still have their own connection limits, and monthly bandwidth allowances can apply. |
 
 Also use provider/host/database monitoring when needed: TGDrive does not report
-the server's physical network-port capacity. It backs off automatically when
-MongoDB slows down ([automatic tuning](performance.md#automatic-tuning)), but
-database dashboards still give the full picture.
+the server's physical network-port capacity or MongoDB latency. Use database
+dashboards to inspect latency, quotas and connection pressure alongside TGDrive's
+resource readings.
 Compare improvements with the same mix of cold reads, cached reads and uploads.
 Keep **one active TGDrive installation and one app worker per drive**; increasing
 workers against the same drive is not the supported way to use a larger server.
@@ -157,9 +158,11 @@ Healthy bots can add Telegram capacity for cold downloads and uploads. They do
 not increase server bandwidth or eliminate channel/provider limits. Cached reads
 already need less Telegram payload capacity.
 
-TGDrive sets uploads per bot, request limits, pacing and queue sizes itself. It
-halves them after a FloodWait or timeout and raises them one step at a time
-while transfers stay healthy; see [automatic tuning](performance.md#automatic-tuning).
+Startup values define concurrency ceilings, request pacing and queue sizes.
+The governor sizes resources and caps preloads by CPU; Telegram's per-account
+schedulers apply cooldown and recover effective limits within configured
+ceilings after successful requests. Resource resizing preserves that feedback.
+See [automatic tuning](performance.md#automatic-tuning).
 Your levers are the accounts in **Connections** and the server's resources. Add
 or change accounts through the [connection maintenance workflow](usage.md#settings-and-connections).
 
@@ -168,7 +171,7 @@ Respect saved retry deadlines and Telegram's
 Restarting or rotating identities does not bypass them. TGDrive uses
 Telethon/MTProto; hosted HTTP Bot API broadcast limits are a different system.
 
-Concurrency is tuned automatically; see
+Resource sizing and per-account feedback are separate; see
 [automatic tuning](performance.md#automatic-tuning). For scheduling details, use
 [account selection](architecture.md#account-identity-and-selection) and
 [the upload pipeline](performance.md#upload-pipeline-and-smaller-splits).

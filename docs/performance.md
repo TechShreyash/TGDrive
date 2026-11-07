@@ -43,8 +43,8 @@ connection. [Choosing server capacity](performance-tuning.md#what-a-server-upgra
 
 ## Automatic tuning
 
-Once the runtime is ready, a resource governor re-measures the server every
-5 seconds and applies new values live. These values are not owner settings:
+The resource governor sizes budgets at startup, then re-measures the server every
+5 seconds and applies resource changes live. These are not editable dashboard preferences:
 the Configuration page and API no longer accept them, and **Performance →
 Automatic tuning** shows what was chosen and why. `GET /api/v1/performance` returns its current values, a reason
 for each value and the latest measurements under `tuning`.
@@ -52,27 +52,31 @@ for each value and the latest measurements under `tuning`.
 | Value | Rule |
 | --- | --- |
 | Memory cache | 25% of available memory; changes only when the target moves by more than 10% |
-| Disk reserve (`min_free_bytes`, `cache_min_free_bytes`) | Larger of 1 GiB and 5% of the data disk |
-| Disk cache | 50% of free data-disk space after the reserve |
-| Temporary upload budget, largest accepted file | Free data-disk space after the reserve |
-| Uploads per bot, upload pipeline, request limit, media per bot, URL downloads, preload jobs | Start from current settings. Halve (minimum 1) when a window sees a new FloodWait or request timeout. Add 1 when the window moved data without errors, throughput did not drop by more than 10% and 60 seconds have passed since the last change. Only preload jobs have a ceiling: 4 per CPU |
-| MongoDB back-off | Pings MongoDB every tick and learns its usual latency (the lowest seen, drifting up 1% per tick). A ping above both 250 ms and four times the usual latency halves every concurrency value, at most once per 60 seconds, and pauses increases until MongoDB is fast again. A failed ping is ignored |
+| Disk reserves (`min_free_bytes`, `cache_min_free_bytes`) | Larger of 1 GiB and 5% of each relevant filesystem: staging (`CACHE_DIR`) and media cache respectively |
+| Disk cache | 50% of free media-cache disk after its reserve; cache admission also checks that filesystem |
+| Total staging budget, logical file ceiling | Free staging disk after reserve plus bytes already allocated to admitted staging; admission still subtracts other reservations and checks remaining writes against actual free space |
+| Concurrency | Preserve configured startup ceilings; preloads also stay within 4 jobs per CPU and 8 jobs total. The resource governor does not cut or raise unrelated queues from throughput, FloodWait or database latency |
 
 Memory comes from cgroup v2 (`memory.max`, `memory.current`), with
-`/proc/meminfo` as the fallback; the CPU count comes from `cpu.max`, falling
-back to the host CPU count. Byte values also use the same 10% hysteresis.
+`/proc/meminfo` as the fallback. If memory metrics are unavailable, the current
+memory value is retained while disk/CPU policy continues. CPU count comes from
+`cpu.max`, falling back to the host CPU count. Byte values use the same 10%
+hysteresis. The governor does not sample MongoDB latency. Per-account request
+schedulers separately reduce effective rate/concurrency after FloodWait and
+recover toward their configured ceilings after successful requests. Cache and
+staging updates preserve that cooldown/recovery state.
 
 <details>
 <summary>Limits</summary>
 
-- Free disk excludes space the cache and upload staging already occupy, so
-  disk budgets settle below the true maximum on a busy disk.
+- Cache sizing uses remaining free disk; staging adds its allocated bytes back
+  to the total budget so an admitted transfer does not consume its own limit as
+  it writes. Unrelated disk exhaustion can still stop it.
 - cgroup `memory.current` includes the page cache, so heavy file I/O lowers
   the measured available memory and shrinks the memory cache.
-- Signals come from per-account request schedulers. Before Telegram traffic
-  starts, only the memory and disk values change.
-- Tuned values are not saved; after a restart the governor starts again from
-  the defaults.
+- Governor resource values are not saved; restart recomputes them from the
+  configured startup values and available measurements. It does not bypass saved
+  Telegram waits or learn a new concurrency ceiling from traffic.
 - To leave room for other apps on a shared server, set Docker `mem_limit` and
   `cpus`; the governor reads those cgroup limits.
 
@@ -379,7 +383,7 @@ offsets continue to require synchronized bytes and a MongoDB receipt commit.
 
 ## Upload pipeline and smaller splits
 
-| Control | Starting value (tuned automatically) |
+| Control | Startup default |
 | --- | --- |
 | Concurrent uploads per bot | 1 |
 | Outstanding 512 KiB upload RPCs per document | 4; also bounded by account request limit |
@@ -392,14 +396,18 @@ offsets continue to require synchronized bytes and a MongoDB receipt commit.
 These count origin operations/RPCs, not viewers or whole files. More queue space
 permits longer waits, not throughput. Rate limits are protective application
 ceilings, not Telegram entitlements; provider waits take precedence.
+The governor retains these configured ceilings, apart from the preload CPU cap;
+per-account feedback can temporarily reduce effective Telegram capacity. Pacing
+and queue size keep their configured values.
 
 <details>
 <summary>Splits, Premium and tuning tradeoffs</summary>
 
 Smaller parts can engage more slots but add messages, manifests, retries and
 boundary setup. Pipelining can improve one document without splitting it.
-All new documents stay within 2000 MiB, including Premium. A file can have any
-number of parts; journaled plans are never re-split by a new preference. Staging/file-size limits still apply.
+All new documents stay within 2000 MiB, including Premium. Larger files use
+ordered parts; journaled plans are never re-split by a new preference. Staging
+and catalog-record bounds still apply.
 
 Ready Premium clients are preferred for parts and payload windows, with eligible
 bot fallback when busy, cooling or unhealthy. Dispatched parts retain their
@@ -407,9 +415,9 @@ sender on retry. Premium is a potential speed benefit, not a larger TGDrive file
 limit. [Telegram's file documentation](https://core.telegram.org/api/files) describes
 Premium throttling differences; TGDrive has not measured a live Premium multiplier.
 
-The governor makes these trade-offs: it backs off after provider waits and keeps
-an increase only while throughput holds. Never rotate identities around provider
-waits.
+Per-account schedulers back off on provider waits and recover within configured
+ceilings; the governor does not raise unrelated limits from aggregate bytes.
+Never rotate identities around provider waits.
 
 </details>
 
@@ -437,6 +445,12 @@ WebAssembly (WASM). A file playing in a browser's native player does not establi
 that this separate pipeline can decode it smoothly. **Try again** and
 **Download Original** remain available for slow starts or unsupported files.
 [Player controls](usage.md#open-preview-and-download).
+
+The waiting copy follows the player's engine, opening, track-preparation,
+buffering and seek phases. Retry appears on an explicit error or a sustained
+wait without byte/playback progress; a separate playback deadline still permits
+retry when arriving bytes do not make the decoder usable. Source and seek
+changes reset that wait tracking.
 
 The animated waiting status shows measured bytes received and current delivery
 speed when available. Bytes include repeated reads/seeks, not a whole-file

@@ -2,10 +2,9 @@
 
 [Docs home](README.md) · [Setup](setup.md) · [Configuration reference](reference.md)
 
-TGDrive sets its own cache sizes, storage budgets and Telegram concurrency from
-the server's memory, CPU, disk and Telegram's responses, and keeps adjusting
-them while it runs. There is nothing to tune. **Configuration** holds only the
-choices that are yours to make.
+TGDrive sizes cache/storage from server resources and caps preload jobs by CPU.
+Configured concurrency ceilings remain; Telegram applies per-account cooldown
+and recovery within them. **Configuration** holds the choices you can save here.
 
 | I want to… | Where |
 | --- | --- |
@@ -45,11 +44,12 @@ after confirmation. See [rebuild progress and limits](thumbnails.md#rebuild-exis
 
 | Setting | Default | Meaning |
 | --- | --- | --- |
-| File split size | 2000 MiB | Largest Telegram document TGDrive creates; 2000 MiB is Telegram's limit. Choose 1–2000; 0 also uses 2000. Existing transfers keep their plan. |
+| File split size | 2000 MiB | TGDrive's maximum document size for every account. Choose 1–2000; 0 also uses 2000. Existing transfers keep their plan. |
 
-The largest file you can upload is whatever fits in free disk space after a
-reserve; uploads per bot, URL downloads and Telegram request limits are
-automatic. **Bot uploads** (folder and encryption) also live on this page.
+New work must fit the logical file ceiling, existing staging reservations and
+actual disk space after the reserve. Startup values set uploads per bot, URL
+downloads and Telegram request ceilings. **Bot uploads** (folder and encryption) also live
+on this page. [Staging policy](performance.md#automatic-tuning).
 
 ## Cap TGDrive with Docker limits
 
@@ -63,8 +63,11 @@ services:
         cpus: 2
 ~~~
 
-Environment variables such as `CACHE_MEMORY_BYTES`, `STAGING_BUDGET_BYTES` or
-`TELEGRAM_REQUEST_LIMIT` from earlier versions are ignored.
+Earlier resource variables seed startup values; they are not saved dashboard
+preferences. The governor replaces measured resource budgets while running and
+keeps configured concurrency ceilings, apart from the preload CPU cap. Pacing,
+queue size and cache retention keep their startup values. See
+[which settings are managed](reference.md#performance-and-cache-settings).
 
 ## Timezone
 
