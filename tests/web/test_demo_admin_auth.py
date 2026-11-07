@@ -46,9 +46,13 @@ def auth_client(tmp_path, **overrides):
     settings = Settings(_env_file=None, **values)
     store = new_store(tmp_path / "drive")
     runtime = FakeRuntime(store)
+    recovery_file = tmp_path / "synthetic-backup.tgdb"
+    with recovery_file.open("xb") as destination:
+        recovery_file.chmod(0o600)
+        destination.write(b"synthetic encrypted backup")
     runtime.replica = SimpleNamespace(
         blocked=False,
-        recovery_file=Mock(return_value=b"synthetic encrypted backup"),
+        recovery_file=Mock(return_value=recovery_file),
     )
     try:
         with pytest.MonkeyPatch.context() as monkeypatch:

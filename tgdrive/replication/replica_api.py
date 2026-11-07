@@ -9,6 +9,7 @@ import secrets
 import shutil
 
 from fastapi import Depends, HTTPException, Request, Response
+from fastapi.responses import FileResponse
 from pydantic import Field, SecretStr, StrictBool
 
 from tgdrive.settings.managed_settings import PrivateModel, SettingsProblem
@@ -100,8 +101,8 @@ def register_replica_routes(app, settings, require_admin, get_runtime):
     @app.get("/api/v1/replica/file", dependencies=admin)
     async def backup_file(request: Request):
         current = service(request)
-        return Response(
-            current.recovery_file(),
+        return FileResponse(
+            await asyncio.to_thread(current.recovery_file),
             media_type="application/octet-stream",
             headers={
                 "Cache-Control": "no-store",

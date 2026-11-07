@@ -224,7 +224,9 @@ def test_demo_guard_uses_matched_route_under_proxy_root_path(
 ):
     with owner_client(tmp_path, root_path="/demo") as (client, _, runtime, _settings):
         login(client)
-        runtime.replica = SimpleNamespace(blocked=False, recovery_file=lambda: b"")
+        runtime.replica = SimpleNamespace(
+            blocked=False, recovery_file=lambda: tmp_path / "unused-backup.tgdb"
+        )
         runtime.mongo = object()
         response = client.request(method, path, json=payload, headers=ORIGIN)
         assert response.status_code == 403, response.text

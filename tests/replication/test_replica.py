@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import inspect
 import time
 from types import SimpleNamespace
@@ -210,6 +211,44 @@ def setup(tmp_path, *, multipart=False, empty=False):
 async def dispose(replica, store):
     await replica.close()
     store.close()
+
+
+def test_local_archive_selection_keeps_unverified_and_older_retained_files(tmp_path):
+    configured, store, _remote, replica, _ = setup(tmp_path)
+    directory = configured.resolved_cache_dir / "mongo-backups"
+    directory.mkdir(parents=True)
+    path = directory / "retained.tgdb"
+    path.write_bytes(b"retained encrypted archive")
+    path.chmod(0o600)
+    digest = hashlib.sha256(path.read_bytes()).hexdigest()
+    rows = [
+        {"id": "pending", "status": "pending", "created_at": "2026-11-07T12:00:00Z"},
+        {"id": "missing", "status": "confirmed", "created_at": "2026-11-07T11:00:00Z"},
+        {
+            "id": "retained",
+            "status": "unverified",
+            "created_at": "2026-11-07T10:00:00Z",
+            "sha256": digest,
+        },
+    ]
+    replica.runtime.backup = SimpleNamespace(
+        latest_history=lambda: rows[:1], local_archives=lambda: iter(rows)
+    )
+    try:
+        assert replica.backup_file() == path
+        assert replica.status()["backup_file_available"]
+        assert replica.recovery_file() == path
+        path.write_bytes(b"changed archive")
+        from tgdrive.settings.managed_settings import SettingsProblem
+
+        with pytest.raises(SettingsProblem, match="changed") as error:
+            replica.recovery_file()
+        assert error.value.status == 409
+        path.unlink()
+        assert replica.backup_file() is None
+        assert not replica.status()["backup_file_available"]
+    finally:
+        store.close()
 
 
 @pytest.mark.asyncio

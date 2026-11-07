@@ -127,8 +127,8 @@ class ChannelReplica:
 
         return encryption.backup_key()
 
-    def backup_file(self):
-        """Return only a confirmed local file; status never initiates a download."""
+    def _backup_selection(self):
+        """Select one retained archive and its own integrity record."""
         import re
 
         choices = []
@@ -137,12 +137,23 @@ class ChannelReplica:
             path = self.directory / "replica-bundles" / (saved["digest"] + ".tgdb")
             if path.is_file():
                 choices.append(
-                    (saved.get("created_at", "1970-01-01T00:00:00+00:00"), path)
+                    (
+                        saved.get("created_at", "1970-01-01T00:00:00+00:00"),
+                        path,
+                        saved.get("sha256"),
+                    )
                 )
         service = getattr(self.runtime, "backup", None)
-        latest = getattr(service, "latest_history", lambda: [])()
-        if latest and latest[0].get("status") == "confirmed":
-            identity = latest[0].get("id", "")
+        archives = getattr(service, "local_archives", None)
+        latest = (
+            archives()
+            if callable(archives)
+            else getattr(service, "latest_history", lambda: [])()
+        )
+        for row in latest:
+            if row.get("status") not in {"confirmed", "unverified"}:
+                continue
+            identity = row.get("id", "")
             if re.fullmatch(r"[A-Za-z0-9_-]{1,128}", identity):
                 path = (
                     self.settings.resolved_cache_dir
@@ -150,33 +161,52 @@ class ChannelReplica:
                     / (identity + ".tgdb")
                 )
                 if path.is_file():
-                    choices.append((latest[0]["created_at"], path))
+                    choice = (row["created_at"], path, row.get("sha256"))
+                    if not choices or datetime.fromisoformat(
+                        choice[0]
+                    ) > datetime.fromisoformat(choices[0][0]):
+                        choices[:] = [choice]
         return (
-            max(choices, key=lambda choice: datetime.fromisoformat(choice[0]))[1]
+            max(choices, key=lambda choice: datetime.fromisoformat(choice[0]))[1:]
             if choices
             else None
         )
 
+    def backup_file(self):
+        """Offer retained confirmed or unverified archives without downloading."""
+        selected = self._backup_selection()
+        return selected[0] if selected else None
+
     def recovery_file(self):
-        path = self.backup_file()
-        if path is None:
+        selected = self._backup_selection()
+        if selected is None:
             raise SettingsProblem(
                 "Create and confirm a backup before downloading its recovery file.",
                 status=404,
             )
-        content = read_private(path)
-        saved = self.journal.get("backup_file", {})
-        if path.parent == self.directory / "replica-bundles":
-            expected = saved.get("sha256")
-        else:
-            expected = self.runtime.backup.latest_history()[0].get("sha256")
-        if not expected or hashlib.sha256(content).hexdigest() != expected:
+        path, expected = selected
+        import os
+        import stat
+
+        descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
+        try:
+            info = os.fstat(descriptor)
+            if not stat.S_ISREG(info.st_mode) or info.st_mode & 0o077:
+                raise SettingsProblem(
+                    "The saved recovery file is unsafe or exceeds its size limit.",
+                    status=409,
+                )
+            with os.fdopen(descriptor, "rb", closefd=False) as content:
+                digest = hashlib.file_digest(content, "sha256").hexdigest()
+        finally:
+            os.close(descriptor)
+        if not expected or digest != expected:
             raise SettingsProblem(
                 "The saved recovery file changed. "
                 "Create a fresh confirmed backup before downloading.",
                 status=409,
             )
-        return content
+        return path
 
     async def configure(self, channel, token, independent):
         if not independent or channel == self.settings.storage_channel or channel >= 0:
