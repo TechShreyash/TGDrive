@@ -220,13 +220,22 @@ def register_routes(
             replica = getattr(runtime, "replica", None)
             if replica is not None:
                 async with replica.control, replica._operation:
-                    config = replica.journal.get("config", {})
-                    if replica.blocked:
+                    saved = await asyncio.to_thread(
+                        replica.journal.get_many,
+                        {
+                            "config": {},
+                            "status": {},
+                            "recovery": None,
+                            "activation": None,
+                        },
+                    )
+                    config = saved["config"]
+                    if saved["recovery"] or saved["activation"]:
                         raise HTTPException(
                             409, "Finish channel recovery before creating a new backup"
                         )
                     if config.get("enabled"):
-                        if replica.journal.get("status", {}).get("phase") == "paused":
+                        if saved["status"].get("phase") == "paused":
                             raise HTTPException(
                                 409,
                                 "Resume the independent backup "
@@ -237,8 +246,12 @@ def register_routes(
                             try:
                                 await replica._sync(config, force_snapshot=True)
                             except Exception as error:
-                                raise replica._record_failure(error) from None
-                            if replica.status()["protected_revision"] >= required:
+                                raise await ResumableUploads._owned_worker(
+                                    replica._record_failure, error
+                                ) from None
+                            if (await asyncio.to_thread(replica.status))[
+                                "protected_revision"
+                            ] >= required:
                                 break
                         else:
                             raise HTTPException(
@@ -259,7 +272,7 @@ def register_routes(
                 503,
                 "Backup is not confirmed yet. Check the backup status and try again.",
             ) from None
-        return {"recovery": service.protection_status(store)}
+        return {"recovery": await asyncio.to_thread(service.protection_status, store)}
 
     @app.get("/api/v1/search", dependencies=admin)
     async def search(

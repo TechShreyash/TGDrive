@@ -751,6 +751,9 @@ class FixtureReplica:
                 else None,
             }.get(name, default)
         )
+        self.journal.get_many = lambda defaults: {
+            name: self.journal.get(name, default) for name, default in defaults.items()
+        }
 
     def status(self):
         import copy

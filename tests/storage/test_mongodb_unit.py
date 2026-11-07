@@ -22,7 +22,7 @@ from tgdrive.recovery.mongo_backup import (
 )
 from tgdrive.recovery.recovery_file import write_recovery_snapshot
 from tgdrive.settings.managed_settings import SettingsProblem
-from tgdrive.storage.mongo import DatabaseUnavailable
+from tgdrive.storage.mongo import DatabaseUnavailable, MongoBackend
 from tgdrive.storage.mongo_store import MongoStore
 from tgdrive.transfers.tasks import TransferRegistry
 
@@ -641,7 +641,9 @@ def test_database_status_reports_active_independent_checkpoint_without_recursion
     }
     service.replica = SimpleNamespace(
         journal=SimpleNamespace(
-            get=lambda name, default=None: saved.get(name, default)
+            get_many=lambda defaults: {
+                name: saved.get(name, default) for name, default in defaults.items()
+            }
         ),
         status=Mock(
             side_effect=AssertionError(
@@ -847,6 +849,160 @@ async def test_actual_verified_send_and_pin_retry_share_durable_failure_handling
     assert backend.db.backups.find_one({"_id": "last-good"}) == good
     assert service.pool.defer_channel.await_count == (2 if cooldown else 1)
     service.pool.defer_channel.assert_awaited_with(1100.25)
+
+
+@pytest.fixture
+def verified_publication(snapshot_source):
+    from tgdrive.core.encryption import backup_key
+
+    service, store, backend = snapshot_source
+    directory = service.settings.resolved_cache_dir / "mongo-backups"
+    directory.mkdir(parents=True)
+    previous = directory / "last-good.tgdb"
+    previous.write_bytes(b"last confirmed ciphertext")
+    good = {
+        "_id": "last-good",
+        "id": "last-good",
+        "status": "confirmed",
+        "format": "tgdrive-backup-v2",
+        "local_path": str(previous),
+        "created_at": "2000-01-01T00:00:00+00:00",
+        "confirmed_at": "2000-01-01T00:00:01+00:00",
+        "pin_verified_at": "2000-01-01T00:00:01+00:00",
+    }
+    current = directory / "pending.tgdb"
+    current.write_bytes(b"verified pending ciphertext")
+    pending = {
+        "_id": "pending",
+        "id": "pending",
+        "status": "pending",
+        "created_at": "2000-01-02T00:00:00+00:00",
+        "revision": store.revision,
+        "local_path": str(current),
+        "sha256": hashlib.sha256(current.read_bytes()).hexdigest(),
+        "random_id": 12345,
+        "sender": "backup-bot",
+        "message_id": 77,
+        "channel_id": service.settings.storage_channel,
+        "retry_at": 0,
+        "counts": {},
+        "format": "tgdrive-backup-v2",
+        "key_sha256": hashlib.sha256(bytes.fromhex(backup_key())).hexdigest(),
+    }
+    backend.db.backups.insert_one(good)
+    backend.db.backups.insert_one(pending)
+    service._observe_backup(good)
+    return service, store, backend, good, pending, previous
+
+
+@pytest.mark.parametrize("boundary", ["before", "lease", "after"])
+async def test_publication_preserves_last_good_backup_after_ownership_loss(
+    verified_publication, monkeypatch, boundary
+):
+    service, store, backend, good, pending, previous = verified_publication
+    lost = False
+    fences, leased = [], []
+
+    def check_owner():
+        if lost:
+            raise DatabaseUnavailable("Synthetic ownership lost")
+
+    def fence(_session):
+        check_owner()
+        fences.append(True)
+
+    def pin(_channel, _message):
+        nonlocal lost
+        if boundary == "after":
+            lost = True
+
+    client = SimpleNamespace(
+        pin_message=AsyncMock(side_effect=pin),
+        get_pinned_message_id=AsyncMock(return_value=77),
+    )
+
+    @asynccontextmanager
+    async def lease(**kwargs):
+        nonlocal lost
+        leased.append(kwargs)
+        if boundary == "lease":
+            lost = True
+        yield client
+
+    observe = service._observe_backup
+
+    def observed(row):
+        nonlocal lost
+        observe(row)
+        if boundary == "before" and row["id"] == pending["id"]:
+            lost = True
+
+    # Exercise production's fenced writer rather than the fixture's direct one.
+    backend._write_lock = threading.RLock()
+    monkeypatch.setattr(backend, "write", MongoBackend.write.__get__(backend))
+    monkeypatch.setattr(backend, "check_owner", check_owner)
+    monkeypatch.setattr(backend, "fence", fence)
+    monkeypatch.setattr(service, "_observe_backup", observed)
+    monkeypatch.setattr(service, "_prune_confirmed_files", Mock())
+    service.pool.lease = lease
+    with pytest.raises(DatabaseUnavailable, match="ownership lost"):
+        await service.snapshot_now(store)
+    assert client.pin_message.await_count == (1 if boundary == "after" else 0)
+    assert len(leased) == (0 if boundary == "before" else 1)
+    assert fences == []  # The failed owner check ran before any durable mutation.
+    assert backend.db.backups.find_one({"_id": pending["id"]}) == pending
+    assert service.latest_history()[0]["status"] == "pending"
+    assert service._last_success_at == good["confirmed_at"]
+    assert previous.read_bytes() == b"last confirmed ciphertext"
+    assert Path(pending["local_path"]).is_file()
+    service._prune_confirmed_files.assert_not_called()
+
+
+async def test_cancelled_backup_confirmation_drains_its_fenced_write(
+    verified_publication, monkeypatch
+):
+    service, store, backend, good, pending, previous = verified_publication
+    entered, release = threading.Event(), threading.Event()
+    update = backend.db.backups.update_one
+
+    def held_confirmation(query, change, **kwargs):
+        if change.get("$set", {}).get("status") == "confirmed":
+            entered.set()
+            assert release.wait(3), "The test did not release backup confirmation"
+        return update(query, change, **kwargs)
+
+    @asynccontextmanager
+    async def lease(**_kwargs):
+        yield SimpleNamespace(
+            pin_message=AsyncMock(), get_pinned_message_id=AsyncMock(return_value=77)
+        )
+
+    backend._write_lock = threading.RLock()
+    monkeypatch.setattr(backend, "write", MongoBackend.write.__get__(backend))
+    monkeypatch.setattr(backend.db.backups, "update_one", held_confirmation)
+    monkeypatch.setattr(service, "_prune_confirmed_files", Mock())
+    service.pool.lease = lease
+    task = asyncio.create_task(service.snapshot_now(store))
+    try:
+        assert await asyncio.to_thread(entered.wait, 2)
+        task.cancel()
+        await asyncio.sleep(0)
+        task.cancel()
+        await asyncio.sleep(0)
+        assert not task.done() and service._lock.locked()
+        release.set()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        assert (
+            backend.db.backups.find_one({"_id": pending["id"]})["status"] == "confirmed"
+        )
+        assert service._last_success_at == good["confirmed_at"]
+        assert previous.is_file()
+        service._prune_confirmed_files.assert_not_called()
+    finally:
+        release.set()
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
 
 
 @pytest.mark.parametrize("pin", [77, 88, ConnectionError("Telegram unavailable")])
@@ -1077,3 +1233,29 @@ def test_cursor_rejects_invalid_query_keys(kind, key, identity):
 
     with pytest.raises(ValidationError):
         _decode_cursor(_encode_cursor("size", (kind, key, identity)), "size")
+
+
+@pytest.mark.parametrize("operation", ["verify_lineage", "ensure_revision"])
+async def test_backup_lineage_checks_leave_the_event_loop_responsive(
+    snapshot_source, monkeypatch, operation
+):
+    service, store, _backend = snapshot_source
+    entered, release = asyncio.Event(), threading.Event()
+    loop = asyncio.get_running_loop()
+    loop_thread = threading.get_ident()
+
+    def held_check(_store):
+        assert threading.get_ident() != loop_thread
+        loop.call_soon_threadsafe(entered.set)
+        assert release.wait(5)
+
+    monkeypatch.setattr(service, "check_upload_allowed", held_check)
+    arguments = (store, store.revision) if operation == "ensure_revision" else (store,)
+    task = asyncio.create_task(getattr(service, operation)(*arguments))
+    try:
+        await asyncio.wait_for(entered.wait(), 2)
+        await asyncio.sleep(0)
+        assert not task.done()
+    finally:
+        release.set()
+    await task

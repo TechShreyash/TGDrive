@@ -64,15 +64,24 @@ class ReplicaJournal:
         self.lock = threading.RLock()
 
     def get(self, key, default=None):
-        db = self.backend.db
-        row = db.replica_state.find_one({"_id": key})
-        if row is None:
-            return copy.deepcopy(default)
-        chunks = db.replica_chunks.find({"key": key}).sort("index", 1)
-        raw = "".join(chunk["data"] for chunk in chunks)
-        if len(raw) != row["length"]:
-            raise ValueError("Backup journal state is incomplete")
-        return json_util.loads(raw, json_options=json_util.JSONOptions(tz_aware=True))
+        with self.lock:
+            db = self.backend.db
+            row = db.replica_state.find_one({"_id": key})
+            if row is None:
+                return copy.deepcopy(default)
+            chunks = db.replica_chunks.find({"key": key}).sort("index", 1)
+            raw = "".join(chunk["data"] for chunk in chunks)
+            if len(raw) != row["length"]:
+                raise ValueError("Backup journal state is incomplete")
+            return json_util.loads(
+                raw, json_options=json_util.JSONOptions(tz_aware=True)
+            )
+
+
+    def get_many(self, defaults):
+        """Read related keys from one committed journal version."""
+        with self.lock:
+            return {key: self.get(key, default) for key, default in defaults.items()}
 
     def set(self, key, value):
         self.set_many({key: value})

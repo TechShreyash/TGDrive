@@ -17,6 +17,7 @@ from pathlib import Path
 
 from tgdrive.recovery.backup import BackupError, RecoveryConflict
 from tgdrive.recovery.recovery_file import write_recovery_snapshot
+from tgdrive.storage.mongo import DatabaseUnavailable
 from tgdrive.storage.mongo_store import MongoStore
 from tgdrive.storage.store import ROOT_ID, SCHEMA_VERSION
 from tgdrive.transfers.tasks import _journalled
@@ -238,16 +239,20 @@ class MongoProtection:
         self.check_local_binding(store)
 
     async def verify_lineage(self, store):
-        self.check_upload_allowed(store)
+        await asyncio.to_thread(self.check_upload_allowed, store)
 
     async def restore_publication_cooldown(self):
         return
 
     async def ensure_revision(self, store, required_revision):
-        self.check_upload_allowed(store)
-        if required_revision > store.revision:
-            raise BackupError("The catalog revision is not committed")
-        return store.revision
+        def committed():
+            self.check_upload_allowed(store)
+            revision = store.revision
+            if required_revision > revision:
+                raise BackupError("The catalog revision is not committed")
+            return revision
+
+        return await asyncio.to_thread(committed)
 
     def protection_status(self, store):
         try:
@@ -255,17 +260,19 @@ class MongoProtection:
             state, error = "protected", None
         except Exception:
             state, error = "error", "MongoDB connection or ownership needs attention"
+        revision = store.revision
         result = {
             "state": state,
             "backend": "mongodb",
-            "metadata_revision": store.revision,
-            "protected_revision": store.revision if state == "protected" else 0,
+            "metadata_revision": revision,
+            "protected_revision": revision if state == "protected" else 0,
             "backup_error": self._last_error,
             "last_success_at": self._last_success_at,
         }
         journal = getattr(getattr(self, "replica", None), "journal", None)
-        if journal is not None and journal.get("config", {}).get("enabled"):
-            independent = journal.get("status", {})
+        saved = journal.get_many({"config": {}, "status": {}}) if journal else {}
+        if saved.get("config", {}).get("enabled"):
+            independent = saved["status"]
             result["last_success_at"] = (
                 independent.get("last_success_at") or self._last_success_at
             )
@@ -281,8 +288,8 @@ class MongoProtection:
         return list(rows.limit(limit or 100))
 
     async def backup(self, store, *, force=False):
-        self.check_upload_allowed(store)
-        if store.storage_channel_id is None:
+        await self.verify_lineage(store)
+        if await asyncio.to_thread(lambda: store.storage_channel_id is None):
             await asyncio.to_thread(
                 store.bind_storage_channel, self.settings.storage_channel
             )
@@ -323,8 +330,10 @@ class MongoProtection:
                 and pending.get("key_sha256") != hashlib.sha256(key).hexdigest()
             ):
                 # A pending file from a different key is abandoned, never resent.
-                await asyncio.to_thread(
-                    backend.db.backups.update_one,
+                await _worker(
+                    backend.write,
+                    backend.db.backups,
+                    "update_one",
                     {"_id": pending["_id"]},
                     {"$set": {"status": "superseded"}},
                 )
@@ -370,7 +379,7 @@ class MongoProtection:
                     "format": "tgdrive-backup-v2",
                     "key_sha256": hashlib.sha256(key).hexdigest(),
                 }
-                await asyncio.to_thread(backend.db.backups.insert_one, row)
+                await _worker(backend.write, backend.db.backups, "insert_one", row)
                 pending = row
             self._observe_backup(pending)
             if pending["channel_id"] != self.settings.storage_channel:
@@ -385,8 +394,10 @@ class MongoProtection:
                 # A fresh host may lack the old temporary file. Never resend
                 # changed bytes under an existing random_id.
                 if not path.is_file():
-                    await asyncio.to_thread(
-                        backend.db.backups.update_one,
+                    await _worker(
+                        backend.write,
+                        backend.db.backups,
+                        "update_one",
                         {"_id": pending["_id"]},
                         {"$set": {"status": "interrupted"}},
                     )
@@ -406,8 +417,10 @@ class MongoProtection:
                 async with self.pool.lease(client_name=pending["sender"]) as client:
                     if pending["sender"] is None:
                         pending["sender"] = client.name
-                        await asyncio.to_thread(
-                            backend.db.backups.update_one,
+                        await _worker(
+                            backend.write,
+                            backend.db.backups,
+                            "update_one",
                             {"_id": pending["_id"]},
                             {"$set": {"sender": client.name}},
                         )
@@ -445,8 +458,10 @@ class MongoProtection:
                         raise BackupError("Telegram backup verification failed")
                 # Persist verified-send evidence before pinning. A retry on a new
                 # host needs neither another upload nor the old temporary file.
-                await asyncio.to_thread(
-                    backend.db.backups.update_one,
+                await _worker(
+                    backend.write,
+                    backend.db.backups,
+                    "update_one",
                     {"_id": pending["_id"]},
                     {"$set": {"message_id": identity}},
                 )
@@ -464,8 +479,10 @@ class MongoProtection:
                     and seconds > 0
                 ):
                     deadline = time.time() + seconds + 0.25
-                    await asyncio.to_thread(
-                        backend.db.backups.update_one,
+                    await _worker(
+                        backend.write,
+                        backend.db.backups,
+                        "update_one",
                         {"_id": pending["_id"]},
                         {"$set": {"retry_at": deadline}},
                     )
@@ -481,6 +498,7 @@ class MongoProtection:
 
     async def _publish(self, row, previous_files):
         """Confirm recovery only after the verified ciphertext is discoverable."""
+        self.backend.check_owner()
         await self._pin(row, row["message_id"])
         verified_at = datetime.now(UTC).isoformat()
         confirmed = {
@@ -488,8 +506,10 @@ class MongoProtection:
             "confirmed_at": verified_at,
             "pin_verified_at": verified_at,
         }
-        await asyncio.to_thread(
-            self.backend.db.backups.update_one,
+        await _worker(
+            self.backend.write,
+            self.backend.db.backups,
+            "update_one",
             {"_id": row["_id"]},
             {"$set": confirmed},
         )
@@ -503,9 +523,12 @@ class MongoProtection:
         """Pin and verify discovery; leave failed publication pending for retry."""
         try:
             async with self.pool.lease(client_name=row["sender"]) as client:
+                self.backend.check_owner()
                 await client.pin_message(self.settings.storage_channel, message_id)
                 if await client.get_pinned_message_id(row["channel_id"]) != message_id:
                     raise BackupError("The backup pin could not be verified")
+        except DatabaseUnavailable:
+            raise
         except Exception as error:
             self._last_error = (
                 "The backup is awaiting its recovery pin. Grant the storage bot "
@@ -603,7 +626,9 @@ class MongoProtection:
                 pass
             try:
                 replica = getattr(self, "replica", None)
-                if replica is not None and replica.status().get("enabled"):
+                if replica is not None and (
+                    await asyncio.to_thread(replica.status)
+                ).get("enabled"):
                     delay = self.settings.mongodb_backup_seconds
                     continue
                 await self.snapshot_now(store)

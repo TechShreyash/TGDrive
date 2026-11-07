@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import copy
 import json
+import threading
 
 import pytest
 from pydantic import SecretStr
@@ -181,3 +182,61 @@ def test_private_archive_write_and_read_reject_world_readable_or_symlink(tmp_pat
     with pytest.raises(OSError):
         read_private(link)
     assert target.read_bytes() == b"encrypted archive"
+
+
+def test_related_journal_reads_cannot_mix_a_concurrent_commit(tmp_path, monkeypatch):
+    journal = journal_for(tmp_path, FakeMongoBackend())
+    old = {"config": {"enabled": True}, "status": {"phase": "protected"}}
+    new = {"config": {"enabled": False}, "status": {"phase": "disabled"}}
+    journal.set_many(old)
+    first_read, writer_attempted = threading.Event(), threading.Event()
+    original_lock = journal.lock
+
+    class ObservedLock:
+        def __enter__(self):
+            if threading.current_thread().name == "journal-writer":
+                writer_attempted.set()
+            return original_lock.__enter__()
+
+        def __exit__(self, *args):
+            return original_lock.__exit__(*args)
+
+    journal.lock = ObservedLock()
+    original_get = journal.get
+
+    def read(key, default=None):
+        value = original_get(key, default)
+        if key == "config" and threading.current_thread().name == "journal-reader":
+            first_read.set()
+            assert writer_attempted.wait(2)
+        return value
+
+    monkeypatch.setattr(journal, "get", read)
+    results, errors = [], []
+
+    def run(operation):
+        try:
+            operation()
+        except Exception as error:
+            errors.append(error)
+
+    reader = threading.Thread(
+        target=lambda: run(lambda: results.append(journal.get_many(old))),
+        name="journal-reader",
+    )
+    writer = threading.Thread(
+        target=lambda: run(lambda: journal.set_many(new)), name="journal-writer"
+    )
+    reader.start()
+    try:
+        assert first_read.wait(2)
+        writer.start()
+    finally:
+        reader.join(3)
+        if writer.ident is not None:
+            writer.join(3)
+    assert not reader.is_alive() and not writer.is_alive()
+    assert not errors
+    assert results == [old]
+    assert journal.get_many(old) == new
+
