@@ -672,7 +672,9 @@ class ConnectionManager:
             await self.close()
             self._checks.clear()
             self._refresh_not_before = 0
-            revision, api_id, api_hash, existing = self._desired()
+            revision, api_id, api_hash, existing = await asyncio.to_thread(
+                self._desired
+            )
             if change.expected_revision != revision:
                 raise SettingsProblem(
                     "Connection settings changed. Refresh before saving.",
@@ -747,7 +749,7 @@ class ConnectionManager:
             repair = None
             addition = _adds_only(document, existing, api_id, api_hash)
             try:
-                self._ensure_idle(include_work=not addition)
+                await asyncio.to_thread(self._ensure_idle, include_work=not addition)
             except SettingsProblem:
                 repair = await self._credential_repair(
                     document, existing, api_id, api_hash
@@ -821,18 +823,35 @@ class ConnectionManager:
             # particular, cancellation while collecting pool health must not
             # make an authenticated login revoke an already persisted session.
             active = await self._active_snapshot(rows)
-            response = self._snapshot(document.revision, document.api_id, rows, active)
-            if repair is None:
-                self._ensure_idle(include_work=not addition)
-            await asyncio.to_thread(
-                save_document, self.settings.resolved_data_dir, document, revision
+            response = await asyncio.to_thread(
+                self._snapshot, document.revision, document.api_id, rows, active
             )
-            try:
-                # Shielded: the save is committed, so the live apply must finish.
-                return await asyncio.shield(self._apply(document))
-            except Exception:
-                logger.exception("Saved connections could not be applied live")
-                return response
+            if repair is None:
+                await asyncio.to_thread(self._ensure_idle, include_work=not addition)
+
+            async def commit_and_apply():
+                await asyncio.to_thread(
+                    save_document, self.settings.resolved_data_dir, document, revision
+                )
+                try:
+                    return await self._apply(document)
+                except Exception:
+                    logger.exception("Saved connections could not be applied live")
+                    return response
+
+            task = asyncio.create_task(commit_and_apply())
+            cancelled = False
+            while True:
+                try:
+                    result = await asyncio.shield(task)
+                    break
+                except asyncio.CancelledError:
+                    if task.cancelled():
+                        raise
+                    cancelled = True
+            if cancelled:
+                raise asyncio.CancelledError
+            return result
 
     async def _apply(self, document: ManagedDocument) -> dict[str, Any]:
         """Load saved connections into the running settings and client pool."""

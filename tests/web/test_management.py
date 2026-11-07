@@ -946,6 +946,39 @@ async def test_cancellation_after_commit_never_revokes_saved_session(
         await service.close()
 
 
+async def test_cancelled_save_drains_commit_and_apply_under_manager_lock(
+    managed, monkeypatch
+):
+    import threading
+
+    manager, _, settings, _ = managed
+    entered, release = asyncio.Event(), threading.Event()
+    loop = asyncio.get_running_loop()
+    original = management_module.save_document
+
+    def held_commit(*args):
+        loop.call_soon_threadsafe(entered.set)
+        assert release.wait(5)
+        original(*args)
+
+    monkeypatch.setattr(management_module, "save_document", held_commit)
+    task = asyncio.create_task(
+        manager.save(SettingsChange(expected_revision=0, api_id=222))
+    )
+    try:
+        await asyncio.wait_for(entered.wait(), 2)
+        task.cancel()
+        await asyncio.sleep(0)
+        assert manager.lock.locked() and not task.done()
+    finally:
+        release.set()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    assert settings.api_id == 222 and settings.managed_revision == 1
+    assert read_document(settings.resolved_data_dir).revision == 1
+    assert not manager.lock.locked()
+
+
 async def test_cached_names_are_read_only_and_hidden_for_replacement_account(managed):
     manager, runtime, _, _ = managed
     old_name = "storage-bot-123456"

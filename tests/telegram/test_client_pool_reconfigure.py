@@ -70,6 +70,41 @@ async def _lease_name(pool, name):
         return client
 
 
+async def test_superseded_replacement_never_starts_after_held_lease():
+    old, superseded, latest = [FakeClient("storage-bot-1") for _ in range(3)]
+    pool = ClientPool([entry("a", old, "storage-bot-1")])
+    await pool.start()
+    async with pool.lease():
+        await pool.reconfigure([entry("b", superseded, "storage-bot-1")])
+        await pool.reconfigure([entry("c", latest, "storage-bot-1")])
+        await pool.retry_failed()
+        await settle()
+        assert superseded.start_calls == latest.start_calls == 0
+    assert await asyncio.wait_for(_lease_name(pool, "storage-bot-1"), 1) is latest
+    assert superseded.start_calls == 0
+    await pool.stop()
+    assert old.stop_calls == latest.stop_calls == 1
+
+
+async def test_replacement_waits_until_failed_disconnect_retries_successfully():
+    class FlakyDisconnect(FakeClient):
+        async def stop(self):
+            self.stop_calls += 1
+            if self.stop_calls == 1:
+                raise ConnectionError("disconnect failed")
+
+    old, new = FlakyDisconnect("storage-bot-1"), FakeClient("storage-bot-1")
+    pool = ClientPool([entry("old", old, "storage-bot-1")])
+    await pool.start()
+    await pool.reconfigure([entry("new", new, "storage-bot-1")])
+    await settle()
+    assert old.stop_calls == 1 and new.start_calls == 0
+    await pool.retry_failed()
+    assert await asyncio.wait_for(_lease_name(pool, "storage-bot-1"), 1) is new
+    assert old.stop_calls == 2
+    await pool.stop()
+
+
 @pytest.mark.asyncio
 async def test_failed_new_client_reports_error_and_retries():
     good, bad = FakeClient("bot-a"), FakeClient("bot-b", fail_start=True)

@@ -450,12 +450,26 @@ class ClientPool:
         """Reconnect configured clients that are not running; others stay."""
         retry_pool = False
         async with self._lifecycle_lock:
+            # A failed disconnect still owns its session file.
+            await asyncio.gather(
+                *(
+                    self._retire(slot)
+                    for slot in tuple(self._retiring)
+                    if slot.needs_stop and slot.error is not None
+                )
+            )
             retry_pool = self._state is PoolState.FAILED
             if self._state is PoolState.RUNNING:
                 ready = [
                     slot
                     for slot in self._slots
-                    if not slot.started and not slot.starting
+                    if not slot.started
+                    and not slot.starting
+                    and not any(
+                        old.identity == slot.identity and old.needs_stop
+                        for old in self._retiring
+                        if slot.identity
+                    )
                 ]
                 for slot in ready:
                     slot.starting = True
@@ -505,26 +519,42 @@ class ClientPool:
             logger.warning("A removed Telegram client did not disconnect cleanly")
         finally:
             async with self._leases:
-                if slot in self._retiring:
+                if not slot.needs_stop and slot in self._retiring:
                     self._retiring.remove(slot)
                 self._leases.notify_all()
 
     async def _start_after_retire(self, slots: list[_ClientSlot]) -> None:
         names = {slot.identity for slot in slots}
-        async with self._leases:
-            await self._leases.wait_for(
-                lambda: (
-                    not any(
-                        old.identity in names and old.needs_stop
-                        for old in self._retiring
+        while True:
+            async with self._leases:
+                await self._leases.wait_for(
+                    lambda names=names: (
+                        not any(
+                            old.identity in names and old.needs_stop
+                            for old in self._retiring
+                        )
                     )
                 )
-            )
-        if self._state is PoolState.RUNNING:
-            await self._start_new(slots)
-        else:
-            for slot in slots:
-                slot.starting = False
+            async with self._lifecycle_lock:
+                ready = [
+                    slot
+                    for slot in slots
+                    if self._state is PoolState.RUNNING
+                    and any(live is slot for live in self._slots)
+                    and not slot.started
+                ]
+                for slot in slots:
+                    if not any(live is slot for live in ready):
+                        slot.starting = False
+                # A later replacement may have retired another matching session.
+                names = {slot.identity for slot in ready if slot.identity}
+                if any(
+                    old.identity in names and old.needs_stop for old in self._retiring
+                ):
+                    continue
+                if ready:
+                    await self._start_new(ready)
+                return
 
     async def stop(
         self,
