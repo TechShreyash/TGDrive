@@ -51,6 +51,7 @@ MAX_BYTES = 64 * 1024
 MAX_POSTER_BYTES = 1024 * 1024
 VIDEO_IMAGES_MAGIC = b"TGDRVIMG"
 VIDEO_IMAGES_HEADER = struct.Struct("!8sII")
+ADDRESS_SPACE_BYTES = 768 * 1024**2
 LOCAL_SECONDS = 60
 STALL_SECONDS = 30
 # shortcut: fixed hang guard per remote attempt, replace if real renders need longer.
@@ -432,9 +433,11 @@ def main():
     try:
         import resource
 
-        # No CPU or memory cap: ffmpeg inherits them and heavy decodes need more.
-        # The wall-clock rules in render() stop hangs; oom_score_adj below makes
-        # the kernel pick this worker first under memory pressure.
+        # Shared libraries and UHD reference frames count toward virtual memory.
+        resource.setrlimit(
+            resource.RLIMIT_AS, (ADDRESS_SPACE_BYTES, ADDRESS_SPACE_BYTES)
+        )
+        resource.setrlimit(resource.RLIMIT_CPU, (30, 30))
         resource.setrlimit(resource.RLIMIT_FSIZE, (0, 0))
     except ImportError:
         pass

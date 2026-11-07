@@ -25,6 +25,8 @@ MAX_PAGE_READ = 96 * BLOCK
 MAX_TEXT = 2 * BLOCK
 # Bounds loops over malformed image headers; not a limit on archive size.
 MAX_ENTRIES = 10000
+MAX_IMAGE_PIXELS = 64_000_000
+MAX_IMAGE_EDGE = 32768
 IMAGES = {".png", ".jpg", ".jpeg", ".gif", ".webp", ".avif"}
 
 
@@ -179,6 +181,7 @@ def open_zip(source):
     )
     if at + 22 + comment != len(tail) or disk or cd_disk or disk_count != count:
         raise BookError("Split-volume ZIP books are not supported.")
+    end = source.size - tail_size + at
     if count == 65535 or length == 0xFFFFFFFF or offset == 0xFFFFFFFF:
         position = source.size - tail_size + at
         if position < 20:
@@ -198,8 +201,27 @@ def open_zip(source):
         ):
             raise BookError("Invalid ZIP64 directory.")
         count, length, offset = record[7:10]
-    if offset + length > source.size:
-        raise BookError("This is not a readable ZIP book.")
+        end = zip64_at
+    if count > MAX_ENTRIES or length > 2 * BLOCK or offset + length > end:
+        raise BookError(
+            "This book has too many resources for the reader. Download it instead."
+        )
+    source.seek(offset)
+    directory = source.read(length)
+    position = actual = 0
+    while position < len(directory):
+        if (
+            position + 46 > len(directory)
+            or directory[position : position + 4] != b"PK\x01\x02"
+        ):
+            raise BookError("Invalid ZIP book directory.")
+        name, extra, comment = struct.unpack_from("<3H", directory, position + 28)
+        position += 46 + name + extra + comment
+        actual += 1
+        if actual > MAX_ENTRIES or position > len(directory):
+            raise BookError("The ZIP book directory exceeds its resource limits.")
+    if actual != count:
+        raise BookError("The ZIP book directory entry count is inconsistent.")
     archive = ZipFile(source)
     names = set()
     for entry in archive.infolist():
@@ -477,6 +499,15 @@ def image_result(data, *, raw_images):
             "This page has invalid or overly complex image dimensions. "
             "Download the original to open it in another reader."
         ) from None
+    if any(
+        width > MAX_IMAGE_EDGE
+        or height > MAX_IMAGE_EDGE
+        or width * height > MAX_IMAGE_PIXELS
+        for width, height in dimensions
+    ):
+        raise BookError(
+            "This page exceeds the reader's dimension limits. Download it instead."
+        )
     return {
         "kind": "image",
         "mime": mime,
@@ -726,7 +757,11 @@ def read_book(source, fmt, entry=None, *, raw_images=False):
     with libarchive.stream_reader(
         SafeRarSource(source), filter_name="none", block_size=65536
     ) as archive:
-        for member in archive:
+        for index, member in enumerate(archive):
+            if index >= MAX_ENTRIES:
+                raise BookError(
+                    "This comic has too many resources. Download it instead."
+                )
             if source.failure:
                 raise source.failure
             name = str(member.pathname)
@@ -768,7 +803,8 @@ def run():
     try:
         import resource
 
-        # No memory or CPU cap; the parser timeout in books.py stops hangs.
+        resource.setrlimit(resource.RLIMIT_AS, (384 * BLOCK, 384 * BLOCK))
+        resource.setrlimit(resource.RLIMIT_CPU, (10, 10))
         resource.setrlimit(resource.RLIMIT_FSIZE, (0, 0))
     except ImportError:
         pass

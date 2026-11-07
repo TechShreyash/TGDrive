@@ -143,19 +143,60 @@ def test_jpeg_standalone_tem_marker_preserves_original_bytes():
 
 
 @pytest.mark.parametrize("kind,suffix,mime", RASTER_HEADERS)
-async def test_very_large_page_dimensions_open_without_a_pixel_limit(
-    kind, suffix, mime
-):
+async def test_oversized_page_dimensions_fall_back_to_download(kind, suffix, mime):
     image = raster_header(kind, 40000, 30000)
     data = book_page(image, suffix)
 
     async def fetch(start, count):
         return data[start : start + count]
 
-    result = await parse_book(
-        {"name": "huge.cbz", "size": len(data)}, fetch, "page" + suffix, raw_images=True
+    with pytest.raises(HTTPException, match="dimension limits"):
+        await parse_book(
+            {"name": "huge.cbz", "size": len(data)},
+            fetch,
+            "page" + suffix,
+            raw_images=True,
+        )
+
+
+def test_uhd_page_dimensions_remain_supported():
+    image = raster_header("png", 7680, 4320)
+    data = book_page(image, ".png")
+    assert (
+        read_book(source(data)[0], "cbz", "page.png", raw_images=True)["content"]
+        == image
     )
-    assert result["mime"] == mime and result["content"] == image
+
+
+def test_book_directory_limit_precedes_zipfile_allocation(monkeypatch):
+    import tgdrive.media.book_worker as worker
+
+    output = io.BytesIO()
+    with ZipFile(output, "w") as archive:
+        for index in range(worker.MAX_ENTRIES + 1):
+            archive.writestr(f"{index}.jpg", b"x")
+    monkeypatch.setattr(
+        worker, "ZipFile", lambda *_: pytest.fail("unbounded allocation")
+    )
+    with pytest.raises(BookError, match="too many resources"):
+        read_book(source(output.getvalue())[0], "cbz")
+
+
+def test_underdeclared_book_directory_is_bounded_before_zipfile_allocation(monkeypatch):
+    import tgdrive.media.book_worker as worker
+
+    output = io.BytesIO()
+    with ZipFile(output, "w") as archive:
+        for index in range(worker.MAX_ENTRIES + 1):
+            archive.writestr(f"{index}.jpg", b"x")
+    data = bytearray(output.getvalue())
+    footer = data.rfind(b"PK\x05\x06")
+    struct.pack_into("<HH", data, footer + 8, 1, 1)
+    monkeypatch.setattr(
+        worker, "ZipFile", lambda *_: pytest.fail("unbounded allocation")
+    )
+    with pytest.raises(BookError, match="resource limits"):
+        read_book(source(data)[0], "cbz")
 
 
 def test_epub_index_and_selected_chapter_do_not_download_unused_payload():

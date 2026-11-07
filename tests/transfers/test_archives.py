@@ -110,6 +110,17 @@ def test_manifest_limits_precede_zipfile_allocation(tmp_path, monkeypatch):
         zip_manifest(path, 1024, 1024**2)
 
 
+def test_declared_metadata_heavy_zip_is_rejected_before_allocating(
+    tmp_path, monkeypatch
+):
+    path = write_zip(tmp_path, [(f"{index}.txt", b"a") for index in range(1001)])
+    monkeypatch.setattr(
+        archives, "ZipFile", lambda *_: pytest.fail("unbounded allocation")
+    )
+    with pytest.raises(ArchiveError, match="1000 entries"):
+        zip_manifest(path, 1024, 1024**2)
+
+
 def test_manifest_preserves_empty_directories_and_bounds_output(tmp_path):
     path = write_zip(
         tmp_path, [("folder/", b""), ("folder/deep/data", b"hello"), ("empty/", b"")]
@@ -121,6 +132,16 @@ def test_manifest_preserves_empty_directories_and_bounds_output(tmp_path):
         zip_manifest(path, 4, 1024**2)
     with pytest.raises(ArchiveError, match="staging budget"):
         zip_manifest(path, 1024, path.stat().st_size + 4)
+
+
+def test_manifest_counts_explicit_and_implicit_folders_only_once(tmp_path):
+    path = write_zip(
+        tmp_path,
+        [("folder/", b"")] + [(f"folder/{index}", b"x") for index in range(999)],
+    )
+    plan = zip_manifest(path, 1024, 1024**2)
+    assert len(plan["files"]) == 999
+    assert plan["folders"] == [("folder",)]
 
 
 class MemoryTelegram(Account):

@@ -151,11 +151,11 @@ def test_only_video_decodes_keyframes(monkeypatch, name, suffix, keyframes):
         assert command.index("-skip_frame") < command.index("-i")
 
 
-def test_worker_sets_no_address_space_limit():
+def test_worker_retains_inherited_resource_limits():
     from tgdrive.media import thumbnail_worker
 
     source = Path(thumbnail_worker.__file__).read_text()
-    assert "RLIMIT_AS" not in source and "RLIMIT_FSIZE" in source
+    assert all(limit in source for limit in ("RLIMIT_AS", "RLIMIT_CPU", "RLIMIT_FSIZE"))
 
 
 @pytest.mark.parametrize("progress", [True, False])
