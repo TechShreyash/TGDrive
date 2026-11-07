@@ -16,6 +16,7 @@ import math
 import os
 import re
 import secrets
+import shutil
 import stat
 import time
 from contextlib import asynccontextmanager, suppress
@@ -25,13 +26,14 @@ from typing import Any
 from telethon import TelegramClient, functions, types, utils
 from telethon.errors import NetworkMigrateError, PhoneMigrateError, UserMigrateError
 
+from tgdrive.recovery.recovery_file import MAX_STAGED_RECOVERY_BYTES
+from tgdrive.transfers.tasks import _journalled
+
 BACKUP_NAME = "tgdrive-backup.tgdb"
-# shortcut: a recovery file is one Telegram document, so Telegram's 2000 MiB
-# document limit bounds it (tens of millions of catalog items compressed);
-# split it across several pinned documents if a drive ever outgrows that.
-MAX_CAPSULE_BYTES = 2000 * 1024 * 1024
+MAX_CAPSULE_BYTES = MAX_STAGED_RECOVERY_BYTES
 MAX_VERIFY_BATCH = 32
 _BLOCK = 512 * 1024
+_worker = _journalled(asyncio.to_thread)
 _BOT = re.compile(r"[1-9][0-9]{4,14}:[A-Za-z0-9_-]{20,}")
 
 
@@ -693,6 +695,15 @@ class ReplicaTransport:
         ]
         allowed = (filename,) if isinstance(filename, str) else filename
         if names not in ([name] for name in allowed):
+            if len(names) == 1 and re.fullmatch(
+                r"tgdrive-[A-Za-z0-9_-]+\.tgdb", names[0]
+            ):
+                raise ReplicaTransportError(
+                    "An older TGDrive backup is pinned. Preserve the channel and "
+                    "original key; restore using tagged v2.2 into isolated MongoDB, "
+                    "then upgrade. This channel must not initialize a new drive.",
+                    "LEGACY_BACKUP_REQUIRES_UPGRADE",
+                )
             raise ReplicaTransportError(
                 "The selected message has a different document type. Choose a "
                 "confirmed TGDrive recovery checkpoint.",
@@ -727,7 +738,20 @@ class ReplicaTransport:
                     )
                 digest.update(block)
                 if target is not None:
-                    target.write(block)
+
+                    def write_block(block=block):
+                        if shutil.disk_usage(Path(target.name).parent).free < (
+                            len(block) + self._settings.min_free_bytes
+                        ):
+                            raise ReplicaTransportError(
+                                "Not enough temporary space to download "
+                                "the recovery file.",
+                                "REPLICA_LOCAL_SPACE",
+                            )
+                        if target.write(block) != len(block):
+                            raise OSError("Incomplete recovery archive write")
+
+                    await _worker(write_block)
         finally:
             if callable(getattr(iterator, "aclose", None)):
                 await iterator.aclose()

@@ -184,7 +184,7 @@ class Clock:
 async def started(native=None, *, primary=PRIMARY, pacer=None):
     native = native or Native()
     transport = ReplicaTransport(
-        SimpleNamespace(bot_tokens=(primary,), api_id=1),
+        SimpleNamespace(bot_tokens=(primary,), api_id=1, min_free_bytes=0),
         TOKEN,
         client=native,
         pacer=pacer or ReplicaRequestPacer(interval=0, maximum_interval=0),

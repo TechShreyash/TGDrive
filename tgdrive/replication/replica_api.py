@@ -12,7 +12,9 @@ import shutil
 from fastapi import Depends, HTTPException, Request, Response
 from pydantic import Field, SecretStr, StrictBool
 
+from tgdrive.recovery.recovery_file import MAX_STAGED_RECOVERY_BYTES, LegacyRecoveryFile
 from tgdrive.settings.managed_settings import PrivateModel, SettingsProblem
+from tgdrive.transfers.uploads import ResumableUploads
 
 
 class ConfigureReplica(PrivateModel):
@@ -56,6 +58,10 @@ def register_replica_routes(app, settings, require_admin, get_runtime):
         except Exception as error:
             from tgdrive.replication.replica_transport import ReplicaTransportError
 
+            if isinstance(error, LegacyRecoveryFile):
+                raise SettingsProblem(
+                    str(error), code="LEGACY_BACKUP_REQUIRES_UPGRADE", status=409
+                ) from None
             detail = (
                 str(error)
                 if isinstance(error, (ReplicaTransportError, ValueError))
@@ -176,7 +182,9 @@ def register_replica_routes(app, settings, require_admin, get_runtime):
             raise HTTPException(422, "Enter a valid replacement bot token")
         current = service(request)
         async with current.control:
-            if current._operation.locked() or current.blocked:
+            if current._operation.locked() or await asyncio.to_thread(
+                lambda: current.blocked
+            ):
                 raise HTTPException(
                     409,
                     "Pause or finish the existing recovery before opening another file",
@@ -189,6 +197,12 @@ def register_replica_routes(app, settings, require_admin, get_runtime):
                         size = 0
                         async for part in request.stream():
                             size += len(part)
+                            if size > MAX_STAGED_RECOVERY_BYTES:
+                                raise HTTPException(
+                                    413,
+                                    "The encrypted recovery file exceeds "
+                                    "its size limit",
+                                )
                             if (
                                 shutil.disk_usage(current.directory).free
                                 < len(part) + settings.min_free_bytes
@@ -215,7 +229,9 @@ def register_replica_routes(app, settings, require_admin, get_runtime):
     @app.get("/api/v1/replica/report", dependencies=admin)
     async def report(request: Request):
         return Response(
-            json.dumps(service(request).status(), ensure_ascii=False),
+            json.dumps(
+                await asyncio.to_thread(service(request).status), ensure_ascii=False
+            ),
             media_type="application/json",
             headers={
                 "Cache-Control": "no-store",
@@ -244,7 +260,9 @@ def register_replica_routes(app, settings, require_admin, get_runtime):
                 )
             async with current._operation:
                 if payload.activate:
-                    candidate = current.journal.get("candidate")
+                    candidate = await asyncio.to_thread(
+                        current.journal.get, "candidate"
+                    )
                     if candidate and candidate.get("complete"):
                         catalog = candidate.get("catalog")
                         destination = (
@@ -264,7 +282,7 @@ def register_replica_routes(app, settings, require_admin, get_runtime):
                                 "to confirm activation.",
                                 status=422,
                             )
-                    return current.activate()
+                    return await ResumableUploads._owned_worker(current.activate)
                 if payload.target_channel is not None:
                     return await invoke(
                         current.recover_to(

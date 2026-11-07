@@ -2,20 +2,31 @@
 
 from __future__ import annotations
 
+import asyncio
 import copy
+import io
 import json
 import threading
+from datetime import UTC, datetime
+from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 import pytest
+from bson import Binary, Int64
 from pydantic import SecretStr
 
 from tests.support.mongo_fixtures import FakeMongoBackend, new_store
+from tgdrive.replication.replica import ChannelReplica
 from tgdrive.replication.replica_settings import POLICIES
 from tgdrive.replication.replica_state import (
+    BoundedPrivateReader,
+    PrivateRecoveryFileTooLarge,
     ReplicaJournal,
     atomic_private,
     files_in,
     parts_in,
+    private_reader,
+    read_legacy_value,
     read_private,
     remap_catalog,
 )
@@ -184,6 +195,165 @@ def test_private_archive_write_and_read_reject_world_readable_or_symlink(tmp_pat
     assert target.read_bytes() == b"encrypted archive"
 
 
+def test_private_record_oversize_is_typed_and_preserves_the_sparse_file(tmp_path):
+    maximum = 64 * 1024**2
+    target = tmp_path / "activation.json"
+    with target.open("wb") as record:
+        record.write(b"preserve this activation")
+        record.truncate(maximum + 1)
+    target.chmod(0o600)
+    before = target.stat()
+    with pytest.raises(PrivateRecoveryFileTooLarge) as failure:
+        read_private(target)
+    assert failure.value.maximum_bytes == maximum
+    assert target.stat().st_size == before.st_size
+    assert target.stat().st_mtime_ns == before.st_mtime_ns
+    with target.open("rb") as record:
+        assert record.read(24) == b"preserve this activation"
+    assert list(tmp_path.iterdir()) == [target]
+
+
+def test_private_reader_bounds_growth_on_the_same_checked_file(tmp_path, monkeypatch):
+    import tgdrive.replication.replica_state as state
+
+    target = tmp_path / "activation.json"
+    atomic_private(target, b"a")
+    monkeypatch.setattr(state, "_private_maximum_bytes", lambda: 4)
+    with private_reader(target) as source:
+        with target.open("ab") as growing:
+            growing.write(b"bcde")
+        with pytest.raises(PrivateRecoveryFileTooLarge) as failure:
+            source.read()
+        assert failure.value.maximum_bytes == 4
+    assert target.read_bytes() == b"abcde"
+    reader = BoundedPrivateReader(io.BytesIO(b"abcde!"), 5)
+    assert reader.read(3) == b"abc"
+    with pytest.raises(PrivateRecoveryFileTooLarge):
+        reader.read(3)
+    assert reader.consumed_bytes == 5
+
+
+@pytest.mark.parametrize("source_chunk", [97, 1024**2])
+@pytest.mark.parametrize("extra", [0, 1])
+def test_legacy_reader_enforces_exact_serialized_utf8_limit_including_whitespace(
+    source_chunk, extra
+):
+    from tgdrive.recovery.staged_snapshot import MAX_VALUE_BYTES, RecoveryResourceLimit
+
+    class WhitespaceSource:
+        def __init__(self):
+            self.position = 0
+
+        def read(self, size):
+            count = min(size, source_chunk, MAX_VALUE_BYTES + extra - self.position)
+            prefix = b"null"[self.position : self.position + count]
+            self.position += count
+            return prefix + b" " * (count - len(prefix))
+
+    source = WhitespaceSource()
+    assert MAX_VALUE_BYTES == 32 * 1024**2
+    if extra:
+        with pytest.raises(RecoveryResourceLimit):
+            read_legacy_value(source)
+        assert source.position == MAX_VALUE_BYTES + 1
+    else:
+        assert read_legacy_value(source) is None
+        assert source.position == MAX_VALUE_BYTES
+
+
+def test_journal_resource_rejection_is_memoized_until_a_replacement_write(
+    tmp_path, monkeypatch
+):
+    import tgdrive.recovery.staged_snapshot as staged
+    from tgdrive.replication.replica_activation import ActivationError
+
+    backend = FakeMongoBackend()
+    journal = journal_for(tmp_path, backend)
+    raw = json.dumps({"items": [None] * 16})
+    journal._write_state({"candidate": raw}, None)  # A historical writer's value.
+    original = backend.db.replica_chunks.find
+    reads = []
+
+    def read(*args, **kwargs):
+        reads.append(True)
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(backend.db.replica_chunks, "find", read)
+    monkeypatch.setattr(staged, "MAX_VALUE_ITEMS", 8)
+    for _ in range(3):
+        with pytest.raises(ActivationError) as failure:
+            journal.get("candidate")
+        assert failure.value.code == "ACTIVATION_RESOURCE_LIMIT"
+        assert failure.value.status == 409
+    assert len(reads) == 1
+    memo = journal.resource_error()
+    assert memo["key"] == "candidate" and memo["code"] == "ACTIVATION_RESOURCE_LIMIT"
+    memo["detail"] = "changed outside the journal"
+    assert journal.resource_error()["detail"] != memo["detail"]
+    assert backend.db.replica_chunks.find_one({"key": "candidate"})["data"] == raw
+    journal.set("candidate", {"repaired": True})
+    assert journal.resource_error() is None
+    before_refresh = len(reads)
+    assert journal.get("candidate") == {"repaired": True}
+    assert len(reads) == before_refresh + 1
+
+
+def test_new_journal_values_must_remain_readable_before_any_related_write(
+    tmp_path, monkeypatch
+):
+    import tgdrive.recovery.staged_snapshot as staged
+    from tgdrive.replication.replica_activation import ActivationError
+
+    journal = journal_for(tmp_path, FakeMongoBackend())
+    journal.set_many({"config": {"keep": True}, "candidate": {"old": True}})
+    monkeypatch.setattr(staged, "MAX_VALUE_ITEMS", 8)
+    with pytest.raises(ActivationError) as failure:
+        journal.set_many(
+            {"config": {"keep": False}, "candidate": {"items": [None] * 16}}
+        )
+    assert failure.value.code == "ACTIVATION_RESOURCE_LIMIT"
+    assert journal.get_many({"config": None, "candidate": None}) == {
+        "config": {"keep": True},
+        "candidate": {"old": True},
+    }
+    assert journal.resource_error() is None
+
+
+def test_journal_chunk_stream_keeps_utf8_characters_and_legacy_bson_types(
+    tmp_path, monkeypatch
+):
+    journal = journal_for(tmp_path, FakeMongoBackend())
+    monkeypatch.setattr(journal, "CHUNK", 7)
+    value = {
+        "name": "漢😀" * 30,
+        "at": datetime(2026, 10, 28, tzinfo=UTC),
+        "large": Int64(2**40),
+        "data": Binary(b"abc", 128),
+    }
+    journal.set("candidate", value)
+    assert journal.get("candidate") == value
+    chunks = journal.backend.db.replica_chunks
+    assert chunks.count_documents({"key": "candidate"}) > 1
+    assert journal.backend.db.replica_state.find_one({"_id": "candidate"})[
+        "length"
+    ] == len(
+        "".join(
+            row["data"] for row in chunks.find({"key": "candidate"}).sort("index", 1)
+        )
+    )
+    chunks.update_one({"key": "candidate", "index": 1}, {"$set": {"index": 2}})
+    with pytest.raises(ValueError, match="incomplete"):
+        journal.get("candidate")
+
+
+def test_duplicate_journal_fields_remain_invalid_not_resource_exhaustion(tmp_path):
+    journal = journal_for(tmp_path, FakeMongoBackend())
+    journal._write_state({"candidate": '{"same":1,"same":2}'}, None)
+    with pytest.raises(ValueError, match="Duplicate"):
+        journal.get("candidate")
+    assert journal.resource_error() is None
+
+
 def test_related_journal_reads_cannot_mix_a_concurrent_commit(tmp_path, monkeypatch):
     journal = journal_for(tmp_path, FakeMongoBackend())
     old = {"config": {"enabled": True}, "status": {"phase": "protected"}}
@@ -240,3 +410,79 @@ def test_related_journal_reads_cannot_mix_a_concurrent_commit(tmp_path, monkeypa
     assert results == [old]
     assert journal.get_many(old) == new
 
+
+@pytest.mark.parametrize("operation", ["mutation", "publish"])
+@pytest.mark.parametrize("cancel", [False, True])
+async def test_blocking_replica_work_keeps_loop_responsive_and_drains_cancellation(
+    tmp_path, operation, cancel
+):
+    replica = ChannelReplica.__new__(ChannelReplica)
+    replica.directory = tmp_path
+    replica._operation = asyncio.Lock()
+    replica.journal = SimpleNamespace(get=lambda *_args: {"phase": "paused"})
+    entered, release, completed = (
+        threading.Event(),
+        threading.Event(),
+        threading.Event(),
+    )
+    loop_thread = threading.get_ident()
+
+    def blocked(*_args):
+        assert threading.get_ident() != loop_thread
+        entered.set()
+        assert release.wait(3)
+        completed.set()
+        if operation == "mutation":
+            return None
+        return "a" * 64, tmp_path / "bundle", 2, "b" * 64, 0, "c" * 64
+
+    if operation == "mutation":
+        replica._mutation_config = blocked
+        task = asyncio.create_task(replica.before_mutation())
+    else:
+        replica._stage_bundle = blocked
+        task = asyncio.create_task(
+            replica._publish(None, -1001, -1002, {}, {}, {}, "key")
+        )
+    try:
+        assert await asyncio.wait_for(asyncio.to_thread(entered.wait, 2), 3)
+        if cancel:
+            task.cancel()
+            await asyncio.sleep(0)
+            await asyncio.sleep(0)
+            assert not task.done()
+        release.set()
+        if cancel:
+            with pytest.raises(asyncio.CancelledError):
+                await task
+        else:
+            await task
+        assert completed.is_set()
+    finally:
+        release.set()
+        await asyncio.gather(task, return_exceptions=True)
+
+
+async def test_copy_progress_coalesces_without_coalescing_durable_receipts(
+    monkeypatch,
+):
+    import tgdrive.replication.replica as replica_module
+
+    replica = ChannelReplica.__new__(ChannelReplica)
+    updates, receipts = [], []
+    replica.update = lambda **values: updates.append(values)
+    replica.journal = SimpleNamespace(
+        get=lambda *_args: {},
+        intent=lambda identity, size: (size, None),
+        confirm=lambda identity, message: receipts.append((identity, message)),
+    )
+    monkeypatch.setattr(replica_module, "time", SimpleNamespace(monotonic=lambda: 0))
+    transport = SimpleNamespace(copy=AsyncMock(side_effect=[111, 112]))
+    catalog = payload()["catalog"]
+    restored = await replica._copy_catalog(transport, catalog, BACKUP)
+    assert len(updates) == 2
+    assert updates[-1]["done_files"] == 2
+    assert updates[-1]["done_parts"] == 2
+    assert updates[-1]["done_bytes"] == 15
+    assert len(receipts) == transport.copy.await_count == 2
+    assert [node["message_id"] for node in files_in(restored)] == [111, 112]

@@ -206,9 +206,6 @@ async def require_admin(request: Request) -> None:
         )
     replica = getattr(runtime, "replica", None)
     if (
-        getattr(runtime, "recovery_only", False)
-        or (replica is not None and replica.blocked)
-    ) and (
         request.method not in {"GET", "HEAD", "OPTIONS"}
         and not request.url.path.startswith("/api/v1/replica")
         and request.url.path != "/api/v1/start-new"
@@ -218,6 +215,9 @@ async def require_admin(request: Request) -> None:
             "/api/logout",
         }
         and not request.url.path.endswith("/cancel")
+    ) and (
+        getattr(runtime, "recovery_only", False)
+        or (replica is not None and await asyncio.to_thread(lambda: replica.blocked))
     ):
         raise HTTPException(
             409, "Channel recovery has paused file changes. Open Storage & Backups."
@@ -279,21 +279,24 @@ def create_app(
         effective_settings,
     )
 
-    activation_unavailable = False
+    activation_unavailable = None
     try:
         settings = effective_settings(settings)
     except DatabaseUnavailable as error:
         logging.getLogger(__name__).error("TGDrive startup rejected: %s", error)
         raise
-    except ActivationError:
-        activation_unavailable = True
+    except ActivationError as error:
+        # Retain the actionable public error without retaining the decoded
+        # private catalog and credentials through an exception traceback.
+        activation_unavailable = error.with_traceback(None)
+        activation_unavailable.__context__ = None
         logging.getLogger(__name__).warning(
             "Saved recovery activation needs review; opening owner recovery."
         )
     configure_logging(settings.log_level)
     app_runtime = runtime or Runtime(settings)
     if activation_unavailable:
-        app_runtime._activation_unavailable = True
+        app_runtime._activation_unavailable = activation_unavailable
     owner_credential = (
         settings.admin_password_hash.get_secret_value()
         if settings.admin_password_hash

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import shutil
 from pathlib import Path
 from types import SimpleNamespace
@@ -347,6 +348,107 @@ async def test_mongodb_failure_rejects_startup_even_with_recovery_state(
     assert runtime._owner_lock is None
     assert "startup rejected" in caplog.text
     assert "restart the deployment" in caplog.text
+
+
+async def test_activation_resource_error_survives_web_setup_and_recovery_startup(
+    tmp_path, monkeypatch
+):
+    import threading
+
+    from tgdrive.replication.replica import ChannelReplica
+    from tgdrive.replication.replica_activation import MANIFEST, ActivationError
+    from tgdrive.web.app import create_app
+
+    config = settings(tmp_path)
+    path = config.resolved_data_dir / MANIFEST
+    path.parent.mkdir(parents=True)
+    with path.open("wb") as record:
+        record.write(b"preserve pending activation")
+        record.truncate(64 * 1024**2 + 1)
+    path.chmod(0o600)
+    pool = FakePool()
+    runtime = Runtime(config, pool=pool)
+    runtime.remote = FakeRemote()
+    caller, failures = threading.get_ident(), []
+    original = ChannelReplica._record_failure
+
+    def record_failure(replica, error):
+        assert threading.get_ident() != caller
+        failures.append(error)
+        return original(replica, error)
+
+    monkeypatch.setattr(ChannelReplica, "_record_failure", record_failure)
+    monkeypatch.setattr(ChannelReplica, "start", lambda _self: None)
+    app = create_app(config, runtime=runtime)
+    preserved = runtime._activation_unavailable
+    assert isinstance(preserved, ActivationError)
+    assert preserved.code == "ACTIVATION_RESOURCE_LIMIT"
+    try:
+        await runtime.start()
+        assert failures == [preserved]
+        assert runtime.recovery_only and runtime.store is None
+        assert runtime.transfers is None and not pool.started
+        status = await asyncio.to_thread(runtime.replica.status)
+        assert status["error"]["code"] == preserved.code
+        assert status["error"]["detail"] == str(preserved)
+        assert "64 MiB" in status["error"]["detail"]
+        assert path.stat().st_size == 64 * 1024**2 + 1
+        assert not (path.parent / "recovery-archive").exists()
+    finally:
+        app.state.sessions.close()
+        await runtime.stop()
+
+
+@pytest.mark.parametrize("key", ["candidate", "job", "config", "status"])
+async def test_oversize_legacy_journal_stops_startup_without_redecoding_or_erasure(
+    tmp_path, monkeypatch, mongo_backend, key
+):
+    import copy
+    import json
+    import threading
+
+    from tgdrive.replication.replica import ChannelReplica
+
+    config = settings(tmp_path)
+    raw = json.dumps([{}] * 65_537)
+    mongo_backend.db.replica_state.insert_one({"_id": key, "length": len(raw)})
+    mongo_backend.db.replica_chunks.insert_one(
+        {"_id": key + "\x000", "key": key, "index": 0, "data": raw}
+    )
+    preserved = copy.deepcopy(
+        (mongo_backend.db.replica_state.rows, mongo_backend.db.replica_chunks.rows)
+    )
+    find = mongo_backend.db.replica_chunks.find
+    caller, reads = threading.get_ident(), []
+
+    def counted_read(query, *args, **kwargs):
+        if query.get("key") == key:
+            assert threading.get_ident() != caller
+            reads.append(query)
+        return find(query, *args, **kwargs)
+
+    monkeypatch.setattr(mongo_backend.db.replica_chunks, "find", counted_read)
+    initialize = Mock(side_effect=AssertionError("Must preserve pending recovery"))
+    monkeypatch.setattr("tgdrive.storage.mongo.initialize_if_empty", initialize)
+    monkeypatch.setattr(ChannelReplica, "start", lambda _self: None)
+    runtime = Runtime(config, pool=FakePool())
+    runtime.remote = FakeRemote()
+    try:
+        await runtime.start()
+        assert runtime.recovery_only and runtime.store is None
+        assert runtime.transfers is None and not runtime.pool.started
+        for _ in range(2):
+            status = await asyncio.to_thread(runtime.replica.status)
+            assert status["error"]["code"] == "ACTIVATION_RESOURCE_LIMIT"
+            assert "preserv" in status["error"]["action"].lower()
+        assert len(reads) == 1
+        assert preserved == (
+            mongo_backend.db.replica_state.rows,
+            mongo_backend.db.replica_chunks.rows,
+        )
+        initialize.assert_not_called()
+    finally:
+        await runtime.stop()
 
 
 def test_runtime_rejects_dangerous_cache_root(tmp_path: Path) -> None:

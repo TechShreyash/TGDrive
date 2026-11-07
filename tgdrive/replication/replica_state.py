@@ -6,12 +6,146 @@ import copy
 import json
 import os
 import secrets
+import stat
 import threading
+from contextlib import contextmanager
 from pathlib import Path
 
 from bson import json_util
 
 from tgdrive.storage.mongo_store import MongoStore
+
+
+class PrivateRecoveryFileTooLarge(ValueError):
+    """A preserved legacy record exceeds bounded in-memory compatibility reads."""
+
+    def __init__(self, maximum_bytes):
+        self.maximum_bytes = maximum_bytes
+        super().__init__(
+            "The private recovery file exceeds its compatibility admission limit"
+        )
+
+
+def _private_maximum_bytes():
+    from tgdrive.recovery.recovery_file import MAX_EXPANDED_BYTES
+
+    return 4 * MAX_EXPANDED_BYTES
+
+
+class BoundedPrivateReader:
+    """Bound serialized bytes, including input that grows after its initial stat."""
+
+    def __init__(self, source, maximum_bytes):
+        self.source, self.maximum_bytes = source, maximum_bytes
+        self.consumed_bytes = 0
+
+    def read(self, size=-1):
+        if size == 0:
+            return b""
+        available = self.maximum_bytes - self.consumed_bytes
+        if available == 0:
+            if self.source.read(1):
+                raise PrivateRecoveryFileTooLarge(self.maximum_bytes)
+            return b""
+        requested = available if size < 0 else min(size, available)
+        data = self.source.read(requested)
+        self.consumed_bytes += len(data)
+        if (
+            len(data) == available
+            and (size < 0 or size > available)
+            and self.source.read(1)
+        ):
+            raise PrivateRecoveryFileTooLarge(self.maximum_bytes)
+        return data
+
+
+@contextmanager
+def private_reader(path):
+    """Own one checked private regular-file descriptor throughout a bounded read."""
+    maximum = _private_maximum_bytes()
+    fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    try:
+        info = os.fstat(fd)
+        if not stat.S_ISREG(info.st_mode):
+            raise ValueError("Invalid private recovery file")
+        if info.st_mode & 0o077:
+            raise ValueError("Recovery files must have mode 0600")
+        if info.st_size > maximum:
+            raise PrivateRecoveryFileTooLarge(maximum)
+        with os.fdopen(fd, "rb", closefd=False) as source:
+            yield BoundedPrivateReader(source, maximum)
+    finally:
+        os.close(fd)
+
+
+def read_legacy_value(source):
+    """Keep legacy BSON interpretation while bounding a whole decoded value."""
+    import ijson
+
+    from tgdrive.recovery.staged_snapshot import (
+        MAX_VALUE_BYTES,
+        RecoveryResourceLimit,
+        _Parser,
+    )
+
+    options = json_util.JSONOptions(tz_aware=True)
+    parser = _Parser(
+        BoundedPrivateReader(source, MAX_VALUE_BYTES),
+        object_hook=lambda value: json_util.object_hook(value, json_options=options),
+    )
+    try:
+        value = parser.value()
+        if next(parser.events, None) is not None:
+            raise ValueError("Trailing private recovery JSON data")
+        return value
+    except PrivateRecoveryFileTooLarge as error:
+        if error.maximum_bytes == MAX_VALUE_BYTES:
+            raise RecoveryResourceLimit(
+                "Legacy recovery JSON exceeds the serialized UTF-8 byte limit"
+            ) from None
+        raise
+    except ijson.JSONError:
+        raise ValueError("Invalid private recovery JSON") from None
+
+
+class _JournalChunks:
+    """Read ordered MongoDB string chunks without joining the complete value."""
+
+    def __init__(self, chunks, characters):
+        if type(characters) is not int or characters < 0:
+            raise ValueError("Backup journal state is incomplete")
+        if characters > _private_maximum_bytes():
+            raise PrivateRecoveryFileTooLarge(_private_maximum_bytes())
+        self.chunks, self.characters = iter(chunks), characters
+        self.seen_characters = self.index = self.offset = 0
+        self.buffer = b""
+
+    def read(self, size):
+        output = bytearray()
+        while len(output) < size:
+            if self.offset == len(self.buffer):
+                row = next(self.chunks, None)
+                if row is None:
+                    if self.seen_characters != self.characters:
+                        raise ValueError("Backup journal state is incomplete")
+                    break
+                data = row.get("data")
+                if (
+                    type(row.get("index")) is not int
+                    or row["index"] != self.index
+                    or not isinstance(data, str)
+                    or not data
+                ):
+                    raise ValueError("Backup journal state is incomplete")
+                self.index += 1
+                self.seen_characters += len(data)
+                if self.seen_characters > self.characters:
+                    raise ValueError("Backup journal state is incomplete")
+                self.buffer, self.offset = data.encode("utf-8"), 0
+            count = min(size - len(output), len(self.buffer) - self.offset)
+            output.extend(self.buffer[self.offset : self.offset + count])
+            self.offset += count
+        return bytes(output)
 
 
 def atomic_private(path: Path, content: bytes):
@@ -34,19 +168,8 @@ def atomic_private(path: Path, content: bytes):
 
 
 def read_private(path: Path):
-    fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
-    try:
-        info = os.fstat(fd)
-        import stat
-
-        if not stat.S_ISREG(info.st_mode):
-            raise ValueError("Invalid private recovery file")
-        if info.st_mode & 0o077:
-            raise ValueError("Recovery files must have mode 0600")
-        with os.fdopen(fd, "rb", closefd=False) as source:
-            return source.read()
-    finally:
-        os.close(fd)
+    with private_reader(path) as source:
+        return source.read()
 
 
 class ReplicaJournal:
@@ -62,21 +185,53 @@ class ReplicaJournal:
         if self.backend is None:
             raise DatabaseUnavailable("MongoDB is required for the backup journal.")
         self.lock = threading.RLock()
+        self._resource_errors = {}
+
+    def resource_error(self):
+        """Return a memoized rejection without reading the preserved value again."""
+        with self.lock:
+            if not self._resource_errors:
+                return None
+            key, reason = next(iter(self._resource_errors.items()))
+            from tgdrive.replication.replica_activation import _resource_error
+
+            return {
+                "key": key,
+                "code": "ACTIVATION_RESOURCE_LIMIT",
+                "detail": str(_resource_error(reason)),
+            }
 
     def get(self, key, default=None):
+        from tgdrive.recovery.staged_snapshot import RecoveryResourceLimit
+
         with self.lock:
+            if key in self._resource_errors:
+                from tgdrive.replication.replica_activation import _resource_error
+
+                raise _resource_error(self._resource_errors[key]) from None
             db = self.backend.db
             row = db.replica_state.find_one({"_id": key})
             if row is None:
                 return copy.deepcopy(default)
-            chunks = db.replica_chunks.find({"key": key}).sort("index", 1)
-            raw = "".join(chunk["data"] for chunk in chunks)
-            if len(raw) != row["length"]:
-                raise ValueError("Backup journal state is incomplete")
-            return json_util.loads(
-                raw, json_options=json_util.JSONOptions(tz_aware=True)
-            )
+            chunks = db.replica_chunks.find({"key": key}).sort("index", 1).batch_size(1)
+            try:
+                source = _JournalChunks(chunks, row["length"])
+                return read_legacy_value(
+                    BoundedPrivateReader(source, _private_maximum_bytes())
+                )
+            except PrivateRecoveryFileTooLarge, RecoveryResourceLimit, MemoryError:
+                reason = "Saved recovery journal exceeds provisional decoding limits"
+            finally:
+                close = getattr(chunks, "close", None)
+                if close is not None:
+                    close()
+            # Store only a reason, never the exception/traceback with its partial
+            # decoded private tree. The same owned journal can now report status
+            # without rebuilding a value already rejected by admission.
+            self._resource_errors[key] = reason
+            from tgdrive.replication.replica_activation import _resource_error
 
+            raise _resource_error(reason) from None
 
     def get_many(self, defaults):
         """Read related keys from one committed journal version."""
@@ -123,13 +278,34 @@ class ReplicaJournal:
             )
             for key, value in values.items()
         }
+        from tgdrive.recovery.staged_snapshot import RecoveryResourceLimit
+
+        for raw in encoded.values():
+            chunks = (
+                {"index": index, "data": raw[start : start + self.CHUNK]}
+                for index, start in enumerate(range(0, len(raw), self.CHUNK))
+            )
+            try:
+                read_legacy_value(_JournalChunks(chunks, len(raw)))
+            except PrivateRecoveryFileTooLarge, RecoveryResourceLimit, MemoryError:
+                from tgdrive.replication.replica_activation import _resource_error
+
+                raise _resource_error(
+                    "New recovery journal value exceeds provisional decoding limits"
+                ) from None
 
         def write(session):
             self.backend.fence(session)
             self._write_state(encoded, session)
 
         with self.lock:
-            self.backend.transaction(write)
+            try:
+                self.backend.transaction(write)
+            finally:
+                # An uncertain commit may have installed the readable replacement.
+                # Re-evaluate affected keys once after an actual write attempt.
+                for key in values:
+                    self._resource_errors.pop(key, None)
 
     def intent(self, key, size):
         db = self.backend.db

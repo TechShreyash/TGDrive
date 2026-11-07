@@ -602,3 +602,12 @@ def test_valid_large_binary_fits_the_json_token_budget(tmp_path, snapshot):
         row = next(rows)
         assert row["_id"] == "large-binary"
         assert row["data"] == payload
+
+
+def test_parser_resource_errors_are_distinct_from_duplicate_fields(monkeypatch):
+    monkeypatch.setattr(staged_snapshot, "MAX_VALUE_ITEMS", 3)
+    with pytest.raises(staged_snapshot.RecoveryResourceLimit):
+        staged_snapshot._Parser(io.BytesIO(b'{"x":[null,null,null]}')).value()
+    with pytest.raises(ValueError, match="Duplicate") as invalid:
+        staged_snapshot._Parser(io.BytesIO(b'{"x":1,"x":2}')).value()
+    assert not isinstance(invalid.value, staged_snapshot.RecoveryResourceLimit)

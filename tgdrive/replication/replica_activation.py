@@ -10,18 +10,27 @@ from __future__ import annotations
 
 import copy
 import hashlib
+import io
 import json
 import os
 import re
 import secrets
 import stat
 import unicodedata
+from contextlib import closing
+from pathlib import Path
 
-from bson import json_util
+from bson import BSON, json_util
 from pydantic import SecretStr
 
 from tgdrive.core.config import Settings
-from tgdrive.replication.replica_state import atomic_private, read_private
+from tgdrive.recovery.staged_snapshot import RecoveryResourceLimit
+from tgdrive.replication.replica_state import (
+    PrivateRecoveryFileTooLarge,
+    atomic_private,
+    private_reader,
+    read_legacy_value,
+)
 from tgdrive.settings.managed_settings import (
     ManagedClient,
     ManagedDocument,
@@ -48,8 +57,19 @@ _MONGO_ARCHIVE = (
 
 
 class ActivationError(SettingsProblem):
-    def __init__(self, detail):
-        super().__init__(detail, code="RECOVERY_ACTIVATION_FAILED", status=409)
+    def __init__(self, detail, *, code="RECOVERY_ACTIVATION_FAILED"):
+        super().__init__(detail, code=code, status=409)
+
+
+def _resource_error(reason):
+    return ActivationError(
+        reason + "; this resource rejection does not establish corruption. "
+        "The record is preserved. Stop and preserve the "
+        "old deployment. Separate fresh recovery requires an intact compatible "
+        "archive. If none is available, no fallback is established; preserve this "
+        "record. See docs/backup-recovery.md.",
+        code="ACTIVATION_RESOURCE_LIMIT",
+    )
 
 
 def _raw(value):
@@ -129,9 +149,7 @@ def _document(credentials, revision):
     )
 
 
-def _checked_settings(
-    settings, catalog, credentials, document=None, *, restore_mongodb_key=True
-):
+def _checked_settings(settings, catalog, credentials, document=None):
     restoring = document is None
     if document is None:
         document = _document(credentials, 1)
@@ -169,6 +187,100 @@ def _checked_settings(
     return Settings(_env_file=None, **value)
 
 
+def _staged_source(settings, descriptor):
+    """Bind a private, completed validation index to its immutable file digest."""
+    from tgdrive.recovery.staged_snapshot import StagedSnapshot
+
+    if (
+        not isinstance(descriptor, dict)
+        or set(descriptor) != {"path", "sha256"}
+        or not isinstance(descriptor["path"], str)
+        or not isinstance(descriptor["sha256"], str)
+        or re.fullmatch(r"[0-9a-f]{64}", descriptor["sha256"]) is None
+    ):
+        raise ValueError("Invalid staged recovery descriptor")
+    relative = descriptor["path"]
+    if (
+        not relative
+        or "\\" in relative
+        or "\x00" in relative
+        or any(part in {"", ".", ".."} for part in relative.split("/"))
+        or Path(relative).is_absolute()
+    ):
+        raise ValueError("Unsafe staged recovery path")
+    path = settings.resolved_data_dir
+    for part in relative.split("/"):
+        path = path / part
+        if path.is_symlink():
+            raise ValueError("Unsafe staged recovery path")
+    with os.fdopen(os.open(path, os.O_RDONLY | os.O_NOFOLLOW), "rb") as source:
+        before = os.fstat(source.fileno())
+        if not stat.S_ISREG(before.st_mode) or before.st_mode & 0o077:
+            raise ValueError("Staged recovery index must be a private regular file")
+        if hashlib.file_digest(source, "sha256").hexdigest() != descriptor["sha256"]:
+            raise ValueError("Staged recovery index changed")
+        snapshot = StagedSnapshot(path)
+        after = path.stat(follow_symlinks=False)
+        if snapshot.digest != descriptor["sha256"] or (
+            before.st_dev,
+            before.st_ino,
+            before.st_size,
+            before.st_mtime_ns,
+        ) != (after.st_dev, after.st_ino, after.st_size, after.st_mtime_ns):
+            raise ValueError("Staged recovery index changed")
+    return snapshot
+
+
+def _staged_catalog(snapshot, channel):
+    if channel != snapshot.catalog["storage_channel_id"] and snapshot.header[
+        "replica"
+    ] != {"channel": channel}:
+        raise ValueError("Staged recovery has no mapping for the requested channel")
+    return {
+        "schema_version": SCHEMA_VERSION,
+        "drive_id": snapshot.catalog["drive_id"],
+        "revision": snapshot.catalog["revision"],
+        "backed_up_revision": snapshot.catalog["revision"],
+        "storage_channel_id": channel,
+    }
+
+
+def _normalized_credentials(settings, catalog, credentials):
+    from tgdrive.replication.replica_settings import (
+        POLICIES,
+        validate_recovery_settings,
+    )
+
+    if not isinstance(credentials, dict) or set(credentials) != {
+        "api_id",
+        "api_hash",
+        "session_secret",
+        "bot_tokens",
+        "managed_document",
+        "preferences",
+    }:
+        raise ValueError("Invalid recovery credentials")
+    validate_recovery_settings(credentials)
+    if type(credentials["api_id"]) is not int:
+        raise ValueError("Invalid recovery API identity")
+    if not isinstance(credentials["bot_tokens"], list) or not all(
+        isinstance(token, str) for token in credentials["bot_tokens"]
+    ):
+        raise ValueError("Invalid recovery bot credentials")
+    checked = _checked_settings(settings, catalog, credentials)
+    return {
+        "api_id": checked.api_id,
+        "api_hash": checked.api_hash.get_secret_value(),
+        "session_secret": checked.session_secret.get_secret_value(),
+        "bot_tokens": list(checked.bot_tokens),
+        "managed_document": copy.deepcopy(credentials["managed_document"]),
+        "preferences": {
+            name: POLICIES[name].model_validate(policy).model_dump()
+            for name, policy in credentials["preferences"].items()
+        },
+    }
+
+
 def _candidate(settings, candidate):
     try:
         if not isinstance(candidate, dict) or candidate.get("complete") is not True:
@@ -184,58 +296,34 @@ def _candidate(settings, candidate):
             or catalog["storage_channel_id"] >= 0
         ):
             raise ValueError
-        MongoStore._validate_payload(catalog)
+        staged = None
+        if "staged" in candidate:
+            if "database" in candidate:
+                raise ValueError("Recovery candidate contains two database sources")
+            staged = _staged_source(settings, candidate["staged"])
+            if catalog != _staged_catalog(staged, catalog["storage_channel_id"]):
+                raise ValueError("Staged recovery metadata does not match its index")
+            with closing(staged.records("settings")) as rows:
+                check_recovery_key(settings, {"settings": rows})
+            with closing(staged.records("jobs")) as rows:
+                for row in rows:
+                    _history([row])
+        else:
+            MongoStore._validate_payload(catalog)
         catalog = copy.deepcopy(catalog)
         # Never restore source-channel mutation receipts, including preparation
         # request IDs which could accidentally replay from an old browser tab.
-        catalog["operations"] = []
-        catalog["deletions"] = []
-        catalog.pop("folder_preparations", None)
-        credentials = candidate["credentials"]
-        required = {
-            "api_id",
-            "api_hash",
-            "session_secret",
-            "bot_tokens",
-            "managed_document",
-            "preferences",
-        }
-        optional = set()
-        if (
-            not isinstance(credentials, dict)
-            or not required <= set(credentials)
-            or set(credentials) - required - optional
-        ):
-            raise ValueError
-        from tgdrive.replication.replica_settings import (
-            POLICIES,
-            validate_recovery_settings,
+        if staged is None:
+            catalog["operations"] = []
+            catalog["deletions"] = []
+            catalog.pop("folder_preparations", None)
+        credentials = _normalized_credentials(
+            settings, catalog, candidate["credentials"]
         )
-
-        validate_recovery_settings(credentials)
-        extras = {
-            name: copy.deepcopy(credentials[name])
-            for name in ("managed_document", "preferences", *optional)
-            if name in credentials
-        }
-        extras["preferences"] = {
-            name: POLICIES[name].model_validate(policy).model_dump()
-            for name, policy in extras["preferences"].items()
-        }
-        if type(credentials["api_id"]) is not int:
-            raise ValueError
-        if not isinstance(credentials["bot_tokens"], list) or not all(
-            isinstance(token, str) for token in credentials["bot_tokens"]
+        if staged is not None and credentials != _normalized_credentials(
+            settings, catalog, staged.header["credentials"]
         ):
-            raise ValueError
-        checked = _checked_settings(settings, catalog, credentials)
-        credentials = {
-            "api_id": checked.api_id,
-            "api_hash": checked.api_hash.get_secret_value(),
-            "session_secret": checked.session_secret.get_secret_value(),
-            "bot_tokens": list(checked.bot_tokens),
-            **extras,
-        }
+            raise ValueError("Staged recovery credentials do not match its index")
         token, key = candidate["token"], candidate["key"]
         _document(dict(credentials, bot_tokens=[token]), 1)
         if not isinstance(key, str) or not re.fullmatch(r"[0-9a-fA-F]{64}", key):
@@ -247,8 +335,11 @@ def _candidate(settings, candidate):
             "token": token,
             "key": key.lower(),
         }
+        if staged is not None:
+            result["staged"] = copy.deepcopy(candidate["staged"])
         if "database" in candidate:
             result["database"] = _database(candidate["database"], catalog)
+            check_recovery_key(settings, result["database"])
         if "backup_config" in candidate:
             config = candidate["backup_config"]
             if (
@@ -264,10 +355,37 @@ def _candidate(settings, candidate):
                 raise ValueError
             result["backup_config"] = copy.deepcopy(config)
         return result
+    except ActivationError:
+        raise
+    except MemoryError:
+        raise _resource_error(
+            "Pending activation could not fit available memory"
+        ) from None
     except Exception:
         raise ActivationError(
             "Recovery activation data is invalid; nothing changed."
         ) from None
+
+
+def check_recovery_key(settings, database):
+    """A capsule key never rotates the deployment's encrypted-file key."""
+    if database is None:
+        return  # Version-1 catalog-only activations contain legacy plaintext parts.
+    from tgdrive.core.encryption import fingerprint
+
+    expected = next(
+        (
+            row.get("document", {}).get("fingerprint")
+            for row in database.get("settings", [])
+            if row.get("_id") == "encryption"
+        ),
+        None,
+    )
+    if expected != fingerprint(settings.encryption_key):
+        raise ActivationError(
+            "ENCRYPTION_KEY does not match the recovered drive. Restore the original "
+            "deployment key before recovery; no catalog or settings were replaced."
+        )
 
 
 def _database(records, catalog):
@@ -410,11 +528,6 @@ def _manifest_path(settings):
     return settings.resolved_data_dir / MANIFEST
 
 
-def _mongodb_key_fingerprint(_settings):
-    # Kept for the activation manifest layout; backups now derive their key.
-    return None
-
-
 def _activation_identity(value):
     fields = (
         "candidate",
@@ -432,8 +545,8 @@ def _load(settings):
     if not path.exists() and not path.is_symlink():
         return None
     try:
-        content = read_private(path)
-        value = json_util.loads(content, object_pairs_hook=_object)
+        with private_reader(path) as source:
+            value = read_legacy_value(source)
         if (
             not isinstance(value, dict)
             or set(value)
@@ -470,7 +583,25 @@ def _load(settings):
         ):
             raise ValueError
         return value
-    except Exception:
+    except PrivateRecoveryFileTooLarge as error:
+        raise _resource_error(
+            f"Pending activation exceeds the {error.maximum_bytes // 1024**2} MiB "
+            "compatibility admission limit"
+        ) from None
+    except RecoveryResourceLimit:
+        raise _resource_error(
+            "Pending activation exceeds provisional decoding limits"
+        ) from None
+    except MemoryError:
+        raise _resource_error(
+            "Pending activation could not fit available memory"
+        ) from None
+    except Exception as error:
+        if (
+            isinstance(error, ActivationError)
+            and error.code == "ACTIVATION_RESOURCE_LIMIT"
+        ):
+            raise
         raise ActivationError(
             "The private activation record is invalid. Preserve it and repeat "
             "recovery inspection."
@@ -478,7 +609,14 @@ def _load(settings):
 
 
 def _write(settings, value):
-    content = _raw(value)
+    try:
+        content = _raw(value)
+        with io.BytesIO(content) as source:
+            read_legacy_value(source)
+    except PrivateRecoveryFileTooLarge, RecoveryResourceLimit, MemoryError:
+        raise _resource_error(
+            "New activation record exceeds provisional decoding limits"
+        ) from None
     atomic_private(_manifest_path(settings), content)
 
 
@@ -505,7 +643,7 @@ def prepare_activation(settings, candidate):
         if document
         else None,
         "backend": "mongodb",
-        "mongodb_key_before_sha256": _mongodb_key_fingerprint(settings),
+        "mongodb_key_before_sha256": None,
         "phase": "prepared",
     }
     value["id"] = _activation_identity(value)
@@ -529,21 +667,11 @@ def effective_settings(settings):
         applied = value["phase"] == "applied"
         if applied:
             document = read_document(settings.resolved_data_dir)
-        fingerprint = _mongodb_key_fingerprint(settings)
-        rotated = (
-            applied
-            and fingerprint is not None
-            and fingerprint != value["mongodb_key_before_sha256"]
-        )
         return _checked_settings(
             settings,
             candidate["catalog"],
             candidate["credentials"],
             document,
-            # Before activation, the capsule key always wins. Afterwards, a
-            # changed deployment key is an intentional rotation; an unchanged
-            # old key or missing key must not undo recovery.
-            restore_mongodb_key=not rotated,
         )
     except DatabaseUnavailable:
         raise
@@ -597,7 +725,15 @@ def _archive_dir(directory, identity):
 def _preserve_mongo(backend, archive):
     destination = archive / "mongodb-before.json"
     if destination.exists() or destination.is_symlink():
-        read_private(destination)
+        # This archive was published with fsync + replace. Replaying preservation
+        # only needs the same private-file checks, never a whole-archive read.
+        fd = os.open(destination, os.O_RDONLY | os.O_NOFOLLOW)
+        try:
+            info = os.fstat(fd)
+            if not stat.S_ISREG(info.st_mode) or info.st_mode & 0o077:
+                raise ActivationError("Recovery preservation requires private files.")
+        finally:
+            os.close(fd)
         return
     temporary = archive / (".mongodb-preserve-" + secrets.token_hex(12))
 
@@ -649,13 +785,73 @@ def _mongo_nodes(catalog):
     return mongo_nodes(catalog)
 
 
+def _staged_nodes(snapshot, channel):
+    remap = channel if channel != snapshot.catalog["storage_channel_id"] else None
+    with closing(snapshot.nodes(remap)) as rows:
+        for row in rows:
+            # Rebuild existing search/index fields just as mongo_nodes does for
+            # inline catalogs; archived derived keys never become trusted indexes.
+            values = {key: row[key] for key in ("upload_date", "trashed")}
+            if row.get("starred"):
+                values["starred"] = True
+            if row["kind"] == "file":
+                values.update(message_id=row["message_id"], size=row["size"])
+                for key in ("parts", "sha256"):
+                    if row.get(key):
+                        values[key] = row[key]
+                if row.get("poster") is not None:
+                    values["poster"] = row["poster"]
+            values["part_count"] = len(values.get("parts") or [None])
+            yield MongoStore._node(
+                row["_id"], row["parent_id"], row["name"], row["kind"], **values
+            )
+
+
+def _insert_rows(collection, rows, session):
+    """Bound each recovery write batch by document count and encoded bytes."""
+    batch, size = [], 0
+    iterator = iter(rows)
+    try:
+        for row in iterator:
+            encoded_bytes = len(BSON.encode(row))
+            if batch and (len(batch) >= 256 or size + encoded_bytes > 8 * 1024**2):
+                collection.insert_many(batch, session=session)
+                batch, size = [], 0
+            batch.append(row)
+            size += encoded_bytes
+        if batch:
+            collection.insert_many(batch, session=session)
+    finally:
+        close = getattr(iterator, "close", None)
+        if close is not None:
+            close()
+
+
 def _apply_mongo(settings, value, backend):
     candidate = value["candidate"]
     desired = _document(candidate["credentials"], value["settings_revision"] + 1)
     connection_document = json.loads(desired.private_bytes())
     database = candidate.get("database")
+    staged = (
+        _staged_source(settings, candidate["staged"]) if "staged" in candidate else None
+    )
+    full_database = database is not None or staged is not None
+
+    def rows(name):
+        if staged is not None:
+            with closing(staged.records(name)) as source:
+                for row in source:
+                    if name == "jobs":
+                        yield from _history([row])
+                    elif name == "shares":
+                        yield dict(row, _id=row["id"])
+                    else:
+                        yield row
+        else:
+            yield from database[name]
+
     owner_hash = None
-    if database is not None:
+    if full_database:
         from argon2 import PasswordHasher
 
         owner_hash = (
@@ -709,24 +905,30 @@ def _apply_mongo(settings, value, backend):
         )
         if settings_digest != value["settings_sha256"]:
             raise ActivationError("Connection settings changed; nothing was replaced.")
-        if database is not None:
+        if full_database:
             for name in ("settings", "sessions", "identities"):
                 backend.db[name].delete_many({}, session=session)
-            if database["settings"]:
-                backend.db.settings.insert_many(database["settings"], session=session)
+            _insert_rows(backend.db.settings, rows("settings"), session)
         for name in (*_MONGO_DOMAIN, "jobs", "receipts", "bot_folders", "backups"):
             backend.db[name].delete_many({}, session=session)
-        if database is not None:
+        if full_database:
             for name in ("jobs", "bot_folders"):
-                if database[name]:
-                    backend.db[name].insert_many(database[name], session=session)
-        nodes = _mongo_nodes(candidate["catalog"])
-        backend.db.nodes.insert_many(nodes, session=session)
-        shares = [
-            dict(row, _id=row["id"]) for row in candidate["catalog"].get("shares", [])
-        ]
-        if shares:
-            backend.db.shares.insert_many(shares, session=session)
+                _insert_rows(backend.db[name], rows(name), session)
+        nodes = (
+            _staged_nodes(staged, candidate["catalog"]["storage_channel_id"])
+            if staged is not None
+            else _mongo_nodes(candidate["catalog"])
+        )
+        _insert_rows(backend.db.nodes, nodes, session)
+        shares = (
+            rows("shares")
+            if staged is not None
+            else (
+                dict(row, _id=row["id"])
+                for row in candidate["catalog"].get("shares", [])
+            )
+        )
+        _insert_rows(backend.db.shares, shares, session)
         metadata = {
             "_id": "catalog",
             "schema_version": SCHEMA_VERSION,
@@ -736,7 +938,11 @@ def _apply_mongo(settings, value, backend):
             "storage_channel_id": candidate["catalog"]["storage_channel_id"],
             "generation": (before or {}).get("generation", 0) + 1,
             "replica_activation_id": value["id"],
-            **catalog_counters(candidate["catalog"]),
+            **(
+                staged.counters
+                if staged is not None
+                else catalog_counters(candidate["catalog"])
+            ),
         }
         backend.db.catalog.replace_one(
             {"_id": "catalog"}, metadata, upsert=True, session=session
@@ -760,7 +966,7 @@ def _apply_mongo(settings, value, backend):
                 session=session,
             )
         bootstrap = backend.db.settings.find_one({"_id": "bootstrap"}, session=session)
-        if database is not None and bootstrap is None:
+        if full_database and bootstrap is None:
             bootstrap = {"_id": "bootstrap", "document": {}}
         if bootstrap:
             bootstrap["document"].update(
@@ -769,7 +975,7 @@ def _apply_mongo(settings, value, backend):
                     "SESSION_SECRET": candidate["credentials"]["session_secret"],
                 }
             )
-            if database is not None:
+            if full_database:
                 bootstrap["document"].update(
                     {
                         "API_ID": desired.api_id,

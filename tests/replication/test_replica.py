@@ -6,6 +6,7 @@ import asyncio
 import hashlib
 import inspect
 import time
+from contextlib import nullcontext
 from types import SimpleNamespace
 
 import pytest
@@ -338,8 +339,11 @@ def capture_for(replica, store):
     from tgdrive.replication.replica_settings import credentials_from_snapshot
 
     def capture():
+        from tgdrive.core.encryption import key_record
+
         catalog = store.export()
         records = {name: [] for name in COLLECTIONS}
+        records["settings"] = [key_record(replica.settings.encryption_key)]
         records["catalog"] = [
             {
                 "_id": "catalog",
@@ -370,6 +374,510 @@ def capture_for(replica, store):
         }
 
     return capture
+
+
+def enable_staged_capture(replica, store, *, large=False):
+    """Seed an explicit snapshot adapter, then exercise production capture."""
+    records = capture_for(replica, store)()["database"]
+    backend = replica.runtime.mongo
+    backend.client = SimpleNamespace(start_session=lambda **_: nullcontext(object()))
+    for name, rows in records.items():
+        backend.db[name].delete_many({})
+        if rows:
+            backend.db[name].insert_many(rows)
+    if large:
+        # Exceed both prior catalog-count and expanded-metadata ceilings without
+        # requiring thousands of synthetic Telegram side effects.
+        backend.db.identities.insert_many(
+            {"_id": f"identity-{index}", "name": "x" * 2000} for index in range(10_001)
+        )
+    del replica._capture
+
+
+@pytest.mark.asyncio
+async def test_staged_replica_crosses_old_limits_without_catalog_materialization(
+    tmp_path, monkeypatch
+):
+    from tgdrive.replication import replica as replica_module
+
+    configured, store, remote, replica, config = setup(tmp_path)
+    enable_staged_capture(replica, store, large=True)
+    original_export = store.export
+    before = original_export()
+
+    def reject_materialization(*_args, **_kwargs):
+        raise AssertionError("The staged path must not materialize a full catalog")
+
+    monkeypatch.setattr(store, "export", reject_materialization)
+    monkeypatch.setattr(replica_module, "decode_bundle", reject_materialization)
+    monkeypatch.setattr(replica, "start", lambda: None)
+    try:
+        remote.lose_response = True
+        with pytest.raises(ReplicaTransportError, match="Response lost"):
+            await replica._sync(config)
+        job = replica.journal.get("job")
+        assert "staged" in job and "database" not in job
+        assert len(str(job)) < 10_000
+        index = replica._open_staged(job).path
+        assert index.stat().st_size > 16 * 1024**2
+        await replica._sync(config)
+        assert not index.exists()
+        copies = [call for call in remote.calls if call[0] == "copy"]
+        assert len(copies) == 2 and copies[0][-1] == copies[1][-1]
+        await replica.inspect_file(replica.backup_file(), replica.key(), source=BACKUP)
+        candidate = replica.journal.get("candidate")
+        assert "staged" in candidate and "database" not in candidate
+        assert "root" not in candidate["catalog"]
+        assert len(str(candidate)) < 10_000
+        await replica.recover_to(REPLACEMENT, "345678:" + "z" * 30, str(REPLACEMENT))
+        await replica._recover_copy(replica.journal.get("recovery"))
+        recovered = replica.journal.get("candidate")
+        assert recovered["complete"] and "staged" in recovered
+        assert recovered["catalog"]["storage_channel_id"] == REPLACEMENT
+        staged = replica._open_staged(recovered)
+        for node in staged.nodes():
+            if node["kind"] != "file":
+                continue
+            for part in parts_in(node):
+                identity = (
+                    f"{store.drive_id}:{REPLACEMENT}:{BACKUP}:"
+                    f"{part['message_id']}:{part['size']}"
+                )
+                assert replica.journal.intent(identity, part["size"])[
+                    1
+                ] == staged.mapping(part["message_id"])
+        replica.activate()
+        assert replica.status()["phase"] == "restart_required"
+        assert original_export() == before
+        assert not list(configured.resolved_data_dir.glob(".replica-mapping-*"))
+    finally:
+        await dispose(replica, store)
+
+
+@pytest.mark.asyncio
+async def test_cancelled_staged_worker_drains_and_removes_unadmitted_index(tmp_path):
+    import threading
+
+    _configured, store, _remote, replica, config = setup(tmp_path)
+    entered, release = threading.Event(), threading.Event()
+    try:
+        await replica._sync(config)
+        bundle = await asyncio.to_thread(
+            replica._read_bundle, replica.backup_file(), replica.key()
+        )
+        index = replica._open_staged(bundle).path
+
+        def stage():
+            entered.set()
+            release.wait()
+            return bundle
+
+        operation = asyncio.create_task(replica._staged_worker(stage))
+        await asyncio.to_thread(entered.wait)
+        operation.cancel()
+        await asyncio.sleep(0)
+        assert not operation.done()
+        assert index.exists()
+        release.set()
+        with pytest.raises(asyncio.CancelledError):
+            await operation
+        assert not index.exists()
+    finally:
+        release.set()
+        await dispose(replica, store)
+
+
+@pytest.mark.asyncio
+async def test_cancelled_mapping_creation_drains_and_closes_created_index(
+    tmp_path, monkeypatch
+):
+    import threading
+
+    from tgdrive.replication import replica as replica_module
+
+    configured, store, remote, replica, config = setup(tmp_path)
+    enable_staged_capture(replica, store)
+    entered, release = threading.Event(), threading.Event()
+    operation = None
+    allocate = replica_module._CopyMapping
+
+    def delayed_mapping(*args):
+        mapping = allocate(*args)
+        entered.set()
+        release.wait()
+        return mapping
+
+    monkeypatch.setattr(replica_module, "_CopyMapping", delayed_mapping)
+    try:
+        operation = asyncio.create_task(replica._sync(config))
+        assert await asyncio.to_thread(entered.wait, 5)
+        operation.cancel()
+        await asyncio.sleep(0)
+        operation.cancel()
+        await asyncio.sleep(0)
+        assert not operation.done()
+        assert list(configured.resolved_data_dir.glob(".replica-mapping-*"))
+        release.set()
+        with pytest.raises(asyncio.CancelledError):
+            await operation
+        assert not list(configured.resolved_data_dir.glob(".replica-mapping-*"))
+        assert not remote.calls
+        assert replica.journal.get("job")["staged"]
+    finally:
+        release.set()
+        if operation is not None:
+            await asyncio.gather(operation, return_exceptions=True)
+        await dispose(replica, store)
+
+
+@pytest.mark.asyncio
+async def test_missing_normal_job_index_recaptures_without_losing_confirmed_state(
+    tmp_path, monkeypatch
+):
+    configured, store, remote, replica, config = setup(tmp_path)
+    enable_staged_capture(replica, store)
+    try:
+        await replica._sync(config)
+        confirmed = replica.journal.get("restore_point")
+        protected = replica.status()["protected_revision"]
+        job = await asyncio.to_thread(replica._capture)
+        replica.journal.set("job", job)
+        replica._open_staged(job).path.unlink()
+        random_id, _ = replica.journal.intent("pending-original-part", 3)
+        capture = replica._capture
+        captured = []
+
+        def recapture():
+            assert replica.journal.get("restore_point") == confirmed
+            assert replica.status()["protected_revision"] == protected
+            assert replica.journal.intent("pending-original-part", 3) == (
+                random_id,
+                None,
+            )
+            captured.append(True)
+            return capture()
+
+        monkeypatch.setattr(replica, "_capture", recapture)
+        await replica._sync(config, force_snapshot=True)
+        assert captured == [True]
+        assert replica.journal.get("job") is None
+        assert replica.status()["phase"] == "protected"
+        assert replica.journal.intent("pending-original-part", 3) == (random_id, None)
+        assert len([call for call in remote.calls if call[0] == "copy"]) == 1
+        assert not list(configured.resolved_data_dir.glob(".replica-mapping-*"))
+    finally:
+        await dispose(replica, store)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("protected_key", ["candidate", "recovery", "activation"])
+async def test_missing_job_cannot_discard_recovery_or_activation(
+    tmp_path, protected_key
+):
+    from tgdrive.settings.managed_settings import SettingsProblem
+
+    _configured, store, _remote, replica, _config = setup(tmp_path)
+    enable_staged_capture(replica, store)
+    try:
+        job = await asyncio.to_thread(replica._capture)
+        replica.journal.set("job", job)
+        replica._open_staged(job).path.unlink()
+        preserved = {"preserve": protected_key}
+        replica.journal.set(protected_key, preserved)
+        with pytest.raises(SettingsProblem, match="Preserve recovery state"):
+            await asyncio.to_thread(replica._restart_missing_job, job)
+        assert replica.journal.get("job") == job
+        assert replica.journal.get(protected_key) == preserved
+    finally:
+        await dispose(replica, store)
+
+
+@pytest.mark.asyncio
+async def test_completed_recovery_commit_survives_cleanup_failure_without_recopy(
+    tmp_path, monkeypatch
+):
+    configured, store, remote, replica, config = setup(tmp_path)
+    enable_staged_capture(replica, store)
+    monkeypatch.setattr(replica, "start", lambda: None)
+    try:
+        await replica._sync(config)
+        await replica.inspect_file(replica.backup_file(), replica.key(), source=BACKUP)
+        await replica.recover_to(REPLACEMENT, "345678:" + "z" * 30, str(REPLACEMENT))
+        recovery = replica.journal.get("recovery")
+        previous = replica.journal.get("candidate")
+        discard = replica._discard_staged
+        failed = []
+
+        def fail_after_commit(value):
+            saved = replica.journal.get_many({"candidate": None, "status": {}})
+            if value == previous and saved["candidate"].get("complete") and not failed:
+                assert saved["status"]["phase"] == "ready_to_activate"
+                failed.append(True)
+                raise OSError("Injected cleanup failure after readiness commit")
+            discard(value)
+
+        monkeypatch.setattr(replica, "_discard_staged", fail_after_commit)
+        with pytest.raises(OSError, match="after readiness commit") as error:
+            await replica._recover_copy(recovery)
+        assert failed == [True]
+        replica._record_failure(error.value)
+        completed = replica.journal.get("candidate")
+        assert completed["complete"]
+        assert completed["catalog"]["storage_channel_id"] == REPLACEMENT
+        assert replica._open_staged(completed).path.exists()
+        calls = list(remote.calls)
+        await replica.close()
+        replica = ChannelReplica(
+            configured, replica.runtime, transport_factory=remote.factory
+        )
+        replica.start = lambda: None
+        await replica.action("retry")
+        await replica._recover_copy(recovery)
+        assert replica.journal.get("candidate") == completed
+        assert replica.status()["phase"] == "ready_to_activate"
+        assert remote.calls == calls
+        assert not list(configured.resolved_data_dir.glob(".replica-mapping-*"))
+    finally:
+        await dispose(replica, store)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("phase", ["paused", "disabled"])
+async def test_recovery_completion_preserves_control_stop(tmp_path, phase):
+    _configured, store, remote, replica, _config = setup(tmp_path)
+    recovery = {"target": REPLACEMENT}
+    previous = {"complete": False}
+    replica.journal.set_many({"candidate": previous, "recovery": recovery})
+    replica.update(phase=phase)
+    try:
+        completed = {"complete": True, "discovered": True}
+        assert await replica._complete_recovery(completed, recovery) is False
+        assert replica.journal.get("candidate") == previous
+        assert replica.journal.get("status")["phase"] == phase
+        assert not remote.calls
+        assert replica.journal.get("activation") is None
+    finally:
+        await dispose(replica, store)
+
+
+@pytest.mark.asyncio
+async def test_discovered_completion_with_busy_control_stays_ready_without_deadlock(
+    tmp_path, monkeypatch
+):
+    _configured, store, _remote, replica, _config = setup(tmp_path)
+    recovery = {"target": REPLACEMENT}
+    completed = {"complete": True, "discovered": True}
+    replica.journal.set("recovery", recovery)
+
+    def unexpected_activation():
+        raise AssertionError("Busy controls require explicit activation later")
+
+    monkeypatch.setattr(replica, "activate", unexpected_activation)
+    try:
+        async with replica.control, replica._operation:
+            assert await asyncio.wait_for(
+                replica._complete_recovery(completed, recovery), timeout=2
+            )
+        assert replica.journal.get("candidate") == completed
+        assert replica.journal.get("status")["phase"] == "ready_to_activate"
+    finally:
+        await dispose(replica, store)
+
+
+@pytest.mark.asyncio
+async def test_pause_after_readiness_commit_prevents_automatic_activation(
+    tmp_path, monkeypatch
+):
+    import threading
+
+    _configured, store, _remote, replica, _config = setup(tmp_path)
+    recovery = {"target": REPLACEMENT}
+    completed = {"complete": True, "discovered": True}
+    replica.journal.set("recovery", recovery)
+    committed, release = threading.Event(), threading.Event()
+    save = replica._save_candidate
+    operation = None
+
+    def save_then_wait(*args, **kwargs):
+        result = save(*args, **kwargs)
+        committed.set()
+        release.wait()
+        return result
+
+    def unexpected_activation():
+        raise AssertionError("Pause must win over automatic activation")
+
+    monkeypatch.setattr(replica, "_save_candidate", save_then_wait)
+    monkeypatch.setattr(replica, "activate", unexpected_activation)
+    try:
+        operation = asyncio.create_task(replica._complete_recovery(completed, recovery))
+        assert await asyncio.to_thread(committed.wait, 5)
+        async with replica.control:
+            replica.update(phase="paused")
+            release.set()
+            assert await asyncio.wait_for(operation, timeout=2)
+        assert replica.journal.get("candidate") == completed
+        assert replica.journal.get("status")["phase"] == "paused"
+        assert replica.journal.get("activation") is None
+    finally:
+        release.set()
+        if operation is not None:
+            await asyncio.gather(operation, return_exceptions=True)
+        await dispose(replica, store)
+
+
+@pytest.mark.asyncio
+async def test_resource_rejection_status_and_controls_preserve_unreadable_state(
+    tmp_path, monkeypatch
+):
+    from tgdrive.settings.managed_settings import SettingsProblem
+
+    _configured, store, remote, replica, _config = setup(tmp_path)
+    problem = {
+        "key": "candidate",
+        "code": "ACTIVATION_RESOURCE_LIMIT",
+        "detail": "Preserve the saved recovery state and original archive.",
+    }
+    get = replica.journal.get
+    reads = []
+
+    def reject_saved_values(key, default=None):
+        reads.append(key)
+        assert key == "backup_file", "Rejected state must not be decoded again"
+        return get(key, default)
+
+    def reject_writes(*_args, **_kwargs):
+        raise AssertionError("Resource rejection must not overwrite saved state")
+
+    monkeypatch.setattr(replica.journal, "resource_error", lambda: problem)
+    monkeypatch.setattr(replica.journal, "get", reject_saved_values)
+    monkeypatch.setattr(replica.journal, "set_many", reject_writes)
+    try:
+        for _ in range(2):
+            state = replica.status()
+            assert state["phase"] == "error"
+            assert state["error"]["code"] == problem["code"]
+            assert state["error"]["detail"] == problem["detail"]
+            assert "preserve" in state["error"]["action"]
+            assert state["error"]["retry_at"] == 0
+            assert not state["file_restore_allowed"]
+        for action in ("disable", "retry"):
+            with pytest.raises(SettingsProblem) as error:
+                await replica.action(action)
+            assert error.value.status == 409
+            assert error.value.code == problem["code"]
+        assert replica.blocked is True
+        failure = OSError("Synthetic secondary failure")
+        assert replica._record_failure(failure) is failure
+        await replica._loop()
+        assert reads == ["backup_file", "backup_file"]
+        assert not remote.instances
+    finally:
+        await dispose(replica, store)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("guard_first", [False, True])
+async def test_first_resource_rejection_blocks_mutations_and_keeps_status_readable(
+    tmp_path, monkeypatch, guard_first
+):
+    import json
+
+    _configured, store, _remote, replica, _config = setup(tmp_path)
+    database = replica.journal.backend.db
+    raw = json.dumps([{}] * 65_537)
+    database.replica_state.insert_one({"_id": "candidate", "length": len(raw)})
+    database.replica_chunks.insert_one(
+        {"_id": "candidate\x000", "key": "candidate", "index": 0, "data": raw}
+    )
+    find, reads = database.replica_chunks.find, []
+
+    def counted_read(query, *args, **kwargs):
+        if query.get("key") == "candidate":
+            reads.append(query)
+        return find(query, *args, **kwargs)
+
+    monkeypatch.setattr(database.replica_chunks, "find", counted_read)
+    try:
+        if guard_first:
+            assert replica.blocked is True
+        for _ in range(2):
+            state = replica.status()
+            assert state["phase"] == "error"
+            assert state["error"]["code"] == "ACTIVATION_RESOURCE_LIMIT"
+            assert "preserve" in state["error"]["action"]
+        assert replica.blocked is True
+        assert len(reads) == 1
+        assert database.replica_chunks.find_one({"key": "candidate"})["data"] == raw
+    finally:
+        await dispose(replica, store)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("fault", ["publish", "pause"])
+async def test_staged_resume_preserves_acknowledgements_and_publication_identity(
+    tmp_path, fault
+):
+    configured, store, remote, replica, config = setup(tmp_path)
+    enable_staged_capture(replica, store)
+    try:
+        if fault == "publish":
+            remote.lose_publish_response_channel = BACKUP
+            with pytest.raises(ReplicaTransportError, match="response lost"):
+                await replica._sync(config)
+        else:
+            remote.after_copy = lambda: replica.update(phase="paused")
+            await replica._sync(config)
+            assert not remote.pins
+        job = replica.journal.get("job")
+        index = replica._open_staged(job).path
+        await replica.close()
+        replica = ChannelReplica(
+            configured, replica.runtime, transport_factory=remote.factory
+        )
+        replica.update(phase="syncing")
+        await replica._sync(config)
+        copies = [call for call in remote.calls if call[0] == "copy"]
+        assert len(copies) == 1
+        assert any(call[0] == "verify" for call in remote.calls)
+        publications = [
+            call for call in remote.calls if call[:2] == ("publish", BACKUP)
+        ]
+        if fault == "publish":
+            assert len(publications) == 2
+            assert publications[0][-1] == publications[1][-1]
+        assert replica.status()["protected_revision"] == store.revision
+        assert replica.journal.get("job") is None
+        assert not index.exists()
+        assert not list(configured.resolved_data_dir.glob(".replica-mapping-*"))
+    finally:
+        await dispose(replica, store)
+
+
+@pytest.mark.asyncio
+async def test_staged_inspection_preserves_file_key_refusal_before_remote_probes(
+    tmp_path,
+):
+    from tgdrive.core.encryption import key_record
+    from tgdrive.replication.replica_activation import ActivationError
+    from tgdrive.replication.replica_state import encode_bundle
+
+    _configured, store, remote, replica, config = setup(tmp_path)
+    try:
+        await replica._sync(config)
+        payload = decode_bundle(replica.backup_file().read_bytes(), replica.key())
+        payload["database"]["settings"] = [key_record("f" * 64)]
+        path = tmp_path / "different-file-key.tgdb"
+        path.write_bytes(encode_bundle(payload, replica.key()))
+        path.chmod(0o600)
+        calls = len(remote.instances)
+        with pytest.raises(ActivationError, match="ENCRYPTION_KEY") as error:
+            await replica.inspect_file(path, replica.key())
+        assert error.value.status == 409
+        assert len(remote.instances) == calls
+        assert replica.journal.get("candidate") is None
+    finally:
+        await dispose(replica, store)
 
 
 @pytest.mark.asyncio
@@ -471,7 +979,8 @@ async def test_v2_file_rebuilds_main_from_surviving_backup_without_changing_live
         inspected = replica.journal.get("candidate")
         assert inspected["source_is_backup"]
         assert inspected["catalog"]["storage_channel_id"] == BACKUP
-        assert "database" in inspected and not inspected["complete"]
+        assert "staged" in inspected and "database" not in inspected
+        assert not inspected["complete"]
         target_token = "345678:" + "z" * 30
         await replica.recover_to(REPLACEMENT, target_token, str(REPLACEMENT))
         await replica._recover_copy(replica.journal.get("recovery"))
@@ -484,8 +993,14 @@ async def test_v2_file_rebuilds_main_from_surviving_backup_without_changing_live
             assert remote.messages[key] == value
         assert store.export() == before
         updated = decode_bundle(replica.backup_file().read_bytes(), replica.key())
-        assert updated["catalog"] == recovered["catalog"]
-        assert updated["replica_catalog"] == inspected["catalog"]
+        assert all(
+            updated["catalog"][key] == value
+            for key, value in recovered["catalog"].items()
+        )
+        assert all(
+            updated["replica_catalog"][key] == value
+            for key, value in inspected["catalog"].items()
+        )
         assert updated["credentials"]["bot_tokens"] == [target_token]
     finally:
         await dispose(replica, store)
@@ -515,6 +1030,9 @@ async def test_v2_import_accepts_fresh_access_when_saved_bot_tokens_are_revoked(
             await replica.inspect_file(saved, replica.key(), source=BACKUP)
         assert error.value.code == "RECOVERY_ACCESS_REQUIRED"
         assert replica.journal.get("candidate") is None
+        assert not list(
+            (configured.resolved_data_dir / "recovery-staging").glob("*.sqlite")
+        )
         await replica.inspect_file(
             saved, replica.key(), source=BACKUP, token=fresh_token
         )
@@ -547,7 +1065,7 @@ async def test_v2_database_only_restore_reuses_verified_main_bot_without_extra_t
         )
         await replica._recover_copy(replica.journal.get("recovery"))
         candidate = replica.journal.get("candidate")
-        assert candidate["complete"] and "database" in candidate
+        assert candidate["complete"] and "staged" in candidate
         assert candidate["credentials"]["bot_tokens"] == list(configured.bot_tokens)
         assert candidate["backup_config"] == {"channel": BACKUP, "token": TOKEN}
         assert len([call for call in remote.calls if call[0] == "copy"]) == copies
@@ -1235,6 +1753,9 @@ async def test_pause_during_local_snapshot_does_not_restart_telegram_work(
     _, store, remote, replica, config = setup(tmp_path)
     entered, release = asyncio.Event(), asyncio.Event()
     original_thread = asyncio.to_thread
+    from tgdrive.replication import replica as replica_module
+
+    original_worker = replica_module._worker
     selected = replica._credentials if stage == "credentials" else replica._capture
 
     async def blocked_snapshot(function, *args, **kwargs):
@@ -1246,6 +1767,14 @@ async def test_pause_during_local_snapshot_does_not_restart_telegram_work(
     monkeypatch.setattr(
         "tgdrive.replication.replica.asyncio.to_thread", blocked_snapshot
     )
+
+    async def blocked_worker(function, *args, **kwargs):
+        if function == selected:
+            entered.set()
+            await release.wait()
+        return await original_worker(function, *args, **kwargs)
+
+    monkeypatch.setattr(replica_module, "_worker", blocked_worker)
     operation = asyncio.create_task(replica._sync(config))
     try:
         await asyncio.wait_for(entered.wait(), 1)
@@ -1412,7 +1941,9 @@ async def test_inspected_backup_rebuilds_replacement_main_when_original_main_is_
         assert restored["catalog"]["storage_channel_id"] == REPLACEMENT
         assert replica.status()["phase"] == "ready_to_activate"
         assert restored["credentials"]["bot_tokens"] == ["345678:" + "z" * 30]
-        for node in files_in(restored["catalog"]):
+        for node in replica._open_staged(restored).nodes():
+            if node["kind"] != "file":
+                continue
             for part in parts_in(node):
                 assert (REPLACEMENT, part["message_id"]) in remote.messages
         assert (

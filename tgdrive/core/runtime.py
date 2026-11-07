@@ -95,9 +95,11 @@ class Runtime:
             logger.info("Checking MongoDB transaction support and write permissions")
             await asyncio.to_thread(self.mongo.transaction, self.mongo.fence)
 
+            self.replica = ChannelReplica(self.settings, self)
             try:
-                if getattr(self, "_activation_unavailable", False):
-                    raise ActivationError("Recovery activation requires review")
+                await asyncio.to_thread(self.replica._check_saved_state)
+                if activation_error := getattr(self, "_activation_unavailable", None):
+                    raise activation_error
                 await asyncio.to_thread(apply_activation, self.settings, self.mongo)
                 from tgdrive.storage.upgrade import upgrade
 
@@ -126,13 +128,7 @@ class Runtime:
                 ValueError,
             ) as error:
                 self.recovery_only = True
-                self.replica = ChannelReplica(self.settings, self)
-                self.replica.report(
-                    "error",
-                    "The MongoDB catalog is unavailable or requires explicit recovery. "
-                    "Existing data has been preserved; normal file operations "
-                    "are stopped.",
-                )
+                await asyncio.to_thread(self.replica._record_failure, error)
                 self.replica.start()
                 logger.warning(
                     "Catalog unavailable: %s Owner web recovery is available; "
@@ -141,35 +137,40 @@ class Runtime:
                 )
                 return
             self.recovery_only = False
-            self.replica = ChannelReplica(self.settings, self)
             self.backup.replica = self.replica
-            if self.replica.journal.get("activation"):
-                candidate = self.replica.journal.get("candidate", {})
-                backup_config = candidate.get("backup_config")
-                transition = {
-                    "activation": None,
-                    "recovery": None,
-                    "candidate": None,
-                    "job": None,
-                    "config": dict(backup_config, enabled=True)
-                    if backup_config
-                    else {},
-                    "status": self.replica.journal.get("status", {})
-                    | {
-                        "phase": "idle" if backup_config else "disabled",
-                        "protected_revision": 0,
-                        "error": None,
-                    },
-                }
-                if "database" in candidate:
-                    transition.update(
-                        key=candidate["key"], mongodb_key=candidate["key"]
-                    )
-                self.replica.journal.set_many(transition)
+
+            def finish_activation():
+                with self.replica.journal.lock:
+                    if not self.replica.journal.get("activation"):
+                        return
+                    candidate = self.replica.journal.get("candidate", {})
+                    backup_config = candidate.get("backup_config")
+                    transition = {
+                        "activation": None,
+                        "recovery": None,
+                        "candidate": None,
+                        "job": None,
+                        "config": dict(backup_config, enabled=True)
+                        if backup_config
+                        else {},
+                        "status": self.replica.journal.get("status", {})
+                        | {
+                            "phase": "idle" if backup_config else "disabled",
+                            "protected_revision": 0,
+                            "error": None,
+                        },
+                    }
+                    if "database" in candidate:
+                        transition.update(
+                            key=candidate["key"], mongodb_key=candidate["key"]
+                        )
+                    self.replica.journal.set_many(transition)
+
+            await asyncio.to_thread(finish_activation)
             try:
                 await asyncio.to_thread(self.replica.key)
             except Exception as error:
-                self.replica._record_failure(error)
+                await asyncio.to_thread(self.replica._record_failure, error)
                 logger.warning(
                     "Recovery key persistence needs attention: %s", type(error).__name__
                 )
@@ -200,7 +201,7 @@ class Runtime:
             check_binding = getattr(self.backup, "check_local_binding", None)
             if check_binding is not None:
                 try:
-                    check_binding(self.store)
+                    await asyncio.to_thread(check_binding, self.store)
                 except RecoveryConflict:
                     logger.warning(
                         "Storage-channel configuration conflicts with local state"
@@ -532,7 +533,10 @@ class Runtime:
 
         if not await asyncio.to_thread(database_is_empty, self.mongo):
             return False
-        replica = ChannelReplica(self.settings, self)
+        replica = getattr(self, "replica", None)
+        created = replica is None
+        if created:
+            replica = ChannelReplica(self.settings, self)
         candidate = await asyncio.to_thread(replica.journal.get, "candidate")
         if candidate and candidate.get("discovered"):
             found = True
@@ -545,7 +549,8 @@ class Runtime:
                 await asyncio.to_thread(replica._record_failure, error)
                 found = True
         if not found:
-            await replica.close()
+            if created:
+                await replica.close()
             return False
         self.recovery_only = True
         self.replica = replica

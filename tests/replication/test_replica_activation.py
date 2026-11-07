@@ -5,12 +5,13 @@ from __future__ import annotations
 import copy
 import json
 import threading
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 from datetime import UTC, datetime
 from types import SimpleNamespace
 
 import pytest
-from bson import Binary, json_util
+from bson import Binary, Decimal128, Int64, json_util
 from pydantic import SecretStr
 
 from tests.support.mongo_fixtures import Collection as FixtureCollection
@@ -761,6 +762,9 @@ def database_snapshot(settings):
 
     backend = for_settings(settings)
     records = {name: copy.deepcopy(backend.data.get(name, [])) for name in COLLECTIONS}
+    from tgdrive.core.encryption import key_record
+
+    records["settings"].append(key_record(settings.encryption_key))
     records["jobs"] = [
         {
             "_id": "interrupted-upload",
@@ -796,6 +800,19 @@ def database_snapshot(settings):
         }
     )
     return records
+
+
+def test_wrong_deployment_key_is_rejected_before_preparing_activation(settings):
+    from tgdrive.core.encryption import key_record
+
+    value = candidate(catalog(settings))
+    value["database"] = database_snapshot(settings)
+    value["database"]["settings"] = [key_record("f" * 64)]
+    before = copy.deepcopy(for_settings(settings).data)
+    with pytest.raises(ActivationError, match="ENCRYPTION_KEY does not match"):
+        prepare_activation(settings, value)
+    assert for_settings(settings).data == before
+    assert not (settings.resolved_data_dir / MANIFEST).exists()
 
 
 @pytest.mark.parametrize("interrupted", [False, True])
@@ -883,3 +900,390 @@ def test_unified_file_rejects_mismatched_database_or_backup_before_activation(
         prepare_activation(settings, value)
     assert installed(settings) == before
     assert not (settings.resolved_data_dir / MANIFEST).exists()
+
+
+def staged_candidate(settings, *, jobs=()):
+    from tgdrive.recovery.recovery_file import sanitize_database
+    from tgdrive.recovery.staged_snapshot import stage_snapshot
+
+    value = candidate(catalog(settings))
+    database = sanitize_database(database_snapshot(settings))
+    database["jobs"] = list(jobs)
+    database["operations"] = [
+        {
+            "_id": "old-operation",
+            "operation_id": "old-operation",
+            "node_id": next(
+                row["_id"] for row in database["nodes"] if row["kind"] == "file"
+            ),
+        }
+    ]
+    envelope = {
+        "format": "tgdrive-backup",
+        "version": 2,
+        "complete": True,
+        "created_at": "2026-10-28T10:00:00Z",
+        "database": database,
+        "replica": {"channel": NEW, "messages": {"123": 1123}},
+        "credentials": value["credentials"],
+    }
+    directory = settings.resolved_data_dir / "recovery-staging" / "case"
+    directory.mkdir(parents=True, mode=0o700)
+    source = directory / "snapshot.json"
+    source.write_text(json_util.dumps(envelope), encoding="utf-8")
+    index = stage_snapshot(source, directory / "snapshot.sqlite")
+    value["catalog"] = {
+        name: value["catalog"][name]
+        for name in (
+            "schema_version",
+            "drive_id",
+            "revision",
+            "backed_up_revision",
+            "storage_channel_id",
+        )
+    }
+    value["staged"] = {
+        "path": index.path.relative_to(settings.resolved_data_dir).as_posix(),
+        "sha256": index.digest,
+    }
+    return value, index
+
+
+def test_staged_activation_streams_bounded_batches_and_retains_history(
+    settings, monkeypatch
+):
+    before = catalog(settings)
+    jobs = (
+        {"_id": f"job-{index}", "archived": True, "summary": {"name": "Saved"}}
+        for index in range(700)
+    )
+    value, _index = staged_candidate(settings, jobs=jobs)
+    batches = []
+    original = Collection.insert_many
+
+    def insert(collection, rows, **kwargs):
+        batches.append((collection.name, len(rows)))
+        return original(collection, rows, **kwargs)
+
+    monkeypatch.setattr(Collection, "insert_many", insert)
+    prepare_activation(settings, value)
+    assert installed(settings) == before
+    manifest = read_private(settings.resolved_data_dir / MANIFEST)
+    assert len(manifest) < 16 * 1024
+    assert b'"database"' not in manifest and b'"root"' not in manifest
+    assert _apply(effective_settings(settings))
+    after = installed(settings)
+    assert after["storage_channel_id"] == NEW
+    assert next(iter(after["root"]["children"].values()))["message_id"] == 1123
+    assert after["shares"] == before["shares"]
+    backend = for_settings(settings)
+    assert len(backend.data["jobs"]) == 700
+    assert backend.data["operations"] == [] and backend.data["deletions"] == []
+    assert backend.data["preparations"] == [] and backend.data["sessions"] == []
+    assert backend.data["identities"] == [] and backend.data["receipts"] == []
+    assert max(count for _name, count in batches) <= 256
+    assert not _apply(settings)
+
+
+@pytest.mark.parametrize(
+    "change",
+    [
+        "digest",
+        "permissions",
+        "symlink",
+        "parent_symlink",
+        "path",
+        "credentials",
+        "channel",
+        "key",
+    ],
+)
+def test_staged_activation_refuses_changed_or_unsafe_source_before_prepare(
+    settings, change
+):
+    from tgdrive.core.encryption import key_record
+    from tgdrive.recovery.staged_snapshot import stage_snapshot
+
+    value, index = staged_candidate(settings)
+    if change == "digest":
+        value["staged"]["sha256"] = "0" * 64
+    elif change == "permissions":
+        index.path.chmod(0o644)
+    elif change == "symlink":
+        target = index.path.with_suffix(".saved")
+        index.path.rename(target)
+        index.path.symlink_to(target)
+    elif change == "parent_symlink":
+        parent = index.path.parent
+        target = parent.with_name("saved")
+        parent.rename(target)
+        parent.symlink_to(target, target_is_directory=True)
+    elif change == "path":
+        value["staged"]["path"] = "recovery-staging/../snapshot.sqlite"
+    elif change == "credentials":
+        value["credentials"]["session_secret"] = "changed" * 8
+    elif change == "channel":
+        value["catalog"]["storage_channel_id"] = -100999999
+    else:
+        source = index.path.with_suffix(".json")
+        raw = json_util.loads(source.read_bytes())
+        raw["database"]["settings"] = [key_record("f" * 64)]
+        source.write_text(json_util.dumps(raw), encoding="utf-8")
+        index.path.unlink()
+        value["staged"]["sha256"] = stage_snapshot(source, index.path).digest
+    before = copy.deepcopy(for_settings(settings).data)
+    with pytest.raises(ActivationError):
+        prepare_activation(settings, value)
+    assert for_settings(settings).data == before
+    assert not (settings.resolved_data_dir / MANIFEST).exists()
+
+
+def test_staged_activation_rechecks_index_and_replays_atomic_failure(settings):
+    value, index = staged_candidate(settings)
+    backend = for_settings(settings)
+    before = copy.deepcopy(backend.data)
+    prepare_activation(settings, value)
+    original = index.path.read_bytes()
+    with index.path.open("ab") as changed:
+        changed.write(b"changed")
+    with pytest.raises(ActivationError):
+        _apply(settings)
+    assert backend.data == before
+    index.path.write_bytes(original)
+    backend.fail_insert = True
+    with pytest.raises(RuntimeError, match="transaction interruption"):
+        _apply(settings)
+    assert backend.data == before
+    assert _apply(settings)
+    assert installed(settings)["storage_channel_id"] == NEW
+    assert not _apply(settings)
+
+
+def test_existing_large_preservation_archive_is_checked_without_loading(
+    settings, monkeypatch
+):
+    import tgdrive.replication.replica_activation as module
+
+    archive = settings.resolved_data_dir / "recovery-archive" / "private"
+    archive.mkdir(parents=True, mode=0o700)
+    path = archive / "mongodb-before.json"
+    with path.open("wb") as source:
+        source.truncate(128 * 1024**2)
+    path.chmod(0o600)
+    monkeypatch.setattr(
+        module, "private_reader", lambda _path: pytest.fail("read whole archive")
+    )
+    module._preserve_mongo(for_settings(settings), archive)
+
+
+def test_staged_policy_normalization_remains_replayable(settings):
+    from tgdrive.recovery.staged_snapshot import stage_snapshot
+
+    value, index = staged_candidate(settings)
+    source = index.path.with_suffix(".json")
+    raw = json_util.loads(source.read_bytes())
+    raw["credentials"]["preferences"]["performance-preferences.json"] = {
+        "timezone": "UTC"
+    }
+    value["credentials"] = copy.deepcopy(raw["credentials"])
+    source.write_text(json_util.dumps(raw), encoding="utf-8")
+    index.path.unlink()
+    value["staged"]["sha256"] = stage_snapshot(source, index.path).digest
+    prepare_activation(settings, value)
+    assert effective_settings(settings).timezone == "UTC"
+    assert _apply(settings)
+    assert not _apply(settings)
+
+
+@pytest.mark.parametrize("failure", [None, "history", "insert"])
+def test_staged_activation_closes_partial_iterators_in_their_worker(
+    settings, monkeypatch, failure
+):
+    from tgdrive.recovery.staged_snapshot import StagedSnapshot, stage_snapshot
+
+    jobs = (
+        [{"_id": "bad", "archived": True, "summary": "invalid"}]
+        if failure == "history"
+        else []
+    )
+    value, index = staged_candidate(settings, jobs=jobs)
+    if failure == "insert":
+        source = index.path.with_suffix(".json")
+        raw = json_util.loads(source.read_bytes())
+        template = next(
+            row for row in raw["database"]["nodes"] if row["kind"] == "file"
+        )
+        raw["database"]["nodes"].extend(
+            dict(
+                template,
+                _id=f"bulk-{number}",
+                name=f"bulk-{number}.bin",
+                name_key=f"bulk-{number}.bin",
+            )
+            for number in range(600)
+        )
+        source.write_text(json_util.dumps(raw), encoding="utf-8")
+        index.path.unlink()
+        value["staged"]["sha256"] = stage_snapshot(source, index.path).digest
+    observed, closed = [], []
+    original = StagedSnapshot.records
+
+    def tracked(snapshot, collection):
+        def stream():
+            origin = threading.get_ident()
+            try:
+                yield from original(snapshot, collection)
+            finally:
+                closed.append((origin, threading.get_ident()))
+
+        iterator = stream()
+        observed.append(iterator)  # Retain it as an exception traceback/GC could.
+        return iterator
+
+    monkeypatch.setattr(StagedSnapshot, "records", tracked)
+    with ThreadPoolExecutor(max_workers=1) as worker:
+        try:
+            if failure == "history":
+                with pytest.raises(ActivationError):
+                    worker.submit(prepare_activation, settings, value).result()
+            else:
+                worker.submit(prepare_activation, settings, value).result()
+                if failure == "insert":
+                    for_settings(settings).fail_insert = True
+                    with pytest.raises(RuntimeError, match="transaction interruption"):
+                        worker.submit(_apply, settings).result()
+            assert observed and all(iterator.gi_frame is None for iterator in observed)
+            assert closed and all(origin == closer for origin, closer in closed)
+        finally:
+            # Keep a failing regression safe to collect on the test's thread.
+            worker.submit(lambda: [iterator.close() for iterator in observed]).result()
+
+
+def test_oversize_pending_activation_is_a_preserved_resource_limit(settings):
+    path = settings.resolved_data_dir / MANIFEST
+    path.parent.mkdir(parents=True)
+    with path.open("wb") as record:
+        record.write(b"preserve this activation")
+        record.truncate(64 * 1024**2 + 1)
+    path.chmod(0o600)
+    before = path.stat()
+    backend = for_settings(settings)
+    database = copy.deepcopy(backend.data)
+    for load in (effective_settings, _apply):
+        with pytest.raises(ActivationError) as failure:
+            load(settings)
+        assert failure.value.code == "ACTIVATION_RESOURCE_LIMIT"
+        assert failure.value.status == 409
+        detail = str(failure.value)
+        assert len(detail) < 400
+        assert "64 MiB compatibility admission limit" in detail
+        assert (
+            "does not establish corruption" in detail
+            and "record is preserved" in detail
+        )
+        assert (
+            "intact compatible archive" in detail
+            and "no fallback is established" in detail
+        )
+        assert "docs/backup-recovery.md" in detail
+    assert backend.data == database
+    assert path.stat().st_size == before.st_size
+    assert path.stat().st_mtime_ns == before.st_mtime_ns
+    assert list(path.parent.iterdir()) == [path]
+
+
+@pytest.mark.parametrize("step", ["decode", "catalog"])
+def test_pending_activation_memory_exhaustion_is_not_misreported_as_corruption(
+    settings, monkeypatch, step
+):
+    import tgdrive.replication.replica_activation as module
+
+    prepare_activation(settings, candidate(catalog(settings)))
+    path = settings.resolved_data_dir / MANIFEST
+    original = path.read_bytes()
+
+    def exhausted(*_args, **_kwargs):
+        raise MemoryError("Synthetic allocation failure")
+
+    if step == "decode":
+        monkeypatch.setattr(module, "read_legacy_value", exhausted)
+    else:
+        monkeypatch.setattr(MongoStore, "_validate_payload", exhausted)
+    with pytest.raises(ActivationError) as failure:
+        effective_settings(settings)
+    assert failure.value.code == "ACTIVATION_RESOURCE_LIMIT"
+    assert "available memory" in str(failure.value)
+    assert len(str(failure.value)) < 400
+    assert path.read_bytes() == original
+    assert not (path.parent / "recovery-archive").exists()
+
+
+def test_legacy_whole_manifest_resource_limit_precedes_candidate_construction(
+    settings, monkeypatch
+):
+    import tgdrive.recovery.staged_snapshot as staged
+    import tgdrive.replication.replica_activation as module
+
+    prepare_activation(settings, candidate(catalog(settings)))
+    path = settings.resolved_data_dir / MANIFEST
+    original = path.read_bytes()
+    before = copy.deepcopy(for_settings(settings).data)
+    monkeypatch.setattr(staged, "MAX_VALUE_ITEMS", 32)
+    monkeypatch.setattr(
+        module,
+        "_candidate",
+        lambda *_args: pytest.fail("Constructed excessive candidate"),
+    )
+    with pytest.raises(ActivationError) as failure:
+        effective_settings(settings)
+    assert failure.value.code == "ACTIVATION_RESOURCE_LIMIT"
+    assert path.read_bytes() == original
+    assert for_settings(settings).data == before
+    assert not (path.parent / "recovery-archive").exists()
+
+
+def test_bounded_legacy_loader_preserves_canonical_extended_json_and_identity(settings):
+    import tgdrive.replication.replica_activation as module
+
+    value = candidate(catalog(settings))
+    value["database"] = database_snapshot(settings)
+    value["database"]["jobs"] = [
+        {
+            "_id": "typed-history",
+            "archived": True,
+            "summary": {
+                "name": "Typed history",
+                "at": datetime(2026, 10, 28, tzinfo=UTC),
+                "large": Int64(2**40),
+                "binary": Binary(b"typed", 128),
+                "decimal": Decimal128("NaN"),
+                "floating": float("nan"),
+            },
+        }
+    ]
+    identity = prepare_activation(settings, value)
+    path = settings.resolved_data_dir / MANIFEST
+    loaded = module._load(settings)
+    assert loaded["id"] == identity == module._activation_identity(loaded)
+    assert module._raw(loaded) == path.read_bytes()
+    assert effective_settings(settings).storage_channel == NEW
+
+
+def test_activation_writer_rejects_unreadable_phase_before_replacing_the_record(
+    settings, monkeypatch
+):
+    import tgdrive.recovery.staged_snapshot as staged
+    import tgdrive.replication.replica_activation as module
+
+    prepare_activation(settings, candidate(catalog(settings)))
+    path = settings.resolved_data_dir / MANIFEST
+    original = path.read_bytes()
+    value = module._load(settings)
+    value["phase"] = "preserved"
+    monkeypatch.setattr(staged, "MAX_VALUE_ITEMS", 8)
+    with pytest.raises(ActivationError) as failure:
+        module._write(settings, value)
+    assert failure.value.code == "ACTIVATION_RESOURCE_LIMIT"
+    assert path.read_bytes() == original
+    assert json.loads(original)["phase"] == "prepared"
+    assert list(path.parent.iterdir()) == [path]

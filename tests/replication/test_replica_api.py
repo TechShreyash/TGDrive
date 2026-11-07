@@ -47,6 +47,85 @@ def owner(tmp_path, monkeypatch):
     store.close()
 
 
+def test_rejected_legacy_journal_is_visible_and_cannot_be_cleared_by_controls(
+    owner, monkeypatch
+):
+    import copy
+
+    client, _, replica = owner
+    login(client)
+    database = replica.journal.backend.db
+    raw = json.dumps([{}] * 65_537)
+    database.replica_state.insert_one({"_id": "candidate", "length": len(raw)})
+    database.replica_chunks.insert_one(
+        {"_id": "candidate\x000", "key": "candidate", "index": 0, "data": raw}
+    )
+    preserved = copy.deepcopy(
+        (database.replica_state.rows, database.replica_chunks.rows)
+    )
+    find, reads = database.replica_chunks.find, []
+
+    def counted_read(query, *args, **kwargs):
+        if query.get("key") == "candidate":
+            reads.append(query)
+        return find(query, *args, **kwargs)
+
+    monkeypatch.setattr(database.replica_chunks, "find", counted_read)
+    for _ in range(2):
+        response = client.get("/api/v1/replica")
+        assert response.status_code == 200
+        assert response.json()["error"]["code"] == "ACTIVATION_RESOURCE_LIMIT"
+    for action in ("disable", "retry"):
+        response = client.post("/api/v1/replica/action", json={"action": action})
+        assert response.status_code == 409
+        assert response.json()["code"] == "ACTIVATION_RESOURCE_LIMIT"
+    assert len(reads) == 1
+    assert preserved == (database.replica_state.rows, database.replica_chunks.rows)
+
+
+async def test_request_recovery_guard_keeps_legacy_decoding_off_the_event_loop(
+    owner, monkeypatch
+):
+    import threading
+
+    from starlette.requests import Request
+
+    from tgdrive.web import app as app_module
+
+    client, runtime, _replica = owner
+    loop = asyncio.get_running_loop()
+    caller, entered, release = threading.get_ident(), asyncio.Event(), threading.Event()
+
+    class HeldReplica:
+        @property
+        def blocked(self):
+            assert threading.get_ident() != caller
+            loop.call_soon_threadsafe(entered.set)
+            assert release.wait(3)
+            return False
+
+    runtime.replica = HeldReplica()
+    monkeypatch.setattr(app_module, "_is_admin", lambda _request: True)
+    request = Request(
+        {
+            "type": "http",
+            "app": client.app,
+            "method": "POST",
+            "path": "/api/v1/nodes",
+            "headers": [],
+            "route": SimpleNamespace(path="/api/v1/nodes"),
+        }
+    )
+    operation = asyncio.create_task(app_module.require_admin(request))
+    try:
+        await asyncio.wait_for(entered.wait(), 2)
+        await asyncio.sleep(0)
+        assert not operation.done()
+    finally:
+        release.set()
+    await operation
+
+
 def test_replica_is_owner_only_and_cross_origin_mutations_are_rejected(owner):
     client, _, _ = owner
     for path in ("", "/file", "/report"):
@@ -360,7 +439,43 @@ def test_recovery_file_import_requires_authentication_and_same_origin(owner):
     replica.inspect_file.assert_not_awaited()
 
 
-def test_recovery_file_import_streams_large_files_without_a_size_limit(owner):
+def test_legacy_import_reports_supported_version_matched_restore(owner):
+    from tgdrive.recovery.recovery_file import LegacyRecoveryFile
+
+    client, _, replica = owner
+    replica.inspect_file = AsyncMock(side_effect=LegacyRecoveryFile())
+    login(client)
+    response = client.post(
+        "/api/v1/replica/import",
+        content=b"legacy archive",
+        headers={"Content-Type": "application/octet-stream"},
+    )
+    assert response.status_code == 409
+    assert response.json()["code"] == "LEGACY_BACKUP_REQUIRES_UPGRADE"
+    assert "tagged v2.2" in response.json()["detail"]
+
+
+def test_recovery_file_import_rejects_oversize_stream_before_inspection(
+    owner, monkeypatch
+):
+    monkeypatch.setattr("tgdrive.replication.replica_api.MAX_STAGED_RECOVERY_BYTES", 16)
+    client, _, replica = owner
+    replica.inspect_file = AsyncMock(return_value={"phase": "paused"})
+    login(client)
+    response = client.post(
+        "/api/v1/replica/import",
+        content=iter([b"x" * 8] * 3),
+        headers={
+            "Content-Type": "application/octet-stream",
+            "X-TGDrive-Recovery-Key": "a1" * 32,
+        },
+    )
+    assert response.status_code == 413
+    replica.inspect_file.assert_not_awaited()
+    assert not list(replica.directory.glob(".replica-import-*"))
+
+
+def test_recovery_file_import_streams_files_within_provider_limit(owner):
     client, _, replica = owner
     replica.inspect_file = AsyncMock(return_value={"phase": "paused"})
     login(client)
@@ -374,7 +489,6 @@ def test_recovery_file_import_streams_large_files_without_a_size_limit(owner):
     )
     assert response.status_code != 413
     replica.inspect_file.assert_awaited_once()
-
 
 
 def test_recovery_file_import_remains_available_during_recovery_and_connection_repair(

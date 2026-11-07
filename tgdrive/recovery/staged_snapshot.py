@@ -84,6 +84,10 @@ CREATE TABLE metadata (key TEXT PRIMARY KEY, value BLOB NOT NULL);
 """
 
 
+class RecoveryResourceLimit(ValueError):
+    """JSON admission exceeded a bounded decoder resource allowance."""
+
+
 def _pack(value):
     raw = BSON.encode(value)
     if len(raw) > MAX_BSON_BYTES:
@@ -209,7 +213,9 @@ class _Reader:
             return b""
         remaining = MAX_TOKEN_BYTES - (self.position - self.checkpoint)
         if remaining <= 0:
-            raise ValueError("Recovery JSON token or whitespace exceeds its limit")
+            raise RecoveryResourceLimit(
+                "Recovery JSON token or whitespace exceeds its limit"
+            )
         data = self.source.read(
             min(size if size > 0 else READ_BYTES, READ_BYTES, remaining)
         )
@@ -218,7 +224,8 @@ class _Reader:
 
 
 class _Parser:
-    def __init__(self, source):
+    def __init__(self, source, *, object_hook=_object):
+        self.object_hook = object_hook
         self.reader = _Reader(source)
         self.events = iter(
             ijson.basic_parse(self.reader, use_float=True, buf_size=READ_BYTES)
@@ -239,14 +246,14 @@ class _Parser:
 
     def value(self, first=None, *, depth=0, start=None, items=None):
         if depth >= MAX_NESTING:
-            raise ValueError("Recovery JSON nesting exceeds its limit")
+            raise RecoveryResourceLimit("Recovery JSON nesting exceeds its limit")
         if start is None:
             start = self.reader.position
         if items is None:
             items = [0]
         event, value = first or self.next()
         if self.reader.position - start > MAX_VALUE_BYTES + READ_BYTES:
-            raise ValueError("Recovery JSON record exceeds its limit")
+            raise RecoveryResourceLimit("Recovery JSON record exceeds its limit")
         if event == "start_map":
             result = {}
             while True:
@@ -257,9 +264,11 @@ class _Parser:
                     raise ValueError("Duplicate or invalid recovery field")
                 items[0] += 1
                 if items[0] > MAX_VALUE_ITEMS:
-                    raise ValueError("Recovery JSON record exceeds its item limit")
+                    raise RecoveryResourceLimit(
+                        "Recovery JSON record exceeds its item limit"
+                    )
                 result[key] = self.value(depth=depth + 1, start=start, items=items)
-            return _object(result)
+            return self.object_hook(result)
         if event == "start_array":
             result = []
             while True:
@@ -268,7 +277,9 @@ class _Parser:
                     return result
                 items[0] += 1
                 if items[0] > MAX_VALUE_ITEMS:
-                    raise ValueError("Recovery JSON record exceeds its item limit")
+                    raise RecoveryResourceLimit(
+                        "Recovery JSON record exceeds its item limit"
+                    )
                 result.append(
                     self.value(first, depth=depth + 1, start=start, items=items)
                 )
