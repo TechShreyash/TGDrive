@@ -184,8 +184,8 @@ docker compose --env-file .env.example config --no-env-resolution --quiet
 
 The locked Pyright 1.1.414 checks `tgdrive`, `scripts` and `tests` in standard
 mode using the configured Python 3.14 environment. The CI Quality job runs
-the same check after syncing all dependency groups. Static analysis does not establish runtime
-behavior or replace the relevant tests. Keep the 80% coverage floor. Compose
+the same check after syncing all dependency groups. Static analysis does not
+establish runtime behavior or replace the relevant tests. Keep the 80% coverage floor. Compose
 validation checks syntax, not placeholder credential validity.
 
 </details>
