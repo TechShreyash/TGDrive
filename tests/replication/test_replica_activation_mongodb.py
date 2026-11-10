@@ -14,6 +14,7 @@ import pytest
 from pydantic import SecretStr
 
 from tgdrive.core.config import Settings
+from tgdrive.core.encryption import key_record
 from tgdrive.replication.replica_activation import (
     MANIFEST,
     ActivationError,
@@ -76,7 +77,9 @@ def deployment(tmp_path):
             SESSION_SECRET="s" * 40,
             ENCRYPTION_KEY="e" * 64,
         )
-        store = MongoStore.create(backend)
+        store = MongoStore.create(
+            backend, initial_settings=[key_record(settings.encryption_key)]
+        )
         store.bind_storage_channel(OLD)
         folder = store.create_folder("/", "Projects")
         parts = [
