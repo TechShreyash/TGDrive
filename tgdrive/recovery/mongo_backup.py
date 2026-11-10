@@ -294,10 +294,8 @@ class MongoProtection:
 
     async def backup(self, store, *, force=False):
         await self.verify_lineage(store)
-        if await asyncio.to_thread(lambda: store.storage_channel_id is None):
-            await asyncio.to_thread(
-                store.bind_storage_channel, self.settings.storage_channel
-            )
+        if await _worker(lambda: store.storage_channel_id is None):
+            await _worker(store.bind_storage_channel, self.settings.storage_channel)
         if force:
             return await self.snapshot_now(store)
         return False

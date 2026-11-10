@@ -7,6 +7,7 @@ import fcntl
 import inspect
 import logging
 import time
+from contextlib import AsyncExitStack
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -21,7 +22,7 @@ from tgdrive.telegram.client_pool import ClientPool
 from tgdrive.telegram.clients import build_bot_mode_client, build_client_pool
 from tgdrive.transfers.manager import TransferManager, restore_telegram_cooldowns
 from tgdrive.transfers.remote import RemoteClient, RemoteTimeouts
-from tgdrive.transfers.tasks import TransferRegistry
+from tgdrive.transfers.tasks import TransferRegistry, _journalled
 
 if TYPE_CHECKING:
     from tgdrive.core.governor import Governor
@@ -31,6 +32,7 @@ if TYPE_CHECKING:
     from tgdrive.transfers.uploads import ResumableUploads
 
 logger = logging.getLogger(__name__)
+_worker = _journalled(asyncio.to_thread)
 
 
 class Runtime:
@@ -102,49 +104,56 @@ class Runtime:
             # Database configuration, connectivity and ownership are startup
             # requirements, including when recovery metadata is available.
             logger.info("Checking MongoDB connectivity")
-            await asyncio.to_thread(self.mongo.ping)
+            await _worker(self.mongo.ping)
             logger.info("Acquiring MongoDB drive ownership")
-            await asyncio.to_thread(self.mongo.acquire)
-            self._mongo_acquired = True
+
+            def acquire():
+                self.mongo.acquire()
+                self._mongo_acquired = True
+
+            await _worker(acquire)
             logger.info("Checking MongoDB transaction support and write permissions")
-            await asyncio.to_thread(self.mongo.transaction, self.mongo.fence)
+            await _worker(self.mongo.transaction, self.mongo.fence)
 
             self.replica = ChannelReplica(self.settings, self)
             try:
-                await asyncio.to_thread(self.replica._check_saved_state)
+                await _worker(self.replica._check_saved_state)
                 if activation_error := getattr(self, "_activation_unavailable", None):
                     raise activation_error
-                await asyncio.to_thread(apply_activation, self.settings, self.mongo)
+                await _worker(apply_activation, self.settings, self.mongo)
                 from tgdrive.storage.upgrade import upgrade
 
                 # A 2.0-2.2 drive is upgraded in place; its files stay where they are.
-                await asyncio.to_thread(upgrade, self.mongo, self.settings)
+                await _worker(upgrade, self.mongo, self.settings)
                 if await self._offer_backup_restore():
                     return
-                created = await asyncio.to_thread(
-                    initialize_if_empty, self.settings, self.mongo
-                )
+                created = await _worker(initialize_if_empty, self.settings, self.mongo)
                 logger.info(
                     "Created a new MongoDB drive from deployment configuration"
                     if created
                     else "Opening the existing MongoDB drive"
                 )
-                self.store = await self.backup.restore()
+
+                @_journalled
+                async def restore_store():
+                    self.store = await self.backup.restore()
+
+                await restore_store()
                 from tgdrive.core.encryption import check_drive_key
 
-                await asyncio.to_thread(
-                    check_drive_key, self.mongo, self.settings.encryption_key
-                )
+                await _worker(check_drive_key, self.mongo, self.settings.encryption_key)
             except (
                 ActivationError,
                 BackupError,
                 CorruptStoreError,
                 ValueError,
             ) as error:
+                if (task := asyncio.current_task()) is not None and task.cancelling():
+                    raise
                 self.recovery_only = True
-                await asyncio.to_thread(self.replica._record_failure, error)
+                await _worker(self.replica._record_failure, error)
                 if getattr(error, "code", None) != "ACTIVATION_RESOURCE_LIMIT":
-                    await asyncio.to_thread(
+                    await _worker(
                         self.replica.report,
                         "error",
                         "The MongoDB catalog is unavailable or requires explicit "
@@ -158,6 +167,7 @@ class Runtime:
                     error,
                 )
                 return
+            assert self.store is not None
             self.recovery_only = False
             self.backup.replica = self.replica
 
@@ -188,11 +198,13 @@ class Runtime:
                         )
                     self.replica.journal.set_many(transition)
 
-            await asyncio.to_thread(finish_activation)
+            await _worker(finish_activation)
             try:
-                await asyncio.to_thread(self.replica.key)
+                await _worker(self.replica.key)
             except Exception as error:
-                await asyncio.to_thread(self.replica._record_failure, error)
+                if (task := asyncio.current_task()) is not None and task.cancelling():
+                    raise
+                await _worker(self.replica._record_failure, error)
                 logger.warning(
                     "Recovery key persistence needs attention: %s", type(error).__name__
                 )
@@ -223,8 +235,12 @@ class Runtime:
             check_binding = getattr(self.backup, "check_local_binding", None)
             if check_binding is not None:
                 try:
-                    await asyncio.to_thread(check_binding, self.store)
+                    await _worker(check_binding, self.store)
                 except RecoveryConflict:
+                    if (
+                        task := asyncio.current_task()
+                    ) is not None and task.cancelling():
+                        raise
                     logger.warning(
                         "Storage-channel configuration conflicts with local state"
                     )
@@ -239,6 +255,8 @@ class Runtime:
                 await self.pool.start()
                 connected = True
             except Exception as exc:
+                if (task := asyncio.current_task()) is not None and task.cancelling():
+                    raise
                 logger.warning(
                     "Telegram unavailable during startup: %s; metadata stays available",
                     type(exc).__name__,
@@ -252,11 +270,19 @@ class Runtime:
                     await self.backup.backup(self.store)
                     lineage_ready = True
                 except RecoveryConflict:
+                    if (
+                        task := asyncio.current_task()
+                    ) is not None and task.cancelling():
+                        raise
                     logger.warning(
                         "Recovery conflict: metadata stays available; "
                         "Telegram mutation recovery is paused"
                     )
                 except Exception:
+                    if (
+                        task := asyncio.current_task()
+                    ) is not None and task.cancelling():
+                        raise
                     logger.warning(
                         "Initial channel verification failed; the saved catalog "
                         "remains available and transfer recovery waits for repair"
@@ -284,17 +310,24 @@ class Runtime:
             from tgdrive.core.governor import Governor
             from tgdrive.transfers.uploads import ResumableUploads
 
-            self.transfers.uploads = await asyncio.to_thread(
-                ResumableUploads, self.settings, self.transfers
-            )
+            manager = self.transfers
+
+            def restore_uploads():
+                manager.uploads = ResumableUploads(self.settings, manager)
+
+            await _worker(restore_uploads)
             self.governor = Governor(self.settings, self)
             await self.governor.tick()
-            if await asyncio.to_thread(lambda: self.replica.blocked):
+            if await _worker(lambda: self.replica.blocked):
                 lineage_ready = False
             if lineage_ready:
                 try:
                     await self.transfers.recover()
                 except Exception:
+                    if (
+                        task := asyncio.current_task()
+                    ) is not None and task.cancelling():
+                        raise
                     lineage_ready = False
                     logger.warning(
                         "Durable transfers are waiting for verified protection; "
@@ -322,17 +355,21 @@ class Runtime:
                     self._reconnect(), name="telegram-reconnect"
                 )
             logger.info("TGDrive runtime is ready")
-        except DatabaseUnavailable as exc:
-            logger.error(
-                "TGDrive startup rejected: %s Correct the MongoDB configuration "
-                "or database access, then restart the deployment.",
-                exc,
-            )
-            await self._cleanup_failed_start()
-            raise
-        except Exception:
-            logger.exception("TGDrive startup failed")
-            await self._cleanup_failed_start()
+        except BaseException as error:
+            if isinstance(error, DatabaseUnavailable):
+                logger.error(
+                    "TGDrive startup rejected: %s Correct the MongoDB configuration "
+                    "or database access, then restart the deployment.",
+                    error,
+                )
+            elif not isinstance(error, asyncio.CancelledError):
+                logger.exception("TGDrive startup failed")
+            try:
+                await self._cleanup_failed_start()
+            except asyncio.CancelledError:
+                pass
+            except BaseException:
+                logger.exception("Cleanup after failed startup failed")
             raise
 
     def _check_upload_allowed(self) -> None:
@@ -450,15 +487,20 @@ class Runtime:
                 return [exc]
         return []
 
+    @_journalled
     async def stop(self) -> list[BaseException]:
         self.ready = False
+        failures: list[BaseException] = []
         if getattr(self, "governor", None) is not None:
-            await self.governor.stop()
+            try:
+                await self.governor.stop()
+            except Exception as exc:
+                logger.exception("Failed to stop the resource governor")
+                failures.append(exc)
         if self._reconnector is not None:
             self._reconnector.cancel()
             await asyncio.gather(self._reconnector, return_exceptions=True)
             self._reconnector = None
-        failures: list[BaseException] = []
         failures.extend(await self._close_media_resources())
         if self.bot_mode is not None:
             try:
@@ -473,9 +515,17 @@ class Runtime:
                 logger.exception("Failed to stop transfer manager")
                 failures.append(exc)
         else:
-            await self.remote.close()
+            try:
+                await self.remote.close()
+            except Exception as exc:
+                logger.exception("Failed to stop the remote transport")
+                failures.append(exc)
         if getattr(self, "replica", None) is not None:
-            await self.replica.close()
+            try:
+                await self.replica.close()
+            except Exception as exc:
+                logger.exception("Failed to stop the channel replica")
+                failures.append(exc)
         if self.store is not None:
             try:
                 await self.backup.stop(self.store)
@@ -505,7 +555,7 @@ class Runtime:
                     logger.exception("Failed to close local persistence")
                     failures.append(exc)
         finally:
-            self._release_owner_lock()
+            await _worker(self._release_owner_lock)
         if failures:
             logger.error("Shutdown completed with %s error(s)", len(failures))
         else:
@@ -520,36 +570,30 @@ class Runtime:
             self._owner_lock.close()
             self._owner_lock = None
 
+    @_journalled
     async def _cleanup_failed_start(self) -> None:
-        if getattr(self, "replica", None) is not None:
-            await self.replica.close()
-        if self.bot_mode is not None:
-            try:
-                await self.bot_mode.stop()
-            except Exception:
-                logger.exception("Bot-mode cleanup after failed startup failed")
-            finally:
-                self.bot_mode.close()
-        try:
-            await self.remote.close()
-        except Exception:
-            logger.exception("Remote-client cleanup after failed startup failed")
-        await self._close_media_resources()
-        try:
-            await self.pool.stop(drain_timeout=10)
-        except Exception:
-            logger.exception("Client-pool cleanup after failed startup failed")
-        try:
+        self.ready = False
+        async with AsyncExitStack() as cleanup:
+            cleanup.push_async_callback(_worker, self._release_owner_lock)
+            if self.store is not None:
+                cleanup.callback(self.store.close)
+            cleanup.callback(self.registry.close)
             if self.transfers is not None:
-                await self.transfers.close()
                 uploads = getattr(self.transfers, "uploads", None)
                 if uploads is not None:
-                    uploads.close()
-            self.registry.close()
-            if self.store is not None:
-                self.store.close()
-        finally:
-            self._release_owner_lock()
+                    cleanup.callback(uploads.close)
+            cleanup.push_async_callback(self.pool.stop, drain_timeout=10)
+            cleanup.push_async_callback(self.remote.close)
+            if getattr(self, "replica", None) is not None:
+                cleanup.push_async_callback(self.replica.close)
+            if self.transfers is not None:
+                cleanup.push_async_callback(self.transfers.close)
+            if self.bot_mode is not None:
+                cleanup.callback(self.bot_mode.close)
+                cleanup.push_async_callback(self.bot_mode.stop)
+            cleanup.push_async_callback(self._close_media_resources)
+            if getattr(self, "governor", None) is not None:
+                cleanup.push_async_callback(self.governor.stop)
 
     async def _offer_backup_restore(self) -> bool:
         """An empty database with a pinned backup opens the restore screen.
@@ -559,22 +603,24 @@ class Runtime:
         from tgdrive.replication.replica import ChannelReplica
         from tgdrive.storage.mongo import database_is_empty
 
-        if not await asyncio.to_thread(database_is_empty, self.mongo):
+        if not await _worker(database_is_empty, self.mongo):
             return False
         replica = getattr(self, "replica", None)
         created = replica is None
         if created:
             replica = ChannelReplica(self.settings, self)
-        candidate = await asyncio.to_thread(replica.journal.get, "candidate")
+        candidate = await _worker(replica.journal.get, "candidate")
         if candidate and candidate.get("discovered"):
             found = True
         else:
             try:
                 found = await replica.discover_backup()
             except Exception as error:
+                if (task := asyncio.current_task()) is not None and task.cancelling():
+                    raise
                 # Never initialize over a backup we could not read.
                 logger.warning("A pinned backup could not be checked; opening recovery")
-                await asyncio.to_thread(replica._record_failure, error)
+                await _worker(replica._record_failure, error)
                 found = True
         if not found:
             if created:

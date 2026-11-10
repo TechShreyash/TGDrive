@@ -8,7 +8,7 @@ import logging
 import math
 import mimetypes
 import time
-from contextlib import asynccontextmanager, suppress
+from contextlib import AsyncExitStack, asynccontextmanager, suppress
 from pathlib import Path
 from typing import Annotated, Any, cast
 
@@ -48,7 +48,6 @@ from tgdrive.core.logging import configure_logging
 from tgdrive.core.runtime import Runtime
 from tgdrive.core.security import (
     SESSION_COOKIE,
-    InvalidSession,
     LoginLimiter,
     SessionManager,
     credential_session_key,
@@ -90,9 +89,9 @@ from tgdrive.transfers.manager import (
     TransferTooLarge,
 )
 from tgdrive.transfers.remote import RemoteError, RemoteTooLarge, UnsafeRemoteURL
-from tgdrive.transfers.tasks import TransferNotFound, TransferRecord
+from tgdrive.transfers.tasks import TransferNotFound, TransferRecord, _journalled
 from tgdrive.web.api_v1 import register_routes
-from tgdrive.web.demo_access import is_demo_restricted, session_access
+from tgdrive.web.demo_access import session_access
 from tgdrive.web.http_guard import (
     ApiBodyGuardMiddleware,
     SameOriginMiddleware,
@@ -159,23 +158,17 @@ def _transfers(request: Request) -> TransferManager:
 
 
 def _is_admin(request: Request) -> bool:
-    token = request.cookies.get(SESSION_COOKIE)
-    if not token:
-        return False
-    try:
-        request.app.state.sessions.verify(token)
-        return True
-    except InvalidSession:
-        return False
+    return session_access(request)["authenticated"]
 
 
 async def require_admin(request: Request) -> None:
-    if not _is_admin(request):
+    access = session_access(request)
+    if not access["authenticated"]:
         raise HTTPException(status_code=401, detail="Not authenticated")
-    request_policy(request)
+    request_policy(restricted=access["demo_read_only"])
     # Use the matched route so proxy root paths cannot bypass demo restrictions.
     path = request.scope["route"].path
-    if is_demo_restricted(request):
+    if access["demo_read_only"]:
         management_path = any(
             path == root or path.startswith(root + "/")
             for root in ("/api/v1/settings", "/api/v1/replica", "/api/v1/backup")
@@ -343,65 +336,60 @@ def create_app(
 
     @asynccontextmanager
     async def lifespan(_app: FastAPI):
+        from tgdrive.observability.traffic import checkpoint_history, sample_performance
+
+        @_journalled
+        async def close(sampler):
+            async with AsyncExitStack() as cleanup:
+                cleanup.push_async_callback(app_runtime.stop)
+                cleanup.push_async_callback(_app.state.posters.close)
+                cleanup.push_async_callback(_app.state.thumbnails.close)
+                cleanup.push_async_callback(_app.state.thumbnail_rebuild.close)
+                cleanup.push_async_callback(
+                    asyncio.gather, *opened_tasks, return_exceptions=True
+                )
+                connection_manager = getattr(app_runtime, "connection_manager", None)
+                if connection_manager is not None:
+                    cleanup.push_async_callback(connection_manager.close)
+                login_service = getattr(_app.state, "premium_login_service", None)
+                if login_service is not None:
+                    cleanup.push_async_callback(login_service.close)
+                if sampler is not None:
+                    sampler.cancel()
+                    with suppress(asyncio.CancelledError):
+                        await sampler
+                    try:
+                        await checkpoint_history(
+                            _app.state.traffic,
+                            app_runtime.pool,
+                            _app.state.telemetry_history,
+                            force=True,
+                        )
+                    except Exception:
+                        logger.exception(
+                            "Could not checkpoint performance history on shutdown"
+                        )
+
         try:
             await _app.state.thumbnail_repair.start()
             await app_runtime.start()
-            await _app.state.thumbnail_rebuild.restore()
-            demo_store = app_runtime.store if settings.demo_mode else None
-            if demo_store is not None:
-                try:
-                    await asyncio.to_thread(demo_store.ensure_demo_files)
-                except BaseException:
-                    await app_runtime.stop()
-                    raise
-            from tgdrive.observability.traffic import (
-                checkpoint_history,
-                sample_performance,
-            )
-
-            class LivePool:
-                # Follows the runtime swap done by Start new drive.
-                def __getattr__(self, name):
-                    return getattr(getattr(_app.state.runtime, "pool", None), name)
-
-            live_pool = LivePool()
-            sampler = asyncio.create_task(
-                sample_performance(
-                    _app.state.traffic,
-                    live_pool,
-                    history=_app.state.telemetry_history,
-                ),
-                name="tgdrive-performance-sampler",
-            )
+            sampler = None
             try:
+                await _app.state.thumbnail_rebuild.restore()
+                demo_store = app_runtime.store if settings.demo_mode else None
+                if demo_store is not None:
+                    await _journalled(asyncio.to_thread)(demo_store.ensure_demo_files)
+                sampler = asyncio.create_task(
+                    sample_performance(
+                        _app.state.traffic,
+                        app_runtime.pool,
+                        history=_app.state.telemetry_history,
+                    ),
+                    name="tgdrive-performance-sampler",
+                )
                 yield
             finally:
-                sampler.cancel()
-                with suppress(asyncio.CancelledError):
-                    await sampler
-                try:
-                    await checkpoint_history(
-                        _app.state.traffic,
-                        live_pool,
-                        _app.state.telemetry_history,
-                        force=True,
-                    )
-                except Exception:
-                    logging.getLogger(__name__).exception(
-                        "Could not checkpoint performance history on shutdown"
-                    )
-                login_service = getattr(_app.state, "premium_login_service", None)
-                if login_service is not None:
-                    await login_service.close()
-                connection_manager = getattr(app_runtime, "connection_manager", None)
-                if connection_manager is not None:
-                    await connection_manager.close()
-                await asyncio.gather(*opened_tasks, return_exceptions=True)
-                await _app.state.thumbnail_rebuild.close()
-                await _app.state.thumbnails.close()
-                await _app.state.posters.close()
-                # "Start new drive" swaps in a fresh runtime; stop that one.
-                await _app.state.runtime.stop()
+                await close(sampler)
         finally:
             sessions.close()
 

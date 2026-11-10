@@ -34,10 +34,8 @@ def write_policy(restricted: bool):
         restricted_writes.reset(token)
 
 
-def request_policy(request):
-    from tgdrive.web.demo_access import is_demo_restricted
-
-    restricted_writes.set(is_demo_restricted(request))
+def request_policy(*, restricted: bool):
+    restricted_writes.set(restricted)
 
 
 def check_ids(identities):

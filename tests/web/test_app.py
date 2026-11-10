@@ -1338,3 +1338,148 @@ def test_readiness_rejects_non_async_pool_health(
         runtime.pool = original
     assert response.status_code == 503
     assert response.json() == {"status": "not ready"}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("failure", ["error", "cancel"])
+async def test_post_start_setup_always_drains_runtime_cleanup(
+    tmp_path, monkeypatch, failure
+):
+    import asyncio
+    from unittest.mock import Mock
+
+    store = new_store(tmp_path / "drive.json")
+    runtime = FakeRuntime(store)
+    settings = make_settings(tmp_path)
+    register_test_backend(monkeypatch, settings, runtime.mongo)
+    app = create_app(settings, runtime=runtime)
+    entered, stopping, release = (asyncio.Event() for _ in range(3))
+    original_stop = runtime.stop
+
+    async def restore():
+        entered.set()
+        if failure == "error":
+            raise RuntimeError("Synthetic post-start setup failure")
+        await asyncio.Event().wait()
+
+    async def stop():
+        stopping.set()
+        await release.wait()
+        await original_stop()
+
+    monkeypatch.setattr(app.state.thumbnail_rebuild, "restore", restore)
+    monkeypatch.setattr(runtime, "stop", stop)
+    monkeypatch.setattr(app.state.sessions, "close", Mock())
+
+    async def serve():
+        async with app.router.lifespan_context(app):
+            pytest.fail("Startup must not succeed")
+
+    task = asyncio.create_task(serve())
+    try:
+        await asyncio.wait_for(entered.wait(), 2)
+        if failure == "cancel":
+            task.cancel()
+        await asyncio.wait_for(stopping.wait(), 1)
+        if failure == "cancel":
+            task.cancel()
+        await asyncio.sleep(0)
+        assert not task.done()
+        assert not runtime.stopped
+        app.state.sessions.close.assert_not_called()
+        release.set()
+        expected = asyncio.CancelledError if failure == "cancel" else RuntimeError
+        with pytest.raises(expected):
+            await task
+        assert runtime.stopped
+        app.state.sessions.close.assert_called_once_with()
+    finally:
+        release.set()
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+        store.close()
+
+
+@pytest.mark.asyncio
+async def test_cancelled_demo_setup_drains_seed_before_runtime_stop(
+    tmp_path, monkeypatch
+):
+    import asyncio
+
+    store = new_store(tmp_path / "drive.json")
+    runtime = FakeRuntime(store)
+    settings = make_settings(tmp_path)
+    settings.demo_mode = True
+    register_test_backend(monkeypatch, settings, runtime.mongo)
+    app = create_app(settings, runtime=runtime)
+    entered, release, finished = (threading.Event() for _ in range(3))
+
+    def seed():
+        entered.set()
+        assert release.wait(5)
+        finished.set()
+
+    monkeypatch.setattr(store, "ensure_demo_files", seed)
+
+    async def serve():
+        async with app.router.lifespan_context(app):
+            pytest.fail("Cancelled startup must not serve requests")
+
+    task = asyncio.create_task(serve())
+    try:
+        assert await asyncio.to_thread(entered.wait, 2)
+        task.cancel()
+        await asyncio.sleep(0)
+        task.cancel()
+        await asyncio.sleep(0)
+        assert not task.done()
+        assert not runtime.stopped
+        release.set()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        assert finished.is_set() and runtime.stopped
+    finally:
+        release.set()
+        await asyncio.gather(task, return_exceptions=True)
+        assert await asyncio.to_thread(finished.wait, 2)
+        store.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("demo,elevated", [(False, False), (True, False), (True, True)])
+async def test_authorization_verifies_once_and_rechecks_next_invocation(
+    app_client, monkeypatch, demo, elevated
+):
+    from unittest.mock import Mock
+
+    from fastapi import HTTPException
+
+    from tgdrive.core.security import InvalidSession
+    from tgdrive.storage.demo_files import restricted_writes
+
+    client, _, _, settings = app_client
+    app = client.app
+    settings.demo_mode = demo
+    verify = Mock(side_effect=[{"demo_admin": elevated}, InvalidSession("revoked")])
+    monkeypatch.setattr(app.state.sessions, "verify", verify)
+    request = Request(
+        {
+            "type": "http",
+            "app": app,
+            "method": "GET",
+            "path": "/api/v1/settings",
+            "headers": [(b"cookie", b"tgdrive_session=synthetic")],
+            "route": SimpleNamespace(path="/api/v1/settings"),
+        }
+    )
+    token = restricted_writes.set(False)
+    try:
+        await app_module.require_admin(request)
+        assert verify.call_count == 1
+        assert restricted_writes.get() is (demo and not elevated)
+        with pytest.raises(HTTPException) as denied:
+            await app_module.require_admin(request)
+        assert denied.value.status_code == 401
+        assert verify.call_count == 2
+    finally:
+        restricted_writes.reset(token)

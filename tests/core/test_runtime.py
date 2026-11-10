@@ -729,3 +729,185 @@ async def test_empty_database_without_backup_creates_a_new_drive(
     runtime = Runtime(settings(tmp_path), pool=cast(ClientPool, FakePool()))
     assert await runtime._offer_backup_restore() is False
     assert not getattr(runtime, "recovery_only", False)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "boundary",
+    [
+        "acquire",
+        "transaction",
+        "receipts",
+        "activation",
+        "key",
+        "binding",
+        "discovery",
+        "catalog",
+    ],
+)
+async def test_cancelled_startup_drains_worker_before_releasing_ownership(
+    tmp_path, monkeypatch, mongo_backend, boundary
+):
+    import threading
+
+    entered, release, finished = (threading.Event() for _ in range(3))
+    events = []
+    receipts = SimpleNamespace(close=lambda: events.append("receipts_closed"))
+    cleanup_started = asyncio.Event()
+
+    def held(*_args):
+        entered.set()
+        assert release.wait(5), "The event loop did not release the startup worker"
+        if boundary == "binding":
+            original_bind(*_args)
+        events.append("worker_finished")
+        finished.set()
+        if boundary in {"activation", "key", "discovery"}:
+            raise ValueError("Synthetic startup worker failure")
+        return receipts if boundary == "receipts" else None
+
+    store = new_store(tmp_path / "drive.json")
+    runtime = Runtime(settings(tmp_path), pool=cast(ClientPool, FakePool()))
+    if boundary == "binding":
+        runtime.backup.restore = AsyncMock(return_value=store)
+    else:
+        runtime.backup = cast(MongoProtection, FakeBackup(store))
+    runtime.remote = cast(RemoteClient, FakeRemote())
+    original_cleanup = runtime._cleanup_failed_start
+
+    async def cleanup():
+        cleanup_started.set()
+        await original_cleanup()
+
+    monkeypatch.setattr(runtime, "_cleanup_failed_start", cleanup)
+    if boundary == "catalog":
+
+        async def restore():
+            await asyncio.to_thread(held)
+            return store
+
+        runtime.backup.restore = restore
+    elif boundary == "receipts":
+        monkeypatch.setattr("tgdrive.transfers.uploads.ResumableUploads", held)
+    elif boundary == "activation":
+        monkeypatch.setattr(
+            "tgdrive.replication.replica_activation.apply_activation", held
+        )
+    elif boundary == "key":
+        monkeypatch.setattr("tgdrive.replication.replica.ChannelReplica.key", held)
+    elif boundary == "binding":
+        original_bind = store.bind_storage_channel
+        monkeypatch.setattr(store, "bind_storage_channel", held)
+    elif boundary == "discovery":
+        from tgdrive.transfers.tasks import _journalled
+
+        async def discover(_replica):
+            return await _journalled(asyncio.to_thread)(held)
+
+        monkeypatch.setattr("tgdrive.storage.mongo.database_is_empty", lambda *_: True)
+        monkeypatch.setattr(
+            "tgdrive.replication.replica.ChannelReplica.discover_backup", discover
+        )
+    else:
+        getattr(mongo_backend, boundary).side_effect = held
+    mongo_backend.release.side_effect = lambda: events.append("ownership_released")
+    task = asyncio.create_task(runtime.start())
+    try:
+        assert await asyncio.to_thread(entered.wait, 3)
+        task.cancel()
+        await asyncio.sleep(0)
+        task.cancel()
+        await asyncio.sleep(0)
+        assert not task.done()
+        assert runtime._owner_lock is not None
+        assert not cleanup_started.is_set()
+        mongo_backend.release.assert_not_called()
+        release.set()
+        expected = (
+            ValueError
+            if boundary in {"activation", "key", "discovery"}
+            else asyncio.CancelledError
+        )
+        with pytest.raises(expected):
+            await task
+        assert runtime._owner_lock is None
+        assert not runtime._mongo_acquired and not runtime.ready
+        mongo_backend.release.assert_called_once_with()
+        assert events.index("worker_finished") < events.index("ownership_released")
+        if boundary == "receipts":
+            assert events.index("receipts_closed") < events.index("ownership_released")
+    finally:
+        release.set()
+        await asyncio.gather(task, return_exceptions=True)
+        if entered.is_set():
+            assert await asyncio.to_thread(finished.wait, 3)
+        if runtime._owner_lock is not None:
+            runtime._mongo_acquired = True
+            await runtime._cleanup_failed_start()
+        store.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("partial", [False, True])
+@pytest.mark.parametrize("cancel", [False, True])
+async def test_cleanup_drains_transfers_before_pool_even_when_replica_close_fails(
+    tmp_path, mongo_backend, partial, cancel
+):
+    from tgdrive.replication.replica import ChannelReplica
+    from tgdrive.transfers.manager import TransferManager
+
+    events = []
+    entered, release = asyncio.Event(), asyncio.Event()
+    pool = FakePool()
+    runtime = Runtime(settings(tmp_path), pool=cast(ClientPool, pool))
+    runtime._prepare_runtime_directories()
+    runtime._owner_lock = (runtime.settings.resolved_data_dir / ".instance.lock").open(
+        "a"
+    )
+    runtime._mongo_acquired = True
+    store = new_store(tmp_path / "drive.json")
+    runtime.store = store
+    runtime.backup = cast(MongoProtection, FakeBackup(store))
+    mongo_backend.release.side_effect = lambda: events.append("owner_released")
+
+    async def close_transfers():
+        entered.set()
+        await release.wait()
+        events.append("transfers_closed")
+
+    async def stop_pool(**_kwargs):
+        events.append("pool_stopped")
+        return ()
+
+    async def close_replica():
+        raise RuntimeError("Synthetic replica cleanup failure")
+
+    runtime.transfers = cast(TransferManager, SimpleNamespace(close=close_transfers))
+    runtime.replica = cast(ChannelReplica, SimpleNamespace(close=close_replica))
+    pool.stop = stop_pool
+    cleanup = runtime._cleanup_failed_start if partial else runtime.stop
+    task = asyncio.create_task(cleanup())
+    try:
+        await asyncio.wait_for(entered.wait(), 2)
+        if cancel:
+            task.cancel()
+            await asyncio.sleep(0)
+            task.cancel()
+            await asyncio.sleep(0)
+        assert not task.done()
+        assert "pool_stopped" not in events
+        assert "owner_released" not in events
+        release.set()
+        if partial or cancel:
+            with pytest.raises(RuntimeError if partial else asyncio.CancelledError):
+                await task
+        else:
+            failures = await task
+            assert failures is not None and len(failures) == 1
+            assert str(failures[0]) == "Synthetic replica cleanup failure"
+        assert events == ["transfers_closed", "pool_stopped", "owner_released"]
+        assert runtime._owner_lock is None and not runtime._mongo_acquired
+    finally:
+        release.set()
+        await asyncio.gather(task, return_exceptions=True)
+        store.close()
