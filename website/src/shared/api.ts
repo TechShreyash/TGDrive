@@ -48,10 +48,17 @@ export function sessionExpiryHandler() {
 export async function request<T>(
     url: string,
     body?: unknown,
-    options: RequestInit & { timeoutMs?: number } = {},
+    options: RequestInit & {
+        timeoutMs?: number;
+        notifySessionExpiry?: boolean;
+    } = {},
 ): Promise<T> {
     const expireSession = sessionExpiryHandler();
-    const { timeoutMs = 60000, ...fetchOptions } = options;
+    const {
+        timeoutMs = 60000,
+        notifySessionExpiry = true,
+        ...fetchOptions
+    } = options;
     const headers = new Headers(fetchOptions.headers);
     headers.set("Accept", "application/json");
     if (body !== undefined) headers.set("Content-Type", "application/json");
@@ -72,7 +79,8 @@ export async function request<T>(
                   ])
                 : AbortSignal.timeout(timeoutMs),
         });
-        if (url !== "/api/checkPassword") expireSession(response.status);
+        if (notifySessionExpiry && url !== "/api/checkPassword")
+            expireSession(response.status);
         text = await response.text();
     } catch (error) {
         if (error instanceof DOMException && error.name === "AbortError")
@@ -177,12 +185,12 @@ export const api = {
         }),
     config: () =>
         request<PublicConfig>("/api/config", undefined, { cache: "no-store" }),
-    session: () =>
+    session: (signal?: AbortSignal) =>
         request<{
             authenticated: boolean;
             demo_read_only?: boolean;
             demo_admin?: boolean;
-        }>("/api/v1/session", undefined, { cache: "no-store" }),
+        }>("/api/v1/session", undefined, { cache: "no-store", signal }),
     login: async (password: string) => {
         for (let attempt = 1; ; attempt++) {
             try {

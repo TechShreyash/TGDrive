@@ -1,4 +1,5 @@
 import Preview from "../previews/Preview";
+import type { VideoProgressMode } from "../previews/video/videoWatchProgress";
 import { useEffect, useState } from "react";
 import {
     Folder,
@@ -45,6 +46,7 @@ export default function ActionDialog({
     dialog,
     destination,
     auth,
+    videoProgressMode,
     onClose,
     onChanged,
     onNotice,
@@ -54,6 +56,7 @@ export default function ActionDialog({
     dialog: ActionDialogState;
     destination: string;
     auth: string;
+    videoProgressMode?: VideoProgressMode;
     onClose: () => void;
     onChanged: () => void;
     onNotice: (message: string, error?: boolean) => void;
@@ -225,7 +228,14 @@ export default function ActionDialog({
             />
         );
     if (dialog.type === "preview")
-        return <Preview item={dialog.item} auth={auth} onClose={onClose} />;
+        return (
+            <Preview
+                item={dialog.item}
+                auth={auth}
+                videoProgressMode={videoProgressMode}
+                onClose={onClose}
+            />
+        );
     if (dialog.type === "restore")
         return (
             <Modal

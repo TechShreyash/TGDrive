@@ -340,6 +340,8 @@ def preview_dialog(page: Any):
     ).to_be_visible()
     download = dialog.get_by_role("link", name="Download Original", exact=True)
     expect(download).to_be_visible()
+    # The entrance transform temporarily shrinks the full-window dialog.
+    expect(dialog).to_have_css("transform", "none")
     metrics = dialog.evaluate("""element => {
       const rect=element.getBoundingClientRect();
       return {left:rect.left,top:rect.top,width:rect.width,height:rect.height,

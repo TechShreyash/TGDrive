@@ -259,7 +259,10 @@ def test_frozen_picture_holds_audio_and_recovers_on_real_frames(
     player.evaluate("""el=>{
       // Stop real picture presentation while the audio clock keeps moving.
       // No manufactured waiting/state-change event should be needed for feedback.
-      el.player.videoRenderer.stopPresentationLoop();
+      const renderer=el.player.videoRenderer;
+      window.restorePresentation=renderer.startPresentationLoop.bind(renderer);
+      renderer.startPresentationLoop=()=>{};
+      renderer.stopPresentationLoop();
       window.frozenFrameCount=el.getVideoPlaybackQuality().totalVideoFrames;
     }""")
     status = page.locator(".advanced-state")
@@ -289,6 +292,9 @@ def test_frozen_picture_holds_audio_and_recovers_on_real_frames(
     )
     expect(page.locator(".advanced-player-host")).to_have_attribute("aria-busy", "true")
     # The existing refill path must restart presentation and sound together.
+    player.evaluate("""el=>{
+      el.player.videoRenderer.startPresentationLoop=window.restorePresentation;
+    }""")
     expect(status).to_have_count(0, timeout=5000)
     assert player.evaluate(
         "el=>el.getVideoPlaybackQuality().totalVideoFrames>window.frozenFrameCount"

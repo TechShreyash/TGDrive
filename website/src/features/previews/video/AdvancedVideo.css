@@ -89,6 +89,18 @@
     margin: 0;
     font-variant-numeric: tabular-nums;
 }
+.advanced-progress-notice {
+    position: absolute;
+    inset: 12px 16px auto;
+    z-index: 2;
+    margin: 0;
+    padding: 8px 12px;
+    border-radius: 6px;
+    color: #eef1f5;
+    background: #15171be6;
+    font-size: 13px;
+    line-height: 1.5;
+}
 .advanced-state-buffering {
     inset: auto 16px 102px;
     padding: 0;

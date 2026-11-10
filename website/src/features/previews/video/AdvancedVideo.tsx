@@ -1,4 +1,10 @@
-import { useEffect, useReducer, useRef, useState } from "react";
+import {
+    useEffect,
+    useLayoutEffect,
+    useReducer,
+    useRef,
+    useState,
+} from "react";
 import { createPortal } from "react-dom";
 import { LoaderCircle, Play, RefreshCw } from "lucide-react";
 import type { MoviElement } from "movi-player/element/slim";
@@ -22,6 +28,9 @@ import {
     formatVideoTime,
     readVideoPosition,
     saveVideoPosition,
+    createVideoProgressWriter,
+    loadServerVideoPosition,
+    type VideoProgressMode,
 } from "./videoWatchProgress";
 import "./AdvancedVideo.css";
 import advancedStyles from "./AdvancedVideo.css?inline";
@@ -329,6 +338,7 @@ export function videoWaitAllowsRetry(idleMs: number, waitMs: number) {
 }
 export default function AdvancedVideo({
     fileId,
+    progressMode,
     src,
     posterUrl,
     name,
@@ -336,6 +346,7 @@ export default function AdvancedVideo({
     qualityControl,
 }: {
     fileId: string;
+    progressMode: VideoProgressMode | null;
     src: string;
     posterUrl: string;
     name: string;
@@ -388,9 +399,94 @@ export default function AdvancedVideo({
     const [seekAttempt, setSeekAttempt] = useState(0);
     const [showStatus, setShowStatus] = useState(false);
     const [playbackError, setPlaybackError] = useState("");
-    const [continueTime, setContinueTime] = useState(() =>
-        readVideoPosition(fileId),
-    );
+    const [continueTime, setContinueTime] = useState<number | null>(null);
+    const [progressNotice, setProgressNotice] = useState("");
+    const progressWriter = useRef<ReturnType<
+        typeof createVideoProgressWriter
+    > | null>(null);
+    const progressAccess = useRef(progressMode);
+    progressAccess.current = progressMode;
+    const progressGeneration = useRef(0);
+    const progressActive = useRef(false);
+    const progressRead = useRef<AbortController | null>(null);
+    const hasStartedWatching = useRef(false);
+    const playbackHasStarted = useRef(false);
+    const closingPosition = useRef<
+        (() => { time: number; duration: number } | null) | null
+    >(null);
+    const newProgressWriter = () => {
+        const generation = progressGeneration.current;
+        return createVideoProgressWriter(fileId, (message) => {
+            if (
+                progressActive.current &&
+                generation === progressGeneration.current
+            )
+                setProgressNotice(message);
+        });
+    };
+    const finalizeProgress = (
+        writer: ReturnType<typeof createVideoProgressWriter> | null,
+    ) => {
+        if (!writer) return;
+        const saved = closingPosition.current?.();
+        if (saved) writer.save(saved.time, saved.duration);
+        writer.close();
+    };
+    useEffect(() => {
+        hasStartedWatching.current = false;
+        playbackHasStarted.current = false;
+    }, [fileId]);
+    useEffect(() => {
+        const controller = new AbortController();
+        progressRead.current = controller;
+        progressActive.current = true;
+        ++progressGeneration.current;
+        setContinueTime(null);
+        const writer = progressMode === "server" ? newProgressWriter() : null;
+        progressWriter.current = writer;
+        if (progressMode === "server") {
+            if (hasStartedWatching.current) {
+                if (playbackHasStarted.current) progressWriter.current?.start();
+                setProgressNotice("");
+            } else {
+                setProgressNotice("Checking saved video position…");
+                void loadServerVideoPosition(fileId, controller.signal)
+                    .then((saved) => {
+                        if (
+                            controller.signal.aborted ||
+                            hasStartedWatching.current
+                        )
+                            return;
+                        setContinueTime(
+                            saved && saved.position_seconds > 0
+                                ? saved.position_seconds
+                                : null,
+                        );
+                        setProgressNotice("");
+                    })
+                    .catch(() => {
+                        if (!controller.signal.aborted)
+                            setProgressNotice(
+                                "Saved video progress is unavailable. Playback still works; reopen the video to check again.",
+                            );
+                    });
+            }
+        } else if (progressMode === "share" || progressMode === "demo") {
+            if (!hasStartedWatching.current)
+                setContinueTime(readVideoPosition(fileId, progressMode));
+            setProgressNotice("");
+        } else
+            setProgressNotice(
+                progressMode === null
+                    ? "Checking video resume access…"
+                    : "Video resume access could not be checked. Playback still works; reopen the video to check again.",
+            );
+        return () => {
+            progressActive.current = false;
+            controller.abort();
+            finalizeProgress(writer);
+        };
+    }, [fileId, progressMode]);
     const [transfer, setTransfer] = useState<VideoBufferSnapshot | null>(null);
     const waitingForVideo = useRef(true);
     waitingForVideo.current = state.phase !== "ready";
@@ -472,7 +568,11 @@ export default function AdvancedVideo({
         let progressTimer: number | undefined;
         let frameCallback: number | undefined;
         let frameSource: MoviElement | null = null;
-        let lastPlayback: { time: number; playing: boolean } | null = null;
+        let lastPlayback: {
+            time: number;
+            playing: boolean;
+            duration: number;
+        } | null = null;
         let watchStarted = false;
         let representativePoster = false;
         let posterSource: string | null = null;
@@ -587,14 +687,35 @@ export default function AdvancedVideo({
                 return;
             const now = performance.now();
             if (!force && now - lastSavedAt < 5000) return;
-            saveVideoPosition(
-                fileId,
-                finished || player?.ended ? 0 : lastPlayback.time,
-            );
+            const time = finished || player?.ended ? 0 : lastPlayback.time;
+            const access = progressAccess.current;
+            if (access === "server")
+                progressWriter.current?.save(time, lastPlayback.duration);
+            else if (access === "share" || access === "demo")
+                saveVideoPosition(fileId, time, access);
             lastSavedAt = now;
         };
-        const startWatching = () => {
+        const startWatching = (played = false) => {
+            if (!progressActive.current) return;
             watchStarted = true;
+            const firstWatch = !hasStartedWatching.current;
+            hasStartedWatching.current = true;
+            if (played) playbackHasStarted.current = true;
+            progressRead.current?.abort();
+            if (
+                firstWatch &&
+                progressAccess.current !== null &&
+                progressAccess.current !== "unavailable"
+            )
+                setProgressNotice("");
+            if (
+                progressAccess.current === "server" &&
+                playbackHasStarted.current
+            ) {
+                if (progressWriter.current?.closed)
+                    progressWriter.current = newProgressWriter();
+                progressWriter.current?.start();
+            }
             finished = false;
             setContinueTime(null);
         };
@@ -611,6 +732,7 @@ export default function AdvancedVideo({
             lastPlayback = {
                 time: videoResumeTime(player.currentTime, player.duration),
                 playing: !player.paused,
+                duration: player.duration,
             };
             if (!player.seeking && !player.paused) savePosition();
         };
@@ -618,11 +740,47 @@ export default function AdvancedVideo({
             rememberPlayback();
             savePosition(true);
         };
+        const snapshotClosingPosition = () => {
+            if (!watchStarted || (resume && !resume.positionApplied))
+                return null;
+            if (
+                usable &&
+                player?.isConnected &&
+                player.player &&
+                player.player.getState() !== "error" &&
+                Number.isFinite(player.currentTime) &&
+                Number.isFinite(player.duration) &&
+                player.duration > 0
+            ) {
+                return {
+                    time:
+                        finished || player.ended
+                            ? 0
+                            : videoResumeTime(
+                                  player.currentTime,
+                                  player.duration,
+                              ),
+                    duration: player.duration,
+                };
+            }
+            return lastPlayback
+                ? {
+                      time: finished ? 0 : lastPlayback.time,
+                      duration: lastPlayback.duration,
+                  }
+                : null;
+        };
+        closingPosition.current = snapshotClosingPosition;
+        const closeProgress = () => {
+            flushPosition();
+            progressWriter.current?.close();
+            playbackHasStarted.current = false;
+        };
         const saveWhenHidden = () => {
             if (document.hidden) flushPosition();
         };
         document.addEventListener("visibilitychange", saveWhenHidden);
-        window.addEventListener("pagehide", flushPosition);
+        window.addEventListener("pagehide", closeProgress);
         const updateBuffer = () => {
             if (!player || cancelled || failed) return;
             const sample = videoBufferSnapshot(player);
@@ -861,7 +1019,7 @@ export default function AdvancedVideo({
                 listen("play", () => {
                     if (representativePoster)
                         player?.removeAttribute("postertime");
-                    startWatching();
+                    startWatching(true);
                     // A playing state is an intent; watch actual presented frames below.
                     latestProgressAt = performance.now();
                 });
@@ -987,8 +1145,10 @@ export default function AdvancedVideo({
             clearWaiting();
             clearInterval(progressTimer);
             document.removeEventListener("visibilitychange", saveWhenHidden);
-            window.removeEventListener("pagehide", flushPosition);
+            window.removeEventListener("pagehide", closeProgress);
             flushPosition();
+            if (closingPosition.current === snapshotClosingPosition)
+                closingPosition.current = null;
             detachPresentation?.();
             detachPip?.();
             detachGestures?.();
@@ -1039,6 +1199,14 @@ export default function AdvancedVideo({
             if (posterSource) URL.revokeObjectURL(posterSource);
         };
     }, [fileId, src, posterUrl, name, playback, attempt]);
+    useLayoutEffect(
+        () => () => {
+            // Capture before custom-element disconnection resets its clock to zero.
+            finalizeProgress(progressWriter.current);
+            progressActive.current = false;
+        },
+        [fileId],
+    );
     const copy =
         state.phase === "buffering" && transfer?.decodeBound
             ? "Waiting for video decoding…"
@@ -1162,6 +1330,11 @@ export default function AdvancedVideo({
         <>
             {loadingStatus}
             {continueButton}
+            {progressNotice && (
+                <p className="advanced-progress-notice" role="status">
+                    {progressNotice}
+                </p>
+            )}
         </>
     );
     return (

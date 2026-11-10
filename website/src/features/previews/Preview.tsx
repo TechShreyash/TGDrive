@@ -1,4 +1,5 @@
 import AdvancedVideo from "./video/AdvancedVideo";
+import type { VideoProgressMode } from "./video/videoWatchProgress";
 import { videoPosterUrl } from "./video/videoPoster";
 import "./Preview.css";
 import "./Reader.css";
@@ -15,7 +16,12 @@ import {
     RefreshCw,
     X,
 } from "lucide-react";
-import { request, errorMessage, sessionExpiryHandler } from "../../shared/api";
+import {
+    api,
+    request,
+    errorMessage,
+    sessionExpiryHandler,
+} from "../../shared/api";
 import {
     itemPath,
     fileUrl,
@@ -214,10 +220,12 @@ export function previewRetryDelay(status: FileRequestStatus, retries: number) {
 export default function Preview({
     item,
     auth,
+    videoProgressMode,
     onClose,
 }: {
     item: DriveItem;
     auth: string;
+    videoProgressMode?: VideoProgressMode;
     onClose?: () => void;
 }) {
     const nativeKind = nativePreviewKind(item.name);
@@ -291,7 +299,9 @@ export default function Preview({
             );
         }
     }
-    const [fileStatus, setFileStatus] = useState<FileRequestStatus | null>(null);
+    const [fileStatus, setFileStatus] = useState<FileRequestStatus | null>(
+        null,
+    );
     const [toolbarTarget, setToolbarTarget] = useState<HTMLDivElement | null>(
         null,
     );
@@ -338,6 +348,41 @@ export default function Preview({
     } | null>(null);
     const descriptor = preview?.path === path ? preview.value : null;
     const kind = nativeKind || (descriptor?.kind === "video" ? "video" : null);
+    const [resolvedProgressMode, setResolvedProgressMode] =
+        useState<VideoProgressMode | null>(null);
+    useEffect(() => {
+        if (kind !== "video" || videoProgressMode !== undefined) return;
+        const controller = new AbortController();
+        setResolvedProgressMode(null);
+        // Share tokens never prove owner identity; check the cookie session separately.
+        void api
+            .session(controller.signal)
+            .then((session) => {
+                if (
+                    typeof session.authenticated !== "boolean" ||
+                    (session.demo_read_only !== undefined &&
+                        typeof session.demo_read_only !== "boolean") ||
+                    (session.demo_admin !== undefined &&
+                        typeof session.demo_admin !== "boolean")
+                )
+                    throw new Error(
+                        "Video resume identity could not be verified.",
+                    );
+                if (!controller.signal.aborted)
+                    setResolvedProgressMode(
+                        session.authenticated && !session.demo_read_only
+                            ? "server"
+                            : session.authenticated && session.demo_read_only
+                              ? "demo"
+                              : "share",
+                    );
+            })
+            .catch(() => {
+                if (!controller.signal.aborted)
+                    setResolvedProgressMode("unavailable");
+            });
+        return () => controller.abort();
+    }, [kind, videoProgressMode, auth]);
     useEffect(() => {
         setFileStatus(null);
         // The player's own readiness state is authoritative for video. A server
@@ -591,7 +636,11 @@ export default function Preview({
                             aria-label="Close Preview"
                             onClick={onClose}
                         >
-                            {details ? <X size={21} /> : <ArrowLeft size={22} />}
+                            {details ? (
+                                <X size={21} />
+                            ) : (
+                                <ArrowLeft size={22} />
+                            )}
                         </button>
                     )}
                     {!details && (
@@ -783,7 +832,11 @@ export default function Preview({
                                               ? "Telegram is busy"
                                               : "Preview Unavailable"}
                                     </h3>
-                                    <p role={mediaFailure ? "status" : undefined}>
+                                    <p
+                                        role={
+                                            mediaFailure ? "status" : undefined
+                                        }
+                                    >
                                         {mediaFailure === "checking"
                                             ? "Checking whether Telegram is temporarily busy."
                                             : mediaFailure === "retrying"
@@ -821,6 +874,10 @@ export default function Preview({
                                 <AdvancedVideo
                                     key={item.id + ":" + attempt}
                                     fileId={item.id}
+                                    progressMode={
+                                        videoProgressMode ??
+                                        resolvedProgressMode
+                                    }
                                     src={src}
                                     posterUrl={videoPosterUrl(path, auth)}
                                     name={item.name}

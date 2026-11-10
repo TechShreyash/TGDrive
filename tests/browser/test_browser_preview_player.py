@@ -22,6 +22,24 @@ pytestmark = pytest.mark.e2e
 pytest_plugins = ("tests.browser.test_browser_e2e",)
 
 
+def _seed_position(page: Any, server: Server, item_id: str) -> str:
+    url = server.url + f"/api/v1/files/{item_id}/video-progress"
+    begin = page.request.post(url + "/session", data={})
+    assert begin.ok, begin.text()
+    saved = page.request.put(
+        url,
+        data={
+            "session_id": begin.json()["session_id"],
+            "sequence": 1,
+            "position_seconds": 1.5,
+            "duration_seconds": 5.0,
+            "final": True,
+        },
+    )
+    assert saved.ok, saved.text()
+    return url
+
+
 def test_video_stored_poster_is_sharp_and_released_when_preview_closes(
     server: Server, desktop: tuple[Any, Any]
 ) -> None:
@@ -101,8 +119,7 @@ def test_video_missing_poster_decodes_representative_frame_without_watching(
         "data-item-id"
     )
     assert item_id
-    position_key = "tgdrive.video.position.v1:" + item_id
-    page.evaluate("key=>localStorage.setItem(key,'1.5')", position_key)
+    position_url = _seed_position(page, server, item_id)
     file.dblclick()
     dialog = preview_dialog(page)
     player = dialog.locator("movi-player")
@@ -131,7 +148,7 @@ def test_video_missing_poster_decodes_representative_frame_without_watching(
         dialog.get_by_role("button", name="Continue from 0:01", exact=True)
     ).to_be_visible()
     dialog.get_by_role("button", name="Close Preview", exact=True).click()
-    assert page.evaluate("key=>localStorage.getItem(key)", position_key) == "1.5"
+    assert page.request.get(position_url).json()["progress"]["position_seconds"] == 1.5
 
     file.dblclick()
     player = preview_dialog(page).locator("movi-player")
@@ -196,13 +213,12 @@ def test_representative_seek_yields_to_early_user_intent(
         "data-item-id"
     )
     assert item_id
-    position_key = "tgdrive.video.position.v1:" + item_id
-    page.evaluate("key=>localStorage.setItem(key,'1.5')", position_key)
+    position_url = _seed_position(page, server, item_id)
     file.dblclick()
     dialog = preview_dialog(page)
     player = dialog.locator("movi-player")
     expect(player).to_have_attribute("data-poster-flush-waiting", "true")
-    assert page.evaluate("key=>localStorage.getItem(key)", position_key) == "1.5"
+    assert page.request.get(position_url).json()["progress"]["position_seconds"] == 1.5
     if action == "play":
         player.locator("button.movi-play-pause").click()
         page.wait_for_function("""()=>{

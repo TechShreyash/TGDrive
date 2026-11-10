@@ -2572,6 +2572,13 @@ export default function App() {
                     dialog={dialog}
                     destination={destination}
                     auth={location.auth}
+                    videoProgressMode={
+                        isPublic || configLoad !== "ready"
+                            ? undefined
+                            : demoReadOnly
+                              ? "demo"
+                              : "server"
+                    }
                     onClose={closeDialog}
                     onChanged={() => {
                         reloadMetadata();
