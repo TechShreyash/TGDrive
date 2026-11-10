@@ -61,11 +61,17 @@ summarizes account availability, waits and request errors; it does not establish
 whole-server health or available throughput. Insufficient recent-error history
 is shown as unavailable rather than as zero failures.
 
-**Performance explanation** currently reports that explanations are unavailable
-from the server. Expand **How to interpret measurements** for general guidance;
-this is not an active workload diagnosis. Raw measurements remain available
-below: the live strip, **Network traffic**, **What limits speed** (per-account
-transfer slots, flood waits, CPU, memory and cache disk), **Automatic tuning**
+**Performance explanation** shows recent observed workload and supported waits:
+Telegram admission queues, cooldowns during queued work and stream-buffer
+admission. Several waits can appear together; expand their evidence for measured
+values. The panel distinguishes collecting samples, idle activity and stale or
+unavailable evidence. A missing measurement is not zero, and no reported wait
+does not establish spare capacity or identify a bottleneck.
+
+Expand **Measurements and interpretation** to compare Telegram inbound with
+HTTP bytes delivered and cache lookups over the observed window. In-flight
+request counts are not user counts. Raw measurements remain available below:
+the live strip, **Network traffic**, **What limits speed**, **Automatic tuning**
 and **All-time totals**. The **Accounts** and **Resources** tabs hold the detail.
 
 **Monitor → Performance** separates server network, TGDrive HTTP file traffic
