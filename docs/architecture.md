@@ -757,7 +757,9 @@ accepted record can exceed the normal batch target. Media and recovered
 mappings must verify before activation, with deployment-key checks before
 replacement and schema/identity checks retained.
 
-New activation manifests reference validated staged data. Retained version-1
+New activation manifests reference validated staged data. Their internal
+staged-index descriptor path must fit **4,096 UTF-8 bytes**, checked before path
+expansion. This is not a catalog path-length or folder-depth limit. Retained version-1
 inline manifests and journal values use bounded compatibility decoding; new
 writes are preflighted for readability. A resource rejection preserves the
 input and stops initialization. See the exact limits and intact-archive
