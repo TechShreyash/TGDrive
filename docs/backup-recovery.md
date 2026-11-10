@@ -264,17 +264,42 @@ use [version-compatible recovery](#upgrade-or-restore-an-older-drive).
 **In-place reset is unavailable.** The start-new API rejects a valid
 reset request with `409 START_NEW_UNAVAILABLE` and preserves the existing drive.
 
-For an intentional fresh start, create a separate deployment with a **new
-dedicated MongoDB database, new private storage channel and separate persistent
-volumes/project name**, following [Setup](setup.md). Give that new drive its own
-`ENCRYPTION_KEY`; retain the old database, channel, volumes, configuration and
-original key for recovery. Do not clear old volumes or unpin old backups as a
-shortcut. Starting an empty drive does not import or erase the old files.
+For an intentional fresh start, use this order:
 
-For Compose on the same host, stop the old deployment and include a new project
-name such as `-p tgdrive-new` in every new deployment command. The supplied
-Compose files name the project explicitly; copying them to another folder alone
-does not select separate volumes.
+1. Stop **every old TGDrive instance**. Keep a verified off-host recovery
+   archive, the original `ENCRYPTION_KEY`, login and channel configuration,
+   database and old volumes. Decide explicitly whether you may need the old
+   drive: erasing its dedicated database or channel data is irreversible unless
+   your retained recovery material is sufficient.
+2. Recommended: create a **new dedicated MongoDB database and new private
+   storage channel**, with fresh, separate `DATA_DIR` and `CACHE_DIR` volumes.
+   Configure a new `ENCRYPTION_KEY` and explicit owner login credentials, then
+   follow [Setup](setup.md). On the same Compose host, use a new project name
+   such as `-p tgdrive-new` in every command; copying the Compose files alone
+   does not select separate volumes.
+3. If intentionally reusing resources instead, identify the exact dedicated
+   database and channel first. You may empty that dedicated database or use a
+   new one; never drop unrelated collections or a shared database. A new
+   channel still needs an empty database: an existing catalog bound to channel A
+   conflicts with channel B rather than becoming a fresh drive. Use fresh data
+   and cache directories, preserving the old volumes.
+4. A reused channel without a discoverable TGDrive recovery pin can initialize
+   an empty catalog. Its old ordinary messages remain in the channel: they are
+   neither imported nor erased. An empty database with an existing TGDrive
+   recovery pin instead offers recovery; clearing the catalog alone is not a
+   clean fresh start. To reuse that channel for a fresh catalog, preserve and
+   verify your archive first, then remove only the old TGDrive recovery pin
+   if you intentionally give up automatic discovery there. Never unpin
+   unrelated messages or purge a shared channel;
+   prefer a new channel whenever the old one cannot safely be made dedicated
+   and empty.
+5. Start only the new deployment, verify its empty catalog and configuration,
+   and create and verify its own backup before relying on it. Preserve the old
+   recovery materials until you have verified the outcome.
+
+Do not assume an old independent backup channel can be reused: use a new
+private backup channel for the new drive, or inspect its recovery point first.
+Starting an empty drive does not import or erase the old files.
 
 ## Upgrade or restore an older drive
 
