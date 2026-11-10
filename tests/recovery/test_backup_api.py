@@ -52,13 +52,13 @@ def mongo_backend(tmp_path, monkeypatch):
 
 
 @pytest.fixture
-def owner(tmp_path, mongo_backend):
+def owner(tmp_path, mongo_backend, monkeypatch):
     settings = make_settings(tmp_path)
     store = new_store(tmp_path / "drive")
     runtime = FakeRuntime(store)
     runtime.mongo = mongo_backend
     runtime.pool = None
-    runtime.backup = Backup()
+    monkeypatch.setattr(runtime, "backup", Backup(), raising=False)
     with TestClient(
         create_app(settings, runtime=runtime), base_url="https://testserver"
     ) as client:

@@ -12,6 +12,7 @@ import shutil
 import sqlite3
 import tempfile
 import time
+from collections.abc import Awaitable, Callable, Iterable
 from contextlib import closing, suppress
 from datetime import UTC, datetime
 from functools import partial
@@ -146,10 +147,11 @@ class ChannelReplica:
         if problem:
             return problem
         activation_error = getattr(self.runtime, "_activation_unavailable", None)
-        if getattr(activation_error, "code", None) == "ACTIVATION_RESOURCE_LIMIT":
+        activation_code = getattr(activation_error, "code", None)
+        if activation_code == "ACTIVATION_RESOURCE_LIMIT":
             return {
                 "key": "activation",
-                "code": activation_error.code,
+                "code": activation_code,
                 "detail": str(activation_error),
             }
         return None
@@ -297,7 +299,9 @@ class ChannelReplica:
                     )
                 )
         service = getattr(self.runtime, "backup", None)
-        archives = getattr(service, "local_archives", None)
+        archives: Callable[[], Iterable[dict]] | None = getattr(
+            service, "local_archives", None
+        )
         latest = (
             archives()
             if callable(archives)
@@ -991,7 +995,9 @@ class ChannelReplica:
 
             mapping = await _worker(allocate)
             batch = []
-            verify_many = getattr(transport, "verify_many", None)
+            verify_many: (
+                Callable[[int, list[tuple[int, int]]], Awaitable[None]] | None
+            ) = getattr(transport, "verify_many", None)
             if callable(verify_many):
 
                 async def verify_batch():
@@ -1112,7 +1118,9 @@ class ChannelReplica:
             # A resumed job must still recheck every journaled document. Batch those
             # reads so each cooldown does not trigger two requests per old part.
             verified = {}
-            verify_many = getattr(transport, "verify_many", None)
+            verify_many: (
+                Callable[[int, list[tuple[int, int]]], Awaitable[None]] | None
+            ) = getattr(transport, "verify_many", None)
             if callable(verify_many):
                 batch = []
 
@@ -1565,6 +1573,7 @@ class ChannelReplica:
                 self._request_pacer.reset()
                 await _worker(self.journal.set, "job", None)
                 return
+            assert job is not None
             catalog = job["catalog"]
             if "staged" in job:
                 copy_mapping = await self._copy_staged(
@@ -2227,7 +2236,7 @@ class ChannelReplica:
                         ).hexdigest(),
                     },
                 )
-            completed = dict(
+            completed: dict = dict(
                 candidate, catalog=restored, credentials=credentials, complete=True
             )
             if (
@@ -2419,15 +2428,14 @@ class ChannelReplica:
             "channel": target
         }:
             return False
-        sentinel = object()
         from itertools import zip_longest
 
         with (
             closing(expected.nodes(source_branch)) as originals,
             closing(actual.nodes(target_branch)) as replacements,
         ):
-            for old, new in zip_longest(originals, replacements, fillvalue=sentinel):
-                if old is sentinel or new is sentinel:
+            for old, new in zip_longest(originals, replacements):
+                if old is None or new is None:
                     return False
                 if old["kind"] == "file":
                     old["message_id"] = mapping.lookup(old["message_id"])

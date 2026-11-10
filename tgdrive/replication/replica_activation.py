@@ -875,6 +875,7 @@ def _apply_mongo(settings, value, backend):
                     else:
                         yield row
         else:
+            assert database is not None
             yield from database[name]
 
     owner_hash = None

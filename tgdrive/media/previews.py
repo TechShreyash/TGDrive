@@ -328,7 +328,9 @@ async def describe_media(
     async with lease_media(pool, channel_id, message_id) as (client, message, media):
         describe = getattr(client, "describe_media", None)
         if callable(describe):
-            return describe(message)
+            description = describe(message)
+            if isinstance(description, dict):
+                return description
         return {
             "original": {
                 "id": "original",

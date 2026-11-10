@@ -343,10 +343,8 @@ async def probe(args, directory):
         assert await asyncio.to_thread(apply_activation, configured, backend)
         phases.append(audit(directory, "applied"))
         encryption.check_drive_key(backend, configured.encryption_key)
-        assert (
-            backend.db.catalog.find_one({"_id": "catalog"})["storage_channel_id"]
-            == TARGET
-        )
+        catalog = backend.db.catalog.find_one({"_id": "catalog"})
+        assert catalog is not None and catalog["storage_channel_id"] == TARGET
         assert backend.db.nodes.count_documents({"kind": "file"}) == args.files
         for row in backend.db.nodes.find({"kind": "file"}).batch_size(256):
             index = int(row["_id"])
@@ -358,7 +356,9 @@ async def probe(args, directory):
         assert backend.db.jobs.count_documents({}) == jobs
         for index in range(jobs):
             identity = "probe-history" if index == 0 else f"probe-history-{index}"
-            summary = backend.db.jobs.find_one({"_id": identity})["summary"]
+            job = backend.db.jobs.find_one({"_id": identity})
+            assert job is not None
+            summary = job["summary"]
             assert summary["probe_date"] == stamp and summary["probe_integer"] == 2**40
             if args.shape == "many":
                 assert len(summary["metadata"]) == len(summary["items"]) == 32_000

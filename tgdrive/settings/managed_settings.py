@@ -15,6 +15,9 @@ _ID = re.compile(r"[a-z0-9-]{1,80}")
 
 
 class SettingsProblem(RuntimeError):
+    retry_after: int | None = None
+    retryable: bool = False
+
     def __init__(self, detail: str, *, code="SETTINGS_INVALID", status=422):
         super().__init__(detail)
         self.code = code
@@ -204,10 +207,9 @@ def initial_clients(settings) -> list[ManagedClient]:
     rows = []
     identities = iter(settings.managed_client_ids)
     labels = iter(settings.managed_client_labels)
-    for kind, values in (
-        ("bot", settings.bot_tokens),
-        ("user", settings.string_sessions),
-    ):
+    kinds: tuple[Literal["bot", "user"], ...] = ("bot", "user")
+    for kind in kinds:
+        values = settings.bot_tokens if kind == "bot" else settings.string_sessions
         for index, value in enumerate(values, 1):
             rows.append(
                 ManagedClient(

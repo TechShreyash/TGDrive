@@ -4,11 +4,13 @@ from __future__ import annotations
 
 import time
 from collections import deque
+from collections.abc import Mapping, Sequence
 from itertools import pairwise
+from typing import Literal, TypedDict
 
 WINDOW_SECONDS = 30
 STALE_AFTER_SECONDS = 15
-WORKLOAD_KINDS = (
+WORKLOAD_KINDS: tuple[str, ...] = (
     "playback_requests",
     "download_requests",
     "unknown_file_requests",
@@ -16,18 +18,56 @@ WORKLOAD_KINDS = (
 )
 
 
-def _difference(values):
-    if len(values) < 2 or any(value is None for value in values):
+class ConstraintEvidence(TypedDict):
+    name: str
+    value: int | float
+    unit: str
+
+
+class Constraint(TypedDict):
+    code: str
+    certainty: Literal["observed"]
+    evidence: list[ConstraintEvidence]
+
+
+class _Observation(TypedDict):
+    at: float
+    workload: dict[str, int]
+    http: int
+    requests: int
+    origin: dict[object, int | float] | None
+    cache: tuple[int, int, int] | None
+    busy: bool
+    constraints: list[Constraint]
+
+
+class DiagnosisSnapshot(TypedDict):
+    sampled_at: float | None
+    window_seconds: int
+    observed_seconds: float
+    stale_after_seconds: int
+    state: Literal["unavailable", "observing", "active", "idle"]
+    workload: dict[str, int]
+    telegram_inbound_bytes_per_second: float | None
+    http_delivered_bytes_per_second: float | None
+    cache_hits: int | float | None
+    cache_misses: int | float | None
+    constraints: list[Constraint]
+
+
+def _difference(values: Sequence[int | float | None]) -> int | float | None:
+    known = [value for value in values if value is not None]
+    if len(values) < 2 or len(known) != len(values):
         return None
-    if any(after < before for before, after in pairwise(values)):
+    if any(after < before for before, after in pairwise(known)):
         return None
-    return values[-1] - values[0]
+    return known[-1] - known[0]
 
 
 class PerformanceDiagnosis:
-    def __init__(self, workload):
+    def __init__(self, workload: Mapping[str, int]):
         self.workload = workload
-        self.samples = deque(maxlen=11)
+        self.samples: deque[_Observation] = deque(maxlen=11)
 
     def observe(self, traffic, telegram, cache, sources):
         now = time.time()
@@ -37,7 +77,7 @@ class PerformanceDiagnosis:
             self.samples.popleft()
         telegram = telegram or {}
         accounts = telegram.get("accounts", [])
-        origin = {}
+        origin: dict[object, int | float] | None = {}
         for account in accounts:
             requests = account.get("requests")
             identity = sources.get(account["name"])
@@ -48,10 +88,11 @@ class PerformanceDiagnosis:
         if not accounts:
             origin = None
         read_activity = getattr(cache, "activity_snapshot", None)
-        activity = read_activity() if callable(read_activity) else None
-        constraints = []
+        activity_value = read_activity() if callable(read_activity) else None
+        activity = activity_value if isinstance(activity_value, dict) else None
+        constraints: list[Constraint] = []
 
-        def constraint(code, *evidence):
+        def constraint(code: str, *evidence: tuple[str, int | float, str]) -> None:
             constraints.append(
                 {
                     "code": code,
@@ -134,10 +175,10 @@ class PerformanceDiagnosis:
             }
         )
 
-    def snapshot(self):
+    def snapshot(self) -> DiagnosisSnapshot:
         now = time.time()
         latest = self.samples[-1] if self.samples else None
-        result = {
+        result: DiagnosisSnapshot = {
             "sampled_at": latest["at"] if latest else None,
             "window_seconds": WINDOW_SECONDS,
             "observed_seconds": 0,
@@ -156,20 +197,22 @@ class PerformanceDiagnosis:
         seconds = latest["at"] - rows[0]["at"]
         http = _difference([row["http"] for row in rows])
         requests = _difference([row["requests"] for row in rows])
-        origins = [row["origin"] for row in rows]
+        origins = [origin for row in rows if (origin := row["origin"]) is not None]
         inbound = None
-        if all(
-            origin is not None and origin.keys() == origins[0].keys()
-            for origin in origins
+        if len(origins) == len(rows) and all(
+            origin.keys() == origins[0].keys() for origin in origins
         ):
             deltas = [
                 _difference([origin[key] for origin in origins]) for key in origins[0]
             ]
-            if all(delta is not None for delta in deltas):
-                inbound = sum(deltas)
-        caches = [row["cache"] for row in rows]
+            known_deltas = [delta for delta in deltas if delta is not None]
+            if len(known_deltas) == len(deltas):
+                inbound = sum(known_deltas)
+        caches = [cache for row in rows if (cache := row["cache"]) is not None]
         hits = misses = None
-        if all(cache is not None and cache[0] == caches[0][0] for cache in caches):
+        if len(caches) == len(rows) and all(
+            cache[0] == caches[0][0] for cache in caches
+        ):
             hits = _difference([cache[1] for cache in caches])
             misses = _difference([cache[2] for cache in caches])
         busy = (
@@ -178,7 +221,8 @@ class PerformanceDiagnosis:
             or bool(inbound)
             or bool(requests)
         )
-        return result | {
+        return {
+            **result,
             "observed_seconds": seconds,
             "state": "observing" if seconds < 6 else "active" if busy else "idle",
             "workload": latest["workload"],

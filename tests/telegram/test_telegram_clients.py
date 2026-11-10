@@ -2,7 +2,8 @@ from __future__ import annotations
 
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any, ClassVar
+from typing import Any, ClassVar, cast
+from unittest.mock import AsyncMock
 
 import pytest
 
@@ -54,6 +55,7 @@ class NativeClient:
             self.session = session
             self.me = SimpleNamespace(id=session.account_id, bot=False, premium=True)
         self.instances.append(self)
+        self.get_me = AsyncMock(side_effect=lambda: self.me)
 
     def is_connected(self) -> bool:
         return self.connected
@@ -67,9 +69,6 @@ class NativeClient:
     async def is_user_authorized(self) -> bool:
         return self.authorized
 
-    async def get_me(self) -> Any:
-        return self.me
-
     async def sign_in(self, **kwargs: str) -> None:
         assert set(kwargs) == {"bot_token"}
         self.sign_ins.append(kwargs)
@@ -77,6 +76,10 @@ class NativeClient:
 
     async def start(self, **_kwargs: Any) -> None:
         raise AssertionError("Interactive TelegramClient.start must never be called")
+
+
+class FixtureClient(clients.Client):
+    native: NativeClient
 
 
 @pytest.fixture(autouse=True)
@@ -139,10 +142,10 @@ async def test_pool_identity_survives_credential_reordering(tmp_path: Path) -> N
 async def test_rotated_bot_token_retains_the_account_session_path(
     tmp_path: Path,
 ) -> None:
-    first = clients.Client(
+    first = FixtureClient(
         name="old-position", settings=settings(tmp_path), bot_token="123456:" + "x" * 30
     )
-    second = clients.Client(
+    second = FixtureClient(
         name="new-position", settings=settings(tmp_path), bot_token="123456:" + "z" * 30
     )
     assert first.name == second.name == "storage-bot-123456"
@@ -153,7 +156,7 @@ async def test_rotated_bot_token_retains_the_account_session_path(
 @pytest.mark.asyncio
 async def test_bot_authorization_never_enters_interactive_login(tmp_path: Path) -> None:
     token = "123456:" + "x" * 30
-    client = clients.Client(name="unused", settings=settings(tmp_path), bot_token=token)
+    client = FixtureClient(name="unused", settings=settings(tmp_path), bot_token=token)
     client.native.authorized = False
     await client.start()
     assert client.native.sign_ins == [{"bot_token": token}]
@@ -168,7 +171,7 @@ async def test_wrong_authorized_account_fails_closed(
     wrong_id: int,
     is_bot: bool,
 ) -> None:
-    client = clients.Client(
+    client = FixtureClient(
         name="unused", settings=settings(tmp_path), bot_token="123456:" + "x" * 30
     )
     client.native.me = SimpleNamespace(id=wrong_id, bot=is_bot, premium=True)
@@ -179,7 +182,7 @@ async def test_wrong_authorized_account_fails_closed(
 
 @pytest.mark.asyncio
 async def test_user_session_must_already_be_authorized(tmp_path: Path) -> None:
-    client = clients.Client(
+    client = FixtureClient(
         name="unused", settings=settings(tmp_path), session_string="session-A"
     )
     client.native.authorized = False
@@ -199,7 +202,7 @@ async def test_premium_session_capability_is_checked(
     is_bot: bool,
     premium: bool,
 ) -> None:
-    client = clients.Client(
+    client = FixtureClient(
         name="unused", settings=settings(tmp_path), session_string="session-A"
     )
     client.native.me = SimpleNamespace(id=101, bot=is_bot, premium=premium)
@@ -215,9 +218,10 @@ def test_optional_bot_mode_has_separate_update_session(tmp_path: Path) -> None:
     )
     client = clients.build_bot_mode_client(value)
     assert client is not None
-    assert client.native.options["receive_updates"] is True
+    native = cast(NativeClient, client.native)
+    assert native.options["receive_updates"] is True
     assert client.name == "bot-mode-123456"
-    assert Path(client.native.session.filename).name == "bot-mode-123456.session"
+    assert Path(native.session.filename).name == "bot-mode-123456.session"
 
 
 @pytest.mark.asyncio

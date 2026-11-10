@@ -111,6 +111,7 @@ def archive_members(store, paths):
     result, used = [], set()
 
     def visit(path, prefix, root=False):
+        page = None
         try:
             page = store.list_page(path, limit=100)
             node = page["folder"]
@@ -131,6 +132,7 @@ def archive_members(store, paths):
         if len(result) > MAX_ENTRIES:
             raise ArchiveError("A ZIP job supports at most 1000 files and folders.")
         if node["type"] == "folder":
+            assert page is not None
             while True:
                 for child in page["items"]:
                     visit("/" + child["id"], relative)
@@ -734,6 +736,7 @@ async def _decode_archive(manager, record, source, directory):
         await _stop_decoder(process)
         raise asyncio.CancelledError
     cancelled = asyncio.create_task(record.cancel_event.wait())
+    assert process.stdin is not None
     try:
         process.stdin.write(
             json.dumps(

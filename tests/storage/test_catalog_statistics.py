@@ -1,13 +1,16 @@
 """Catalog totals reuse only the same immutable committed snapshot."""
 
+from typing import cast
+
 import pytest
 
 from tests.support.mongo_fixtures import FakeMongoBackend
+from tgdrive.storage.mongo import MongoBackend
 from tgdrive.storage.mongo_store import MongoStore, catalog_counters
 
 
 def test_statistics_are_counters_kept_in_the_write_transaction():
-    store = MongoStore.create(FakeMongoBackend())
+    store = MongoStore.create(cast(MongoBackend, FakeMongoBackend()))
     try:
         folder = store.create_folder("/", "Folder")
         path = "/" + folder["id"]
@@ -46,7 +49,7 @@ def test_statistics_are_counters_kept_in_the_write_transaction():
 
 
 def test_statistics_do_not_cache_mutable_or_rolled_back_batches():
-    store = MongoStore.create(FakeMongoBackend())
+    store = MongoStore.create(cast(MongoBackend, FakeMongoBackend()))
     try:
         before = store.statistics()
         with pytest.raises(ValueError, match="Roll back"), store.metadata_batch():

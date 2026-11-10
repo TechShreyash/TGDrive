@@ -71,6 +71,7 @@ async def test_database_outage_retries_same_backup_after_restart(
     try:
         await replica._sync(config)
         point = replica.journal.get("restore_point")
+        assert isinstance(point, dict)
         kit = replica.key()
         originals = dict(remote.messages)
         if pending:
@@ -80,6 +81,7 @@ async def test_database_outage_retries_same_backup_after_restart(
             with pytest.raises(ReplicaTransportError):
                 await replica._sync(config)
         job = replica.journal.get("job")
+        assert replica.journal.backend is not None
         intents = list(replica.journal.backend.db.replica_copies.find())
         receipts = dict(remote.receipts)
         monkeypatch.setattr(collection, "find_one", unavailable)
@@ -171,6 +173,7 @@ async def test_permanent_errors_stop_without_leaking_or_replacing_backup(
     try:
         await replica._sync(config)
         point, kit = replica.journal.get("restore_point"), replica.key()
+        assert isinstance(point, dict)
         originals = dict(remote.messages)
         monkeypatch.setattr(replica.runtime.mongo.db.settings, "find_one", unavailable)
         monkeypatch.setattr(replica, "report", record_failure)

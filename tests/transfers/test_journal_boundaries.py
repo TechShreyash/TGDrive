@@ -4,6 +4,7 @@ import asyncio
 import threading
 from contextlib import AsyncExitStack
 from io import BytesIO
+from typing import cast
 
 import httpx2 as httpx
 import pytest
@@ -15,6 +16,7 @@ from tests.support.mongo_fixtures import new_store, register_test_backend
 from tests.transfers.test_transfers import FakeRemote, make_manager
 from tgdrive.storage.mongo import DatabaseUnavailable
 from tgdrive.transfers.manager import TransferManager
+from tgdrive.transfers.remote import RemoteClient
 from tgdrive.transfers.remote_scheduler import URLDownloadScheduler
 from tgdrive.transfers.staging import StorageUnavailable, staging_usage
 from tgdrive.transfers.tasks import TransferNotFound, TransferRegistry, TransferStatus
@@ -218,12 +220,13 @@ async def test_complete_receipt_recovers_if_process_stops_before_spawn(
             settings=manager.settings,
             pool=pool,
             store=store,
-            remote=FakeRemote(),
+            remote=cast(RemoteClient, FakeRemote()),
             registry=TransferRegistry(mongo=backend.db.jobs, mongo_backend=backend),
         )
         recovered.uploads = ResumableUploads(manager.settings, recovered)
         await recovered.recover()
         job = recovered.registry.get(receipt["id"])
+        assert job.task is not None
         await job.task
         assert job.status == TransferStatus.COMPLETED
         assert store.has_file_operation(job.id)
@@ -264,6 +267,7 @@ async def test_pending_first_browser_job_still_reserves_staging(tmp_path, monkey
         release.set()
     try:
         job = await first
+        assert job.task is not None
         await job.task
         assert job.status == TransferStatus.COMPLETED
         assert manager._pending_staging == {}

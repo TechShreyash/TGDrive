@@ -218,7 +218,10 @@ async def test_alt_svc_default_preserves_streaming_payload_and_file_headers(
     async def send(value):
         messages.append(value)
 
-    await middleware({"type": "http", "path": path}, None, send)
+    async def receive():
+        raise AssertionError("The response-only application must not receive")
+
+    await middleware({"type": "http", "path": path}, receive, send)
     headers = dict(messages[0]["headers"])
     assert messages[0]["status"] == status
     assert headers[b"alt-svc"] == b"clear"
@@ -248,5 +251,8 @@ async def test_alt_svc_policy_passes_non_http_scope_and_messages_unchanged():
     async def send(message):
         sent.append(message)
 
-    await SecurityHeadersMiddleware(app, secure=True)(scope, None, send)
+    async def receive():
+        raise AssertionError("The response-only application must not receive")
+
+    await SecurityHeadersMiddleware(app, secure=True)(scope, receive, send)
     assert sent == [accept] and sent[0] is accept

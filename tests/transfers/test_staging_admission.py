@@ -264,6 +264,7 @@ async def test_url_import_checks_shared_space_before_reading_body(
 
     monkeypatch.setattr(manager.remote, "_cancelable", observe_wait)
     await asyncio.wait_for(waiting.wait(), 3)
+    assert record.task is not None
     assert not record.task.done()
     assert list(response.content.chunks) == [b"x" * 80]
     record.cancel_event.set()
@@ -328,6 +329,7 @@ async def test_url_reserves_once_and_reports_live_written_bytes(
         url="https://files.example/a", destination="/", filename=None
     )
     try:
+        assert record.task is not None
         await record.task
         assert record.status == TransferStatus.COMPLETED, record.error
         assert admissions == [64 if known else 100]
@@ -360,9 +362,9 @@ async def test_waiting_url_reserves_a_window_instead_of_the_whole_file(
     first = FakeResponse(200, headers={"Content-Length": "48"}, chunks=[b"x" * 48])
     second = FakeResponse(200, headers={"Content-Length": "48"}, chunks=[b"y" * 48])
 
-    async def held_read(_size):
+    async def held_read(size):
         first_read.set()
-        await asyncio.Event().wait()
+        return await asyncio.Future[bytes]()
 
     original_read = second.content.read
 

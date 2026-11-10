@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import inspect
 import time
 from collections import OrderedDict
 from collections.abc import Awaitable, Callable
@@ -66,12 +67,15 @@ async def load_thumbnail(*, pool: Any, channel_id: int, message_id: int):
             message = await get_message(client, channel_id, message_id)
             if message is None or getattr(message, "empty", False):
                 return None
-            content = await download(
+            pending = download(
                 message,
                 max_bytes=THUMBNAIL_BYTES,
                 target_size=320,
                 max_dimension=THUMBNAIL_DIMENSION,
             )
+            if not inspect.isawaitable(pending):
+                return None
+            content = await pending
             if (
                 not isinstance(content, bytes)
                 or not 0 < len(content) <= THUMBNAIL_BYTES

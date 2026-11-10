@@ -4,6 +4,7 @@ import asyncio
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 from types import SimpleNamespace
+from typing import cast
 from unittest.mock import AsyncMock, Mock
 
 import pytest
@@ -12,6 +13,7 @@ from fastapi.testclient import TestClient
 from telethon import types, utils
 from telethon.errors import FileReferenceExpiredError
 
+from tgdrive.telegram.client_pool import ClientPool
 from tgdrive.telegram.clients import Client, TelegramMessage
 
 MIB = 1024**2
@@ -56,6 +58,8 @@ class PartIterator:
 
 
 class Native:
+    get_messages: AsyncMock
+
     def __init__(self, payload, gate=None):
         self.payload, self.gate = payload, gate
         self.requests = self.active = self.peak = 0
@@ -257,7 +261,10 @@ async def test_scheduled_processing_identity_is_never_committed_as_channel_messa
     result = SimpleNamespace(
         updates=[
             types.UpdateNewScheduledMessage(
-                message=SimpleNamespace(id=77, video_processing_pending=True)
+                message=cast(
+                    types.TypeMessage,
+                    SimpleNamespace(id=77, video_processing_pending=True),
+                )
             )
         ]
     )
@@ -331,11 +338,11 @@ async def test_parallel_reference_failures_share_one_message_refresh():
 class ValidatingNative(Native):
     """Exercise Telethon's actual file-location coercion before yielding bytes."""
 
-    def iter_download(self, target, **options):
-        dc_id, location = utils.get_input_location(target)
+    def iter_download(self, message, **options):
+        dc_id, location = utils.get_input_location(message)
         assert dc_id == 2 and isinstance(location, types.InputDocumentFileLocation)
         assert location.id == 1
-        return super().iter_download(target, **options)
+        return super().iter_download(message, **options)
 
 
 def real_message():
@@ -386,7 +393,7 @@ def test_real_message_first_yield_survives_base_http_middleware():
     @app.get("/file")
     async def file(request: Request):
         return await stream_telegram_file(
-            pool=pool,
+            pool=cast(ClientPool, pool),
             channel_id=CHANNEL,
             message_id=77,
             file_name="video.mp4",

@@ -258,6 +258,7 @@ def test_deep_folder_opens_from_a_short_url_with_its_full_breadcrumb(
             if parent != "/"
             else ("/" + folder["id"])
         )
+    assert folder is not None
     page.goto(server.url + "/?" + urlencode({"path": "/" + folder["id"]}))
     expect(page.get_by_role("heading", name="Depth 149", exact=True)).to_be_visible()
     crumbs = page.get_by_role("navigation", name="Breadcrumb")

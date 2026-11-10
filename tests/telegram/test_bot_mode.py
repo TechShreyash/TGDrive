@@ -4,7 +4,8 @@ import asyncio
 from contextlib import contextmanager
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any
+from typing import Any, cast
+from unittest.mock import AsyncMock
 
 import pytest
 from pydantic import SecretStr
@@ -15,6 +16,7 @@ from tgdrive.settings.bot_settings import BotUploadPreferences
 from tgdrive.storage.mongo import DatabaseUnavailable
 from tgdrive.storage.mongo_store import MongoStore
 from tgdrive.telegram.bot_mode import BotMode
+from tgdrive.telegram.clients import Client
 
 
 @pytest.fixture(autouse=True)
@@ -69,6 +71,8 @@ class FakeLifecycleClient(FakeBotClient):
 
 
 class FakeMessage:
+    document: SimpleNamespace
+
     def __init__(
         self,
         user_id: int,
@@ -99,8 +103,7 @@ def _async_recorder():
     async def record(*args: object, **kwargs: object) -> None:
         calls.append((args, kwargs))
 
-    record.calls = calls
-    return record
+    return AsyncMock(side_effect=record, calls=calls)
 
 
 def root_mode(**kwargs):
@@ -122,7 +125,7 @@ async def test_photo_upload_gets_fallback_name_and_metadata(tmp_path: Path) -> N
     )
     message = FakeMessage(1, copied=copied)
 
-    await mode._file(client, message)
+    await mode._file(cast(Client, client), message)
 
     item = next(iter(store.list_directory("/").values()))
     assert item["name"].startswith("photo-")
@@ -150,7 +153,7 @@ async def test_bot_upload_preserves_copy_when_metadata_fails(
         raise RuntimeError("disk full")
 
     monkeypatch.setattr(store, "add_file", fail)
-    await mode._file(client, message)
+    await mode._file(cast(Client, client), message)
 
     assert client.deleted == []
     assert not store.list_directory("/")
@@ -207,7 +210,7 @@ async def test_bot_import_guard_before_copy_and_after_copy_preserves_metadata(
         before_delete=verify_delete,
     )
     try:
-        await mode._file(client, FakeMessage(1, copied=copied))
+        await mode._file(cast(Client, client), FakeMessage(1, copied=copied))
         assert checks == 2 and verified == [True] and client.deleted == [57]
         assert not store.list_directory("/")
         assert mode.active_imports == 0
@@ -234,7 +237,7 @@ async def test_bot_rollback_does_not_delete_after_lineage_conflict(tmp_path):
         before_delete=verify_delete,
     )
     try:
-        await mode._file(client, FakeMessage(1, copied=copied))
+        await mode._file(cast(Client, client), FakeMessage(1, copied=copied))
         assert client.deleted == []
         assert not store.list_directory("/")
         assert mode.active_imports == 0
@@ -256,7 +259,7 @@ async def test_bot_active_import_counter_covers_copy_and_cancellation(tmp_path):
         await asyncio.Event().wait()
 
     message.copy = copy
-    task = asyncio.create_task(mode._file(client, message))
+    task = asyncio.create_task(mode._file(cast(Client, client), message))
     try:
         await entered.wait()
         assert mode.active_imports == 1
@@ -395,7 +398,7 @@ async def test_bot_preserves_saved_media_after_lost_commit_acknowledgement(
         ),
     )
     try:
-        await mode._file(client, message)
+        await mode._file(cast(Client, client), message)
         assert mongo_backend.db.nodes.find_one({"message_id": 62}) is not None
         assert client.deleted == []
         assert "could not be confirmed" in message.status.edit_text.calls[-1][0][0]
@@ -457,7 +460,7 @@ async def test_bot_operation_identity_survives_token_rotation_and_bot_replacemen
         await replacement._file(replacement.client, replay)
         assert len(bot.store.list_directory("/")) == (1 if same_account else 2)
         assert replay.status.edit_text.calls[-1][0][0].startswith("Saved ✓")
-        assert replacement.client.deleted == []
+        assert cast(FakeBotClient, replacement.client).deleted == []
     finally:
         replacement.close()
 
@@ -629,8 +632,8 @@ async def test_strangers_get_one_private_bot_notice(tmp_path):
     mode = root_mode(client=client, settings=settings(tmp_path), store=new_store())
     try:
         first, second = FakeMessage(4242), FakeMessage(4242)
-        await mode._unauthorized(client, first)
-        await mode._unauthorized(client, second)
+        await mode._unauthorized(cast(Client, client), first)
+        await mode._unauthorized(cast(Client, client), second)
         assert "4242" in first.replies[-1][0]
         assert second.replies == []
     finally:

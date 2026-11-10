@@ -12,6 +12,7 @@ from tests.support.app_fixtures import login
 from tgdrive.observability.performance_diagnosis import (
     WORKLOAD_KINDS,
     PerformanceDiagnosis,
+    _difference,
 )
 from tgdrive.observability.traffic import TrafficCounters, TrafficMiddleware
 
@@ -106,6 +107,22 @@ def test_cache_replacement_and_counter_reset_are_not_zero_hits(observation):
     assert o.sample()["cache_hits"] is None
     o.diagnosis.observe(o.traffic, o.telegram, None, o.sources)
     assert o.diagnosis.snapshot()["cache_hits"] is None
+
+
+@pytest.mark.parametrize("values", [(1, None, 3), (None, 2, 3), (3, 1, 4)])
+def test_counter_gaps_and_interior_resets_remain_unknown(values):
+    assert _difference(values) is None
+
+
+def test_non_dictionary_cache_activity_remains_unavailable(observation):
+    o = observation
+    o.cache.activity_snapshot = lambda: object()
+    o.sample()
+    o.now[0] += 6
+    o.traffic.download_bytes = 60
+    result = o.sample()
+    assert result["cache_hits"] is result["cache_misses"] is None
+    assert result["http_delivered_bytes_per_second"] == 10
 
 
 def test_multiple_observed_waits_have_units_without_private_values(observation):

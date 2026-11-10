@@ -82,6 +82,7 @@ def test_expiry_only_edit_preserves_label_and_explicit_null_removes_expiry(
     if never:
         assert current["expires_at"] is None
     else:
+        assert expiry is not None
         assert current["expires_at"] == (
             datetime.fromisoformat(expiry)
             .isoformat(timespec="seconds")

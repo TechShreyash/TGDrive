@@ -1,30 +1,36 @@
 """Channel binding and transfer lineage guards preserve catalog references."""
 
 from types import SimpleNamespace
+from typing import cast
 from unittest.mock import AsyncMock
 
 import pytest
 
 from tests.support.mongo_fixtures import new_store, reopen_store, store_from_payload
 from tests.transfers.test_transfers import FakeTelegramClient
+from tgdrive.core.config import Settings
 from tgdrive.core.errors import CorruptStoreError, ValidationError
 from tgdrive.recovery.backup import RecoveryConflict
 from tgdrive.telegram.client_pool import ClientPool
 from tgdrive.transfers.manager import TransferManager
+from tgdrive.transfers.remote import RemoteClient
 from tgdrive.transfers.tasks import TransferRegistry, TransferStatus
 
 
 def manager_for(tmp_path, pool, store, guard):
     return TransferManager(
-        settings=SimpleNamespace(
-            resolved_cache_dir=tmp_path / "cache",
-            max_concurrent_transfers=1,
-            storage_channel=-1001234567890,
-            bot_upload_limit=2_000_000_000,
+        settings=cast(
+            Settings,
+            SimpleNamespace(
+                resolved_cache_dir=tmp_path / "cache",
+                max_concurrent_transfers=1,
+                storage_channel=-1001234567890,
+                bot_upload_limit=2_000_000_000,
+            ),
         ),
         pool=pool,
         store=store,
-        remote=SimpleNamespace(close=AsyncMock()),
+        remote=cast(RemoteClient, SimpleNamespace(close=AsyncMock())),
         registry=TransferRegistry(),
         ensure_lineage=guard,
     )
@@ -84,6 +90,7 @@ async def test_catalog_deletion_rechecks_lineage_before_removing_refs(
 
     manager = manager_for(tmp_path, pool, store, guard)
     record = await manager.start_deletion(path)
+    assert record.task is not None
     await record.task
     assert record.status is TransferStatus.ERROR
     assert client.deleted == []

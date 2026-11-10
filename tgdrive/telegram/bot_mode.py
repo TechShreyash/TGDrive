@@ -269,7 +269,10 @@ class BotMode:
         source_chat = getattr(
             getattr(message, "native", None), "chat_id", message.from_user.id
         )
-        bot_id = self.settings.main_bot_token_value.split(":", 1)[0]
+        token = self.settings.main_bot_token_value
+        if token is None:
+            raise RuntimeError("Bot mode is not configured")
+        bot_id = token.split(":", 1)[0]
         operation_id = hashlib.sha256(
             f"bot:{bot_id}:{source_chat}:{message.id}".encode()
         ).hexdigest()
@@ -282,6 +285,8 @@ class BotMode:
                 if inspect.isawaitable(check):
                     await check
             path, folder_name = await self.folder_settings.destination()
+            if path is None:
+                raise RuntimeError("The upload destination is unavailable")
             # No reply keyboard here: inline buttons are edited in when saved.
             status = await message.reply_text(f"Saving to {folder_name}…")
             if self.transfers is not None and await self.folder_settings.encrypt():
@@ -292,6 +297,8 @@ class BotMode:
                 self.settings.storage_channel,
                 disable_notification=True,
             )
+            if copied is None:
+                raise RuntimeError("Telegram did not return the copied message")
             media = self._media(copied)
             if media is None:
                 raise RuntimeError("copied message contains no media")

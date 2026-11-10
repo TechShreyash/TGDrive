@@ -14,13 +14,13 @@ import secrets
 import time
 import weakref
 from collections import OrderedDict, deque
-from collections.abc import AsyncIterator, Awaitable, Callable
+from collections.abc import AsyncGenerator, Awaitable, Callable, Coroutine
 from contextlib import suppress
 from dataclasses import dataclass, field
 from functools import partial
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any
+from typing import Any, Protocol, TypedDict, cast
 
 from telethon import TelegramClient, events, functions, types, utils
 from telethon.errors import (
@@ -61,6 +61,22 @@ class _BlockFlight:
     done: asyncio.Event = field(default_factory=asyncio.Event)
 
 
+class _ReadSlots(Protocol):
+    async def acquire(self) -> object: ...
+
+    def release(self) -> None: ...
+
+
+class _UploadSource(Protocol):
+    def read(self, size: int, /) -> bytes: ...
+
+    def verify(self, expected_sha256: str | None, /) -> None: ...
+
+
+class _CaptionOptions(TypedDict, total=False):
+    caption: str
+
+
 class _BlockCache:
     """Bounded payload LRU and shared reads; never an authorization cache."""
 
@@ -82,7 +98,7 @@ class _BlockCache:
         self.bytes_used = 0
         self.entries: OrderedDict[tuple[Any, ...], tuple[float, bytes]] = OrderedDict()
         self.flights: dict[tuple[Any, ...], _BlockFlight] = {}
-        self._slots = asyncio.Semaphore(read_slots)
+        self._slots: _ReadSlots = asyncio.Semaphore(read_slots)
 
     def _drop(self, key: tuple[Any, ...]) -> None:
         _, data = self.entries.pop(key)
@@ -126,7 +142,7 @@ class _BlockCache:
         self,
         key: tuple[Any, ...],
         expected: int,
-        load: Callable[[], Awaitable[bytes]],
+        load: Callable[[], Coroutine[object, object, bytes]],
     ) -> bytes:
         while True:
             hit = self._hit(key)
@@ -317,7 +333,14 @@ def _media_options(message: Any) -> list[tuple[dict[str, Any], Any]]:
     photo = getattr(native, "photo", None)
     if not isinstance(photo, types.Photo):
         return []
-    sizes = [size for size in photo.sizes if _photo_size(size)]
+    sizes = [
+        size
+        for size in photo.sizes
+        if isinstance(
+            size, (types.PhotoSize, types.PhotoSizeProgressive, types.PhotoCachedSize)
+        )
+        and _photo_size(size)
+    ]
     if not sizes:
         return []
     options = []
@@ -329,7 +352,8 @@ def _media_options(message: Any) -> list[tuple[dict[str, Any], Any]]:
             else _variant_id(message, f"photo:{photo.id}:{size.type}")
         )
         selected = copy.copy(photo)
-        selected.sizes = [size]
+        selected_sizes: list[types.TypePhotoSize] = [size]
+        selected.sizes = selected_sizes
         info = dict(
             id=identity,
             label="Original" if original else f"{size.w}x{size.h}",
@@ -407,6 +431,8 @@ class TelegramMessage:
 class Client:
     """Adapt one Telegram account to the pool's transfer and media operations."""
 
+    _download_block_cache: _BlockCache
+
     def __init__(
         self,
         *,
@@ -428,7 +454,7 @@ class Client:
         self.username: str | None = None
         self._identity_cache = IdentityCache(settings.resolved_data_dir)
         self._identity_task: asyncio.Task | None = None
-        self._identity_pool = None
+        self._identity_pool: ClientPool | None = None
         self._identity_next_refresh = 0.0
         self.identity_retry_at: float | None = None
         if bot_token:
@@ -458,7 +484,7 @@ class Client:
             timeout=20,
             auto_reconnect=True,
         )
-        self.native.parse_mode = None
+        self.native.parse_mode = ""
 
     @property
     def is_connected(self) -> bool:
@@ -477,7 +503,8 @@ class Client:
                         client_name=self.name,
                     )
                 await self.native.sign_in(bot_token=self._token)
-            me = await self.native.get_me()
+            # Telethon only returns InputPeerUser when input_peer=True.
+            me = cast(types.User | None, await self.native.get_me())
             if me is None:
                 raise RuntimeError("Telegram did not confirm the authenticated account")
             if self._token:
@@ -497,7 +524,7 @@ class Client:
                 await self._refresh_main_endpoint()
             self._start_identity_refresh(seed=me)
         except BaseException:
-            await self.native.disconnect()
+            await cast(Awaitable[None], self.native.disconnect())
             raise
 
     async def _refresh_main_endpoint(self) -> None:
@@ -507,7 +534,7 @@ class Client:
         continues to own exported senders and migration for file downloads.
         """
         session = self.native.session
-        if not all(
+        if session is None or not all(
             hasattr(session, name) for name in ("dc_id", "server_address", "port")
         ):
             return
@@ -532,7 +559,7 @@ class Client:
         replacement = (previous[0], selected.ip_address, selected.port)
         if replacement == previous:
             return
-        await self.native.disconnect()
+        await cast(Awaitable[None], self.native.disconnect())
         try:
             session.set_dc(*replacement)
             session.save()
@@ -542,7 +569,7 @@ class Client:
                     raise RuntimeError("Refreshed Telegram endpoint lost authorization")
         except BaseException as error:
             try:
-                await self.native.disconnect()
+                await cast(Awaitable[None], self.native.disconnect())
                 session.set_dc(*previous)
                 session.save()
                 # Bound the rollback like the attempt: an unreachable previous
@@ -567,7 +594,7 @@ class Client:
     def identity_refreshing(self) -> bool:
         return self._identity_task is not None and not self._identity_task.done()
 
-    def bind_identity_pool(self, pool: Any) -> None:
+    def bind_identity_pool(self, pool: ClientPool) -> None:
         self._identity_pool = pool
 
     def refresh_identity(self) -> None:
@@ -610,7 +637,9 @@ class Client:
                 if seed is None:
                     if self._identity_pool is None:
                         async with asyncio.timeout(8):
-                            account = await self.native.get_me()
+                            account = cast(
+                                types.User | None, await self.native.get_me()
+                            )
                     else:
                         async with (
                             self._identity_pool.lease(
@@ -618,7 +647,9 @@ class Client:
                             ),
                             asyncio.timeout(8),
                         ):
-                            account = await self.native.get_me()
+                            account = cast(
+                                types.User | None, await self.native.get_me()
+                            )
                 else:
                     account = seed
                 expected_id = int(self.name.rsplit("-", 1)[1])
@@ -669,7 +700,7 @@ class Client:
                 await self._identity_task
             self._identity_task = None
         self.identity_retry_at = None
-        await self.native.disconnect()
+        await cast(Awaitable[None], self.native.disconnect())
 
     async def _defer_read(self, error: FloodWaitError | FloodPremiumWaitError) -> None:
         deadline = time.time() + max(1, error.seconds) + 0.25
@@ -758,7 +789,7 @@ class Client:
         except FloodWaitError as exc:
             # Save*Part FloodWait happens before this boundary and is account-scoped.
             # SendMedia may be channel-scoped: every writer observes this cooldown.
-            exc.tgdrive_channel_flood = True
+            setattr(exc, "tgdrive_channel_flood", True)  # noqa: B010 - third-party error metadata.
             defer = getattr(self, "_defer_channel", None)
             if defer is not None:
                 await defer(time.time() + exc.seconds + 0.25)
@@ -805,7 +836,7 @@ class Client:
             )
             if expected_sha256 is not None:
                 source.verify(expected_sha256)
-        thumbnail = None
+        uploaded_thumbnail = None
         if cover and nonce is None:
             try:
                 async with asyncio.timeout(4):
@@ -814,7 +845,7 @@ class Client:
                         def verify(self, _expected):
                             pass
 
-                    thumbnail = await self._upload_parts(
+                    uploaded_thumbnail = await self._upload_parts(
                         CoverSource(cover),
                         length=len(cover),
                         file_name="thumbnail.jpg",
@@ -824,7 +855,7 @@ class Client:
                 pass  # A failed optional thumbnail must not fail the original.
         media = types.InputMediaUploadedDocument(
             file=uploaded,
-            thumb=thumbnail,
+            thumb=uploaded_thumbnail,
             mime_type="application/octet-stream"
             if nonce is not None
             else mimetypes.guess_type(file_name)[0] or "application/octet-stream",
@@ -849,13 +880,13 @@ class Client:
                 )
             )
         except FloodWaitError as exc:
-            exc.tgdrive_channel_flood = True
+            setattr(exc, "tgdrive_channel_flood", True)  # noqa: B010 - third-party error metadata.
             defer = getattr(self, "_defer_channel", None)
             if defer is not None:
                 await defer(time.time() + exc.seconds + 0.25)
             raise
         except RPCError as exc:
-            if thumbnail is None or "THUMB" not in str(exc).upper():
+            if uploaded_thumbnail is None or "THUMB" not in str(exc).upper():
                 raise
             media.thumb = None
             result = await self._publish(
@@ -877,13 +908,13 @@ class Client:
 
     async def _upload_parts(
         self,
-        source: FileWindow,
+        source: _UploadSource,
         *,
         length: int,
         file_name: str,
         progress: Any,
         nonce: str | None = None,
-    ) -> Any:
+    ) -> types.InputFile | types.InputFileBig:
         """Pipeline bounded idempotent protocol parts; publish only after all ACKs."""
         part_size = 512 * 1024
         part_count = math.ceil(length / part_size)
@@ -977,6 +1008,7 @@ class Client:
                 await asyncio.gather(*pending, return_exceptions=True)
         if big:
             return types.InputFileBig(id=file_id, parts=part_count, name=file_name)
+        assert digest is not None
         return types.InputFile(
             id=file_id,
             parts=part_count,
@@ -988,17 +1020,16 @@ class Client:
         self, channel: int, document: Any, **options: Any
     ) -> TelegramMessage:
         path = Path(document if isinstance(document, (str, Path)) else document.name)
+        caption: _CaptionOptions = (
+            {"caption": options.get("caption") or ""} if "caption" in options else {}
+        )
         return await self.send_staged(
             channel,
             path,
             file_name=options.get("file_name", path.name),
             random_id=options.get("random_id", secrets.randbits(63)),
             progress=options.get("progress"),
-            **(
-                {"caption": options.get("caption") or ""}
-                if "caption" in options
-                else {}
-            ),
+            **caption,
         )
 
     async def copy_media(
@@ -1019,8 +1050,10 @@ class Client:
     async def get_pinned_message_id(self, channel: int) -> int | None:
         """Discover the channel's latest pin without bot-prohibited history/search."""
         peer = await self.native.get_input_entity(channel)
+        input_channel = utils.get_input_channel(peer)
+        assert input_channel is not None
         result = await self.native(
-            functions.channels.GetFullChannelRequest(utils.get_input_channel(peer))
+            functions.channels.GetFullChannelRequest(input_channel)
         )
         identity = getattr(result.full_chat, "pinned_msg_id", None)
         if identity is not None and (type(identity) is not int or identity <= 0):
@@ -1037,8 +1070,10 @@ class Client:
         )
 
         peer = await self.native.get_input_entity(channel)
+        input_channel = utils.get_input_channel(peer)
+        assert input_channel is not None
         result = await self.native(
-            functions.channels.GetFullChannelRequest(utils.get_input_channel(peer))
+            functions.channels.GetFullChannelRequest(input_channel)
         )
         chat = next(
             (item for item in result.chats if utils.get_peer_id(item) == channel),
@@ -1203,7 +1238,7 @@ class Client:
 
     async def stream_media(
         self, message: Any, *, limit: int, offset: int, use_cache: bool = True
-    ) -> AsyncIterator[bytes]:
+    ) -> AsyncGenerator[bytes]:
         """Yield ordered MiB blocks with at most four windows of read-ahead."""
         if limit <= 0:
             return

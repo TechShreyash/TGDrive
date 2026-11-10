@@ -183,7 +183,8 @@ class RebuildSource:
         await self.runner.setup()
         site = web.TCPSite(self.runner, "127.0.0.1", 0)
         await site.start()
-        port = site._server.sockets[0].getsockname()[1]
+        addresses = self.runner.addresses
+        port = addresses[0][1]
         return f"http://127.0.0.1:{port}/{self.token}"
 
     async def close(self):
@@ -261,7 +262,7 @@ class ThumbnailRebuild:
         ):
             return True
         pool = getattr(runtime, "pool", None)
-        if callable(getattr(pool, "performance_snapshot", None)):
+        if pool is not None and callable(getattr(pool, "performance_snapshot", None)):
             return bool(pool.performance_snapshot().get("active", 0))
         return False
 
@@ -355,6 +356,7 @@ class ThumbnailRebuild:
                 output, temporary = opened
             if interrupted:
                 raise asyncio.CancelledError
+            assert output is not None and temporary is not None
             if content is not None:
                 await covers._owned_disk_call(output.write, content)
             else:

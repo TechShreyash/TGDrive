@@ -30,9 +30,10 @@ class IdentityCache:
     def __init__(self, data_dir: Path):
         from tgdrive.storage.mongo import DatabaseUnavailable, for_directory
 
-        self._mongo = for_directory(data_dir)
-        if self._mongo is None:
+        mongo = for_directory(data_dir)
+        if mongo is None:
             raise DatabaseUnavailable("MongoDB is required for account identities.")
+        self._mongo = mongo
 
     def defer(self, account: str, deadline: float) -> None:
         self._mongo.db.identities.update_one(

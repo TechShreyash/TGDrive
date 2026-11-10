@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 from types import SimpleNamespace
+from typing import cast
 from unittest.mock import AsyncMock
 
 import pytest
@@ -16,6 +17,7 @@ from tgdrive.telegram.client_pool import ClientPool
 from tgdrive.telegram.connection_errors import TelegramConnectionError
 from tgdrive.transfers import multipart_transfer
 from tgdrive.transfers.manager import TransferManager
+from tgdrive.transfers.remote import RemoteClient
 from tgdrive.transfers.tasks import TransferStatus, upload_effects
 
 THUMBNAIL = b"\xff\xd8\xffsmall\xff\xd9"
@@ -28,7 +30,7 @@ class PosterLedger(multipart_tests.Ledger):
         super().__init__()
         self.options = []
         self.lose_poster_reply = False
-        self.poster_failure = None
+        self.poster_failure: Exception | None = None
         self.hold_poster = False
 
 
@@ -79,7 +81,8 @@ def images(monkeypatch):
 
 async def manager_for(tmp_path):
     manager, ledger = await multipart_tests.manager_for(tmp_path, ledger=PosterLedger())
-    manager.settings.bot_upload_limit = 1024**2
+    assert isinstance(ledger, PosterLedger)
+    cast(SimpleNamespace, manager.settings).bot_upload_limit = 1024**2
     return manager, ledger
 
 
@@ -91,6 +94,7 @@ async def test_single_video_commits_two_documents_without_changing_original(
     image_paths = multipart_transfer.upload_image_paths(source)
     try:
         record = await manager.enqueue_upload(source, "/", "clip.mp4", len(PAYLOAD))
+        assert record.task is not None
         await record.task
         assert record.status is TransferStatus.COMPLETED
         item = multipart_tests.stored(manager)
@@ -129,6 +133,7 @@ async def test_lost_poster_reply_reuses_identity_and_does_not_regenerate(
     source = multipart_tests.staged(manager, PAYLOAD)
     try:
         record = await manager.enqueue_upload(source, "/", "clip.mp4", len(PAYLOAD))
+        assert record.task is not None
         await record.task
         assert record.status is TransferStatus.ERROR
         poster = record.context["multipart_plan"]["poster"]
@@ -137,6 +142,7 @@ async def test_lost_poster_reply_reuses_identity_and_does_not_regenerate(
         assert not manager.store.list_directory("/")
         assert source.exists()
         record = await manager.retry_job(record.id)
+        assert record.task is not None
         await record.task
         assert record.status is TransferStatus.COMPLETED
         attempts = [
@@ -159,6 +165,7 @@ async def test_missing_poster_does_not_block_original(tmp_path, images, availabl
         record = await manager.enqueue_upload(
             multipart_tests.staged(manager, PAYLOAD), "/", "clip.mp4", len(PAYLOAD)
         )
+        assert record.task is not None
         await record.task
         assert record.status is TransferStatus.COMPLETED
         assert not multipart_tests.stored(manager).get("poster")
@@ -192,6 +199,7 @@ async def test_predispatch_poster_failures_fall_back_to_original(
     source = multipart_tests.staged(manager, PAYLOAD)
     try:
         record = await manager.enqueue_upload(source, "/", "clip.mp4", len(PAYLOAD))
+        assert record.task is not None
         await record.task
         assert record.status is TransferStatus.COMPLETED
         assert not multipart_tests.stored(manager).get("poster")
@@ -217,6 +225,7 @@ async def test_cancellation_deletes_original_poster_and_owned_image_sources(
         await manager.cancel_job(record.id)
         assert source.exists()
         ledger.release.set()
+        assert record.task is not None
         await record.task
         assert record.status is TransferStatus.CANCELLED
         assert not ledger.messages
@@ -261,11 +270,12 @@ async def test_restart_replays_ambiguous_poster_from_owned_staging(tmp_path, ima
         pool=pool,
         store=reopen_store(tmp_path / "drive"),
         registry=multipart_tests.registry_for(tmp_path),
-        remote=SimpleNamespace(close=AsyncMock()),
+        remote=cast(RemoteClient, SimpleNamespace(close=AsyncMock())),
     )
     try:
         await recovered.recover()
         record = recovered.registry.get(record_id)
+        assert record.task is not None
         await record.task
         assert record.status is TransferStatus.COMPLETED
         poster = record.context["multipart_plan"]["poster"]

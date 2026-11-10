@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+from collections.abc import Awaitable, Callable
 from io import BytesIO
 from pathlib import Path
 from types import SimpleNamespace
+from typing import cast
 
 import pytest
 from fastapi import UploadFile
@@ -18,8 +20,8 @@ from tgdrive.transfers.manager import (
     TransferManager,
     TransferTooLarge,
 )
-from tgdrive.transfers.remote import DownloadResult
-from tgdrive.transfers.tasks import TransferRegistry, TransferStatus
+from tgdrive.transfers.remote import DownloadResult, RemoteClient
+from tgdrive.transfers.tasks import TransferRecord, TransferRegistry, TransferStatus
 
 
 class StopTransmission(Exception):
@@ -54,7 +56,7 @@ class FakeTelegramClient:
         path: Path,
         *,
         file_name: str,
-        progress: object,
+        progress: Callable[[int, int], Awaitable[None]],
         offset: int = 0,
         size: int | None = None,
         expected_sha256: str | None = None,
@@ -104,7 +106,7 @@ class FakeRemote:
         *,
         filename: str | None,
         cancel_event: asyncio.Event,
-        progress: object,
+        progress: Callable[[int, int], Awaitable[None]],
         **_kwargs: object,
     ) -> DownloadResult:
         assert not cancel_event.is_set()
@@ -152,7 +154,7 @@ async def make_manager(tmp_path: Path, *, max_size: int = 1024):
         settings=settings,
         pool=pool,
         store=store,
-        remote=FakeRemote(),
+        remote=cast(RemoteClient, FakeRemote()),
         registry=TransferRegistry(),
     )
     return manager, store, client, pool
@@ -241,7 +243,9 @@ async def test_interrupted_browser_request_cancels_and_cleans_partial_file(
             self.closed = True
 
     upload = InterruptedUpload()
-    request_task = asyncio.create_task(manager.receive_browser_upload(upload, "/"))
+    request_task = asyncio.create_task(
+        manager.receive_browser_upload(cast(UploadFile, upload), "/")
+    )
     await read_started.wait()
     record = next(iter(manager.registry._records.values()))
     request_task.cancel()
@@ -396,7 +400,7 @@ async def test_creation_callback_can_cancel_before_saving(tmp_path: Path) -> Non
     upload = UploadFile(BytesIO(b"hello"), size=5, filename="hello.txt")
     created: list[str] = []
 
-    async def cancel_immediately(record: object) -> None:
+    async def cancel_immediately(record: TransferRecord) -> None:
         created.append(record.id)
         (await manager.registry.cancel(record.id))
 
@@ -421,7 +425,7 @@ async def test_staging_setup_failure_closes_upload_and_marks_bound_record(
     # permission/filesystem setup failure before the first multipart read.
     (manager.cache_dir / "uploads").write_bytes(b"occupied")
     upload = UploadFile(BytesIO(b"hello"), size=5, filename="hello.txt")
-    bound: list[object] = []
+    bound: list[TransferRecord] = []
 
     with pytest.raises(FileExistsError):
         await manager.receive_browser_upload(upload, "/", on_created=bound.append)

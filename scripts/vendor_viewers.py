@@ -236,6 +236,8 @@ def generate(root: Path, output_dir: Path, node: str, source_dir: Path | None) -
         upstream = upstream_bytes(viewer, source_dir)
         entries = package_entries(upstream)
         metadata_entry = entries["package/package.json"]
+        if metadata_entry.content is None:
+            raise ValueError("Expected regular package metadata: package/package.json")
         metadata = json.loads(metadata_entry.content)
         if metadata["name"] != viewer.name or metadata["version"] != viewer.version:
             raise ValueError(f"Unexpected upstream package metadata: {viewer.name}")

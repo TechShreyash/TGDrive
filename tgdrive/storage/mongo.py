@@ -12,7 +12,10 @@ import uuid
 from contextlib import contextmanager, suppress
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from tgdrive.settings.managed_settings import ManagedDocument
 
 from bson.codec_options import CodecOptions, TypeDecoder, TypeRegistry
 from bson.int64 import Int64
@@ -23,7 +26,9 @@ from pymongo.write_concern import WriteConcern
 
 
 class _IntegerDecoder(TypeDecoder):
-    bson_type = Int64
+    @property
+    def bson_type(self):
+        return Int64
 
     def transform_bson(self, value):
         return int(value)
@@ -107,7 +112,7 @@ class MongoBackend:
         self._write_lock = threading.RLock()
         self._writes_paused = False
         self._settings_cached = False
-        self._settings_document = None
+        self._settings_document: ManagedDocument | None = None
         self.token: str | None = None
         self._stop = threading.Event()
         self._heartbeat: threading.Thread | None = None

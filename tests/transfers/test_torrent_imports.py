@@ -5,11 +5,12 @@ from __future__ import annotations
 import asyncio
 import time
 from types import SimpleNamespace
+from typing import cast
 from unittest.mock import AsyncMock
 
 import pytest
 
-from tests.support.mongo_fixtures import reopen_store
+from tests.support.mongo_fixtures import FakeMongoBackend, reopen_store
 from tests.transfers.test_multipart_transfers import (
     Account,
     dispose,
@@ -76,6 +77,7 @@ async def test_transient_download_retries_reuse_reservation_and_release_slot(
     monkeypatch.setattr("tgdrive.transfers.torrent.download_torrent", download)
     try:
         record = await manager.start_torrent(source=SOURCE, destination="/")
+        assert record.task is not None
         await record.task
         assert record.status is TransferStatus.COMPLETED, record.error
         assert attempts == [(SOURCE, manager.cache_dir / "torrents" / record.id)] * 2
@@ -102,6 +104,7 @@ async def test_permanent_failure_stops_and_transient_failures_use_three_retries(
     monkeypatch.setattr("tgdrive.transfers.torrent.download_torrent", failed)
     try:
         record = await manager.start_torrent(source=SOURCE, destination="/")
+        assert record.task is not None
         await record.task
         assert record.status is TransferStatus.ERROR
         assert len(attempts) == (4 if transient else 1)
@@ -147,6 +150,7 @@ async def test_cancel_during_torrent_backoff_never_starts_another_attempt(
         record = await manager.start_torrent(source=SOURCE, destination="/")
         await asyncio.wait_for(waiting.wait(), 2)
         await manager.cancel_job(record.id)
+        assert record.task is not None
         await record.task
         assert record.status is TransferStatus.CANCELLED
         assert attempts == [True] and ledger.calls == []
@@ -183,6 +187,7 @@ async def test_reopened_torrent_preserves_retry_deadline_and_remaining_budget(
     monkeypatch.setattr("tgdrive.transfers.torrent.download_torrent", failed)
     try:
         await manager._resume(record)
+        assert record.task is not None
         await record.task
         assert record.status is TransferStatus.ERROR
         assert len(attempts) == 2
@@ -194,6 +199,7 @@ async def test_reopened_torrent_preserves_retry_deadline_and_remaining_budget(
         assert ledger.calls == []
         manager.remote._wait_for_retry.reset_mock()
         await manager.retry_job(record.id)
+        assert record.task is not None
         await record.task
         assert record.status is TransferStatus.ERROR
         assert len(attempts) == 6
@@ -237,6 +243,7 @@ async def test_nested_torrent_keeps_existing_folder_and_shows_one_task(
     existing = manager.store.create_folder("/", "Album")
     try:
         record = await manager.start_torrent(source=SOURCE, destination="/")
+        assert record.task is not None
         await record.task
         assert record.status is TransferStatus.COMPLETED
         tree = record.context["torrent_tree"]
@@ -278,6 +285,7 @@ async def test_torrent_retry_skips_completed_files_even_after_child_pruning(
 
     monkeypatch.setattr(manager, "_upload_path", fail_second)
     record = await manager.start_torrent(source=SOURCE, destination="/")
+    assert record.task is not None
     await record.task
     assert record.status is TransferStatus.ERROR
     assert record.context["torrent_completed"] == [0]
@@ -297,6 +305,7 @@ async def test_torrent_retry_skips_completed_files_even_after_child_pruning(
         )
     try:
         retried = await manager.retry_job(record.id)
+        assert retried.task is not None
         await retried.task
         assert retried.status is TransferStatus.COMPLETED
         assert retried.context["torrent_completed"] == [0, 1]
@@ -314,11 +323,12 @@ async def test_torrent_limits_reject_before_writing_payload(
     torrent_source(monkeypatch)
     manager, ledger = await manager_for(tmp_path)
     if per_file:
-        manager.settings.upload_limit = 2
+        cast(SimpleNamespace, manager.settings).upload_limit = 2
     else:
         manager.settings.staging_budget_bytes = 5
     try:
         record = await manager.start_torrent(source=SOURCE, destination="/")
+        assert record.task is not None
         await record.task
         assert record.status is TransferStatus.ERROR
         assert not record.context.get("torrent_downloaded")
@@ -351,6 +361,7 @@ async def test_cancelling_torrent_download_stops_and_removes_its_stage(
         record = await manager.start_torrent(source=SOURCE, destination="/")
         await asyncio.wait_for(ready.wait(), 2)
         await manager.cancel_job(record.id)
+        assert record.task is not None
         await record.task
         assert record.status is TransferStatus.CANCELLED
         assert not (manager.cache_dir / "torrents" / record.id).exists()
@@ -394,7 +405,7 @@ async def test_torrent_resume_counts_retained_allocation_during_zero_hash_progre
     tmp_path, monkeypatch
 ):
     manager, ledger = await manager_for(tmp_path)
-    manager.settings.upload_limit = 8192
+    cast(SimpleNamespace, manager.settings).upload_limit = 8192
     manager.settings.min_free_bytes = 100
     monkeypatch.setattr("tgdrive.transfers.torrent.available", lambda: True)
     observed = []
@@ -435,6 +446,7 @@ async def test_torrent_resume_counts_retained_allocation_during_zero_hash_progre
     monkeypatch.setattr("tgdrive.transfers.torrent.download_torrent", resume)
     try:
         record = await manager.start_torrent(source=SOURCE, destination="/")
+        assert record.task is not None
         await record.task
         assert record.status is TransferStatus.ERROR
         assert observed[:2] == [0, 1024]
@@ -476,13 +488,17 @@ async def test_busy_torrent_slots_keep_next_queued_and_allow_local_uploads(
         local = manager.cache_dir / "device.upload"
         local.write_bytes(b"abc")
         upload = await manager.enqueue_upload(local, "/", "device.bin", 3)
+        assert upload.task is not None
         await asyncio.wait_for(upload.task, 2)
         assert upload.status is TransferStatus.COMPLETED
         assert len(downloads) == 2
         assert torrents[2].status is TransferStatus.QUEUED
         assert torrents[2].phase == "torrent_metadata"
         release.set()
-        await asyncio.gather(*(record.task for record in torrents))
+        assert all(record.task is not None for record in torrents)
+        await asyncio.gather(
+            *(cast(asyncio.Task[None], record.task) for record in torrents)
+        )
         assert all(record.status is TransferStatus.COMPLETED for record in torrents)
         assert len(ledger.messages) == 4
     finally:
@@ -523,6 +539,7 @@ async def test_chosen_torrent_files_are_the_only_ones_reserved_and_imported(
         record = await manager.start_torrent(
             source=SOURCE, destination="/", select_files=True
         )
+        assert record.task is not None
         await record.task
         # Paused after metadata: nothing reserved, the choice is offered.
         assert record.phase == "torrent_select"
@@ -536,6 +553,7 @@ async def test_chosen_torrent_files_are_the_only_ones_reserved_and_imported(
                 await manager.select_torrent_files(record.id, invalid)
 
         await manager.select_torrent_files(record.id, [2, 0])
+        assert record.task is not None
         await record.task
         assert record.status is TransferStatus.COMPLETED
         assert selections == [[0, 2]]
@@ -544,9 +562,8 @@ async def test_chosen_torrent_files_are_the_only_ones_reserved_and_imported(
         tree = record.context["torrent_tree"]
         assert set(tree["folders"]) == {"", "Extra"}  # No empty "Disc" folder.
         # Only the two chosen files reach Telegram (plus any generated covers).
-        stored = [
-            row for row in manager.store.backend.db.nodes.rows if row["kind"] == "file"
-        ]
+        backend = cast(FakeMongoBackend, manager.store.backend)
+        stored = [row for row in backend.db.nodes.rows if row["kind"] == "file"]
         assert sorted(row["name"] for row in stored) == ["a.txt", "c.bin"]
         with pytest.raises(ValueError, match="not waiting"):
             await manager.select_torrent_files(record.id, [1])
@@ -566,6 +583,7 @@ async def test_single_file_torrent_starts_without_waiting_for_a_choice(
         record = await manager.start_torrent(
             source=SOURCE, destination="/", select_files=True
         )
+        assert record.task is not None
         await record.task
         assert record.status is TransferStatus.COMPLETED
         assert len(ledger.messages) == 1

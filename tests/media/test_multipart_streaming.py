@@ -2,10 +2,12 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+from collections.abc import Awaitable, Callable
 from types import SimpleNamespace
 
 import pytest
 from starlette.requests import ClientDisconnect
+from starlette.responses import StreamingResponse
 
 from tests.media.test_streaming import make_request, response_body
 from tgdrive.media.streaming import (
@@ -50,9 +52,9 @@ class MultipartClient:
         self.fetches = []
         self.reads = []
         self.closed = []
-        self.fetch_error = None
-        self.before_fetch = None
-        self.before_chunk = None
+        self.fetch_error: Exception | None = None
+        self.before_fetch: Callable[[int], Awaitable[None]] | None = None
+        self.before_chunk: Callable[[int, int], Awaitable[None]] | None = None
 
     async def start(self):
         self.is_connected = True
@@ -262,8 +264,10 @@ async def test_late_part_failure_cannot_satisfy_content_length_and_releases_all(
     received = bytearray()
     try:
         response = await stream(pool, contents)
+        assert isinstance(response, StreamingResponse)
         with pytest.raises(OSError):
             async for chunk in response.body_iterator:
+                assert isinstance(chunk, bytes)
                 received.extend(chunk)
         assert len(received) < int(response.headers["content-length"])
         assert client.closed[0] == 101
@@ -412,8 +416,10 @@ async def test_full_part_checksum_withholds_final_block_after_prior_blocks_were_
     received = bytearray()
     try:
         response = await stream(pool, contents)
+        assert isinstance(response, StreamingResponse)
         with pytest.raises(OSError, match="checksum"):
             async for chunk in response.body_iterator:
+                assert isinstance(chunk, bytes)
                 received.extend(chunk)
         assert bytes(received) == b"a" * CHUNK
         assert len(received) < int(response.headers["content-length"])

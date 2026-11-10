@@ -217,6 +217,7 @@ def test_http_multipart_owner_share_scope_stable_move_trash_and_revocation(
     app = create_app(configured, runtime=runtime)
     try:
         with TestClient(app, base_url="https://testserver") as client:
+            assert client.portal is not None
             client.portal.call(runtime.pool.start)
             try:
                 assert (
@@ -303,8 +304,10 @@ def test_http_multipart_owner_share_scope_stable_move_trash_and_revocation(
                     ).status_code
                     == 403
                 )
+                assert client.portal is not None
                 assert client.portal.call(runtime.pool.health).active_leases == 0
             finally:
+                assert client.portal is not None
                 client.portal.call(runtime.pool.stop)
     finally:
         store.close()

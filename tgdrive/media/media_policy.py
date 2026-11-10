@@ -64,7 +64,7 @@ def merge_ranges(ranges: Iterable[Sequence[int]]) -> list[list[int]]:
     input, allowing callers to update cache readiness without changing its source.
     """
     result: list[list[int]] = []
-    for start, end in sorted(ranges):
+    for start, end in sorted(ranges, key=lambda interval: (interval[0], interval[1])):
         if end <= start:
             continue
         if result and start <= result[-1][1]:

@@ -27,6 +27,7 @@ from tgdrive.storage.mongo_store import MongoStore
 from tgdrive.storage.store import (
     ROOT_ID,
     SCHEMA_VERSION,
+    _FileNode,
     _name_key,
     _parse_one,
     _strict_int,
@@ -374,7 +375,7 @@ def _node(db, row, budget):
             row["kind"],
             _name_key(parsed.name),
             int(parsed.trashed),
-            parsed.size if row["kind"] == "file" else 0,
+            parsed.size if isinstance(parsed, _FileNode) else 0,
         ),
     )
     if row["kind"] == "file":

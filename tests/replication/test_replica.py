@@ -6,6 +6,7 @@ import asyncio
 import hashlib
 import inspect
 import time
+from collections.abc import Callable
 from contextlib import nullcontext
 from types import SimpleNamespace
 
@@ -14,10 +15,14 @@ import pytest
 from tests.support.mongo_fixtures import new_store, register_test_backend
 from tests.support.recovery_fixtures import settings
 from tgdrive.replication.replica import ChannelReplica
-from tgdrive.replication.replica_state import decode_bundle, files_in, parts_in
+from tgdrive.replication.replica_state import (
+    ReplicaJournal,
+    decode_bundle,
+    files_in,
+    parts_in,
+)
 from tgdrive.replication.replica_transport import ReplicaTransportError
 from tgdrive.storage.mongo import for_directory
-from tgdrive.storage.mongo_store import MongoStore
 
 BACKUP = -1002234567890
 REPLACEMENT = -1003234567890
@@ -42,10 +47,10 @@ class Telegram:
         self.instances = []
         self.next_id = 1001
         self.lose_response = False
-        self.copy_error = None
-        self.publish_error_channel = None
-        self.lose_publish_response_channel = None
-        self.after_copy = None
+        self.copy_error: ReplicaTransportError | None = None
+        self.publish_error_channel: int | None = None
+        self.lose_publish_response_channel: int | None = None
+        self.after_copy: Callable[[], object] | None = None
         self.unavailable = set()
 
     def factory(self, configured, token):
@@ -328,6 +333,12 @@ async def test_file_inspection_keeps_saved_provider_wait_before_new_requests(tmp
         await dispose(replica, store)
 
 
+def journal_record(journal: ReplicaJournal, key: str):
+    record = journal.get(key)
+    assert isinstance(record, dict)
+    return record
+
+
 def remote_bundle(remote, replica, channel=BACKUP):
     return decode_bundle(remote.messages[channel, remote.pins[channel]], replica.key())
 
@@ -380,6 +391,7 @@ def enable_staged_capture(replica, store, *, large=False):
     """Seed an explicit snapshot adapter, then exercise production capture."""
     records = capture_for(replica, store)()["database"]
     backend = replica.runtime.mongo
+    assert backend is not None
     backend.client = SimpleNamespace(start_session=lambda **_: nullcontext(object()))
     for name, rows in records.items():
         backend.db[name].delete_many({})
@@ -416,6 +428,7 @@ async def test_staged_replica_crosses_old_limits_without_catalog_materialization
         with pytest.raises(ReplicaTransportError, match="Response lost"):
             await replica._sync(config)
         job = replica.journal.get("job")
+        assert isinstance(job, dict)
         assert "staged" in job and "database" not in job
         assert len(str(job)) < 10_000
         index = replica._open_staged(job).path
@@ -426,12 +439,14 @@ async def test_staged_replica_crosses_old_limits_without_catalog_materialization
         assert len(copies) == 2 and copies[0][-1] == copies[1][-1]
         await replica.inspect_file(replica.backup_file(), replica.key(), source=BACKUP)
         candidate = replica.journal.get("candidate")
+        assert isinstance(candidate, dict)
         assert "staged" in candidate and "database" not in candidate
         assert "root" not in candidate["catalog"]
         assert len(str(candidate)) < 10_000
         await replica.recover_to(REPLACEMENT, "345678:" + "z" * 30, str(REPLACEMENT))
         await replica._recover_copy(replica.journal.get("recovery"))
         recovered = replica.journal.get("candidate")
+        assert isinstance(recovered, dict)
         assert recovered["complete"] and "staged" in recovered
         assert recovered["catalog"]["storage_channel_id"] == REPLACEMENT
         staged = replica._open_staged(recovered)
@@ -522,7 +537,7 @@ async def test_cancelled_mapping_creation_drains_and_closes_created_index(
             await operation
         assert not list(configured.resolved_data_dir.glob(".replica-mapping-*"))
         assert not remote.calls
-        assert replica.journal.get("job")["staged"]
+        assert journal_record(replica.journal, "job")["staged"]
     finally:
         release.set()
         if operation is not None:
@@ -539,6 +554,7 @@ async def test_missing_normal_job_index_recaptures_without_losing_confirmed_stat
     try:
         await replica._sync(config)
         confirmed = replica.journal.get("restore_point")
+        assert isinstance(confirmed, dict)
         protected = replica.status()["protected_revision"]
         job = await asyncio.to_thread(replica._capture)
         replica.journal.set("job", job)
@@ -604,12 +620,16 @@ async def test_completed_recovery_commit_survives_cleanup_failure_without_recopy
         await replica.inspect_file(replica.backup_file(), replica.key(), source=BACKUP)
         await replica.recover_to(REPLACEMENT, "345678:" + "z" * 30, str(REPLACEMENT))
         recovery = replica.journal.get("recovery")
+        assert isinstance(recovery, dict)
         previous = replica.journal.get("candidate")
+        assert isinstance(previous, dict)
         discard = replica._discard_staged
         failed = []
 
         def fail_after_commit(value):
             saved = replica.journal.get_many({"candidate": None, "status": {}})
+            assert isinstance(saved["candidate"], dict)
+            assert isinstance(saved["status"], dict)
             if value == previous and saved["candidate"].get("complete") and not failed:
                 assert saved["status"]["phase"] == "ready_to_activate"
                 failed.append(True)
@@ -622,6 +642,7 @@ async def test_completed_recovery_commit_survives_cleanup_failure_without_recopy
         assert failed == [True]
         replica._record_failure(error.value)
         completed = replica.journal.get("candidate")
+        assert isinstance(completed, dict)
         assert completed["complete"]
         assert completed["catalog"]["storage_channel_id"] == REPLACEMENT
         assert replica._open_staged(completed).path.exists()
@@ -653,7 +674,7 @@ async def test_recovery_completion_preserves_control_stop(tmp_path, phase):
         completed = {"complete": True, "discovered": True}
         assert await replica._complete_recovery(completed, recovery) is False
         assert replica.journal.get("candidate") == previous
-        assert replica.journal.get("status")["phase"] == phase
+        assert journal_record(replica.journal, "status")["phase"] == phase
         assert not remote.calls
         assert replica.journal.get("activation") is None
     finally:
@@ -679,7 +700,7 @@ async def test_discovered_completion_with_busy_control_stays_ready_without_deadl
                 replica._complete_recovery(completed, recovery), timeout=2
             )
         assert replica.journal.get("candidate") == completed
-        assert replica.journal.get("status")["phase"] == "ready_to_activate"
+        assert journal_record(replica.journal, "status")["phase"] == "ready_to_activate"
     finally:
         await dispose(replica, store)
 
@@ -717,7 +738,7 @@ async def test_pause_after_readiness_commit_prevents_automatic_activation(
             release.set()
             assert await asyncio.wait_for(operation, timeout=2)
         assert replica.journal.get("candidate") == completed
-        assert replica.journal.get("status")["phase"] == "paused"
+        assert journal_record(replica.journal, "status")["phase"] == "paused"
         assert replica.journal.get("activation") is None
     finally:
         release.set()
@@ -786,6 +807,7 @@ async def test_manifest_resource_error_survives_controls_and_keeps_safe_download
     try:
         await replica._sync(config)
         archive = replica.backup_file()
+        assert archive is not None
         content = archive.read_bytes()
         before = replica.journal.get_many({"config": None, "status": None})
         error = _resource_error(
@@ -841,6 +863,7 @@ async def test_manifest_without_journal_flag_keeps_staged_index_across_disable(
         await replica.recover_to(REPLACEMENT, "345678:" + "z" * 30, str(REPLACEMENT))
         await replica._recover_copy(replica.journal.get("recovery"))
         candidate = replica.journal.get("candidate")
+        assert isinstance(candidate, dict)
         index = replica._open_staged(candidate).path
         set_value = replica.journal.set
 
@@ -855,6 +878,7 @@ async def test_manifest_without_journal_flag_keeps_staged_index_across_disable(
                 await asyncio.to_thread(replica.activate)
         assert replica.journal.get("activation") is None
         manifest = _load(configured)
+        assert manifest is not None
         assert manifest["phase"] == "prepared"
         if apply_first:
             assert await asyncio.to_thread(
@@ -872,12 +896,15 @@ async def test_manifest_without_journal_flag_keeps_staged_index_across_disable(
         assert index.exists()
         await asyncio.to_thread(replica._discard_staged, candidate)
         assert index.exists()
-        assert _load(configured)["candidate"]["staged"] == candidate["staged"]
+        manifest = _load(configured)
+        assert manifest is not None
+        assert manifest["candidate"]["staged"] == candidate["staged"]
         if not apply_first:
             assert await asyncio.to_thread(
                 apply_activation, configured, replica.runtime.mongo
             )
-        assert _load(configured)["phase"] == "applied"
+        manifest = _load(configured)
+        assert manifest is not None and manifest["phase"] == "applied"
         await asyncio.to_thread(replica._discard_staged, candidate)
         assert index.exists()
     finally:
@@ -915,6 +942,7 @@ async def test_first_resource_rejection_blocks_mutations_and_keeps_status_readab
     import json
 
     _configured, store, _remote, replica, _config = setup(tmp_path)
+    assert replica.journal.backend is not None
     database = replica.journal.backend.db
     raw = json.dumps([{}] * 65_537)
     database.replica_state.insert_one({"_id": "candidate", "length": len(raw)})
@@ -939,7 +967,8 @@ async def test_first_resource_rejection_blocks_mutations_and_keeps_status_readab
             assert "preserve" in state["error"]["action"]
         assert replica.blocked is True
         assert len(reads) == 1
-        assert database.replica_chunks.find_one({"key": "candidate"})["data"] == raw
+        chunk = database.replica_chunks.find_one({"key": "candidate"})
+        assert chunk is not None and chunk["data"] == raw
     finally:
         await dispose(replica, store)
 
@@ -961,6 +990,7 @@ async def test_staged_resume_preserves_acknowledgements_and_publication_identity
             await replica._sync(config)
             assert not remote.pins
         job = replica.journal.get("job")
+        assert isinstance(job, dict)
         index = replica._open_staged(job).path
         await replica.close()
         replica = ChannelReplica(
@@ -996,7 +1026,9 @@ async def test_staged_inspection_preserves_file_key_refusal_before_remote_probes
     _configured, store, remote, replica, config = setup(tmp_path)
     try:
         await replica._sync(config)
-        payload = decode_bundle(replica.backup_file().read_bytes(), replica.key())
+        archive = replica.backup_file()
+        assert archive is not None
+        payload = decode_bundle(archive.read_bytes(), replica.key())
         payload["database"]["settings"] = [key_record("f" * 64)]
         path = tmp_path / "different-file-key.tgdb"
         path.write_bytes(encode_bundle(payload, replica.key()))
@@ -1026,6 +1058,7 @@ async def test_v2_restore_point_publishes_one_self_contained_file_per_channel(
         assert len(published) == 2
         assert {call[1] for call in published} == {configured.storage_channel, BACKUP}
         point = replica.journal.get("restore_point")
+        assert isinstance(point, dict)
         assert point["format_version"] == 2
         original = remote.messages[
             configured.storage_channel, point["source_message_id"]
@@ -1037,7 +1070,8 @@ async def test_v2_restore_point_publishes_one_self_contained_file_per_channel(
             before | {"backed_up_revision": before["revision"]}
         )
         assert decoded["recovery_token"] == TOKEN
-        assert replica.backup_file().read_bytes() == original
+        archive = replica.backup_file()
+        assert archive is not None and archive.read_bytes() == original
         assert store.export() == before
         assert replica.status()["phase"] == "protected"
         store.create_folder("/", "Next restore point")
@@ -1059,7 +1093,9 @@ async def test_v2_local_retention_waits_for_confirmation_and_preserves_pending_f
     try:
         await replica._sync(config)
         previous = replica.backup_file()
+        assert previous is not None
         point = replica.journal.get("restore_point")
+        assert isinstance(point, dict)
         remote_content = remote.messages[BACKUP, point["backup_message_id"]]
         pending = previous.parent / (("f" * 64) + ".tgdb")
         atomic_private(pending, b"unconfirmed recovery bytes")
@@ -1073,7 +1109,8 @@ async def test_v2_local_retention_waits_for_confirmation_and_preserves_pending_f
         remote.publish_error_channel = None
         await replica._sync(config)
         assert replica.backup_file() != previous
-        assert replica.backup_file().is_file()
+        archive = replica.backup_file()
+        assert archive is not None and archive.is_file()
         assert not previous.exists()
         assert pending.read_bytes() == b"unconfirmed recovery bytes"
         assert remote.messages[BACKUP, point["backup_message_id"]] == remote_content
@@ -1092,6 +1129,7 @@ async def test_v2_file_rebuilds_main_from_surviving_backup_without_changing_live
     try:
         await replica._sync(config)
         saved = replica.backup_file()
+        assert saved is not None
         protected = {
             key: value for key, value in remote.messages.items() if key[0] == BACKUP
         }
@@ -1108,6 +1146,7 @@ async def test_v2_file_rebuilds_main_from_surviving_backup_without_changing_live
         monkeypatch.setattr(Transport, "inspect", independent_access)
         await replica.inspect_file(saved, replica.key())
         inspected = replica.journal.get("candidate")
+        assert isinstance(inspected, dict)
         assert inspected["source_is_backup"]
         assert inspected["catalog"]["storage_channel_id"] == BACKUP
         assert "staged" in inspected and "database" not in inspected
@@ -1116,6 +1155,7 @@ async def test_v2_file_rebuilds_main_from_surviving_backup_without_changing_live
         await replica.recover_to(REPLACEMENT, target_token, str(REPLACEMENT))
         await replica._recover_copy(replica.journal.get("recovery"))
         recovered = replica.journal.get("candidate")
+        assert isinstance(recovered, dict)
         assert recovered["complete"]
         assert recovered["catalog"]["storage_channel_id"] == REPLACEMENT
         assert recovered["backup_config"] == {"channel": BACKUP, "token": TOKEN}
@@ -1123,7 +1163,9 @@ async def test_v2_file_rebuilds_main_from_surviving_backup_without_changing_live
         for key, value in protected.items():
             assert remote.messages[key] == value
         assert store.export() == before
-        updated = decode_bundle(replica.backup_file().read_bytes(), replica.key())
+        archive = replica.backup_file()
+        assert archive is not None
+        updated = decode_bundle(archive.read_bytes(), replica.key())
         assert all(
             updated["catalog"][key] == value
             for key, value in recovered["catalog"].items()
@@ -1149,6 +1191,7 @@ async def test_v2_import_accepts_fresh_access_when_saved_bot_tokens_are_revoked(
     try:
         await replica._sync(config)
         saved = replica.backup_file()
+        assert saved is not None
         start = Transport.start
 
         async def reject_revoked(self):
@@ -1168,6 +1211,7 @@ async def test_v2_import_accepts_fresh_access_when_saved_bot_tokens_are_revoked(
             saved, replica.key(), source=BACKUP, token=fresh_token
         )
         candidate = replica.journal.get("candidate")
+        assert isinstance(candidate, dict)
         assert candidate["token"] == fresh_token
         assert candidate["catalog"]["storage_channel_id"] == BACKUP
         assert not candidate["complete"]
@@ -1196,6 +1240,7 @@ async def test_v2_database_only_restore_reuses_verified_main_bot_without_extra_t
         )
         await replica._recover_copy(replica.journal.get("recovery"))
         candidate = replica.journal.get("candidate")
+        assert isinstance(candidate, dict)
         assert candidate["complete"] and "staged" in candidate
         assert candidate["credentials"]["bot_tokens"] == list(configured.bot_tokens)
         assert candidate["backup_config"] == {"channel": BACKUP, "token": TOKEN}
@@ -1445,6 +1490,7 @@ async def test_primary_lost_at_second_publish_retains_recoverable_backup_and_old
     try:
         await replica._sync(config)
         old = replica.journal.get("restore_point")
+        assert isinstance(old, dict)
         store.create_folder("/", "After previous restore point")
         remote.publish_error_channel = configured.storage_channel
         with pytest.raises(ReplicaTransportError):
@@ -1540,6 +1586,7 @@ async def test_unchanged_backup_stays_idle_between_hourly_health_checks(tmp_path
     try:
         await replica._sync(config)
         point = replica.journal.get("restore_point")
+        assert isinstance(point, dict)
         remote.calls.clear()
         connections = len(remote.instances)
         replica.update(checked_at=time.time() - HEALTH_CHECK_INTERVAL_SECONDS + 60)
@@ -1563,6 +1610,7 @@ async def test_hourly_health_check_does_not_start_a_copy_job_or_republish(
     try:
         await replica._sync(config)
         point = replica.journal.get("restore_point")
+        assert isinstance(point, dict)
         success = replica.status()["last_success_at"]
         remote.calls.clear()
         phases = []
@@ -1658,11 +1706,13 @@ async def test_idle_health_wait_reports_context_and_retries_after_saved_deadline
         assert "Retry in 120 seconds" in failure["detail"]
         assert replica.journal.get("job") is None
         assert replica.journal.get("restore_point") is not None
+        assert replica._task is not None
         replica._task.cancel()
         await asyncio.gather(replica._task, return_exceptions=True)
         monkeypatch.setattr(Transport, "start", original_start)
         connections = len(remote.instances)
         await replica.action("sync")
+        assert replica._task is not None
         replica._task.cancel()
         await asyncio.gather(replica._task, return_exceptions=True)
         assert replica.status()["error"]["retry_at"] == failure["retry_at"]
@@ -1710,6 +1760,7 @@ async def test_deletion_barrier_rechecks_recent_checkpoint_before_mutation(
     try:
         await replica._sync(config)
         point = replica.journal.get("restore_point")
+        assert isinstance(point, dict)
         if failure == "access":
             remote.unavailable.add(BACKUP)
         elif failure == "pin":
@@ -1981,7 +2032,7 @@ async def test_recovery_probe_does_not_undo_pause_or_disable(
             assert replica.journal.get("recovery") is None
             assert replica.journal.get("candidate") is None
         else:
-            assert not replica.journal.get("candidate")["complete"]
+            assert not journal_record(replica.journal, "candidate")["complete"]
     finally:
         release.set()
         if operation is not None and not operation.done():
@@ -2058,6 +2109,7 @@ async def test_inspected_backup_rebuilds_replacement_main_when_original_main_is_
         remote.unavailable.add(configured.storage_channel)
         await replica.inspect_recovery(BACKUP, TOKEN, key)
         candidate = replica.journal.get("candidate")
+        assert isinstance(candidate, dict)
         assert candidate["catalog"]["storage_channel_id"] == BACKUP
         assert not candidate["complete"]
         recovery = {
@@ -2068,6 +2120,7 @@ async def test_inspected_backup_rebuilds_replacement_main_when_original_main_is_
         replica.update(phase="recovering")
         await replica._recover_copy(recovery)
         restored = replica.journal.get("candidate")
+        assert isinstance(restored, dict)
         assert restored["complete"]
         assert restored["catalog"]["storage_channel_id"] == REPLACEMENT
         assert replica.status()["phase"] == "ready_to_activate"
@@ -2099,7 +2152,9 @@ async def test_database_only_restore_checks_existing_parts_without_payload_copie
             configured.storage_channel,
             TOKEN,
             replica.key(),
-            message_id=replica.journal.get("restore_point")["source_message_id"],
+            message_id=journal_record(replica.journal, "restore_point")[
+                "source_message_id"
+            ],
         )
         before = len([call for call in remote.calls if call[0] == "copy"])
         recovery = {
@@ -2110,7 +2165,7 @@ async def test_database_only_restore_checks_existing_parts_without_payload_copie
         replica.journal.set("recovery", recovery)
         replica.update(phase="recovering")
         await replica._recover_copy(recovery)
-        assert replica.journal.get("candidate")["complete"]
+        assert journal_record(replica.journal, "candidate")["complete"]
         assert len([call for call in remote.calls if call[0] == "copy"]) == before
         verified = [call[2] for call in remote.calls if call[0] == "verify"]
         assert verified == [77, 78]
@@ -2242,7 +2297,7 @@ async def test_capsule_publication_response_loss_recovers_after_process_restart(
         assert (remote.pins[BACKUP] == original_pin) is not lost_stage
         assert replica.status()["protected_revision"] == store.revision
         assert (
-            replica.journal.get("restore_point")["backup_message_id"]
+            journal_record(replica.journal, "restore_point")["backup_message_id"]
             == remote.pins[BACKUP]
         )
         assert remote_bundle(remote, replica)["catalog"] == store.export()
@@ -2262,6 +2317,7 @@ async def test_health_check_detects_changed_pin_without_overwriting_it(
     try:
         await replica._sync(config)
         point = replica.journal.get("restore_point")
+        assert isinstance(point, dict)
         count = len([call for call in remote.calls if call[0] == "publish"])
         replica.update(checked_at=0)
         if replacement is None:
@@ -2280,30 +2336,25 @@ async def test_health_check_detects_changed_pin_without_overwriting_it(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("kind", ["capsule"])
-async def test_recovery_refuses_unrelated_pin_introduced_during_pause(tmp_path, kind):
+async def test_recovery_refuses_unrelated_pin_introduced_during_pause(tmp_path):
     _, store, remote, replica, config = setup(tmp_path)
     try:
         await replica._sync(config)
-        unrelated = (
-            remote.messages[BACKUP, remote.pins[BACKUP]]
-            if kind == "capsule"
-            else MongoStore._json_bytes(store.export())
-        )
+        unrelated = remote.messages[BACKUP, remote.pins[BACKUP]]
         await replica.inspect_recovery(BACKUP, TOKEN, replica.key())
         recovery = {"target": REPLACEMENT, "target_token": "345678:" + "z" * 30}
         replica.journal.set("recovery", recovery)
         replica.update(phase="recovering")
         remote.after_copy = lambda: replica.update(phase="paused")
         await replica._recover_copy(recovery)
-        assert not replica.journal.get("candidate")["complete"]
+        assert not journal_record(replica.journal, "candidate")["complete"]
         foreign_pin = remote.new_message(REPLACEMENT, unrelated)
         remote.pins[REPLACEMENT] = foreign_pin
         publications = len([call for call in remote.calls if call[0] == "publish"])
         replica.update(phase="recovering")
         with pytest.raises(ValueError, match="pin changed"):
             await replica._recover_copy(recovery)
-        assert not replica.journal.get("candidate")["complete"]
+        assert not journal_record(replica.journal, "candidate")["complete"]
         assert remote.pins[REPLACEMENT] == foreign_pin
         assert (
             len([call for call in remote.calls if call[0] == "publish"]) == publications
@@ -2387,11 +2438,12 @@ async def test_empty_database_finds_pinned_backup_and_restores_in_one_click(
         found.journal.set("candidate", None)
         assert await found.discover_backup() is True
         candidate = found.status()["recovery_candidate"]
+        assert isinstance(candidate, dict)
         assert candidate["discovered"] and not candidate["complete"]
         assert candidate["channel"] == configured.storage_channel
         await found.restore_discovered()
         await found._recover_copy(found.journal.get("recovery"))
-        assert found.journal.get("candidate")["complete"]
+        assert journal_record(found.journal, "candidate")["complete"]
         assert found.status()["phase"] == "restart_required"
         assert remote.pins[configured.storage_channel] == pinned
         assert not [c for c in remote.calls if c[0] == "copy" and c[3] != BACKUP]
@@ -2441,7 +2493,7 @@ async def test_discovery_stops_at_real_legacy_drive_json_marker(tmp_path):
     configured, store, remote, replica, _config = setup(tmp_path)
 
     class LegacyPinned(DiscoveryTransport):
-        async def download(self, _channel, _message, _destination):
+        async def download(self, channel, message_id, destination):
             ReplicaTransport._capsule(
                 SimpleNamespace(
                     size=123,
@@ -2494,6 +2546,7 @@ async def test_recovery_admission_keeps_authenticated_resource_and_key_errors_di
         await replica._sync(config)
         before = store.export()
         confirmed = replica.journal.get("restore_point")
+        assert isinstance(confirmed, dict)
         plaintext = tmp_path / "fixture.json"
         decrypt_snapshot(
             replica.backup_file(),

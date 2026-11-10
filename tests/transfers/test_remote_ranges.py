@@ -34,9 +34,9 @@ class RangeSource:
             )
         else:
             assert headers["If-Range"] == '"version-1"'
-            start, last = map(
-                int, re.fullmatch(r"bytes=(\d+)-(\d+)", headers["Range"]).groups()
-            )
+            match = re.fullmatch(r"bytes=(\d+)-(\d+)", headers["Range"])
+            assert match is not None
+            start, last = map(int, match.groups())
             response = FakeResponse(
                 206,
                 headers={
@@ -102,9 +102,9 @@ async def test_parallel_workers_overlap_instead_of_serializing_range_requests(tm
             if range_count == 1:
                 original_read = response.content.read
 
-                async def wait_for_peer(limit):
+                async def wait_for_peer(size):
                     await second_range.wait()
-                    return await original_read(limit)
+                    return await original_read(size)
 
                 response.content.read = wait_for_peer
             else:

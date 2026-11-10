@@ -23,6 +23,7 @@ pytestmark = pytest.mark.e2e
 
 def open_fixture(page, server, suffix=""):
     url = os.environ.get("TGDRIVE_MOBILE_UI_URL", server.url)
+    assert isinstance(url, str)
     if url != server.url:
 
         def forward(route):

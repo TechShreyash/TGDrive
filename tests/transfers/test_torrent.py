@@ -4,12 +4,14 @@ import asyncio
 import base64
 from pathlib import Path
 from types import SimpleNamespace
+from typing import cast
 from unittest.mock import AsyncMock
 
 import aiohttp
 import pytest
 
 from tgdrive.transfers import torrent
+from tgdrive.transfers.remote import RemoteClient
 
 
 @pytest.mark.parametrize(
@@ -40,7 +42,7 @@ async def test_rpc_transport_failure_has_a_safe_typed_error(tmp_path, error):
     def failed(*_args, **_kwargs):
         raise error
 
-    engine.session = SimpleNamespace(post=failed)
+    engine.session = cast(aiohttp.ClientSession, SimpleNamespace(post=failed))
     with pytest.raises(
         torrent.TorrentTransportError, match="connection was interrupted"
     ):
@@ -59,7 +61,7 @@ async def test_no_peer_stall_is_terminal(tmp_path, monkeypatch):
     assert not isinstance(caught.value, torrent.TorrentTransportError)
 
 
-def metadata(files=None, **extra):
+def metadata(files=None) -> dict[bytes, object]:
     info = {
         b"name": b"Collection",
         b"piece length": 16,
@@ -69,7 +71,6 @@ def metadata(files=None, **extra):
         info[b"length"] = 4
     else:
         info[b"files"] = files
-    info.update(extra)
     return {b"info": info}
 
 
@@ -177,7 +178,7 @@ async def test_cancellation_drains_worker_before_return(monkeypatch, tmp_path):
         torrent.download_torrent(
             "magnet:?xt=urn:btih:" + "ab" * 20,
             tmp_path,
-            remote=None,
+            remote=cast(RemoteClient, None),
             cancel_event=cancel,
             progress=AsyncMock(),
             admit=AsyncMock(),
@@ -238,7 +239,7 @@ async def test_validates_and_admits_before_unpausing_payload(monkeypatch, tmp_pa
     manifest = await torrent.download_torrent(
         "https://files.example/source.torrent",
         tmp_path,
-        remote=remote,
+        remote=cast(RemoteClient, remote),
         cancel_event=asyncio.Event(),
         progress=AsyncMock(),
         admit=admit,
@@ -246,12 +247,13 @@ async def test_validates_and_admits_before_unpausing_payload(monkeypatch, tmp_pa
 
     assert manifest.total_size == 4
     assert calls == ["admit", "addTorrent", "getFiles", "unpause", "stopped"]
+    assert metadata_dir is not None
     assert not Path(metadata_dir).exists()
 
     retried = await torrent.download_torrent(
         "https://files.example/expired.torrent",
         tmp_path,
-        remote=remote,
+        remote=cast(RemoteClient, remote),
         cancel_event=asyncio.Event(),
         progress=AsyncMock(),
         admit=AsyncMock(),
@@ -264,13 +266,14 @@ async def test_downloader_shutdown_waits_for_process_and_closes_rpc():
     process = SimpleNamespace(returncode=None, wait=AsyncMock())
     process.terminate = lambda: setattr(process, "returncode", -15)
     engine = torrent._Aria2(Path("unused"))
-    engine.process = process
-    engine.session = SimpleNamespace(close=AsyncMock())
+    engine.process = cast(asyncio.subprocess.Process, process)
+    engine.session = cast(aiohttp.ClientSession, SimpleNamespace(close=AsyncMock()))
 
     await engine.__aexit__(None, None, None)
 
     process.wait.assert_awaited_once()
-    engine.session.close.assert_awaited_once()
+    assert engine.session is not None
+    cast(AsyncMock, engine.session.close).assert_awaited_once()
 
 
 async def test_selected_files_are_the_only_ones_aria2c_downloads(monkeypatch, tmp_path):
@@ -324,7 +327,7 @@ async def test_selected_files_are_the_only_ones_aria2c_downloads(monkeypatch, tm
     await torrent.download_torrent(
         "https://files.example/source.torrent",
         tmp_path,
-        remote=remote,
+        remote=cast(RemoteClient, remote),
         cancel_event=asyncio.Event(),
         progress=AsyncMock(),
         admit=admit,
@@ -342,7 +345,7 @@ async def test_retry_progress_counts_verified_pieces_instead_of_restarting(tmp_p
         ]
     )
 
-    async def call(_method, *_params):
+    async def call(method, *params):
         return next(states)
 
     engine.call = call

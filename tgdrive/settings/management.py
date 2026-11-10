@@ -8,11 +8,12 @@ import secrets
 import shutil
 import time
 from collections import Counter
+from collections.abc import Awaitable, Callable, Sequence
 from contextlib import suppress
-from typing import Any, Literal
+from typing import Any, Literal, cast
 
 from pydantic import Field, SecretStr, ValidationError
-from telethon import TelegramClient, functions, utils
+from telethon import TelegramClient, functions, types, utils
 from telethon.sessions import StringSession
 
 from tgdrive.core.config import Settings
@@ -28,6 +29,7 @@ from tgdrive.settings.managed_settings import (
 )
 from tgdrive.telegram.channel_state import storage_channel_problem
 from tgdrive.telegram.client_identity import IdentityCache, account_identity
+from tgdrive.telegram.client_pool import ClientStatus
 from tgdrive.telegram.connection_errors import connection_problem
 
 logger = logging.getLogger(__name__)
@@ -81,7 +83,7 @@ async def verify_connection(
             auto_reconnect=False,
             base_logger=_PREFLIGHT_LOG,
         )
-        client.parse_mode = None
+        client.parse_mode = ""
         async with asyncio.timeout(25):
             await client.connect()
             if row.kind == "bot":
@@ -90,7 +92,7 @@ async def verify_connection(
                 raise SettingsProblem(
                     "Premium session has expired or is not authorized"
                 )
-            account = await client.get_me()
+            account = cast(types.User | None, await client.get_me())
             if account is None or bool(account.bot) != (row.kind == "bot"):
                 raise SettingsProblem(
                     "Telegram account does not match the connection type"
@@ -104,8 +106,11 @@ async def verify_connection(
                     "This account does not have an active Telegram Premium subscription"
                 )
             peer = await client.get_input_entity(channel)
-            result = await client(
-                functions.channels.GetFullChannelRequest(utils.get_input_channel(peer))
+            input_channel = utils.get_input_channel(peer)
+            assert input_channel is not None
+            result = cast(
+                types.messages.ChatFull,
+                await client(functions.channels.GetFullChannelRequest(input_channel)),
             )
             chat = next(
                 (item for item in result.chats if utils.get_peer_id(item) == channel),
@@ -178,7 +183,7 @@ async def verify_connection(
     finally:
         if client is not None:
             with suppress(Exception):
-                await client.disconnect()
+                await cast(Awaitable[None], client.disconnect())
 
 
 def _adds_only(document, existing, api_id, api_hash) -> bool:
@@ -272,8 +277,11 @@ class ConnectionManager:
         runtime = self.runtime
         backup = getattr(runtime, "backup", None)
         store = getattr(runtime, "store", None)
-        if store is not None and callable(getattr(backup, "protection_status", None)):
-            status = backup.protection_status(store)
+        protection_status: Callable[..., dict[str, Any]] | None = getattr(
+            backup, "protection_status", None
+        )
+        if store is not None and callable(protection_status):
+            status = protection_status(store)
             clean_watermark = (
                 status.get("protected_revision") == store.revision
                 and status.get("metadata_revision") == store.revision
@@ -304,9 +312,10 @@ class ConnectionManager:
         desired: list[ManagedClient] | None = None,
     ) -> list[dict[str, Any]]:
         pool = getattr(self.runtime, "pool", None)
-        statuses = (
-            await pool.status() if callable(getattr(pool, "status", None)) else ()
+        read_status: Callable[[], Awaitable[Sequence[ClientStatus]]] | None = getattr(
+            pool, "status", None
         )
+        statuses = await read_status() if callable(read_status) else ()
         names = [getattr(status, "name", "") for status in statuses] + [
             row.runtime_name
             or (
@@ -371,7 +380,7 @@ class ConnectionManager:
                 }
                 self._refresh_not_before = time.monotonic() + 30
                 # Reconnect saved clients that failed to start; running ones stay.
-                retry = getattr(
+                retry: Callable[[], Awaitable[None]] | None = getattr(
                     getattr(self.runtime, "pool", None), "retry_failed", None
                 )
                 if callable(retry):
@@ -404,7 +413,7 @@ class ConnectionManager:
                                     self.identity_cache.retry_at, name
                                 ),
                             )
-                        retry_at = getattr(
+                        retry_at: Callable[[str], Awaitable[float]] | None = getattr(
                             getattr(self.runtime, "pool", None),
                             "account_retry_at",
                             None,
@@ -441,7 +450,9 @@ class ConnectionManager:
                                     self.settings.storage_channel,
                                 )
                         pool = getattr(self.runtime, "pool", None)
-                        restore = getattr(pool, "restore_channel_access", None)
+                        restore: Callable[[str], Awaitable[None]] | None = getattr(
+                            pool, "restore_channel_access", None
+                        )
                         if (
                             callable(restore)
                             and revision == self.settings.managed_revision
@@ -463,17 +474,21 @@ class ConnectionManager:
                         delay = getattr(error, "retry_after", None)
                         limited = isinstance(delay, int) and delay > 0
                         deadline = time.time() + (
-                            delay + 0.25 if limited else (5 if attempt == 0 else 15)
+                            delay + 0.25
+                            if isinstance(delay, int) and delay > 0
+                            else (5 if attempt == 0 else 15)
                         )
                         if limited and name:
                             with suppress(Exception):
                                 await asyncio.to_thread(
                                     self.identity_cache.defer, name, deadline
                                 )
-                            defer = getattr(
-                                getattr(self.runtime, "pool", None),
-                                "defer_client",
-                                None,
+                            defer: Callable[[str, float], Awaitable[None]] | None = (
+                                getattr(
+                                    getattr(self.runtime, "pool", None),
+                                    "defer_client",
+                                    None,
+                                )
                             )
                             if callable(defer):
                                 await defer(name, deadline)
@@ -535,16 +550,17 @@ class ConnectionManager:
                 "display_name": live.get("display_name"),
                 "username": live.get("username"),
             }
-            identity = self._cached_names.get(
+            identity_name = (
                 row.runtime_name
                 or live.get("runtime_name")
                 or (
                     "storage-bot-" + row.credential.get_secret_value().split(":", 1)[0]
                     if row.kind == "bot"
                     else None
-                ),
-                identity,
+                )
             )
+            if identity_name is not None:
+                identity = self._cached_names.get(identity_name, identity)
             clients.append(
                 {
                     "id": row.id,
@@ -571,6 +587,9 @@ class ConnectionManager:
             )
         backup = getattr(self.runtime, "backup", None)
         store = getattr(self.runtime, "store", None)
+        protection_status: Callable[..., dict[str, Any]] | None = getattr(
+            backup, "protection_status", None
+        )
         return {
             "revision": revision,
             "api_id": api_id,
@@ -582,23 +601,25 @@ class ConnectionManager:
                 self.runtime, "storage_channel_error", None
             ),
             "stats": self._stats(),
-            "recovery": backup.protection_status(store)
-            if store is not None
-            and callable(getattr(backup, "protection_status", None))
+            "recovery": protection_status(store)
+            if store is not None and callable(protection_status)
             else None,
         }
 
     def _stats(self) -> dict[str, Any]:
         store = getattr(self.runtime, "store", None)
-        result = {
+        result: dict[str, Any] = {
             "files": 0,
             "folders": 0,
             "total_bytes": 0,
             "trashed_files": 0,
             "trashed_bytes": 0,
         }
-        if callable(getattr(store, "statistics", None)):
-            result.update(store.statistics())
+        statistics: Callable[[], dict[str, Any]] | None = getattr(
+            store, "statistics", None
+        )
+        if callable(statistics):
+            result.update(statistics())
         registry = getattr(self.runtime, "registry", None) or getattr(
             getattr(self.runtime, "transfers", None), "registry", None
         )
@@ -645,8 +666,11 @@ class ConnectionManager:
             return None
         statuses = ()
         pool = getattr(self.runtime, "pool", None)
-        if callable(getattr(pool, "status", None)):
-            statuses = await pool.status()
+        read_status: Callable[[], Awaitable[Sequence[ClientStatus]]] | None = getattr(
+            pool, "status", None
+        )
+        if callable(read_status):
+            statuses = await read_status()
         live_names = {
             row.id: status.name
             for row, status in zip(self.active, statuses, strict=False)
@@ -760,7 +784,7 @@ class ConnectionManager:
             # during a same-account repair. Running clients are not replaced here.
             gate = asyncio.Semaphore(2)
 
-            async def verify(row):
+            async def verify(row: ManagedClient) -> str | None:
                 if not row.enabled:
                     return row.runtime_name
                 if repair is not None and row.id not in repair:
@@ -784,10 +808,11 @@ class ConnectionManager:
 
             try:
                 async with asyncio.timeout(90):
-                    names = await asyncio.gather(
+                    results = await asyncio.gather(
                         *(verify(row) for row in rows), return_exceptions=True
                     )
-                    for result in names:
+                    names: list[str | None] = []
+                    for result in results:
                         if isinstance(result, SettingsProblem):
                             raise result
                         if isinstance(result, BaseException):
@@ -796,6 +821,7 @@ class ConnectionManager:
                                 code="SETTINGS_PREFLIGHT_FAILED",
                                 status=503,
                             )
+                        names.append(result)
             except TimeoutError:
                 raise SettingsProblem(
                     "Telegram verification timed out. No changes were saved.",
@@ -863,7 +889,9 @@ class ConnectionManager:
     async def _reconfigure_pool(self) -> None:
         from tgdrive.telegram.clients import client_entries
 
-        reconfigure = getattr(getattr(self.runtime, "pool", None), "reconfigure", None)
+        reconfigure: Callable[..., Awaitable[None]] | None = getattr(
+            getattr(self.runtime, "pool", None), "reconfigure", None
+        )
         if callable(reconfigure):
             await reconfigure(*client_entries(self.settings))
 

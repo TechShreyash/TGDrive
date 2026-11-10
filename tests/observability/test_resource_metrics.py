@@ -107,6 +107,7 @@ def test_history_retains_measured_resources_without_dashboard_and_expires(
     initial = metrics.sample()
     assert initial["history"][0]["cpu_percent"] is None
     assert initial["history"][0]["received_bytes_per_second"] is None
+    value = initial
     for index in range(1, 106):
         now[0] += 3
         (cgroup / "cpu.stat").write_text(f"usage_usec {1000000 + index * 3000000}")

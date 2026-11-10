@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any
+from typing import Any, cast
 from unittest.mock import AsyncMock, Mock
 
 import pytest
@@ -109,6 +109,8 @@ def native_message(message_id: int = 77) -> Any:
 
 
 class NativeTransport:
+    delete_messages: AsyncMock
+
     def __init__(self) -> None:
         self.requests: list[Any] = []
         self.get_input_entity = AsyncMock(
@@ -181,7 +183,7 @@ async def test_send_replays_real_raw_request_with_the_persisted_random_id(
     ]
     assert all(
         call.kwargs["progress"] is progress
-        for call in client._upload_parts.await_args_list
+        for call in cast(AsyncMock, client._upload_parts).await_args_list
     )
     native.get_messages.assert_awaited_once_with(CHANNEL, ids=77)
 

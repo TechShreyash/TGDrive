@@ -340,7 +340,7 @@ def render(
             and (
                 len(cover_input)
                 if cover_input is not None
-                else source_size
+                else (source_size or 0)
                 if remote_url
                 else path.stat().st_size
             )
@@ -471,7 +471,7 @@ def main():
         )
     else:
         result = renderer(Path(sys.argv[1]), sys.argv[2])
-    if images:
+    if isinstance(result, tuple):
         thumbnail, poster = result
         sys.stdout.buffer.write(
             VIDEO_IMAGES_HEADER.pack(VIDEO_IMAGES_MAGIC, len(thumbnail), len(poster))

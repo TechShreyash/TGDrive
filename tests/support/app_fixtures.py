@@ -16,8 +16,12 @@ from tests.support.mongo_fixtures import (
     register_test_backend,
 )
 from tgdrive.core.config import Settings
+from tgdrive.media.preloading import PreloadManager
+from tgdrive.replication.replica import ChannelReplica
+from tgdrive.settings.management import ConnectionManager
 from tgdrive.storage.mongo_store import MongoStore
 from tgdrive.transfers.tasks import TransferRegistry
+from tgdrive.transfers.uploads import ResumableUploads
 from tgdrive.web.app import create_app
 
 
@@ -39,6 +43,9 @@ def make_settings(tmp_path: Path) -> Settings:
 
 
 class FakeTransfers:
+    store: MongoStore
+    uploads: ResumableUploads
+
     def __init__(self) -> None:
         self.registry = TransferRegistry()
         self.deleted_messages: list[int] = []
@@ -101,6 +108,11 @@ class FakeTransfers:
 
 
 class FakeRuntime:
+    replica: ChannelReplica | SimpleNamespace
+    backup: SimpleNamespace
+    preloads: PreloadManager | SimpleNamespace
+    connection_manager: ConnectionManager
+
     def __init__(self, store: MongoStore) -> None:
         self.store = store
         self.mongo = FakeMongoBackend()

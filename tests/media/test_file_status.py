@@ -122,6 +122,7 @@ async def test_stream_overload_preserves_retry_status_before_and_after_headers(
 
         async def receive():
             await asyncio.Event().wait()
+            return {"type": "http.disconnect"}
 
         with pytest.raises(MediaQueueFull):
             await response(

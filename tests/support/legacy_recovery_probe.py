@@ -64,11 +64,18 @@ def current_settings(directory):
 
 
 def old_worker(manifest):
+    import importlib
+
     import tgdrive
-    from tgdrive.core.config import Settings
-    from tgdrive.recovery.mongo_backup import restore_snapshot, write_snapshot
-    from tgdrive.recovery.recovery_file import write_recovery_snapshot
     from tgdrive.storage.mongo_store import MongoStore
+
+    # These APIs belong to the extracted tag, not the running checkout.
+    Settings = importlib.import_module("tgdrive.core.config").Settings
+    backup = importlib.import_module("tgdrive.recovery.mongo_backup")
+    restore_snapshot, write_snapshot = backup.restore_snapshot, backup.write_snapshot
+    write_recovery_snapshot = importlib.import_module(
+        "tgdrive.recovery.recovery_file"
+    ).write_recovery_snapshot
 
     root = manifest.parent.resolve()
     state = json.loads(manifest.read_text())
@@ -337,7 +344,9 @@ def main():
                     job = target.db.jobs.find_one({"_id": JOB})
                     shares = list(target.db.shares.find({}).sort("_id", 1))
                     configured = current_settings(root / kind)
-                    copy = Path(upgrade(target, configured))
+                    copy_path = upgrade(target, configured)
+                    assert copy_path is not None
+                    copy = Path(copy_path)
                     assert copy.stat().st_mode & 0o077 == 0
                     assert upgrade(target, configured) is None
                     store = MongoStore(target)

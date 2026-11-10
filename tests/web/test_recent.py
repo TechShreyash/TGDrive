@@ -1,6 +1,8 @@
 """Recent lists files the owner opened or uploaded, newest activity first."""
 
+import asyncio
 from datetime import UTC, datetime, timedelta
+from types import SimpleNamespace
 
 import pytest
 from fastapi.testclient import TestClient
@@ -111,8 +113,19 @@ def test_owner_opens_are_recorded_once_per_window_and_shares_never(
     original = store.mark_opened
     monkeypatch.setattr(store, "mark_opened", lambda i: (calls.append(i), original(i)))
     clock = [1000.0]
-    monkeypatch.setattr(app_module.time, "monotonic", lambda: clock[0])
+    monkeypatch.setattr(app_module, "time", SimpleNamespace(monotonic=lambda: clock[0]))
+
+    async def drain_recent_writes():
+        tasks = [
+            task
+            for task in asyncio.all_tasks()
+            if task.get_name() == "record-file-open"
+        ]
+        if tasks:
+            await asyncio.wait_for(asyncio.gather(*tasks), timeout=5)
+
     with TestClient(app, base_url="https://testserver") as client:
+        assert client.portal is not None
         params = {"path": full(item)}
         client.get("/api/v1/preview", params=params | {"auth": token})
         assert calls == []  # Share visitors are not owner activity.
@@ -124,9 +137,14 @@ def test_owner_opens_are_recorded_once_per_window_and_shares_never(
         )
         for _ in range(3):
             client.get("/api/v1/preview", params=params)
+        client.portal.call(drain_recent_writes)
+        assert calls == [item["id"]]
+        client.get("/api/v1/preview", params=params)
+        client.portal.call(drain_recent_writes)
         assert calls == [item["id"]]
         clock[0] += app_module.RECENT_WRITE_SECONDS + 1
         client.get("/api/v1/preview", params=params)
+        client.portal.call(drain_recent_writes)
         assert calls == [item["id"], item["id"]]
         with pytest.raises(AttributeError):
             client.get("/api/v1/thumbnail", params=params)  # Fake pool; not an open.

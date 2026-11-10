@@ -8,11 +8,12 @@ import re
 from collections.abc import Mapping
 from functools import lru_cache
 from pathlib import Path
+from typing import Any
 
 from argon2 import Type, extract_parameters
 from argon2.exceptions import InvalidHashError
 from pydantic import Field, SecretStr, ValidationInfo, field_validator, model_validator
-from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic_settings import BaseSettings, InitSettingsSource, SettingsConfigDict
 
 _BOT_TOKEN_RE = re.compile(r"^[1-9][0-9]{4,14}:[A-Za-z0-9_-]{20,}$")
 # Conservative document cap in binary MiB; new uploads use it for every account.
@@ -47,6 +48,10 @@ class Settings(BaseSettings):
     Secret values are represented by :class:`~pydantic.SecretStr`, which keeps
     accidental logging and validation errors from exposing credentials.
     """
+
+    def __init__(self, **values: Any) -> None:
+        # Settings accept raw aliases and BaseSettings source options before validation.
+        super().__init__(**values)
 
     model_config = SettingsConfigDict(
         env_file=".env",
@@ -301,7 +306,7 @@ class Settings(BaseSettings):
 
         return (
             init_settings,
-            managed_source,
+            InitSettingsSource(settings_cls, managed_source()),
             env_settings,
             dotenv_settings,
             file_secret_settings,
@@ -349,7 +354,7 @@ class Settings(BaseSettings):
             12 if info.field_name in {"admin_password", "demo_admin_password"} else 32
         )
         if len(raw) < minimum:
-            label = info.field_name.replace("_", " ")
+            label = (info.field_name or "secret").replace("_", " ")
             raise ValueError(f"{label} must contain at least {minimum} characters")
         return SecretStr(raw)
 

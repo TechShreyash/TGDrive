@@ -200,17 +200,19 @@ def _decode_cursor(value, sort):
     ):
         raise ValidationError("Invalid cursor")
     _validate_id(identity)
-    if sort == "size" and not 0 <= key < 2**63:
-        raise ValidationError("Invalid cursor size")
-    if sort == "name" and len(key) > 3 * MAX_NAME_LENGTH:
-        raise ValidationError("Invalid cursor name")
-    if sort == "type":
-        _validate_id(key)
-    if sort == "date":
-        try:
-            _validate_timestamp(key)
-        except OverflowError:
-            raise ValidationError("Invalid cursor date") from None
+    if isinstance(key, int):
+        if not 0 <= key < 2**63:
+            raise ValidationError("Invalid cursor size")
+    else:
+        if sort == "name" and len(key) > 3 * MAX_NAME_LENGTH:
+            raise ValidationError("Invalid cursor name")
+        if sort == "type":
+            _validate_id(key)
+        if sort == "date":
+            try:
+                _validate_timestamp(key)
+            except OverflowError:
+                raise ValidationError("Invalid cursor date") from None
     return kind, key, identity
 
 
@@ -501,15 +503,20 @@ class MongoStore:
             query, projection, session=self._session, **options
         )
 
-    def _one(self, collection, query, projection=None):
+    def _one(self, collection, query, projection=None) -> dict[str, Any] | None:
         return self.db[collection].find_one(query, projection, session=self._session)
 
     # --------------------------------------------------------------- reads
 
-    def _current(self):
-        if self._session is not None:
-            return self._one("catalog", {"_id": "catalog"})
-        return self._metadata
+    def _current(self) -> dict[str, Any]:
+        metadata = (
+            self._one("catalog", {"_id": "catalog"})
+            if self._session is not None
+            else self._metadata
+        )
+        if metadata is None:
+            raise CorruptStoreError("MongoDB catalog metadata is missing")
+        return metadata
 
     @property
     def drive_id(self):
@@ -553,10 +560,10 @@ class MongoStore:
             node = self._one("nodes", {"_id": operation["node_id"]}, {"message_id": 1})
             return node is not None and node.get("message_id") == message_id
 
-    def _get(self, identity, *, full=False):
+    def _get(self, identity, *, full=False) -> dict[str, Any] | None:
         return self._one("nodes", {"_id": identity}, None if full else _LIGHT)
 
-    def _ancestors(self, identity, *, full=False):
+    def _ancestors(self, identity, *, full=False) -> list[dict[str, Any]]:
         """Root-first chain ending at ``identity`` in one MongoDB round trip."""
         rows = list(
             self.db.nodes.aggregate(
@@ -602,10 +609,14 @@ class MongoStore:
     def _chain_path(chain):
         return "/" + "/".join(row["_id"] for row in chain[1:])
 
-    def _resolve(self, path, *, full=False):
+    def _resolve(
+        self, path, *, full=False
+    ) -> tuple[dict[str, Any], str, list[dict[str, Any]]]:
         parts, path = _normalize_path(path)
         if not parts:
             root = self._get(ROOT_ID, full=full)
+            if root is None:
+                raise CorruptStoreError("MongoDB catalog root is missing")
             return root, "/", [root]
         chain = self._ancestors(parts[-1], full=full)
         # "/<id>" addresses an item at any depth, so URLs stay short however
@@ -763,7 +774,7 @@ class MongoStore:
                 raise NotFoundError("Uploaded item is unavailable")
             else:
                 parts, _ = _normalize_path(destination)
-                chain = self._ancestors(parts[-1]) if parts else [self._get(ROOT_ID)]
+                chain = self._ancestors(parts[-1] if parts else ROOT_ID)
             self._visible(chain)
             from tgdrive.transfers.transfer_locations import location_record
 
@@ -1001,6 +1012,8 @@ class MongoStore:
     def _subtree_totals(self, identity):
         """Files, folders and bytes under a node, including the node itself."""
         node = self._get(identity)
+        if node is None:
+            raise NotFoundError("Catalog item is unavailable")
         files = int(node["kind"] == "file")
         folders = int(node["kind"] == "folder")
         size = node["size"] if files else 0
@@ -1599,7 +1612,7 @@ class MongoStore:
             if number is None:
                 clauses.append({"tokens": {"$regex": "^" + re.escape(word)}})
             elif len(word) >= 3:
-                options = [{"tokens": number}]
+                options: list[dict[str, Any]] = [{"tokens": number}]
                 options.append({"tokens": {"$regex": "^" + re.escape(word)}})
                 clauses.append({"$or": options})
             else:
@@ -1607,8 +1620,8 @@ class MongoStore:
         order_patterns = (
             [
                 re.compile(
-                    r"(?<!\d)0*" + re.escape(_number(word))
-                    if _number(word)
+                    r"(?<!\d)0*" + re.escape(numeric_word)
+                    if (numeric_word := _number(word))
                     else r"(?<![^\W_])" + re.escape(word)
                 )
                 for word in words
@@ -1769,6 +1782,8 @@ class MongoStore:
     def _messages(self, identity):
         result = set()
         root = self._get(identity, full=True)
+        if root is None:
+            raise NotFoundError("Catalog item is unavailable")
         rows = [root] if root["kind"] == "file" else []
         rows = [
             *rows,
@@ -1973,8 +1988,8 @@ class MongoStore:
         expiry = expires_at
         if expires_at is not _SHARE_UNSET and expires_at is not None:
             expiry = _validate_timestamp(expires_at)
-        if expiry is not _SHARE_UNSET and expiry is not None and expiry <= _utc_now():
-            raise ValidationError("Link expiry must be in the future")
+            if expiry <= _utc_now():
+                raise ValidationError("Link expiry must be in the future")
         with self._transaction(write=True):
             row = self._one("shares", {"_id": share_id})
             if row is None:
@@ -2326,6 +2341,8 @@ class MongoStore:
             if self._session is not None
             else self.db.catalog.find_one({"_id": "catalog"})
         )
+        if metadata is None:
+            raise CorruptStoreError("MongoDB catalog metadata is missing")
         return {name: metadata.get(name, 0) for name in _COUNTERS}
 
     @staticmethod
@@ -2384,7 +2401,7 @@ class MongoStore:
     def _validate_records(cls, root: _FolderNode, payload: dict[str, Any]) -> None:
         """Check recovery records against the tree without opening a database."""
         nodes, parents, expected_hashes = {}, {}, {}
-        stack = [(root, None)]
+        stack: list[tuple[_FileNode | _FolderNode, str | None]] = [(root, None)]
         while stack:
             node, parent = stack.pop()
             nodes[node.id], parents[node.id] = node, parent

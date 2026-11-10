@@ -4,6 +4,7 @@ import gzip
 from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
+from typing import cast
 
 import pytest
 from bson import json_util
@@ -13,6 +14,7 @@ from pymongo.errors import ConnectionFailure
 from tests.support.mongo_fixtures import FakeMongoBackend
 from tgdrive.core import encryption
 from tgdrive.core.errors import CorruptStoreError
+from tgdrive.storage.mongo import MongoBackend
 from tgdrive.storage.mongo_store import MongoStore
 from tgdrive.storage.upgrade import needs_upgrade, upgrade
 
@@ -124,7 +126,7 @@ def settings(tmp_path):
 
 def test_2_2_drive_is_refused_until_upgraded():
     with pytest.raises(CorruptStoreError):
-        MongoStore(drive_2_2())
+        MongoStore(cast(MongoBackend, drive_2_2()))
 
 
 def test_upgrade_keeps_every_record_and_opens_in_2_3(tmp_path):
@@ -132,13 +134,14 @@ def test_upgrade_keeps_every_record_and_opens_in_2_3(tmp_path):
     before = {name: len(backend.db[name].rows) for name in ("nodes", "shares")}
     assert needs_upgrade(backend)
     copy_path = upgrade(backend, settings(tmp_path))
+    assert copy_path is not None
     with gzip.open(copy_path) as copy:
         saved = [json_util.loads(line) for line in copy]
     assert {row["collection"] for row in saved} >= {"catalog", "nodes", "shares"}
     assert (tmp_path / copy_path.rsplit("/", 1)[-1]).stat().st_mode & 0o777 == 0o600
     assert {name: len(backend.db[name].rows) for name in before} == before
     encryption.check_drive_key(backend, SecretStr(KEY))
-    store = MongoStore(backend)
+    store = MongoStore(cast(MongoBackend, backend))
     assert store.statistics() == {
         "files": 1,
         "folders": 1,
@@ -179,7 +182,7 @@ def test_upgrade_runs_once_and_resumes_after_interruption(tmp_path, monkeypatch)
     monkeypatch.undo()
     assert upgrade(backend, settings(tmp_path)) is not None
     assert upgrade(backend, settings(tmp_path)) is None
-    assert MongoStore(backend).statistics()["files"] == 1
+    assert MongoStore(cast(MongoBackend, backend)).statistics()["files"] == 1
     assert list(tmp_path.glob("upgrade-2.2-*.json.gz")) == copies
     assert copies[0].read_bytes() == original_copy
 
@@ -257,6 +260,7 @@ def test_durable_copy_identity_is_saved_before_the_first_migration_write(
 
     monkeypatch.setattr(backend.db.nodes, "bulk_write", checked)
     copy_path = upgrade(backend, settings(tmp_path))
+    assert copy_path is not None
     assert copies == [Path(copy_path)]
 
 

@@ -11,7 +11,7 @@ from collections.abc import AsyncIterator, Awaitable, Callable, Iterable
 from contextlib import asynccontextmanager, suppress
 from dataclasses import dataclass
 from enum import StrEnum
-from typing import TYPE_CHECKING, Any, Literal, Protocol
+from typing import TYPE_CHECKING, Any, Literal, Protocol, cast
 
 from tgdrive.media.media_scheduler import (
     MediaPriority,
@@ -26,6 +26,7 @@ from tgdrive.telegram.connection_errors import (
 
 if TYPE_CHECKING:
     from tgdrive.core.config import Settings
+    from tgdrive.media.preloading import PreloadManager
 
 logger = logging.getLogger(__name__)
 
@@ -44,6 +45,8 @@ type ClientFactory = Callable[
     [], TelegramClientLifecycle | Awaitable[TelegramClientLifecycle]
 ]
 type ClientSource = TelegramClientLifecycle | ClientFactory
+type ClientConfiguration = tuple[Any, str | None, ClientSource]
+type ClientEntry = ClientSource | ClientConfiguration
 
 
 class PoolState(StrEnum):
@@ -183,10 +186,12 @@ class ClientPool:
     idempotent; clients start and stop concurrently.
     """
 
+    _preload_manager: PreloadManager
+
     def __init__(
         self,
-        bot_clients: Iterable[ClientSource] = (),
-        user_clients: Iterable[ClientSource] = (),
+        bot_clients: Iterable[ClientEntry] = (),
+        user_clients: Iterable[ClientEntry] = (),
         *,
         allow_partial_start: bool = False,
         media_send_interval: float = 0.0,
@@ -214,7 +219,11 @@ class ClientPool:
         # Removed clients finish their leases here, then disconnect.
         self._retiring: list[_ClientSlot] = []
         self._retire_tasks: set[asyncio.Task] = set()
-        for kind, sources in (("bot", bot_clients), ("user", user_clients)):
+        sources_by_kind: tuple[tuple[ClientKind, Iterable[ClientEntry]], ...] = (
+            ("bot", bot_clients),
+            ("user", user_clients),
+        )
+        for kind, sources in sources_by_kind:
             for index, source in enumerate(sources):
                 # ``(key, identity, source)`` entries can later be reconfigured.
                 key, identity = None, None
@@ -225,11 +234,13 @@ class ClientPool:
                 )
                 self._slots.append(
                     _ClientSlot(
-                        source=source,
+                        source=cast(ClientSource, source),
                         kind=kind,
                         index=index,
                         is_factory=is_factory,
-                        client=None if is_factory else source,
+                        client=None
+                        if is_factory
+                        else cast(TelegramClientLifecycle, source),
                         key=key,
                         identity=identity,
                     )
@@ -381,8 +392,8 @@ class ClientPool:
 
     async def reconfigure(
         self,
-        bot_clients: Iterable[tuple[Any, str | None, ClientSource]] = (),
-        user_clients: Iterable[tuple[Any, str | None, ClientSource]] = (),
+        bot_clients: Iterable[ClientConfiguration] = (),
+        user_clients: Iterable[ClientConfiguration] = (),
     ) -> None:
         """Apply a new client list without interrupting unchanged clients.
 
@@ -396,7 +407,10 @@ class ClientPool:
         async with self._lifecycle_lock:
             current = {(slot.kind, slot.key): slot for slot in self._slots}
             ordered: list[_ClientSlot] = []
-            for kind, entries in (("bot", bot_clients), ("user", user_clients)):
+            entries_by_kind: tuple[
+                tuple[ClientKind, Iterable[ClientConfiguration]], ...
+            ] = (("bot", bot_clients), ("user", user_clients))
+            for kind, entries in entries_by_kind:
                 for index, (key, identity, source) in enumerate(entries):
                     slot = current.pop((kind, key), None) if key is not None else None
                     if slot is None:
@@ -408,7 +422,9 @@ class ClientPool:
                             kind=kind,
                             index=index,
                             is_factory=is_factory,
-                            client=None if is_factory else source,
+                            client=None
+                            if is_factory
+                            else cast(TelegramClientLifecycle, source),
                             key=key,
                             identity=identity,
                         )
@@ -833,7 +849,7 @@ class ClientPool:
                             slot.download_active += 1
                         if media:
                             slot.media_active += 1
-                        client = slot.client
+                        client = cast(TelegramClientLifecycle, slot.client)
                         if media or download:
                             own = next(
                                 row
@@ -1264,7 +1280,7 @@ class ClientPool:
     async def _start_slot(self, slot: _ClientSlot) -> None:
         try:
             if slot.is_factory:
-                slot.client = await _maybe_await(slot.source())  # type: ignore[operator]
+                slot.client = await _maybe_await(cast(ClientFactory, slot.source)())
             if slot.client is None:
                 raise TypeError(f"{slot.fallback_name} factory returned None")
             slot.needs_stop = True

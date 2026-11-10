@@ -92,6 +92,7 @@ def test_existing_mongodb_bootstrap_reopens_with_only_database_configuration(
         "tgdrive.settings.managed_settings.read_document", lambda _: None
     )
     settings = Settings(_env_file=None)
+    assert settings.admin_password_hash is not None
     assert settings.admin_password_hash.get_secret_value() == owner_hash
     assert settings.session_secret.get_secret_value() == bootstrap["SESSION_SECRET"]
     assert not (tmp_path / "deployment-secrets.json").exists()

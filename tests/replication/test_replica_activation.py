@@ -9,6 +9,7 @@ from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 from datetime import UTC, datetime
 from types import SimpleNamespace
+from typing import cast
 
 import pytest
 from bson import Binary, Decimal128, Int64, json_util
@@ -138,7 +139,7 @@ def installed(settings):
 
 def test_prepare_preserves_live_mongo_catalog_and_archives_replaced_state(settings):
     before = catalog(settings)
-    backend = for_settings(settings)
+    backend = cast(Backend, for_settings(settings))
     original_jobs = copy.deepcopy(backend.data["jobs"])
     source = candidate(before)
     identity = prepare_activation(settings, source)
@@ -160,12 +161,9 @@ def test_prepare_preserves_live_mongo_catalog_and_archives_replaced_state(settin
     assert saved["jobs"] == original_jobs
     assert saved["catalog"][0]["storage_channel_id"] == OLD
     assert backend.data["jobs"] == [] and backend.data["receipts"] == []
-    assert (
-        read_document(settings.resolved_data_dir)
-        .clients[0]
-        .credential.get_secret_value()
-        == NEW_BOT
-    )
+    document = read_document(settings.resolved_data_dir)
+    assert document is not None
+    assert document.clients[0].credential.get_secret_value() == NEW_BOT
     assert not _apply(next_settings)
 
 
@@ -218,6 +216,7 @@ def test_applied_settings_keep_newer_connections_and_never_reinstall_catalog(set
     prepare_activation(settings, candidate(before))
     _apply(settings)
     current = read_document(settings.resolved_data_dir)
+    assert current is not None
     newer = ManagedDocument(
         revision=current.revision + 1,
         api_id=55555,
@@ -323,11 +322,11 @@ class Collection(FixtureCollection):
     def delete_many(self, query, **kwargs):
         return super().delete_many(query or {}, **kwargs)
 
-    def insert_many(self, rows, **kwargs):
+    def insert_many(self, documents, **kwargs):
         if self.backend.fail_insert and self.name == "nodes":
             self.backend.fail_insert = False
             raise RuntimeError("synthetic transaction interruption")
-        self.rows.extend(copy.deepcopy(rows))
+        self.rows.extend(copy.deepcopy(documents))
 
 
 class Database(SimpleNamespace):
@@ -534,7 +533,7 @@ def with_saved_settings(value):
 def test_recovery_restores_mongo_policies_and_keeps_previous_connections_disabled(
     settings,
 ):
-    backend = for_settings(settings)
+    backend = cast(Backend, for_settings(settings))
     backend.db.settings.replace_one(
         {"_id": "performance-preferences"},
         {"_id": "performance-preferences", "document": {"timezone": "Asia/Tokyo"}},
@@ -548,6 +547,7 @@ def test_recovery_restores_mongo_policies_and_keeps_previous_connections_disable
     assert pending.string_sessions == ()
     assert _apply(pending)
     document = read_document(settings.resolved_data_dir)
+    assert document is not None
     assert [row.id for row in document.clients if row.enabled] == [
         credential_id("bot", NEW_BOT)
     ]
@@ -556,6 +556,7 @@ def test_recovery_restores_mongo_policies_and_keeps_previous_connections_disable
         "Former Premium",
     }
     saved = backend.db.settings.find_one({"_id": "performance-preferences"})
+    assert saved is not None
     assert saved["document"]["timezone"] == "UTC"
     archived = json.loads(
         read_private(
@@ -748,6 +749,7 @@ def test_full_historical_connection_list_is_archived_without_auto_enabling_it(se
     prepare_activation(settings, value)
     assert _apply(settings)
     saved = read_document(settings.resolved_data_dir)
+    assert saved is not None
     # The recovery bot plus every former connection: no account count limit.
     assert len(saved.clients) == 51
     assert sum(row.enabled for row in saved.clients) == 1
@@ -760,7 +762,7 @@ def test_full_historical_connection_list_is_archived_without_auto_enabling_it(se
 def database_snapshot(settings):
     from tgdrive.recovery.mongo_backup import COLLECTIONS
 
-    backend = for_settings(settings)
+    backend = cast(Backend, for_settings(settings))
     records = {name: copy.deepcopy(backend.data.get(name, [])) for name in COLLECTIONS}
     from tgdrive.core.encryption import key_record
 
@@ -808,10 +810,10 @@ def test_wrong_deployment_key_is_rejected_before_preparing_activation(settings):
     value = candidate(catalog(settings))
     value["database"] = database_snapshot(settings)
     value["database"]["settings"] = [key_record("f" * 64)]
-    before = copy.deepcopy(for_settings(settings).data)
+    before = copy.deepcopy(cast(Backend, for_settings(settings)).data)
     with pytest.raises(ActivationError, match="ENCRYPTION_KEY does not match"):
         prepare_activation(settings, value)
-    assert for_settings(settings).data == before
+    assert cast(Backend, for_settings(settings)).data == before
     assert not (settings.resolved_data_dir / MANIFEST).exists()
 
 
@@ -825,7 +827,7 @@ def test_unified_file_restores_database_settings_and_history_safely(
     value = candidate(before)
     value["database"] = database_snapshot(settings)
     value["backup_config"] = {"channel": OLD, "token": BACKUP_BOT}
-    backend = for_settings(settings)
+    backend = cast(Backend, for_settings(settings))
     backend.data["sessions"] = [{"_id": "current-browser-cookie"}]
     prepare_activation(settings, value)
     manifest = json_util.loads(
@@ -861,7 +863,9 @@ def test_unified_file_restores_database_settings_and_history_safely(
     assert history[0]["summary"]["name"] == "original.bin"
     assert history[0]["summary"]["retained"] is False
     assert "data" not in history[0] and "context" not in history[0]["summary"]
-    bootstrap = backend.db.settings.find_one({"_id": "bootstrap"})["document"]
+    row = backend.db.settings.find_one({"_id": "bootstrap"})
+    assert row is not None
+    bootstrap = row["document"]
     assert PasswordHasher().verify(
         bootstrap["ADMIN_PASSWORD_HASH"], "test activation password"
     )
@@ -873,7 +877,7 @@ def test_unified_file_restores_database_settings_and_history_safely(
 def test_unified_file_recovers_a_missing_mongodb_catalog(settings):
     value = candidate(catalog(settings))
     value["database"] = database_snapshot(settings)
-    backend = for_settings(settings)
+    backend = cast(Backend, for_settings(settings))
     backend.data = {name: [] for name in backend.data}
     prepare_activation(settings, value)
     assert _apply(effective_settings(settings))
@@ -976,7 +980,7 @@ def test_staged_activation_streams_bounded_batches_and_retains_history(
     assert after["storage_channel_id"] == NEW
     assert next(iter(after["root"]["children"].values()))["message_id"] == 1123
     assert after["shares"] == before["shares"]
-    backend = for_settings(settings)
+    backend = cast(Backend, for_settings(settings))
     assert len(backend.data["jobs"]) == 700
     assert backend.data["operations"] == [] and backend.data["deletions"] == []
     assert backend.data["preparations"] == [] and backend.data["sessions"] == []
@@ -1031,10 +1035,10 @@ def test_staged_activation_refuses_changed_or_unsafe_source_before_prepare(
         source.write_text(json_util.dumps(raw), encoding="utf-8")
         index.path.unlink()
         value["staged"]["sha256"] = stage_snapshot(source, index.path).digest
-    before = copy.deepcopy(for_settings(settings).data)
+    before = copy.deepcopy(cast(Backend, for_settings(settings)).data)
     with pytest.raises(ActivationError):
         prepare_activation(settings, value)
-    assert for_settings(settings).data == before
+    assert cast(Backend, for_settings(settings)).data == before
     assert not (settings.resolved_data_dir / MANIFEST).exists()
 
 
@@ -1093,7 +1097,7 @@ def test_pending_staged_descriptor_overflow_preserves_input_before_path_or_ident
     manifest["candidate"]["staged"]["path"] = "a/" * (3 * 1024**2 // 2) + "index"
     original = module._raw(manifest)
     module.atomic_private(path, original)
-    backend = for_settings(settings)
+    backend = cast(Backend, for_settings(settings))
     before = copy.deepcopy(backend.data)
     digest = index.digest
     monkeypatch.setattr(
@@ -1117,7 +1121,7 @@ def test_pending_staged_descriptor_overflow_preserves_input_before_path_or_ident
 
 def test_staged_activation_rechecks_index_and_replays_atomic_failure(settings):
     value, index = staged_candidate(settings)
-    backend = for_settings(settings)
+    backend = cast(Backend, for_settings(settings))
     before = copy.deepcopy(backend.data)
     prepare_activation(settings, value)
     original = index.path.read_bytes()
@@ -1226,7 +1230,7 @@ def test_staged_activation_closes_partial_iterators_in_their_worker(
             else:
                 worker.submit(prepare_activation, settings, value).result()
                 if failure == "insert":
-                    for_settings(settings).fail_insert = True
+                    cast(Backend, for_settings(settings)).fail_insert = True
                     with pytest.raises(RuntimeError, match="transaction interruption"):
                         worker.submit(_apply, settings).result()
             assert observed and all(iterator.gi_frame is None for iterator in observed)
@@ -1244,7 +1248,7 @@ def test_oversize_pending_activation_is_a_preserved_resource_limit(settings):
         record.truncate(64 * 1024**2 + 1)
     path.chmod(0o600)
     before = path.stat()
-    backend = for_settings(settings)
+    backend = cast(Backend, for_settings(settings))
     database = copy.deepcopy(backend.data)
     for load in (effective_settings, _apply):
         with pytest.raises(ActivationError) as failure:
@@ -1304,7 +1308,7 @@ def test_legacy_whole_manifest_resource_limit_precedes_candidate_construction(
     prepare_activation(settings, candidate(catalog(settings)))
     path = settings.resolved_data_dir / MANIFEST
     original = path.read_bytes()
-    before = copy.deepcopy(for_settings(settings).data)
+    before = copy.deepcopy(cast(Backend, for_settings(settings)).data)
     monkeypatch.setattr(staged, "MAX_VALUE_ITEMS", 32)
     monkeypatch.setattr(
         module,
@@ -1315,7 +1319,7 @@ def test_legacy_whole_manifest_resource_limit_precedes_candidate_construction(
         effective_settings(settings)
     assert failure.value.code == "ACTIVATION_RESOURCE_LIMIT"
     assert path.read_bytes() == original
-    assert for_settings(settings).data == before
+    assert cast(Backend, for_settings(settings)).data == before
     assert not (path.parent / "recovery-archive").exists()
 
 
@@ -1341,6 +1345,7 @@ def test_bounded_legacy_loader_preserves_canonical_extended_json_and_identity(se
     identity = prepare_activation(settings, value)
     path = settings.resolved_data_dir / MANIFEST
     loaded = module._load(settings)
+    assert loaded is not None
     assert loaded["id"] == identity == module._activation_identity(loaded)
     assert module._raw(loaded) == path.read_bytes()
     assert effective_settings(settings).storage_channel == NEW
@@ -1356,6 +1361,7 @@ def test_activation_writer_rejects_unreadable_phase_before_replacing_the_record(
     path = settings.resolved_data_dir / MANIFEST
     original = path.read_bytes()
     value = module._load(settings)
+    assert value is not None
     value["phase"] = "preserved"
     monkeypatch.setattr(staged, "MAX_VALUE_ITEMS", 8)
     with pytest.raises(ActivationError) as failure:
@@ -1371,7 +1377,7 @@ def test_activation_writer_rejects_unreadable_phase_before_replacing_the_record(
 def test_activation_keeps_video_position_but_invalidates_writer(
     settings, staged, interrupted
 ):
-    backend = for_settings(settings)
+    backend = cast(Backend, for_settings(settings))
     identity = next(
         row["_id"] for row in backend.data["nodes"] if row["kind"] == "file"
     )
@@ -1403,10 +1409,12 @@ def test_activation_keeps_video_position_but_invalidates_writer(
         with pytest.raises(RuntimeError, match="transaction interruption"):
             _apply(pending)
         preserved = backend.db.nodes.find_one({"_id": identity})
+        assert preserved is not None
         assert preserved["video_progress"] == progress
         assert preserved["video_progress_session"] == old_writer
     assert _apply(pending)
     restored = backend.db.nodes.find_one({"_id": identity})
+    assert restored is not None
     assert restored["message_id"] == 1123
     assert restored["video_progress"] == progress
     assert "video_progress_session" not in restored

@@ -12,6 +12,7 @@ import struct
 import sys
 from collections import OrderedDict
 from html.parser import HTMLParser
+from typing import Any
 from urllib.parse import unquote, urlsplit
 from zipfile import ZipFile
 
@@ -600,8 +601,9 @@ class ChapterParser(HTMLParser):
             raise BookError("This chapter is too complex to preview.")
         attrs = dict(attrs)
         node = {"tag": tag, "children": []}
-        if attrs.get("id") and len(attrs["id"]) <= 128:
-            node["id"] = attrs["id"]
+        identity = attrs.get("id")
+        if identity and len(identity) <= 128:
+            node["id"] = identity
         if tag == "a":
             node["href"] = local_ref(self.base, attrs.get("href", ""))
         if tag == "img":
@@ -698,7 +700,7 @@ def epub_index(archive):
     return {"kind": "epub", "title": title, "entries": entries}
 
 
-def read_book(source, fmt, entry=None, *, raw_images=False):
+def read_book(source, fmt, entry=None, *, raw_images=False) -> dict[str, Any]:
     image_limit = MAX_PAGE if raw_images else MAX_ENTRY
     if fmt in {"epub", "cbz"}:
         with open_zip(source) as archive:
@@ -857,6 +859,8 @@ def run():
             )
         if result.get("kind") == "image" and "content" in result:
             content = result.pop("content")
+            if not isinstance(content, bytes):
+                raise BookError("The book returned an invalid image.")
             print(
                 json.dumps({"image": {"mime": result["mime"], "length": len(content)}}),
                 flush=True,

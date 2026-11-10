@@ -373,7 +373,9 @@ def test_recovery_file_import_accepts_replacement_channel_credentials(owner):
         },
     )
     assert response.status_code == 200
-    args = replica.inspect_file.await_args.args
+    call = replica.inspect_file.await_args
+    assert call is not None
+    args = call.args
     assert args[1:] == (replica.key(), -1001234567890, TOKEN)
     assert not args[0].exists()
 

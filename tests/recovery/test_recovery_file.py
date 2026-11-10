@@ -5,6 +5,7 @@ import zlib
 from contextlib import nullcontext
 from datetime import UTC, datetime
 from types import SimpleNamespace
+from typing import cast
 from unittest.mock import Mock
 
 import pytest
@@ -24,6 +25,7 @@ from tgdrive.replication.replica_state import (
     parts_in,
     remap_catalog,
 )
+from tgdrive.storage.mongo import MongoBackend
 from tgdrive.storage.mongo_store import MongoStore
 
 KEY = "a1" * 32
@@ -38,7 +40,7 @@ def source(tmp_path):
     backend.client = SimpleNamespace(
         start_session=Mock(return_value=nullcontext(object()))
     )
-    store = MongoStore.create(backend, storage_channel=MAIN)
+    store = MongoStore.create(cast(MongoBackend, backend), storage_channel=MAIN)
     store.add_file("/", "Report.txt", 41, 3)
     backend.db.settings.insert_one(
         {

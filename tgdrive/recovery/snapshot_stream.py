@@ -152,9 +152,9 @@ def write_recovery_snapshot(
     settings,
     *,
     validate_snapshot,
-    max_records=MAX_DATABASE_RECORDS,
-    max_database_bytes=MAX_DATABASE_BYTES,
-    max_expanded_bytes=MAX_EXPANDED_BYTES,
+    max_records: int | None = MAX_DATABASE_RECORDS,
+    max_database_bytes: int | None = MAX_DATABASE_BYTES,
+    max_expanded_bytes: int | None = MAX_EXPANDED_BYTES,
     max_recovery_bytes=MAX_RECOVERY_BYTES,
 ):
     """Validate staged JSON, then atomically publish its existing V2 ciphertext.
@@ -251,7 +251,7 @@ def write_staged_json(
     replica_mapping=None,
     credentials=None,
     recovery_token=None,
-    max_expanded_bytes=MAX_EXPANDED_BYTES,
+    max_expanded_bytes: int | None = MAX_EXPANDED_BYTES,
 ):
     """Render bounded staged rows, optionally rebasing verified message locations."""
     from tgdrive.recovery.mongo_backup import COLLECTIONS
@@ -396,7 +396,7 @@ def decrypt_snapshot(
     settings,
     *,
     max_recovery_bytes=MAX_RECOVERY_BYTES,
-    max_expanded_bytes=MAX_EXPANDED_BYTES,
+    max_expanded_bytes: int | None = MAX_EXPANDED_BYTES,
 ):
     """Authenticate all ciphertext before decompressing into private staged JSON.
 

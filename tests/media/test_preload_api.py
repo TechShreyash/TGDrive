@@ -18,6 +18,8 @@ from tgdrive.web.app import create_app
 
 
 class MediaRuntime(FakeRuntime):
+    pool: ClientPool
+
     async def start(self):
         await self.pool.start()
         await super().start()
@@ -82,6 +84,7 @@ def test_manual_preload_api_caches_entire_original_for_download_and_seek(
                 if task is not None:
                     await asyncio.wait_for(asyncio.shield(task), 5)
 
+            assert client.portal is not None
             client.portal.call(finish)
             state = client.get("/api/v1/preloads").json()
             assert state["jobs"][0]["state"] == "ready", state

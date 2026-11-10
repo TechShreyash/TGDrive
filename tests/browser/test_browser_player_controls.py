@@ -367,9 +367,11 @@ def test_time_buffer_survives_network_loss_and_ten_second_skips(
 ) -> None:
     _, page = desktop
     media = tmp_path / "long-video.mp4"
+    ffmpeg = shutil.which("ffmpeg")
+    assert ffmpeg is not None
     subprocess.run(  # noqa: S603 - fixed self-generated media fixture
         [
-            shutil.which("ffmpeg"),
+            ffmpeg,
             "-v",
             "error",
             "-f",
@@ -450,9 +452,11 @@ def test_video_only_backpressure_does_not_search_ahead_for_nonexistent_audio(
 ) -> None:
     _, page = desktop
     media = tmp_path / "video-only.mkv"
+    ffmpeg = shutil.which("ffmpeg")
+    assert ffmpeg is not None
     subprocess.run(  # noqa: S603 - fixed self-generated media fixture
         [
-            shutil.which("ffmpeg"),
+            ffmpeg,
             "-v",
             "error",
             "-i",

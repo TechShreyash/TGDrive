@@ -7,10 +7,12 @@ from contextlib import asynccontextmanager, nullcontext
 from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
+from typing import Protocol, cast
 from unittest.mock import AsyncMock, Mock
 
 import pytest
 from pymongo.errors import ConnectionFailure
+from pymongo.results import UpdateResult
 
 from tests.support.mongo_fixtures import FakeMongoBackend
 from tests.support.recovery_fixtures import settings as recovery_settings
@@ -25,6 +27,14 @@ from tgdrive.settings.managed_settings import SettingsProblem
 from tgdrive.storage.mongo import DatabaseUnavailable, MongoBackend
 from tgdrive.storage.mongo_store import MongoStore
 from tgdrive.transfers.tasks import TransferRegistry
+
+
+class ProviderCooldown(RuntimeError):
+    seconds = 30
+
+
+class OwnedLock(Protocol):
+    def _is_owned(self) -> bool: ...
 
 
 async def test_recent_snapshot_survives_restart_without_immediate_duplicate(
@@ -156,7 +166,9 @@ def snapshot_source(tmp_path):
     backend.client = SimpleNamespace(
         start_session=Mock(side_effect=lambda **_kwargs: nullcontext(object()))
     )
-    store = MongoStore.create(backend, storage_channel=-1001234567890)
+    store = MongoStore.create(
+        cast(MongoBackend, backend), storage_channel=-1001234567890
+    )
     settings = recovery_settings(tmp_path).model_copy(
         update={"cache_dir": tmp_path},
     )
@@ -376,8 +388,7 @@ async def test_snapshot_cooldown_updates_observation_without_confirmation(
     snapshot_source,
 ):
     service, store, _backend = snapshot_source
-    error = RuntimeError("Synthetic provider cooldown")
-    error.seconds = 30
+    error = ProviderCooldown("Synthetic provider cooldown")
     service.pool.lease = Mock(side_effect=error)
     service.pool.defer_channel = AsyncMock()
     with pytest.raises(RuntimeError, match="provider cooldown"):
@@ -418,7 +429,7 @@ async def test_cancelled_snapshot_drains_export_before_removing_unadmitted_file(
         with pytest.raises(asyncio.CancelledError):
             await task
         assert not path.exists()
-        assert backend.db.backups.find({}) == []
+        assert list(backend.db.backups.find({})) == []
         service.pool.lease.assert_not_called()
     finally:
         release.set()
@@ -576,7 +587,7 @@ def test_pristine_restore_accepts_only_its_unmodified_recovery_key(
 ):
     backend = FakeMongoBackend()
     store = (
-        MongoStore.create(backend, storage_channel=-1001234567890)
+        MongoStore.create(cast(MongoBackend, backend), storage_channel=-1001234567890)
         if with_catalog
         else None
     )
@@ -672,8 +683,8 @@ def test_owner_renewal_waits_for_open_catalog_transactions():
 
     def renew():
         # A renewal inside a transaction would WriteConflict that transaction.
-        held.append(backend._write_lock._is_owned())
-        return SimpleNamespace(matched_count=1)
+        held.append(cast(OwnedLock, backend._write_lock)._is_owned())
+        return UpdateResult({"n": 1, "nModified": 0, "ok": 1.0}, True)
 
     backend._renew = renew
     backend._renew_loop()
@@ -771,8 +782,7 @@ async def test_actual_verified_send_and_pin_retry_share_durable_failure_handling
         BackupError("Wait", retry_after=60),
     ]
     if cooldown:
-        failures[0] = RuntimeError("Telegram FloodWait")
-        failures[0].seconds = 30
+        failures[0] = ProviderCooldown("Telegram FloodWait")
 
     async def send(_channel, path, **_kwargs):
         nonlocal payload

@@ -216,6 +216,7 @@ def test_live_mongo_catalog_preferences_and_credentials_commit_together(deployme
     assert row.backend.db.operations.count_documents({}) == 0
     assert row.backend.db.backups.count_documents({}) == 0
     document = read_document(row.settings.resolved_data_dir)
+    assert document is not None
     assert [
         client.credential.get_secret_value()
         for client in document.clients

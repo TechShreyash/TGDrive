@@ -10,6 +10,7 @@ from contextlib import closing
 from datetime import UTC, datetime
 from itertools import chain
 from types import SimpleNamespace
+from typing import cast
 
 import pytest
 from bson import BSON, Binary, ObjectId, json_util
@@ -20,6 +21,7 @@ from tgdrive.recovery import staged_snapshot
 from tgdrive.recovery.mongo_backup import COLLECTIONS
 from tgdrive.recovery.recovery_file import LegacyRecoveryFile, snapshot_catalog
 from tgdrive.replication.replica_settings import credentials_from_snapshot
+from tgdrive.storage.mongo import MongoBackend
 from tgdrive.storage.mongo_store import MongoStore
 
 MAIN = -1001234567890
@@ -41,7 +43,7 @@ class UnexpandedPath(str):
 @pytest.fixture
 def snapshot(tmp_path):
     backend = FakeMongoBackend()
-    store = MongoStore.create(backend, storage_channel=MAIN)
+    store = MongoStore.create(cast(MongoBackend, backend), storage_channel=MAIN)
     try:
         folder = store.create_folder("/", "Folder")
         store.add_file("/" + folder["id"], "Document.txt", 41, 3)
@@ -385,8 +387,12 @@ def test_json_record_limit_is_checked_after_a_map_key(monkeypatch, chunk_bytes):
     monkeypatch.setattr(staged_snapshot, "READ_BYTES", 8)
 
     class Chunks(io.BytesIO):
-        def read(self, size=-1):
-            return super().read(min(size, chunk_bytes) if size >= 0 else chunk_bytes)
+        def read(self, size: int | None = -1):
+            return super().read(
+                min(size, chunk_bytes)
+                if size is not None and size >= 0
+                else chunk_bytes
+            )
 
     key = b"k" * 24
     parser = staged_snapshot._Parser(

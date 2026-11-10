@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from typing import cast
 from unittest.mock import AsyncMock
 
 import pytest
@@ -20,7 +21,7 @@ async def test_cold_book_range_uses_single_account_slot_without_nested_reservati
 ):
     payload = b"a" * BLOCK + b"book tail"
     client = account("only-bot", payload)
-    metadata = client.get_messages.side_effect
+    metadata = cast(AsyncMock, client.get_messages).side_effect
     priorities = []
 
     def fetch(*args, **kwargs):

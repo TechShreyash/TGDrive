@@ -67,6 +67,7 @@ async def test_revocation_wakes_waiters_and_preserves_fixed_sender():
         async with pool.lease(media=True, client_name=first.name):
             pytest.fail("a revoked sender must not be selected")
 
+    waiting = None
     try:
         with pytest.raises(TelegramConnectionError):
             async with pool.lease(media=True, client_name=first.name):
@@ -74,6 +75,7 @@ async def test_revocation_wakes_waiters_and_preserves_fixed_sender():
                 await asyncio.sleep(0)
                 raise SessionRevokedError(request=None)
         with pytest.raises(TelegramConnectionError):
+            assert waiting is not None
             await asyncio.wait_for(waiting, 1)
         with pytest.raises(TelegramConnectionError, match="no longer configured"):
             async with pool.lease(media=True, client_name="removed"):
@@ -193,12 +195,14 @@ async def test_payload_recovers_using_another_account(error_type, monkeypatch):
 async def test_upload_reassigns_only_before_message_dispatch(tmp_path):
     manager, ledger = await manager_for(tmp_path, users=True)
     user = next(s.client for s in manager.pool._slots if s.kind == "user")
+    assert isinstance(user, Account)
     user.send_staged = AsyncMock(side_effect=SessionRevokedError(request=None))
     payload = b"abcdef"
     source = staged(manager, payload)
     checksum, parts = fingerprint(
         source, len(payload), manager.settings.bot_upload_limit
     )
+    assert user is not None
     parts[0]["sender"] = user.name
     record = await manager.registry.create("queued", total=len(payload))
     record.context.update(
@@ -211,6 +215,7 @@ async def test_upload_reassigns_only_before_message_dispatch(tmp_path):
             manager._upload_path(record, source, "/", "data.bin", len(payload)), 2
         )
         assert record.status == TransferStatus.COMPLETED
+        assert user is not None
         user.send_staged.assert_awaited()
         parts = stored(manager)["parts"]
         assert (
@@ -241,8 +246,10 @@ async def test_post_dispatch_revocation_preserves_bytes_and_operation_identity(
     source = staged(manager, b"abc")
     record = await manager.enqueue_upload(source, "/", "data.bin", 3)
     try:
+        assert record.task is not None
         await asyncio.wait_for(record.task, 2)
         assert record.status == TransferStatus.ERROR
+        assert record.error is not None
         assert "Connections" in record.error
         assert source.exists() and manager.store.list_directory("/") == {}
         part = record.context["multipart_plan"]["parts"][0]
@@ -252,14 +259,17 @@ async def test_post_dispatch_revocation_preserves_bytes_and_operation_identity(
         manager.pool = ClientPool([Account("replacement-bot", ledger)])
         await manager.pool.start()
         (await manager.retry_job(record.id))
+        assert record.task is not None
         await asyncio.wait_for(record.task, 2)
         assert record.status == TransferStatus.ERROR
+        assert record.error is not None
         assert "no longer configured" in record.error
         assert source.exists() and len(ledger.messages) == 1
         await manager.pool.stop()
         manager.pool = ClientPool([Account("bot-one", ledger)])
         await manager.pool.start()
         (await manager.retry_job(record.id))
+        assert record.task is not None
         await asyncio.wait_for(record.task, 2)
         assert record.status == TransferStatus.COMPLETED
         assert (part["sender"], part["random_id"]) == original

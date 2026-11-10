@@ -201,8 +201,10 @@ class Governor:
         ):
             async with service._lock:
                 await service._apply(service.value.model_copy(update=values))
-        if uploads != self.settings.telegram_uploads_per_bot and hasattr(
-            pool, "set_uploads_per_bot"
+        if (
+            pool is not None
+            and uploads != self.settings.telegram_uploads_per_bot
+            and hasattr(pool, "set_uploads_per_bot")
         ):
             await pool.set_uploads_per_bot(uploads)
             self.settings.telegram_uploads_per_bot = uploads

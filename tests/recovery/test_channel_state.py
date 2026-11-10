@@ -2,18 +2,22 @@
 
 from contextlib import asynccontextmanager
 from types import SimpleNamespace
+from typing import cast
 from unittest.mock import AsyncMock
 
 import pytest
-from telethon import functions, types
+from telethon import TelegramClient, functions, types
 
 from tests.core.test_runtime import FakeBackup, FakePool, FakeRemote, settings
 from tests.core.test_runtime import mongo_backend as mongo_backend_fixture
 from tests.support.mongo_fixtures import new_store
 from tgdrive.core.runtime import Runtime
+from tgdrive.recovery.mongo_backup import MongoProtection
 from tgdrive.settings.managed_settings import SettingsProblem
 from tgdrive.telegram.channel_state import storage_bot_rights_problem
+from tgdrive.telegram.client_pool import ClientPool
 from tgdrive.telegram.clients import Client
+from tgdrive.transfers.remote import RemoteClient
 
 mongo_backend = mongo_backend_fixture
 
@@ -50,22 +54,24 @@ async def test_live_adapter_checks_channel_privacy_retention_and_required_rights
             return SimpleNamespace(chats=[chat], full_chat=full_chat)
 
     client = Client.__new__(Client)
-    client.native = Native()
+    native = Native()
+    client.native = cast(TelegramClient, native)
     assert (
         await client.storage_channel_problem(CHANNEL, require_pin=require_pin)
     ) is None
     full_chat.ttl_period = 86400
     problem = await client.storage_channel_problem(CHANNEL, require_pin=require_pin)
-    assert problem[0] == "CHANNEL_AUTO_DELETE"
+    assert problem is not None and problem[0] == "CHANNEL_AUTO_DELETE"
     full_chat.ttl_period = None
     chat.username = "public_storage"
     problem = await client.storage_channel_problem(CHANNEL, require_pin=require_pin)
-    assert problem[0] == "CHANNEL_PUBLIC"
+    assert problem is not None and problem[0] == "CHANNEL_PUBLIC"
     chat.username = None
+    assert chat.admin_rights is not None
     chat.admin_rights.delete_messages = False
     problem = await client.storage_channel_problem(CHANNEL, require_pin=require_pin)
-    assert problem[0] == "CHANNEL_RIGHTS"
-    assert len(client.native.requests) == 4
+    assert problem is not None and problem[0] == "CHANNEL_RIGHTS"
+    assert len(native.requests) == 4
 
 
 @pytest.mark.parametrize("right", ["post_messages", "delete_messages", "edit_messages"])
@@ -75,7 +81,8 @@ def test_bot_rights_match_checkpoint_mode(right):
     )
     setattr(rights, right, False)
     chat = SimpleNamespace(admin_rights=rights)
-    assert storage_bot_rights_problem(chat, require_pin=True)[0] == "CHANNEL_RIGHTS"
+    problem = storage_bot_rights_problem(chat, require_pin=True)
+    assert problem is not None and problem[0] == "CHANNEL_RIGHTS"
     assert bool(storage_bot_rights_problem(chat, require_pin=False)) == (
         right != "edit_messages"
     )
@@ -106,7 +113,7 @@ async def test_runtime_rechecks_every_bot_and_failed_checks_allow_immediate_retr
     tmp_path,
 ):
     pool = ChannelPool(None, ("CHANNEL_RIGHTS", "Restore Delete Messages permission."))
-    runtime = Runtime(settings(tmp_path), pool=pool)
+    runtime = Runtime(settings(tmp_path), pool=cast(ClientPool, pool))
     with pytest.raises(SettingsProblem, match="Delete Messages"):
         await runtime._verify_storage_channel()
     assert runtime.storage_channel_error == "Restore Delete Messages permission."
@@ -124,7 +131,7 @@ async def test_channel_probe_network_error_is_safe_and_retryable(tmp_path):
     pool = ChannelPool(None)
     probe = pool.clients["storage-0"].storage_channel_problem
     probe.side_effect = TimeoutError("sensitive request details")
-    runtime = Runtime(settings(tmp_path), pool=pool)
+    runtime = Runtime(settings(tmp_path), pool=cast(ClientPool, pool))
     with pytest.raises(ConnectionError, match="could not be verified") as error:
         await runtime._verify_storage_channel()
     assert "sensitive" not in str(error.value)
@@ -139,15 +146,17 @@ async def test_unsafe_channel_preserves_metadata_and_pauses_startup_recovery(
     store = new_store(tmp_path / "drive")
     store.create_folder("/", "Preserve")
     pool = ChannelPool(("CHANNEL_AUTO_DELETE", "Turn auto-delete off."))
-    runtime = Runtime(settings(tmp_path), pool=pool)
-    runtime.backup = FakeBackup(store)
-    runtime.remote = FakeRemote()
+    runtime = Runtime(settings(tmp_path), pool=cast(ClientPool, pool))
+    backup = FakeBackup(store)
+    runtime.backup = cast(MongoProtection, backup)
+    runtime.remote = cast(RemoteClient, FakeRemote())
     monkeypatch.setattr("tgdrive.core.runtime.build_bot_mode_client", lambda _: None)
     try:
         await runtime.start()
         assert runtime.ready
+        assert runtime.store is not None
         assert runtime.store.list_directory("/")
-        assert runtime.backup.backups == 0
+        assert backup.backups == 0
         assert runtime.storage_channel_error == "Turn auto-delete off."
     finally:
         await runtime.stop()

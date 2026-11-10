@@ -281,7 +281,7 @@ async def test_cold_ahead_reclamation_keeps_payload_reserved_until_remote_cleanu
     )
     active = set()
 
-    async def remote(_source, *, offset, limit, **_kwargs):
+    async def remote(message, *, offset, limit, **_kwargs):
         assert limit == 1
         active.add(offset)
         try:
@@ -371,7 +371,7 @@ async def test_reclaiming_shared_ahead_keeps_another_viewers_origin_fill_alive(
     release_data = asyncio.Event()
     calls, cancelled = [], []
 
-    async def remote(_source, *, offset, limit, **_kwargs):
+    async def remote(message, *, offset, limit, **_kwargs):
         assert limit == 1
         calls.append(offset)
         try:

@@ -98,6 +98,7 @@ def test_device_receipts_finish_while_telegram_waits_and_survive_tab_close(
             for record in server.control()["records"].values()
         )
         assert _device_close_blocked(page), "Unsent device data must guard tab close"
+        batch = None
         if selection == "folder":
             batch = page.locator('.transfer-batch[data-stage="device"]')
             expect(batch).to_have_count(1)
@@ -122,6 +123,7 @@ def test_device_receipts_finish_while_telegram_waits_and_survive_tab_close(
         expect(received.get_by_role("progressbar")).to_have_count(0)
         expect(received.locator(".transfer-metrics")).to_have_count(0)
         if selection == "folder":
+            assert batch is not None
             batch.get_by_role("button", name="Hide Files", exact=True).click()
     finally:
         # Playwright releases any pending routes when this handler is removed.

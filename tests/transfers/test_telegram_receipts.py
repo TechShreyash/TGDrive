@@ -1,6 +1,7 @@
 """Bot-mode imports appear as website transfers while Telegram bytes arrive."""
 
 import asyncio
+from unittest.mock import AsyncMock
 
 import pytest
 
@@ -29,8 +30,7 @@ def fake_download(content=b"abcdefghij", *, gate=None, fail=None):
             output.write(content[4:])
         await progress(len(content), len(content))
 
-    download.calls = calls
-    return download
+    return AsyncMock(side_effect=download, calls=calls)
 
 
 async def test_receipt_is_a_visible_job_then_uploads_and_removes_staged_bytes(
@@ -53,6 +53,7 @@ async def test_receipt_is_a_visible_job_then_uploads_and_removes_staged_bytes(
         public = TransferRegistry.history_snapshot(record)
         assert public["kind"] == "telegram" and public["name"] == "ten.bin"
         gate.set()
+        assert record.task is not None
         await asyncio.wait_for(record.task, 2)
         assert record.status is TransferStatus.COMPLETED
         assert stored(manager)["size"] == 10
@@ -79,6 +80,7 @@ async def test_replayed_message_reuses_the_running_receipt(tmp_path):
         )
         assert first is second
         gate.set()
+        assert first.task is not None
         await asyncio.wait_for(first.task, 2)
         again = await manager.receive_telegram_file(
             download, staged, "/", "ten.bin", 10, transfer_id="r" * 32
@@ -110,6 +112,7 @@ async def test_failed_or_cancelled_receipt_removes_partial_bytes(tmp_path, outco
         if outcome == "cancel":
             await manager.cancel_job(record.id)
         gate.set()
+        assert record.task is not None
         await asyncio.wait_for(record.task, 2)
         assert record.status is (
             TransferStatus.ERROR if outcome == "error" else TransferStatus.CANCELLED

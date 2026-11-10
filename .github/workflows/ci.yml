@@ -82,13 +82,21 @@ jobs:
                   cache-dependency-glob: uv.lock
 
             - name: Install locked dependencies
-              run: uv sync --frozen --python 3.14.8
+              run: uv sync --frozen --all-groups --python 3.14.8
 
             - name: Ruff lint
               run: uv run --frozen --python 3.14.8 ruff check tgdrive tests scripts
 
             - name: Ruff format check
               run: uv run --frozen --python 3.14.8 ruff format --check tgdrive tests scripts
+
+            - name: Set up Node.js for Python typechecking
+              uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+              with:
+                  node-version: "24.22.0"
+
+            - name: Python typecheck
+              run: uv run --frozen --all-groups --python 3.14.8 pyright
 
             - name: Bandit security scan
               run: uv run --frozen --python 3.14.8 bandit -c pyproject.toml -r tgdrive

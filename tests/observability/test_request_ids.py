@@ -42,6 +42,7 @@ async def test_bound_record_is_visible_during_save_and_after_completion() -> Non
     starts.cancel("b" * 24)
     assert not entry.cancelled
     assert entry.snapshot()["status"] == "completed"
+    assert entry.fingerprint is not None
     assert starts.claim("b" * 24, entry.fingerprint)[1] is False
 
 

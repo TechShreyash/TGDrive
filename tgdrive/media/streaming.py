@@ -249,7 +249,11 @@ def _media_byte_rate(message, size):
     document = getattr(native, "document", None)
     for attribute in getattr(document, "attributes", ()):
         duration = getattr(attribute, "duration", None)
-        if type(duration) in (int, float) and math.isfinite(duration) and duration > 0:
+        if (
+            (type(duration) is int or type(duration) is float)
+            and math.isfinite(duration)
+            and duration > 0
+        ):
             rate = size / duration
             return rate if math.isfinite(rate) and rate > 0 else None
     return None
@@ -465,6 +469,7 @@ async def stream_telegram_file(
                 )
             return message, media
 
+        message = media = None
         for attempt in range(3):
             try:
                 message, media = await fetch_media()
@@ -473,7 +478,7 @@ async def stream_telegram_file(
                 problem = await pool.report_failure(client, error)
                 if isinstance(error, FloodWaitError):
                     await pool.defer_client(
-                        client.name, time.time() + max(1, error.seconds)
+                        getattr(client, "name", ""), time.time() + max(1, error.seconds)
                     )
                 elif problem is None and pool.kind_of(client) != "user":
                     raise

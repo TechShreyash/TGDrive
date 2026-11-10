@@ -20,6 +20,7 @@ import sys
 import time
 import uuid
 from pathlib import Path
+from typing import cast
 
 ROOT = Path(__file__).resolve().parents[2]
 URI = "mongodb://127.0.0.1:27028/?directConnection=true"
@@ -90,6 +91,7 @@ def item_counts(source):
             if event == "start_map":
                 job_start = count
             elif event == "end_map":
+                assert job_start is not None
                 jobs.append(count - job_start)
     return {"whole_value_items": count, "job_value_items": jobs}
 
@@ -97,7 +99,7 @@ def item_counts(source):
 def jobs(count, items, shape):
     result = []
     for index in range(count):
-        summary = {"name": "Many-item legacy history"}
+        summary: dict[str, object] = {"name": "Many-item legacy history"}
         if shape == "mixed":
             summary.update(
                 metadata={f"k{item:05d}": item for item in range(items)},
@@ -158,6 +160,7 @@ def prepare(args):
     from tgdrive.replication import replica_activation as activation
     from tgdrive.replication.replica_settings import credentials_from_snapshot
     from tgdrive.replication.replica_state import atomic_private
+    from tgdrive.storage.mongo import MongoBackend
     from tgdrive.storage.mongo_store import MongoStore
 
     directory = args.prepare.resolve()
@@ -166,7 +169,9 @@ def prepare(args):
     database = "tgdrive_test_legacy_activation_" + uuid.uuid4().hex
     configured = settings(directory, database)
     fake = FakeMongoBackend()
-    store = MongoStore.create(fake, storage_channel=configured.storage_channel)
+    store = MongoStore.create(
+        cast(MongoBackend, fake), storage_channel=configured.storage_channel
+    )
     fake.db.nodes.insert_many(
         MongoStore._node(
             f"{index:022d}",
@@ -334,6 +339,7 @@ def exercise(directory, metadata, expect_resource_limit):
     assert not expect_resource_limit, (
         "The oversized legacy value must be refused safely"
     )
+    assert value is not None
     assert value["id"] == metadata["activation_id"]
     phase("after_load")
     del value

@@ -94,12 +94,13 @@ def _decode(data: bytes):
             offset = end + 1
             return value
         if marker in (b"l", b"d"):
-            result = [] if marker == b"l" else {}
+            sequence = []
+            mapping = {}
             previous = None
             while data[offset : offset + 1] != b"e":
                 key = read(depth + 1)
                 if marker == b"l":
-                    result.append(key)
+                    sequence.append(key)
                 else:
                     if not isinstance(key, bytes) or (
                         previous is not None and key <= previous
@@ -108,9 +109,9 @@ def _decode(data: bytes):
                             "Invalid or duplicate torrent dictionary key."
                         )
                     previous = key
-                    result[key] = read(depth + 1)
+                    mapping[key] = read(depth + 1)
             offset += 1
-            return result
+            return sequence if marker == b"l" else mapping
         offset -= 1
         end = data.find(b":", offset)
         raw = data[offset:end]
@@ -291,7 +292,9 @@ async def _udp_trackers(values: list[str]) -> list[str]:
                 answers = await asyncio.get_running_loop().getaddrinfo(
                     parsed.hostname, port, family=socket.AF_INET, type=socket.SOCK_DGRAM
                 )
-            if not answers or any(address_is_forbidden(item[4][0]) for item in answers):
+            if not answers or any(
+                address_is_forbidden(str(item[4][0])) for item in answers
+            ):
                 raise TorrentError("Torrent trackers must use public IP addresses.")
             address = str(ipaddress.ip_address(answers[0][4][0]))
             pinned = urlunsplit(
@@ -406,6 +409,8 @@ class _Aria2:
             await self.session.close()
 
     async def call(self, method, *params):
+        if self.session is None:
+            raise TorrentError("The torrent service is not running.")
         try:
             async with self.session.post(
                 self.url,

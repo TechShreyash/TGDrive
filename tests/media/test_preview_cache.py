@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import asyncio
+from typing import cast
+from unittest.mock import AsyncMock
 
 import pytest
 
@@ -59,7 +61,9 @@ async def test_disabled_preview_cache_never_retains_in_transport(tmp_path):
         assert state["memory"]["bytes"] == state["disk"]["bytes"] == 0
         assert state["scratch"]["bytes"] == 0
         assert not manager._observed and not manager._jobs
-        assert client.get_messages.await_count == 2  # Warm metadata is never reused.
+        assert (
+            cast(AsyncMock, client.get_messages).await_count == 2
+        )  # Warm metadata is never reused.
         assert all(row.active_leases == 0 for row in await pool.status())
     finally:
         await manager.close()
@@ -86,7 +90,7 @@ async def test_preview_prefix_appears_in_shared_inventory_without_preload(tmp_pa
         assert sum(client.native.requests.values()) == 2
         assert not hasattr(client, "_download_block_cache")
         assert not manager._observed and not manager._jobs
-        assert client.get_messages.await_count == 2
+        assert cast(AsyncMock, client.get_messages).await_count == 2
         assert all(iterator.closed for iterator in client.native.iterators)
     finally:
         await manager.close()

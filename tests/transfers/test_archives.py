@@ -6,6 +6,7 @@ import io
 import stat
 import struct
 from types import SimpleNamespace
+from typing import cast
 from unittest.mock import AsyncMock
 from zipfile import ZIP_DEFLATED, ZIP_LZMA, ZIP_STORED, ZipFile, ZipInfo
 
@@ -13,11 +14,13 @@ import pytest
 
 from tests.support.mongo_fixtures import new_store, register_test_backend
 from tests.transfers.test_multipart_transfers import Account, Ledger, registry_for
+from tgdrive.core.config import Settings
 from tgdrive.storage.demo_files import DemoFilesReadOnly
 from tgdrive.telegram.client_pool import ClientPool
 from tgdrive.transfers import archives
 from tgdrive.transfers.archives import ArchiveError, archive_members, zip_manifest
 from tgdrive.transfers.manager import TransferManager
+from tgdrive.transfers.remote import RemoteClient
 from tgdrive.transfers.staging import staging_usage
 from tgdrive.transfers.tasks import TransferStatus
 from tgdrive.transfers.transfer_locations import locate_transfer
@@ -148,7 +151,7 @@ class MemoryTelegram(Account):
     def __init__(self, ledger):
         super().__init__("archive-test", ledger)
         self.read_started = asyncio.Event()
-        self.read_gate = None
+        self.read_gate: asyncio.Event | None = None
 
     async def stream_media(self, message, *, offset, limit):
         self.read_started.set()
@@ -176,11 +179,11 @@ async def manager_for(tmp_path, *, store=None, ledger=None, registry=None):
         min_free_bytes=0,
     )
     manager = TransferManager(
-        settings=settings,
+        settings=cast(Settings, settings),
         pool=pool,
         store=store or new_store(tmp_path / "drive"),
         registry=registry or registry_for(tmp_path),
-        remote=SimpleNamespace(close=AsyncMock()),
+        remote=cast(RemoteClient, SimpleNamespace(close=AsyncMock())),
     )
     return manager, ledger, client
 

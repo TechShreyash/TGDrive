@@ -116,7 +116,7 @@ def _totals(backend) -> dict[str, int]:
         {}, {"_id": 1, "parent_id": 1, "kind": 1, "size": 1, "trashed": 1}
     ):
         children.setdefault(row["parent_id"], []).append(row)
-    totals = dict.fromkeys(
+    totals: dict[str, int] = dict.fromkeys(
         ("files", "folders", "total_bytes", "trashed_files", "trashed_bytes"), 0
     )
     stack = [(ROOT_ID, False)]

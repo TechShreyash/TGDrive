@@ -1,6 +1,6 @@
 # /// script
 # requires-python = "==3.14.8"
-# dependencies = ["cairosvg>=2.8,<3", "pillow>=12,<13"]
+# dependencies = ["cairosvg==2.9.1", "pillow==13.0.0"]
 # ///
 """Render TGDrive's checked-in SVG masters: uv run --script scripts/brand-assets.py.
 
@@ -20,10 +20,12 @@ RESAMPLE = Image.Resampling.LANCZOS
 
 def render(name: str, width: int, height: int | None = None) -> Image.Image:
     """Supersample curved edges, including the 16px browser-tab icon."""
-    options = {"output_width": width * 4}
-    if height is not None:
-        options["output_height"] = height * 4
-    png = cairosvg.svg2png(url=str(BRAND / name), **options)
+    png = cairosvg.svg2png(
+        url=str(BRAND / name),
+        output_width=width * 4,
+        output_height=height * 4 if height is not None else None,
+    )
+    assert isinstance(png, bytes)
     with Image.open(BytesIO(png)) as source:
         target_height = height or round(source.height / 4)
         return source.convert("RGBA").resize((width, target_height), RESAMPLE)

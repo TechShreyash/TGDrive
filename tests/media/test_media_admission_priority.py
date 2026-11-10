@@ -13,6 +13,7 @@ from tests.media.test_telegram_cache import Native
 from tgdrive.media.media_metadata import get_message
 from tgdrive.media.media_reader import BLOCK, stream_pooled_media
 from tgdrive.media.media_scheduler import (
+    MediaPriority,
     MediaPriorityScope,
     MediaScheduler,
     media_priority,
@@ -81,6 +82,7 @@ async def test_shared_background_fill_inherits_demand_without_overtaking_older_d
             payload[:BLOCK],
             payload[3 * BLOCK :],
         ]
+        assert isinstance(client.native, OrderedNative)
         assert [offset // BLOCK for offset in client.native.order] == [2, 0, 3, 1]
         assert sum(client.native.requests.values()) == 8  # Two RPCs/MiB, no duplicate.
         cache = pool._media_read_cache
@@ -202,7 +204,7 @@ async def test_shared_metadata_validation_inherits_demand_without_duplicate_rpc(
     client = MetadataClient()
     tasks = []
 
-    async def read(message_id, priority="demand"):
+    async def read(message_id, priority: MediaPriority = "demand"):
         token = media_priority.set(priority)
         try:
             return await get_message(client, CHANNEL, message_id)

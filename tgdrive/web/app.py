@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import inspect
 import logging
 import math
 import mimetypes
@@ -329,9 +330,11 @@ def create_app(
     demo_password_hash = (
         settings.demo_admin_password_hash.get_secret_value()
         if settings.demo_admin_password_hash and demo_credential
-        else PasswordHasher().hash(demo_credential.get_secret_value())
-        if demo_credential
-        else None
+        else (
+            PasswordHasher().hash(demo_credential.get_secret_value())
+            if demo_credential
+            else None
+        )
     )
     limiter = LoginLimiter()
     # Argon2 is deliberately expensive. Bound its memory/CPU use and keep it off
@@ -344,9 +347,10 @@ def create_app(
             await _app.state.thumbnail_repair.start()
             await app_runtime.start()
             await _app.state.thumbnail_rebuild.restore()
-            if settings.demo_mode and getattr(app_runtime, "store", None) is not None:
+            demo_store = app_runtime.store if settings.demo_mode else None
+            if demo_store is not None:
                 try:
-                    await asyncio.to_thread(app_runtime.store.ensure_demo_files)
+                    await asyncio.to_thread(demo_store.ensure_demo_files)
                 except BaseException:
                     await app_runtime.stop()
                     raise
@@ -433,7 +437,7 @@ def create_app(
     register_video_progress_routes(app, require_admin=require_admin, get_store=_store)
 
     @app.exception_handler(DatabaseUnavailable)
-    async def database_unavailable(_request: Request, _error: DatabaseUnavailable):
+    async def database_unavailable(_request: Request, _error: Exception):
         return JSONResponse(
             {
                 "detail": "MongoDB is unavailable. Check its connection and retry.",
@@ -585,9 +589,11 @@ def create_app(
         # Authorization happens when the native player requests /file.
         del path, auth
         return FileResponse(
-            WEBSITE_DIR / "dist" / "VideoPlayer.html"
-            if (WEBSITE_DIR / "dist" / "VideoPlayer.html").exists()
-            else WEBSITE_DIR / "public" / "VideoPlayer.html",
+            (
+                WEBSITE_DIR / "dist" / "VideoPlayer.html"
+                if (WEBSITE_DIR / "dist" / "VideoPlayer.html").exists()
+                else WEBSITE_DIR / "public" / "VideoPlayer.html"
+            ),
             headers={"Cache-Control": "no-store"},
         )
 
@@ -605,8 +611,12 @@ def create_app(
         ready = bool(getattr(current_runtime, "ready", False))
         pool_health = getattr(getattr(current_runtime, "pool", None), "health", None)
         if ready and callable(pool_health):
-            health = await pool_health()
-            ready = bool(health.ready)
+            pending_health = pool_health()
+            if inspect.isawaitable(pending_health):
+                health = await pending_health
+                ready = bool(getattr(health, "ready", False))
+            else:
+                ready = False
         return JSONResponse(
             status_code=200 if ready else 503,
             content={"status": "ok" if ready else "not ready"},
@@ -800,7 +810,7 @@ def create_app(
         payload: ItemPathRequest,
         request: Request,
         _admin: Admin,
-    ) -> dict[str, str]:
+    ) -> JSONResponse:
         store = _store(request)
         check_path(store, payload.path, descendants=True)
         manager = _transfers(request)
@@ -904,7 +914,7 @@ def create_app(
                 starts.fail(entry, str(exc) or type(exc).__name__)
             raise
         if entry and entry.record is None:
-            bind_created(record)
+            await bind_created(record)
         return JSONResponse({"status": "ok", "id": record.id})
 
     @app.post("/api/getFileInfoFromUrl")
@@ -1556,7 +1566,8 @@ def create_app(
         _, data = await asyncio.to_thread(authorized_file, request, path, auth)
         pool = _runtime(request).pool
         estimate = getattr(pool, "queue_estimate", None)
-        progress = getattr(pool, "_request_files", {}).get(request_id)
+        requests = getattr(pool, "_request_files", None)
+        progress = requests.get(request_id) if isinstance(requests, dict) else None
         if progress is not None and progress["file"] != (
             settings.storage_channel,
             data["message_id"],
@@ -1570,7 +1581,7 @@ def create_app(
         )
         phase = progress["phase"] if progress is not None else None
         if (
-            queue
+            isinstance(queue, dict)
             and queue.get("queued_operations")
             and not queue.get("active_operations")
             and phase in {"checking_file", "receiving"}
@@ -1582,11 +1593,11 @@ def create_app(
                 "size": data["size"],
                 "phase": phase,
                 "code": progress["code"] if progress is not None else None,
-                "retry_after": max(
-                    0, math.ceil(progress["retry_at"] - time.monotonic())
-                )
-                if progress is not None and progress["retry_at"] is not None
-                else None,
+                "retry_after": (
+                    max(0, math.ceil(progress["retry_at"] - time.monotonic()))
+                    if progress is not None and progress["retry_at"] is not None
+                    else None
+                ),
             },
             headers={"Cache-Control": "no-store"},
         )

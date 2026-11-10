@@ -296,6 +296,7 @@ def _parse_node(data: object) -> _Node:
             child, grandchildren = _parse_one(raw_child)
             if child.id != child_id:
                 raise ValidationError("child map key does not match child id")
+            assert isinstance(folder, _FolderNode)
             folder.children[child_id] = child
             if isinstance(child, _FolderNode):
                 pending.append((child, grandchildren))
@@ -368,6 +369,7 @@ def _path_segments(path: object):
 def _validate_path(path: object) -> str:
     for _ in _path_segments(path):
         pass
+    assert isinstance(path, str)
     return path[:-1] if path != "/" and path.endswith("/") else path
 
 

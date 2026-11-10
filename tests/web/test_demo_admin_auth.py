@@ -12,6 +12,7 @@ from unittest.mock import AsyncMock, Mock
 
 import pytest
 from argon2 import PasswordHasher
+from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from pydantic import ValidationError
 
@@ -84,6 +85,7 @@ def test_same_login_form_grants_only_the_passwords_signed_access(
     with auth_client(tmp_path) as (client, settings, runtime):
         assert sign_in(client, password, demo_admin=True).status_code == 200
         token = client.cookies.get(SESSION_COOKIE)
+        assert isinstance(client.app, FastAPI)
         assert (
             client.app.state.sessions.verify(token).get("demo_admin", False)
             is privileged
@@ -104,6 +106,7 @@ def test_same_login_form_grants_only_the_passwords_signed_access(
         assert saved.status_code == (200 if privileged else 403)
         assert backup.status_code == (200 if privileged else 403)
         assert preference_save.await_count == int(privileged)
+        assert isinstance(runtime.replica, SimpleNamespace)
         assert runtime.replica.recovery_file.call_count == int(privileged)
         assert settings.demo_mode is True
         assert client.post("/api/logout", json={}, headers=ORIGIN).status_code == 200
@@ -123,6 +126,7 @@ def test_legacy_demo_without_second_password_remains_restricted(tmp_path):
         assert sign_in(client, VISITOR).status_code == 200
         assert client.get("/api/config").json()["demo_read_only"] is True
         assert client.get("/api/v1/replica/file").status_code == 403
+        assert isinstance(client.app, FastAPI)
         with pytest.raises(ValueError, match="not configured"):
             client.app.state.sessions.create(demo_admin=True)
 

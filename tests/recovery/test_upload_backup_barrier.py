@@ -3,15 +3,18 @@
 import asyncio
 import hashlib
 from types import SimpleNamespace
+from typing import cast
 from unittest.mock import AsyncMock
 
 import pytest
 
 from tests.support.mongo_fixtures import new_store, register_test_backend, reopen_store
+from tgdrive.core.config import Settings
 from tgdrive.recovery.backup import BackupError
 from tgdrive.storage.mongo import for_directory
 from tgdrive.telegram.client_pool import ClientPool
 from tgdrive.transfers.manager import BackupPending, TransferManager
+from tgdrive.transfers.remote import RemoteClient
 from tgdrive.transfers.tasks import TransferRegistry, TransferStatus
 
 
@@ -22,6 +25,7 @@ def mongo_backend(tmp_path, monkeypatch):
 
 def registry_for(directory):
     backend = for_directory(directory)
+    assert backend is not None
     return TransferRegistry(mongo=backend.db.jobs, mongo_backend=backend)
 
 
@@ -77,17 +81,20 @@ class MediaClient:
 
 def manager_for(tmp_path, pool, callback, *, store=None, registry=None):
     return TransferManager(
-        settings=SimpleNamespace(
-            resolved_cache_dir=tmp_path / "cache",
-            max_concurrent_transfers=1,
-            storage_channel=-100123,
-            bot_upload_limit=2_000_000_000,
-            upload_limit=4_000_000_000,
+        settings=cast(
+            Settings,
+            SimpleNamespace(
+                resolved_cache_dir=tmp_path / "cache",
+                max_concurrent_transfers=1,
+                storage_channel=-100123,
+                bot_upload_limit=2_000_000_000,
+                upload_limit=4_000_000_000,
+            ),
         ),
         pool=pool,
         store=store or new_store(tmp_path / "drive"),
         registry=registry or registry_for(tmp_path),
-        remote=SimpleNamespace(close=AsyncMock()),
+        remote=cast(RemoteClient, SimpleNamespace(close=AsyncMock())),
         ensure_backup=callback,
     )
 
@@ -143,6 +150,7 @@ async def test_checkpoint_wait_releases_upload_slot_and_protects_committed_media
         assert first.exists() and second.exists()
         assert client.deleted == []
         release.set()
+        assert one.task is not None and two.task is not None
         await asyncio.gather(one.task, two.task)
         assert one.status == two.status == TransferStatus.COMPLETED
         assert not first.exists() and not second.exists()
@@ -165,6 +173,7 @@ async def test_backup_error_restarts_without_staged_bytes_or_second_media_send(
     manager = manager_for(tmp_path, pool, failed)
     source = staged_file(tmp_path)
     record = await manager.enqueue_upload(source, "/", "one.bin", source.stat().st_size)
+    assert record.task is not None
     await record.task
     assert record.status == TransferStatus.ERROR
     assert record.phase == "finalizing"
@@ -187,6 +196,7 @@ async def test_backup_error_restarts_without_staged_bytes_or_second_media_send(
         with pytest.raises(BackupPending):
             await recovered.cancel_job(record.id)
         retry = await recovered.retry_job(record.id)
+        assert retry.task is not None
         await retry.task
         assert retry.status == TransferStatus.COMPLETED
         callback.assert_awaited_once_with(required)
@@ -217,6 +227,7 @@ async def test_store_commit_journal_gap_is_detected_before_cancel_or_resend(
 
     monkeypatch.setattr(manager.store, "add_file", commit_then_crash)
     record = await manager.enqueue_upload(source, "/", "one.bin", source.stat().st_size)
+    assert record.task is not None
     await record.task
     assert record.status == TransferStatus.ERROR
     assert not record.context.get("metadata_committed")
@@ -238,6 +249,7 @@ async def test_store_commit_journal_gap_is_detected_before_cancel_or_resend(
     )
     try:
         retry = await recovered.retry_job(record.id)
+        assert retry.task is not None
         await retry.task
         assert retry.status == TransferStatus.COMPLETED
         confirmed.assert_awaited_once_with(required)
@@ -282,6 +294,7 @@ async def test_checkpoint_flood_wait_retries_only_backup_and_persists_deadline(
         journal.close()
         assert len(client.sent) == 1
         release.set()
+        assert record.task is not None
         await record.task
         assert record.status == TransferStatus.COMPLETED
         assert "backup_retry_at" not in record.context
@@ -305,6 +318,7 @@ async def test_insufficient_checkpoint_keeps_staging_and_retryable_phase(
     source = staged_file(tmp_path)
     record = await manager.enqueue_upload(source, "/", "one.bin", source.stat().st_size)
     try:
+        assert record.task is not None
         await record.task
         assert record.status == TransferStatus.ERROR
         assert record.phase == "finalizing"
@@ -313,6 +327,7 @@ async def test_insufficient_checkpoint_keeps_staging_and_retryable_phase(
         assert len(client.sent) == 1
         assert client.deleted == []
         retried = await manager.retry_job(record.id)
+        assert retried.task is not None
         await retried.task
         assert retried.status == TransferStatus.ERROR
         assert retried.phase == "finalizing"
@@ -361,6 +376,7 @@ async def test_shutdown_during_checkpoint_recovers_protection_without_media_rese
     try:
         await recovered.recover()
         resumed = recovered.registry.get(record.id)
+        assert resumed.task is not None
         await resumed.task
         assert resumed.status == TransferStatus.COMPLETED
         confirmed.assert_awaited_once_with(required)

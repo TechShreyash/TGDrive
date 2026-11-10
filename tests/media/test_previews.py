@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from functools import partial
 from types import SimpleNamespace
 from urllib.parse import parse_qs, urlsplit
 
@@ -132,7 +133,8 @@ async def test_binary_text_name_does_not_send_binary_to_text_renderer():
 
 @pytest.mark.asyncio
 async def test_pdf_descriptor_encodes_share_and_bounds_memory_without_fetch():
-    kwargs = dict(
+    preview = partial(
+        describe_preview,
         pool=object(),
         channel_id=-100,
         message_id=7,
@@ -140,7 +142,7 @@ async def test_pdf_descriptor_encodes_share_and_bounds_memory_without_fetch():
         path="/folder/file",
         auth="share&token",
     )
-    result = await describe_preview(size=1024, **kwargs)
+    result = await preview(size=1024)
     assert result["kind"] == "pdf"
     assert parse_qs(urlsplit(result["url"]).query) == {
         "path": ["/folder/file"],
@@ -148,8 +150,8 @@ async def test_pdf_descriptor_encodes_share_and_bounds_memory_without_fetch():
         "preview": ["1"],
     }
     for size in (21 * 1024**2, PDF_PREVIEW_BYTES):
-        assert (await describe_preview(size=size, **kwargs))["kind"] == "pdf"
-    result = await describe_preview(size=PDF_PREVIEW_BYTES + 1, **kwargs)
+        assert (await preview(size=size))["kind"] == "pdf"
+    result = await preview(size=PDF_PREVIEW_BYTES + 1)
     assert result["kind"] == "unsupported"
     assert "url" not in result
 

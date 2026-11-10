@@ -220,14 +220,14 @@ def test_demo_setting_cannot_be_changed_through_the_settings_api(demo_owner):
     ],
 )
 def test_demo_guard_uses_matched_route_under_proxy_root_path(
-    tmp_path, method, path, payload
+    tmp_path, monkeypatch, method, path, payload
 ):
     with owner_client(tmp_path, root_path="/demo") as (client, _, runtime, _settings):
         login(client)
         runtime.replica = SimpleNamespace(
             blocked=False, recovery_file=lambda: tmp_path / "unused-backup.tgdb"
         )
-        runtime.mongo = object()
+        monkeypatch.setattr(runtime, "mongo", object())
         response = client.request(method, path, json=payload, headers=ORIGIN)
         assert response.status_code == 403, response.text
         assert response.json()["code"] == "DEMO_MODE_READ_ONLY"

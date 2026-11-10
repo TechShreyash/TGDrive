@@ -10,11 +10,10 @@ import pytest
 from telethon.errors import FloodWaitError
 
 from tests.support.mongo_fixtures import register_test_backend
+from tests.telegram.test_telegram_clients import FixtureClient, settings
 from tests.telegram.test_telegram_clients import native_transport as native_transport
-from tests.telegram.test_telegram_clients import settings
 from tgdrive.telegram.client_identity import IdentityCache
 from tgdrive.telegram.client_pool import ClientPool
-from tgdrive.telegram.clients import Client
 
 pytestmark = pytest.mark.usefixtures("mongo_backend")
 
@@ -24,9 +23,13 @@ def mongo_backend(tmp_path, monkeypatch):
     return register_test_backend(monkeypatch, settings(tmp_path))
 
 
-def client_for(tmp_path, name="Drive Bot", username="drive_bot"):
+def client_for(
+    tmp_path, name: str | None = "Drive Bot", username: str | None = "drive_bot"
+):
     config = settings(tmp_path)
-    client = Client(name="unused", settings=config, bot_token=config.bot_tokens[0])
+    client = FixtureClient(
+        name="unused", settings=config, bot_token=config.bot_tokens[0]
+    )
     client.native.me.first_name = name
     client.native.me.username = username
     client.native.get_me = AsyncMock(return_value=client.native.me)
@@ -90,7 +93,9 @@ async def test_names_survive_recreation_refresh_and_status_polling_without_extra
         assert second.username == "changed_bot"
         assert second.native.get_me.await_count == 2
         cached = IdentityCache(settings(tmp_path).resolved_data_dir)
-        assert cached.read(second.name)["display_name"] == "Changed नाम"
+        identity = cached.read(second.name)
+        assert identity is not None
+        assert identity["display_name"] == "Changed नाम"
         assert not (
             settings(tmp_path).resolved_data_dir / "client-identities.sqlite3"
         ).exists()

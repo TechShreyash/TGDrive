@@ -78,6 +78,8 @@ def message(identity, channel_id, doc):
 
 
 class Native:
+    session: SQLiteSession
+
     def __init__(self):
         self.connect = AsyncMock()
         self.sign_in = AsyncMock(return_value=SimpleNamespace(id=234567, bot=True))
@@ -134,7 +136,10 @@ class Native:
                 if self.bad_copy:
                     doc.id += 1
             else:
-                doc = document(len(self.body), request.media.attributes[0].file_name)
+                assert isinstance(request.media, types.InputMediaUploadedDocument)
+                filename = request.media.attributes[0]
+                assert isinstance(filename, types.DocumentAttributeFilename)
+                doc = document(len(self.body), filename.file_name)
             self.messages[identity, result] = message(result, identity, doc)
             if self.wrong_destination_peer:
                 self.messages[identity, result].peer_id = types.PeerChannel(999)
@@ -211,10 +216,11 @@ def persistent_clients(monkeypatch):
 
     def create(session_path, *_args, **_kwargs):
         native = Native()
-        native.session = SQLiteSession(session_path)
+        session = SQLiteSession(session_path)
+        native.session = session
 
         async def account():
-            key = native.session.auth_key
+            key = session.auth_key
             if not state.expired and key is not None and key.key is not None:
                 return SimpleNamespace(id=state.account_id, bot=True)
             return None
@@ -222,13 +228,13 @@ def persistent_clients(monkeypatch):
         async def authorize(**_kwargs):
             if state.failure is not None:
                 raise state.failure
-            native.session.auth_key = AuthKey(bytes(range(256)))
-            native.session.save()
+            session.auth_key = AuthKey(bytes(range(256)))
+            session.save()
             return SimpleNamespace(id=state.account_id, bot=True)
 
         native.sign_in = AsyncMock(side_effect=authorize)
         native.get_me = AsyncMock(side_effect=account)
-        native.disconnect = AsyncMock(side_effect=native.session.close)
+        native.disconnect = AsyncMock(side_effect=session.close)
         state.instances.append(native)
         return native
 
@@ -614,7 +620,7 @@ async def test_real_telethon_auth_probe_preserves_floodwait_without_signing_in()
         assert isinstance(request, functions.users.GetUsersRequest)
         return [account]
 
-    native._sender = SimpleNamespace(
+    native._sender = Mock(
         send=Mock(side_effect=lambda request, **_kwargs: respond(request))
     )
     transport = ReplicaTransport(
@@ -671,7 +677,7 @@ async def test_real_telethon_login_replays_auth_once_after_dc_switch(migration):
     def send(request, *, ordered=False):
         return respond(request)
 
-    native._sender = SimpleNamespace(send=Mock(side_effect=send))
+    native._sender = Mock(send=Mock(side_effect=send))
     transport = ReplicaTransport(
         SimpleNamespace(bot_tokens=(PRIMARY,)), TOKEN, client=native
     )
@@ -783,6 +789,7 @@ async def test_private_channel_preflight_rejects_unsafe_states(mode, code):
     elif mode == "group":
         chat.broadcast = False
     elif mode == "permissions":
+        assert chat.admin_rights is not None
         chat.admin_rights.edit_messages = False
     else:
         chat.admin_rights = None
@@ -805,6 +812,7 @@ async def test_copy_existing_premium_document_uses_reference_not_original_bytes(
         r for r in native.requests if isinstance(r, functions.messages.SendMediaRequest)
     ]
     assert len(sent) == 1 and isinstance(sent[0].media, types.InputMediaDocument)
+    assert isinstance(sent[0].media.id, types.InputDocument)
     assert sent[0].media.id.id == native.messages[MAIN, 77].document.id
     assert sent[0].random_id == 123 and sent[0].silent
     assert not any(
@@ -955,7 +963,9 @@ async def test_download_rejects_wrong_or_unbounded_capsules(tmp_path, bad):
     transport, native = await started()
     doc = document(len(native.body), BACKUP_NAME)
     if bad == "name":
-        doc.attributes[0].file_name = "../../etc/passwd"
+        filename = doc.attributes[0]
+        assert isinstance(filename, types.DocumentAttributeFilename)
+        filename.file_name = "../../etc/passwd"
     elif bad == "oversize":
         doc.size = MAX_CAPSULE_BYTES + 1
     elif bad == "truncated":
@@ -1082,6 +1092,7 @@ async def test_channel_auto_delete_prevents_backup_copy_before_publishing():
     async def with_auto_delete(self, request):
         result = await original(self, request)
         if isinstance(request, functions.channels.GetFullChannelRequest):
+            assert isinstance(result, SimpleNamespace)
             result.full_chat.ttl_period = 86400
         return result
 

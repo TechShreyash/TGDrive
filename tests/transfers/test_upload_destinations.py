@@ -6,6 +6,7 @@ import asyncio
 import hashlib
 import threading
 from types import SimpleNamespace
+from typing import cast
 from unittest.mock import AsyncMock
 
 import pytest
@@ -27,6 +28,7 @@ from tgdrive.core.errors import (
 )
 from tgdrive.telegram.client_pool import ClientPool
 from tgdrive.transfers.manager import TransferManager
+from tgdrive.transfers.remote import RemoteClient
 from tgdrive.transfers.tasks import TransferStatus
 from tgdrive.transfers.uploads import UploadError
 
@@ -211,11 +213,12 @@ async def test_queued_restart_follows_uuid_after_destination_move(tmp_path):
         pool=pool,
         store=reopen_store(tmp_path / "drive"),
         registry=registry_for(tmp_path),
-        remote=SimpleNamespace(close=AsyncMock()),
+        remote=cast(RemoteClient, SimpleNamespace(close=AsyncMock())),
     )
     try:
         await recovered.recover()
         current = recovered.registry.get(record.id)
+        assert current.task is not None
         await current.task
         assert current.status == TransferStatus.COMPLETED
         assert current.context["destination"] == expected
@@ -243,6 +246,7 @@ async def test_move_during_remote_send_commits_in_same_current_shared_folder(tmp
         manager.store.move(target, shared)
         expected = manager.store.resolve_id(record.context["destination_id"])
         ledger.release.set()
+        assert record.task is not None
         await record.task
         assert record.status == TransferStatus.COMPLETED
         items = manager.store.list_directory(expected)
@@ -266,6 +270,7 @@ async def test_trashed_destination_during_send_reconciles_and_cleans_own_parts(
         await asyncio.wait_for(ledger.dispatched.wait(), 2)
         manager.store.set_trashed(target, True)
         ledger.release.set()
+        assert record.task is not None
         await record.task
         assert record.status == TransferStatus.CANCELLED
         assert not ledger.messages and not source.exists()
@@ -291,6 +296,7 @@ async def test_delete_worker_matches_moved_destination_uuid_before_cleanup(tmp_p
         deletion = await manager.start_deletion(current)
         await asyncio.wait_for(record.cancel_event.wait(), 2)
         ledger.release.set()
+        assert deletion.task is not None
         await asyncio.wait_for(deletion.task, 2)
         assert record.status == TransferStatus.CANCELLED
         assert deletion.status == TransferStatus.COMPLETED
@@ -335,6 +341,7 @@ async def test_catalog_outage_does_not_turn_destination_validation_into_cancella
         await asyncio.wait_for(ledger.dispatched.wait(), 2)
         monkeypatch.setattr(manager.store, "upload_destination", unavailable)
         ledger.release.set()
+        assert record.task is not None
         await record.task
         assert record.status == TransferStatus.ERROR
         assert not record.context.get("cancel_requested")
@@ -342,6 +349,7 @@ async def test_catalog_outage_does_not_turn_destination_validation_into_cancella
         sent = len(ledger.requests)
         monkeypatch.setattr(manager.store, "upload_destination", original)
         retried = await manager.retry_job(record.id)
+        assert retried.task is not None
         await retried.task
         assert retried.status == TransferStatus.COMPLETED
         assert len(ledger.requests) == sent

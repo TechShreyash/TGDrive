@@ -33,9 +33,9 @@ def sample(
     *,
     cpu=20,
     memory=1024,
-    incoming=100,
-    outgoing=50,
-    interface="eth0",
+    incoming: int | None = 100,
+    outgoing: int | None = 50,
+    interface: str | None = "eth0",
     scope="cgroup",
     limit=8192,
 ):
@@ -289,6 +289,14 @@ def test_history_uses_mongodb_without_creating_a_local_database(
     assert mongo_backend.db.telemetry_minutes.count_documents({}) == 0
 
 
+def test_compaction_initializes_history_before_reading(tmp_path, mongo_backend):
+    storage = HistoryStorage(tmp_path)
+    storage.compact(36000)
+    assert storage.ready
+    assert storage.initialize() is mongo_backend
+    assert mongo_backend.db.telemetry_minutes.count_documents({}) == 0
+
+
 def test_history_api_requires_owner_bounds_results_and_hides_storage_errors(
     tmp_path, monkeypatch, mongo_backend
 ):
@@ -383,6 +391,7 @@ def test_compaction_rollback_cannot_count_minutes_twice(tmp_path, monkeypatch):
         history.observe(sample(at), counters())
     history.flush(force=True, now=36100)
     before = history.storage.read(36000, 39600)
+    assert history.storage.mongo is not None
     collection = history.storage.mongo.db.telemetry_minutes
     original = collection.delete_many
 
@@ -414,6 +423,7 @@ def test_flush_retry_does_not_resurrect_a_previously_compacted_minute(
     history.flush(force=True, now=36091)
     for at in (39600, 39630, 39660, 39690):
         history.observe(sample(at), counters())
+    assert history.storage.mongo is not None
     collection = history.storage.mongo.db.telemetry_minutes
     original = collection.delete_many
     merged_hours = 0
@@ -430,7 +440,8 @@ def test_flush_retry_does_not_resurrect_a_previously_compacted_minute(
     now = 39691 + MINUTE_DETAIL_SECONDS + 7200
     with pytest.raises(OSError, match="Second hour"):
         history.flush(force=True, now=now)
-    assert collection.find_one({"_id": 36000})["hour"] is True
+    row = collection.find_one({"_id": 36000})
+    assert row is not None and row["hour"] is True
     monkeypatch.setattr(collection, "delete_many", original)
     history.flush(force=True, now=now + 60)
     rows = history.storage.read(36000, 43200)
@@ -447,6 +458,7 @@ def test_telemetry_checkpoint_refuses_lost_ownership_before_writing(
     history.observe(sample(960), counters())
     history.observe(sample(963), counters(1))
     backend = history.storage.mongo
+    assert backend is not None
 
     def lost_owner(_session):
         raise DatabaseUnavailable("Synthetic ownership loss")

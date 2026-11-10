@@ -19,9 +19,10 @@ import secrets
 import shutil
 import stat
 import time
+from collections.abc import Awaitable, Callable
 from contextlib import asynccontextmanager, suppress
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 from telethon import TelegramClient, functions, types, utils
 from telethon.errors import NetworkMigrateError, PhoneMigrateError, UserMigrateError
@@ -105,7 +106,7 @@ def _provider_error(error: Exception) -> ReplicaTransportError:
         )
     seconds = getattr(error, "seconds", None)
     if (
-        type(seconds) in (int, float)
+        (type(seconds) is int or type(seconds) is float)
         and math.isfinite(seconds)
         and (seconds > 0 or name in {"FloodWaitError", "SlowModeWaitError"})
     ):
@@ -216,7 +217,7 @@ class ReplicaTransport:
     def __init__(self, settings, bot_token: str, *, client=None, pacer=None) -> None:
         self._settings = settings
         self._token = bot_token.strip() if isinstance(bot_token, str) else ""
-        self._client = client
+        self._client: TelegramClient | None = client
         self._started = False
         self._lock = asyncio.Lock()
         self._pacer = pacer or ReplicaRequestPacer()
@@ -292,9 +293,10 @@ class ReplicaTransport:
 
     async def _peer(self, channel):
         # Cache only the input peer, never channel privacy, permissions or TTL.
+        client = self._ready()
         if channel not in self._peers:
             self._peers[channel] = await self._request(
-                "resolve_peer", self._client.get_input_entity, channel
+                "resolve_peer", client.get_input_entity, channel
             )
         return self._peers[channel]
 
@@ -343,12 +345,13 @@ class ReplicaTransport:
                     "the session file and check its storage before retrying.",
                     "REPLICA_SESSION",
                 ) from None
-            self._client.parse_mode = None
+            self._client.parse_mode = ""
         try:
             async with self._guard(30):
                 if self._session_file is not None:
                     self._persistent_session(identity)
                 await self._client.connect()
+                account = None
                 for attempt in range(2):
                     try:
                         # Telethon's is_user_authorized() catches every RPCError,
@@ -389,13 +392,14 @@ class ReplicaTransport:
         if self._client is not None:
             with suppress(Exception):
                 async with asyncio.timeout(10):
-                    await self._client.disconnect()
+                    await cast(Awaitable[None], self._client.disconnect())
 
-    def _ready(self) -> None:
-        if not self._started:
+    def _ready(self) -> TelegramClient:
+        if not self._started or self._client is None:
             raise ReplicaTransportError(
                 "Connect the backup bot before continuing.", "REPLICA_NOT_CONNECTED"
             )
+        return self._client
 
     async def inspect(self, channel: int, *, writable: bool = True) -> dict:
         self._ready()
@@ -410,10 +414,12 @@ class ReplicaTransport:
                     "private channels, then retry.",
                     "REPLICA_ACCESS",
                 ) from None
+            input_channel = utils.get_input_channel(peer)
+            assert input_channel is not None
             result = await self._request(
                 "channels.getFullChannel",
                 self._client,
-                functions.channels.GetFullChannelRequest(utils.get_input_channel(peer)),
+                functions.channels.GetFullChannelRequest(input_channel),
             )
             chat = next(
                 (row for row in result.chats if utils.get_peer_id(row) == channel), None
@@ -479,10 +485,12 @@ class ReplicaTransport:
         async with self._lock, self._guard(25):
             await self.inspect(channel, writable=False)
             peer = await self._peer(channel)
+            input_channel = utils.get_input_channel(peer)
+            assert input_channel is not None
             result = await self._request(
                 "channels.getFullChannel",
                 self._client,
-                functions.channels.GetFullChannelRequest(utils.get_input_channel(peer)),
+                functions.channels.GetFullChannelRequest(input_channel),
             )
             identity = getattr(result.full_chat, "pinned_msg_id", None)
             return None if identity is None else _message(identity)
@@ -517,8 +525,9 @@ class ReplicaTransport:
         return message, document
 
     async def _get(self, channel: int, message_id: int):
+        client = self._ready()
         message = await self._request(
-            "channels.getMessages", self._client.get_messages, channel, ids=message_id
+            "channels.getMessages", client.get_messages, channel, ids=message_id
         )
         return self._document(channel, message_id, message)
 
@@ -643,7 +652,7 @@ class ReplicaTransport:
 
     async def verify_many(self, channel: int, documents: list[tuple[int, int]]) -> None:
         """Check a bounded group of journaled parts with one fresh channel read."""
-        self._ready()
+        client = self._ready()
         channel = _channel(channel)
         if not 1 <= len(documents) <= MAX_VERIFY_BATCH:
             raise ReplicaTransportError("Invalid verification batch.", "REPLICA_INPUT")
@@ -660,7 +669,7 @@ class ReplicaTransport:
             await self.inspect(channel, writable=False)
             messages = await self._request(
                 "channels.getMessages",
-                self._client.get_messages,
+                client.get_messages,
                 channel,
                 ids=list(expected),
             )
@@ -719,9 +728,10 @@ class ReplicaTransport:
         return size
 
     async def _read_to(self, document, target, size: int) -> str:
+        client = self._ready()
         digest = hashlib.sha256()
         count = 0
-        iterator = self._client.iter_download(
+        iterator = client.iter_download(
             document, request_size=_BLOCK, chunk_size=_BLOCK, file_size=size
         )
         try:
@@ -754,8 +764,11 @@ class ReplicaTransport:
 
                     await _worker(write_block)
         finally:
-            if callable(getattr(iterator, "aclose", None)):
-                await iterator.aclose()
+            close: Callable[[], Awaitable[None]] | None = getattr(
+                iterator, "aclose", None
+            )
+            if callable(close):
+                await close()
         if count != size:
             raise ReplicaTransportError(
                 "Telegram returned an incomplete recovery archive. Retry the "
@@ -775,7 +788,7 @@ class ReplicaTransport:
         pin: bool,
         filename: str,
     ) -> int:
-        self._ready()
+        client = self._ready()
         channel, random_id, path = _channel(channel), _random(random_id), Path(path)
         if not isinstance(caption, str) or len(caption) > 1024:
             raise ReplicaTransportError("Invalid checkpoint caption.", "REPLICA_INPUT")
@@ -794,7 +807,7 @@ class ReplicaTransport:
                 source.seek(0)
                 uploaded = await self._request(
                     "upload_recovery_bundle",
-                    self._client.upload_file,
+                    client.upload_file,
                     source,
                     file_name=filename,
                     file_size=size,
@@ -856,12 +869,12 @@ class ReplicaTransport:
             await self.inspect(channel, writable=False)
             if message_id is None:
                 peer = await self._peer(channel)
+                input_channel = utils.get_input_channel(peer)
+                assert input_channel is not None
                 full = await self._request(
                     "channels.getFullChannel",
                     self._client,
-                    functions.channels.GetFullChannelRequest(
-                        utils.get_input_channel(peer)
-                    ),
+                    functions.channels.GetFullChannelRequest(input_channel),
                 )
                 message_id = getattr(full.full_chat, "pinned_msg_id", None)
                 if message_id is None:

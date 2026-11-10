@@ -69,9 +69,9 @@ async def test_one_bot_serves_distinct_anonymous_files_and_drops_cancelled_waite
     calls, tasks = [], []
     active = peak = 0
 
-    async def remote(source, *, offset, limit, **_kwargs):
+    async def remote(message, *, offset, limit, **_kwargs):
         nonlocal active, peak
-        document = source.native.document.id
+        document = message.native.document.id
         calls.append((document, offset))
         active += 1
         peak = max(peak, active)

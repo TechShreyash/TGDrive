@@ -296,6 +296,7 @@ def test_container_keys_and_owner_survive_move_without_local_volume(
     monkeypatch.setenv("DATA_DIR", str(tmp_path / "second-server"))
     reopened = Settings(_env_file=None)
     assert reopened.session_secret == first.session_secret
+    assert reopened.admin_password_hash is not None
     assert PasswordHasher().verify(
         reopened.admin_password_hash.get_secret_value(), fixture["ADMIN_PASSWORD"]
     )
@@ -471,7 +472,8 @@ async def test_jobs_sessions_names_and_connection_settings_use_mongodb(
     cache = IdentityCache(tmp_path)
     cache.write("bot-123", {"display_name": "Example", "username": "example_bot"})
     cache.defer("bot-123", 12345.0)
-    assert cache.read("bot-123")["display_name"] == "Example"
+    cached = cache.read("bot-123")
+    assert cached is not None and cached["display_name"] == "Example"
     assert cache.retry_at("bot-123") == 12345.0
     document = ManagedDocument(
         revision=1,
@@ -487,7 +489,8 @@ async def test_jobs_sessions_names_and_connection_settings_use_mongodb(
         ],
     )
     save_document(tmp_path, document, 0)
-    assert read_document(tmp_path).revision == 1
+    saved = read_document(tmp_path)
+    assert saved is not None and saved.revision == 1
     assert not list(tmp_path.glob("*.sqlite3"))
     assert not (tmp_path / "telegram-settings.json").exists()
 

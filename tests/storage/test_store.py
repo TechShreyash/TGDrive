@@ -4,10 +4,16 @@ import hashlib
 import json
 import re
 from datetime import UTC, datetime, timedelta
+from typing import cast
 
 import pytest
 
-from tests.support.mongo_fixtures import new_store, reopen_store, store_from_payload
+from tests.support.mongo_fixtures import (
+    FakeMongoBackend,
+    new_store,
+    reopen_store,
+    store_from_payload,
+)
 from tgdrive.core.errors import (
     CorruptStoreError,
     DuplicateNameError,
@@ -322,6 +328,7 @@ def test_move_updates_ancestry_without_changing_ids_and_rejects_cycles() -> None
     file = store.add_file(_full_path(nested), "document.txt", 10, 7)
     token = store.create_share(_full_path(nested))
     moved = store.move(_full_path(nested), _full_path(target))
+    assert moved is not None
     assert moved["id"] == nested["id"]
     new_path = store.resolve_id(file["id"])
     assert new_path == _full_path(moved) + "/" + file["id"]
@@ -342,6 +349,7 @@ def test_move_conflicts_skip_or_keep_both_preserving_extension() -> None:
     assert store.move(_full_path(file), _full_path(target), conflict="skip") is None
     assert store.revision == revision
     moved = store.move(_full_path(file), _full_path(target))
+    assert moved is not None
     assert moved["name"] == "résumé (1).txt"
     assert moved["id"] == file["id"]
 
@@ -429,7 +437,8 @@ def test_database_load_rejects_inconsistent_indexes_and_overlapping_deletions(
     database = tmp_path / "index"
     store = new_store(database)
     folder = store.create_folder("/", "Folder")
-    for row in store.backend.db.nodes.rows:
+    backend = cast(FakeMongoBackend, store.backend)
+    for row in backend.db.nodes.rows:
         if row["_id"] == folder["id"]:
             row["name_key"] = "wrong"
     # Startup reads no full catalog; every backup export validates it instead.

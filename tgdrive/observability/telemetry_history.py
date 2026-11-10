@@ -11,6 +11,10 @@ import math
 import threading
 import time
 from pathlib import Path
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from tgdrive.storage.mongo import MongoBackend
 
 RETENTION_SECONDS = 31 * 86400
 # Minute rows older than this are merged into hourly rows (about 44,600 rows
@@ -65,12 +69,13 @@ class HistoryStorage:
 
     def __init__(self, directory: Path):
         self.directory = directory
-        self.mongo = None
+        self.mongo: MongoBackend | None = None
         self.ready = False
 
-    def initialize(self):
+    def initialize(self) -> MongoBackend:
         if self.ready:
-            return
+            assert self.mongo is not None
+            return self.mongo
         from tgdrive.storage.mongo import DatabaseUnavailable, for_directory
 
         self.mongo = for_directory(self.directory)
@@ -78,39 +83,41 @@ class HistoryStorage:
             raise DatabaseUnavailable("MongoDB is required for telemetry history.")
         self.mongo.db.telemetry_minutes.create_index("at")
         self.ready = True
+        return self.mongo
 
     def load(self, minute):
-        self.initialize()
-        state = self.mongo.db.telemetry_state.find_one({"_id": "lifetime"})
-        current = self.mongo.db.telemetry_minutes.find_one({"_id": minute})
+        mongo = self.initialize()
+        state = mongo.db.telemetry_state.find_one({"_id": "lifetime"})
+        current = mongo.db.telemetry_minutes.find_one({"_id": minute})
         return state, current
 
     def write(self, rows, state, cutoff):
-        self.initialize()
+        mongo = self.initialize()
         # Absolute replacements make a retry idempotent, including an unknown
         # write outcome. The lifetime checkpoint is never incremented twice.
         from pymongo import ReplaceOne
 
         def checkpoint(session):
-            self.mongo.fence(session)
+            mongo.fence(session)
             if rows:
-                self.mongo.db.telemetry_minutes.bulk_write(
+                mongo.db.telemetry_minutes.bulk_write(
                     [ReplaceOne({"_id": r["at"]}, r, upsert=True) for r in rows],
                     ordered=False,
                     session=session,
                 )
-            self.mongo.db.telemetry_state.replace_one(
+            mongo.db.telemetry_state.replace_one(
                 {"_id": "lifetime"}, state, upsert=True, session=session
             )
-            self.mongo.db.telemetry_minutes.delete_many(
+            mongo.db.telemetry_minutes.delete_many(
                 {"at": {"$lt": cutoff}}, session=session
             )
 
-        self.mongo.transaction(checkpoint)
+        mongo.transaction(checkpoint)
 
     def compact(self, now):
         """Merge each finished hour older than the minute window into one row."""
-        collection = self.mongo.db.telemetry_minutes
+        mongo = self.initialize()
+        collection = mongo.db.telemetry_minutes
         boundary = math.floor((now - MINUTE_DETAIL_SECONDS) / 3600) * 3600
         # Bound catch-up work after downtime; every transaction holds one hour.
         for _ in range(24):
@@ -122,7 +129,7 @@ class HistoryStorage:
             hour = math.floor(first["at"] / 3600) * 3600
 
             def merge_hour(session, hour=hour):
-                self.mongo.fence(session)
+                mongo.fence(session)
                 query = {
                     "at": {"$gte": hour, "$lt": hour + 3600},
                     "hour": {"$ne": True},
@@ -146,12 +153,12 @@ class HistoryStorage:
                     session=session,
                 )
 
-            self.mongo.transaction(merge_hour)
+            mongo.transaction(merge_hour)
 
     def read(self, start, end):
-        self.initialize()
+        mongo = self.initialize()
         return list(
-            self.mongo.db.telemetry_minutes.find(
+            mongo.db.telemetry_minutes.find(
                 # An hourly row can start before ``start`` and still overlap it.
                 {
                     "at": {"$gte": math.floor(start / 3600) * 3600, "$lt": end},
@@ -163,8 +170,8 @@ class HistoryStorage:
         )
 
     def earliest(self):
-        self.initialize()
-        row = self.mongo.db.telemetry_minutes.find_one({}, sort=[("at", 1)])
+        mongo = self.initialize()
+        row = mongo.db.telemetry_minutes.find_one({}, sort=[("at", 1)])
         return row["first"] if row else None
 
 

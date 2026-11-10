@@ -7,6 +7,7 @@ import hashlib
 import logging
 import threading
 import weakref
+from collections.abc import Awaitable, Callable
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
@@ -19,7 +20,7 @@ from pymongo.errors import ConnectionFailure
 import tgdrive.transfers.uploads as module
 from tests.support.mongo_fixtures import new_store, register_test_backend
 from tgdrive.storage.mongo import for_directory
-from tgdrive.transfers.tasks import TransferRegistry, TransferStatus
+from tgdrive.transfers.tasks import TransferRecord, TransferRegistry, TransferStatus
 from tgdrive.transfers.uploads import CHUNK_SIZE, ResumableUploads, UploadError
 
 pytestmark = pytest.mark.usefixtures("mongo_backend")
@@ -31,10 +32,14 @@ def mongo_backend(tmp_path, monkeypatch):
 
 
 class Manager:
+    uploads: ResumableUploads
+    cancel_job: Callable[[str], Awaitable[TransferRecord]]
+
     def __init__(self, tmp_path: Path, *, backend=None):
         self.store = new_store()
         if backend is None:
             backend = for_directory(tmp_path / "data")
+        assert backend is not None
         self.registry = TransferRegistry(mongo=backend.db.jobs, mongo_backend=backend)
         self.enqueued = 0
 
@@ -205,7 +210,7 @@ async def test_idle_receipt_locks_are_released_after_failed_lookups(tmp_path):
         with pytest.raises(UploadError) as missing:
             await uploads.cancel(f"{index:032x}")
         assert missing.value.status == 404
-    del missing
+        del missing
     gc.collect()
     assert not uploads.locks
 

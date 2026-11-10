@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import threading
 from types import SimpleNamespace
-from typing import Any
+from typing import Any, cast
 
 import pytest
 from fastapi import Request
@@ -702,7 +702,9 @@ async def test_devices_share_owner_access_but_keep_independent_sessions(
 
             assert (await devices[0].post("/api/logout")).status_code == 200
             assert devices[0].cookies.get(SESSION_COOKIE) is None
-            devices[0].cookies.set(SESSION_COOKIE, original_tokens[0])
+            revoked_token = original_tokens[0]
+            assert revoked_token is not None
+            devices[0].cookies.set(SESSION_COOKIE, revoked_token)
             assert (await devices[0].get("/api/v1/nodes")).status_code == 401
             assert (
                 await devices[0].post(
@@ -774,6 +776,7 @@ def test_logout_only_writes_for_active_owner_sessions(
     assert response.json() == {"status": "ok"}
     assert "Max-Age=0" in response.headers["set-cookie"]
     if cookie_state == "valid":
+        assert token is not None
         revoke.assert_called_once_with(token)
         backend.write.assert_called_once_with(
             collection,
@@ -850,7 +853,7 @@ def test_mongodb_outage_refuses_app_auth_without_leaking_provider_error(tmp_path
     )
     backend = SimpleNamespace(db=SimpleNamespace(sessions=sessions), write=Mock())
     runtime = FakeRuntime(store)
-    runtime.mongo = backend
+    runtime.mongo = cast(FakeMongoBackend, backend)
     try:
         with pytest.raises(
             DatabaseUnavailable, match="Restore database access, then restart TGDrive"
@@ -914,6 +917,7 @@ def test_restarts_preserve_sessions_but_password_changes_revoke_them(tmp_path, h
     with TestClient(app(settings), base_url="https://testserver") as client:
         login(client)
         token = client.cookies.get("tgdrive_session")
+        assert token is not None
     with TestClient(app(settings), base_url="https://testserver") as client:
         client.cookies.set("tgdrive_session", token)
         assert client.get("/api/v1/session").json()["authenticated"] is True
@@ -1283,3 +1287,54 @@ def test_expired_shares_listed_and_legacy_links_not_rotated(app_client, monkeypa
     assert len(client.get("/api/v1/shares").json()["shares"]) == 1
     assert client.post("/api/v1/shares/link", json={"path": path}).status_code == 410
     assert not store.authorize_file(path, token)
+
+
+@pytest.mark.parametrize("cancel_before_bind", [False, True])
+def test_upload_fallback_awaits_binding_and_pending_cancellation(
+    app_client, monkeypatch, cancel_before_bind
+):
+    client, _store, runtime, _settings = app_client
+    login(client)
+    request_id = "adapter-fallback-request"
+    starts = client.app.state.transfer_starts
+
+    async def adapter_without_creation_callback(upload, _destination, **_kwargs):
+        record = await runtime.transfers.registry.create("uploading", total=3)
+        await upload.close()
+        if cancel_before_bind:
+            starts.cancel(request_id)
+        return record
+
+    monkeypatch.setattr(
+        runtime.transfers, "receive_browser_upload", adapter_without_creation_callback
+    )
+    response = client.post(
+        "/api/upload",
+        data={"path": "/", "client_request_id": request_id},
+        files={"file": ("hello.txt", b"abc")},
+    )
+    assert response.status_code == 200, response.text
+    entry = starts.get(request_id)
+    assert entry.record is runtime.transfers.registry.get(response.json()["id"])
+    lookup = client.post(
+        "/api/getTransferByRequest", json={"client_request_id": request_id}
+    )
+    assert lookup.status_code == 200
+    assert lookup.json()["data"]["id"] == response.json()["id"]
+    assert (lookup.json()["data"]["status"] == "cancelled") is cancel_before_bind
+    assert len(runtime.transfers.registry._records) == 1
+
+
+@pytest.mark.parametrize("health", [lambda: None, lambda: SimpleNamespace(ready=True)])
+def test_readiness_rejects_non_async_pool_health(
+    app_client: tuple[Any, ...], health: Any
+) -> None:
+    client, _, runtime, _ = app_client
+    original = runtime.pool
+    runtime.pool = SimpleNamespace(health=health)
+    try:
+        response = client.get("/health/ready")
+    finally:
+        runtime.pool = original
+    assert response.status_code == 503
+    assert response.json() == {"status": "not ready"}

@@ -178,12 +178,9 @@ def test_public_demo_cannot_read_or_write_owner_progress(tmp_path, password, all
         assert read.status_code == begin.status_code == (200 if allowed else 403)
         if not allowed:
             assert read.json()["code"] == "VIDEO_PROGRESS_OWNER_ONLY"
-            assert (
-                runtime.store.db.nodes.find_one({"_id": identity}).get(
-                    "video_progress_session"
-                )
-                is None
-            )
+            node = runtime.store.db.nodes.find_one({"_id": identity})
+            assert node is not None
+            assert node.get("video_progress_session") is None
 
 
 @pytest.mark.asyncio
@@ -216,7 +213,9 @@ async def test_cancelled_progress_commit_is_drained_before_return(
         release.set()
         with pytest.raises(asyncio.CancelledError):
             await task
-        assert store.video_progress(identity)["position_seconds"] == 20
+        progress = store.video_progress(identity)
+        assert progress is not None
+        assert progress["position_seconds"] == 20
     finally:
         release.set()
         await asyncio.gather(task, return_exceptions=True)

@@ -1,6 +1,7 @@
 """Atomic metadata batches roll back names, ancestry, shares and revisions together."""
 
 import copy
+from typing import cast
 
 import pytest
 
@@ -11,6 +12,7 @@ from tgdrive.core.errors import (
     RootMutationError,
     TrashedItemError,
 )
+from tgdrive.storage.mongo import MongoBackend
 from tgdrive.storage.mongo_store import MongoStore
 
 
@@ -88,7 +90,7 @@ def test_deletion_preflight_never_mutates_and_accepts_pending_same_root_retry():
 
 def test_pending_deletions_hide_from_trash_across_restart_and_reappear_on_failure():
     mongo = FakeMongoBackend()
-    store = MongoStore.create(mongo)
+    store = MongoStore.create(cast(MongoBackend, mongo))
     try:
         node = store.create_folder("/", "Removal")
         path = "/" + node["id"]
@@ -104,7 +106,7 @@ def test_pending_deletions_hide_from_trash_across_restart_and_reappear_on_failur
         assert store.list_trash("removal") == {}
         assert store.get_directory(path, include_trashed=True)["name"] == "Removal"
         store.close()
-        store = MongoStore(mongo)
+        store = MongoStore(cast(MongoBackend, mongo))
         assert set(store.list_trash()) == {other["id"]}
 
         store.fail_deletion(intent["id"], "Backup unavailable")
@@ -148,7 +150,7 @@ def test_batch_failure_rolls_back_earlier_items_and_share_access(action):
 def test_mongo_bulk_catalog_copies_do_not_grow_with_selection(
     monkeypatch, count, action
 ):
-    store = MongoStore.create(FakeMongoBackend())
+    store = MongoStore.create(cast(MongoBackend, FakeMongoBackend()))
     try:
         paths = [
             "/" + store.create_folder("/", f"Item {index}")["id"]
@@ -178,7 +180,10 @@ def test_mongo_bulk_catalog_copies_do_not_grow_with_selection(
         assert len(catalog_copies) <= 2
         assert len(results) == count
         assert store.revision == before_revision + count
-        assert {row["id"] for row in results} == {path[1:] for path in paths}
+        assert all(row is not None for row in results)
+        assert {row["id"] for row in results if row is not None} == {
+            path[1:] for path in paths
+        }
         if action == "move":
             assert set(store.list_directory(destination)) == {
                 path[1:] for path in paths

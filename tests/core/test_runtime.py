@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import asyncio
 import shutil
+from collections.abc import Awaitable, Callable
 from pathlib import Path
 from types import SimpleNamespace
+from typing import cast
 from unittest.mock import AsyncMock, MagicMock, Mock
 
 import pytest
@@ -12,8 +14,11 @@ import tgdrive.core.runtime as runtime_module
 from tests.support.mongo_fixtures import Collection, new_store
 from tgdrive.core.config import Settings
 from tgdrive.core.runtime import Runtime
+from tgdrive.recovery.mongo_backup import MongoProtection
 from tgdrive.storage.mongo import DatabaseUnavailable
 from tgdrive.storage.mongo_store import MongoStore
+from tgdrive.telegram.client_pool import ClientPool
+from tgdrive.transfers.remote import RemoteClient
 
 
 def settings(tmp_path: Path, **overrides: object) -> Settings:
@@ -60,6 +65,9 @@ def mongo_backend(monkeypatch):
 
 
 class FakePool:
+    pace_send: Callable[[int], Awaitable[None]]
+    defer_channel: Callable[[float], Awaitable[None]]
+
     def __init__(self, *, fail_start: bool = False) -> None:
         self.fail_start = fail_start
         self.started = False
@@ -155,9 +163,11 @@ async def test_startup_tunes_restored_staging_before_transfer_or_bot_admission(
             },
         }
     )
-    runtime = Runtime(config, pool=FakePool())
-    runtime.backup = FakeBackup(new_store(tmp_path / "drive.json"))
-    runtime.remote = FakeRemote()
+    runtime = Runtime(config, pool=cast(ClientPool, FakePool()))
+    runtime.backup = cast(
+        MongoProtection, FakeBackup(new_store(tmp_path / "drive.json"))
+    )
+    runtime.remote = cast(RemoteClient, FakeRemote())
     admissions = []
 
     def measure(path, media_path):
@@ -213,9 +223,9 @@ async def test_failed_receipt_restore_preserves_error_and_closes_started_resourc
     store.close = Mock(wraps=store.close)
     pool = FakePool()
     remote = FakeRemote()
-    runtime = Runtime(settings(tmp_path), pool=pool)
-    runtime.backup = FakeBackup(store)
-    runtime.remote = remote
+    runtime = Runtime(settings(tmp_path), pool=cast(ClientPool, pool))
+    runtime.backup = cast(MongoProtection, FakeBackup(store))
+    runtime.remote = cast(RemoteClient, remote)
 
     def fail(*_):
         raise RuntimeError("receipt catalog unavailable")
@@ -235,11 +245,11 @@ async def test_runtime_starts_once_and_stops_components(
 ) -> None:
     store = new_store(tmp_path / "drive.json")
     pool = FakePool()
-    runtime = Runtime(settings(tmp_path), pool=pool)
+    runtime = Runtime(settings(tmp_path), pool=cast(ClientPool, pool))
     backup = FakeBackup(store)
     remote = FakeRemote()
-    runtime.backup = backup
-    runtime.remote = remote
+    runtime.backup = cast(MongoProtection, backup)
+    runtime.remote = cast(RemoteClient, remote)
     monkeypatch.setattr(runtime_module, "build_bot_mode_client", lambda _settings: None)
 
     await runtime.start()
@@ -273,10 +283,10 @@ async def test_runtime_persists_recovery_key_before_workers_without_blocking_bro
 
     store = new_store(tmp_path / "drive.json")
     pool = FakePool()
-    runtime = Runtime(settings(tmp_path), pool=pool)
+    runtime = Runtime(settings(tmp_path), pool=cast(ClientPool, pool))
     backup = FakeBackup(store)
-    runtime.backup = backup
-    runtime.remote = FakeRemote()
+    runtime.backup = cast(MongoProtection, backup)
+    runtime.remote = cast(RemoteClient, FakeRemote())
     caller = threading.get_ident()
     calls = []
 
@@ -297,6 +307,7 @@ async def test_runtime_persists_recovery_key_before_workers_without_blocking_bro
         await runtime.start()
         assert calls == [True]
         assert runtime.ready and backup.started and pool.started
+        assert runtime.store is not None
         assert runtime.store.list_directory("/") == {}
         if conflict:
             assert runtime.replica.status()["error"]["code"] == "RECOVERY_KEY_CONFLICT"
@@ -310,10 +321,10 @@ async def test_telegram_outage_keeps_local_metadata_available(tmp_path: Path) ->
     config = settings(tmp_path)
     config.resolved_data_dir.mkdir(parents=True)
     store = new_store(config.resolved_data_dir / "drive")
-    runtime = Runtime(config, pool=pool)
-    runtime.backup = FakeBackup(store)
+    runtime = Runtime(config, pool=cast(ClientPool, pool))
+    runtime.backup = cast(MongoProtection, FakeBackup(store))
     remote = FakeRemote()
-    runtime.remote = remote
+    runtime.remote = cast(RemoteClient, remote)
     await runtime.start()
     assert runtime.ready
     assert runtime.store is not None
@@ -328,12 +339,14 @@ async def test_telegram_outage_keeps_local_metadata_available(tmp_path: Path) ->
 async def test_mongodb_failure_rejects_startup_even_with_recovery_state(
     tmp_path, mongo_backend, failure, caplog
 ):
+    from tgdrive.replication.replica_activation import ActivationError
+
     getattr(mongo_backend, failure).side_effect = DatabaseUnavailable(
         "Synthetic MongoDB failure"
     )
     pool = FakePool()
-    runtime = Runtime(settings(tmp_path), pool=pool)
-    runtime._activation_unavailable = True
+    runtime = Runtime(settings(tmp_path), pool=cast(ClientPool, pool))
+    runtime._activation_unavailable = ActivationError("Pending recovery activation")
     restore = AsyncMock()
     runtime.backup = Mock(restore=restore)
 
@@ -367,8 +380,8 @@ async def test_activation_resource_error_survives_web_setup_and_recovery_startup
         record.truncate(64 * 1024**2 + 1)
     path.chmod(0o600)
     pool = FakePool()
-    runtime = Runtime(config, pool=pool)
-    runtime.remote = FakeRemote()
+    runtime = Runtime(config, pool=cast(ClientPool, pool))
+    runtime.remote = cast(RemoteClient, FakeRemote())
     caller, failures = threading.get_ident(), []
     original = ChannelReplica._record_failure
 
@@ -442,12 +455,13 @@ async def test_oversize_legacy_journal_stops_startup_without_redecoding_or_erasu
     initialize = Mock(side_effect=AssertionError("Must preserve pending recovery"))
     monkeypatch.setattr("tgdrive.storage.mongo.initialize_if_empty", initialize)
     monkeypatch.setattr(ChannelReplica, "start", lambda _self: None)
-    runtime = Runtime(config, pool=FakePool())
-    runtime.remote = FakeRemote()
+    pool = FakePool()
+    runtime = Runtime(config, pool=cast(ClientPool, pool))
+    runtime.remote = cast(RemoteClient, FakeRemote())
     try:
         await runtime.start()
         assert runtime.recovery_only and runtime.store is None
-        assert runtime.transfers is None and not runtime.pool.started
+        assert runtime.transfers is None and not pool.started
         for _ in range(2):
             status = await asyncio.to_thread(runtime.replica.status)
             assert status["error"]["code"] == "ACTIVATION_RESOURCE_LIMIT"
@@ -504,12 +518,13 @@ async def test_known_legacy_pin_stops_fresh_initialization(
 
     monkeypatch.setattr(ChannelReplica, "__init__", replica_with_legacy_transport)
     monkeypatch.setattr(ChannelReplica, "start", lambda _self: None)
-    runtime = Runtime(settings(tmp_path), pool=FakePool())
-    runtime.remote = FakeRemote()
+    pool = FakePool()
+    runtime = Runtime(settings(tmp_path), pool=cast(ClientPool, pool))
+    runtime.remote = cast(RemoteClient, FakeRemote())
     try:
         await runtime.start()
         assert runtime.recovery_only and runtime.store is None
-        assert runtime.transfers is None and not runtime.pool.started
+        assert runtime.transfers is None and not pool.started
         status = await asyncio.to_thread(runtime.replica.status)
         assert status["error"]["code"] == "LEGACY_BACKUP_REQUIRES_UPGRADE"
         initialize.assert_not_called()
@@ -519,7 +534,9 @@ async def test_known_legacy_pin_stops_fresh_initialization(
 
 def test_runtime_rejects_dangerous_cache_root(tmp_path: Path) -> None:
     root = Path(tmp_path.anchor)
-    runtime = Runtime(settings(tmp_path, CACHE_DIR=root), pool=FakePool())
+    runtime = Runtime(
+        settings(tmp_path, CACHE_DIR=root), pool=cast(ClientPool, FakePool())
+    )
 
     with pytest.raises(ValueError, match="CACHE_DIR"):
         runtime._prepare_runtime_directories()
@@ -538,7 +555,8 @@ def test_runtime_rejects_overlapping_storage_before_cleanup(
     removed: list[Path] = []
     monkeypatch.setattr(shutil, "rmtree", lambda path, **_: removed.append(path))
     runtime = Runtime(
-        settings(tmp_path, CACHE_DIR=cache, DATA_DIR=data), pool=FakePool()
+        settings(tmp_path, CACHE_DIR=cache, DATA_DIR=data),
+        pool=cast(ClientPool, FakePool()),
     )
 
     with pytest.raises(ValueError, match="overlap"):
@@ -559,7 +577,9 @@ def test_runtime_rejects_cleanup_symlink_outside_cache(
     (cache / "uploads").symlink_to(outside, target_is_directory=True)
     removed: list[Path] = []
     monkeypatch.setattr(shutil, "rmtree", lambda path, **_: removed.append(path))
-    runtime = Runtime(settings(tmp_path, CACHE_DIR=cache), pool=FakePool())
+    runtime = Runtime(
+        settings(tmp_path, CACHE_DIR=cache), pool=cast(ClientPool, FakePool())
+    )
 
     with pytest.raises(ValueError, match="cleanup paths"):
         runtime._prepare_runtime_directories()
@@ -605,9 +625,9 @@ async def test_bot_mode_shares_channel_send_pacing_and_flood_cooldown(
 
     pool = PacedPool()
     client = BoundClient()
-    runtime = Runtime(settings(tmp_path), pool=pool)
-    runtime.backup = FakeBackup(store)
-    runtime.remote = FakeRemote()
+    runtime = Runtime(settings(tmp_path), pool=cast(ClientPool, pool))
+    runtime.backup = cast(MongoProtection, FakeBackup(store))
+    runtime.remote = cast(RemoteClient, FakeRemote())
     monkeypatch.setattr(runtime_module, "BotMode", Bot)
     monkeypatch.setattr(
         runtime_module,
@@ -623,6 +643,7 @@ async def test_bot_mode_shares_channel_send_pacing_and_flood_cooldown(
                 lambda _: client,
             )
             await runtime._reconnect()
+        assert runtime.bot_mode is not None
         assert runtime.bot_mode.client is client
         assert client.gate == pool.pace_send
         assert client.defer == pool.defer_channel
@@ -641,7 +662,9 @@ async def test_bot_reconnect_retries_failed_start_without_registering_twice(
         start=AsyncMock(side_effect=[ConnectionError("temporary outage"), None])
     )
     factory = Mock(return_value=client)
-    runtime = Runtime(settings(tmp_path), pool=pool)
+    runtime = Runtime(settings(tmp_path), pool=cast(ClientPool, pool))
+    store = new_store(tmp_path / "drive")
+    runtime.store = store
     runtime.ready = True
     runtime.backup = Mock(backup=AsyncMock())
     runtime._verify_storage_channel = AsyncMock()
@@ -662,6 +685,7 @@ async def test_bot_reconnect_retries_failed_start_without_registering_twice(
         runtime.ready = False
         await runtime.remote.close()
         runtime.registry.close()
+        store.close()
 
 
 @pytest.mark.asyncio
@@ -681,7 +705,7 @@ async def test_empty_database_with_pinned_backup_opens_restore_not_a_new_drive(
 
     monkeypatch.setattr(ChannelReplica, "discover_backup", found)
     monkeypatch.setattr(ChannelReplica, "start", lambda self: None)
-    runtime = Runtime(settings(tmp_path), pool=FakePool())
+    runtime = Runtime(settings(tmp_path), pool=cast(ClientPool, FakePool()))
     try:
         await runtime.start()
         assert runtime.recovery_only and runtime.store is None
@@ -702,6 +726,6 @@ async def test_empty_database_without_backup_creates_a_new_drive(
         return False
 
     monkeypatch.setattr(ChannelReplica, "discover_backup", none)
-    runtime = Runtime(settings(tmp_path), pool=FakePool())
+    runtime = Runtime(settings(tmp_path), pool=cast(ClientPool, FakePool()))
     assert await runtime._offer_backup_restore() is False
     assert not getattr(runtime, "recovery_only", False)

@@ -4,6 +4,7 @@ import asyncio
 import json
 from datetime import UTC, datetime
 from types import SimpleNamespace
+from typing import cast
 from unittest.mock import AsyncMock
 
 import pytest
@@ -30,7 +31,7 @@ from tgdrive.settings.management import (
     SettingsChange,
     verify_connection,
 )
-from tgdrive.storage.mongo import DatabaseUnavailable
+from tgdrive.storage.mongo import DatabaseUnavailable, MongoBackend
 from tgdrive.storage.mongo_store import MongoStore
 from tgdrive.telegram.client_identity import IdentityCache
 from tgdrive.transfers.tasks import TransferStatus
@@ -46,7 +47,7 @@ def managed(tmp_path, monkeypatch):
     settings = make_settings(tmp_path)
     settings.resolved_cache_dir.mkdir(parents=True)
     backend = register_test_backend(monkeypatch, settings)
-    store = MongoStore.create(backend)
+    store = MongoStore.create(cast(MongoBackend, backend))
     runtime = FakeRuntime(store)
     runtime.mongo = backend
 
@@ -96,12 +97,14 @@ async def test_atomic_private_save_cas_and_secret_safe_snapshot(managed):
         assert secret not in text
     assert _runtime.mongo.db.settings.find_one({"_id": "telegram"})["revision"] == 1
     document = read_document(settings.resolved_data_dir)
+    assert document is not None
     assert document.api_hash.get_secret_value() == "b" * 32
     assert document.clients[0].credential.get_secret_value() == TOKEN
     with pytest.raises(SettingsProblem) as conflict:
         await manager.save(SettingsChange(expected_revision=0, api_id=1000))
     assert conflict.value.code == "SETTINGS_CONFLICT"
-    assert read_document(settings.resolved_data_dir).revision == 1
+    saved_document = read_document(settings.resolved_data_dir)
+    assert saved_document is not None and saved_document.revision == 1
 
 
 @pytest.mark.asyncio
@@ -144,11 +147,10 @@ async def test_premium_private_import_preserves_existing_client_ids(managed):
     assert [row["kind"] for row in result["clients"]] == ["bot", "user"]
     assert result["clients"][0]["id"] == initial
     assert "synthetic-session" not in json.dumps(result)
+    saved_document = read_document(settings.resolved_data_dir)
+    assert saved_document is not None
     assert (
-        read_document(settings.resolved_data_dir)
-        .clients[1]
-        .credential.get_secret_value()
-        == "synthetic-session"
+        saved_document.clients[1].credential.get_secret_value() == "synthetic-session"
     )
     api_id, api_hash, revision = manager.login_api()
     assert api_id == 12345 and api_hash.get_secret_value() == "a" * 32 and revision == 1
@@ -182,7 +184,9 @@ async def test_pending_upload_allows_only_same_account_credential_repair(
         result = await manager.save(change)
         assert result["revision"] == 1
         assert token not in json.dumps(result)
-        saved = read_document(settings.resolved_data_dir).clients[0]
+        saved_document = read_document(settings.resolved_data_dir)
+        assert saved_document is not None
+        saved = saved_document.clients[0]
         assert saved.runtime_name == record.context["sender"]
         assert saved.credential.get_secret_value() == token
     else:
@@ -413,7 +417,8 @@ def test_store_cas_atomic_write_and_no_catalog_secret_export(managed):
     save_document(settings.resolved_data_dir, document(), 0)
     with pytest.raises(SettingsProblem):
         save_document(settings.resolved_data_dir, document(2), 0)
-    assert read_document(settings.resolved_data_dir).revision == 1
+    saved_document = read_document(settings.resolved_data_dir)
+    assert saved_document is not None and saved_document.revision == 1
     assert SECOND_TOKEN not in json.dumps(store.export())
 
 
@@ -746,7 +751,8 @@ async def test_concurrent_managers_cas_after_candidate_verification(managed):
     assert sum(isinstance(result, dict) for result in results) == 1
     failures = [result for result in results if isinstance(result, SettingsProblem)]
     assert len(failures) == 1 and failures[0].code == "SETTINGS_CONFLICT"
-    assert read_document(settings.resolved_data_dir).revision == 1
+    saved_document = read_document(settings.resolved_data_dir)
+    assert saved_document is not None and saved_document.revision == 1
 
 
 @pytest.mark.asyncio
@@ -915,6 +921,7 @@ async def test_cancellation_after_commit_never_revokes_saved_session(
     original = management_module.save_document
     loop = asyncio.get_running_loop()
     task = asyncio.current_task()
+    assert task is not None
 
     def cancel_after_commit(*arguments):
         original(*arguments)
@@ -975,7 +982,8 @@ async def test_cancelled_save_drains_commit_and_apply_under_manager_lock(
     with pytest.raises(asyncio.CancelledError):
         await task
     assert settings.api_id == 222 and settings.managed_revision == 1
-    assert read_document(settings.resolved_data_dir).revision == 1
+    saved_document = read_document(settings.resolved_data_dir)
+    assert saved_document is not None and saved_document.revision == 1
     assert not manager.lock.locked()
 
 
@@ -1048,6 +1056,7 @@ def test_refresh_names_requires_owner_and_same_origin_without_saving_configurati
             await asyncio.gather(*manager._check_tasks)
 
         # The endpoint accepts background work; a GET need not complete it.
+        assert client.portal is not None
         client.portal.call(completed_checks)
         client.get("/api/v1/settings")
         assert manager.verifier.call_count == 1
@@ -1148,8 +1157,11 @@ async def test_refresh_preserves_flood_wait_and_never_exposes_raw_error(managed)
     runtime.pool = SimpleNamespace(
         status=AsyncMock(return_value=()), defer_client=AsyncMock()
     )
-    problem = SettingsProblem("Telegram temporarily limited verification")
-    problem.retry_after = 120
+
+    class FloodProblem(SettingsProblem):
+        retry_after = 120
+
+    problem = FloodProblem("Telegram temporarily limited verification")
     manager.verifier = AsyncMock(side_effect=problem)
     await manager.refresh_connections()
     for _ in range(100):

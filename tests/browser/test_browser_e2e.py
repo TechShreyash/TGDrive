@@ -1786,6 +1786,7 @@ def test_enhanced_video_quality_switch_restores_settled_paused_position(
     )
     player.locator("button.movi-play-pause").click()
     deadline = time.monotonic() + 10
+    state = None
     while time.monotonic() < deadline:
         state = player.evaluate(
             "element=>({time:element.currentTime,paused:element.paused})"
@@ -1793,6 +1794,7 @@ def test_enhanced_video_quality_switch_restores_settled_paused_position(
         if not state["paused"] and state["time"] > 1.05:
             break
         page.wait_for_timeout(50)
+    assert state is not None
     assert not state["paused"] and state["time"] > 1.05
     saved_time = state["time"]
     switch_source("fixture-same-bytes")
@@ -2630,6 +2632,7 @@ def test_supported_asf_wmv_software_decode_has_real_frames_pixels_seek_and_origi
         "async element=>{await element.pause();await element.player.seek(0.7);}"
     )
     deadline = time.monotonic() + 10
+    position = None
     while time.monotonic() < deadline:
         position = player.evaluate(
             "element=>({time:element.currentTime,seeking:element.seeking})"
@@ -2637,6 +2640,7 @@ def test_supported_asf_wmv_software_decode_has_real_frames_pixels_seek_and_origi
         if abs(position["time"] - 0.7) < 0.25 and not position["seeking"]:
             break
         page.wait_for_timeout(100)
+    assert position is not None
     assert abs(position["time"] - 0.7) < 0.25 and not position["seeking"]
     with page.expect_download() as result:
         dialog.get_by_role("link", name="Download Original", exact=True).click()

@@ -6,21 +6,60 @@ import os
 import time
 from collections import deque
 from pathlib import Path
+from typing import Literal, NotRequired, TypedDict
 
 from tgdrive.observability.traffic import HISTORY_SECONDS, MAX_SAMPLE_GAP_SECONDS
+
+
+class CpuSample(TypedDict):
+    percent: float | None
+    scope: Literal["cgroup", "host"] | None
+    capacity_cores: NotRequired[float]
+
+
+class NetworkSample(TypedDict):
+    available: bool
+    interface: str | None
+    started_at: float
+    received_bytes: int
+    sent_bytes: int
+    received_bytes_per_second: float | None
+    sent_bytes_per_second: float | None
+    scope: str
+
+
+class ResourceHistorySample(TypedDict):
+    at: float
+    cpu_percent: float | None
+    cpu_scope: Literal["cgroup", "host"] | None
+    memory_bytes: int | None
+    memory_limit_bytes: int | None
+    received_bytes_per_second: float | None
+    sent_bytes_per_second: float | None
+    network_interface: str | None
+
+
+class ResourceSample(TypedDict):
+    cpu: CpuSample
+    network: NetworkSample
+    history: list[ResourceHistorySample]
 
 
 class ResourceMetrics:
     def __init__(self, *, proc=Path("/proc"), cgroup=Path("/sys/fs/cgroup")):
         self.proc, self.cgroup = proc, cgroup
         self.started_at = time.time()
-        self._cpu_previous = None
-        self._network_previous = None
+        self._cpu_previous: (
+            tuple[float, tuple[Literal["cgroup", "host"], float, float]] | None
+        ) = None
+        self._network_previous: tuple[float, tuple[str, int, int]] | None = None
         self._received = self._sent = 0
-        self.history = deque(maxlen=120)
+        self.history: deque[ResourceHistorySample] = deque(maxlen=120)
         self.value = {"cpu": {"percent": None}, "network": {"available": False}}
 
-    def _cpu_counter(self):
+    def _cpu_counter(
+        self,
+    ) -> tuple[Literal["cgroup", "host"], float, float] | None:
         try:
             capacity = float(os.cpu_count() or 1)
             if hasattr(os, "sched_getaffinity"):
@@ -50,7 +89,7 @@ class ResourceMetrics:
         except OSError, ValueError, IndexError:
             return None
 
-    def _network_counter(self):
+    def _network_counter(self) -> tuple[str, int, int] | None:
         try:
             interfaces = {}
             for line in (self.proc / "net/dev").read_text().splitlines():
@@ -95,7 +134,7 @@ class ResourceMetrics:
         except OSError, ValueError, IndexError:
             return None
 
-    def sample(self):
+    def sample(self) -> ResourceSample:
         now = time.monotonic()
         cpu = self._cpu_counter()
         percent = None
@@ -110,7 +149,7 @@ class ResourceMetrics:
                 if denominator > 0 and delta >= 0:
                     percent = min(100.0, 100 * delta / denominator)
         self._cpu_previous = (now, cpu) if cpu is not None else None
-        cpu_value = {"percent": percent, "scope": cpu[0] if cpu else None}
+        cpu_value: CpuSample = {"percent": percent, "scope": cpu[0] if cpu else None}
         if cpu is not None and cpu[0] == "cgroup":
             cpu_value["capacity_cores"] = cpu[2]
         network = self._network_counter()
@@ -126,25 +165,23 @@ class ResourceMetrics:
                     if 0 < elapsed <= MAX_SAMPLE_GAP_SECONDS:
                         incoming, outgoing = received / elapsed, sent / elapsed
         self._network_previous = (now, network) if network is not None else None
-        self.value = {
-            "cpu": cpu_value,
-            "network": {
-                "available": network is not None,
-                "interface": network[0] if network else None,
-                "started_at": self.started_at,
-                "received_bytes": self._received,
-                "sent_bytes": self._sent,
-                "received_bytes_per_second": incoming,
-                "sent_bytes_per_second": outgoing,
-                "scope": (
-                    "Default network interface; includes URL imports, "
-                    "Telegram and HTTP traffic."
-                ),
-            },
+        network_value: NetworkSample = {
+            "available": network is not None,
+            "interface": network[0] if network else None,
+            "started_at": self.started_at,
+            "received_bytes": self._received,
+            "sent_bytes": self._sent,
+            "received_bytes_per_second": incoming,
+            "sent_bytes_per_second": outgoing,
+            "scope": (
+                "Default network interface; includes URL imports, "
+                "Telegram and HTTP traffic."
+            ),
         }
+        self.value = {"cpu": cpu_value, "network": network_value}
         # Keep measured history even when nobody has the dashboard open. Reading
         # the cgroup files here avoids polling the whole system/disk each tick.
-        memory = {}
+        memory: dict[str, int | None] = {}
         for key, filename in (
             ("memory_bytes", "memory.current"),
             ("memory_limit_bytes", "memory.max"),
@@ -167,11 +204,17 @@ class ResourceMetrics:
                 "at": at,
                 "cpu_percent": percent,
                 "cpu_scope": cpu_value["scope"],
-                **memory,
+                "memory_bytes": memory["memory_bytes"],
+                "memory_limit_bytes": memory["memory_limit_bytes"],
                 "received_bytes_per_second": incoming,
                 "sent_bytes_per_second": outgoing,
                 "network_interface": network[0] if network else None,
             }
         )
-        self.value = self.value | {"history": list(self.history)}
-        return self.value
+        value: ResourceSample = {
+            "cpu": cpu_value,
+            "network": network_value,
+            "history": list(self.history),
+        }
+        self.value = value
+        return value

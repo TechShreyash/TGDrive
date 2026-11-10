@@ -1,5 +1,6 @@
 import asyncio
 from types import SimpleNamespace
+from typing import cast
 
 import pytest
 from fastapi.testclient import TestClient
@@ -17,6 +18,7 @@ from tgdrive.settings.bot_settings import (
 )
 from tgdrive.settings.managed_settings import SettingsProblem
 from tgdrive.telegram.bot_mode import BotMode
+from tgdrive.telegram.clients import Client
 from tgdrive.web.app import create_app
 
 
@@ -28,7 +30,7 @@ def bot_setup(tmp_path, monkeypatch):
     runtime = SimpleNamespace(store=store, mongo=backend)
     service = get_bot_settings(configured, runtime)
     mode = BotMode(
-        client=FakeBotClient(),
+        client=cast(Client, FakeBotClient()),
         settings=configured,
         store=store,
         folder_settings=service,
@@ -86,6 +88,7 @@ async def test_website_change_applies_to_next_import_without_restart(bot_setup):
     await bot._set_folder(bot.client, link_message)
     text, buttons = link_message.replies[-1]
     assert "https://drive.example" + SETTINGS_LOCATION in text
+    assert buttons is not None
     assert buttons[0][0].type.url == "https://drive.example" + SETTINGS_LOCATION
     await service.save(BotUploadPreferences(folder_path="/"))
     message = file_message(2, identity=102)

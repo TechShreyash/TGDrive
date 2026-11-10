@@ -5,7 +5,7 @@ import time
 
 import pytest
 
-from tgdrive.media.media_scheduler import MediaScheduler, media_priority
+from tgdrive.media.media_scheduler import MediaPriority, MediaScheduler, media_priority
 from tgdrive.telegram.client_pool import ClientPool, MediaQueueFull
 
 
@@ -81,7 +81,7 @@ async def test_pool_combined_cap_demand_priority_and_metadata_independence():
     release = asyncio.Event()
     order = []
 
-    async def work(label, *, download=False, priority="demand"):
+    async def work(label, *, download=False, priority: MediaPriority = "demand"):
         async with pool.lease(media=not download, download=download, priority=priority):
             order.append(label)
             if label == "upload":
@@ -137,9 +137,12 @@ async def test_bounded_origin_queue_is_retryable_and_does_not_block_metadata():
         task = asyncio.create_task(waiting())
         await wait_until(lambda: pool.performance_snapshot()["queued"] == 1)
         estimate = pool.queue_estimate("visitor-range")
+        assert estimate is not None
         assert estimate["position"] == 1
         assert estimate["estimated_wait_seconds"] is None
-        assert pool.queue_estimate("active-upload")["active_operations"] == 1
+        active_estimate = pool.queue_estimate("active-upload")
+        assert active_estimate is not None
+        assert active_estimate["active_operations"] == 1
         with pytest.raises(MediaQueueFull) as error:
             async with pool.lease(download=True):
                 pytest.fail("a full queue cannot admit another origin request")
@@ -294,7 +297,7 @@ async def test_demand_upload_overtakes_preload_upload_without_fifo_deadlock():
     release = asyncio.Event()
     order = []
 
-    async def work(label, priority="demand"):
+    async def work(label, priority: MediaPriority = "demand"):
         async with pool.lease(media=True, priority=priority):
             order.append(label)
             if label == "active":
@@ -355,13 +358,16 @@ async def test_upload_queue_estimate_includes_known_channel_cooldown():
     try:
         await wait_until(lambda: pool.performance_snapshot()["queued"] == 1)
         estimate = pool.queue_estimate("cooling-upload")
+        assert estimate is not None
         assert 59 <= estimate["estimated_wait_seconds"] <= 60
         owner_queue = pool.performance_snapshot()["queue"][0]
         assert owner_queue["request_id"] == "cooling-upload"
         assert 59 <= owner_queue["estimated_wait_seconds"] <= 60
         # Upload-only cooldowns cannot add latency to a ready download lane.
         async with pool.lease(download=True, request_id="ready-read"):
-            assert pool.queue_estimate("ready-read")["estimated_wait_seconds"] == 0
+            read_estimate = pool.queue_estimate("ready-read")
+            assert read_estimate is not None
+            assert read_estimate["estimated_wait_seconds"] == 0
     finally:
         pending.cancel()
         await asyncio.gather(pending, return_exceptions=True)

@@ -255,7 +255,7 @@ async def download_ranges(
                 return_when=asyncio.FIRST_COMPLETED,
             )
             client._raise_if_cancelled(cancel_event)
-            for task in done & workers:
+            for task in workers.intersection(done):
                 workers.remove(task)
                 all_workers.discard(task)
                 task.result()
@@ -270,7 +270,9 @@ async def download_ranges(
     except RemoteCancelled:
         raise
     finally:
-        pending = all_workers | ({cancelled} if cancelled is not None else set())
+        pending: set[asyncio.Task[bool | None]] = set(all_workers)
+        if cancelled is not None:
+            pending.add(cancelled)
         for task in pending:
             if not task.done():
                 task.cancel()

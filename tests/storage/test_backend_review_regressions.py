@@ -8,18 +8,61 @@ from unittest.mock import AsyncMock
 import pytest
 
 from tests.media.test_preloading import CHANNEL, finish, manager_for
-from tests.support.mongo_fixtures import new_store
+from tests.support.mongo_fixtures import FakeMongoBackend, new_store
+from tgdrive.core.errors import CorruptStoreError
 from tgdrive.media.media_reader import BLOCK
 from tgdrive.media.thumbnail_rebuild import RebuildSource
 from tgdrive.storage import pacing
 from tgdrive.storage.mongo import DatabaseUnavailable
+from tgdrive.storage.store import ROOT_ID
+
+
+def test_missing_catalog_metadata_blocks_statistics_and_mutations_without_repair():
+    backend = FakeMongoBackend()
+    store = new_store(backend=backend)
+    try:
+        store.add_file("/", "preserved.bin", 77, 3)
+        nodes = list(backend.db.nodes.find({}))
+        backend.db.catalog.delete_one({"_id": "catalog"})
+
+        with pytest.raises(CorruptStoreError, match="catalog metadata is missing"):
+            store.statistics()
+        with pytest.raises(CorruptStoreError, match="catalog metadata is missing"):
+            store.bind_storage_channel(-1001234567890)
+
+        assert list(backend.db.catalog.find({})) == []
+        assert list(backend.db.nodes.find({})) == nodes
+    finally:
+        store.close()
+
+
+def test_missing_root_refuses_directory_listing_and_preserves_surviving_nodes():
+    backend = FakeMongoBackend()
+    store = new_store(backend=backend)
+    try:
+        folder = store.create_folder("/", "Preserved")
+        store.add_file("/" + folder["id"], "preserved.bin", 77, 3)
+        backend.db.nodes.delete_one({"_id": ROOT_ID})
+        nodes = list(backend.db.nodes.find({}))
+        metadata = list(backend.db.catalog.find({}))
+
+        with pytest.raises(CorruptStoreError, match="catalog root is missing"):
+            store.list_directory("/")
+
+        assert len(nodes) == 2
+        assert list(backend.db.nodes.find({})) == nodes
+        assert list(backend.db.catalog.find({})) == metadata
+    finally:
+        store.close()
 
 
 def test_recent_activity_refuses_a_lost_installation_owner(monkeypatch):
     store = new_store()
     try:
         item = store.add_file("/", "notes.txt", 77, 3)
-        before = store.db.nodes.find_one({"_id": item["id"]})["active_at"]
+        row = store.db.nodes.find_one({"_id": item["id"]})
+        assert row is not None
+        before = row["active_at"]
 
         def lost_owner():
             raise DatabaseUnavailable("Synthetic ownership loss")
@@ -27,7 +70,8 @@ def test_recent_activity_refuses_a_lost_installation_owner(monkeypatch):
         monkeypatch.setattr(store.backend, "check_owner", lost_owner)
         with pytest.raises(DatabaseUnavailable, match="ownership loss"):
             store.mark_opened(item["id"])
-        assert store.db.nodes.find_one({"_id": item["id"]})["active_at"] == before
+        row = store.db.nodes.find_one({"_id": item["id"]})
+        assert row is not None and row["active_at"] == before
     finally:
         store.close()
 

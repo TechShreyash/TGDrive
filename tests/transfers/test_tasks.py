@@ -413,6 +413,7 @@ async def test_only_temporary_connection_errors_are_marked_for_restart(
         assert record.status is TransferStatus.ERROR
         assert bool(record.context.get("restart_retryable")) is retryable
         if retryable:
+            assert record.error is not None
             assert "restart TGDrive" in record.error
         (await registry.retry(record.id))
         assert "restart_retryable" not in record.context

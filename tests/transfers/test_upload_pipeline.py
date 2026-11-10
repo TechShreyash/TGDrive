@@ -4,6 +4,7 @@ import asyncio
 import hashlib
 from collections import Counter
 from types import SimpleNamespace
+from typing import cast
 from unittest.mock import AsyncMock, Mock
 
 import pytest
@@ -23,12 +24,12 @@ class Native:
         self.active = 0
         self.maximum = 0
         self.published = []
-        self.fail_part = None
-        self.flood_part = None
+        self.fail_part: int | None = None
+        self.flood_part: int | None = None
         self.flood_seconds = 1
         self.flood_count = 1
         self.flood_error = FloodWaitError
-        self.hold = None
+        self.hold: asyncio.Event | None = None
         self.get_input_entity = AsyncMock(return_value="channel")
 
     async def __call__(self, request):
@@ -111,6 +112,7 @@ async def test_pipeline_retries_only_failed_part_and_preserves_window_hash_and_d
         == hashlib.md5(payload, usedforsecurity=False).hexdigest()
     )
     boundary.assert_awaited_once()
+    assert progress.await_args is not None
     assert progress.await_args.args == (len(payload), len(payload))
 
 
@@ -156,6 +158,7 @@ async def test_big_file_pipeline_retries_one_part_without_resending_acked_parts(
     assert isinstance(uploaded, types.InputFileBig)
     assert uploaded.parts == total_parts
     assert uploaded.name == "large.bin"
+    assert progress.await_args is not None
     assert progress.await_args.args == (len(payload), len(payload))
     assert adapter._media_scheduler.active == 0
     assert adapter._media_scheduler.snapshot()["queued"] == 0
@@ -231,7 +234,7 @@ async def test_pipeline_flood_feedback_retries_individual_part(
     adapter._media_scheduler.flood = feedback
     await adapter.send_staged(123, path, file_name="file.bin", random_id=1)
     assert native.calls == {0: 1, 1: occurrences + 1, 2: 1}
-    assert adapter._defer_read.await_count == occurrences
+    assert cast(AsyncMock, adapter._defer_read).await_count == occurrences
     assert adapter._media_scheduler.floods == occurrences
     assert adapter._media_scheduler.effective_limit == max(1, 4 // 2**occurrences)
 

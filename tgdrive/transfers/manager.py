@@ -13,7 +13,7 @@ import time
 from collections.abc import Awaitable, Callable, Iterable
 from contextlib import suppress
 from pathlib import Path, PurePosixPath
-from typing import Any
+from typing import TYPE_CHECKING, Any, TypeGuard
 
 import aiofiles
 from fastapi import UploadFile
@@ -45,6 +45,9 @@ from tgdrive.transfers.tasks import (
     _journalled,
     upload_effects,
 )
+
+if TYPE_CHECKING:
+    from tgdrive.transfers.uploads import ResumableUploads
 
 logger = logging.getLogger(__name__)
 _CHUNK_SIZE = 1024 * 1024
@@ -99,8 +102,12 @@ async def restore_telegram_cooldowns(
     account_deadlines: dict[str, float] = {}
     channel_deadline = 0.0
 
-    def future(value: Any) -> bool:
-        return type(value) in (int, float) and math.isfinite(value) and value > now
+    def future(value: Any) -> TypeGuard[int | float]:
+        return (
+            (type(value) is int or type(value) is float)
+            and math.isfinite(value)
+            and value > now
+        )
 
     for record in records:
         context = record.context
@@ -137,6 +144,8 @@ class TransferManager:
     those records aligned with staged bytes, destination identities, and backups.
     """
 
+    uploads: ResumableUploads
+
     def __init__(
         self,
         *,
@@ -159,6 +168,7 @@ class TransferManager:
         self._ensure_backup = ensure_backup
         self._ensure_lineage = ensure_lineage
         self._ensure_channel = ensure_channel
+        self._ensure_replica: Callable[[], Awaitable[None]] | None = None
         self._check_upload_allowed = check_upload_allowed
         self.cache_dir = settings.resolved_cache_dir
         self.cache_dir.mkdir(parents=True, exist_ok=True)
@@ -1015,7 +1025,7 @@ class TransferManager:
             self._check_upload_allowed()
         binding = self.store.upload_destination(destination)
         destination = binding["path"]
-        context = dict(
+        context: dict[str, Any] = dict(
             kind="upload",
             local_path=str(local_path),
             destination=destination,
@@ -1149,7 +1159,7 @@ class TransferManager:
                 if (
                     record is None
                     or getattr(exc, "code", None) == "RECOVERY_REQUIRED"
-                    or type(delay) not in (int, float)
+                    or (type(delay) is not int and type(delay) is not float)
                     or not math.isfinite(delay)
                     or delay <= 0
                     or not math.isfinite(time.time() + delay)
@@ -1377,7 +1387,7 @@ class TransferManager:
             except BackupError as exc:
                 delay = getattr(exc, "retry_after", None)
                 if (
-                    type(delay) not in (int, float)
+                    (type(delay) is not int and type(delay) is not float)
                     or not math.isfinite(delay)
                     or delay <= 0
                     or not math.isfinite(time.time() + delay)
@@ -1443,6 +1453,8 @@ class TransferManager:
 
         async def protect_batch():
             nonlocal protection
+            if protect is None:
+                return
             if protection is None:
                 protection = asyncio.create_task(protect())
             await protection
@@ -1565,10 +1577,16 @@ class TransferManager:
         async with self.pool.lease() as client:
             for start in range(0, len(message_ids), 100):
                 await self._verify_lineage()
-                await client.delete_messages(
+                delete = getattr(client, "delete_messages", None)
+                if not callable(delete):
+                    raise RuntimeError("Telegram client cannot delete messages")
+                pending = delete(
                     self.settings.storage_channel,
                     message_ids[start : start + 100],
                 )
+                if not inspect.isawaitable(pending):
+                    raise TypeError("Message deletion must be asynchronous")
+                await pending
 
     async def close(self) -> None:
         await self.registry.shutdown()

@@ -10,8 +10,9 @@ import resource
 import tempfile
 import time
 from collections import Counter
+from contextlib import ExitStack
 from pathlib import Path
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, patch
 
 from tests.media.test_pooled_media import account
 from tests.media.test_telegram_cache import message
@@ -51,12 +52,19 @@ async def run(args, directory):
     payload = b"x" * (32 * BLOCK)
     clients = [account(str(index), payload) for index in range(3)]
     monitor = Counter()
+    patches = ExitStack()
     for client in clients:
         client._media_scheduler = MediaScheduler(limit=8, rate=48)
         client.native.payloads = {identity: payload for identity in range(1, 5)}
         native_download = client.native.iter_download
-        client.native.iter_download = lambda *a, original=native_download, **kw: (
-            DelayedIterator(original(*a, **kw), 0.02, monitor)
+        patches.enter_context(
+            patch.object(
+                client.native,
+                "iter_download",
+                lambda *a, original=native_download, **kw: DelayedIterator(
+                    original(*a, **kw), 0.02, monitor
+                ),
+            )
         )
         client.get_messages = AsyncMock(
             side_effect=lambda _channel, message_ids, client=client: source(
@@ -92,7 +100,14 @@ async def run(args, directory):
             await asyncio.sleep(0.005)
 
     async def consume(
-        label, identity, *, offset=0, count=32, slow=0, background=False, take=None
+        label,
+        identity,
+        *,
+        offset=0,
+        count=32,
+        slow: float = 0,
+        background=False,
+        take=None,
     ):
         before = monitor["origin_bytes"]
         started = time.monotonic()
@@ -170,6 +185,7 @@ async def run(args, directory):
         await sampling
         await pool.stop()
         await cache.close()
+        patches.close()
 
 
 if __name__ == "__main__":

@@ -2,10 +2,12 @@ from __future__ import annotations
 
 import json
 from contextlib import asynccontextmanager
+from typing import cast
 from unittest.mock import AsyncMock
 
 import pytest
 from fastapi import HTTPException
+from starlette.responses import StreamingResponse
 
 from tests.media.test_multipart_streaming import MultipartClient, build_parts
 from tests.media.test_pooled_media import account
@@ -14,7 +16,13 @@ from tests.media.test_telegram_cache import document, message
 from tgdrive.media.media_policy import MediaCachePolicy
 from tgdrive.media.media_reader import BLOCK
 from tgdrive.media.preloading import PreloadManager
-from tgdrive.media.streaming import _not_modified, media_etag, stream_telegram_file
+from tgdrive.media.streaming import (
+    _ActivityBody,
+    _not_modified,
+    _PrimedBody,
+    media_etag,
+    stream_telegram_file,
+)
 from tgdrive.telegram.client_pool import ClientPool, MediaQueueFull
 from tgdrive.telegram.clients import TelegramMessage
 
@@ -82,13 +90,13 @@ async def test_conditional_request_revalidates_metadata_without_reading_payload(
     try:
         first = await response(pool, payload)
         assert await response_body(first) == payload
-        metadata = client.get_messages.call_count
+        metadata = cast(AsyncMock, client.get_messages).call_count
         reads = sum(client.native.requests.values())
         conditional = await response(
             pool, payload, request(if_none_match=first.headers["etag"])
         )
         assert conditional.status_code == 304 and conditional.body == b""
-        assert client.get_messages.call_count == metadata + 1
+        assert cast(AsyncMock, client.get_messages).call_count == metadata + 1
         assert sum(client.native.requests.values()) == reads
     finally:
         await pool.stop()
@@ -134,7 +142,7 @@ async def test_origin_overload_returns_retryable_503_before_stream_headers(tmp_p
         overloaded = await response(pool, b"hello")
         assert overloaded.status_code == 503
         assert overloaded.headers["retry-after"] == "7"
-        assert json.loads(overloaded.body)["code"] == "TELEGRAM_QUEUE_FULL"
+        assert json.loads(bytes(overloaded.body))["code"] == "TELEGRAM_QUEUE_FULL"
         assert not client.native.requests
         assert all(row.active_leases == 0 for row in await pool.status())
         assert not pool._media_read_cache.memory.flights
@@ -417,7 +425,9 @@ async def test_only_identified_playback_uses_media_duration_for_background_warmi
     payload = b"x" * (2 * BLOCK)
     client = account("bot", payload)
     source = message(1, len(payload))
-    source.document.attributes.append(
+    assert isinstance(source.media, types.MessageMediaDocument)
+    assert isinstance(source.media.document, types.Document)
+    source.media.document.attributes.append(
         types.DocumentAttributeVideo(duration=3600, w=1920, h=1080)
     )
     client.get_messages = AsyncMock(return_value=TelegramMessage(client, source))
@@ -696,6 +706,8 @@ async def test_old_response_cannot_change_reopened_viewer_after_cache_clear(
         if finish_old:
             assert await response_body(first) == payload[: 4 * BLOCK]
         else:
+            assert isinstance(first, StreamingResponse)
+            assert isinstance(first.body_iterator, (_PrimedBody, _ActivityBody))
             await first.body_iterator.aclose()
         assert viewer["active"] == 1 and viewer["warm_until"] == 0
         assert viewer["last_end"] is None and viewer["sequential"] == 0
@@ -705,8 +717,12 @@ async def test_old_response_cannot_change_reopened_viewer_after_cache_clear(
         assert viewer["sequential"] == 4 * BLOCK
     finally:
         if first is not None:
+            assert isinstance(first, StreamingResponse)
+            assert isinstance(first.body_iterator, (_PrimedBody, _ActivityBody))
             await first.body_iterator.aclose()
         if second is not None:
+            assert isinstance(second, StreamingResponse)
+            assert isinstance(second.body_iterator, (_PrimedBody, _ActivityBody))
             await second.body_iterator.aclose()
         await manager.close()
         await pool.stop()

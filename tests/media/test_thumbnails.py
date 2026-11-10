@@ -5,10 +5,11 @@ import base64
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 from types import SimpleNamespace
+from typing import cast
 
 import pytest
 from fastapi.testclient import TestClient
-from telethon import types
+from telethon import TelegramClient, types
 
 from tests.support.app_fixtures import FakeRuntime, login, make_settings
 from tests.support.mongo_fixtures import new_store, register_test_backend
@@ -43,7 +44,7 @@ def app_client(tmp_path, monkeypatch):
 
 
 class ThumbnailClient:
-    def __init__(self, content=PNG, before_download=None):
+    def __init__(self, content: bytes | None = PNG, before_download=None):
         self.content = content
         self.before_download = before_download
         self.reads = 0
@@ -82,7 +83,9 @@ class ThumbnailPool:
             self.active -= 1
 
 
-def use_thumbnail_pool(app_client, *, content=PNG, before_download=None):
+def use_thumbnail_pool(
+    app_client, *, content: bytes | None = PNG, before_download=None
+):
     client, store, runtime, _settings = app_client
     account = ThumbnailClient(content, before_download)
     pool = ThumbnailPool(account)
@@ -275,7 +278,9 @@ async def test_thumbnail_cache_singleflight_lru_bytes_and_negative_ttl():
     await entered.wait()
     second = asyncio.create_task(cache.get((1,), loader))
     release.set()
-    assert (await first).content == (await second).content == PNG
+    first_image, second_image = await first, await second
+    assert first_image is not None and second_image is not None
+    assert first_image.content == second_image.content == PNG
     assert reads == 1
     await cache.get((2,), loader)
     await cache.get((3,), loader)
@@ -319,7 +324,8 @@ async def test_thumbnail_cache_limits_work_and_recovers_after_timeout():
     async def ready():
         return Thumbnail(PNG, "image/png")
 
-    assert (await cache.get((3,), ready)).content == PNG
+    thumbnail = await cache.get((3,), ready)
+    assert thumbnail is not None and thumbnail.content == PNG
     await cache.close()
 
 
@@ -346,7 +352,8 @@ async def test_cancelled_last_waiter_releases_thumbnail_fill_without_poisoning_n
     async def ready():
         return Thumbnail(PNG, "image/png")
 
-    assert (await cache.get((1,), ready)).content == PNG
+    thumbnail = await cache.get((1,), ready)
+    assert thumbnail is not None and thumbnail.content == PNG
     await cache.close()
 
 
@@ -407,14 +414,26 @@ class NativeDownload:
 
 
 def transport_message(sizes, *, photo=False):
-    kwargs = dict(
-        id=7, access_hash=8, file_reference=b"ref", date=datetime.now(UTC), dc_id=2
-    )
     if photo:
-        media = types.Photo(**kwargs, sizes=sizes)
+        media = types.Photo(
+            id=7,
+            access_hash=8,
+            file_reference=b"ref",
+            date=datetime.now(UTC),
+            dc_id=2,
+            sizes=sizes,
+        )
         return SimpleNamespace(photo=media, document=None)
     media = types.Document(
-        **kwargs, mime_type="video/mp4", size=2_000_000_000, attributes=[], thumbs=sizes
+        id=7,
+        access_hash=8,
+        file_reference=b"ref",
+        date=datetime.now(UTC),
+        dc_id=2,
+        mime_type="video/mp4",
+        size=2_000_000_000,
+        attributes=[],
+        thumbs=sizes,
     )
     return SimpleNamespace(photo=None, document=media)
 
@@ -424,7 +443,7 @@ def transport_message(sizes, *, photo=False):
 async def test_transport_chooses_small_explicit_thumb_and_closes_iterator(photo):
     native = NativeDownload([PNG])
     client = Client.__new__(Client)
-    client.native = native
+    client.native = cast(TelegramClient, native)
     message = transport_message(
         [
             types.PhotoSize(type="s", w=90, h=90, size=1024),
@@ -448,7 +467,8 @@ async def test_transport_chooses_small_explicit_thumb_and_closes_iterator(photo)
 @pytest.mark.asyncio
 async def test_transport_refuses_large_missing_or_vector_thumbs_without_download():
     client = Client.__new__(Client)
-    client.native = NativeDownload([b"never"])
+    native = NativeDownload([b"never"])
+    client.native = cast(TelegramClient, native)
     for sizes in [
         [],
         [types.PhotoSize(type="x", w=320, h=180, size=THUMBNAIL_BYTES + 1)],
@@ -457,14 +477,14 @@ async def test_transport_refuses_large_missing_or_vector_thumbs_without_download
         [types.PhotoSize(type="", w=320, h=180, size=1000)],
     ]:
         assert await client.download_thumbnail(transport_message(sizes)) is None
-    assert client.native.calls == []
+    assert native.calls == []
 
 
 @pytest.mark.asyncio
 async def test_transport_rejects_oversized_response_and_embedded_thumb_uses_no_rpc():
     client = Client.__new__(Client)
     native = NativeDownload([b"x" * 32768] * 10)
-    client.native = native
+    client.native = cast(TelegramClient, native)
     message = transport_message([types.PhotoSize(type="m", w=320, h=180, size=1000)])
     assert await client.download_thumbnail(message) is None
     assert native.iterator.reads == 5

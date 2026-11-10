@@ -94,7 +94,7 @@ def test_slow_recent_writes_leave_workers_for_other_file_opens(app_client, monke
 
     def use_small_executor():
         loop = asyncio.get_running_loop()
-        original_executor = loop._default_executor
+        original_executor = vars(loop)["_default_executor"]
         loop.set_default_executor(workers)
         return loop, original_executor
 

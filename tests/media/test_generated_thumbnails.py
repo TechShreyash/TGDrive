@@ -5,10 +5,11 @@ import shutil
 import subprocess
 from pathlib import Path
 from types import SimpleNamespace
+from typing import cast
 from unittest.mock import AsyncMock
 
 import pytest
-from telethon import types
+from telethon import TelegramClient, types
 from telethon.errors import RPCError
 
 from tests.support.book_samples import png
@@ -245,8 +246,9 @@ async def test_native_upload_keeps_original_and_own_cover_when_thumbnail_is_opti
             return SimpleNamespace()
 
     client = Client.__new__(Client)
-    client.native = Native()
-    client._upload_parts = AsyncMock(side_effect=client.native.upload_parts)
+    native = Native()
+    client.native = cast(TelegramClient, native)
+    client._upload_parts = AsyncMock(side_effect=native.upload_parts)
     client._thumbnail_directory = tmp_path / "covers"
     client._sent = AsyncMock(return_value=SimpleNamespace(id=50))
     result = await client.send_staged(

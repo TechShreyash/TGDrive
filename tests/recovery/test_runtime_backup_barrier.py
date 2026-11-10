@@ -1,6 +1,7 @@
 """Production lifecycle wiring for mandatory completed-upload protection."""
 
 from pathlib import Path
+from typing import cast
 from unittest.mock import AsyncMock, Mock
 
 import tgdrive.core.runtime as runtime_module
@@ -9,6 +10,7 @@ from tests.support.mongo_fixtures import new_store
 from tgdrive.core.config import Settings
 from tgdrive.core.errors import CorruptStoreError
 from tgdrive.core.runtime import Runtime
+from tgdrive.telegram.client_pool import ClientPool
 
 mongo_backend = mongo_backend_fixture
 
@@ -54,7 +56,7 @@ async def test_runtime_upload_barrier_always_calls_its_store_backup(
     settings = configuration(tmp_path)
     settings.resolved_data_dir.mkdir(parents=True)
     store = new_store()
-    runtime = Runtime(settings, pool=RuntimePool())
+    runtime = Runtime(settings, pool=cast(ClientPool, RuntimePool()))
     runtime.backup.restore = AsyncMock(return_value=store)
     runtime.backup.ensure_revision = AsyncMock(
         side_effect=lambda _store, required_revision: required_revision
@@ -75,7 +77,7 @@ async def test_runtime_upload_barrier_always_calls_its_store_backup(
 
 async def test_missing_catalog_requires_explicit_recovery(tmp_path):
     pool = RuntimePool()
-    runtime = Runtime(configuration(tmp_path), pool=pool)
+    runtime = Runtime(configuration(tmp_path), pool=cast(ClientPool, pool))
     runtime.backup.restore = AsyncMock(
         side_effect=CorruptStoreError(
             "Saved MongoDB catalog requires explicit recovery"
@@ -112,13 +114,15 @@ async def test_existing_catalog_remains_available_during_telegram_outage(tmp_pat
     store = new_store()
     store.create_folder("/", "Offline catalog")
     pool = RuntimePool(unavailable=True)
-    runtime = Runtime(settings, pool=pool)
+    runtime = Runtime(settings, pool=cast(ClientPool, pool))
     runtime.backup.restore = AsyncMock(return_value=store)
     runtime.backup.start = Mock()
     runtime.backup.stop = AsyncMock()
     try:
         await runtime.start()
         assert runtime.ready
+        assert runtime.store is not None
+        assert runtime.transfers is not None
         assert [
             item["name"] for item in runtime.store.list_directory("/").values()
         ] == ["Offline catalog"]

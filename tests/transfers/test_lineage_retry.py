@@ -2,6 +2,7 @@
 
 import asyncio
 import time
+from typing import cast
 from unittest.mock import AsyncMock
 
 from tests.recovery.test_upload_backup_barrier import (
@@ -51,6 +52,7 @@ async def test_provider_wait_retries_same_upload_and_exposes_deadline(tmp_path):
         await wait_phase(record, "retry_wait")
         assert record.as_dict()["retry_at"] > time.time()
         assert not client.sent
+        assert record.task is not None
         await asyncio.wait_for(record.task, 2)
         assert record.status == TransferStatus.COMPLETED
         assert manager._ensure_lineage.await_count == 2
@@ -71,6 +73,7 @@ async def test_cancel_wakes_an_unsent_provider_wait_without_sending(tmp_path):
     try:
         await wait_phase(record, "retry_wait")
         (await manager.cancel_job(record.id))
+        assert record.task is not None
         await asyncio.wait_for(record.task, 1)
         assert record.status == TransferStatus.CANCELLED
         assert not client.sent
@@ -87,6 +90,7 @@ async def test_confirmed_conflict_never_retries_or_sends(tmp_path):
     source = staged_file(tmp_path)
     record = await manager.enqueue_upload(source, "/", "one.bin", source.stat().st_size)
     try:
+        assert record.task is not None
         await record.task
         assert record.status == TransferStatus.ERROR
         assert manager._ensure_lineage.await_count == 1
@@ -109,11 +113,13 @@ async def test_append_admission_uses_local_guard_but_still_waits_for_checkpoint(
     record = await manager.enqueue_upload(source, "/", "one.bin", source.stat().st_size)
     try:
         assert checked == [0]  # Admission is guarded before background work begins.
+        assert record.task is not None
         await asyncio.wait_for(record.task, 2)
         assert len(checked) >= 2  # A queued job rechecks admission before sending.
         assert set(checked) == {0}
         assert manager._ensure_lineage.await_count == 0
-        assert manager._ensure_backup.await_count == 1
+        assert manager._ensure_backup is not None
+        assert cast(AsyncMock, manager._ensure_backup).await_count == 1
         assert record.status == TransferStatus.COMPLETED
         assert len(client.sent) == 1
     finally:
@@ -150,6 +156,7 @@ async def test_restart_preserves_guard_deadline_and_sends_only_once(
         assert recovered.context["lineage_retry_at"] == deadline
         await asyncio.sleep(0.01)
         assert not client.sent
+        assert recovered.task is not None
         await asyncio.wait_for(recovered.task, 2)
         assert recovered.status == TransferStatus.COMPLETED
         assert len(client.sent) == 1

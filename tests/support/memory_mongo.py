@@ -53,13 +53,28 @@ def _matches(row, query):
     return True
 
 
-class FixtureCursor(list):
+class FixtureCursor:
+    def __init__(self, rows):
+        self.rows = list(rows)
+
+    def __iter__(self):
+        return iter(self.rows)
+
+    def __len__(self):
+        return len(self.rows)
+
+    def __getitem__(self, index):
+        return self.rows[index]
+
     def sort(self, key, direction=1):
-        super().sort(key=lambda row: _value(row, key), reverse=direction < 0)
+        self.rows.sort(
+            key=lambda row: (_value(row, key) is not None, _value(row, key)),
+            reverse=direction < 0,
+        )
         return self
 
     def limit(self, count):
-        return FixtureCursor(self[:count])
+        return FixtureCursor(self.rows[:count])
 
 
 class FixtureCollection:

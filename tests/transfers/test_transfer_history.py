@@ -4,12 +4,17 @@ import copy
 import json
 import time
 from types import SimpleNamespace
+from typing import cast
 
 import pytest
 from fastapi.testclient import TestClient
 
 from tests.support.app_fixtures import FakeRuntime, login, make_settings
-from tests.support.mongo_fixtures import new_store, register_test_backend
+from tests.support.mongo_fixtures import (
+    FakeMongoBackend,
+    new_store,
+    register_test_backend,
+)
 from tgdrive.storage.mongo import for_directory
 from tgdrive.transfers.tasks import TransferNotFound, TransferRegistry, TransferStatus
 from tgdrive.web.app import create_app
@@ -28,6 +33,7 @@ def registry_for(path, **kwargs):
     if path is None:
         return TransferRegistry(**kwargs)
     backend = for_directory(path.parent)
+    assert backend is not None
     return TransferRegistry(mongo=backend.db.jobs, mongo_backend=backend, **kwargs)
 
 
@@ -197,7 +203,7 @@ async def test_history_http_owner_boundary_and_validation(tmp_path):
     settings = make_settings(tmp_path)
     store = new_store(tmp_path / "catalog")
     runtime = FakeRuntime(store)
-    runtime.mongo = for_directory(tmp_path)
+    runtime.mongo = cast(FakeMongoBackend, for_directory(tmp_path))
     record = await add(
         runtime.transfers.registry, "owner-only.bin", TransferStatus.COMPLETED
     )
@@ -311,17 +317,23 @@ async def test_history_search_reads_can_overlap_archive_writes_without_connectio
         registry.close()
 
 
-class HistoryCursor(list):
+class HistoryCursor:
+    def __init__(self, rows):
+        self.rows = rows
+
+    def __iter__(self):
+        return iter(self.rows)
+
     def batch_size(self, _size):
         return self
 
     def sort(self, fields):
         for key, direction in reversed(fields):
-            super().sort(key=lambda row: row.get(key), reverse=direction < 0)
+            self.rows.sort(key=lambda row: row.get(key), reverse=direction < 0)
         return self
 
     def limit(self, count):
-        return HistoryCursor(self[:count])
+        return HistoryCursor(self.rows[:count])
 
 
 class HistoryMongo:
@@ -470,7 +482,7 @@ async def test_clear_history_api_requires_login_and_keeps_live_jobs(tmp_path):
     settings = make_settings(tmp_path)
     store = new_store(tmp_path / "clear-api")
     runtime = FakeRuntime(store)
-    runtime.mongo = for_directory(tmp_path)
+    runtime.mongo = cast(FakeMongoBackend, for_directory(tmp_path))
     finished = await add(
         runtime.transfers.registry, "finished", TransferStatus.COMPLETED
     )
@@ -607,7 +619,7 @@ async def test_task_history_http_bounds_owner_boundary_and_current_folder_metada
     settings = make_settings(tmp_path)
     store = new_store(tmp_path / "task-catalog")
     runtime = FakeRuntime(store)
-    runtime.mongo = for_directory(tmp_path)
+    runtime.mongo = cast(FakeMongoBackend, for_directory(tmp_path))
     registry = runtime.transfers.registry
     folder = folder_metadata()
     children = [

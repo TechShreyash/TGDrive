@@ -58,6 +58,7 @@ async def test_force_replaces_existing_covers_counts_skips_and_ignores_trash(
 
     monkeypatch.setattr(manager, "render_file", render)
     await manager.start()
+    assert manager.task is not None
     await manager.task
     assert calls == [photo["id"]]
     assert manager.state["status"] == "completed"
@@ -197,6 +198,7 @@ async def test_native_rebuild_uses_selected_bytes_and_preserves_originals(
     monkeypatch.setattr(module, "read_range", fetch)
     monkeypatch.setattr(module, "RATE", 10**12)
     await manager.start()
+    assert manager.task is not None
     await manager.task
     assert manager.state["generated"] == 1, manager.snapshot()
     assert manager.state["failed"] == manager.state["skipped"] == 0
@@ -222,6 +224,7 @@ async def test_failed_optional_render_retains_existing_thumbnail(rebuild, monkey
 
     monkeypatch.setattr(manager, "render_file", render)
     await manager.start()
+    assert manager.task is not None
     await manager.task
     assert manager.state["skipped"] == 1
     assert manager.state["status"] == "completed"
@@ -257,7 +260,8 @@ async def test_force_invalidates_the_small_cover_cache():
 
     await cache.get(key, old)
     await cache.invalidate_file(-100, 2)
-    assert (await cache.get(key, new)).content == b"new"
+    thumbnail = await cache.get(key, new)
+    assert thumbnail is not None and thumbnail.content == b"new"
     assert cache.bytes == 3
     await cache.close()
 

@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 from contextlib import suppress
+from typing import TypeGuard
 
 from telethon.errors import RPCError
 
@@ -17,7 +18,7 @@ from tgdrive.telegram.client_pool import ClientPoolError
 
 
 async def load_poster(*, pool, channel_id, poster, directory, authorize):
-    def valid(content):
+    def valid(content) -> TypeGuard[bytes]:
         return (
             isinstance(content, bytes)
             and 0 < len(content) == poster["size"] <= MAX_POSTER_BYTES

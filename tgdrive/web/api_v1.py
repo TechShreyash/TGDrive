@@ -177,7 +177,9 @@ def register_routes(
         pool = getattr(runtime, "pool", None)
         health = await pool.health() if pool else None
         statuses = (
-            await pool.status() if callable(getattr(pool, "status", None)) else ()
+            await pool.status()
+            if pool is not None and callable(getattr(pool, "status", None))
+            else ()
         )
         telegram_issues = [
             {

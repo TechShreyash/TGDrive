@@ -5,6 +5,7 @@ from types import SimpleNamespace
 
 import pytest
 from starlette.requests import ClientDisconnect, Request
+from starlette.responses import Response, StreamingResponse
 
 from tgdrive.media.streaming import TelegramFileNotFound, stream_telegram_file
 from tgdrive.telegram.client_pool import ClientPool
@@ -22,7 +23,9 @@ class FakeStreamClient:
     async def stop(self) -> None:
         self.is_connected = False
 
-    async def get_messages(self, _channel: int, *, message_ids: int):
+    async def get_messages(
+        self, channel: int, *, message_ids: int
+    ) -> SimpleNamespace | None:
         assert message_ids == 7
         return SimpleNamespace(
             empty=False,
@@ -57,8 +60,14 @@ def make_request(range_header: str | None = None) -> Request:
     )
 
 
-async def response_body(response: object) -> bytes:
-    return b"".join([chunk async for chunk in response.body_iterator])
+async def response_body(response: Response) -> bytes:
+    assert isinstance(response, StreamingResponse)
+    return b"".join(
+        [
+            chunk.encode(response.charset) if isinstance(chunk, str) else chunk
+            async for chunk in response.body_iterator
+        ]
+    )
 
 
 @pytest.mark.asyncio
@@ -139,7 +148,9 @@ async def test_cancellation_before_stream_response_releases_lease() -> None:
     entered = asyncio.Event()
 
     class WaitingClient(FakeStreamClient):
-        async def get_messages(self, _channel: int, *, message_ids: int):
+        async def get_messages(
+            self, channel: int, *, message_ids: int
+        ) -> SimpleNamespace | None:
             entered.set()
             await asyncio.Event().wait()
 
@@ -206,7 +217,9 @@ class TrackingStreamClient(FakeStreamClient):
         self.fetches = 0
         self.streams = 0
 
-    async def get_messages(self, channel: int, *, message_ids: int):
+    async def get_messages(
+        self, channel: int, *, message_ids: int
+    ) -> SimpleNamespace | None:
         self.fetches += 1
         if self.error:
             raise self.error
@@ -367,7 +380,9 @@ async def test_premium_cancellation_does_not_fall_back_or_leak() -> None:
     entered = asyncio.Event()
 
     class WaitingClient(TrackingStreamClient):
-        async def get_messages(self, _channel: int, *, message_ids: int):
+        async def get_messages(
+            self, channel: int, *, message_ids: int
+        ) -> SimpleNamespace | None:
             entered.set()
             await asyncio.Event().wait()
 
@@ -507,7 +522,9 @@ async def test_large_pdf_download_overrides_preview_size_cap(download, status):
     size = PDF_PREVIEW_BYTES + 1
 
     class LargePdfClient(FakeStreamClient):
-        async def get_messages(self, _channel: int, *, message_ids: int):
+        async def get_messages(
+            self, channel: int, *, message_ids: int
+        ) -> SimpleNamespace | None:
             return SimpleNamespace(
                 empty=False, document=SimpleNamespace(file_size=size), id=message_ids
             )

@@ -264,6 +264,7 @@ async def test_poster_cache_coalesces_and_accepts_images_above_grid_thumbnail_ca
         first, second = await asyncio.gather(
             cache.get((1,), load), cache.get((1,), load)
         )
+        assert first is not None
         assert first is second and first.content == JPEG
         assert calls == 1 and cache.bytes == len(JPEG)
     finally:

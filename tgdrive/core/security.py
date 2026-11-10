@@ -98,13 +98,15 @@ class SessionManager:
 
     def revoke(self, token: str) -> None:
         if self._mongo is not None:
+            assert self._mongo_backend is not None
             digest = hashlib.sha256(token.encode()).hexdigest()
             self._mongo_backend.write(self._mongo, "delete_one", {"_id": digest})
             self._mongo_sessions.pop(digest, None)
             return
 
     def create(self, *, now: int | None = None, demo_admin: bool = False) -> str:
-        if demo_admin and self._demo_admin_key is None:
+        signing_key = self._demo_admin_key if demo_admin else self._key
+        if signing_key is None:
             raise ValueError("Demo administrator sign-in is not configured")
         issued_at = int(time.time() if now is None else now)
         payload = {
@@ -120,13 +122,14 @@ class SessionManager:
         )
         signature = _b64encode(
             hmac.new(
-                self._demo_admin_key if demo_admin else self._key,
+                signing_key,
                 encoded.encode("ascii"),
                 hashlib.sha256,
             ).digest()
         )
         token = f"{encoded}.{signature}"
         if self._mongo is not None:
+            assert self._mongo_backend is not None
             self._mongo_backend.write(
                 self._mongo, "delete_many", {"expires": {"$lte": issued_at}}
             )

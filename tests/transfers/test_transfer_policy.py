@@ -1,4 +1,6 @@
 import asyncio
+from types import SimpleNamespace
+from typing import cast
 from unittest.mock import AsyncMock
 
 from tests.transfers.test_multipart_transfers import (
@@ -14,13 +16,14 @@ from tgdrive.transfers.tasks import TransferRegistry, TransferStatus
 
 async def test_smaller_operator_split_preserves_all_bytes(tmp_path):
     manager, ledger = await manager_for(tmp_path)
-    manager.settings.bot_upload_limit = 4 * 1024**2
+    cast(SimpleNamespace, manager.settings).bot_upload_limit = 4 * 1024**2
     manager.settings.upload_split_mib = 1
-    manager.settings.upload_limit = 16 * 1024**2
+    cast(SimpleNamespace, manager.settings).upload_limit = 16 * 1024**2
     payload = b"a" * (2 * 1024**2) + b"end"
     source = staged(manager, payload)
     record = await manager.enqueue_upload(source, "/", "split.bin", len(payload))
     try:
+        assert record.task is not None
         await asyncio.wait_for(record.task, 5)
         assert record.status is TransferStatus.COMPLETED
         item = stored(manager)
@@ -59,6 +62,7 @@ async def test_url_source_remains_remote_after_staging_and_resume_uses_staged_fi
         manager._upload_path = AsyncMock()
         manager._remote_pipeline = AsyncMock()
         (await manager._resume(job))
+        assert job.task is not None
         await job.task
         manager._upload_path.assert_awaited_once()
         manager._remote_pipeline.assert_not_awaited()

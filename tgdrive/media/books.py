@@ -120,6 +120,7 @@ async def parse_book(data, fetch, entry=None, *, thumbnail=False, raw_images=Fal
         env=environment,
         limit=MAX_OUTPUT,
     )
+    assert process.stdin is not None and process.stdout is not None
     raster = (
         raw_images
         and not thumbnail

@@ -1,12 +1,14 @@
 """PDF preview purpose retains demand bytes without bulk preload admission."""
 
 from types import SimpleNamespace
+from typing import cast
 from unittest.mock import Mock
 
 import pytest
 
 from tests.media.test_multipart_streaming import MultipartClient, build_parts
 from tests.media.test_streaming import FakeStreamClient, make_request, response_body
+from tgdrive.media.preloading import PreloadManager
 from tgdrive.media.streaming import stream_telegram_file
 from tgdrive.telegram.client_pool import ClientPool
 
@@ -29,7 +31,7 @@ async def test_pdf_preview_and_download_do_not_start_extra_preloading(
         delivered=Mock(),
         finished=Mock(),
     )
-    pool._preload_manager = manager
+    pool._preload_manager = cast(PreloadManager, manager)
     await pool.start()
     try:
         response = await stream_telegram_file(

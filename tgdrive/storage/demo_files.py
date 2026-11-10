@@ -85,7 +85,7 @@ def check_transfer(store, record):
         )
 
 
-def annotate(record):
+def annotate[T](record: T) -> T:
     """Annotate independent HTTP records; never add presentation fields to storage."""
     if isinstance(record, list):
         for item in record:

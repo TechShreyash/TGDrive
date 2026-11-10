@@ -237,11 +237,14 @@ class CachedThumbnailRepair:
                             output, path = opened
                         if interrupted:
                             raise asyncio.CancelledError
+                    if output is None or path is None:
+                        raise CachedSourceUnavailable
                     count = await _owned_disk_call(output.write, block)
+                    assert count is not None
                     if count != len(block):
                         raise CachedSourceUnavailable
                     written += count
-                if output is None or written != source["size"]:
+                if output is None or path is None or written != source["size"]:
                     raise CachedSourceUnavailable
                 await _owned_disk_call(output.flush)
                 if await _owned_disk_call(lambda: path.stat().st_size) != written:
@@ -431,6 +434,7 @@ async def _generate(
                 process, interrupted = await _finish_owned(opening)
                 if interrupted:
                     raise asyncio.CancelledError
+                assert process is not None and process.stdout is not None
                 if on_start is not None:
                     on_start()
                 content = bytearray()

@@ -1,10 +1,12 @@
 """Operation receipts identify stored media without losing deletion tombstones."""
 
+from typing import cast
+
 import pytest
 
 from tests.support.mongo_fixtures import FakeMongoBackend, new_store
 from tgdrive.core.errors import ValidationError
-from tgdrive.storage.mongo import DatabaseUnavailable
+from tgdrive.storage.mongo import DatabaseUnavailable, MongoBackend
 from tgdrive.storage.mongo_store import MongoStore
 
 
@@ -44,7 +46,7 @@ def test_operation_media_matching_rejects_invalid_message_ids(store, message_id)
 
 
 def test_closed_mongo_store_cannot_confirm_operation_absence():
-    store = MongoStore.create(FakeMongoBackend())
+    store = MongoStore.create(cast(MongoBackend, FakeMongoBackend()))
     store.close()
     with pytest.raises(DatabaseUnavailable):
         store.has_file_operation("unknown-operation")

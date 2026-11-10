@@ -58,6 +58,7 @@ async def test_catalog_delete_waits_for_backup_and_retains_original_messages(
     store.finish_deletion = checked_finish
     try:
         job = await manager.start_deletion(path)
+        assert job.task is not None
         await job.task
         assert job.status is TransferStatus.COMPLETED
         assert telegram.deleted == [] and 77 in telegram.messages
@@ -102,7 +103,9 @@ async def test_bulk_delete_confirms_all_copies_before_any_catalog_removal(
     monkeypatch.setattr(store, "finish_deletion", checked_finish)
     try:
         jobs = await manager.start_deletions(paths)
-        await asyncio.gather(*(job.task for job in jobs))
+        tasks = [job.task for job in jobs]
+        assert all(task is not None for task in tasks)
+        await asyncio.gather(*(task for task in tasks if task is not None))
         assert all(job.status is TransferStatus.COMPLETED for job in jobs)
         manager._ensure_replica.assert_awaited_once()
         assert store.list_trash() == {} and store.pending_deletions() == []
@@ -132,6 +135,7 @@ async def test_paused_backup_prevents_permanent_delete_and_retry_preserves_inten
     replica.update(phase="paused")
     try:
         job = await manager.start_deletion(path)
+        assert job.task is not None
         await job.task
         assert job.status is TransferStatus.ERROR
         assert telegram.deleted == [] and 77 in telegram.messages
@@ -139,6 +143,7 @@ async def test_paused_backup_prevents_permanent_delete_and_retry_preserves_inten
         assert not remote.pins
         replica.update(phase="idle")
         retry = await manager.retry_job(job.id)
+        assert retry.task is not None
         await retry.task
         assert retry.status is TransferStatus.COMPLETED
         assert telegram.deleted == [] and 77 in telegram.messages
@@ -164,6 +169,7 @@ async def test_unavailable_backup_blocks_delete_without_erasing_main_or_its_refs
     )
     try:
         job = await manager.start_deletion(path)
+        assert job.task is not None
         await job.task
         assert job.status is TransferStatus.ERROR
         manager._ensure_replica.assert_awaited_once()
@@ -198,12 +204,14 @@ async def test_mongo_settings_outage_retains_backup_and_blocks_delete_until_retr
     try:
         await replica._sync(config)
         point = replica.journal.get("restore_point")
+        assert isinstance(point, dict)
         kit = replica.key()
         messages = dict(remote.messages)
         receipts = dict(remote.receipts)
         monkeypatch.setattr(collection, "find_one", unavailable)
 
         job = await manager.start_deletion(path)
+        assert job.task is not None
         await job.task
         assert job.status is TransferStatus.ERROR
         assert job.phase == "checking_backup"
@@ -221,6 +229,7 @@ async def test_mongo_settings_outage_retains_backup_and_blocks_delete_until_retr
 
         monkeypatch.setattr(collection, "find_one", find_one)
         retry = await manager.retry_job(job.id)
+        assert retry.task is not None
         await retry.task
         assert retry.status is TransferStatus.ERROR
         assert replica.status()["error"]["retry_at"] == error["retry_at"]
@@ -230,6 +239,7 @@ async def test_mongo_settings_outage_retains_backup_and_blocks_delete_until_retr
 
         replica.update(error=error | {"retry_at": time.time() - 1})
         retry = await manager.retry_job(job.id)
+        assert retry.task is not None
         await retry.task
         assert retry.status is TransferStatus.COMPLETED
         assert store.pending_deletions() == [] and store.list_trash() == {}
@@ -257,6 +267,7 @@ async def test_background_backup_does_not_block_normal_upload_completion(tmp_pat
         job = await manager.enqueue_upload(
             source, "/", "new.bin", source.stat().st_size
         )
+        assert job.task is not None
         await job.task
         assert job.status is TransferStatus.COMPLETED
         manager._ensure_replica.assert_not_called()

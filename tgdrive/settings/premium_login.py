@@ -112,6 +112,7 @@ class PremiumLoginService:
                 "Login is unavailable while TGDrive stops.", status=503
             )
         task = asyncio.current_task()
+        assert task is not None
         self._operations.add(task)
         try:
             yield
@@ -422,9 +423,9 @@ class PremiumLoginService:
                         code="TELEGRAM_LOGIN_EXPIRED",
                         status=410,
                     ) from None
-                if isinstance(error, PremiumLoginProblem) or (
-                    hasattr(error, "code") and str(error.code).startswith("SETTINGS_")
-                ):
+                if isinstance(error, PremiumLoginProblem) or str(
+                    getattr(error, "code", "")
+                ).startswith("SETTINGS_"):
                     raise
                 raise PremiumLoginProblem(
                     "This account could not be connected. "

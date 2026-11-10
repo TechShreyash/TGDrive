@@ -8,6 +8,9 @@ import os
 import re
 import secrets
 import shutil
+from collections.abc import Callable
+from pathlib import Path
+from typing import BinaryIO
 
 from fastapi import Depends, HTTPException, Request, Response
 from pydantic import Field, SecretStr, StrictBool
@@ -111,8 +114,10 @@ def register_replica_routes(app, settings, require_admin, get_runtime):
 
         opened = []
 
-        def open_download():
-            acquire = getattr(current, "open_recovery_file", None)
+        def open_download() -> tuple[Path, BinaryIO]:
+            acquire: Callable[[], tuple[Path, BinaryIO]] | None = getattr(
+                current, "open_recovery_file", None
+            )
             if callable(acquire):
                 path, content = acquire()
             else:

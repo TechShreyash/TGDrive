@@ -81,14 +81,21 @@ class Native:
         self.active = self.peak = 0
         self.iterators = []
 
+    def is_connected(self) -> bool:
+        return True
+
     def iter_download(self, target, *, offset, request_size, limit):
         dc, location = utils.get_input_location(target)
         assert dc == 2 and request_size == MIB // 2
         return Iterator(self, location.id, offset, limit)
 
 
+class MediaClient(Client):
+    native: Native
+
+
 def transport(native, name="account-one"):
-    value = Client.__new__(Client)
+    value = MediaClient.__new__(MediaClient)
     value.native, value.name = native, name
     return value
 

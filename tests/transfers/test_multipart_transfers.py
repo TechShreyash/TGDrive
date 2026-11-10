@@ -6,16 +6,19 @@ import threading
 import time
 from contextlib import asynccontextmanager
 from types import SimpleNamespace
+from typing import cast
 from unittest.mock import AsyncMock
 
 import pytest
 from telethon.errors import FloodWaitError
 
 from tests.support.mongo_fixtures import new_store, register_test_backend, reopen_store
+from tgdrive.core.config import Settings
 from tgdrive.storage.mongo import for_directory
 from tgdrive.telegram.client_pool import ClientPool, NoClientAvailable
 from tgdrive.transfers.manager import TransferError, TransferManager
 from tgdrive.transfers.multipart_transfer import fingerprint
+from tgdrive.transfers.remote import RemoteClient
 from tgdrive.transfers.tasks import TransferRegistry, TransferStatus
 
 
@@ -26,6 +29,7 @@ def mongo_backend(tmp_path, monkeypatch):
 
 def registry_for(directory):
     backend = for_directory(directory)
+    assert backend is not None
     return TransferRegistry(mongo=backend.db.jobs, mongo_backend=backend)
 
 
@@ -55,7 +59,7 @@ class Ledger:
         self.next_id = 100
         self.lose_once = False
         self.flood_seconds = 0
-        self.rpc_delay = 0
+        self.rpc_delay = 0.0
         self.fail_cleanup = False
         self.flood_cleanup = False
         self.hold = False
@@ -170,11 +174,11 @@ async def manager_for(
         min_free_bytes=0,
     )
     manager = TransferManager(
-        settings=settings,
+        settings=cast(Settings, settings),
         pool=pool,
         store=new_store(tmp_path / "drive"),
         registry=registry_for(tmp_path),
-        remote=SimpleNamespace(close=AsyncMock()),
+        remote=cast(RemoteClient, SimpleNamespace(close=AsyncMock())),
         ensure_backup=callback,
     )
     return manager, ledger
@@ -228,6 +232,7 @@ async def test_bot_only_parts_commit_once_then_checkpoint(tmp_path):
         assert (await manager.pool.health()).active_leases == 0
         assert all(value == 1 for value in ledger.max_active.values())
         release.set()
+        assert record.task is not None
         await record.task
         assert record.status == TransferStatus.COMPLETED
         assert not source.exists()
@@ -257,6 +262,7 @@ async def test_telegram_recovery_clears_waiting_error_before_completion(
         record = await manager.enqueue_upload(
             staged(manager, b"abc"), "/", "small.bin", 3
         )
+        assert record.task is not None
         await record.task
 
         assert attempts == 2
@@ -276,6 +282,7 @@ async def test_lost_response_replays_same_sender_random_id_skips_confirmed_parts
     source = staged(manager, b"abcdefghij")
     record = await manager.enqueue_upload(source, "/", "ten.bin", 10)
     try:
+        assert record.task is not None
         await record.task
         assert record.status == TransferStatus.ERROR
         plan = record.context["multipart_plan"]
@@ -283,6 +290,7 @@ async def test_lost_response_replays_same_sender_random_id_skips_confirmed_parts
         assert not manager.store.list_directory("/")
         before_count = len(ledger.messages)
         record = await manager.retry_job(record.id)
+        assert record.task is not None
         await record.task
         assert record.status == TransferStatus.COMPLETED
         for before, part in zip(identities, plan["parts"], strict=True):
@@ -320,11 +328,12 @@ async def test_process_restart_reconciles_ambiguous_part_and_reuses_plan(tmp_pat
         pool=pool,
         store=reopen_store(tmp_path / "drive"),
         registry=registry_for(tmp_path),
-        remote=SimpleNamespace(close=AsyncMock()),
+        remote=cast(RemoteClient, SimpleNamespace(close=AsyncMock())),
     )
     try:
         await recovered.recover()
         row = recovered.registry.get(identity)
+        assert row.task is not None
         await row.task
         assert row.status == TransferStatus.COMPLETED
         assert [
@@ -347,6 +356,7 @@ async def test_cancel_reconciles_and_deletes_every_own_part_before_unlink(tmp_pa
         (await manager.cancel_job(record.id))
         assert source.exists()
         ledger.release.set()
+        assert record.task is not None
         await record.task
         assert record.status == TransferStatus.CANCELLED
         assert ledger.messages == {}
@@ -372,6 +382,7 @@ async def test_cancel_cleanup_failure_retains_bytes_and_retries_cleanup(tmp_path
         await asyncio.wait_for(ledger.dispatched.wait(), 2)
         (await manager.cancel_job(record.id))
         ledger.release.set()
+        assert record.task is not None
         await record.task
         assert record.status != TransferStatus.CANCELLED
         assert source.exists() and ledger.messages
@@ -379,6 +390,7 @@ async def test_cancel_cleanup_failure_retains_bytes_and_retries_cleanup(tmp_path
         sent = len(ledger.requests)
         ledger.fail_cleanup = False
         record = await manager.retry_job(record.id)
+        assert record.task is not None
         await record.task
         assert record.status == TransferStatus.CANCELLED
         assert not source.exists() and not ledger.messages
@@ -395,10 +407,12 @@ async def test_premium_never_raises_new_part_size(tmp_path, healthy, split_mib):
     manager.settings.upload_split_mib = split_mib
     if not healthy:
         user = next(slot.client for slot in manager.pool._slots if slot.kind == "user")
+        assert user is not None
         await manager.pool.mark_unhealthy(user)
     source = staged(manager, b"abcdef")
     record = await manager.enqueue_upload(source, "/", "six.bin", 6)
     try:
+        assert record.task is not None
         await record.task
         assert record.status == TransferStatus.COMPLETED
         assert [part["size"] for part in stored(manager)["parts"]] == [4, 2]
@@ -410,13 +424,14 @@ async def test_premium_never_raises_new_part_size(tmp_path, healthy, split_mib):
 
 async def test_smaller_split_applies_to_premium_and_preserves_original(tmp_path):
     manager, ledger = await manager_for(tmp_path, users=True)
-    manager.settings.bot_upload_limit = 4 * 1024**2
+    cast(SimpleNamespace, manager.settings).bot_upload_limit = 4 * 1024**2
     manager.settings.upload_split_mib = 1
     payload = b"a" * (3 * 1024**2 + 7)
     record = await manager.enqueue_upload(
         staged(manager, payload), "/", "data.bin", len(payload)
     )
     try:
+        assert record.task is not None
         await record.task
         assert record.status == TransferStatus.COMPLETED
         parts = stored(manager)["parts"]
@@ -459,6 +474,7 @@ async def test_upload_part_flood_wait_persists_fixed_sender_and_retries(tmp_path
     source = staged(manager, b"abcdefghij")
     record = await manager.enqueue_upload(source, "/", "ten.bin", 10)
     try:
+        assert record.task is not None
         await record.task
         assert record.status == TransferStatus.COMPLETED
         first = ledger.calls[0]
@@ -474,6 +490,7 @@ async def test_global_media_slot_not_held_while_fixed_sender_cooling(tmp_path):
     manager, _ledger = await manager_for(tmp_path)
     await manager.pool.defer_client("bot-one", time.time() + 0.05)
     async with manager.pool.lease(client_name="bot-one", media=True) as client:
+        assert isinstance(client, Account)
         assert client.name == "bot-one"
     assert manager._semaphore._value == 2
     await dispose(manager)
@@ -499,7 +516,8 @@ async def test_cancel_refuses_to_delete_replaced_remote_document(tmp_path):
                 message.native.document.id += 1
             await original(item)
 
-        manager._verify_lineage = replace_before_delete
+        manager._verify_lineage = AsyncMock(side_effect=replace_before_delete)
+        assert record.task is not None
         await record.task
         assert record.status != TransferStatus.CANCELLED
         assert source.exists()
@@ -520,6 +538,7 @@ async def test_refetch_rejects_changed_native_document_identity(tmp_path):
         OSError("synthetic commit error")
     )
     try:
+        assert record.task is not None
         await record.task
         assert record.status == TransferStatus.ERROR
         part = record.context["multipart_plan"]["parts"][0]
@@ -528,8 +547,10 @@ async def test_refetch_rejects_changed_native_document_identity(tmp_path):
         (await manager.registry.persist(record))
         manager.store.add_file = original
         retried = await manager.retry_job(record.id)
+        assert retried.task is not None
         await retried.task
         assert retried.status == TransferStatus.ERROR
+        assert retried.error is not None
         assert "identity changed" in retried.error
         assert source.exists()
         assert manager.store.list_directory("/") == {}
@@ -547,6 +568,7 @@ async def test_cleanup_flood_wait_is_durable_and_does_not_rotate_sender(tmp_path
         await asyncio.wait_for(ledger.dispatched.wait(), 2)
         (await manager.cancel_job(record.id))
         ledger.release.set()
+        assert record.task is not None
         await record.task
         assert record.status == TransferStatus.CANCELLED
         assert record.context["channel_retry_at"] > 0
@@ -568,6 +590,7 @@ async def test_one_flooding_part_does_not_hide_other_active_part_progress(tmp_pa
         assert record.phase in {"uploading", "finalizing"}
         assert record.as_dict()["retry_at"] is None
         ledger.release.set()
+        assert record.task is not None
         await record.task
         assert record.status == TransferStatus.COMPLETED
     finally:
@@ -578,6 +601,7 @@ async def test_one_flooding_part_does_not_hide_other_active_part_progress(tmp_pa
 async def test_fully_waiting_logical_upload_exposes_provider_retry_deadline(tmp_path):
     manager, ledger = await manager_for(tmp_path, flood=True)
     second = next(slot.client for slot in manager.pool._slots if slot.name == "bot-two")
+    assert second is not None
     await manager.pool.mark_unhealthy(second)
     source = staged(manager, b"abcdefghij")
     record = await manager.enqueue_upload(source, "/", "ten.bin", 10)
@@ -588,6 +612,7 @@ async def test_fully_waiting_logical_upload_exposes_provider_retry_deadline(tmp_
                 await asyncio.sleep(0.001)
         assert record.phase == "retry_wait"
         assert record.as_dict()["retry_at"] > time.time()
+        assert record.task is not None
         await record.task
         assert record.status == TransferStatus.COMPLETED
     finally:
@@ -610,6 +635,8 @@ async def test_cancel_recovery_skips_deleted_unconfirmed_parts(
 
     for slot in manager.pool._slots:
         client = slot.client
+        assert client is not None
+        assert isinstance(client, Account)
         original = client.delete_messages
         originals.append((client, original))
 
@@ -628,6 +655,7 @@ async def test_cancel_recovery_skips_deleted_unconfirmed_parts(
         await asyncio.wait_for(ledger.both_dispatched.wait(), 2)
         (await manager.cancel_job(record.id))
         ledger.release.set()
+        assert record.task is not None
         await record.task
         assert record.status == TransferStatus.QUEUED
         assert source.exists()
@@ -642,6 +670,7 @@ async def test_cancel_recovery_skips_deleted_unconfirmed_parts(
         for client, original in originals:
             monkeypatch.setattr(client, "delete_messages", original)
         retried = await manager.retry_job(record.id)
+        assert retried.task is not None
         await retried.task
         assert retried.status == TransferStatus.CANCELLED
         assert not ledger.messages
@@ -659,6 +688,7 @@ async def test_restart_restores_flood_cooldown_from_terminal_error_job(tmp_path)
     ledger.lose_once = True
     source = staged(manager, b"abcdefghij")
     failed = await manager.enqueue_upload(source, "/", "ten.bin", 10)
+    assert failed.task is not None
     await failed.task
     assert failed.status == TransferStatus.ERROR
     assert failed.context["multipart_plan"]["parts"][0]["retry_at"] > time.time()
@@ -673,7 +703,7 @@ async def test_restart_restores_flood_cooldown_from_terminal_error_job(tmp_path)
         pool=pool,
         store=reopen_store(tmp_path / "drive"),
         registry=registry_for(tmp_path),
-        remote=SimpleNamespace(close=AsyncMock()),
+        remote=cast(RemoteClient, SimpleNamespace(close=AsyncMock())),
     )
     try:
         await recovered.recover()
@@ -684,6 +714,7 @@ async def test_restart_restores_flood_cooldown_from_terminal_error_job(tmp_path)
         fresh = manager.cache_dir / "new.upload"
         fresh.write_bytes(b"x")
         job = await recovered.enqueue_upload(fresh, "/", "new.bin", 1)
+        assert job.task is not None
         await asyncio.wait_for(job.task, 2)
         assert job.status == TransferStatus.COMPLETED
         assert ledger.calls[-1][0] == "bot-two"
@@ -752,6 +783,7 @@ async def test_hash_thread_is_drained_and_stage_cleanup_distinguishes_shutdown(
         await asyncio.wait_for(entered.wait(), 2)
         if user_cancel:
             (await manager.cancel_job(record.id))
+            assert record.task is not None
             record.task.cancel()
         else:
             shutdown = asyncio.create_task(manager.registry.shutdown())
@@ -762,6 +794,7 @@ async def test_hash_thread_is_drained_and_stage_cleanup_distinguishes_shutdown(
         release.set()
         if shutdown is not None:
             await shutdown
+        assert record.task is not None
         await asyncio.gather(record.task, return_exceptions=True)
         assert finished.is_set()
         assert manager._semaphore._value == 2
@@ -789,6 +822,8 @@ async def test_queued_small_file_gets_media_turn_before_large_file_finishes(tmp_
         small = manager.cache_dir / "small.upload"
         small.write_bytes(b"z")
         tiny = await manager.enqueue_upload(small, "/", "small.bin", 1)
+        assert big.task is not None
+        assert tiny.task is not None
         await asyncio.gather(big.task, tiny.task)
         assert big.status == tiny.status == TransferStatus.COMPLETED
         small_turn = next(
@@ -851,6 +886,7 @@ async def test_one_large_file_uses_every_eligible_client_slot(tmp_path, mixed_cl
         if mixed_clients:
             (await manager.cancel_job(record.id))
         ledger.release.set()
+        assert record.task is not None
         await asyncio.wait_for(record.task, 2)
         if mixed_clients:
             assert record.status == TransferStatus.CANCELLED
@@ -889,6 +925,7 @@ async def test_multipart_workers_follow_live_per_bot_limit(tmp_path):
             "a": 2
         }  # Lowering drains; it never cancels current sends.
         ledger.release.set()
+        assert record.task is not None
         await asyncio.wait_for(record.task, 2)
         assert record.status == TransferStatus.COMPLETED
         assert ledger.max_active == {"a": 2}

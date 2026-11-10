@@ -466,7 +466,11 @@ async def test_tcp_stalled_cached_download_does_not_block_a_different_video(
 @pytest.mark.asyncio
 async def test_browser_fixture_uses_the_real_pooled_cache_and_closes_it():
     """Browser decoding tests must not silently bypass cache/backpressure code."""
-    from tests.support.browser_transfer_app import FixtureRuntime, settings
+    from tests.support.browser_transfer_app import (
+        FixtureClient,
+        FixtureRuntime,
+        settings,
+    )
     from tgdrive.telegram.clients import _block_identity
 
     runtime = FixtureRuntime()
@@ -474,6 +478,7 @@ async def test_browser_fixture_uses_the_real_pooled_cache_and_closes_it():
     cache = runtime.pool._media_read_cache
     try:
         async with runtime.pool.lease() as client:
+            assert isinstance(client, FixtureClient)
             source = await client.get_messages(
                 settings.storage_channel, message_ids=101
             )

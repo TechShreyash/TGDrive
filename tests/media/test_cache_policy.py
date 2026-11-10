@@ -137,6 +137,7 @@ async def test_disk_write_is_deferred_and_included_in_memory_budget(
         tmp_path, MediaCachePolicy(memory_max_bytes=8 * BLOCK, min_free_bytes=0)
     )
     started, release = threading.Event(), threading.Event()
+    assert cache.disk is not None
     original = cache.disk.write
 
     def slow_write(*args):
@@ -165,6 +166,7 @@ async def test_disk_write_is_deferred_and_included_in_memory_budget(
     finally:
         release.set()
         await cache.close()
+    assert cache.disk is not None
     assert cache.disk.read(key(size=BLOCK), BLOCK) == payload
 
 
@@ -259,6 +261,7 @@ async def test_clear_during_inflight_read_does_not_resurrect_payload(tmp_path):
     gate.set()
     assert await task == b"abc"
     assert not cache.memory.entries
+    assert cache.disk is not None
     assert cache.disk.read(key(size=3), 3) is None
     await cache.close()
 
@@ -296,8 +299,7 @@ async def test_alternate_representations_do_not_combine_ready_ranges(tmp_path):
     cache = MediaReadCache(tmp_path, MediaCachePolicy(disk_max_bytes=0))
     cache.register_file(channel_id=CHANNEL, message_id=77, size=2 * BLOCK, name="movie")
     original = key(size=2 * BLOCK)
-    alternate = list(key(index=1, size=2 * BLOCK))
-    alternate[3] += 1
+    alternate = (CHANNEL, 77, "document", 178, 2 * BLOCK, 1)
     try:
         await cache.get(original, BLOCK, lambda: asyncio.sleep(0, result=b"a" * BLOCK))
         await cache.get(

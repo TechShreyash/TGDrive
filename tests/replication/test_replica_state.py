@@ -124,6 +124,7 @@ def test_large_journal_values_are_chunked_and_round_trip(tmp_path):
     value = {"database": "x" * (ReplicaJournal.CHUNK * 2 + 5)}
     journal.set("job", value)
     assert journal.get("job") == value
+    assert journal.backend is not None
     assert journal.backend.db.replica_chunks.count_documents({"key": "job"}) == 3
     journal.set("job", None)
     assert journal.get("job", "missing") is None
@@ -287,10 +288,13 @@ def test_journal_resource_rejection_is_memoized_until_a_replacement_write(
         assert failure.value.status == 409
     assert len(reads) == 1
     memo = journal.resource_error()
+    assert memo is not None
     assert memo["key"] == "candidate" and memo["code"] == "ACTIVATION_RESOURCE_LIMIT"
     memo["detail"] = "changed outside the journal"
-    assert journal.resource_error()["detail"] != memo["detail"]
-    assert backend.db.replica_chunks.find_one({"key": "candidate"})["data"] == raw
+    original_memo = journal.resource_error()
+    assert original_memo is not None and original_memo["detail"] != memo["detail"]
+    chunk = backend.db.replica_chunks.find_one({"key": "candidate"})
+    assert chunk is not None and chunk["data"] == raw
     journal.set("candidate", {"repaired": True})
     assert journal.resource_error() is None
     before_refresh = len(reads)
@@ -332,11 +336,12 @@ def test_journal_chunk_stream_keeps_utf8_characters_and_legacy_bson_types(
     }
     journal.set("candidate", value)
     assert journal.get("candidate") == value
+    assert journal.backend is not None
     chunks = journal.backend.db.replica_chunks
     assert chunks.count_documents({"key": "candidate"}) > 1
-    assert journal.backend.db.replica_state.find_one({"_id": "candidate"})[
-        "length"
-    ] == len(
+    state = journal.backend.db.replica_state.find_one({"_id": "candidate"})
+    assert state is not None
+    assert state["length"] == len(
         "".join(
             row["data"] for row in chunks.find({"key": "candidate"}).sort("index", 1)
         )
@@ -371,7 +376,7 @@ def test_related_journal_reads_cannot_mix_a_concurrent_commit(tmp_path, monkeypa
         def __exit__(self, *args):
             return original_lock.__exit__(*args)
 
-    journal.lock = ObservedLock()
+    monkeypatch.setattr(journal, "lock", ObservedLock())
     original_get = journal.get
 
     def read(key, default=None):
@@ -414,12 +419,17 @@ def test_related_journal_reads_cannot_mix_a_concurrent_commit(tmp_path, monkeypa
 @pytest.mark.parametrize("operation", ["mutation", "publish"])
 @pytest.mark.parametrize("cancel", [False, True])
 async def test_blocking_replica_work_keeps_loop_responsive_and_drains_cancellation(
-    tmp_path, operation, cancel
+    tmp_path, monkeypatch, operation, cancel
 ):
     replica = ChannelReplica.__new__(ChannelReplica)
     replica.directory = tmp_path
     replica._operation = asyncio.Lock()
-    replica.journal = SimpleNamespace(get=lambda *_args: {"phase": "paused"})
+    monkeypatch.setattr(
+        replica,
+        "journal",
+        SimpleNamespace(get=lambda *_args: {"phase": "paused"}),
+        raising=False,
+    )
     entered, release, completed = (
         threading.Event(),
         threading.Event(),
@@ -440,7 +450,7 @@ async def test_blocking_replica_work_keeps_loop_responsive_and_drains_cancellati
         replica._mutation_config = blocked
         task = asyncio.create_task(replica.before_mutation())
     else:
-        replica._stage_bundle = blocked
+        monkeypatch.setattr(replica, "_stage_bundle", blocked)
         task = asyncio.create_task(
             replica._publish(None, -1001, -1002, {}, {}, {}, "key")
         )
@@ -471,11 +481,12 @@ async def test_copy_progress_coalesces_without_coalescing_durable_receipts(
     replica = ChannelReplica.__new__(ChannelReplica)
     updates, receipts = [], []
     replica.update = lambda **values: updates.append(values)
-    replica.journal = SimpleNamespace(
+    journal = SimpleNamespace(
         get=lambda *_args: {},
         intent=lambda identity, size: (size, None),
         confirm=lambda identity, message: receipts.append((identity, message)),
     )
+    monkeypatch.setattr(replica, "journal", journal, raising=False)
     monkeypatch.setattr(replica_module, "time", SimpleNamespace(monotonic=lambda: 0))
     transport = SimpleNamespace(copy=AsyncMock(side_effect=[111, 112]))
     catalog = payload()["catalog"]

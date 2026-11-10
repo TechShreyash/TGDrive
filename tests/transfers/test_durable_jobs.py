@@ -5,16 +5,19 @@ import gc
 import hashlib
 import weakref
 from types import SimpleNamespace
+from typing import cast
 from unittest.mock import AsyncMock
 
 import pytest
 from pymongo.errors import ConnectionFailure
 
 from tests.support.mongo_fixtures import new_store, register_test_backend, reopen_store
+from tgdrive.core.config import Settings
 from tgdrive.core.errors import NotFoundError
 from tgdrive.storage.mongo import DatabaseUnavailable, for_directory
 from tgdrive.telegram.client_pool import ClientPool
 from tgdrive.transfers.manager import TransferManager
+from tgdrive.transfers.remote import RemoteClient
 from tgdrive.transfers.tasks import TransferNotFound, TransferRegistry, TransferStatus
 
 pytestmark = pytest.mark.usefixtures("mongo_backend")
@@ -27,6 +30,7 @@ def mongo_backend(tmp_path, monkeypatch):
 
 def registry_for(path, **kwargs):
     backend = for_directory(path.parent)
+    assert backend is not None
     return TransferRegistry(mongo=backend.db.jobs, mongo_backend=backend, **kwargs)
 
 
@@ -111,11 +115,11 @@ def manager_for(tmp_path, pool, *, store=None, registry=None):
         upload_limit=4_000_000_000,
     )
     return TransferManager(
-        settings=settings,
+        settings=cast(Settings, settings),
         pool=pool,
         store=store or new_store(tmp_path / "drive"),
         registry=registry or registry_for(tmp_path / "jobs"),
-        remote=SimpleNamespace(close=AsyncMock()),
+        remote=cast(RemoteClient, SimpleNamespace(close=AsyncMock())),
     )
 
 
@@ -128,6 +132,7 @@ async def test_lost_send_response_retries_same_sender_and_random_id(tmp_path):
     source.write_bytes(b"immutable payload")
     telegram.lose_response = True
     job = await manager.enqueue_upload(source, "/", "one.bin", source.stat().st_size)
+    assert job.task is not None
     await job.task
     assert job.status == TransferStatus.ERROR
     assert source.exists()
@@ -140,6 +145,7 @@ async def test_lost_send_response_retries_same_sender_and_random_id(tmp_path):
         registry=registry_for(tmp_path / "jobs"),
     )
     retry = await recovered.retry_job(job.id)
+    assert retry.task is not None
     await retry.task
     assert retry.status == TransferStatus.COMPLETED
     assert retry.context["sender"] == sender
@@ -166,6 +172,7 @@ async def test_retry_after_metadata_commit_does_not_duplicate_visible_file(
 
     monkeypatch.setattr(manager.store, "add_file", commit_then_lose_response)
     job = await manager.enqueue_upload(source, "/", "one.bin", 5)
+    assert job.task is not None
     await job.task
     assert job.status == TransferStatus.ERROR
     assert len(manager.store.list_directory("/")) == 1
@@ -176,6 +183,7 @@ async def test_retry_after_metadata_commit_does_not_duplicate_visible_file(
         registry=registry_for(tmp_path / "jobs"),
     )
     retry = await recovered.retry_job(job.id)
+    assert retry.task is not None
     await retry.task
     assert retry.status == TransferStatus.COMPLETED
     assert len(recovered.store.list_directory("/")) == 1
@@ -207,6 +215,7 @@ async def test_shutdown_preserves_ambiguous_send_for_restart_reconciliation(tmp_
     )
     await recovered.recover()
     resumed = recovered.registry.get(job.id)
+    assert resumed.task is not None
     await resumed.task
     assert resumed.status == TransferStatus.COMPLETED
     assert len(telegram.messages) == 1
@@ -229,6 +238,7 @@ async def test_cancelled_ambiguous_send_stays_recoverable_until_remote_cleanup(
     await telegram.started.wait()
     (await registry.cancel(job.id))
     with pytest.raises(asyncio.CancelledError):
+        assert job.task is not None
         await job.task
     assert job.status == TransferStatus.QUEUED
     assert job.phase == "cleanup_pending"
@@ -243,6 +253,7 @@ async def test_cancelled_ambiguous_send_stays_recoverable_until_remote_cleanup(
     assert recovered.registry.get(job.id).cancel_event.is_set()
     await recovered.recover()
     resumed = recovered.registry.get(job.id)
+    assert resumed.task is not None
     await resumed.task
     assert resumed.status == TransferStatus.CANCELLED
     assert not telegram.messages and not source.exists()
@@ -275,6 +286,7 @@ async def test_failed_delete_retries_as_catalog_removal_after_restart(
 
     monkeypatch.setattr(manager.store, "finish_deletion", database_unavailable)
     job = await manager.start_deletion(path)
+    assert job.task is not None
     await job.task
     assert job.status is TransferStatus.ERROR
     assert manager.store.message_ids(path, include_trashed=True) == list(range(1, 106))
@@ -290,6 +302,7 @@ async def test_failed_delete_retries_as_catalog_removal_after_restart(
         registry=registry_for(tmp_path / "jobs"),
     )
     retried = await recovered.retry_job(job.id)
+    assert retried.task is not None
     await retried.task
     assert retried.status == TransferStatus.COMPLETED
     assert telegram.deleted == [] and len(telegram.messages) == 105
@@ -311,6 +324,7 @@ async def test_permanent_delete_needs_no_telegram_client_and_revokes_shares(tmp_
     manager.store.set_trashed(path, True)
     try:
         job = await manager.start_deletion(path)
+        assert job.task is not None
         await job.task
         assert job.status is TransferStatus.COMPLETED
         assert manager.store.list_trash() == {}
@@ -360,7 +374,8 @@ async def test_bulk_deletion_protects_all_intents_once_before_removal(
         assert len(jobs) == 3 and not any(job.terminal for job in jobs)
         manager._ensure_replica.assert_awaited_once()
         release.set()
-        await asyncio.gather(*(job.task for job in jobs))
+        assert all(job.task is not None for job in jobs)
+        await asyncio.gather(*(cast(asyncio.Task[None], job.task) for job in jobs))
         assert all(job.status is TransferStatus.COMPLETED for job in jobs)
         assert manager.store.pending_deletions() == []
         assert manager.store.list_trash() == {}
@@ -370,6 +385,7 @@ async def test_bulk_deletion_protects_all_intents_once_before_removal(
         manager.store.set_trashed(path, True)
         manager._ensure_replica.side_effect = None
         separate = await manager.start_deletion(path)
+        assert separate.task is not None
         await separate.task
         assert manager._ensure_replica.await_count == 2
     finally:
@@ -392,7 +408,8 @@ async def test_bulk_backup_failure_preserves_each_item_and_retry_hides_it(
     manager._ensure_replica = AsyncMock(side_effect=RuntimeError("backup unavailable"))
     try:
         jobs = await manager.start_deletions(paths)
-        await asyncio.gather(*(job.task for job in jobs))
+        assert all(job.task is not None for job in jobs)
+        await asyncio.gather(*(cast(asyncio.Task[None], job.task) for job in jobs))
         manager._ensure_replica.assert_awaited_once()
         assert all(job.status is TransferStatus.ERROR for job in jobs)
         assert len(manager.store.list_trash()) == 2
@@ -432,6 +449,7 @@ async def test_bulk_backup_failure_preserves_each_item_and_retry_hides_it(
         assert set(manager.store.list_trash()) == {paths[1].rsplit("/", 1)[-1]}
         assert manager._ensure_replica.await_count == 1
         release.set()
+        assert retry.task is not None
         await retry.task
         assert retry.status is TransferStatus.COMPLETED
         assert manager._ensure_replica.await_count == 2
@@ -462,6 +480,7 @@ async def test_bulk_acceptance_failure_keeps_accepted_deletions_running(
         with pytest.raises(RuntimeError, match="catalog write unavailable"):
             await manager.start_deletions([path, "/later"])
         job = manager.registry.list()[0]
+        assert job.task is not None
         await job.task
         assert job.status is TransferStatus.COMPLETED
         assert manager.store.pending_deletions() == []
@@ -590,9 +609,11 @@ async def test_restart_retries_lost_network_response_without_duplicate_upload(tm
     source.write_bytes(b"immutable payload")
     telegram.lose_response = True
     job = await manager.enqueue_upload(source, "/", "one.bin", source.stat().st_size)
+    assert job.task is not None
     await job.task
     assert job.status is TransferStatus.ERROR
     assert job.context["restart_retryable"] is True
+    assert job.error is not None
     assert "restart TGDrive" in job.error
     random_id = job.context["random_id"]
     await manager.close()
@@ -602,6 +623,7 @@ async def test_restart_retries_lost_network_response_without_duplicate_upload(tm
     try:
         await recovered.recover()
         resumed = recovered.registry.get(job.id)
+        assert resumed.task is not None
         await resumed.task
         assert resumed.status is TransferStatus.COMPLETED
         assert telegram.calls == [random_id, random_id]
@@ -624,6 +646,7 @@ async def test_restart_does_not_retry_nontransient_transfer_failure(tmp_path):
     source = tmp_path / "receipt.part"
     source.write_bytes(b"bytes")
     job = await manager.enqueue_upload(source, "/", "one.bin", 5)
+    assert job.task is not None
     await job.task
     assert job.status is TransferStatus.ERROR
     assert not job.context.get("restart_retryable")
@@ -658,11 +681,13 @@ async def test_recovery_retries_a_finished_task_without_process_restart(tmp_path
             source, "/", "one.bin", source.stat().st_size
         )
         failed_task = job.task
+        assert failed_task is not None
         await failed_task
         assert job.status is TransferStatus.ERROR
         assert job.context["restart_retryable"] is True
         await manager.recover()
         assert job.task is not failed_task
+        assert job.task is not None
         await job.task
         assert job.status is TransferStatus.COMPLETED
         assert len(telegram.messages) == 1
@@ -719,8 +744,10 @@ async def test_live_channel_check_blocks_upload_before_any_telegram_send(
             job = await manager.enqueue_upload(
                 source, "/", "one.bin", source.stat().st_size
             )
+        assert job.task is not None
         await job.task
         assert job.status is TransferStatus.ERROR
+        assert job.error is not None
         assert "auto-delete" in job.error
         assert telegram.calls == []
         assert telegram.messages == {}
@@ -757,8 +784,10 @@ async def test_dispatched_upload_without_part_journal_preserves_staging(
     (await manager.registry.persist(job))
     try:
         (await manager._resume(job))
+        assert job.task is not None
         await job.task
         assert job.status is TransferStatus.ERROR
+        assert job.error is not None
         assert "missing its part journal" in job.error
         assert source.read_bytes() == b"retained payload"
         assert telegram.calls == []

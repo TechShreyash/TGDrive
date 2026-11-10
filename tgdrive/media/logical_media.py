@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import time
-from collections.abc import AsyncIterator
+from collections.abc import AsyncGenerator
 from typing import Any
 
 from telethon.errors import FloodWaitError, RPCError
@@ -147,7 +147,7 @@ class PartLease:
 
     async def read(
         self, selected: ByteRange, *, authorize=None, request_id=None
-    ) -> AsyncIterator[bytes]:
+    ) -> AsyncGenerator[bytes]:
         plan = plan_telegram_chunks(selected)
         from tgdrive.media.media_reader import stream_pooled_media
 

@@ -4,10 +4,28 @@ import asyncio
 import logging
 import time
 from collections import deque
+from typing import TypedDict
 
 logger = logging.getLogger(__name__)
 HISTORY_SECONDS = 300
 MAX_SAMPLE_GAP_SECONDS = 30
+
+
+class TrafficSample(TypedDict):
+    at: float
+    requests: int
+    active: int
+    download_bytes: int
+    upload_bytes: int
+    errors: int
+
+
+class TrafficSnapshot(TrafficSample):
+    download_bytes_per_second: float | None
+    upload_bytes_per_second: float | None
+    started_at: float
+    history: list[TrafficSample]
+    history_window_seconds: int
 
 
 class TrafficCounters:
@@ -19,7 +37,7 @@ class TrafficCounters:
         from tgdrive.observability.resource_metrics import ResourceMetrics
 
         self.resources = ResourceMetrics()
-        self.workload = dict.fromkeys(WORKLOAD_KINDS, 0)
+        self.workload: dict[str, int] = dict.fromkeys(WORKLOAD_KINDS, 0)
         self.diagnosis = PerformanceDiagnosis(self.workload)
         self.started_at = time.time()
         self.requests = 0
@@ -27,7 +45,7 @@ class TrafficCounters:
         self.download_bytes = 0
         self.upload_bytes = 0
         self.errors = 0
-        self.history = deque(maxlen=120)
+        self.history: deque[TrafficSample] = deque(maxlen=120)
         self._last_sample = 0
 
     def classify(self, scope, kind):
@@ -40,9 +58,9 @@ class TrafficCounters:
         self.workload[kind] += 1
         scope["tgdrive.workload"] = kind
 
-    def snapshot(self):
+    def snapshot(self) -> TrafficSnapshot:
         now = time.time()
-        current = {
+        current: TrafficSample = {
             "at": now,
             "requests": self.requests,
             "active": self.active,
@@ -74,15 +92,14 @@ class TrafficCounters:
         if now - self._last_sample >= 1:
             self._last_sample = now
             self.history.append(current)
-        return (
-            current
-            | rates
-            | {
-                "started_at": self.started_at,
-                "history": list(self.history),
-                "history_window_seconds": HISTORY_SECONDS,
-            }
-        )
+        return {
+            **current,
+            "download_bytes_per_second": rates["download_bytes_per_second"],
+            "upload_bytes_per_second": rates["upload_bytes_per_second"],
+            "started_at": self.started_at,
+            "history": list(self.history),
+            "history_window_seconds": HISTORY_SECONDS,
+        }
 
 
 async def sample_performance(counters, pool, *, interval=3, history=None):

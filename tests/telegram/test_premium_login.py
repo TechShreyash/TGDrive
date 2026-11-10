@@ -33,7 +33,7 @@ class LoginClient:
         self.disconnected = False
         self.logged_out = False
         self.calls = []
-        self.send_failure = None
+        self.send_failure: Exception | None = None
         self.session = SimpleNamespace(save=lambda: SESSION)
 
     async def connect(self):
@@ -214,6 +214,7 @@ async def test_send_flood_wait_is_preserved_and_blocks_further_requests():
         assert client.disconnected and not service.challenges
         with pytest.raises(PremiumLoginProblem) as waiting:
             await begin(service, phone="+441234567890")
+        assert waiting.value.retry_after is not None
         assert waiting.value.status == 429 and waiting.value.retry_after >= 122
         assert len(client.calls) == 1
     finally:
@@ -260,9 +261,11 @@ async def test_concurrent_submission_cannot_save_or_revoke_a_saved_session_twice
 
 
 def test_authentication_payload_representations_hide_every_secret():
-    start = LoginStart(expected_revision=1, phone=PHONE, label="Personal")
+    start = LoginStart(expected_revision=1, phone=SecretStr(PHONE), label="Personal")
     verification = LoginVerify(
-        challenge_id="a" * 43, code="12345", password="private-password"
+        challenge_id="a" * 43,
+        code=SecretStr("12345"),
+        password=SecretStr("private-password"),
     )
     assert PHONE not in repr(start)
     assert "12345" not in repr(verification) and "private-password" not in repr(
@@ -406,6 +409,7 @@ async def test_close_during_expired_reaper_logout_drains_disconnect_after_map_re
     now = [100.0]
     service, client, _ = login_service(clock=lambda: now[0])
     await begin(service)
+    assert service._reaper is not None
     service._reaper.cancel()
     with suppress(asyncio.CancelledError):
         await service._reaper

@@ -12,7 +12,7 @@ from types import SimpleNamespace
 from typing import Any
 from unittest.mock import patch
 
-from aiohttp.abc import AbstractResolver
+from aiohttp.abc import AbstractResolver, ResolveResult
 
 from tgdrive.transfers.remote import (
     RemoteCancelled,
@@ -38,7 +38,7 @@ class FakeResolver(AbstractResolver):
         host: str,
         port: int = 0,
         family: int = socket.AF_INET,
-    ) -> list[dict[str, Any]]:
+    ) -> list[ResolveResult]:
         self.calls.append((host, port, family))
         return [
             {
@@ -60,14 +60,14 @@ class FakeContent:
     def __init__(self, chunks: list[bytes] | None = None) -> None:
         self.chunks = deque(chunks or [])
 
-    async def read(self, limit: int) -> bytes:
+    async def read(self, size: int) -> bytes:
         await asyncio.sleep(0)
         if not self.chunks:
             return b""
         chunk = self.chunks.popleft()
-        if len(chunk) > limit:
-            self.chunks.appendleft(chunk[limit:])
-            return chunk[:limit]
+        if len(chunk) > size:
+            self.chunks.appendleft(chunk[size:])
+            return chunk[:size]
         return chunk
 
 

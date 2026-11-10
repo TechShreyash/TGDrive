@@ -22,7 +22,7 @@ class DiskMediaCache:
         directory: Path,
         *,
         max_bytes=512 * 1024**2,
-        ttl=86400,
+        ttl: float = 86400,
         max_entries=None,
         min_free_bytes=0,
         protected_fraction=0.75,
@@ -50,6 +50,7 @@ class DiskMediaCache:
         return hashlib.sha256(repr(identity).encode()).hexdigest()
 
     def _remove(self, key):
+        item = None
         if self._entries is not None:
             item = self._entries.pop(key, None)
             if item:
@@ -87,6 +88,7 @@ class DiskMediaCache:
         self._trim()
 
     def _demote(self):
+        assert self._entries is not None
         ceiling = self.max_bytes * self.protected_fraction
         while self._protected and self._protected_bytes > ceiling:
             key, _ = self._protected.popitem(last=False)
@@ -121,6 +123,7 @@ class DiskMediaCache:
         try:
             with self._lock:
                 self._prepare()
+                assert self._entries is not None
                 key = self._key(identity)
                 item = self._entries.get(key)
                 if item is None:
@@ -174,6 +177,7 @@ class DiskMediaCache:
         try:
             with self._lock:
                 self._prepare()
+                assert self._entries is not None
                 key = self._key(identity)
                 self._remove(key)
                 size = len(data) + 32
@@ -216,6 +220,7 @@ class DiskMediaCache:
             )
             try:
                 self._prepare()
+                assert self._entries is not None
                 self._trim()
             except OSError:
                 pass
@@ -225,6 +230,7 @@ class DiskMediaCache:
         with self._lock:
             try:
                 self._prepare()
+                assert self._entries is not None
                 key = self._key(identity)
                 item = self._entries.get(key)
                 if item is not None:
@@ -241,6 +247,7 @@ class DiskMediaCache:
         with self._lock:
             try:
                 self._prepare()
+                assert self._entries is not None
                 keys = (
                     list(self._entries)
                     if identities is None
@@ -256,6 +263,7 @@ class DiskMediaCache:
         with self._lock:
             try:
                 self._prepare()
+                assert self._entries is not None
                 self._trim()
                 return [
                     identity
@@ -271,6 +279,7 @@ class DiskMediaCache:
             available = True
             try:
                 self._prepare()
+                assert self._entries is not None
                 self._trim()
                 free = shutil.disk_usage(self.directory).free
             except OSError:

@@ -264,16 +264,23 @@ class ClientPoolTests(unittest.IsolatedAsyncioTestCase):
         pool = ClientPool([bot], [user])
         await pool.start()
         try:
-            options = dict(media=True, allow_users=True, prefer_premium=True)
-            async with pool.lease(**options) as first:
+            async with pool.lease(
+                media=True, allow_users=True, prefer_premium=True
+            ) as first:
                 self.assertIs(first, user)
-                async with pool.lease(**options) as second:
+                async with pool.lease(
+                    media=True, allow_users=True, prefer_premium=True
+                ) as second:
                     self.assertIs(second, bot)
             # A recorded bot sender wins even while Premium is available.
-            async with pool.lease(**options, client_name=bot.name) as fixed:
+            async with pool.lease(
+                media=True, allow_users=True, prefer_premium=True, client_name=bot.name
+            ) as fixed:
                 self.assertIs(fixed, bot)
             await pool.defer_client(user.name, time.time() + 60)
-            async with pool.lease(**options) as cooling_fallback:
+            async with pool.lease(
+                media=True, allow_users=True, prefer_premium=True
+            ) as cooling_fallback:
                 self.assertIs(cooling_fallback, bot)
             self.assertEqual((await pool.health()).active_leases, 0)
         finally:

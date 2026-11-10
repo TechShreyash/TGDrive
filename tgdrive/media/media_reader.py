@@ -9,7 +9,7 @@ import math
 import os
 import secrets
 import time
-from collections.abc import AsyncIterator
+from collections.abc import AsyncGenerator
 from contextlib import suppress
 from dataclasses import dataclass
 from pathlib import Path
@@ -365,13 +365,14 @@ class MediaReadCache:
         # This resizable gate is independent of retained payloads; every real
         # pooled load also owns one global scratch frame. Reconfigure the same
         # gate object so old waiters/releases cannot inflate a new semaphore.
-        self.memory._slots = _ScratchBudget(self.scratch.limit * BLOCK)
+        self.fill_slots = _ScratchBudget(self.scratch.limit * BLOCK)
+        self.memory._slots = self.fill_slots
         self.memory.max_bytes = self.effective_memory_bytes
         self.memory.protected_fraction = self.policy.protected_fraction
         self.directory = Path(directory) if directory is not None else None
         self.disk = (
             DiskMediaCache(
-                self.directory,
+                Path(directory),
                 max_bytes=self.policy.disk_max_bytes,
                 ttl=self.policy.ttl_seconds,
                 min_free_bytes=self.policy.min_free_bytes,
@@ -413,12 +414,12 @@ class MediaReadCache:
         self.effective_memory_bytes = _effective_memory(self.policy.memory_max_bytes)
         maximum = _effective_memory(self.policy.scratch_max_bytes)
         self.scratch.resize(maximum)
-        self.memory._slots.resize(maximum)
+        self.fill_slots.resize(maximum)
         self.memory.max_entries = max(256, self.effective_memory_bytes // BLOCK + 32)
         self._adjust_memory()
 
     def _load_index(self):
-        if self.directory is None:
+        if self.directory is None or self.disk is None:
             return
         try:
             path = self.directory / "inventory.json"
@@ -824,13 +825,16 @@ class MediaReadCache:
         self.memory.trim()
 
     async def _drain_writes(self):
+        disk = self.disk
+        if disk is None:
+            return
         while True:
             while self._pending:
                 key = next(iter(self._pending))
                 payload = self._pending[key]
-                await asyncio.to_thread(self.disk.write, key, payload)
+                await asyncio.to_thread(disk.write, key, payload)
                 if key in self._hot_keys:
-                    await asyncio.to_thread(self.disk.promote, key)
+                    await asyncio.to_thread(disk.promote, key)
                     self._hot_keys.discard(key)
                 self._pending.pop(key, None)
                 self._pending_bytes -= len(payload)
@@ -881,6 +885,8 @@ class MediaReadCache:
                     self._index_dirty = True
 
     def _write_index(self, value):
+        if self.directory is None:
+            return
         self.directory.mkdir(parents=True, exist_ok=True, mode=0o700)
         path = self.directory / "inventory.json"
         temporary = self.directory / (secrets.token_hex(16) + ".tmp")
@@ -1005,8 +1011,8 @@ class MediaReadCache:
                 "entries": len(memory_keys),
                 "hits": self._hits,
                 "misses": self._misses,
-                "active_fills": self.memory._slots.used,
-                "max_fills": self.memory._slots.limit,
+                "active_fills": self.fill_slots.used,
+                "max_fills": self.fill_slots.limit,
             },
             "disk": disk,
             "files": files,
@@ -1031,7 +1037,7 @@ async def stream_pooled_media(
     authorize=None,
     request_id: str | None = None,
     retain_hot: bool = False,
-) -> AsyncIterator[bytes]:
+) -> AsyncGenerator[bytes]:
     """Authorization and initial message validation precede every cache read.
 
     Each worker binds the same document through its own account. Content keys

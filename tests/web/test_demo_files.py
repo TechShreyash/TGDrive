@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+from typing import cast
 from unittest.mock import AsyncMock
 
 import pytest
@@ -19,6 +20,7 @@ from tgdrive.storage.demo_files import (
     DemoFilesReadOnly,
     write_policy,
 )
+from tgdrive.storage.mongo import MongoBackend
 from tgdrive.storage.mongo_store import MongoStore
 from tgdrive.transfers.tasks import TransferRegistry, TransferStatus
 from tgdrive.web.share_links import token_factory
@@ -47,7 +49,7 @@ def catalog(tmp_path, request):
     if request.param == "mongo-live":
         store = MongoStore.create(request.getfixturevalue("backend"))
     else:
-        store = MongoStore.create(FakeMongoBackend())
+        store = MongoStore.create(cast(MongoBackend, FakeMongoBackend()))
     try:
         yield store
     finally:

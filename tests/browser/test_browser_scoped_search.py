@@ -134,9 +134,16 @@ def test_transfer_search_resets_cursor_and_filters_active_and_old_finished_names
     def history(route):
         params = route.request.post_data_json
         seen.append(params)
-        query = params.get("q", "").lower()
+        query = params.get("q", "")
+        assert isinstance(query, str)
+        query = query.lower()
         offset = params["offset"]
-        selected = [row for row in records if query in row["name"].lower()]
+        selected = []
+        for row in records:
+            name = row["name"]
+            assert isinstance(name, str)
+            if query in name.lower():
+                selected.append(row)
         rows = selected[offset : offset + 20]
         route.fulfill(
             json={

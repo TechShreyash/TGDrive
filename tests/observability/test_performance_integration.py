@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from types import SimpleNamespace
+from typing import cast
 from unittest.mock import AsyncMock, Mock
 
 import pytest
@@ -16,9 +17,11 @@ from tests.observability.test_performance_preferences import (
 from tests.support.app_fixtures import FakeRuntime, login, make_settings
 from tests.support.mongo_fixtures import new_store
 from tgdrive.core.runtime import Runtime
+from tgdrive.media.preloading import PreloadManager
 from tgdrive.observability.performance_api import database_snapshot, system_snapshot
 from tgdrive.settings.managed_settings import SettingsProblem
 from tgdrive.settings.performance_preferences import PerformanceSettings
+from tgdrive.telegram.client_pool import ClientPool
 from tgdrive.web.app import create_app
 
 pytestmark = pytest.mark.usefixtures("mongo_backend")
@@ -128,27 +131,27 @@ def test_resource_snapshot_survives_unavailable_data_directory(tmp_path):
 @pytest.mark.asyncio
 async def test_media_cleanup_failure_still_stops_pool_and_releases_owner(tmp_path):
     pool = FakePool()
-    runtime = Runtime(make_settings(tmp_path), pool=pool)
-    runtime.preloads = SimpleNamespace(
-        close=AsyncMock(side_effect=OSError("cache failed"))
-    )
-    owner = SimpleNamespace(close=Mock())
+    runtime = Runtime(make_settings(tmp_path), pool=cast(ClientPool, pool))
+    preloads = SimpleNamespace(close=AsyncMock(side_effect=OSError("cache failed")))
+    runtime.preloads = cast(PreloadManager, preloads)
+    owner = Mock(close=Mock())
     runtime._owner_lock = owner
     await runtime.stop()
     assert pool.stopped
     owner.close.assert_called_once()
     assert runtime._owner_lock is None
-    runtime.preloads.close.assert_awaited_once()
+    preloads.close.assert_awaited_once()
 
 
 @pytest.mark.asyncio
 async def test_manager_owns_cache_close_without_double_close(tmp_path):
-    runtime = Runtime(make_settings(tmp_path), pool=FakePool())
+    runtime = Runtime(make_settings(tmp_path), pool=cast(ClientPool, FakePool()))
     cache = SimpleNamespace(close=AsyncMock())
     runtime.pool._media_read_cache = cache
-    runtime.preloads = SimpleNamespace(close=AsyncMock(side_effect=cache.close))
+    preloads = SimpleNamespace(close=AsyncMock(side_effect=cache.close))
+    runtime.preloads = cast(PreloadManager, preloads)
     await runtime.stop()
-    runtime.preloads.close.assert_awaited_once()
+    preloads.close.assert_awaited_once()
     cache.close.assert_awaited_once()
 
 

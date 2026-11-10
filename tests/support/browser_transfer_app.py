@@ -18,11 +18,11 @@ import tempfile
 import time
 import wave
 import zlib
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Iterable
 from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any
+from typing import Any, cast
 from urllib.parse import unquote, urlsplit
 
 from fastapi import Request, Response, UploadFile
@@ -37,12 +37,14 @@ from tests.support.memory_mongo import FixtureMongoBackend
 from tests.support.mongo_fixtures import new_store
 from tgdrive.core.config import Settings
 from tgdrive.core.security import SESSION_COOKIE
+from tgdrive.media.preloading import PreloadManager
 from tgdrive.settings.management import ConnectionManager
 from tgdrive.settings.premium_login import PremiumLoginService
 from tgdrive.storage import mongo as fixture_mongo
+from tgdrive.storage.mongo import MongoBackend
 from tgdrive.storage.mongo_store import MongoStore
-from tgdrive.telegram.client_pool import ClientPool
-from tgdrive.telegram.clients import TelegramMessage
+from tgdrive.telegram.client_pool import ClientEntry, ClientPool
+from tgdrive.telegram.clients import Client, TelegramMessage
 from tgdrive.transfers.manager import TransferCancelled, TransferEmptyFile
 from tgdrive.transfers.remote import RemoteFileInfo
 from tgdrive.transfers.tasks import TransferRecord, TransferRegistry, TransferStatus
@@ -95,7 +97,7 @@ class FixtureClient:
                 attributes=[],
             ),
         )
-        return TelegramMessage(self, native)
+        return TelegramMessage(cast(Client, self), native)
 
     async def download_thumbnail(
         self,
@@ -1008,12 +1010,20 @@ class FixtureReplica:
 
 
 class FixturePool(ClientPool):
-    async def reconfigure(self, *_entries):
+    async def reconfigure(
+        self,
+        bot_clients: Iterable[ClientEntry] = (),
+        user_clients: Iterable[ClientEntry] = (),
+    ) -> None:
         # Saved fixture accounts are never dialled; they stay "Not connected".
         return None
 
 
 class FixtureRuntime:
+    preloads: PreloadManager
+    reading_path: str
+    connection_manager: ConnectionManager
+
     def __init__(self) -> None:
         self.mongo = FixtureMongoBackend()
         self.store = new_store()
@@ -1140,10 +1150,12 @@ settings = Settings(
 )
 # Register only this private fixture directory. Production's required MongoDB
 # interfaces remain active, backed by the explicit in-memory test double.
-fixture_mongo._directories[settings.resolved_data_dir] = runtime.mongo
+fixture_mongo._directories[settings.resolved_data_dir] = cast(
+    MongoBackend, runtime.mongo
+)
 fixture_mongo._backends[
     (settings.mongodb_uri.get_secret_value(), settings.mongodb_database)
-] = runtime.mongo
+] = cast(MongoBackend, runtime.mongo)
 
 runtime.connection_manager = ConnectionManager(
     settings, runtime, verifier=fixture_verify_connection

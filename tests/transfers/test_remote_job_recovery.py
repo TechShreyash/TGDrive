@@ -63,6 +63,7 @@ async def test_url_retry_replaces_only_own_unpublished_stage_after_publication_c
     record = await manager.start_remote(
         url="https://files.example/source.bin", destination=target, filename=None
     )
+    assert record.task is not None
     await record.task
     assert record.status == TransferStatus.ERROR
     assert record.context["kind"] == "remote"
@@ -101,6 +102,7 @@ async def test_url_retry_replaces_only_own_unpublished_stage_after_publication_c
             retried = manager.registry.get(record.id)
         else:
             retried = await manager.retry_job(record.id)
+        assert retried.task is not None
         await retried.task
         assert retried.status == TransferStatus.COMPLETED
         assert retried.context["destination"] == expected_destination
@@ -138,10 +140,10 @@ async def test_url_destination_move_while_retrieval_waits_preserves_folder_ident
     response = FakeResponse(200, headers={"Content-Length": "3"}, chunks=[b"one"])
     original = response.content.read
 
-    async def blocked(limit):
+    async def blocked(size):
         entered.set()
         await release.wait()
-        return await original(limit)
+        return await original(size)
 
     response.content.read = blocked
     manager.remote = RemoteClient(
@@ -157,6 +159,7 @@ async def test_url_destination_move_while_retrieval_waits_preserves_folder_ident
         manager.store.move(target, folder(manager.store, "Other"))
         expected = manager.store.resolve_id(target[1:])
         release.set()
+        assert record.task is not None
         await record.task
         assert record.status == TransferStatus.COMPLETED
         assert record.context["destination"] == expected

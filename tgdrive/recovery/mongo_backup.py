@@ -14,6 +14,7 @@ import stat
 import time
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from tgdrive.recovery.backup import BackupError, RecoveryConflict
 from tgdrive.recovery.recovery_file import write_recovery_snapshot
@@ -21,6 +22,9 @@ from tgdrive.storage.mongo import DatabaseUnavailable
 from tgdrive.storage.mongo_store import MongoStore
 from tgdrive.storage.store import ROOT_ID, SCHEMA_VERSION
 from tgdrive.transfers.tasks import _journalled
+
+if TYPE_CHECKING:
+    from tgdrive.replication.replica import ChannelReplica
 
 logger = logging.getLogger(__name__)
 
@@ -137,6 +141,7 @@ class MongoProtection:
 
     def __init__(self, settings, pool, backend):
         self.settings, self.pool, self.backend = settings, pool, backend
+        self.replica: ChannelReplica | None = None
         self._stop = asyncio.Event()
         self._task = None
         self._lock = asyncio.Lock()
@@ -389,11 +394,13 @@ class MongoProtection:
                 raise BackupError(
                     "Telegram backup is waiting before retry", retry_after=remaining
                 )
+            upload_path: Path | None = None
+            upload_digest: str | None = None
             if pending.get("message_id") is None:
-                path = Path(pending["local_path"])
+                upload_path = Path(pending["local_path"])
                 # A fresh host may lack the old temporary file. Never resend
                 # changed bytes under an existing random_id.
-                if not path.is_file():
+                if not upload_path.is_file():
                     await _worker(
                         backend.write,
                         backend.db.backups,
@@ -407,13 +414,14 @@ class MongoProtection:
                         "The previous backup file is unavailable; "
                         "a new snapshot will be scheduled"
                     )
-                digest = await asyncio.to_thread(file_checksum, path)
-                if digest != pending["sha256"]:
+                upload_digest = await asyncio.to_thread(file_checksum, upload_path)
+                if upload_digest != pending["sha256"]:
                     raise BackupError("The staged backup checksum failed")
             try:
                 if pending.get("message_id") is not None:
                     await self._publish(pending, previous_files)
                     return True
+                assert upload_path is not None and upload_digest is not None
                 async with self.pool.lease(client_name=pending["sender"]) as client:
                     if pending["sender"] is None:
                         pending["sender"] = client.name
@@ -427,7 +435,7 @@ class MongoProtection:
                         self._observe_backup(pending)
                     message = await client.send_document(
                         self.settings.storage_channel,
-                        str(path),
+                        str(upload_path),
                         file_name="tgdrive-backup.tgdb",
                         random_id=pending["random_id"],
                         caption="TGDrive encrypted recovery file · "
@@ -443,7 +451,10 @@ class MongoProtection:
                     remote_size = getattr(
                         getattr(fetched, "document", None), "file_size", None
                     )
-                    if remote_size != path.stat().st_size:
+                    if (
+                        not isinstance(remote_size, int)
+                        or remote_size != upload_path.stat().st_size
+                    ):
                         raise BackupError("Telegram backup size verification failed")
                     remote_hash = hashlib.sha256()
                     iterator = client.stream_media(
@@ -454,7 +465,7 @@ class MongoProtection:
                             remote_hash.update(block)
                     finally:
                         await iterator.aclose()
-                    if remote_hash.hexdigest() != digest:
+                    if remote_hash.hexdigest() != upload_digest:
                         raise BackupError("Telegram backup verification failed")
                 # Persist verified-send evidence before pinning. A retry on a new
                 # host needs neither another upload nor the old temporary file.
@@ -474,7 +485,7 @@ class MongoProtection:
                 if seconds is None:
                     seconds = getattr(exc, "seconds", None)
                 if (
-                    type(seconds) in (int, float)
+                    (type(seconds) is int or type(seconds) is float)
                     and math.isfinite(seconds)
                     and seconds > 0
                 ):

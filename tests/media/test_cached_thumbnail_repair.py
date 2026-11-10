@@ -7,6 +7,7 @@ import errno
 import hashlib
 import threading
 from types import SimpleNamespace
+from typing import TypedDict
 
 import pytest
 
@@ -18,8 +19,15 @@ from tgdrive.media.thumbnails import Thumbnail, ThumbnailBusy, ThumbnailCache
 JPEG = b"\xff\xd8\xffsmall cover\xff\xd9"
 
 
-def source(size, message_id=1, parts=None):
-    return dict(channel_id=-100, message_id=message_id, size=size, parts=parts)
+class Source(TypedDict):
+    channel_id: int
+    message_id: int
+    size: int
+    parts: list[dict[str, int | str]] | None
+
+
+def source(size: int, message_id: int = 1, parts=None) -> Source:
+    return {"channel_id": -100, "message_id": message_id, "size": size, "parts": parts}
 
 
 def media_cache(tmp_path, *, disk=False):
@@ -163,7 +171,9 @@ async def test_source_changes_abort_copy_and_remove_temporary_files(
             yield block
             count += 1
             if count == 1 and change == "clear":
-                await cache.clear(cache.cached_source_version(**metadata).file_id)
+                version = cache.cached_source_version(**metadata)
+                assert version is not None
+                await cache.clear(version.file_id)
             elif count == 1 and change == "eviction":
                 _, data = cache.memory.entries.pop(keys[1])
                 cache.memory.bytes_used -= len(data)
@@ -190,6 +200,7 @@ async def test_corrupt_disk_digest_is_rejected_before_render(tmp_path, monkeypat
     metadata = source(20)
     cache = media_cache(tmp_path, disk=True)
     keys = await fill(cache, metadata, b"a" * 20)
+    assert cache.disk is not None
     block = cache.disk.directory / (cache.disk._key(keys[0]) + ".block")
     block.write_bytes(block.read_bytes()[:-1] + b"z")
     forbid_origin(monkeypatch, cache)
@@ -330,9 +341,12 @@ async def test_failed_render_waits_for_new_data_not_metadata_or_cache_reads(
     assert cache.cached_source_version(**metadata) == version
     assert await repair(helper, cache, metadata) is None
     assert calls == 1
+    assert version is not None
     await cache.clear(version.file_id)
     await fill(cache, metadata, b"a" * 20)
-    assert cache.cached_source_version(**metadata).revision > version.revision
+    refreshed = cache.cached_source_version(**metadata)
+    assert refreshed is not None
+    assert refreshed.revision > version.revision
     assert await repair(helper, cache, metadata) is None
     assert calls == 2
     await cache.close()
@@ -347,12 +361,16 @@ async def test_unrelated_cache_clear_does_not_suppress_a_valid_source_retry(
     await fill(cache, second, b"b" * 20)
     helper = CachedThumbnailRepair(tmp_path / "covers")
     original = cache.cached_file_blocks
-    revision = cache.cached_source_version(**first).data_revision
+    version = cache.cached_source_version(**first)
+    assert version is not None
+    revision = version.data_revision
 
     async def clearing(**kwargs):
         async for block in original(**kwargs):
             yield block
-            await cache.clear(cache.cached_source_version(**second).file_id)
+            other = cache.cached_source_version(**second)
+            assert other is not None
+            await cache.clear(other.file_id)
 
     calls = 0
 
@@ -366,7 +384,9 @@ async def test_unrelated_cache_clear_does_not_suppress_a_valid_source_retry(
     with pytest.raises(ThumbnailBusy):
         await repair(helper, cache, first)
     assert calls == 0
-    assert cache.cached_source_version(**first).data_revision == revision
+    refreshed = cache.cached_source_version(**first)
+    assert refreshed is not None
+    assert refreshed.data_revision == revision
     monkeypatch.setattr(cache, "cached_file_blocks", original)
     assert await repair(helper, cache, first) == JPEG
     assert calls == 1
@@ -570,7 +590,9 @@ async def test_only_negative_thumbnail_entries_follow_source_revision():
     async def image():
         return Thumbnail(JPEG, "image/jpeg")
 
-    assert (await cache.get((3,), image, missing_revision=1)).content == JPEG
-    assert (await cache.get((3,), missing, missing_revision=2)).content == JPEG
+    thumbnail = await cache.get((3,), image, missing_revision=1)
+    assert thumbnail is not None and thumbnail.content == JPEG
+    thumbnail = await cache.get((3,), missing, missing_revision=2)
+    assert thumbnail is not None and thumbnail.content == JPEG
     assert calls == 3
     await cache.close()

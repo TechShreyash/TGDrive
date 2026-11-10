@@ -2,6 +2,7 @@
 
 from threading import RLock
 from types import SimpleNamespace
+from typing import cast
 from unittest.mock import MagicMock, Mock
 
 import pytest
@@ -86,7 +87,7 @@ def test_first_setup_rolls_back_catalog_when_initial_settings_cannot_be_saved(
     backend.db.settings.insert_many = Mock(side_effect=RuntimeError("write failed"))
 
     with pytest.raises(RuntimeError, match="write failed"):
-        initialize_if_empty(settings, backend)
+        initialize_if_empty(settings, cast(MongoBackend, backend))
 
     assert backend.db.catalog.find_one({}) is None
     assert backend.db.nodes.find_one({}) is None
@@ -101,7 +102,7 @@ def test_first_setup_applies_initial_connections_without_a_restart(
 
     settings = make_settings(tmp_path)
     backend = register_test_backend(monkeypatch, settings)
-    assert initialize_if_empty(settings, backend)
+    assert initialize_if_empty(settings, cast(MongoBackend, backend))
 
     manager = ConnectionManager(settings, SimpleNamespace(mongo=backend))
     assert settings.managed_revision == 1

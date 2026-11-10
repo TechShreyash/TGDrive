@@ -4,9 +4,11 @@ from __future__ import annotations
 
 import asyncio
 import fcntl
+import inspect
 import logging
 import time
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from tgdrive.core.config import Settings
 from tgdrive.recovery.backup import RecoveryConflict
@@ -21,10 +23,21 @@ from tgdrive.transfers.manager import TransferManager, restore_telegram_cooldown
 from tgdrive.transfers.remote import RemoteClient, RemoteTimeouts
 from tgdrive.transfers.tasks import TransferRegistry
 
+if TYPE_CHECKING:
+    from tgdrive.core.governor import Governor
+    from tgdrive.media.preloading import PreloadManager
+    from tgdrive.replication.replica import ChannelReplica
+    from tgdrive.replication.replica_activation import ActivationError
+    from tgdrive.transfers.uploads import ResumableUploads
+
 logger = logging.getLogger(__name__)
 
 
 class Runtime:
+    preloads: PreloadManager
+    replica: ChannelReplica
+    governor: Governor
+
     def __init__(
         self,
         settings: Settings,
@@ -53,6 +66,7 @@ class Runtime:
         self.transfers: TransferManager | None = None
         self.bot_mode: BotMode | None = None
         self.ready = False
+        self._activation_unavailable: ActivationError | None = None
         self._owner_lock = None
         self._mongo_acquired = False
         self._reconnector = None
@@ -219,7 +233,7 @@ class Runtime:
                 self.backup, "restore_publication_cooldown", None
             )
             if callable(restore_publication):
-                await restore_publication()
+                await self.backup.restore_publication_cooldown()
             connected = False
             try:
                 await self.pool.start()
@@ -335,11 +349,14 @@ class Runtime:
         await self._verify_storage_channel()
 
     async def _reconnect(self) -> None:
+        store = self.store
+        if store is None:
+            return
         while self.ready:
             try:
                 await self.pool.start()
                 await self._verify_storage_channel()
-                await self.backup.backup(self.store)
+                await self.backup.backup(store)
                 if self.transfers is not None:
                     await self.transfers.recover()
                 logger.info("Telegram connection and catalog lineage verified")
@@ -352,12 +369,10 @@ class Runtime:
                         self.bot_mode = BotMode(
                             client=client,
                             settings=self.settings,
-                            store=self.store,
+                            store=store,
                             folder_settings=get_bot_settings(self.settings, self),
                             before_write=self._check_bot_upload_allowed,
-                            before_delete=lambda: self.backup.verify_lineage(
-                                self.store
-                            ),
+                            before_delete=lambda: self.backup.verify_lineage(store),
                             transfers=self.transfers,
                         )
                 if self.bot_mode is not None:
@@ -381,7 +396,7 @@ class Runtime:
             from tgdrive.settings.managed_settings import SettingsProblem
 
             probed = False
-            for row in await status():
+            for row in await self.pool.status():
                 if row.kind != "bot" or not row.healthy:
                     continue
                 async with self.pool.lease(client_name=row.name) as client:
@@ -390,10 +405,13 @@ class Runtime:
                         continue
                     try:
                         async with asyncio.timeout(30):
-                            problem = await probe(
+                            pending_problem = probe(
                                 self.settings.storage_channel,
                                 require_pin=False,
                             )
+                            if not inspect.isawaitable(pending_problem):
+                                raise TypeError("Channel probe must be asynchronous")
+                            problem = await pending_problem
                     except Exception:
                         self.storage_channel_error = (
                             "Telegram storage channel could not be verified. "
@@ -470,7 +488,9 @@ class Runtime:
         except Exception as exc:
             logger.exception("Failed to stop Telegram client pool")
             failures.append(exc)
-        closers = [self.registry]
+        closers: list[TransferRegistry | ResumableUploads | BotMode | MongoStore] = [
+            self.registry
+        ]
         if self.transfers is not None and hasattr(self.transfers, "uploads"):
             closers.append(self.transfers.uploads)
         if self.bot_mode is not None:

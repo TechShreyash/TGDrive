@@ -7,9 +7,12 @@ import re
 import threading
 from contextlib import contextmanager, nullcontext
 from types import SimpleNamespace
+from typing import cast
 
 from pymongo import DeleteOne, ReplaceOne, UpdateOne
 from pymongo.errors import DuplicateKeyError
+
+from tgdrive.storage.mongo import MongoBackend
 
 
 def _value(document, key):
@@ -122,12 +125,24 @@ def _apply(row, update):
         row[field] = [item for item in row.get(field, []) if item not in values]
 
 
-class Cursor(list):
+class Cursor:
+    def __init__(self, rows=()):
+        self.rows = list(rows)
+
+    def __iter__(self):
+        return iter(self.rows)
+
+    def __len__(self):
+        return len(self.rows)
+
+    def __getitem__(self, index):
+        return self.rows[index]
+
     def sort(self, fields, direction=None):
         if isinstance(fields, str):
             fields = [(fields, direction or 1)]
         for key, direction in reversed(fields):
-            super().sort(
+            self.rows.sort(
                 key=lambda row, key=key: _sort_key(_value(row, key)),
                 reverse=direction < 0,
             )
@@ -144,6 +159,8 @@ class Cursor(list):
 
 
 class Collection:
+    database: Database
+
     def __init__(self):
         self.rows = []
 
@@ -286,7 +303,9 @@ class Collection:
     def bulk_write(self, requests, **_kwargs):
         for request in requests:
             if isinstance(request, ReplaceOne):
-                self.replace_one(request._filter, request._doc, upsert=request._upsert)
+                self.replace_one(
+                    request._filter, request._doc, upsert=bool(request._upsert)
+                )
             elif isinstance(request, DeleteOne):
                 self.delete_one(request._filter)
             elif isinstance(request, UpdateOne):
@@ -388,7 +407,7 @@ def new_store(path=None, backend=None):
     from tgdrive.storage.mongo_store import MongoStore
 
     backend = backend or FakeMongoBackend()
-    store = MongoStore.create(backend)
+    store = MongoStore.create(cast(MongoBackend, backend))
     if path is not None:
         _STORE_BACKENDS[str(path)] = backend
     return store
@@ -398,7 +417,7 @@ def reopen_store(path):
     """Open a new MongoStore over the database created by ``new_store(path)``."""
     from tgdrive.storage.mongo_store import MongoStore
 
-    return MongoStore(_STORE_BACKENDS[str(path)])
+    return MongoStore(cast(MongoBackend, _STORE_BACKENDS[str(path)]))
 
 
 def catalog_counters(payload):
@@ -444,4 +463,4 @@ def store_from_payload(payload, *, revoke_shares=False):
             for row in payload.get("folder_preparations", [])
         ]
     )
-    return MongoStore(backend)
+    return MongoStore(cast(MongoBackend, backend))

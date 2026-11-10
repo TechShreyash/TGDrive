@@ -4,6 +4,7 @@ import hashlib
 import stat
 from contextlib import nullcontext
 from types import SimpleNamespace
+from typing import cast
 from unittest.mock import Mock
 
 import pytest
@@ -16,6 +17,7 @@ from tgdrive.recovery.backup import BackupError
 from tgdrive.recovery.mongo_backup import COLLECTIONS
 from tgdrive.recovery.staged_snapshot import stage_snapshot, validate_snapshot
 from tgdrive.replication.replica_settings import credentials_from_snapshot
+from tgdrive.storage.mongo import MongoBackend
 from tgdrive.storage.mongo_store import MongoStore
 
 KEY = bytes.fromhex("a1" * 32)
@@ -29,7 +31,9 @@ def source(tmp_path):
     backend.client = SimpleNamespace(
         start_session=Mock(return_value=nullcontext(session))
     )
-    store = MongoStore.create(backend, storage_channel=settings.storage_channel)
+    store = MongoStore.create(
+        cast(MongoBackend, backend), storage_channel=settings.storage_channel
+    )
     store.add_file("/", "Report.txt", 41, 3)
     backend.db.sessions.insert_one({"_id": "browser", "token": "sensitive-cookie"})
     backend.db.settings.insert_one(

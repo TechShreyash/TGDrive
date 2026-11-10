@@ -90,7 +90,7 @@ async def test_small_range_has_no_remote_reads_outside_its_aligned_span(tmp_path
     client = account("bot", payload)
     calls = []
 
-    async def remote(_source, *, offset, limit, **_kwargs):
+    async def remote(message, *, offset, limit, **_kwargs):
         calls.append(offset)
         assert limit == 1
         yield payload[offset * BLOCK : (offset + 1) * BLOCK]
@@ -172,7 +172,7 @@ async def test_actual_reader_ramps_then_shares_scratch_and_reduces_slow_pipeline
     client = account("bot", b"x")
     payload = b"x" * BLOCK
 
-    async def remote(_source, *, offset, limit, **_kwargs):
+    async def remote(message, *, offset, limit, **_kwargs):
         assert 0 <= offset < 128 and limit == 1
         yield payload
 

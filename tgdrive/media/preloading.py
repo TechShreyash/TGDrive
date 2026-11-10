@@ -115,7 +115,7 @@ class PreloadManager:
         viewer["authorize"] = authorize
         viewer["allow_full"] = allow_full
         if (
-            type(media_rate) in (int, float)
+            (type(media_rate) is int or type(media_rate) is float)
             and math.isfinite(media_rate)
             and media_rate > 0
         ):
@@ -609,8 +609,8 @@ class PreloadManager:
             task.add_done_callback(completed)
             return dict(row)
 
-    async def _run(self, row, channel_id, message_id, size, parts, authorize):
-        original_authorize = authorize
+    async def _run(self, row, channel_id, message_id, size, parts, original_authorize):
+        authorize = original_authorize
         if original_authorize is not None:
 
             async def authorize():

@@ -260,7 +260,7 @@ class TransferRecord:
         deadlines = [
             value
             for key in deadline_keys
-            if type(value := self.context.get(key)) in (int, float)
+            if (type(value := self.context.get(key)) is int or type(value) is float)
             and math.isfinite(value)
         ]
         result = {
@@ -386,7 +386,8 @@ class TransferRegistry:
         ):
             timestamp = item.get(field_name)
             if timestamp is not None and (
-                type(timestamp) not in (int, float) or not math.isfinite(timestamp)
+                (type(timestamp) is not int and type(timestamp) is not float)
+                or not math.isfinite(timestamp)
             ):
                 raise ValueError("invalid optional job timestamp")
         if not isinstance(item.get("context"), dict) or not isinstance(
@@ -528,7 +529,7 @@ class TransferRegistry:
             (
                 value
                 for value in deadlines
-                if type(value) in (int, float) and math.isfinite(value)
+                if (type(value) is int or type(value) is float) and math.isfinite(value)
             ),
             default=0.0,
         )
@@ -606,7 +607,7 @@ class TransferRegistry:
     def _retained(self, record: TransferRecord) -> bool:
         record = record.committed
         context = record.context
-        archive_parent = self._records.get(context.get("archive_parent_id"))
+        archive_parent = self._records.get(context.get("archive_parent_id", ""))
         if (
             archive_parent is not None
             and context.get("archive_file_index")
@@ -615,7 +616,7 @@ class TransferRegistry:
             not in {TransferStatus.COMPLETED, TransferStatus.CANCELLED}
         ):
             return True
-        parent = self._records.get(context.get("torrent_parent_id"))
+        parent = self._records.get(context.get("torrent_parent_id", ""))
         if (
             parent is not None
             and context.get("torrent_file_index")
@@ -636,7 +637,7 @@ class TransferRegistry:
                 if isinstance(part, dict)
             )
         if any(
-            type(deadline) in (int, float)
+            (type(deadline) is int or type(deadline) is float)
             and math.isfinite(deadline)
             and deadline > time.time()
             for deadline in deadlines
@@ -1161,6 +1162,8 @@ class TransferRegistry:
             if total is not None:
                 record.total = max(0, total)
             if error is not _ERROR_UNSET:
+                if error is not None and not isinstance(error, str):
+                    raise TypeError("Transfer errors must be strings or None")
                 record.error = error[:500] if error is not None else None
             now = time.time()
             monotonic = time.monotonic()

@@ -22,7 +22,7 @@ from typing import TYPE_CHECKING, Any, Protocol
 from urllib.parse import unquote, urljoin, urlsplit, urlunsplit
 
 import aiohttp
-from aiohttp.abc import AbstractResolver
+from aiohttp.abc import AbstractResolver, ResolveResult
 from aiohttp.resolver import DefaultResolver
 
 if TYPE_CHECKING:
@@ -107,7 +107,7 @@ type ProgressCallback = Callable[[int, int | None], Awaitable[None] | None]
 type RetryCallback = Callable[[int, float, Exception], Awaitable[None] | None]
 
 
-def source_retryable(error: Exception) -> bool:
+def source_retryable(error: BaseException) -> bool:
     # Invalid URLs, unsafe redirects, certificate failures, size/storage errors
     # and permanent HTTP responses must not become automatic request loops.
     if isinstance(error, aiohttp.ClientSSLError):
@@ -231,8 +231,8 @@ class ValidatingResolver(AbstractResolver):
         self,
         host: str,
         port: int = 0,
-        family: int = socket.AF_INET,
-    ) -> list[dict[str, Any]]:
+        family: socket.AddressFamily = socket.AF_INET,
+    ) -> list[ResolveResult]:
         try:
             answers = await self._resolver.resolve(host, port, family)
         except UnsafeRemoteURL:

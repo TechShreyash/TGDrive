@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import asyncio
+from typing import cast
 from unittest.mock import AsyncMock
 
 import aiohttp
 import pytest
+from aiohttp.client_reqrep import ConnectionKey
 
 from tests.transfers.test_remote import (
     PUBLIC_DNS,
@@ -116,6 +118,7 @@ async def test_temporary_http_errors_retry_and_respect_retry_after(
     result = await client.download("https://files.example/a", tmp_path)
     assert result.path.read_bytes() == b"x"
     assert len(session.calls) == 2
+    assert wait.await_args is not None
     assert wait.await_args.args[0] == 120
 
 
@@ -176,7 +179,7 @@ async def test_initial_parallel_stream_payload_error_uses_a_fresh_single_respons
         response = await original(*args, **kwargs)
         if "Range" not in kwargs["headers"] and source.full_requests == 1:
 
-            async def broken_read(_size):
+            async def broken_read(size):
                 raise aiohttp.ClientPayloadError("initial range stream interrupted")
 
             response.content.read = broken_read
@@ -195,7 +198,9 @@ async def test_initial_parallel_stream_payload_error_uses_a_fresh_single_respons
 
 def test_unsafe_destinations_and_tls_failures_are_never_retryable():
     assert not source_retryable(UnsafeRemoteURL("blocked"))
-    assert not source_retryable(aiohttp.ClientSSLError(None, OSError("TLS error")))
+    assert not source_retryable(
+        aiohttp.ClientSSLError(cast(ConnectionKey, None), OSError("TLS error"))
+    )
 
 
 async def test_pipeline_publishes_retry_status_releases_staging_and_uploads_once(
@@ -233,6 +238,7 @@ async def test_pipeline_publishes_retry_status_releases_staging_and_uploads_once
         url="https://files.example/book.epub", destination="/", filename="book.epub"
     )
     try:
+        assert record.task is not None
         await record.task
         assert record.status == TransferStatus.COMPLETED, record.error
         assert observed == [2]

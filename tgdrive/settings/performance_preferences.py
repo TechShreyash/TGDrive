@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import inspect
 import json
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
@@ -132,7 +133,10 @@ class PerformanceSettings:
         ):
             setter = getattr(pool, method, None)
             if callable(setter) and (not self._loaded or key in changed):
-                await setter(getattr(value, key))
+                pending = setter(getattr(value, key))
+                if not inspect.isawaitable(pending):
+                    raise TypeError("Pool setters must be asynchronous")
+                await pending
         if not self._loaded or changed.intersection(
             {
                 "telegram_upload_pipeline",

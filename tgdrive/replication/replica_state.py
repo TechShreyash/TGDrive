@@ -10,6 +10,7 @@ import stat
 import threading
 from contextlib import contextmanager
 from pathlib import Path
+from typing import Any
 
 from bson import json_util
 
@@ -78,8 +79,8 @@ def private_reader(path):
         os.close(fd)
 
 
-def read_legacy_value(source):
-    """Keep legacy BSON interpretation while bounding a whole decoded value."""
+def read_legacy_value(source) -> Any:
+    """Decode arbitrary Extended JSON/BSON values, like json_util.loads."""
     import ijson
 
     from tgdrive.recovery.staged_snapshot import (
@@ -179,13 +180,18 @@ class ReplicaJournal:
     CHUNK = 1_000_000
 
     def __init__(self, directory: Path, backend=None):
-        from tgdrive.storage.mongo import DatabaseUnavailable, for_directory
+        from tgdrive.storage.mongo import (
+            DatabaseUnavailable,
+            MongoBackend,
+            for_directory,
+        )
 
-        self.backend = backend or for_directory(directory)
-        if self.backend is None:
+        resolved = backend or for_directory(directory)
+        if resolved is None:
             raise DatabaseUnavailable("MongoDB is required for the backup journal.")
+        self.backend: MongoBackend = resolved
         self.lock = threading.RLock()
-        self._resource_errors = {}
+        self._resource_errors: dict[str, str] = {}
 
     def resource_error(self):
         """Return a memoized rejection without reading the preserved value again."""
@@ -201,7 +207,7 @@ class ReplicaJournal:
                 "detail": str(_resource_error(reason)),
             }
 
-    def get(self, key, default=None):
+    def get(self, key, default=None) -> Any:
         from tgdrive.recovery.staged_snapshot import RecoveryResourceLimit
 
         with self.lock:

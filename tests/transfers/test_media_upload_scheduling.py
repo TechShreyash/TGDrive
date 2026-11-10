@@ -46,8 +46,10 @@ async def test_media_limit_is_per_account_reads_and_second_bot_remain_available(
             await asyncio.sleep(0)
             assert not acquired.is_set()
             async with pool.lease(client_name="one") as read:
+                assert isinstance(read, Account)
                 assert read.name == "one"
             async with pool.lease(media=True) as other:
+                assert isinstance(other, Account)
                 assert other.name == "two"
         await task
         assert acquired.is_set()
@@ -81,6 +83,7 @@ async def test_account_flood_wait_and_channel_flood_wait_have_different_scope():
     try:
         await pool.defer_client("one", time.time() + 0.04)
         async with pool.lease(media=True) as client:
+            assert isinstance(client, Account)
             assert client.name == "two"
         await pool.defer_channel(time.time() + 0.04)
         start = time.monotonic()
@@ -257,9 +260,10 @@ async def test_actual_sendmedia_flood_defers_shared_channel_but_blob_flood_does_
     native.fail_publish = True
     with pytest.raises(FloodWaitError) as message:
         await client.send_staged(-100123, path, file_name="x", random_id=1)
-    assert message.value.tgdrive_channel_flood
+    assert getattr(message.value, "tgdrive_channel_flood", False)
     gate.assert_awaited_once_with(-100123)
     defer.assert_awaited_once()
+    assert defer.await_args is not None
     assert defer.await_args.args[0] >= time.time()
 
 

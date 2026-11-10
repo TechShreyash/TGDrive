@@ -23,10 +23,15 @@ dependencies = [
 ]
 
 [dependency-groups]
+assets = [
+    "cairosvg==2.9.1",
+    "pillow==13.0.0",
+]
 dev = [
     "bandit[toml]==1.9.4",
     "httpx2==2.13.1",
     "pip-audit==2.10.1",
+    "pyright==1.1.414",
     "pytest==9.1.1",
     "pytest-asyncio==1.4.0",
     "pytest-cov==7.1.0",
@@ -38,6 +43,13 @@ e2e = [
 
 [tool.uv]
 package = false
+
+[tool.pyright]
+include = ["tgdrive", "scripts", "tests"]
+pythonVersion = "3.14"
+typeCheckingMode = "standard"
+venvPath = "."
+venv = ".venv"
 
 [tool.pytest.ini_options]
 addopts = "-ra --strict-config --strict-markers"

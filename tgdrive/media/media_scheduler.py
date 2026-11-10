@@ -22,7 +22,7 @@ class MediaPriorityScope:
     """Let foreground subscribers promote one shared fill without restarting it."""
 
     def __init__(self, priority: MediaPriority):
-        self.priority = priority
+        self.priority: MediaPriority = priority
         self._conditions: list[asyncio.Condition] = []
         self._updates: list[Callable[[], None]] = []
 

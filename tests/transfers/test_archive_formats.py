@@ -9,6 +9,8 @@ import lzma
 import tarfile
 from compression import zstd
 from contextlib import contextmanager
+from types import SimpleNamespace
+from typing import cast
 from zipfile import ZIP_BZIP2, ZIP_LZMA
 
 import libarchive
@@ -238,7 +240,9 @@ async def test_raw_reservations_grow_in_chunks_and_release_unused_bytes(
     tmp_path, monkeypatch
 ):
     manager, ledger, _ = await manager_for(tmp_path)
-    manager.settings.upload_limit = manager.settings.bot_upload_limit = 10 * 1024**2
+    cast(SimpleNamespace, manager.settings).upload_limit = cast(
+        SimpleNamespace, manager.settings
+    ).bot_upload_limit = 10 * 1024**2
     data = b"hello" * (2 * 1024**2 - 1)
     compressed = gzip.compress(data)
     reservations = []
@@ -381,6 +385,7 @@ async def test_decoder_killed_and_reaped_on_cancellation(tmp_path, monkeypatch):
         nonlocal process
         assert set(kwargs["env"]) <= {"PATH", "LANG", "PYTHONPATH", "LIBARCHIVE"}
         process = await real_spawn(*args, **kwargs)
+        assert process.stdout is not None
         read = process.stdout.readline
 
         async def pause():
@@ -389,6 +394,7 @@ async def test_decoder_killed_and_reaped_on_cancellation(tmp_path, monkeypatch):
             await asyncio.Event().wait()
             return line
 
+        assert process.stdout is not None
         process.stdout.readline = pause
         return process
 

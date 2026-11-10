@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from dataclasses import replace
 
 import pytest
 
@@ -17,15 +18,13 @@ async def manager_for(tmp_path, payload, gate=None, **changes):
     client = account("bot", payload, gate)
     pool = ClientPool([client], media_cache_dir=tmp_path)
     await pool.start()
-    policy = MediaCachePolicy(
-        **(
-            {
-                "memory_max_bytes": 8 * BLOCK,
-                "disk_max_bytes": 32 * BLOCK,
-                "min_free_bytes": 0,
-            }
-            | changes
-        )
+    policy = replace(
+        MediaCachePolicy(
+            memory_max_bytes=8 * BLOCK,
+            disk_max_bytes=32 * BLOCK,
+            min_free_bytes=0,
+        ),
+        **changes,
     )
     return PreloadManager(pool, policy=policy), pool, client
 
@@ -291,7 +290,9 @@ async def test_explicit_full_prepare_can_replace_old_protected_bytes(tmp_path):
     try:
         for index in range(6):
             old = (CHANNEL, 88, "document", 999, 6 * BLOCK, index)
+            assert manager.cache.disk is not None
             manager.cache.disk.write(old, b"o" * BLOCK)
+            assert manager.cache.disk is not None
             manager.cache.disk.promote(old)
         job = await manager.prepare(channel_id=CHANNEL, message_id=77, size=8 * BLOCK)
         assert (await finish(manager, job))["state"] == "ready"
@@ -881,6 +882,7 @@ async def test_anonymous_player_requests_do_not_qualify_as_distinct_full_file_vi
     tmp_path,
 ):
     manager, pool, _client = await manager_for(tmp_path, b"", auto_preload=True)
+    identity = None
     try:
         for index in range(3):
             viewer = f"anonymous-http-{index}"
@@ -900,6 +902,7 @@ async def test_anonymous_player_requests_do_not_qualify_as_distinct_full_file_vi
                     length=BLOCK,
                     request_id=viewer,
                 )
+        assert identity is not None
         assert manager._observed[identity]["hot_until"] == 0
     finally:
         await manager.close()
