@@ -31,7 +31,9 @@ In VS Code connected to the Ubuntu WSL workspace, use the workspace
 `.venv/bin/python` interpreter for Pylance. The workspace default points there;
 if another interpreter is selected, choose the workspace environment explicitly.
 Keep diagnostics enabled and use the shared Pyright configuration in
-`pyproject.toml`.
+`pyproject.toml`. The all-groups sync also installs the development-only
+`assets` group used by standalone asset scripts. Node 24.22 or newer (below 25)
+is required; CI uses Node 24.22.0 for Pyright.
 
 Native development needs `aria2c` on `PATH` to perform real torrent imports
 (`sudo apt-get install aria2` on Ubuntu). Docker includes it. Torrent unit tests
@@ -180,8 +182,9 @@ npm audit --prefix website --audit-level=high
 docker compose --env-file .env.example config --no-env-resolution --quiet
 ```
 
-Pyright checks `tgdrive`, `scripts` and `tests` in standard mode using the
-configured Python 3.14 environment. Static analysis does not establish runtime
+The locked Pyright 1.1.414 checks `tgdrive`, `scripts` and `tests` in standard
+mode using the configured Python 3.14 environment. The CI Quality job runs
+the same check after syncing all dependency groups. Static analysis does not establish runtime
 behavior or replace the relevant tests. Keep the 80% coverage floor. Compose
 validation checks syntax, not placeholder credential validity.
 
