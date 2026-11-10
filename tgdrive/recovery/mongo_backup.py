@@ -246,9 +246,6 @@ class MongoProtection:
     async def verify_lineage(self, store):
         await asyncio.to_thread(self.check_upload_allowed, store)
 
-    async def restore_publication_cooldown(self):
-        return
-
     async def ensure_revision(self, store, required_revision):
         def committed():
             self.check_upload_allowed(store)

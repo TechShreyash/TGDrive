@@ -79,6 +79,7 @@ class Runtime:
     async def start(self) -> None:
         if self.ready:
             return
+        starting_task = asyncio.current_task()
         self._prepare_runtime_directories()
         try:
             self._owner_lock = (
@@ -92,14 +93,7 @@ class Runtime:
                 raise RuntimeError(
                     "Another TGDrive instance owns this data directory"
                 ) from exc
-            from tgdrive.core.errors import CorruptStoreError
-            from tgdrive.recovery.backup import BackupError
             from tgdrive.replication.replica import ChannelReplica
-            from tgdrive.replication.replica_activation import (
-                ActivationError,
-                apply_activation,
-            )
-            from tgdrive.storage.mongo import initialize_if_empty
 
             # Database configuration, connectivity and ownership are startup
             # requirements, including when recovery metadata is available.
@@ -116,56 +110,7 @@ class Runtime:
             await _worker(self.mongo.transaction, self.mongo.fence)
 
             self.replica = ChannelReplica(self.settings, self)
-            try:
-                await _worker(self.replica._check_saved_state)
-                if activation_error := getattr(self, "_activation_unavailable", None):
-                    raise activation_error
-                await _worker(apply_activation, self.settings, self.mongo)
-                from tgdrive.storage.upgrade import upgrade
-
-                # A 2.0-2.2 drive is upgraded in place; its files stay where they are.
-                await _worker(upgrade, self.mongo, self.settings)
-                if await self._offer_backup_restore():
-                    return
-                created = await _worker(initialize_if_empty, self.settings, self.mongo)
-                logger.info(
-                    "Created a new MongoDB drive from deployment configuration"
-                    if created
-                    else "Opening the existing MongoDB drive"
-                )
-
-                @_journalled
-                async def restore_store():
-                    self.store = await self.backup.restore()
-
-                await restore_store()
-                from tgdrive.core.encryption import check_drive_key
-
-                await _worker(check_drive_key, self.mongo, self.settings.encryption_key)
-            except (
-                ActivationError,
-                BackupError,
-                CorruptStoreError,
-                ValueError,
-            ) as error:
-                if (task := asyncio.current_task()) is not None and task.cancelling():
-                    raise
-                self.recovery_only = True
-                await _worker(self.replica._record_failure, error)
-                if getattr(error, "code", None) != "ACTIVATION_RESOURCE_LIMIT":
-                    await _worker(
-                        self.replica.report,
-                        "error",
-                        "The MongoDB catalog is unavailable or requires explicit "
-                        "recovery. Existing data has been preserved; normal file "
-                        "operations are stopped.",
-                    )
-                self.replica.start()
-                logger.warning(
-                    "Catalog unavailable: %s Owner web recovery is available; "
-                    "file writers are stopped",
-                    error,
-                )
+            if not await self._open_catalog():
                 return
             assert self.store is not None
             self.recovery_only = False
@@ -202,7 +147,7 @@ class Runtime:
             try:
                 await _worker(self.replica.key)
             except Exception as error:
-                if (task := asyncio.current_task()) is not None and task.cancelling():
+                if starting_task is not None and starting_task.cancelling():
                     raise
                 await _worker(self.replica._record_failure, error)
                 logger.warning(
@@ -237,25 +182,18 @@ class Runtime:
                 try:
                     await _worker(check_binding, self.store)
                 except RecoveryConflict:
-                    if (
-                        task := asyncio.current_task()
-                    ) is not None and task.cancelling():
+                    if starting_task is not None and starting_task.cancelling():
                         raise
                     logger.warning(
                         "Storage-channel configuration conflicts with local state"
                     )
             await restore_telegram_cooldowns(self.pool, self.registry.list())
-            restore_publication = getattr(
-                self.backup, "restore_publication_cooldown", None
-            )
-            if callable(restore_publication):
-                await self.backup.restore_publication_cooldown()
             connected = False
             try:
                 await self.pool.start()
                 connected = True
             except Exception as exc:
-                if (task := asyncio.current_task()) is not None and task.cancelling():
+                if starting_task is not None and starting_task.cancelling():
                     raise
                 logger.warning(
                     "Telegram unavailable during startup: %s; metadata stays available",
@@ -270,18 +208,14 @@ class Runtime:
                     await self.backup.backup(self.store)
                     lineage_ready = True
                 except RecoveryConflict:
-                    if (
-                        task := asyncio.current_task()
-                    ) is not None and task.cancelling():
+                    if starting_task is not None and starting_task.cancelling():
                         raise
                     logger.warning(
                         "Recovery conflict: metadata stays available; "
                         "Telegram mutation recovery is paused"
                     )
                 except Exception:
-                    if (
-                        task := asyncio.current_task()
-                    ) is not None and task.cancelling():
+                    if starting_task is not None and starting_task.cancelling():
                         raise
                     logger.warning(
                         "Initial channel verification failed; the saved catalog "
@@ -324,9 +258,7 @@ class Runtime:
                 try:
                     await self.transfers.recover()
                 except Exception:
-                    if (
-                        task := asyncio.current_task()
-                    ) is not None and task.cancelling():
+                    if starting_task is not None and starting_task.cancelling():
                         raise
                     lineage_ready = False
                     logger.warning(
@@ -371,6 +303,69 @@ class Runtime:
             except BaseException:
                 logger.exception("Cleanup after failed startup failed")
             raise
+
+    async def _open_catalog(self) -> bool:
+        """Open the owned catalog, or retain the existing recovery-only path."""
+        from tgdrive.core.errors import CorruptStoreError
+        from tgdrive.recovery.backup import BackupError
+        from tgdrive.replication.replica_activation import (
+            ActivationError,
+            apply_activation,
+        )
+        from tgdrive.storage.mongo import initialize_if_empty
+
+        try:
+            await _worker(self.replica._check_saved_state)
+            if activation_error := getattr(self, "_activation_unavailable", None):
+                raise activation_error
+            await _worker(apply_activation, self.settings, self.mongo)
+            from tgdrive.storage.upgrade import upgrade
+
+            # A 2.0-2.2 drive is upgraded in place; its files stay where they are.
+            await _worker(upgrade, self.mongo, self.settings)
+            if await self._offer_backup_restore():
+                return False
+            created = await _worker(initialize_if_empty, self.settings, self.mongo)
+            logger.info(
+                "Created a new MongoDB drive from deployment configuration"
+                if created
+                else "Opening the existing MongoDB drive"
+            )
+
+            @_journalled
+            async def restore_store():
+                self.store = await self.backup.restore()
+
+            await restore_store()
+            from tgdrive.core.encryption import check_drive_key
+
+            await _worker(check_drive_key, self.mongo, self.settings.encryption_key)
+        except (
+            ActivationError,
+            BackupError,
+            CorruptStoreError,
+            ValueError,
+        ) as error:
+            if (task := asyncio.current_task()) is not None and task.cancelling():
+                raise
+            self.recovery_only = True
+            await _worker(self.replica._record_failure, error)
+            if getattr(error, "code", None) != "ACTIVATION_RESOURCE_LIMIT":
+                await _worker(
+                    self.replica.report,
+                    "error",
+                    "The MongoDB catalog is unavailable or requires explicit "
+                    "recovery. Existing data has been preserved; normal file "
+                    "operations are stopped.",
+                )
+            self.replica.start()
+            logger.warning(
+                "Catalog unavailable: %s Owner web recovery is available; "
+                "file writers are stopped",
+                error,
+            )
+            return False
+        return True
 
     def _check_upload_allowed(self) -> None:
         if getattr(self, "replica", None) is not None and self.replica.blocked:
