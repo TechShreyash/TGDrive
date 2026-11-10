@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import time
+from types import SimpleNamespace
 
 import pytest
 from pymongo.errors import (
@@ -14,6 +15,7 @@ from pymongo.errors import (
     OperationFailure,
 )
 
+import tgdrive.replication.replica as replica_module
 from tests.replication.test_replica import BACKUP, dispose, setup
 from tests.replication.test_replica import replica_backend as replica_backend
 from tgdrive.recovery.backup import BackupError
@@ -117,13 +119,18 @@ async def test_database_outage_retries_same_backup_after_restart(
         monkeypatch.setattr(collection, "find_one", find_one)
         clock = time.time
         monkeypatch.setattr(
-            "tgdrive.replication.replica.time.time", lambda: clock() + 31
+            replica_module,
+            "time",
+            SimpleNamespace(time=lambda: clock() + 31, monotonic=time.monotonic),
         )
         replica._wake.set()
         for _ in range(200):
             if replica.status()["phase"] == "protected":
                 break
             await asyncio.sleep(0.01)
+        # Protection is published before the same cycle retires its redundant job.
+        async with asyncio.timeout(2), replica._operation:
+            pass
         assert replica.status()["phase"] == "protected"
         assert replica.status()["error"] is None
         assert replica.status()["protected_revision"] == store.revision
