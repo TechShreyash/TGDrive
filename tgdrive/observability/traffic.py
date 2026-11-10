@@ -12,9 +12,15 @@ MAX_SAMPLE_GAP_SECONDS = 30
 
 class TrafficCounters:
     def __init__(self):
+        from tgdrive.observability.performance_diagnosis import (
+            WORKLOAD_KINDS,
+            PerformanceDiagnosis,
+        )
         from tgdrive.observability.resource_metrics import ResourceMetrics
 
         self.resources = ResourceMetrics()
+        self.workload = dict.fromkeys(WORKLOAD_KINDS, 0)
+        self.diagnosis = PerformanceDiagnosis(self.workload)
         self.started_at = time.time()
         self.requests = 0
         self.active = 0
@@ -23,6 +29,16 @@ class TrafficCounters:
         self.errors = 0
         self.history = deque(maxlen=120)
         self._last_sample = 0
+
+    def classify(self, scope, kind):
+        if kind not in self.workload:
+            raise ValueError("Unknown aggregate workload kind")
+        previous = scope.get("tgdrive.workload")
+        if previous is None or previous == kind:
+            return
+        self.workload[previous] -= 1
+        self.workload[kind] += 1
+        scope["tgdrive.workload"] = kind
 
     def snapshot(self):
         now = time.time()
@@ -86,6 +102,18 @@ async def sample_performance(counters, pool, *, interval=3, history=None):
             except Exception:
                 # Diagnostics must not interrupt file service or terminate sampling.
                 logger.exception("Could not sample Telegram activity")
+        try:
+            counters.diagnosis.observe(
+                counters,
+                telegram,
+                getattr(pool, "_media_read_cache", None),
+                {
+                    slot.name: id(getattr(slot.client, "_media_scheduler", slot.client))
+                    for slot in getattr(pool, "_slots", [])
+                },
+            )
+        except Exception:
+            logger.exception("Could not sample performance diagnosis")
         if history is not None and (
             history.initialized or time.monotonic() >= retry_history_at
         ):
@@ -134,6 +162,9 @@ class TrafficMiddleware:
         )
         if not tracked:
             return await self.app(scope, receive, send)
+        kind = "unknown_file_requests" if path == "/file" else "upload_requests"
+        scope["tgdrive.workload"] = kind
+        self.counters.workload[kind] += 1
         self.counters.active += 1
         self.counters.requests += 1
         failed = False
@@ -158,5 +189,6 @@ class TrafficMiddleware:
             failed = True
             raise
         finally:
+            self.counters.workload[scope.pop("tgdrive.workload")] -= 1
             self.counters.active -= 1
             self.counters.errors += int(failed)

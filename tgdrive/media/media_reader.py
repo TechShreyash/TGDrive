@@ -934,6 +934,21 @@ class MediaReadCache:
         self._index_dirty = True
         await self.flush()
 
+    def activity_snapshot(self):
+        """Event-loop-local counters without scanning cache files or disk."""
+        return {
+            "hits": self._hits,
+            "misses": self._misses,
+            "scratch": {
+                "bytes": self.scratch.used * BLOCK,
+                "max_bytes": self.scratch.limit * BLOCK,
+                "configured_max_bytes": self.policy.scratch_max_bytes,
+                "peak_bytes": self.scratch.peak * BLOCK,
+                "waiting_heads": self.scratch.waiters,
+                "active_streams": self._active_streams,
+            },
+        }
+
     async def snapshot(self):
         self._refresh_capacity()
         self.memory._hit(())  # Expire idle RAM entries before reporting readiness.
@@ -996,14 +1011,7 @@ class MediaReadCache:
             "disk": disk,
             "files": files,
             "pending_writes": len(self._pending),
-            "scratch": {
-                "bytes": self.scratch.used * BLOCK,
-                "max_bytes": self.scratch.limit * BLOCK,
-                "configured_max_bytes": self.policy.scratch_max_bytes,
-                "peak_bytes": self.scratch.peak * BLOCK,
-                "waiting_heads": self.scratch.waiters,
-                "active_streams": self._active_streams,
-            },
+            "scratch": self.activity_snapshot()["scratch"],
         }
 
     async def close(self):

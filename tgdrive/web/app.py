@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import math
+import mimetypes
 import time
 from contextlib import asynccontextmanager, suppress
 from pathlib import Path
@@ -58,6 +59,7 @@ from tgdrive.media.previews import describe_media, describe_preview
 from tgdrive.media.streaming import (
     TelegramFileNotFound,
     TelegramVariantNotFound,
+    _is_playback_request,
     _record_request_error,
     stream_telegram_file,
 )
@@ -1414,6 +1416,19 @@ def create_app(
         ] = None,
     ) -> Response:
         path, file_data = await asyncio.to_thread(authorized_file, request, path, auth)
+        if request.method == "GET":
+            mime = (
+                mimetypes.guess_type(file_data["name"])[0] or "application/octet-stream"
+            )
+            if download:
+                kind = "download_requests"
+            elif _is_playback_request(
+                request, mime, download=download, preview=preview
+            ):
+                kind = "playback_requests"
+            else:
+                kind = "unknown_file_requests"
+            request.app.state.traffic.classify(request.scope, kind)
         if auth is None and request.method == "GET":
             record_opened(_store(request), file_data["id"])
 
@@ -1452,8 +1467,6 @@ def create_app(
                 )
 
         if request.method == "HEAD" and quality is None:
-            import mimetypes
-
             from tgdrive.media.ranges import (
                 RangeNotSatisfiable,
                 parse_byte_range,

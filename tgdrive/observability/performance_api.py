@@ -6,6 +6,7 @@ import asyncio
 import os
 import resource
 import shutil
+import sys
 import time
 from pathlib import Path
 from typing import Any
@@ -74,7 +75,7 @@ def system_snapshot(settings):
         "process_rss_bytes": current_rss,
         "cpu_count": os.cpu_count(),
         "process_peak_rss_bytes": resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
-        * 1024,
+        * (1 if sys.platform == "darwin" else 1024),
         "load_average": load,
         "disk": disk,
         "staging_budget_bytes": settings.staging_budget_bytes,
@@ -228,6 +229,7 @@ def register_performance_routes(
                 "drive": drive,
                 "database": database,
                 "traffic": request.app.state.traffic.snapshot(),
+                "diagnosis": request.app.state.traffic.diagnosis.snapshot(),
                 "history_scope": (
                     "Last 5 minutes; sampled every 3 seconds; resets on restart."
                 ),
