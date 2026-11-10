@@ -205,12 +205,22 @@ All routes are **Owner**. Field meanings and limits are in
 | --- | --- | --- |
 | `GET /api/v1/settings/performance` | Owner preferences, revision and defaults; excludes managed resource values | Live managed values are under `/api/v1/performance` → `tuning` |
 | `PATCH /api/v1/settings/performance` | Only `timezone`, `auto_preload` and `upload_split_mib` | Optional revision in `If-Match`; stale edits return `409`. Managed keys (including `max_file_size`, `staging_budget_bytes`, `min_free_bytes`) and unknown fields return `422` |
-| `GET /api/v1/performance` | Live accounts, queues, `traffic`, `server`, `drive`/`database` readings and `tuning` | Live samples reset on restart; recorded history/totals use the history route |
+| `GET /api/v1/performance` | Live accounts, queues, `traffic`, `server`, `drive`/`database` readings, `tuning` and `diagnosis` | Live samples reset on restart; recorded history/totals use the history route |
 | `GET /api/v1/performance/history` | `start`, `end` (Unix seconds, within 31 days): up to 360 bins plus lifetime `totals` | `422` bad range; `503` storage unavailable. Don't add the totals together |
+
 | `GET /api/v1/preloads` | Cached files, coverage as `[start, end)` intervals and jobs | |
 | `POST /api/v1/preloads` | `{"path"}`: preload a file | Rejected if it can't fit RAM or disk cache |
 | `POST /api/v1/preloads/clear` | `{"file_id"}` evicts one file; `{}` clears all cached bytes | Originals stay in Telegram |
 | `POST /api/v1/preloads/{job_id}/cancel` | Cancel a preload | Keeps work other readers still need |
+
+The optional `diagnosis` describes recent aggregate observations, not a throughput
+controller or a complete bottleneck analysis. It reports `unavailable` when
+samples are absent or older than 15 seconds, `observing` until six seconds of
+samples have accumulated, then `active` or `idle` for the observed window.
+The sampler retains up to 11 samples over 30 seconds. Rates and cache counts
+can be null when their inputs are missing or reset. Its observed constraints
+cover Telegram queues, queued-account cooldowns and scratch admission waits;
+they can coexist and do not establish network capacity or a unique cause.
 
 <a id="zip-archive-jobs"></a>
 
