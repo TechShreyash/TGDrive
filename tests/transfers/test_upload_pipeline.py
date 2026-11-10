@@ -85,11 +85,12 @@ async def test_pipeline_retries_only_failed_part_and_preserves_window_hash_and_d
     path.write_bytes(b"prefix" + payload + b"suffix")
     native = Native()
     native.fail_part = 1
+    native.hold = asyncio.Event()
     adapter = client(native)
     progress = AsyncMock()
     boundary = AsyncMock()
-    assert (
-        await adapter.send_staged(
+    upload = asyncio.create_task(
+        adapter.send_staged(
             123,
             path,
             file_name="file.bin",
@@ -100,8 +101,16 @@ async def test_pipeline_retries_only_failed_part_and_preserves_window_hash_and_d
             progress=progress,
             before_dispatch=boundary,
         )
-        == "stored"
     )
+    try:
+        async with asyncio.timeout(2):
+            while native.active < 2:  # noqa: ASYNC110 - observe synthetic RPC admission.
+                await asyncio.sleep(0)
+        assert native.published == []
+    finally:
+        native.hold.set()
+        result = await upload
+    assert result == "stored"
     assert b"".join(native.parts[index] for index in sorted(native.parts)) == payload
     assert native.calls == {0: 1, 1: 2, 2: 1}
     assert 1 < native.maximum <= 2
@@ -136,18 +145,29 @@ async def test_big_file_pipeline_retries_one_part_without_resending_acked_parts(
 
     native = BigNative()
     native.fail_part = 7
+    native.hold = asyncio.Event()
     adapter = client(native, limit=3)
     progress = AsyncMock()
-    await adapter.send_staged(
-        123,
-        path,
-        file_name="large.bin",
-        offset=6,
-        size=len(payload),
-        expected_sha256=hashlib.sha256(payload).hexdigest(),
-        random_id=987,
-        progress=progress,
+    upload = asyncio.create_task(
+        adapter.send_staged(
+            123,
+            path,
+            file_name="large.bin",
+            offset=6,
+            size=len(payload),
+            expected_sha256=hashlib.sha256(payload).hexdigest(),
+            random_id=987,
+            progress=progress,
+        )
     )
+    try:
+        async with asyncio.timeout(2):
+            while native.active < 3:  # noqa: ASYNC110 - observe synthetic RPC admission.
+                await asyncio.sleep(0)
+        assert native.published == []
+    finally:
+        native.hold.set()
+        await upload
     assert b"".join(native.parts[index] for index in range(total_parts)) == payload
     assert native.calls == {
         index: 2 if index == native.fail_part else 1 for index in range(total_parts)
