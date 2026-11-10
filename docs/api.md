@@ -207,7 +207,6 @@ All routes are **Owner**. Field meanings and limits are in
 | `PATCH /api/v1/settings/performance` | Only `timezone`, `auto_preload` and `upload_split_mib` | Optional revision in `If-Match`; stale edits return `409`. Managed keys (including `max_file_size`, `staging_budget_bytes`, `min_free_bytes`) and unknown fields return `422` |
 | `GET /api/v1/performance` | Live accounts, queues, `traffic`, `server`, `drive`/`database` readings, `tuning` and `diagnosis` | Live samples reset on restart; recorded history/totals use the history route |
 | `GET /api/v1/performance/history` | `start`, `end` (Unix seconds, within 31 days): up to 360 bins plus lifetime `totals` | `422` bad range; `503` storage unavailable. Don't add the totals together |
-
 | `GET /api/v1/preloads` | Cached files, coverage as `[start, end)` intervals and jobs | |
 | `POST /api/v1/preloads` | `{"path"}`: preload a file | Rejected if it can't fit RAM or disk cache |
 | `POST /api/v1/preloads/clear` | `{"file_id"}` evicts one file; `{}` clears all cached bytes | Originals stay in Telegram |
