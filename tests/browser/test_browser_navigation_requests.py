@@ -176,7 +176,7 @@ def test_upload_refreshes_skip_shares_but_metadata_changes_refresh_badges(
     dialog.get_by_role("button", name="Create Share Link", exact=True).click()
     expect(dialog.get_by_label("Share Link", exact=True)).to_be_visible()
     dialog.get_by_role("button", name="Done", exact=True).click()
-    expect(page.get_by_label("Shared by Link", exact=True)).to_have_count(1)
+    expect(page.get_by_title("Shared by Link", exact=True)).to_have_count(1)
     before = len(shares)
     for _ in range(3):
         with page.expect_response(lambda response: is_listing(response.request)):
@@ -186,7 +186,7 @@ def test_upload_refreshes_skip_shares_but_metadata_changes_refresh_badges(
             () => requestAnimationFrame(resolve)));
         }""")
     assert len(shares) == before
-    expect(page.get_by_label("Shared by Link", exact=True)).to_have_count(1)
+    expect(page.get_by_title("Shared by Link", exact=True)).to_have_count(1)
 
     page.get_by_label("Actions for 資料", exact=True).click()
     page.get_by_role("button", name="Rename", exact=True).click()
@@ -200,7 +200,7 @@ def test_upload_refreshes_skip_shares_but_metadata_changes_refresh_badges(
         dialog.get_by_role("button", name="Save Name", exact=True).click()
     folder = page.get_by_role("button", name="Renamed shared folder", exact=True)
     expect(folder).to_be_visible()
-    expect(page.get_by_label("Shared by Link", exact=True)).to_have_count(1)
+    expect(page.get_by_title("Shared by Link", exact=True)).to_have_count(1)
     if removal == "partial-trash":
 
         def partial_trash(route: Any) -> None:
@@ -219,7 +219,7 @@ def test_upload_refreshes_skip_shares_but_metadata_changes_refresh_badges(
         ):
             page.get_by_role("button", name="Move to Trash", exact=True).click()
         expect(folder).to_have_count(0)
-        expect(page.get_by_label("Shared by Link", exact=True)).to_have_count(0)
+        expect(page.get_by_title("Shared by Link", exact=True)).to_have_count(0)
         return
     page.get_by_role("link", name="Shared Links", exact=True).click()
     page.get_by_role(
@@ -233,7 +233,7 @@ def test_upload_refreshes_skip_shares_but_metadata_changes_refresh_badges(
     ).to_have_count(0)
     page.get_by_role("link", name="My Files", exact=True).click()
     expect(folder).to_be_visible()
-    expect(page.get_by_label("Shared by Link", exact=True)).to_have_count(0)
+    expect(page.get_by_title("Shared by Link", exact=True)).to_have_count(0)
 
 
 def test_deep_folder_opens_from_a_short_url_with_its_full_breadcrumb(
