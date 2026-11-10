@@ -1,4 +1,4 @@
-/** Keep the fresh-start entry visible while the server rejects in-place erasure. */
+/** Fresh setup preserves the existing drive; in-place erasure is unsupported. */
 export default function StartNewDrive() {
     return (
         <section
@@ -7,10 +7,9 @@ export default function StartNewDrive() {
         >
             <h2 id="start-new-drive-heading">Start a new drive</h2>
             <p id="start-new-drive-unavailable">
-                In-place reset is temporarily unavailable. To start empty,
-                configure a fresh dedicated MongoDB database and a new storage
-                channel. Keep the existing database, channel and encryption key
-                for recovery.
+                In-place reset is unavailable. To start empty, configure a fresh
+                dedicated MongoDB database and a new storage channel. Keep the
+                existing database, channel and encryption key for recovery.
             </p>
             <button
                 type="button"

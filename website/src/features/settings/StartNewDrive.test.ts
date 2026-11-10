@@ -5,7 +5,8 @@ import StartNewDrive from "./StartNewDrive";
 
 it("explains the safe fresh-start path without collecting reset credentials", () => {
     const markup = renderToStaticMarkup(createElement(StartNewDrive));
-    expect(markup).toContain("In-place reset is temporarily unavailable");
+    expect(markup).toContain("In-place reset is unavailable");
+    expect(markup).not.toContain("temporarily");
     expect(markup).toContain(
         "Keep the existing database, channel and encryption key",
     );
