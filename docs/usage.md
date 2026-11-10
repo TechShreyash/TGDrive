@@ -183,16 +183,17 @@ a file, download it for a suitable app.
 
 Videos open paused. Choose **Continue from…** for a saved position or **Play**
 to start from the beginning. Signed-in owners and demo administrators save
-video progress in MongoDB, so they can continue on another device. A share token
-alone or a public-demo session uses a separate position in that device's
-browser profile; it cannot read owner progress. Existing browser positions are
-not imported into owner history.
+video progress in MongoDB, so they can continue on another device. This also
+applies in share or embedded viewers when an independent owner session is
+authenticated. A share token alone or a public-demo session uses a separate
+position in that device's browser profile; it cannot read owner progress.
+Existing browser positions are not imported into owner history.
 
 Finishing a video resets its saved position. Progress is advisory: a failed
-server save does not stop playback, and closing or losing a connection can lose
-the latest position. Local progress can also be lost when site data is cleared
-or browser storage is unavailable. Owner progress is included in subsequent
-recovery backups, but an older backup may not contain the latest position.
+server save does not stop playback or fall back to local owner history, and
+closing or losing a connection can lose the latest position. Local progress
+can also be lost when site data is cleared or browser storage is unavailable.
+Owner progress is included in subsequent recovery backups, but an older backup may not contain the latest position.
 Older direct `/file` stream links use browser-native handling; shared viewer
 links use TGDrive's player.
 
