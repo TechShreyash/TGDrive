@@ -428,6 +428,9 @@ def create_app(
     from tgdrive.recovery.start_new import register_start_new_route
 
     register_start_new_route(app, settings, require_admin, password_hash)
+    from tgdrive.web.video_progress import register_video_progress_routes
+
+    register_video_progress_routes(app, require_admin=require_admin, get_store=_store)
 
     @app.exception_handler(DatabaseUnavailable)
     async def database_unavailable(_request: Request, _error: DatabaseUnavailable):

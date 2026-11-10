@@ -1078,7 +1078,9 @@ class FixtureRuntime:
         }
         for identity, (name, content) in enumerate(samples.items(), 110):
             self.payloads[identity] = content
-            self.store.add_file(preview_path, name, identity, len(content))
+            sample = self.store.add_file(preview_path, name, identity, len(content))
+            if name == "movtext-subtitles.mp4":
+                self.video_file_path = preview_path + "/" + sample["id"]
         self.pool = FixturePool([FixtureClient(self.payloads)])
         self.transfers = FixtureTransfers(self.store, self.payloads)
         self.backup = FixtureBackup(self.store)
@@ -1182,6 +1184,7 @@ async def state(request: Request) -> dict[str, Any]:
             "file": runtime.shared_file_path,
             "private_file": runtime.private_file_path,
             "preview_folder": runtime.preview_path,
+            "video": runtime.video_file_path,
         },
     }
 

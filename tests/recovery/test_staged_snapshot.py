@@ -790,3 +790,54 @@ def test_parser_resource_errors_are_distinct_from_duplicate_fields(monkeypatch):
     with pytest.raises(ValueError, match="Duplicate") as invalid:
         staged_snapshot._Parser(io.BytesIO(b'{"x":1,"x":2}')).value()
     assert not isinstance(invalid.value, staged_snapshot.RecoveryResourceLimit)
+
+
+def test_video_progress_is_validated_and_kept_private_to_raw_records(
+    tmp_path, snapshot
+):
+    row = next(row for row in snapshot["database"]["nodes"] if row["kind"] == "file")
+    row["video_progress"] = {
+        "position_seconds": 20.0,
+        "duration_seconds": 200.0,
+        "updated_at": 1000.0,
+    }
+    row["video_progress_session"] = {
+        "id": "a" * 32,
+        "sequence": 1,
+        "started_at": 999.0,
+        "saved_at": 1000.0,
+        "closed": False,
+    }
+    staged = stage(tmp_path, snapshot)
+    with closing(staged.records("nodes")) as nodes:
+        restored = next(node for node in nodes if node["kind"] == "file")
+    assert restored["video_progress"] == row["video_progress"]
+    assert restored["video_progress_session"] == row["video_progress_session"]
+    portable = snapshot_catalog(snapshot["database"])
+    assert "video_progress" not in json_util.dumps(portable)
+
+
+@pytest.mark.parametrize("change", ["nan", "extra", "writer", "folder"])
+def test_invalid_saved_video_metadata_is_rejected_before_activation(
+    tmp_path, snapshot, change
+):
+    row = next(row for row in snapshot["database"]["nodes"] if row["kind"] == "file")
+    row["video_progress"] = {
+        "position_seconds": 20.0,
+        "duration_seconds": 200.0,
+        "updated_at": 1000.0,
+    }
+    if change == "nan":
+        row["video_progress"]["position_seconds"] = float("nan")
+    elif change == "extra":
+        row["video_progress"]["token"] = "invalid"
+    elif change == "writer":
+        row["video_progress_session"] = {"id": "bad"}
+    else:
+        folder = next(
+            row for row in snapshot["database"]["nodes"] if row["kind"] == "folder"
+        )
+        folder["video_progress"] = row.pop("video_progress")
+    with pytest.raises(ValueError):
+        stage(tmp_path, snapshot)
+    assert not (tmp_path / "snapshot.sqlite").exists()

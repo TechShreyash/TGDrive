@@ -17,6 +17,7 @@ import json
 import re
 import secrets
 import threading
+import time
 import unicodedata
 from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
@@ -1321,6 +1322,140 @@ class MongoStore:
                     results[node["_id"]] = self._listed(node, chain)
             return results
 
+    # ------------------------------------------------------- video progress
+
+    def _video_node(self, item_id, *, write=False):
+        from tgdrive.storage.video_progress import validate_video_state
+
+        _validate_id(item_id)
+        node, _path, chain = self._resolve("/" + item_id)
+        if node["kind"] != "file":
+            raise NotFileError("Not a file")
+        self._visible(chain)
+        if write:
+            self._mutable(chain)
+        validate_video_state(node)
+        return node
+
+    def video_progress(self, item_id):
+        with self._transaction(snapshot=True):
+            return copy.deepcopy(self._video_node(item_id).get("video_progress"))
+
+    def begin_video_progress(self, item_id):
+        from tgdrive.storage.video_progress import (
+            SESSION_INTERVAL_SECONDS,
+            VideoProgressError,
+            check_interval,
+            validate_video_state,
+        )
+
+        with self._transaction(write=True):
+            node = self._video_node(item_id, write=True)
+            now = time.time()
+            previous = node.get("video_progress_session")
+            check_interval(
+                previous["started_at"] if previous else None,
+                now,
+                SESSION_INTERVAL_SECONDS,
+            )
+            writer = {
+                "id": secrets.token_urlsafe(24),
+                "sequence": 0,
+                "started_at": now,
+                "saved_at": None,
+                "closed": False,
+            }
+            validate_video_state(node | {"video_progress_session": writer})
+            self.backend.fence(self._session)
+            result = self.db.nodes.update_one(
+                {"_id": item_id, "kind": "file"},
+                {"$set": {"video_progress_session": writer}},
+                session=self._session,
+            )
+            if result.matched_count != 1:
+                raise VideoProgressError(
+                    "The video file changed; reopen it.",
+                    code="VIDEO_PROGRESS_SESSION_CHANGED",
+                )
+            return {
+                "session_id": writer["id"],
+                "progress": copy.deepcopy(node.get("video_progress")),
+            }
+
+    def save_video_progress(
+        self,
+        item_id,
+        session_id,
+        sequence,
+        position_seconds,
+        duration_seconds,
+        *,
+        final=False,
+    ):
+        from tgdrive.storage.video_progress import (
+            SAVE_INTERVAL_SECONDS,
+            VideoProgressError,
+            check_interval,
+            check_writer,
+            position_record,
+        )
+
+        check_writer(session_id, sequence, final)
+        with self._transaction(write=True):
+            node = self._video_node(item_id, write=True)
+            writer = node.get("video_progress_session")
+            if writer is None or writer["id"] != session_id:
+                raise VideoProgressError(
+                    "Another playback session is now the writer.",
+                    code="VIDEO_PROGRESS_SESSION_CHANGED",
+                )
+            now = time.time()
+            progress = position_record(position_seconds, duration_seconds, now)
+            previous = node.get("video_progress")
+            if sequence <= writer["sequence"]:
+                if (
+                    sequence == writer["sequence"]
+                    and previous is not None
+                    and previous["position_seconds"] == position_seconds
+                    and previous["duration_seconds"] == duration_seconds
+                    and writer["closed"] == final
+                ):
+                    return copy.deepcopy(previous)
+                raise VideoProgressError(
+                    "A newer video position is already saved.",
+                    code="VIDEO_PROGRESS_SEQUENCE_STALE",
+                )
+            if writer["closed"]:
+                raise VideoProgressError(
+                    "This playback writer is closed; start a new session.",
+                    code="VIDEO_PROGRESS_SESSION_CHANGED",
+                )
+            if not final:
+                check_interval(writer["saved_at"], now, SAVE_INTERVAL_SECONDS)
+            self.backend.fence(self._session)
+            result = self.db.nodes.update_one(
+                {
+                    "_id": item_id,
+                    "kind": "file",
+                    "video_progress_session.id": session_id,
+                    "video_progress_session.sequence": writer["sequence"],
+                },
+                {
+                    "$set": {
+                        "video_progress": progress,
+                        "video_progress_session": writer
+                        | {"sequence": sequence, "saved_at": now, "closed": final},
+                    }
+                },
+                session=self._session,
+            )
+            if result.matched_count != 1:
+                raise VideoProgressError(
+                    "Another playback session is now the writer.",
+                    code="VIDEO_PROGRESS_SESSION_CHANGED",
+                )
+            return progress
+
     # -------------------------------------------------------------- recent
 
     def mark_opened(self, item_id):
@@ -2068,7 +2203,10 @@ class MongoStore:
         """Portable schema-5 catalog from raw rows; also validates their shape."""
         try:
             portable, parents = {}, {}
+            from tgdrive.storage.video_progress import validate_video_state
+
             for row in nodes:
+                validate_video_state(row)
                 key = row["_id"]
                 if row.get("id", key) != key or row.get("name_key") != _name_key(
                     row["name"]

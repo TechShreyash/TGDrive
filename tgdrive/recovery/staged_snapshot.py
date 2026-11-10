@@ -332,6 +332,9 @@ def _catalog_metadata(catalog):
 
 
 def _node(db, row, budget):
+    from tgdrive.storage.video_progress import validate_video_state
+
+    validate_video_state(row)
     identity = row["_id"]
     if row.get("id", identity) != identity or row.get("name_key") != _name_key(
         row["name"]

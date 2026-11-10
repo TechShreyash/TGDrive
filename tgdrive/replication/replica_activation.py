@@ -791,26 +791,47 @@ def _mongo_nodes(catalog):
     return mongo_nodes(catalog)
 
 
+def _inline_nodes(catalog, database):
+    # Legacy inline candidates are admission-bounded; keep catalog ID rebasing.
+    positions = {
+        row["_id"]: row["video_progress"]
+        for row in (database or {}).get("nodes", [])
+        if "video_progress" in row
+    }
+    for node in _mongo_nodes(catalog):
+        if node["_id"] in positions:
+            node["video_progress"] = positions[node["_id"]]
+        yield node
+
+
+def _database_nodes(rows):
+    from tgdrive.storage.video_progress import validate_video_state
+
+    for row in rows:
+        validate_video_state(row)
+        # Rebuild derived indexes; saved writer sessions never survive activation.
+        values = {key: row[key] for key in ("upload_date", "trashed")}
+        if row.get("starred"):
+            values["starred"] = True
+        if row["kind"] == "file":
+            values.update(message_id=row["message_id"], size=row["size"])
+            for key in ("parts", "sha256"):
+                if row.get(key):
+                    values[key] = row[key]
+            if "video_progress" in row:
+                values["video_progress"] = row["video_progress"]
+            if row.get("poster") is not None:
+                values["poster"] = row["poster"]
+        values["part_count"] = len(values.get("parts") or [None])
+        yield MongoStore._node(
+            row["_id"], row["parent_id"], row["name"], row["kind"], **values
+        )
+
+
 def _staged_nodes(snapshot, channel):
     remap = channel if channel != snapshot.catalog["storage_channel_id"] else None
     with closing(snapshot.nodes(remap)) as rows:
-        for row in rows:
-            # Rebuild existing search/index fields just as mongo_nodes does for
-            # inline catalogs; archived derived keys never become trusted indexes.
-            values = {key: row[key] for key in ("upload_date", "trashed")}
-            if row.get("starred"):
-                values["starred"] = True
-            if row["kind"] == "file":
-                values.update(message_id=row["message_id"], size=row["size"])
-                for key in ("parts", "sha256"):
-                    if row.get(key):
-                        values[key] = row[key]
-                if row.get("poster") is not None:
-                    values["poster"] = row["poster"]
-            values["part_count"] = len(values.get("parts") or [None])
-            yield MongoStore._node(
-                row["_id"], row["parent_id"], row["name"], row["kind"], **values
-            )
+        yield from _database_nodes(rows)
 
 
 def _insert_rows(collection, rows, session):
@@ -923,7 +944,7 @@ def _apply_mongo(settings, value, backend):
         nodes = (
             _staged_nodes(staged, candidate["catalog"]["storage_channel_id"])
             if staged is not None
-            else _mongo_nodes(candidate["catalog"])
+            else _inline_nodes(candidate["catalog"], database)
         )
         _insert_rows(backend.db.nodes, nodes, session)
         shares = (

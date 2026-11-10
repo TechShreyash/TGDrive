@@ -1364,3 +1364,50 @@ def test_activation_writer_rejects_unreadable_phase_before_replacing_the_record(
     assert path.read_bytes() == original
     assert json.loads(original)["phase"] == "prepared"
     assert list(path.parent.iterdir()) == [path]
+
+
+@pytest.mark.parametrize("staged", [False, True])
+@pytest.mark.parametrize("interrupted", [False, True])
+def test_activation_keeps_video_position_but_invalidates_writer(
+    settings, staged, interrupted
+):
+    backend = for_settings(settings)
+    identity = next(
+        row["_id"] for row in backend.data["nodes"] if row["kind"] == "file"
+    )
+    progress = {
+        "position_seconds": 20.0,
+        "duration_seconds": 200.0,
+        "updated_at": 1000.0,
+    }
+    old_writer = {
+        "id": "a" * 32,
+        "sequence": 1,
+        "started_at": 999.0,
+        "saved_at": 1000.0,
+        "closed": False,
+    }
+    backend.db.nodes.update_one(
+        {"_id": identity},
+        {"$set": {"video_progress": progress, "video_progress_session": old_writer}},
+    )
+    if staged:
+        value, _index = staged_candidate(settings)
+    else:
+        value = candidate(catalog(settings))
+        value["database"] = database_snapshot(settings)
+    prepare_activation(settings, value)
+    pending = effective_settings(settings)
+    if interrupted:
+        backend.fail_insert = True
+        with pytest.raises(RuntimeError, match="transaction interruption"):
+            _apply(pending)
+        preserved = backend.db.nodes.find_one({"_id": identity})
+        assert preserved["video_progress"] == progress
+        assert preserved["video_progress_session"] == old_writer
+    assert _apply(pending)
+    restored = backend.db.nodes.find_one({"_id": identity})
+    assert restored["message_id"] == 1123
+    assert restored["video_progress"] == progress
+    assert "video_progress_session" not in restored
+    assert "video_progress" not in json_util.dumps(installed(settings))
