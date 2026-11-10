@@ -27,6 +27,12 @@ npm run build --prefix website
 
 Keep lockfiles. Ordinary tests inject fake resources and need no live Telegram credentials.
 
+In VS Code connected to the Ubuntu WSL workspace, use the workspace
+`.venv/bin/python` interpreter for Pylance. The workspace default points there;
+if another interpreter is selected, choose the workspace environment explicitly.
+Keep diagnostics enabled and use the shared Pyright configuration in
+`pyproject.toml`.
+
 Native development needs `aria2c` on `PATH` to perform real torrent imports
 (`sudo apt-get install aria2` on Ubuntu). Docker includes it. Torrent unit tests
 use synthetic metadata and engine responses; passing them does not establish
@@ -163,6 +169,7 @@ uv lock --check
 npm run typecheck --prefix website
 npm test --prefix website
 npm run build --prefix website
+uv run --frozen --all-groups pyright
 uv run --frozen --all-groups ruff check tgdrive tests scripts
 uv run --frozen --all-groups ruff format --check tgdrive tests scripts
 uv run --frozen --all-groups python -m pytest -W error \
@@ -173,8 +180,10 @@ npm audit --prefix website --audit-level=high
 docker compose --env-file .env.example config --no-env-resolution --quiet
 ```
 
-Keep the 80% coverage floor. Compose validation checks syntax, not placeholder
-credential validity.
+Pyright checks `tgdrive`, `scripts` and `tests` in standard mode using the
+configured Python 3.14 environment. Static analysis does not establish runtime
+behavior or replace the relevant tests. Keep the 80% coverage floor. Compose
+validation checks syntax, not placeholder credential validity.
 
 </details>
 
