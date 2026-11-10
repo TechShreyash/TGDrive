@@ -165,6 +165,15 @@ def test_remote_stall_rule_kills_only_silent_ffmpeg(monkeypatch, progress):
 
     from tgdrive.media import thumbnail_worker
 
+    processes = []
+    popen = thumbnail_worker.subprocess.Popen
+
+    def start(*args, **kwargs):
+        process = popen(*args, **kwargs)
+        processes.append(process)
+        return process
+
+    monkeypatch.setattr(thumbnail_worker.subprocess, "Popen", start)
     monkeypatch.setattr(thumbnail_worker, "STALL_SECONDS", 0.5)
     monkeypatch.setattr(thumbnail_worker, "read_counter", lambda pid: None)
     script = (
@@ -180,6 +189,11 @@ def test_remote_stall_rule_kills_only_silent_ffmpeg(monkeypatch, progress):
     else:
         with pytest.raises(subprocess.TimeoutExpired):
             thumbnail_worker.run_remote(command)
+    assert len(processes) == 1
+    process = processes[0]
+    assert process.returncode is not None
+    assert process.stdout is not None and process.stdout.closed
+    assert process.stderr is not None and process.stderr.closed
 
 
 async def test_disguised_playlist_and_invalid_images_do_not_render(tmp_path):

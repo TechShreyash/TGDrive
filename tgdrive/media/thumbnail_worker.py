@@ -221,46 +221,51 @@ def read_counter(pid):
 def run_remote(command):
     """Stop ffmpeg only after STALL_SECONDS without output, progress or reads."""
     # Fixed tool/flags and a validated loopback URL; no shell interprets input.
-    process = subprocess.Popen(  # noqa: S603  # nosec B603
+    with subprocess.Popen(  # noqa: S603  # nosec B603
         command,
         stdin=subprocess.DEVNULL,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
-    )
-    output = []
-    last = [time.monotonic()]
+    ) as process:
+        output = []
+        last = [time.monotonic()]
 
-    def pump(stream, keep):
-        for chunk in iter(lambda: stream.read1(65536), b""):
-            last[0] = time.monotonic()
-            if keep:
-                output.append(chunk)
+        def pump(stream, keep):
+            for chunk in iter(lambda: stream.read1(65536), b""):
+                last[0] = time.monotonic()
+                if keep:
+                    output.append(chunk)
 
-    threads = [
-        threading.Thread(target=pump, args=(process.stdout, True), daemon=True),
-        threading.Thread(target=pump, args=(process.stderr, False), daemon=True),
-    ]
-    for thread in threads:
-        thread.start()
-    started = time.monotonic()
-    counter = None
-    while True:
-        try:
-            process.wait(timeout=min(1, STALL_SECONDS))
-            break
-        except subprocess.TimeoutExpired:
-            now = time.monotonic()
-            if (current := read_counter(process.pid)) != counter:
-                counter, last[0] = current, now
-            if now - last[0] > STALL_SECONDS or now - started > REMOTE_CEILING_SECONDS:
-                process.kill()
-                process.wait()
-                for thread in threads:
-                    thread.join()
-                raise subprocess.TimeoutExpired(command, STALL_SECONDS) from None
-    for thread in threads:
-        thread.join()
-    return subprocess.CompletedProcess(command, process.returncode, b"".join(output))
+        threads = [
+            threading.Thread(target=pump, args=(process.stdout, True), daemon=True),
+            threading.Thread(target=pump, args=(process.stderr, False), daemon=True),
+        ]
+        for thread in threads:
+            thread.start()
+        started = time.monotonic()
+        counter = None
+        while True:
+            try:
+                process.wait(timeout=min(1, STALL_SECONDS))
+                break
+            except subprocess.TimeoutExpired:
+                now = time.monotonic()
+                if (current := read_counter(process.pid)) != counter:
+                    counter, last[0] = current, now
+                if (
+                    now - last[0] > STALL_SECONDS
+                    or now - started > REMOTE_CEILING_SECONDS
+                ):
+                    process.kill()
+                    process.wait()
+                    for thread in threads:
+                        thread.join()
+                    raise subprocess.TimeoutExpired(command, STALL_SECONDS) from None
+        for thread in threads:
+            thread.join()
+        return subprocess.CompletedProcess(
+            command, process.returncode, b"".join(output)
+        )
 
 
 def render(
