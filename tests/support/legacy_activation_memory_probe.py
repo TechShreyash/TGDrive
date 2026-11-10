@@ -44,6 +44,32 @@ def emit(value):
     print(json.dumps(value, sort_keys=True), flush=True)
 
 
+def filesystem(directory):
+    resolved = Path(directory).resolve()
+    candidates = []
+    for line in Path("/proc/self/mountinfo").read_text().splitlines():
+        mounted, backing = line.split(" - ", 1)
+        fields, storage = mounted.split(), backing.split()
+        mountpoint = Path(
+            re.sub(r"\\([0-7]{3})", lambda match: chr(int(match[1], 8)), fields[4])
+        )
+        if resolved.is_relative_to(mountpoint):
+            candidates.append(
+                (
+                    len(mountpoint.parts),
+                    {
+                        "type": storage[0],
+                        "source": storage[1],
+                        "mountpoint": str(mountpoint),
+                    },
+                )
+            )
+    result = max(candidates, key=lambda value: value[0])[1]
+    if result["type"] != "ext4":
+        raise RuntimeError(f"Probe scratch must be verified ext4, got {result['type']}")
+    return result
+
+
 def item_counts(source):
     """Count precisely what the bounded parser charges, without building values."""
     import ijson
@@ -136,6 +162,7 @@ def prepare(args):
 
     directory = args.prepare.resolve()
     directory.mkdir(mode=0o700, parents=False, exist_ok=False)
+    disk = filesystem(directory)
     database = "tgdrive_test_legacy_activation_" + uuid.uuid4().hex
     configured = settings(directory, database)
     fake = FakeMongoBackend()
@@ -258,6 +285,7 @@ def prepare(args):
             "new _load skipped"
         ),
         "source_sha256": sources(),
+        "scratch_filesystem": disk,
         "prepare_peak_rss_bytes": resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
         * 1024,
     }
@@ -335,6 +363,7 @@ def exercise(directory, metadata, expect_resource_limit):
 
 def measure(args):
     directory = args.measure.resolve()
+    disk = filesystem(directory)
     metadata = json.loads((directory / "probe.json").read_text())
     name = metadata["database"]
     assert re.fullmatch(r"tgdrive_test_legacy_activation_[a-f0-9]{32}", name)
@@ -382,6 +411,7 @@ def measure(args):
         "elapsed_seconds": time.monotonic() - started,
         "memory_max": memory,
         "memory_swap_max": swap,
+        "scratch_filesystem": disk,
         "database_before_cleanup": state,
         "database_cleaned": name,
         "manifest_unchanged": digest(path) == metadata["manifest_sha256"],

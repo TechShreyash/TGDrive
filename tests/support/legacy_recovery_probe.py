@@ -187,6 +187,7 @@ async def refusal_checks(settings, database, legacy_v2):
         ReplicaTransport,
         ReplicaTransportError,
     )
+    from tgdrive.settings.managed_settings import SettingsProblem
 
     encryption.configure(settings.encryption_key)
 
@@ -210,7 +211,7 @@ async def refusal_checks(settings, database, legacy_v2):
             ReplicaTransport._capsule(
                 SimpleNamespace(
                     size=123,
-                    attributes=[types.DocumentAttributeFilename("tgdrive-legacy.tgdb")],
+                    attributes=[types.DocumentAttributeFilename("drive.json")],
                 )
             )
             raise AssertionError("A known legacy pin must not initialize a drive")
@@ -229,8 +230,8 @@ async def refusal_checks(settings, database, legacy_v2):
             raise AssertionError("Legacy discovery must refuse, not return False")
         try:
             await replica.inspect_file(legacy_v2, replica.key())
-        except ValueError:
-            pass
+        except SettingsProblem as error:
+            assert error.code == "BACKUP_KEY_MISMATCH" and error.status == 409
         else:
             raise AssertionError("Current-key import must refuse the historical file")
         # The original key authenticates the fixture for this schema check;
