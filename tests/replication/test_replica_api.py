@@ -16,6 +16,7 @@ from tests.support.app_fixtures import FakeRuntime, login, make_settings
 from tests.support.mongo_fixtures import new_store, register_test_backend
 from tgdrive.core.errors import CorruptStoreError
 from tgdrive.core.runtime import Runtime
+from tgdrive.core.security import SESSION_COOKIE
 from tgdrive.replication.replica import ChannelReplica
 from tgdrive.storage.mongo import DatabaseUnavailable
 from tgdrive.web.app import create_app
@@ -83,9 +84,7 @@ def test_rejected_legacy_journal_is_visible_and_cannot_be_cleared_by_controls(
     assert preserved == (database.replica_state.rows, database.replica_chunks.rows)
 
 
-async def test_request_recovery_guard_keeps_legacy_decoding_off_the_event_loop(
-    owner, monkeypatch
-):
+async def test_request_recovery_guard_keeps_legacy_decoding_off_the_event_loop(owner):
     import threading
 
     from starlette.requests import Request
@@ -93,6 +92,7 @@ async def test_request_recovery_guard_keeps_legacy_decoding_off_the_event_loop(
     from tgdrive.web import app as app_module
 
     client, runtime, _replica = owner
+    login(client)
     loop = asyncio.get_running_loop()
     caller, entered, release = threading.get_ident(), asyncio.Event(), threading.Event()
 
@@ -105,14 +105,18 @@ async def test_request_recovery_guard_keeps_legacy_decoding_off_the_event_loop(
             return False
 
     runtime.replica = HeldReplica()
-    monkeypatch.setattr(app_module, "_is_admin", lambda _request: True)
     request = Request(
         {
             "type": "http",
             "app": client.app,
             "method": "POST",
             "path": "/api/v1/nodes",
-            "headers": [],
+            "headers": [
+                (
+                    b"cookie",
+                    f"{SESSION_COOKIE}={client.cookies[SESSION_COOKIE]}".encode(),
+                )
+            ],
             "route": SimpleNamespace(path="/api/v1/nodes"),
         }
     )
@@ -123,7 +127,7 @@ async def test_request_recovery_guard_keeps_legacy_decoding_off_the_event_loop(
         assert not operation.done()
     finally:
         release.set()
-    await operation
+        await operation
 
 
 def test_replica_is_owner_only_and_cross_origin_mutations_are_rejected(owner):

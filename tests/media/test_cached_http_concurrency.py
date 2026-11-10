@@ -474,6 +474,7 @@ async def test_browser_fixture_uses_the_real_pooled_cache_and_closes_it():
     from tgdrive.telegram.clients import _block_identity
 
     runtime = FixtureRuntime()
+    recovery_directory = runtime.replica.directory
     await runtime.start()
     cache = runtime.pool._media_read_cache
     try:
@@ -527,3 +528,4 @@ async def test_browser_fixture_uses_the_real_pooled_cache_and_closes_it():
     finally:
         await runtime.stop()
     assert cache._closed and runtime.preloads._closed
+    assert not recovery_directory.exists()

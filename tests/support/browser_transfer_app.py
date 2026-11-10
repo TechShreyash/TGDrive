@@ -1115,13 +1115,16 @@ class FixtureRuntime:
 
     async def stop(self) -> None:
         self.ready = False
-        task = getattr(self, "showcase_task", None)
-        if task is not None:
-            task.cancel()
-            await asyncio.gather(task, return_exceptions=True)
-        await self.transfers.registry.shutdown()
-        await self.preloads.close()
-        await self.pool.stop(drain_timeout=1)
+        try:
+            task = getattr(self, "showcase_task", None)
+            if task is not None:
+                task.cancel()
+                await asyncio.gather(task, return_exceptions=True)
+            await self.transfers.registry.shutdown()
+            await self.preloads.close()
+            await self.pool.stop(drain_timeout=1)
+        finally:
+            await self.replica.close()
 
 
 _temporary = tempfile.TemporaryDirectory(prefix="tgdrive-browser-fixture-")
