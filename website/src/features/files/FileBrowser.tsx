@@ -584,11 +584,7 @@ export default function FileBrowser({
     const gridSection = (item: DriveItem, index: number) =>
         groupedGrid &&
         (index === 0 || visibleItems[index - 1].type !== item.type) ? (
-            <li
-                key={"section-" + item.type}
-                className="file-grid-section"
-                role="presentation"
-            >
+            <li key={"section-" + item.type} className="file-grid-section">
                 <h2>{item.type === "folder" ? "Folders" : "Files"}</h2>
             </li>
         ) : null;
@@ -893,6 +889,7 @@ export default function FileBrowser({
                     (layout === "grid" ? " file-grid-scroll" : "")
                 }
                 tabIndex={0}
+                role="region"
                 aria-label="File list"
             >
                 {error ? (
@@ -1424,9 +1421,6 @@ export default function FileBrowser({
                                                                                 <span
                                                                                     className="file-status-label file-status-shared"
                                                                                     title={sharing(
-                                                                                        item,
-                                                                                    )}
-                                                                                    aria-label={sharing(
                                                                                         item,
                                                                                     )}
                                                                                 >

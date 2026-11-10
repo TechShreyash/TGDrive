@@ -17,6 +17,20 @@ browser, desktop, server = fixtures.browser, fixtures.desktop, fixtures.server
 pytestmark = pytest.mark.e2e
 
 
+def test_grid_folder_headers_keep_native_list_semantics(server, desktop):
+    _, page = desktop
+    login(page, server.url)
+    page.request.post(server.url + "/__test__/books", headers=CONTROL)
+    page.goto(server.url)
+    page.get_by_role("button", name="Grid view", exact=True).click()
+    file_list = page.get_by_role("region", name="File list", exact=True)
+    expect(file_list).to_be_visible()
+    header = file_list.get_by_role("listitem").filter(
+        has=page.get_by_role("heading", name="Folders", exact=True)
+    )
+    expect(header).to_have_count(1)
+
+
 @pytest.mark.parametrize(
     "width,theme", [(1440, "light"), (390, "dark"), (320, "light")]
 )
@@ -49,6 +63,19 @@ def test_selective_reader_controls_and_mobile_layout(
     page.get_by_role("button", name=name, exact=True).press("Enter")
     expect(
         page.get_by_role("group", name="Reader controls", exact=True)
+    ).to_be_visible()
+    assert page.locator(".file-preview").evaluate(
+        "node => getComputedStyle(node).colorScheme"
+    ) == page.locator("html").evaluate("node => getComputedStyle(node).colorScheme")
+    assert page.locator(".book-toolbar").evaluate(
+        "node => getComputedStyle(node).backgroundColor"
+    ) == ("rgb(38, 41, 45)" if theme == "dark" else "rgb(238, 241, 245)")
+    expect(
+        page.get_by_role(
+            "region",
+            name="Book chapter" if name.endswith("epub") else "Comic page",
+            exact=True,
+        )
     ).to_be_visible()
     if name.endswith("epub"):
         expect(page.locator(".book-chapter h1")).to_have_text("A quiet morning")

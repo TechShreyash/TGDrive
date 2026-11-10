@@ -548,6 +548,7 @@ export default function BookPreview({
             <div
                 ref={content}
                 className={"book-content book-fit-" + fit}
+                role="region"
                 tabIndex={0}
                 aria-label={
                     book?.kind === "epub" ? "Book chapter" : "Comic page"

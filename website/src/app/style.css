@@ -1827,7 +1827,7 @@ progress::-moz-progress-bar {
     overflow: hidden;
     background: #202328;
     color: #f1f3f6;
-    color-scheme: dark;
+    color-scheme: inherit;
 }
 .file-preview[open] {
     display: flex;

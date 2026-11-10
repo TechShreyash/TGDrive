@@ -50,6 +50,13 @@
 }
 .file-preview {
     color: #eef1f5;
+}
+.file-preview:not(
+    .file-details,
+    :has(.preview-header-reader),
+    :has(.preview-surface-text),
+    :has(.preview-surface-audio)
+) {
     color-scheme: dark;
 }
 .file-preview :is(.preview-header, .preview-download, .preview-heading h2) {
