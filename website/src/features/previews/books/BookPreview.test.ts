@@ -1,12 +1,11 @@
 import { describe, expect, it, vi, afterEach } from "vitest";
 import {
     bookUrl,
-    validateBook,
-    safeNodes,
     bookJson,
     bookEntryLabel,
     isIllustratedPage,
 } from "./BookPreview";
+import { validateBook, safeNodes } from "./bookContent";
 
 afterEach(() => vi.unstubAllGlobals());
 describe("bounded reader descriptors", () => {

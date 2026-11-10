@@ -27,24 +27,14 @@ import {
     takePrefetched,
 } from "./bookImage";
 import PageJump from "../PageJump";
+import {
+    validateBook,
+    safeNodes,
+    type BookEntry,
+    type Book,
+    type BookNode,
+} from "./bookContent";
 
-type Entry = { name: string; label: string };
-type Book = { kind: "epub" | "comic"; title?: string; entries: Entry[] };
-type Node =
-    | string
-    | {
-          tag: string;
-          children: Node[];
-          src?: string;
-          alt?: string;
-          href?: string;
-          id?: string;
-      };
-const tags = new Set(
-    "p div span h1 h2 h3 h4 h5 h6 strong b em i u s a img ul ol li blockquote pre code br hr table thead tbody tr th td caption dl dt dd sup sub figure figcaption section article".split(
-        " ",
-    ),
-);
 const positionKey = "tgdrive.reader.positions";
 function positions(): Record<string, string> {
     try {
@@ -55,17 +45,6 @@ function positions(): Record<string, string> {
     } catch {
         return {};
     }
-}
-function safeEntry(name: string) {
-    return (
-        name.length > 0 &&
-        name.length <= 1024 &&
-        !name.startsWith("/") &&
-        !/^[a-z][a-z0-9+.-]*:/i.test(name) &&
-        !name.includes("\\") &&
-        !/[\x00-\x1f]/.test(name) &&
-        !name.split("/").some((part) => part === ".." || part === ".")
-    );
 }
 export function bookUrl(path: string, auth: string, entry?: string) {
     const params = new URLSearchParams({ path });
@@ -92,69 +71,16 @@ export async function bookJson(url: string, signal: AbortSignal) {
         );
     return data;
 }
-export function validateBook(data: Book): Book {
-    if (
-        !data ||
-        !["epub", "comic"].includes(data.kind) ||
-        !Array.isArray(data.entries) ||
-        !data.entries.length ||
-        data.entries.length > 10000 ||
-        !data.entries.every(
-            (entry) =>
-                entry &&
-                typeof entry.name === "string" &&
-                safeEntry(entry.name) &&
-                typeof entry.label === "string" &&
-                entry.label.length <= 1024,
-        )
-    )
-        throw new Error("The server returned an unreadable book index.");
-    return data;
-}
-export function safeNodes(data: unknown): Node[] {
-    let count = 0;
-    function visit(value: unknown, depth: number): Node {
-        if (++count > 20000 || depth > 100)
-            throw new Error("This chapter is too complex to display.");
-        if (typeof value === "string") return value;
-        const node = value as Exclude<Node, string>;
-        if (
-            !node ||
-            typeof node !== "object" ||
-            !tags.has(node.tag) ||
-            !Array.isArray(node.children)
-        )
-            throw new Error("The server returned an unreadable chapter.");
-        return {
-            tag: node.tag,
-            children: node.children.map((child) => visit(child, depth + 1)),
-            src:
-                typeof node.src === "string" &&
-                safeEntry(node.src.split("#")[0])
-                    ? node.src.split("#")[0]
-                    : undefined,
-            href:
-                typeof node.href === "string" &&
-                safeEntry(node.href.split("#")[0])
-                    ? node.href
-                    : undefined,
-            alt: typeof node.alt === "string" ? node.alt.slice(0, 500) : "",
-            id: typeof node.id === "string" ? node.id.slice(0, 128) : undefined,
-        };
-    }
-    if (!Array.isArray(data)) throw new Error("The chapter could not be read.");
-    return data.map((node) => visit(node, 0));
-}
-export function bookEntryLabel(entry: Entry, index: number): string {
+export function bookEntryLabel(entry: BookEntry, index: number): string {
     if (!/\.(xhtml|html?)$/i.test(entry.label)) return entry.label;
     if (index === 0 || /cover/i.test(entry.label)) return "Cover";
     if (/wrap|spine/i.test(entry.label)) return "Illustration " + (index + 1);
     return "Section " + (index + 1);
 }
-export function isIllustratedPage(nodes: Node[]): boolean {
+export function isIllustratedPage(nodes: BookNode[]): boolean {
     let images = 0;
     let textLength = 0;
-    const visit = (node: Node) => {
+    const visit = (node: BookNode) => {
         if (typeof node === "string") textLength += node.trim().length;
         else {
             if (node.tag === "img" && node.src) images++;
@@ -191,7 +117,7 @@ export default function BookPreview({
     const [book, setBook] = useState<Book | null>(null);
     const [selected, setSelected] = useState("");
     const [readyEntry, setReadyEntry] = useState("");
-    const [nodes, setNodes] = useState<Node[]>([]);
+    const [nodes, setNodes] = useState<BookNode[]>([]);
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState("");
     const [indexAttempt, setIndexAttempt] = useState(0);
@@ -338,7 +264,7 @@ export default function BookPreview({
             setSelected(entry);
         }
     };
-    const render = (node: Node, key: number): ReactNode => {
+    const render = (node: BookNode, key: number): ReactNode => {
         if (typeof node === "string") return node;
         const id = node.id ? "book-anchor-" + node.id : undefined;
         const children = node.children.map(render);
