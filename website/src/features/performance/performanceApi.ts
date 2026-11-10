@@ -215,6 +215,7 @@ export interface AccountPerformance {
     } | null;
 }
 export interface PerformanceSnapshot {
+    diagnosis?: PerformanceDiagnosis | null;
     tuning?: {
         running: boolean;
         values: Record<string, number>;
@@ -278,6 +279,28 @@ export interface PerformanceSnapshot {
         volume_total_bytes: number;
     } | null;
     history_scope?: string;
+}
+export interface PerformanceDiagnosis {
+    sampled_at: number | null;
+    window_seconds: number;
+    observed_seconds: number;
+    stale_after_seconds: number;
+    state: "idle" | "observing" | "active" | "unavailable";
+    workload: {
+        playback_requests: number;
+        download_requests: number;
+        unknown_file_requests: number;
+        upload_requests: number;
+    };
+    telegram_inbound_bytes_per_second: number | null;
+    http_delivered_bytes_per_second: number | null;
+    cache_hits: number | null;
+    cache_misses: number | null;
+    constraints: {
+        code: string;
+        certainty: string;
+        evidence: { name: string; value: number | null; unit: string }[];
+    }[];
 }
 export interface ResourceSample {
     at: number;

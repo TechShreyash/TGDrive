@@ -300,6 +300,14 @@
     max-width: 75ch;
     line-height: 1.6;
 }
+.performance-wait {
+    border-top: 1px solid var(--line);
+    padding-block: 16px;
+}
+.performance-wait h4 {
+    margin: 0;
+    font-size: 14px;
+}
 .performance-overview-grid .performance-facts {
     grid-template-columns: 1fr;
     gap: 16px;

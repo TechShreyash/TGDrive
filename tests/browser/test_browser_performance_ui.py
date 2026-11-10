@@ -54,6 +54,112 @@ def test_performance_explanation_without_backend_support(server, desktop):
     )
 
 
+@pytest.mark.parametrize("width", [1440, 390])
+def test_performance_diagnosis_evidence_states_and_expiry(server, desktop, width):
+    _, page = desktop
+    login(page, server.url)
+    snapshot = page.request.get(server.url + "/api/v1/performance").json()
+    snapshot["traffic"]["at"] = 1003
+    diagnosis = {
+        "sampled_at": 1000,
+        "window_seconds": 30,
+        "observed_seconds": 12,
+        "stale_after_seconds": 15,
+        "state": "idle",
+        "workload": {
+            "playback_requests": 1,
+            "download_requests": 2,
+            "unknown_file_requests": 0,
+            "upload_requests": 0,
+        },
+        "telegram_inbound_bytes_per_second": None,
+        "http_delivered_bytes_per_second": 1024,
+        "cache_hits": None,
+        "cache_misses": 0,
+        "constraints": [],
+    }
+    snapshot["diagnosis"] = diagnosis
+    failing = False
+
+    def reading(route):
+        if failing:
+            route.fulfill(status=503, json={"detail": "Synthetic sampling unavailable"})
+        else:
+            route.fulfill(json=snapshot)
+
+    page.route("**/api/v1/performance", reading)
+    page.set_viewport_size({"width": width, "height": 900})
+    page.clock.install()
+    page.goto(server.url + "/?view=performance")
+    explanation = page.get_by_role("region", name="Performance explanation", exact=True)
+    expect(explanation).to_contain_text("No workload activity was observed")
+    diagnosis["state"] = "observing"
+    page.get_by_role("button", name="Refresh Performance", exact=True).click()
+    expect(explanation).to_contain_text("Collecting samples")
+    diagnosis["state"] = "active"
+    diagnosis["constraints"] = [
+        {
+            "code": "telegram_queue",
+            "certainty": "observed",
+            "evidence": [
+                {
+                    "name": "configured_operations_per_account",
+                    "value": 3,
+                    "unit": "operations",
+                },
+            ],
+        },
+        {
+            "code": "telegram_cooldown",
+            "certainty": "observed",
+            "evidence": [
+                {"name": "longest_cooldown_seconds", "value": 4, "unit": "seconds"},
+            ],
+        },
+        {
+            "code": "scratch_wait",
+            "certainty": "observed",
+            "evidence": [
+                {"name": "reserved_bytes", "value": 1024, "unit": "bytes"},
+            ],
+        },
+    ]
+    page.get_by_role("button", name="Refresh Performance", exact=True).click()
+    expect(explanation.get_by_role("heading", level=4)).to_have_count(3)
+    expect(explanation).to_contain_text("Observed 12 seconds of a 30 second window")
+    evidence = explanation.locator("summary").filter(has_text="Evidence for this wait")
+    evidence.first.focus()
+    page.keyboard.press("Enter")
+    expect(explanation.get_by_text("3 operations", exact=True)).to_be_visible()
+    measurements = explanation.locator("summary").filter(
+        has_text="Measurements and interpretation"
+    )
+    measurements.click()
+    expect(explanation.get_by_text("1 KB/s", exact=True)).to_be_visible()
+    expect(explanation).to_contain_text(
+        "Telegram inbound · reporting accountsUnavailable"
+    )
+    assert explanation.evaluate("node => node.scrollWidth <= node.clientWidth")
+    page.screenshot(
+        path=ARTIFACTS / f"performance-diagnosis-{width}.png",
+        full_page=True,
+        animations="disabled",
+    )
+    # A failed refresh must not keep the retained sample's evidence current.
+    failing = True
+    page.clock.fast_forward(16000)
+    expect(explanation).to_contain_text("unavailable or stale")
+    expect(explanation.get_by_text("1 KB/s", exact=True)).to_have_count(0)
+    expect(explanation.get_by_role("heading", level=4)).to_have_count(0)
+    failing = False
+    snapshot["traffic"]["at"] = diagnosis["sampled_at"] = 2000
+    page.get_by_role("button", name="Refresh Performance", exact=True).click()
+    expect(explanation.get_by_role("heading", level=4)).to_have_count(3)
+    diagnosis["state"] = "unavailable"
+    page.get_by_role("button", name="Refresh Performance", exact=True).click()
+    expect(explanation).to_contain_text("unavailable or stale")
+
+
 def test_missing_request_history_does_not_imply_zero_errors(server, desktop):
     _, page = desktop
     login(page, server.url)
@@ -547,6 +653,7 @@ def test_network_includes_url_downloads_and_resources_use_container_limits(
     ).to_be_visible()
     expect(network.locator("polyline.performance-plot-active")).to_have_count(2)
     plot = network.locator(".performance-chart-plot")
+    network.get_by_role("img").scroll_into_view_if_needed()
     bounds = network.get_by_role("img").bounding_box()
     positions = []
     for fraction in (0.2, 0.65, 0.98):

@@ -1272,7 +1272,10 @@ export default function PerformancePanel({
                             </strong>
                             <span>{healthDetail}</span>
                         </section>
-                        <PerformanceExplanation />
+                        <PerformanceExplanation
+                            diagnosis={snapshot.diagnosis}
+                            serverAt={snapshot.traffic?.at}
+                        />
                         {traffic && (
                             <section
                                 className="performance-section performance-live-traffic"
