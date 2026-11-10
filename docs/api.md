@@ -88,7 +88,7 @@ verification are in [architecture](architecture.md#independent-backup-pacing-and
 | `POST /api/v1/replica/import` | Raw `application/octet-stream` recovery bytes; optional `X-TGDrive-Source-Channel`, `X-TGDrive-Bot-Token` | Returns a candidate; does not activate. `413` above 2000 MiB encrypted; `415` wrong content type; `422 RECOVERY_FILE_INVALID` for malformed metadata; `507` HTTP staging failure. Resource, recognized legacy and authentication failures use structured `409` codes. Disabled in demo mode |
 | `POST /api/v1/replica/restore` | Restore the backup found in the storage channel at startup | Restart when asked. Disabled in demo mode |
 | `POST /api/v1/replica/recover` | Three steps: `source_channel` + `bot_token` to inspect; `target_channel` + `target_bot_token` + `confirm_channel` (optional `catalog_only`) to copy; `activate: true` + `confirm_channel` to switch | Wrong confirmation or an incomplete candidate can't activate |
-| `POST /api/v1/start-new` | `confirm: "START NEW"` and `password`; in-place reset is temporarily unavailable | A valid request returns `409 START_NEW_UNAVAILABLE` without erasing the drive; `403` wrong password or demo mode; `422` invalid confirmation. [Fresh-drive procedure](backup-recovery.md#start-a-new-drive) |
+| `POST /api/v1/start-new` | `confirm: "START NEW"` and `password`; in-place reset is unavailable | A valid request returns `409 START_NEW_UNAVAILABLE` without erasing the drive; `403` wrong password or demo mode; `422` invalid confirmation. [Fresh-drive procedure](backup-recovery.md#start-a-new-drive) |
 
 The status endpoint's `backup` list is latest-first and may be empty.
 `pin_verified_at` records a pin check at that time; `unverified` discovery does

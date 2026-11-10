@@ -261,7 +261,7 @@ and channel IDs can still be private.
 For a surviving 2.0–2.2 database, use the
 [in-place upgrade](operations.md#upgrade-from-22-or-earlier). For an old archive,
 use [version-compatible recovery](#upgrade-or-restore-an-older-drive).
-**In-place reset is temporarily unavailable.** The start-new API rejects a valid
+**In-place reset is unavailable.** The start-new API rejects a valid
 reset request with `409 START_NEW_UNAVAILABLE` and preserves the existing drive.
 
 For an intentional fresh start, create a separate deployment with a **new

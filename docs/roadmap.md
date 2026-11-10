@@ -59,7 +59,7 @@ action. Remaining live validation:
 | Encryption | Legacy/plaintext copies stay readable without payload decryption; partial ranges have no authenticated block tag. Local plaintext staging and the trusted host remain outside payload encryption. |
 | Direct API clients | Some request mappings are process-local and error formats vary; follow the [documented API contracts](api.md). |
 | Storage channel changes | Require verified channel recovery; editing an ID does not move files. |
-| Intentional fresh starts | In-place reset is temporarily unavailable. Use a fresh dedicated database/channel and preserve the old drive; see [the procedure](backup-recovery.md#start-a-new-drive). |
+| Intentional fresh starts | In-place reset is unavailable. Use a fresh dedicated database/channel and preserve the old drive; see [the procedure](backup-recovery.md#start-a-new-drive). |
 
 See [Troubleshooting](operations.md#troubleshooting) for current recovery actions.
 

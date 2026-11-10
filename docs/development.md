@@ -573,7 +573,7 @@ navigation label.
   100 rows initially and on continuation, canonical Files preview URLs and Back
   to Recent. Failed pages retain Try Again and Previous Page controls.
 - Restore drawer focus to its actual opener, or to the main region after
-  navigation. Keep the temporarily unavailable reset entry disabled without
+  navigation. Keep the unavailable reset entry disabled without
   collecting a password/confirmation or expecting a successful reload.
 - Build batches before assigning sections/filters; retain every child and its
   status. Running precedes queued; terminal outcomes share Finished with All,
