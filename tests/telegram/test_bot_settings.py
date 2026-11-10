@@ -280,3 +280,113 @@ def test_bot_settings_owner_api_validates_and_persists(tmp_path, monkeypatch):
     finally:
         runtime.transfers.registry.close()
         store.close()
+
+
+@pytest.mark.parametrize("operation", ["save", "destination", "create_folder"])
+async def test_cancelled_bot_mutation_keeps_lock_until_following_save_is_safe(
+    bot_setup, monkeypatch, operation
+):
+    import threading
+
+    service, _bot, store = bot_setup
+    first_folder = store.create_folder("/", "First")
+    last_folder = store.create_folder("/", "Last")
+    first_path, last_path = "/" + first_folder["id"], "/" + last_folder["id"]
+    await service.snapshot()
+    entered, release, finished = (threading.Event() for _ in range(3))
+    original_write, original_create = service._write, store.create_folder
+
+    def held(*args):
+        entered.set()
+        assert release.wait(5), "Bot settings worker was not released"
+        try:
+            return (
+                original_create if operation == "create_folder" else original_write
+            )(*args)
+        finally:
+            finished.set()
+
+    if operation == "create_folder":
+        monkeypatch.setattr(store, "create_folder", held)
+    else:
+
+        def write(value):
+            if value.folder_path != last_path:
+                return held(value)
+            return original_write(value)
+
+        monkeypatch.setattr(service, "_write", write)
+    first = asyncio.create_task(
+        service.save(BotUploadPreferences(folder_path=first_path))
+        if operation == "save"
+        else service.destination()
+    )
+    following = None
+    try:
+        assert await asyncio.to_thread(entered.wait, 2)
+        first.cancel()
+        await asyncio.sleep(0)
+        first.cancel()
+        await asyncio.sleep(0)
+        following = asyncio.create_task(
+            service.save(BotUploadPreferences(folder_path=last_path))
+        )
+        await asyncio.sleep(0)
+        assert not first.done() and not following.done()
+        assert service._lock.locked()
+        release.set()
+        with pytest.raises(asyncio.CancelledError):
+            await first
+        await following
+        saved = service.runtime.mongo.db.settings.find_one({"_id": "bot-preferences"})
+        assert saved is not None
+        assert (
+            saved["document"]["folder_path"] == service.value.folder_path == last_path
+        )
+    finally:
+        release.set()
+        await asyncio.gather(
+            first, *([following] if following else []), return_exceptions=True
+        )
+        assert await asyncio.to_thread(finished.wait, 2)
+
+
+async def test_bot_destination_validation_stays_cancellable_before_commit(
+    bot_setup, monkeypatch
+):
+    import threading
+
+    service, _bot, store = bot_setup
+    folder = store.create_folder("/", "Selected")
+    await service.snapshot()
+    entered, release, finished = (threading.Event() for _ in range(3))
+    original = store.get_directory
+
+    def read(path):
+        entered.set()
+        assert release.wait(5)
+        try:
+            return original(path)
+        finally:
+            finished.set()
+
+    monkeypatch.setattr(store, "get_directory", read)
+    task = asyncio.create_task(
+        service.save(BotUploadPreferences(folder_path="/" + folder["id"]))
+    )
+    try:
+        assert await asyncio.to_thread(entered.wait, 2)
+        task.cancel()
+        await asyncio.sleep(0)
+        assert task.done()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        assert not service._lock.locked()
+        assert (
+            service.runtime.mongo.db.settings.find_one({"_id": "bot-preferences"})
+            is None
+        )
+    finally:
+        release.set()
+        await asyncio.gather(task, return_exceptions=True)
+        assert await asyncio.to_thread(finished.wait, 2)

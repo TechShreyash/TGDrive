@@ -13,6 +13,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from tgdrive.settings.managed_settings import SettingsProblem
+from tgdrive.transfers.tasks import _journalled
 
 
 class PerformancePreferences(BaseModel):
@@ -244,37 +245,42 @@ class PerformanceSettings:
                 raise SettingsProblem(
                     "Settings changed in another tab. Reload before saving.", status=409
                 )
-            try:
-                value = PerformancePreferences.model_validate(
-                    self.value.model_dump() | changes
-                )
-                await asyncio.to_thread(self._write, value)
-            except SettingsProblem:
-                raise
-            except ValueError:
-                raise
-            except Exception:
-                raise SettingsProblem(
-                    "Could not save performance settings. No changes were applied.",
-                    status=503,
-                ) from None
-            try:
-                await self._apply(value)
-            except Exception:
-                restored = True
+            value = PerformancePreferences.model_validate(
+                self.value.model_dump() | changes
+            )
+
+            @_journalled
+            async def commit_and_apply():
                 try:
-                    await asyncio.to_thread(self._write, self.value)
-                    await self._apply(self.value)
+                    await asyncio.to_thread(self._write, value)
+                except SettingsProblem:
+                    raise
+                except ValueError:
+                    raise
                 except Exception:
-                    restored = False
-                detail = (
-                    "Could not apply performance settings. "
-                    "The previous policy was restored."
-                    if restored
-                    else "Could not apply performance settings. "
-                    "Restart the service to reconcile the saved policy."
-                )
-                raise SettingsProblem(detail, status=503) from None
+                    raise SettingsProblem(
+                        "Could not save performance settings. No changes were applied.",
+                        status=503,
+                    ) from None
+                try:
+                    await self._apply(value)
+                except Exception:
+                    restored = True
+                    try:
+                        await asyncio.to_thread(self._write, self.value)
+                        await self._apply(self.value)
+                    except Exception:
+                        restored = False
+                    detail = (
+                        "Could not apply performance settings. "
+                        "The previous policy was restored."
+                        if restored
+                        else "Could not apply performance settings. "
+                        "Restart the service to reconcile the saved policy."
+                    )
+                    raise SettingsProblem(detail, status=503) from None
+
+            await commit_and_apply()
         return await self.snapshot()
 
 

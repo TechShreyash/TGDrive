@@ -15,6 +15,7 @@ from tgdrive.core.errors import (
 )
 from tgdrive.settings.managed_settings import SettingsProblem
 from tgdrive.storage.store import _normalize_path
+from tgdrive.transfers.tasks import _journalled
 
 DEFAULT_FOLDER_NAME = "TGDriveBotModeFiles"
 SETTINGS_LOCATION = "/?view=settings&section=transfers#bot-mode"
@@ -152,13 +153,18 @@ class BotSettings:
                     raise SettingsProblem(
                         "Choose an existing folder outside Trash.", status=409
                     ) from None
-            try:
-                await asyncio.to_thread(self._write, value)
-            except Exception:
-                raise SettingsProblem(
-                    "Could not save the bot upload folder. Try again.", status=503
-                ) from None
-            self.value = value
+
+            @_journalled
+            async def commit():
+                try:
+                    await asyncio.to_thread(self._write, value)
+                except Exception:
+                    raise SettingsProblem(
+                        "Could not save the bot upload folder. Try again.", status=503
+                    ) from None
+                self.value = value
+
+            await commit()
         return await self.snapshot()
 
     async def encrypt(self):
@@ -178,27 +184,36 @@ class BotSettings:
                     "Use /set_folder to choose another on the website.",
                     status=409,
                 ) from None
+            if path is not None and self.value.folder_path is not None:
+                return path, label
             if path is None:
                 replica = getattr(self.runtime, "replica", None)
                 if replica is not None:
                     await replica.before_mutation()
-                try:
-                    folder = await asyncio.to_thread(
-                        self.runtime.store.create_folder, "/", DEFAULT_FOLDER_NAME
-                    )
-                    path = f"/{folder['id']}"
-                except DuplicateNameError:
-                    path, label = await asyncio.to_thread(self._destination)
-            if self.value.folder_path is None:
-                value = self.value.model_copy(update={"folder_path": path})
-                try:
-                    await asyncio.to_thread(self._write, value)
-                except Exception:
-                    raise SettingsProblem(
-                        "Could not save the bot upload folder.", status=503
-                    ) from None
-                self.value = value
-            return path, label
+
+            @_journalled
+            async def commit_destination():
+                nonlocal path, label
+                if path is None:
+                    try:
+                        folder = await asyncio.to_thread(
+                            self.runtime.store.create_folder, "/", DEFAULT_FOLDER_NAME
+                        )
+                        path = f"/{folder['id']}"
+                    except DuplicateNameError:
+                        path, label = await asyncio.to_thread(self._destination)
+                if self.value.folder_path is None:
+                    value = self.value.model_copy(update={"folder_path": path})
+                    try:
+                        await asyncio.to_thread(self._write, value)
+                    except Exception:
+                        raise SettingsProblem(
+                            "Could not save the bot upload folder.", status=503
+                        ) from None
+                    self.value = value
+                return path, label
+
+            return await commit_destination()
 
 
 def get_bot_settings(settings, runtime):

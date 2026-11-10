@@ -31,6 +31,7 @@ from tgdrive.telegram.channel_state import storage_channel_problem
 from tgdrive.telegram.client_identity import IdentityCache, account_identity
 from tgdrive.telegram.client_pool import ClientStatus
 from tgdrive.telegram.connection_errors import connection_problem
+from tgdrive.transfers.tasks import _journalled
 
 logger = logging.getLogger(__name__)
 _PREFLIGHT_LOG = logging.getLogger("tgdrive.private_telegram_preflight")
@@ -865,19 +866,7 @@ class ConnectionManager:
                     logger.exception("Saved connections could not be applied live")
                     return response
 
-            task = asyncio.create_task(commit_and_apply())
-            cancelled = False
-            while True:
-                try:
-                    result = await asyncio.shield(task)
-                    break
-                except asyncio.CancelledError:
-                    if task.cancelled():
-                        raise
-                    cancelled = True
-            if cancelled:
-                raise asyncio.CancelledError
-            return result
+            return await _journalled(commit_and_apply)()
 
     async def _apply(self, document: ManagedDocument) -> dict[str, Any]:
         """Load saved connections into the running settings and client pool."""

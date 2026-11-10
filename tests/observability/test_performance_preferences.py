@@ -349,3 +349,113 @@ async def test_governor_retries_resource_policy_after_partial_apply_failure(
         assert state.preloads.policy.disk_max_bytes == 2 * governor.GIB
     finally:
         await state.preloads.close()
+
+
+@pytest.mark.parametrize("boundary", ["write", "apply", "rollback"])
+async def test_cancelled_policy_mutation_serializes_commit_apply_and_rollback(
+    tmp_path, mongo_backend, monkeypatch, boundary
+):
+    import asyncio
+    import threading
+
+    settings = make_settings(tmp_path)
+    state = runtime(mongo_backend)
+    service = PerformanceSettings(settings, state)
+    await service.initialize()
+    previous = service.value.timezone
+    entered, release, finished = (threading.Event() for _ in range(3))
+    original_write, original_apply = service._write, service._apply
+
+    def wait():
+        entered.set()
+        assert release.wait(5), "Performance settings worker was not released"
+        finished.set()
+
+    def write(value):
+        if (boundary == "write" and value.timezone == "UTC") or (
+            boundary == "rollback" and value.timezone == previous
+        ):
+            wait()
+        return original_write(value)
+
+    async def apply(value):
+        if value.timezone == "UTC":
+            if boundary == "apply":
+                await asyncio.to_thread(wait)
+            elif boundary == "rollback":
+                raise RuntimeError("Synthetic live-apply failure")
+        await original_apply(value)
+
+    monkeypatch.setattr(service, "_write", write)
+    monkeypatch.setattr(service, "_apply", apply)
+    first = asyncio.create_task(service.save({"timezone": "UTC"}))
+    following = None
+    try:
+        assert await asyncio.to_thread(entered.wait, 2)
+        first.cancel()
+        await asyncio.sleep(0)
+        first.cancel()
+        await asyncio.sleep(0)
+        following = asyncio.create_task(service.save({"timezone": "Europe/London"}))
+        await asyncio.sleep(0)
+        assert not first.done() and not following.done()
+        assert service._lock.locked()
+        release.set()
+        with pytest.raises(
+            SettingsProblem if boundary == "rollback" else asyncio.CancelledError
+        ):
+            await first
+        await following
+        saved = mongo_backend.db.settings.find_one({"_id": "performance-preferences"})
+        assert saved is not None
+        assert (
+            saved["document"]["timezone"]
+            == service.value.timezone
+            == settings.timezone
+            == "Europe/London"
+        )
+    finally:
+        release.set()
+        await asyncio.gather(
+            first, *([following] if following else []), return_exceptions=True
+        )
+        assert await asyncio.to_thread(finished.wait, 2)
+        await state.preloads.close()
+
+
+async def test_policy_loading_stays_cancellable_before_commit(
+    tmp_path, mongo_backend, monkeypatch
+):
+    import asyncio
+    import threading
+
+    service = PerformanceSettings(make_settings(tmp_path), runtime(mongo_backend))
+    entered, release, finished = (threading.Event() for _ in range(3))
+    original = service._read
+
+    def read():
+        entered.set()
+        assert release.wait(5)
+        try:
+            return original()
+        finally:
+            finished.set()
+
+    monkeypatch.setattr(service, "_read", read)
+    task = asyncio.create_task(service.save({"timezone": "UTC"}))
+    try:
+        assert await asyncio.to_thread(entered.wait, 2)
+        task.cancel()
+        await asyncio.sleep(0)
+        assert task.done()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        assert not service._lock.locked()
+        assert (
+            mongo_backend.db.settings.find_one({"_id": "performance-preferences"})
+            is None
+        )
+    finally:
+        release.set()
+        await asyncio.gather(task, return_exceptions=True)
+        assert await asyncio.to_thread(finished.wait, 2)
