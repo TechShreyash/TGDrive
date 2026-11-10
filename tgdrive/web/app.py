@@ -1554,8 +1554,10 @@ def create_app(
         _, data = await asyncio.to_thread(authorized_file, request, path, auth)
         pool = _runtime(request).pool
         estimate = getattr(pool, "queue_estimate", None)
-        requests = getattr(pool, "_request_files", None)
-        progress = requests.get(request_id) if isinstance(requests, dict) else None
+        request_files = getattr(pool, "_request_files", None)
+        progress = (
+            request_files.get(request_id) if isinstance(request_files, dict) else None
+        )
         if progress is not None and progress["file"] != (
             settings.storage_channel,
             data["message_id"],
