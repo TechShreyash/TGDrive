@@ -181,12 +181,20 @@ a file, download it for a suitable app.
 | CBZ/CBR | Comic pages, page fit and right-to-left reading |
 | Unsupported formats | Original download |
 
-Videos open paused. Choose **Continue from…** for a saved position or **Play** to
-start from the beginning. Positions belong to this site's browser profile;
-different devices watch independently, while people sharing a profile share
-positions. Finishing clears the position. Clearing site data, private browsing,
-unavailable local storage or an abrupt shutdown can lose progress. Older direct
-`/file` stream links use browser-native handling; shared viewer links use TGDrive's player.
+Videos open paused. Choose **Continue from…** for a saved position or **Play**
+to start from the beginning. Signed-in owners and demo administrators save
+video progress in MongoDB, so they can continue on another device. A share token
+alone or a public-demo session uses a separate position in that device's
+browser profile; it cannot read owner progress. Existing browser positions are
+not imported into owner history.
+
+Finishing a video resets its saved position. Progress is advisory: a failed
+server save does not stop playback, and closing or losing a connection can lose
+the latest position. Local progress can also be lost when site data is cleared
+or browser storage is unavailable. Owner progress is included in subsequent
+recovery backups, but an older backup may not contain the latest position.
+Older direct `/file` stream links use browser-native handling; shared viewer
+links use TGDrive's player.
 
 Videos use a sharp saved poster before playback when available. Older
 files or unavailable posters use a representative frame from halfway through

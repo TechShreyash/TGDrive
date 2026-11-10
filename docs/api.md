@@ -291,6 +291,25 @@ Access is **Owner** or **Share**; pass `path` and optional `auth` as for `/file`
 | `POST /api/v1/settings/thumbnails/rebuild` | Owner: `{"confirmed": true}` starts a rebuild | `202`; reuses a running one |
 | `POST /api/v1/settings/thumbnails/rebuild/cancel` | Owner: stop the rebuild | |
 
+Owner or independently authenticated demo-admin cookies can use video progress;
+a share token or public-demo access alone does not authorize these routes. The
+response uses `Cache-Control: no-store` and progress is not included in ordinary
+file or share responses.
+
+| Method and route | Body | Result |
+| --- | --- | --- |
+| `GET /api/v1/files/{file_id}/video-progress` | — | `progress` is null or contains `position_seconds`, `duration_seconds` and `updated_at` |
+| `POST /api/v1/files/{file_id}/video-progress/session` | `{}` | Starts a writer and returns `session_id`, current `progress` and `save_interval_seconds` |
+| `PUT /api/v1/files/{file_id}/video-progress` | `session_id`, increasing `sequence`, `position_seconds`, `duration_seconds`, optional `final` | Saves progress; a final save closes the writer |
+
+A new writer supersedes the previous writer. Identical retries are read-only;
+stale sequences and superseded or closed writers return `409`. Session starts
+are paced at one second and regular saves at five seconds; a rate rejection
+returns `429` with `Retry-After`. Positions must be finite and within a positive
+duration. The final save is not subject to the regular save interval. Owner
+progress is stored with the file and included in subsequent V2 recovery backups;
+activation invalidates writer sessions.
+
 Thumbnails and posters recheck access on every request, including cache hits
 and `304`, and use `Cache-Control: private, no-cache`. They never download an
 original video. Cover and poster rules: [Thumbnails](thumbnails.md).
