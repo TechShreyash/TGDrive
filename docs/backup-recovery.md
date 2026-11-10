@@ -129,8 +129,8 @@ and valuable originals. A failed snapshot/publication does not replace the last
 confirmed backup; that older point cannot cover later changes.
 
 Paged browsing and a file below these limits do not establish that recovery
-will fit a particular host. Small-host acceptance remains provisional pending
-complete-pipeline and accepted/rejected legacy memory evidence. A second
+will fit a particular host. Small-host acceptance remains provisional pending complete-pipeline
+recovery evidence. A second
 Telegram channel does not remove these resource requirements.
 
 ## Restore after losing MongoDB
