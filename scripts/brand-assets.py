@@ -1,8 +1,6 @@
-# /// script
-# requires-python = "==3.14.8"
-# dependencies = ["cairosvg==2.9.1", "pillow==13.0.0"]
-# ///
-"""Render TGDrive's checked-in SVG masters: uv run --script scripts/brand-assets.py.
+"""Render the SVG masters with the project's locked asset dependencies.
+
+Run: uv run --frozen --group assets scripts/brand-assets.py
 
 The approved Interlock logo is outlined in the SVG masters; rendering never
 depends on installed fonts or the original image-generation output.

@@ -95,6 +95,7 @@ measure live Telegram/MongoDB throughput or certify deployment.
 | Focused area | Where to look |
 | --- | --- |
 | Upload recovery, folder moves, errors and cross-tab cancellation | [`test_browser_transfer_recovery.py`](../tests/browser/test_browser_transfer_recovery.py) and transfer journal/receipt tests; preserve acknowledged offsets and source files after history cleanup. |
+| Video resume and owner/share isolation | `tests/storage/test_video_progress.py`, `tests/web/test_video_progress.py`, `website/src/features/previews/video/videoWatchProgress.test.ts` and `tests/browser/test_browser_player_resume.py`; cover ordered writers, completion, failed saves and recovery. |
 | Navigation reuse, stale requests and share indicators | [`test_browser_navigation_requests.py`](../tests/browser/test_browser_navigation_requests.py) and [`test_catalog_statistics.py`](../tests/storage/test_catalog_statistics.py). |
 | Idle/hidden polling and thumbnail scroll reuse | `website/src/app/statusPolling.test.ts`, `website/src/features/transfers/jobPolling.test.ts`, `tests/browser/test_browser_file_views.py`; sending/retry correctness stays independent of polling. |
 | Thumbnail regeneration and selective readers | `tests/media/test_thumbnail_rebuild.py`, `test_generated_thumbnails.py`, `test_thumbnails.py`, `test_books.py`, `test_books_api.py`, `test_multipart_previews.py`; synthetic browser flows in `test_browser_thumbnail_rebuild.py` and `test_browser_books_shares.py`. |
@@ -377,6 +378,9 @@ editors. After approval,
 `npm run format:check --prefix website` checks authored frontend formatting;
 `npm run format --prefix website` applies it.
 
+- Before adding a helper or abstraction, check the existing owner and its callers;
+  reuse it when it covers the behavior. Keep a single-use change local unless a
+  shared boundary removes real duplication without obscuring its error handling.
 - Give each module a focused responsibility and name it after the behavior it owns.
   Import its concrete owner instead of adding forwarding modules or barrel exports.
 - Use descriptive names and explicit units for time, byte counts and limits. Type
@@ -465,7 +469,9 @@ sections. The [checked-in captures](showcase.md) illustrate the interface.
 - Reuse semantic tokens, bundled typefaces and Lucide icons. Keep logo cobalt
   separate from interface action colors. Use tabular numerals for measurements.
 - Use `BrandLogo`; preserve the SVG masters' proportions, openings
-  and clear space. Generate raster assets with `scripts/brand-assets.py`.
+  and clear space. Generate raster assets with
+  `uv run --frozen --group assets scripts/brand-assets.py`, using the project's
+  locked asset dependencies.
 - Retain native dialog and custom player behavior. Keep shared theme variables
   in bundled external CSS and preserve the content security policy.
 - Preserve keyboard focus and saved appearance. Target 4.5:1 text contrast, 3:1
