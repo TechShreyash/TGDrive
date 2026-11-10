@@ -501,6 +501,12 @@ transfers before removing, disabling or replacing one, or changing API
 credentials. Repairing credentials for the same Telegram account can recover
 pending work. Blank replacement fields keep secrets. [Connection maintenance and recovery](operations.md#connection-changes).
 
+If you disconnect while saving connection, bot-upload or performance settings,
+a save that has begun committing may still finish. Reload the settings and check
+the displayed values before retrying; disconnecting does not undo the save.
+The accepted write and its apply or rollback finish before another save in that
+settings service is admitted.
+
 ### Storage and backup
 
 **Storage & Backups → Saved to MongoDB** confirms the catalog is saved, not that
