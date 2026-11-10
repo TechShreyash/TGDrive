@@ -179,7 +179,14 @@ def memory_marker(phase):
         "peak_rss_bytes": resource.getrusage(resource.RUSAGE_SELF).ru_maxrss * 1024,
         "rss_bytes": current_rss,
     }
-    for metric in ("memory.current", "memory.peak", "memory.stat"):
+    for metric in (
+        "memory.current",
+        "memory.peak",
+        "memory.stat",
+        "memory.swap.max",
+        "memory.swap.current",
+        "memory.swap.peak",
+    ):
         path = Path("/sys/fs/cgroup") / metric
         if path.exists():
             result[metric] = path.read_text().strip()
@@ -444,6 +451,10 @@ if __name__ == "__main__":
     filesystem = scratch_filesystem()
     if filesystem in {"tmpfs", "ramfs"}:
         parser.error("Use disk-backed scratch; tmpfs would consume the memory budget")
+    memory = Path("/sys/fs/cgroup/memory.max").read_text().strip()
+    swap = Path("/sys/fs/cgroup/memory.swap.max").read_text().strip()
+    if memory != str(256 * 1024**2) or swap != "0":
+        parser.error("Use an enforced 256 MiB memory limit with no swap")
     started = time.monotonic()
     with tempfile.TemporaryDirectory(prefix="tgdrive-recovery-probe-") as temporary:
         result = asyncio.run(probe(args, Path(temporary)))
@@ -458,10 +469,18 @@ if __name__ == "__main__":
     result["cgroup_memory_swap_max"] = (
         Path("/sys/fs/cgroup/memory.swap.max").read_text().strip()
     )
-    for metric in ("memory.peak", "memory.current", "memory.events"):
+    for metric in (
+        "memory.peak",
+        "memory.current",
+        "memory.events",
+        "memory.swap.current",
+        "memory.swap.peak",
+    ):
         path = Path("/sys/fs/cgroup") / metric
         if path.exists():
             result["cgroup_" + metric.replace(".", "_")] = path.read_text().strip()
+    assert result["cgroup_memory_swap_max"] == "0"
+    assert result.get("cgroup_memory_swap_peak") == "0"
     result["disk_measurement"] = (
         "Phase snapshots; transient disk peaks between phases are not sampled"
     )
