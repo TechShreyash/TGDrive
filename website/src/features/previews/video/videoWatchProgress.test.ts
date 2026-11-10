@@ -232,6 +232,84 @@ describe("owner server video progress", () => {
         expect(writes).toHaveLength(1);
         expect(writes[0]).toMatchObject({ position_seconds: 8, final: true });
     });
+    it("retains the latest snapshot received while a regular save is pending", async () => {
+        vi.useFakeTimers();
+        let release!: (response: Response) => void;
+        const { fetcher, writes } = transport();
+        fetcher.mockResolvedValueOnce(Response.json(session));
+        fetcher.mockImplementationOnce(
+            (_url, options) =>
+                new Promise<Response>((resolve) => {
+                    writes.push(JSON.parse(options.body as string));
+                    release = resolve;
+                }),
+        );
+        const writer = createVideoProgressWriter("file", vi.fn());
+        writer.start();
+        writer.save(1, 100);
+        await vi.advanceTimersByTimeAsync(0);
+        writer.save(2, 100);
+        writer.save(3, 100);
+        release(
+            Response.json({ progress: { ...writes[0], updated_at: 1000 } }),
+        );
+        await vi.advanceTimersByTimeAsync(4999);
+        expect(writes).toHaveLength(1);
+        await vi.advanceTimersByTimeAsync(1);
+        expect(writes).toHaveLength(2);
+        expect(writes[1]).toMatchObject({ position_seconds: 3, sequence: 2 });
+        writer.close();
+        await vi.advanceTimersByTimeAsync(0);
+    });
+    it.each([200, 409])(
+        "keeps closed writers quiet when a pending save returns %s",
+        async (status) => {
+            vi.useFakeTimers();
+            let release!: (response: Response) => void;
+            const { fetcher, writes } = transport();
+            fetcher.mockResolvedValueOnce(Response.json(session));
+            fetcher.mockImplementationOnce(
+                (_url, options) =>
+                    new Promise<Response>((resolve) => {
+                        writes.push(JSON.parse(options.body as string));
+                        release = resolve;
+                    }),
+            );
+            const problem = vi.fn();
+            const writer = createVideoProgressWriter("file", problem);
+            writer.start();
+            writer.save(1, 100);
+            await vi.advanceTimersByTimeAsync(0);
+            writer.save(3, 100);
+            writer.close();
+            release(
+                Response.json(
+                    status === 200
+                        ? {
+                              progress: {
+                                  position_seconds: 1,
+                                  duration_seconds: 100,
+                                  updated_at: 1000,
+                              },
+                          }
+                        : {
+                              code: "VIDEO_PROGRESS_SESSION_CHANGED",
+                              detail: "Newer writer",
+                          },
+                    { status },
+                ),
+            );
+            await vi.advanceTimersByTimeAsync(10000);
+            expect(problem).not.toHaveBeenCalled();
+            expect(writes).toHaveLength(status === 200 ? 2 : 1);
+            if (status === 200)
+                expect(writes[1]).toMatchObject({
+                    position_seconds: 3,
+                    sequence: 2,
+                    final: true,
+                });
+        },
+    );
     it("does not reclaim a writer or publish a closing save after a conflict", async () => {
         vi.useFakeTimers();
         const problem = vi.fn();

@@ -406,7 +406,6 @@ export default function AdvancedVideo({
     > | null>(null);
     const progressAccess = useRef(progressMode);
     progressAccess.current = progressMode;
-    const progressGeneration = useRef(0);
     const progressActive = useRef(false);
     const progressRead = useRef<AbortController | null>(null);
     const hasStartedWatching = useRef(false);
@@ -414,23 +413,15 @@ export default function AdvancedVideo({
     const closingPosition = useRef<
         (() => { time: number; duration: number } | null) | null
     >(null);
-    const newProgressWriter = () => {
-        const generation = progressGeneration.current;
-        return createVideoProgressWriter(fileId, (message) => {
-            if (
-                progressActive.current &&
-                generation === progressGeneration.current
-            )
-                setProgressNotice(message);
-        });
-    };
-    const finalizeProgress = (
-        writer: ReturnType<typeof createVideoProgressWriter> | null,
-    ) => {
+    const newProgressWriter = () =>
+        createVideoProgressWriter(fileId, setProgressNotice);
+    const finalizeProgress = () => {
+        const writer = progressWriter.current;
         if (!writer) return;
         const saved = closingPosition.current?.();
         if (saved) writer.save(saved.time, saved.duration);
         writer.close();
+        progressWriter.current = null;
     };
     useEffect(() => {
         hasStartedWatching.current = false;
@@ -440,10 +431,9 @@ export default function AdvancedVideo({
         const controller = new AbortController();
         progressRead.current = controller;
         progressActive.current = true;
-        ++progressGeneration.current;
         setContinueTime(null);
-        const writer = progressMode === "server" ? newProgressWriter() : null;
-        progressWriter.current = writer;
+        progressWriter.current =
+            progressMode === "server" ? newProgressWriter() : null;
         if (progressMode === "server") {
             if (hasStartedWatching.current) {
                 if (playbackHasStarted.current) progressWriter.current?.start();
@@ -484,7 +474,7 @@ export default function AdvancedVideo({
         return () => {
             progressActive.current = false;
             controller.abort();
-            finalizeProgress(writer);
+            finalizeProgress();
         };
     }, [fileId, progressMode]);
     const [transfer, setTransfer] = useState<VideoBufferSnapshot | null>(null);
@@ -1202,7 +1192,7 @@ export default function AdvancedVideo({
     useLayoutEffect(
         () => () => {
             // Capture before custom-element disconnection resets its clock to zero.
-            finalizeProgress(progressWriter.current);
+            finalizeProgress();
             progressActive.current = false;
         },
         [fileId],

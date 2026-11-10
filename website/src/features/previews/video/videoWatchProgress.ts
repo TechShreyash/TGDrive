@@ -94,13 +94,12 @@ export function createVideoProgressWriter(
     let writing: Promise<void> | null = null;
     let latest: { position_seconds: number; duration_seconds: number } | null =
         null;
-    let version = 0,
-        sentVersion = 0,
-        sequence = 0,
+    let sequence = 0,
         beginAttempts = 0;
     let nextSaveAt = 0,
         closed = false,
-        stopped = false;
+        stopped = false,
+        dirty = false;
     let timer: ReturnType<typeof setTimeout> | undefined;
     const problem = (cause: unknown) => {
         const conflict =
@@ -152,7 +151,7 @@ export function createVideoProgressWriter(
             !latest ||
             writing ||
             timer ||
-            version === sentVersion
+            !dirty
         )
             return;
         const remaining = nextSaveAt - performance.now();
@@ -163,7 +162,7 @@ export function createVideoProgressWriter(
             }, remaining);
             return;
         }
-        sentVersion = version;
+        dirty = false;
         writing = put(false)
             .catch(problem)
             .finally(() => {
@@ -247,7 +246,7 @@ export function createVideoProgressWriter(
             )
                 return;
             latest = { position_seconds: time, duration_seconds: duration };
-            version++;
+            dirty = true;
             schedule();
         },
         close() {

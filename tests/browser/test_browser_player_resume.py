@@ -143,6 +143,48 @@ def test_continue_survives_close_and_reload_without_seeking_automatically(
     ).to_have_count(0)
 
 
+def test_pagehide_then_play_creates_one_replacement_writer_and_closes_it(
+    server, desktop
+):
+    _, page = desktop
+    _samples(page, server)
+    writes = []
+    page.on(
+        "request",
+        lambda request: (
+            writes.append((request.method, request.post_data_json))
+            if "/video-progress" in request.url and request.method in {"POST", "PUT"}
+            else None
+        ),
+    )
+    dialog, player, item_id = _open_video(page)
+
+    def is_final_save(response):
+        return (
+            response.request.method == "PUT"
+            and response.url.endswith("/video-progress")
+            and response.request.post_data_json["final"] is True
+        )
+
+    _save_seek(page, player, item_id)
+    with page.expect_response(is_final_save) as hidden_save:
+        page.evaluate("window.dispatchEvent(new PageTransitionEvent('pagehide'))")
+    assert hidden_save.value.ok
+    _wait_saved(page, item_id, 1.5)
+    _save_seek(page, player, item_id, 2.5)
+    with page.expect_response(is_final_save) as closing_save:
+        dialog.get_by_role("button", name="Close Preview", exact=True).click()
+    assert closing_save.value.ok
+    _wait_saved(page, item_id, 2.5)
+    page.wait_for_function("()=>!document.querySelector('movi-player')")
+    assert sum(method == "POST" for method, _ in writes) == 2
+    assert sum(method == "PUT" and body["final"] for method, body in writes) == 2
+    _open_video(page)
+    expect(
+        page.get_by_role("button", name="Continue from 0:02", exact=True)
+    ).to_be_visible()
+
+
 def test_native_play_starts_at_beginning_and_completion_clears_position(
     server, desktop
 ):
