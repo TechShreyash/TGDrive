@@ -1,4 +1,10 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import {
+    useCallback,
+    useEffect,
+    useLayoutEffect,
+    useRef,
+    useState,
+} from "react";
 import { ChevronLeft, ChevronRight, Trash2, Upload } from "lucide-react";
 import { errorMessage } from "../../shared/api";
 import { ErrorNotice, Modal, Spinner } from "../../shared/components";
@@ -25,12 +31,14 @@ const filters: { key: HistoryFilter; label: string }[] = [
     { key: "cancelled", label: "Cancelled" },
 ];
 export default function TransferHistory({
+    active,
     items,
     onError,
     onLocate,
     onNotice,
     query = "",
 }: {
+    active: boolean;
     items: Transfer[];
     onLocate: (item: Transfer, folder?: boolean) => void;
     onError: (message: string) => void;
@@ -54,6 +62,8 @@ export default function TransferHistory({
     currentItems.current = items;
     const manual = useManualRefresh(onNotice);
     const context = JSON.stringify([filter, pageNumber, query]);
+    const loadedContext = useRef<string | null>(null);
+    const previousQuery = useRef(query);
     const manualContext = useRef<string | null>(null);
     const load = useCallback(
         async (signal: AbortSignal, explicit = false) => {
@@ -86,14 +96,17 @@ export default function TransferHistory({
                 setJobs(response.jobs);
                 setLocalItems(response.localItems);
                 setPage(response);
+                loadedContext.current = context;
                 setError("");
                 return true;
             } catch (cause) {
                 if (signal.aborted || generation.current !== version)
                     return false;
-                setJobs([]);
-                setPage(null);
-                if (pageNumber > 1) setPageNumber(1);
+                if (loadedContext.current !== context) {
+                    setJobs([]);
+                    setPage(null);
+                    if (pageNumber > 1) setPageNumber(1);
+                }
                 setError(errorMessage(cause));
                 if (explicit) throw cause;
                 return false;
@@ -106,9 +119,11 @@ export default function TransferHistory({
                     setLoading(false);
             }
         },
-        [filter, pageNumber, query],
+        [filter, pageNumber, query, context],
     );
-    useEffect(() => {
+    useLayoutEffect(() => {
+        if (previousQuery.current === query) return;
+        previousQuery.current = query;
         move(1, true);
     }, [query]);
     useEffect(() => {
@@ -138,6 +153,7 @@ export default function TransferHistory({
             setJobs([]);
             setLocalItems([]);
             setPage(null);
+            loadedContext.current = null;
             setPageNumber(1);
             setLoading(true);
             setError("");
@@ -165,6 +181,7 @@ export default function TransferHistory({
     const move = (next: number, resetTotals = false) => {
         if (next === pageNumber && !resetTotals) return;
         generation.current++;
+        loadedContext.current = null;
         setLoading(true);
         setError("");
         setJobs([]);
@@ -172,6 +189,7 @@ export default function TransferHistory({
         if (resetTotals) setPage(null);
         setPageNumber(next);
     };
+    if (!active) return null;
     const latest = new Map(items.map((item) => [item.key, item]));
     const pageItems = new Map(
         localItems.map((item) => [item.key, latest.get(item.key) || item]),
@@ -282,6 +300,12 @@ export default function TransferHistory({
                         {error && (
                             <div className="page-load-error">
                                 <ErrorNotice message={error} />
+                                {loadedContext.current === context && (
+                                    <p>
+                                        Showing the last loaded history. It may
+                                        be out of date.
+                                    </p>
+                                )}
                                 <button
                                     className="secondary-button"
                                     disabled={loading || manual.refreshing}

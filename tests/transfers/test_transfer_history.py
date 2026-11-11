@@ -327,6 +327,9 @@ class HistoryCursor:
     def batch_size(self, _size):
         return self
 
+    def close(self):
+        pass
+
     def sort(self, fields):
         for key, direction in reversed(fields):
             self.rows.sort(key=lambda row: row.get(key), reverse=direction < 0)
@@ -342,7 +345,7 @@ class HistoryMongo:
     def __init__(self):
         self.rows = {}
 
-    def find(self, query):
+    def find(self, query, projection=None):
         rows = list(self.rows.values())
         if query.get("archived") is True:
             rows = [row for row in rows if row.get("archived") is True]
@@ -510,6 +513,61 @@ async def test_clear_history_api_requires_login_and_keeps_live_jobs(tmp_path):
         store.close()
 
 
+@pytest.mark.parametrize("queue_mode", ["batch", "single", "unavailable"])
+async def test_history_routes_share_one_queue_observation(tmp_path, queue_mode):
+    settings = make_settings(tmp_path)
+    store = new_store(tmp_path / "queue-history")
+    runtime = FakeRuntime(store)
+    runtime.mongo = cast(FakeMongoBackend, for_directory(tmp_path))
+    records = [
+        await add(runtime.transfers.registry, name, TransferStatus.QUEUED)
+        for name in ["first", "second"]
+    ]
+    calls = []
+
+    def single(identity):
+        calls.append([identity])
+        return {"position": 1}
+
+    def batch(identities):
+        identities = list(identities)
+        calls.append(identities)
+        return {identity: {"position": 1} for identity in identities}
+
+    runtime.pool = SimpleNamespace()
+    if queue_mode != "unavailable":
+        runtime.pool.queue_estimate = single
+    if queue_mode == "batch":
+        runtime.pool.queue_estimates = batch
+    try:
+        with TestClient(
+            create_app(settings, runtime=runtime), base_url="https://testserver"
+        ) as client:
+            login(client)
+            for method, route, kwargs in [
+                ("GET", "/api/v1/transfers/history", {}),
+                ("POST", "/api/v1/transfers/history/tasks", {"json": {}}),
+            ]:
+                calls.clear()
+                response = client.request(method, route, **kwargs)
+                assert response.status_code == 200
+                jobs = response.json()["jobs"]
+                identities = [row["id"] for row in jobs]
+                assert set(identities) == {record.id for record in records}
+                assert calls == (
+                    [identities]
+                    if queue_mode == "batch"
+                    else [[identity] for identity in identities]
+                    if queue_mode == "single"
+                    else []
+                )
+                if queue_mode != "unavailable":
+                    assert all(row["queue"] == {"position": 1} for row in jobs)
+    finally:
+        runtime.transfers.registry.close()
+        store.close()
+
+
 async def test_numbered_pages_count_folders_once_and_keep_every_member(task_registry):
     registry = task_registry
     folder = folder_metadata()
@@ -550,6 +608,52 @@ async def test_numbered_pages_count_folders_once_and_keep_every_member(task_regi
     assert not second["has_more"]
     assert second["page"] == 2
     assert (await registry.task_history(page=99, limit=20))["page"] == 2
+
+
+@pytest.mark.parametrize("state", ["empty", "live", "archived", "mixed-folder"])
+async def test_numbered_history_reads_archive_details_only_when_needed(
+    tmp_path, monkeypatch, state
+):
+    registry = registry_for(tmp_path / "task-history", ttl_seconds=1)
+    try:
+        folder = folder_metadata() if state == "mixed-folder" else None
+        if state != "empty":
+            await add(
+                registry,
+                "first.bin",
+                TransferStatus.COMPLETED,
+                folder_upload=folder,
+                identity="first",
+            )
+        if state in {"archived", "mixed-folder"}:
+            await registry.prune(now=time.time() + 2)
+        if state == "mixed-folder":
+            await add(
+                registry,
+                "live.bin",
+                TransferStatus.RUNNING,
+                folder_upload=folder,
+                identity="live",
+            )
+        assert registry._mongo is not None
+        find, calls = registry._mongo.find, []
+
+        def observed(query=None, projection=None, **kwargs):
+            if query and query.get("archived") is True:
+                calls.append((query, projection))
+            return find(query, projection, **kwargs)
+
+        monkeypatch.setattr(registry._mongo, "find", observed)
+        page = await registry.task_history(limit=20)
+        assert len(calls) == (2 if state in {"archived", "mixed-folder"} else 1)
+        assert "summary.folder_upload.name" in calls[0][1]
+        assert "summary.error" not in calls[0][1]
+        assert (
+            len(page["jobs"])
+            == {"empty": 0, "live": 1, "archived": 1, "mixed-folder": 2}[state]
+        )
+    finally:
+        registry.close()
 
 
 async def test_task_status_and_search_apply_before_pagination_across_live_archive(

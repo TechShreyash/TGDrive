@@ -836,9 +836,26 @@ class TransferRegistry:
                         }
                     },
                 ]
-            cursor = self._mongo.find(query)
-            for document in cursor.batch_size(200):
-                yield document["summary"]
+            projection = (
+                {"summary": 1}
+                if selected is not None
+                else {
+                    "summary.id": 1,
+                    "summary.kind": 1,
+                    "summary.name": 1,
+                    "summary.status": 1,
+                    "summary.created_at": 1,
+                    "summary.folder_upload.id": 1,
+                    "summary.folder_upload.name": 1,
+                    "summary.folder_upload.created_at": 1,
+                }
+            )
+            cursor = self._mongo.find(query, projection)
+            try:
+                for document in cursor.batch_size(200):
+                    yield document["summary"]
+            finally:
+                cursor.close()
             return
         for row in list(self._history.values()):
             if selected is None or self._history_task_id(row) in selected:
@@ -861,7 +878,7 @@ class TransferRegistry:
         tasks = {}
         excluded = {"folder:" + identity for identity in exclude_folders}
 
-        def observe(row):
+        def observe(row, *, archived=False):
             if row.get("kind") == "delete":
                 return
             identity = self._history_task_id(row)
@@ -875,10 +892,16 @@ class TransferRegistry:
             )
             entry = tasks.setdefault(
                 identity,
-                {"created_at": created_at, "statuses": set(), "matches": False},
+                {
+                    "created_at": created_at,
+                    "statuses": set(),
+                    "matches": False,
+                    "archived": False,
+                },
             )
             entry["created_at"] = min(entry["created_at"], created_at)
             entry["statuses"].add(row["status"])
+            entry["archived"] |= archived
             names = [row.get("name", "")]
             if identity.startswith("folder:"):
                 names.append(folder.get("name", ""))
@@ -889,7 +912,7 @@ class TransferRegistry:
 
         for row in self._task_archive_rows():
             if row["id"] not in live_ids:
-                observe(row)
+                observe(row, archived=True)
         for row in live:
             observe(row)
         matching = [
@@ -917,16 +940,19 @@ class TransferRegistry:
         selected = matching[offset : offset + limit]
         selected_ids = set(selected)
         members = {}
-        if selected:
-            for row in self._task_archive_rows(selected_ids):
+        archived_ids = {
+            identity for identity in selected if tasks[identity]["archived"]
+        }
+        if archived_ids:
+            for row in self._task_archive_rows(archived_ids):
                 if (
                     row["id"] not in live_ids
                     and self._history_task_id(row) in selected_ids
                 ):
                     members[row["id"]] = row
-            for row in live:
-                if self._history_task_id(row) in selected_ids:
-                    members[row["id"]] = row
+        for row in live:
+            if self._history_task_id(row) in selected_ids:
+                members[row["id"]] = row
         order = {identity: index for index, identity in enumerate(selected)}
         jobs = sorted(
             members.values(),

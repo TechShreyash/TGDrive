@@ -27,6 +27,7 @@ from pymongo import ASCENDING, DESCENDING, UpdateOne
 
 from tgdrive.core.errors import (
     CorruptStoreError,
+    DriveError,
     DuplicateNameError,
     InvalidPathError,
     NotDirectoryError,
@@ -860,6 +861,68 @@ class MongoStore:
             return location_record(
                 chain[-1], self._chain_path(chain), chain, stored=operation is not None
             )
+
+    def transfer_locations(self, requests):
+        """Resolve one response's locations from fresh, bounded catalog batches."""
+        from tgdrive.transfers.transfer_locations import location_record
+
+        result = []
+        with self._transaction(snapshot=True):
+            for start in range(0, len(requests), _BATCH):
+                batch = requests[start : start + _BATCH]
+                identities = {
+                    identity for identity, _, _ in batch if identity is not None
+                }
+                for identity in identities:
+                    _validate_id(identity)
+                operations = (
+                    {
+                        row["_id"]: row["node_id"]
+                        for row in self._find(
+                            "operations",
+                            {"_id": {"$in": sorted(identities)}},
+                            {"_id": 1, "node_id": 1},
+                        ).batch_size(_BATCH)
+                    }
+                    if identities
+                    else {}
+                )
+                targets = []
+                for identity, destination, completed in batch:
+                    try:
+                        stored = identity in operations
+                        if stored:
+                            target = operations[identity]
+                        elif completed:
+                            raise NotFoundError("Uploaded item is unavailable")
+                        else:
+                            parts, _ = _normalize_path(destination)
+                            target = parts[-1] if parts else ROOT_ID
+                        _validate_id(target, allow_root=True)
+                        targets.append((target, stored))
+                    except DriveError as error:
+                        targets.append(error.with_traceback(None))
+                chains = self._chains(
+                    {target[0] for target in targets if isinstance(target, tuple)}
+                )
+                for target in targets:
+                    if isinstance(target, DriveError):
+                        result.append(target)
+                        continue
+                    identity, stored = target
+                    try:
+                        chain = chains.get(identity)
+                        if chain is None:
+                            raise NotFoundError("Item not found")
+                        self._visible(chain)
+                        result.append(
+                            location_record(
+                                chain[-1], self._chain_path(chain), chain, stored=stored
+                            )
+                        )
+                    except DriveError as error:
+                        result.append(error.with_traceback(None))
+        return result
 
     def upload_destination(self, path, *, directory_id=None):
         with self._transaction():

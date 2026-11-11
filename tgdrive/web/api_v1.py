@@ -614,8 +614,14 @@ def register_routes(
                 before=(before, before_id) if before is not None else None,
                 query=q,
             )
-        estimate = getattr(get_runtime(request).pool, "queue_estimate", None)
-        if callable(estimate):
+        pool = get_runtime(request).pool
+        estimates = getattr(pool, "queue_estimates", None)
+        estimate = getattr(pool, "queue_estimate", None)
+        if callable(estimates):
+            queues: Any = estimates(row["id"] for row in result["jobs"])
+            for row in result["jobs"]:
+                row["queue"] = queues.get(row["id"])
+        elif callable(estimate):
             for row in result["jobs"]:
                 row["queue"] = estimate(row["id"])
         await asyncio.to_thread(enrich_locations, get_store(request), result["jobs"])
@@ -644,8 +650,14 @@ def register_routes(
             offset=payload.offset,
             exclude_folders=payload.exclude_folders,
         )
-        estimate = getattr(get_runtime(request).pool, "queue_estimate", None)
-        if callable(estimate):
+        pool = get_runtime(request).pool
+        estimates = getattr(pool, "queue_estimates", None)
+        estimate = getattr(pool, "queue_estimate", None)
+        if callable(estimates):
+            queues: Any = estimates(row["id"] for row in result["jobs"])
+            for row in result["jobs"]:
+                row["queue"] = queues.get(row["id"])
+        elif callable(estimate):
             for row in result["jobs"]:
                 row["queue"] = estimate(row["id"])
         await asyncio.to_thread(enrich_locations, get_store(request), result["jobs"])

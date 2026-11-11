@@ -2,6 +2,7 @@ import BrandLogo from "../shared/BrandLogo";
 import GitHubMark from "../shared/GitHubMark";
 import ThemeControl from "../shared/ThemeControl";
 import {
+    Activity,
     useCallback,
     useEffect,
     useLayoutEffect,
@@ -237,7 +238,12 @@ export default function App() {
     const [dialog, setDialog] = useState<ActionDialogState | null>(null);
     const [demoFilesReadOnly, setDemoFilesReadOnly] = useState(false);
     const [query, setQuery] = useState("");
-    const [scopedQuery, setScopedQuery] = useState("");
+    const [scopedSearch, setScopedSearch] = useState({
+        view: location.view,
+        query: "",
+    });
+    const scopedQuery =
+        scopedSearch.view === location.view ? scopedSearch.query : "";
     const [searchOffset, setSearchOffset] = useState(searchHistoryOffset);
     const [searchSort, setSearchSort] = useState<FileSort>("name");
     const [searchOrder, setSearchOrder] = useState<SortOrder>("asc");
@@ -687,7 +693,7 @@ export default function App() {
             ownSearchNavigation.current = null;
         } else {
             setQuery(isSearch ? currentPath.slice(8) : "");
-            setScopedQuery("");
+            setScopedSearch({ view: location.view, query: "" });
             setSearchExpanded(false);
         }
         if (!isSearch && !isPublic && view === "files")
@@ -1335,7 +1341,7 @@ export default function App() {
     const clearSearch = () => {
         clearTimeout(searchTimer.current);
         setQuery("");
-        setScopedQuery("");
+        setScopedSearch({ view, query: "" });
         setSearchOffset(0);
         if (view === "files" && isSearch) {
             const origin = searchOrigin.current || lastFolder.current;
@@ -1356,7 +1362,7 @@ export default function App() {
             return;
         }
         if (view !== "files") {
-            setScopedQuery(term);
+            setScopedSearch({ view, query: term });
             return;
         }
         const path = "/search_" + term;
@@ -2366,16 +2372,22 @@ export default function App() {
                                 </fieldset>
                             </>
                         )
-                    ) : (
-                        <TransferHistory
-                            onNotice={notify}
-                            query={scopedQuery}
-                            items={items}
-                            onLocate={(item, folder) =>
-                                void locateTransfer(item, folder)
-                            }
-                            onError={(message) => notify(message, true)}
-                        />
+                    ) : null}
+                    {!isPublic && (
+                        <Activity
+                            mode={view === "activity" ? "visible" : "hidden"}
+                        >
+                            <TransferHistory
+                                active={view === "activity"}
+                                onNotice={notify}
+                                query={view === "activity" ? scopedQuery : ""}
+                                items={items}
+                                onLocate={(item, folder) =>
+                                    void locateTransfer(item, folder)
+                                }
+                                onError={(message) => notify(message, true)}
+                            />
+                        </Activity>
                     )}
                 </section>
                 {mobile &&

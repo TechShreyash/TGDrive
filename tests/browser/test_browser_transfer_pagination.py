@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import os
+import time
 
 import pytest
 
@@ -163,3 +164,210 @@ def test_finished_history_cursor_pages_keep_live_sections_and_reset_filters(
     assert all(query["limit"] == 20 for query in seen)
     assert any(query["offset"] == 20 for query in seen)
     assert any(query["offset"] == 40 for query in seen)
+
+
+def test_return_to_transfers_retains_current_page_without_hidden_polling(
+    server, desktop
+):
+    _, page = desktop
+    records = [
+        {
+            "id": f"retained-{index}",
+            "name": f"retained-{index}.bin",
+            "kind": "upload",
+            "status": "completed",
+            "phase": "completed",
+            "current": 100,
+            "total": 100,
+            "created_at": 100 - index,
+            "finished_at": 101 - index,
+        }
+        for index in range(21)
+    ]
+    seen, held = [], []
+    hold = False
+
+    def fulfill(route):
+        query = route.request.post_data_json
+        offset = query["offset"]
+        route.fulfill(
+            json={
+                "jobs": records[offset : offset + 20],
+                "page": query["page"],
+                "page_size": 20,
+                "total_tasks": len(records),
+                "total_pages": 2,
+                "has_more": offset + 20 < len(records),
+            }
+        )
+
+    def history(route):
+        seen.append(route.request.post_data_json)
+        if hold:
+            held.append(route)
+        else:
+            fulfill(route)
+
+    page.route("**/api/v1/jobs", lambda route: route.fulfill(json={"jobs": []}))
+    page.route("**/api/v1/transfers/history/tasks", history)
+    login(page, server.url)
+    page.clock.install()
+    expect(page.get_by_role("heading", name="My Files", exact=True)).to_be_visible()
+    assert seen == []
+    transfers = page.get_by_role("link", name="Transfers", exact=False)
+    transfers.click()
+    region = page.get_by_role("region", name="Transfer History", exact=True)
+    finished = region.locator('[data-category="finished"]')
+    pager = region.get_by_role("navigation", name="Finished transfer pages")
+    expect(finished).to_contain_text("retained-0.bin")
+    successful = region.get_by_role("button", name="Successful", exact=True)
+    successful.click()
+    expect(successful).to_have_attribute("aria-pressed", "true")
+    pager.get_by_role("button", name="Page 2 of finished transfers", exact=True).click()
+    expect(finished).to_contain_text("retained-20.bin")
+    page.get_by_role("link", name="My Files", exact=True).click()
+    expect(region).to_be_hidden()
+    expect(page.locator(".transfer-page")).to_have_count(0)
+    assert page.locator("#transfer-dialog").count() <= 1
+    assert page.locator("#transfer-list").count() <= 1
+    count = len(seen)
+    page.clock.fast_forward(31000)
+    assert len(seen) == count
+    hold = True
+    with page.expect_request("**/api/v1/transfers/history/tasks"):
+        transfers.click()
+    # The response is still held: returning must show the existing page now.
+    expect(finished).to_contain_text("retained-20.bin")
+    expect(successful).to_have_attribute("aria-pressed", "true")
+    expect(pager.get_by_role("status")).to_contain_text("Page 2 of 2")
+    expect(
+        region.get_by_role("status", name="Loading finished transfers")
+    ).to_have_count(0)
+    assert seen[-1]["page"] == 2 and seen[-1]["status"] == "completed"
+    held.pop().fulfill(status=503, json={"detail": "History temporarily unavailable"})
+    expect(region.get_by_role("alert")).to_contain_text(
+        "History temporarily unavailable"
+    )
+    expect(region).to_contain_text("Showing the last loaded history")
+    expect(finished).to_contain_text("retained-20.bin")
+    page.screenshot(
+        path=ARTIFACTS / "transfer-retained-refresh-error.png",
+        full_page=True,
+        animations="disabled",
+    )
+    records[20]["name"] = "updated-on-return.bin"
+    hold = False
+    region.get_by_role("button", name="Try Again", exact=True).click()
+    expect(finished).to_contain_text("updated-on-return.bin")
+    expect(region.get_by_role("alert")).to_have_count(0)
+    page.set_viewport_size({"width": 390, "height": 844})
+    expect(page.locator(".sidebar")).to_have_attribute("inert", "")
+    assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
+    page.screenshot(
+        path=ARTIFACTS / "transfer-retained-mobile.png",
+        full_page=True,
+        animations="disabled",
+    )
+    page.set_viewport_size({"width": 1440, "height": 960})
+    # A different login must not inherit even a hidden owner's history page.
+    page.get_by_role("link", name="My Files", exact=True).click()
+    page.get_by_role("button", name="Log Out", exact=True).click()
+    expect(page.locator(".transfer-history")).to_have_count(0)
+    login(page)
+    hold = True
+    with page.expect_request("**/api/v1/transfers/history/tasks"):
+        transfers.click()
+    expect(finished).not_to_contain_text("updated-on-return.bin")
+    expect(
+        region.get_by_role("status", name="Loading finished transfers")
+    ).to_be_visible()
+    assert seen[-1]["page"] == 1 and seen[-1]["status"] == "finished"
+    fulfill(held.pop())
+    expect(finished).to_contain_text("retained-0.bin")
+
+
+def test_transfer_search_context_is_reset_without_hidden_search_or_late_rows(
+    server, desktop
+):
+    _, page = desktop
+    held = []
+    seen = []
+    hold = False
+
+    def fulfill(route, name):
+        route.fulfill(
+            json={
+                "jobs": [
+                    {
+                        "id": name,
+                        "name": name,
+                        "kind": "upload",
+                        "status": "completed",
+                        "phase": "completed",
+                        "current": 100,
+                        "total": 100,
+                        "created_at": 100,
+                        "finished_at": 101,
+                    }
+                ],
+                "page": 1,
+                "page_size": 20,
+                "total_tasks": 1,
+                "total_pages": 1,
+                "has_more": False,
+            }
+        )
+
+    def history(route):
+        seen.append(route.request.post_data_json)
+        if hold:
+            held.append(route)
+        else:
+            fulfill(route, "all-history.bin")
+
+    page.route("**/api/v1/jobs", lambda route: route.fulfill(json={"jobs": []}))
+    page.route("**/api/v1/transfers/history/tasks", history)
+    login(page, server.url)
+    transfers = page.get_by_role("link", name="Transfers", exact=False)
+    transfers.click()
+    region = page.get_by_role("region", name="Transfer History", exact=True)
+    finished = region.locator('[data-category="finished"]')
+    expect(finished).to_contain_text("all-history.bin")
+    hold = True
+    search = page.get_by_role("searchbox", name="Search Transfers", exact=True)
+    with page.expect_request("**/api/v1/transfers/history/tasks"):
+        search.fill("needle")
+        search.press("Enter")
+    expect(finished).not_to_contain_text("all-history.bin")
+    assert seen[-1]["q"] == "needle"
+    fulfill(held.pop(), "needle.bin")
+    expect(finished).to_contain_text("needle.bin")
+    # Leaving aborts an in-flight poll; its response cannot replace return data.
+    page.clock.install()
+    with page.expect_request("**/api/v1/transfers/history/tasks"):
+        page.clock.fast_forward(11000)
+    deadline = time.monotonic() + 5
+    while not held and time.monotonic() < deadline:
+        page.wait_for_timeout(10)
+    assert held, "The polling request must reach its held route before navigation"
+    late = held.pop()
+    page.get_by_role("link", name="Shared Links", exact=True).click()
+    count = len(seen)
+    shares_search = page.get_by_role(
+        "searchbox", name="Search Shared Links", exact=True
+    )
+    shares_search.fill("unrelated-share")
+    shares_search.press("Enter")
+    page.clock.fast_forward(31000)
+    assert len(seen) == count
+    with page.expect_request("**/api/v1/transfers/history/tasks"):
+        transfers.click()
+    assert seen[-1]["q"] == ""
+    assert all(request["q"] != "unrelated-share" for request in seen)
+    expect(search).to_have_value("")
+    expect(finished).not_to_contain_text("needle.bin")
+    fulfill(held.pop(), "current-history.bin")
+    expect(finished).to_contain_text("current-history.bin")
+    fulfill(late, "obsolete-history.bin")
+    expect(finished).not_to_contain_text("obsolete-history.bin")
+    expect(finished).to_contain_text("current-history.bin")

@@ -26,13 +26,41 @@ def locate_transfer(store, job):
             completed=job.get("status") == "completed"
             and job.get("kind") not in {"torrent", "extract"},
         )
-    except TrashedItemError:
-        return {"available": False, "reason": "Item is in Trash"}
-    except DriveError:
-        return {"available": False, "reason": "Location is no longer available"}
+    except DriveError as error:
+        return unavailable_location(error)
+
+
+def unavailable_location(error):
+    return {
+        "available": False,
+        "reason": "Item is in Trash"
+        if isinstance(error, TrashedItemError)
+        else "Location is no longer available",
+    }
 
 
 def enrich_locations(store, jobs):
-    for job in jobs:
-        job["location"] = locate_transfer(store, job)
+    if not jobs:
+        return jobs
+    try:
+        locations = store.transfer_locations(
+            [
+                (
+                    job.get("id"),
+                    job.get("destination", "/"),
+                    job.get("status") == "completed"
+                    and job.get("kind") not in {"torrent", "extract"},
+                )
+                for job in jobs
+            ]
+        )
+    except DriveError:
+        # A corrupt chain or invalid legacy ID must not hide healthy locations.
+        locations = [locate_transfer(store, job) for job in jobs]
+    for job, location in zip(jobs, locations, strict=True):
+        job["location"] = (
+            unavailable_location(location)
+            if isinstance(location, DriveError)
+            else location
+        )
     return jobs

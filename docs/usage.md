@@ -314,6 +314,13 @@ only** in TGDrive's proxy; keep owner pages protected.
 Each page holds 20 tasks; a folder counts once and expands to its files.
 Completed files offer **Show in folder**; folder batches offer **Show folder**.
 
+Returning to **Transfers** from another page keeps the outer history page and
+filter, showing the last loaded rows while checking for updates. Leaving clears
+its search and closes expanded folder batches. If refresh fails, matching rows
+remain with an out-of-date warning; choose **Try Again** to reload them. History
+polling stops while the page is hidden. Logging out or entering a public share
+or recovery view resets this retained history state.
+
 Finished server history survives restart and appears on other devices. Device-only
 recovery stays in its browser. If server history cannot load, local recovery rows
 remain available to choose originals, retry or cancel once the endpoints are reachable.
