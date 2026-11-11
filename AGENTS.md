@@ -17,6 +17,11 @@ These always apply in this repository.
 - **Pushes:** do not push commits, branches or tags unless the owner asked for
   that specific push. Finish locally, name the remote and branch, and wait.
 - **Reporting:** report only checks you actually ran, and say what was not tested.
+- **Real-app verification:** before committing behavior or UI changes or declaring
+  that work complete, test the relevant workflows in the running local TGDrive
+  and inspect affected UI.
+  Automated checks supplement this; obtain check approval as above and report
+  any real-app behavior that remains unverified before claiming completion.
 - **Judgment:** treat the owner's proposed approaches as suggestions. If you see
   a better one, say so and explain the tradeoff. Answer questions without
   changing code.

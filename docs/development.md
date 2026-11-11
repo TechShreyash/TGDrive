@@ -708,7 +708,7 @@ session authorization waits, archive handoff and activation/bootstrap recovery:
 TGDRIVE_MONGO_TESTS=0 uv run --frozen python -m pytest \
   tests/replication/test_replica.py tests/replication/test_replica_transport.py \
   tests/replication/test_replica_state.py tests/replication/test_replica_settings.py \
-  tests/replication/test_replica_mongo.py tests/replication/test_replica_activation.py \
+  tests/replication/test_replica_errors.py tests/replication/test_replica_activation.py \
   tests/replication/test_replica_activation_mongodb.py \
   tests/replication/test_replica_api.py tests/replication/test_replica_deletion_barrier.py -q
 ```

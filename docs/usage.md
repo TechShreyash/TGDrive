@@ -514,7 +514,8 @@ unfinished uploads are complete. **Temporary storage** holds unfinished work on
 server disk, not your total Telegram storage.
 
 **Back Up Now** creates one encrypted recovery file. Automatic copies normally
-run daily without an independent channel, skipped when nothing changed; independent protection batches changes.
+run daily without an independent channel, including unchanged catalogs;
+independent protection batches changes.
 Each backup is pinned in your channel and opens only with your encryption key.
 [Backup setup and restore](backup-recovery.md).
 
