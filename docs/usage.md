@@ -181,21 +181,33 @@ a file, download it for a suitable app.
 | CBZ/CBR | Comic pages, page fit and right-to-left reading |
 | Unsupported formats | Original download |
 
-Videos open paused. Choose **Continue from…** for a saved position or **Play**
-to start from the beginning. Signed-in owners and demo administrators save
-video progress in MongoDB, so they can continue on another device. This also
-applies in share or embedded viewers when an independent owner session is
-authenticated. A share token alone or a public-demo session uses a separate
-position in that device's browser profile; it cannot read owner progress.
-Existing browser positions are not imported into owner history.
+Videos open paused; opening a file never starts playback. Once a saved position
+is known, **Play** resumes there. **Start over** returns to the beginning. A
+position within the first or final two seconds starts at zero instead.
 
-Finishing a video resets its saved position. Progress is advisory: a failed
-server save does not stop playback or fall back to local owner history, and
-closing or losing a connection can lose the latest position. Local progress
-can also be lost when site data is cleared or browser storage is unavailable.
-Owner progress is included in subsequent recovery backups, but an older backup may not contain the latest position.
+If you press Play before saved progress arrives, playback continues without a
+late jump. A valid later bookmark offers **Continue from…** or **Keep playing
+from here**; seeking manually also chooses your new position. A failed progress
+read offers retry without replacing the old bookmark. After playback resumes,
+**Resumed at… / Start over** appears briefly.
+
+Signed-in owners and demo administrators save video and PDF positions in MongoDB
+for continuation on another device, including independently authenticated shared
+or embedded viewers. Share tokens alone grant no access to owner progress.
+Anonymous shares and public-demo sessions keep separate browser-local progress;
+existing local positions are not imported into owner history.
+
+A thin bar along a video thumbnail's bottom shows its saved position relative to
+its duration, **not which sections were watched**. Old local time-only bookmarks
+can resume without showing a guessed fraction. Shared thumbnails use local
+history even if an owner is also signed in.
+
+Progress is advisory: failed saves do not stop playback or create a local owner
+fallback. Closing or losing a connection can lose recent progress; clearing site
+data can remove local progress. Positions can appear in later recovery snapshots,
+but saving progress alone does not trigger a backup or advance its revision.
 Older direct `/file` stream links use browser-native handling; shared viewer
-links use TGDrive's player.
+links use TGDrive's player. [PDF resume and reader limits](reading.md).
 
 Videos use a sharp saved poster before playback when available. Older
 files or unavailable posters use a representative frame from halfway through

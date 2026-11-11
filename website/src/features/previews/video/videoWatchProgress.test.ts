@@ -5,6 +5,11 @@ import {
     saveVideoPosition,
     loadServerVideoPosition,
     createVideoProgressWriter,
+    readLocalVideoPositions,
+    loadServerVideoPositions,
+    savedVideoResumeTime,
+    VIDEO_POSITION_CHANGED,
+    videoPositionChange,
 } from "./videoWatchProgress";
 
 const prefix = "tgdrive.video.position.v1:";
@@ -38,6 +43,27 @@ describe("video position labels", () => {
         [86400, "24:00:00"],
     ])("formats %s seconds as %s", (seconds, label) => {
         expect(formatVideoTime(seconds)).toBe(label);
+    });
+});
+
+describe("default saved resume boundaries", () => {
+    it.each([
+        [0, 5, 0],
+        [2, 5, 0],
+        [2.01, 5, 2.01],
+        [2.99, 5, 2.99],
+        [3, 5, 0],
+        [1, 2, 0],
+        [180, 3600, 180],
+        [3420, 3600, 3420],
+        [230, 240, 230],
+        [3597.9, 3600, 3597.9],
+        [3598, 3600, 0],
+        [4000, 3600, 0],
+        [Number.NaN, 10, 0],
+        [5, Number.POSITIVE_INFINITY, 0],
+    ])("uses saved time %s of %s seconds as %s", (time, duration, expected) => {
+        expect(savedVideoResumeTime(time, duration)).toBe(expected);
     });
 });
 
@@ -99,6 +125,199 @@ describe("local video watch positions", () => {
         saveVideoPosition("file", 0, "share");
         expect(readVideoPosition("file", "share")).toBeNull();
         expect(stored.get(prefix + "file")).toBe("4");
+    });
+});
+
+describe("bounded thumbnail video progress", () => {
+    it("publishes validated ordinary and final acknowledgements, without writer fields", async () => {
+        vi.useFakeTimers();
+        const events: Event[] = [];
+        window.addEventListener(VIDEO_POSITION_CHANGED, (event) =>
+            events.push(event),
+        );
+        vi.stubGlobal(
+            "fetch",
+            vi.fn(async (_url: string, options: RequestInit) => {
+                if (options.method === "POST")
+                    return Response.json({
+                        session_id: "a".repeat(32),
+                        save_interval_seconds: 5,
+                        progress: null,
+                    });
+                const body = JSON.parse(options.body as string);
+                return Response.json({
+                    progress: { ...body, updated_at: 100 },
+                });
+            }),
+        );
+        const writer = createVideoProgressWriter("file", vi.fn());
+        writer.start();
+        writer.save(30, 120);
+        await vi.advanceTimersByTimeAsync(0);
+        writer.save(40, 120);
+        writer.close();
+        await vi.advanceTimersByTimeAsync(0);
+        expect(events.map(videoPositionChange)).toEqual([
+            {
+                fileId: "file",
+                mode: "server",
+                position: {
+                    position_seconds: 30,
+                    duration_seconds: 120,
+                    updated_at: 100,
+                },
+            },
+            {
+                fileId: "file",
+                mode: "server",
+                position: {
+                    position_seconds: 40,
+                    duration_seconds: 120,
+                    updated_at: 100,
+                },
+            },
+        ]);
+    });
+
+    it("emits local summaries only after measured duration is stored successfully", () => {
+        const events: Event[] = [];
+        window.addEventListener(VIDEO_POSITION_CHANGED, (event) =>
+            events.push(event),
+        );
+        saveVideoPosition("file", 30, "share");
+        expect(events).toEqual([]);
+        saveVideoPosition("file", 30, "share", 120);
+        expect(videoPositionChange(events[0])).toEqual({
+            fileId: "file",
+            mode: "share",
+            position: expect.objectContaining({
+                position_seconds: 30,
+                duration_seconds: 120,
+            }),
+        });
+        vi.stubGlobal("localStorage", {
+            setItem() {
+                throw new Error("Blocked");
+            },
+        });
+        saveVideoPosition("file", 50, "share", 120);
+        expect(events).toHaveLength(1);
+    });
+
+    it.each([
+        null,
+        { fileId: "../file", mode: "server", position: null },
+        { fileId: "file", mode: "owner", position: null },
+        {
+            fileId: "file",
+            mode: "server",
+            position: {
+                position_seconds: 200,
+                duration_seconds: 120,
+                updated_at: 1,
+            },
+        },
+        {
+            fileId: "file",
+            mode: "share",
+            position: {
+                position_seconds: 30,
+                duration_seconds: 0,
+                updated_at: 1,
+            },
+        },
+    ])("rejects an unverified progress event %j", (detail) => {
+        expect(
+            videoPositionChange(
+                new CustomEvent(VIDEO_POSITION_CHANGED, { detail }),
+            ),
+        ).toBeNull();
+    });
+
+    it("uses measured duration only, and never guesses from a legacy time", () => {
+        saveVideoPosition("legacy", 40, "share");
+        saveVideoPosition("known", 30, "share", 120);
+        expect(readLocalVideoPositions(["legacy", "known"], "share")).toEqual({
+            known: expect.objectContaining({
+                position_seconds: 30,
+                duration_seconds: 120,
+            }),
+        });
+        expect(readLocalVideoPositions(["known"], "demo")).toEqual({});
+        saveVideoPosition("known", 50, "share");
+        expect(readVideoPosition("known", "share")).toBe(50);
+        expect(readLocalVideoPositions(["known"], "share")).toEqual({});
+    });
+
+    it("bounds measured local summaries without deleting legacy resume positions", () => {
+        for (let index = 0; index < 201; index++)
+            saveVideoPosition("file-" + index, 30, "share", 120);
+        expect(
+            Object.keys(
+                JSON.parse(stored.get("tgdrive.video.summaries.v1:share")!),
+            ),
+        ).toHaveLength(200);
+        expect(
+            readLocalVideoPositions(["file-0", "file-200"], "share"),
+        ).toEqual({
+            "file-200": expect.objectContaining({ position_seconds: 30 }),
+        });
+        expect(readVideoPosition("file-0", "share")).toBe(30);
+    });
+
+    it("requests one bounded owner batch and accepts only requested verified records", async () => {
+        const fetcher = vi.fn(async (_url: string, _options: RequestInit) =>
+            Response.json({
+                progress: {
+                    file: {
+                        position_seconds: 30,
+                        duration_seconds: 120,
+                        updated_at: 100,
+                    },
+                },
+            }),
+        );
+        vi.stubGlobal("fetch", fetcher);
+        const rows = await loadServerVideoPositions(
+            ["file", "file", "missing"],
+            new AbortController().signal,
+        );
+        expect(rows.file.position_seconds / rows.file.duration_seconds).toBe(
+            0.25,
+        );
+        expect(fetcher).toHaveBeenCalledTimes(1);
+        expect(fetcher.mock.calls[0][0]).toBe(
+            "/api/v1/video-progress/summaries",
+        );
+        expect(JSON.parse(fetcher.mock.calls[0][1].body as string)).toEqual({
+            file_ids: ["file", "missing"],
+        });
+        fetcher.mockResolvedValueOnce(
+            Response.json({
+                progress: {
+                    other: {
+                        position_seconds: 30,
+                        duration_seconds: 120,
+                        updated_at: 100,
+                    },
+                },
+            }),
+        );
+        await expect(
+            loadServerVideoPositions(["file"], new AbortController().signal),
+        ).rejects.toThrow("could not be verified");
+    });
+
+    it("rejects an oversized batch before transport", async () => {
+        const fetcher = vi.fn();
+        vi.stubGlobal("fetch", fetcher);
+        await expect(
+            loadServerVideoPositions(
+                Array.from({ length: 129 }, (_, index) => "file-" + index),
+                new AbortController().signal,
+            ),
+        ).rejects.toThrow("128 files");
+        expect(fetcher).not.toHaveBeenCalled();
     });
 });
 

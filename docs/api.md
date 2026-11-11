@@ -44,8 +44,8 @@ per-person accounts or OpenAPI pages, and response fields may grow over time.
 - Owner routes need the `tgdrive_session` cookie (HttpOnly, SameSite=Strict).
   Mutations reject a foreign `Origin`, or `Sec-Fetch-Site: cross-site` without
   one. There is no cross-origin integration mode.
-- Dates are ISO strings, except upload `expires_at` and job timestamps, which are
-  Unix seconds.
+- Dates are ISO strings, except upload `expires_at`, job timestamps and saved-progress `updated_at`,
+  which are Unix seconds.
 - JSON control bodies are capped at **64 KiB**, including signed-in/demo
   requests. Folder-tree, bulk/move and ZIP-creation requests allow **4 MiB**;
   numbered transfer-history requests allow **256 KiB**. Oversize bodies return
@@ -291,7 +291,7 @@ Access is **Owner** or **Share**; pass `path` and optional `auth` as for `/file`
 | `POST /api/v1/settings/thumbnails/rebuild` | Owner: `{"confirmed": true}` starts a rebuild | `202`; reuses a running one |
 | `POST /api/v1/settings/thumbnails/rebuild/cancel` | Owner: stop the rebuild | |
 
-Owner or independently authenticated demo-admin cookies can use video progress;
+Owner or independently authenticated demo-admin cookies can use video and PDF progress;
 a share token or public-demo access alone does not authorize these routes. The
 response uses `Cache-Control: no-store` and progress is not included in ordinary
 file or share responses.
@@ -301,14 +301,27 @@ file or share responses.
 | `GET /api/v1/files/{file_id}/video-progress` | — | `progress` is null or contains `position_seconds`, `duration_seconds` and `updated_at` |
 | `POST /api/v1/files/{file_id}/video-progress/session` | `{}` | Starts a writer and returns `session_id`, current `progress` and `save_interval_seconds` |
 | `PUT /api/v1/files/{file_id}/video-progress` | `session_id`, increasing `sequence`, `position_seconds`, `duration_seconds`, optional `final` | Saves progress; a final save closes the writer |
+| `GET /api/v1/files/{file_id}/pdf-progress` | — | `progress` is null or contains `page_number`, `page_count`, `updated_at` |
+| `POST /api/v1/files/{file_id}/pdf-progress/session` | `{}` | Starts a writer; returns `session_id`, `progress`, `save_interval_seconds` |
+| `PUT /api/v1/files/{file_id}/pdf-progress` | `session_id`, increasing `sequence`, `page_number`, `page_count`, optional `final` | Saves the page; final closes the writer |
+| `POST /api/v1/video-progress/summaries` | `{"file_ids": [...]}` (0–128 entries before deduplication) | `progress` maps eligible file IDs to saved position/duration/timestamp; unsaved, missing, trashed or nonvideo items are omitted |
 
 A new writer supersedes the previous writer. Identical retries are read-only;
 stale sequences and superseded or closed writers return `409`. Session starts
 are paced at one second and regular saves at five seconds; a rate rejection
 returns `429` with `Retry-After`. Positions must be finite and within a positive
 duration. The final save is not subject to the regular save interval. Owner
-progress is stored with the file and included in subsequent V2 recovery backups;
-activation invalidates writer sessions.
+progress is stored with the file and can be included in later V2 snapshots;
+progress saves do not advance the catalog revision or independently force a
+backup. Activation restores positions and invalidates writer sessions.
+
+PDF values are strict integers with `1 <= page_number <= page_count <= 10000`;
+the page count is client-provided metadata, not a server decode result. The PDF
+routes use `PDF_PROGRESS_OWNER_ONLY` (`403`), `PDF_PROGRESS_SESSION_CHANGED` and
+`PDF_PROGRESS_SEQUENCE_STALE` (`409`), and `PDF_PROGRESS_RATE_LIMITED` (`429`).
+Video summaries grant no share access, return no writer details and do not fetch
+media. Public/share clients must use their scoped local history rather than
+owner summaries, even when owner cookies are present.
 
 Thumbnails and posters recheck access on every request, including cache hits
 and `304`, and use `Cache-Control: private, no-cache`. They never download an

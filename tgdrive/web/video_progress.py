@@ -12,6 +12,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 from tgdrive.settings.managed_settings import SettingsProblem
 from tgdrive.storage.video_progress import (
     MAX_SEQUENCE,
+    MAX_SUMMARY_FILES,
     SAVE_INTERVAL_SECONDS,
     SESSION_PATTERN,
     VideoProgressError,
@@ -26,6 +27,13 @@ FileId = Annotated[str, Path(min_length=1, max_length=128, pattern=r"^[A-Za-z0-9
 
 class BeginVideoProgress(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
+
+
+class VideoProgressSummaries(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+    file_ids: list[
+        Annotated[str, Field(min_length=1, max_length=128, pattern=r"^[A-Za-z0-9_-]+$")]
+    ] = Field(max_length=MAX_SUMMARY_FILES)
 
 
 class SaveVideoProgress(BaseModel):
@@ -69,6 +77,13 @@ def register_video_progress_routes(app, *, require_admin, get_store):
     async def read(file_id: FileId, request: Request):
         value = await asyncio.to_thread(get_store(request).video_progress, file_id)
         return JSONResponse({"progress": value}, headers={"Cache-Control": "no-store"})
+
+    @app.post("/api/v1/video-progress/summaries", dependencies=admin)
+    async def summaries(payload: VideoProgressSummaries, request: Request):
+        values = await asyncio.to_thread(
+            get_store(request).video_progress_summaries, payload.file_ids
+        )
+        return JSONResponse({"progress": values}, headers={"Cache-Control": "no-store"})
 
     @app.post("/api/v1/files/{file_id}/video-progress/session", dependencies=admin)
     async def begin(file_id: FileId, payload: BeginVideoProgress, request: Request):

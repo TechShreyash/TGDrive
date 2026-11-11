@@ -798,16 +798,22 @@ def test_parser_resource_errors_are_distinct_from_duplicate_fields(monkeypatch):
     assert not isinstance(invalid.value, staged_snapshot.RecoveryResourceLimit)
 
 
-def test_video_progress_is_validated_and_kept_private_to_raw_records(
-    tmp_path, snapshot
+@pytest.mark.parametrize("kind", ["video", "pdf"])
+def test_reading_progress_is_validated_and_kept_private_to_raw_records(
+    tmp_path, snapshot, kind
 ):
     row = next(row for row in snapshot["database"]["nodes"] if row["kind"] == "file")
-    row["video_progress"] = {
-        "position_seconds": 20.0,
-        "duration_seconds": 200.0,
-        "updated_at": 1000.0,
-    }
-    row["video_progress_session"] = {
+    field = kind + "_progress"
+    row[field] = (
+        {
+            "position_seconds": 20.0,
+            "duration_seconds": 200.0,
+            "updated_at": 1000.0,
+        }
+        if kind == "video"
+        else {"page_number": 2, "page_count": 3, "updated_at": 1000.0}
+    )
+    row[field + "_session"] = {
         "id": "a" * 32,
         "sequence": 1,
         "started_at": 999.0,
@@ -817,33 +823,39 @@ def test_video_progress_is_validated_and_kept_private_to_raw_records(
     staged = stage(tmp_path, snapshot)
     with closing(staged.records("nodes")) as nodes:
         restored = next(node for node in nodes if node["kind"] == "file")
-    assert restored["video_progress"] == row["video_progress"]
-    assert restored["video_progress_session"] == row["video_progress_session"]
+    assert restored[field] == row[field]
+    assert restored[field + "_session"] == row[field + "_session"]
     portable = snapshot_catalog(snapshot["database"])
-    assert "video_progress" not in json_util.dumps(portable)
+    assert field not in json_util.dumps(portable)
 
 
 @pytest.mark.parametrize("change", ["nan", "extra", "writer", "folder"])
-def test_invalid_saved_video_metadata_is_rejected_before_activation(
-    tmp_path, snapshot, change
+@pytest.mark.parametrize("kind", ["video", "pdf"])
+def test_invalid_saved_reading_metadata_is_rejected_before_activation(
+    tmp_path, snapshot, change, kind
 ):
     row = next(row for row in snapshot["database"]["nodes"] if row["kind"] == "file")
-    row["video_progress"] = {
-        "position_seconds": 20.0,
-        "duration_seconds": 200.0,
-        "updated_at": 1000.0,
-    }
+    field = kind + "_progress"
+    row[field] = (
+        {
+            "position_seconds": 20.0,
+            "duration_seconds": 200.0,
+            "updated_at": 1000.0,
+        }
+        if kind == "video"
+        else {"page_number": 2, "page_count": 3, "updated_at": 1000.0}
+    )
     if change == "nan":
-        row["video_progress"]["position_seconds"] = float("nan")
+        row[field]["updated_at"] = float("nan")
     elif change == "extra":
-        row["video_progress"]["token"] = "invalid"
+        row[field]["token"] = "invalid"
     elif change == "writer":
-        row["video_progress_session"] = {"id": "bad"}
+        row[field + "_session"] = {"id": "bad"}
     else:
         folder = next(
             row for row in snapshot["database"]["nodes"] if row["kind"] == "folder"
         )
-        folder["video_progress"] = row.pop("video_progress")
+        folder[field] = row.pop(field)
     with pytest.raises(ValueError):
         stage(tmp_path, snapshot)
     assert not (tmp_path / "snapshot.sqlite").exists()

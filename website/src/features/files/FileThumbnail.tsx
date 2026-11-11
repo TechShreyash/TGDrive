@@ -3,17 +3,23 @@ import { Play } from "lucide-react";
 import { FileIcon, fileKind } from "../../shared/components";
 import type { DriveItem } from "../../shared/types";
 import { fetchThumbnail, thumbnailCandidate, thumbnailUrl } from "./thumbnails";
+import {
+    formatVideoTime,
+    type VideoPosition,
+} from "../previews/video/videoWatchProgress";
 
 export default function FileThumbnail({
     item,
     auth,
     disabled = false,
     compact = false,
+    progress,
 }: {
     item: DriveItem;
     auth: string;
     disabled?: boolean;
     compact?: boolean;
+    progress?: VideoPosition;
 }) {
     const target = useRef<HTMLDivElement>(null);
     const [source, setSource] = useState<string | null>(null);
@@ -80,56 +86,87 @@ export default function FileThumbnail({
         auth,
         disabled,
     ]);
+    const fraction =
+        progress && progress.duration_seconds > 0
+            ? progress.position_seconds / progress.duration_seconds
+            : 0;
+    const position =
+        fileKind(item.name) === "video" && fraction > 0 && fraction <= 1
+            ? progress
+            : undefined;
     return (
-        <div
-            ref={target}
-            className={
-                "file-tile-preview" +
-                (compact ? " file-list-thumbnail" : "") +
-                (loading ? " thumbnail-loading" : "")
-            }
-            data-kind={fileKind(item.name, item.type === "folder")}
-            data-has-image={source ? "true" : undefined}
-            aria-hidden="true"
-        >
-            {source ? (
-                <>
-                    <img
-                        src={source}
-                        alt=""
-                        decoding="async"
-                        onError={() => setSource(null)}
-                    />
-                    {!compact && fileKind(item.name) === "video" && (
-                        <span className="file-tile-play">
-                            <Play size={16} />
-                        </span>
-                    )}
-                    {/* Photos and videos explain themselves; page-like thumbnails keep their format. */}
-                    {!compact &&
-                        !["image", "video"].includes(fileKind(item.name)) && (
+        <>
+            <div
+                ref={target}
+                className={
+                    "file-tile-preview" +
+                    (compact ? " file-list-thumbnail" : "") +
+                    (loading ? " thumbnail-loading" : "")
+                }
+                data-kind={fileKind(item.name, item.type === "folder")}
+                data-has-image={source ? "true" : undefined}
+                aria-hidden="true"
+            >
+                {source ? (
+                    <>
+                        <img
+                            src={source}
+                            alt=""
+                            decoding="async"
+                            onError={() => setSource(null)}
+                        />
+                        {!compact && fileKind(item.name) === "video" && (
+                            <span className="file-tile-play">
+                                <Play size={16} />
+                            </span>
+                        )}
+                        {/* Photos and videos explain themselves; page-like thumbnails keep their format. */}
+                        {!compact &&
+                            !["image", "video"].includes(
+                                fileKind(item.name),
+                            ) && (
+                                <span className="file-tile-format">
+                                    {(item.name.split(".").at(-1) || "File")
+                                        .slice(0, 8)
+                                        .toUpperCase()}
+                                </span>
+                            )}
+                    </>
+                ) : (
+                    <>
+                        <FileIcon
+                            name={item.name}
+                            folder={item.type === "folder"}
+                        />
+                        {!compact && item.type !== "folder" && (
                             <span className="file-tile-format">
                                 {(item.name.split(".").at(-1) || "File")
                                     .slice(0, 8)
                                     .toUpperCase()}
                             </span>
                         )}
-                </>
-            ) : (
-                <>
-                    <FileIcon
-                        name={item.name}
-                        folder={item.type === "folder"}
-                    />
-                    {!compact && item.type !== "folder" && (
-                        <span className="file-tile-format">
-                            {(item.name.split(".").at(-1) || "File")
-                                .slice(0, 8)
-                                .toUpperCase()}
-                        </span>
-                    )}
-                </>
+                    </>
+                )}
+                {position && (
+                    <span className="file-playback-progress">
+                        <span style={{ width: fraction * 100 + "%" }} />
+                    </span>
+                )}
+            </div>
+            {position && (
+                <meter
+                    className="sr-only"
+                    min={0}
+                    max={position.duration_seconds}
+                    value={position.position_seconds}
+                    aria-label={"Saved playback position for " + item.name}
+                    aria-valuetext={
+                        formatVideoTime(position.position_seconds) +
+                        " of " +
+                        formatVideoTime(position.duration_seconds)
+                    }
+                />
             )}
-        </div>
+        </>
     );
 }

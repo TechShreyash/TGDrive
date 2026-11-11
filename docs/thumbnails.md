@@ -50,7 +50,8 @@ older versions can omit or reject these optional references.
 
 The player opens paused with the stored poster. Missing/unusable posters fall
 back to a frame halfway through the video, keeping the displayed time at zero;
-**Play** starts from the beginning and **Continue from…** keeps its saved meaning.
+**Play** resumes a known saved position; **Start over** returns to the beginning.
+Opening the preview does not autoplay.
 Seeking and decoding can take time, and the selected picture can still be black.
 Files already on Telegram, including direct bot intake, do not automatically get
 a durable poster. Thumbnail repair/rebuilding still refreshes small covers only;

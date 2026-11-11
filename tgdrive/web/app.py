@@ -423,6 +423,9 @@ def create_app(
     from tgdrive.web.video_progress import register_video_progress_routes
 
     register_video_progress_routes(app, require_admin=require_admin, get_store=_store)
+    from tgdrive.web.pdf_progress import register_pdf_progress_routes
+
+    register_pdf_progress_routes(app, require_admin=require_admin, get_store=_store)
 
     @app.exception_handler(DatabaseUnavailable)
     async def database_unavailable(_request: Request, _error: Exception):

@@ -598,8 +598,8 @@ guarantee codec/device playback speed.
 
 The enhanced preview stores owner and independently authenticated demo-admin
 watch positions on the file's MongoDB node. A share token alone cannot access
-that progress. Starting playback creates an ordered writer session; a newer
-session supersedes earlier writers. Regular saves coalesce at the server's
+that progress. Writes use an ordered session; a newer writer supersedes earlier
+writers. Regular saves coalesce at the server's
 interval, with a best-effort closing save. Positions follow stable catalog IDs
 across renames, moves and quality changes. V2 recovery snapshots include saved
 progress, but can predate the latest position; activation invalidates writers.
@@ -607,10 +607,17 @@ progress, but can predate the latest position; activation invalidates writers.
 Anonymous share and public-demo progress stays in separate browser-local scopes,
 under `tgdrive.video.position.v2:<scope>:<file-id>`. Legacy browser keys are read
 only for local history and never imported into owner progress. Completion saves
-zero; an unused Continue offer preserves the position. Invalid positions do not
-produce a Continue offer. Progress failures do not block playback or create a
-local fallback for owner history. See the
+zero. Opening a preview does not autoplay or overwrite its bookmark. Known
+positions prepare a paused seek; an early Play never jumps when a late read
+arrives, instead offering an explicit choice. Progress failures do not block
+playback or create a local fallback for owner history. See the
 [watch-position behavior and storage limits](usage.md#open-preview-and-download).
+
+PDF progress uses the same ordered owner-save boundaries with page/count metadata;
+restoration waits for document readiness and yields to user navigation. Neither
+progress kind advances catalog revision or independently triggers a backup.
+Owner thumbnail summaries batch at most 128 visible IDs without media reads;
+public thumbnail views use scoped local progress, even with owner cookies.
 
 ## Book reader internals
 

@@ -1,8 +1,15 @@
-import { ApiError, request } from "../../../shared/api";
+import { request } from "../../../shared/api";
+import { createOrderedProgressWriter } from "../orderedProgressWriter";
 
 const positionPrefix = "tgdrive.video.position.v1:";
 export type VideoProgressMode = "server" | "share" | "demo" | "unavailable";
 type LocalScope = "share" | "demo";
+export const VIDEO_POSITION_CHANGED = "tgdrive:video-position-changed";
+export interface VideoPositionChange {
+    fileId: string;
+    mode: "server" | LocalScope;
+    position: VideoPosition;
+}
 export interface VideoPosition {
     position_seconds: number;
     duration_seconds: number;
@@ -20,6 +27,16 @@ export function formatVideoTime(seconds: number): string {
     return hours > 0
         ? `${hours}:${String(minutes).padStart(2, "0")}:${remaining}`
         : `${minutes}:${remaining}`;
+}
+
+export function savedVideoResumeTime(time: number, duration: number): number {
+    return Number.isFinite(time) &&
+        Number.isFinite(duration) &&
+        duration > 0 &&
+        time > 2 &&
+        duration - time > 2
+        ? time
+        : 0;
 }
 
 export function readVideoPosition(
@@ -42,11 +59,34 @@ export function saveVideoPosition(
     fileId: string,
     time: number,
     scope: LocalScope,
+    duration?: number,
 ): void {
     if (!Number.isFinite(time) || time < 0) return;
     try {
         // Zero also masks an older legacy position instead of resurrecting it.
         localStorage.setItem(localKey(fileId, scope), String(time));
+        if (
+            duration !== undefined &&
+            Number.isFinite(duration) &&
+            duration > 0 &&
+            time <= duration
+        ) {
+            const rows = localSummaries(scope);
+            delete rows[fileId];
+            const saved = {
+                position_seconds: time,
+                duration_seconds: duration,
+                updated_at: Date.now() / 1000,
+            };
+            localStorage.setItem(
+                "tgdrive.video.summaries.v1:" + scope,
+                JSON.stringify({
+                    ...Object.fromEntries(Object.entries(rows).slice(-199)),
+                    [fileId]: saved,
+                }),
+            );
+            notifyVideoPosition(fileId, scope, saved);
+        }
     } catch {
         // Playback still works when browser storage is unavailable or full.
     }
@@ -69,7 +109,122 @@ function position(value: unknown): VideoPosition | null {
         row.updated_at < 0
     )
         throw new Error("The saved video position could not be verified.");
-    return row;
+    return {
+        position_seconds: row.position_seconds,
+        duration_seconds: row.duration_seconds,
+        updated_at: row.updated_at,
+    };
+}
+
+function notifyVideoPosition(
+    fileId: string,
+    mode: "server" | LocalScope,
+    value: unknown,
+) {
+    const saved = position(value);
+    if (saved && typeof window !== "undefined")
+        window.dispatchEvent(
+            new CustomEvent(VIDEO_POSITION_CHANGED, {
+                detail: { fileId, mode, position: saved },
+            }),
+        );
+}
+
+export function videoPositionChange(event: Event): VideoPositionChange | null {
+    try {
+        if (!(event instanceof CustomEvent)) return null;
+        const value = event.detail;
+        if (
+            !value ||
+            typeof value !== "object" ||
+            Array.isArray(value) ||
+            typeof value.fileId !== "string" ||
+            !/^[A-Za-z0-9_-]{1,128}$/.test(value.fileId) ||
+            !["server", "share", "demo"].includes(value.mode)
+        )
+            return null;
+        const saved = position(value.position);
+        return saved
+            ? { fileId: value.fileId, mode: value.mode, position: saved }
+            : null;
+    } catch {
+        return null;
+    }
+}
+
+function localSummaries(scope: LocalScope): Record<string, VideoPosition> {
+    const raw = localStorage.getItem("tgdrive.video.summaries.v1:" + scope);
+    if (!raw || raw.length > 128 * 1024) return {};
+    try {
+        const rows: unknown = JSON.parse(raw);
+        if (!rows || typeof rows !== "object" || Array.isArray(rows)) return {};
+        return Object.fromEntries(
+            Object.entries(rows)
+                .filter(([id, value]) => {
+                    try {
+                        return (
+                            /^[A-Za-z0-9_-]{1,128}$/.test(id) &&
+                            position(value) !== null
+                        );
+                    } catch {
+                        return false;
+                    }
+                })
+                .sort(([, a], [, b]) => a.updated_at - b.updated_at)
+                .slice(-200),
+        );
+    } catch {
+        return {};
+    }
+}
+
+/** Legacy time-only positions still resume, but cannot establish a fraction. */
+export function readLocalVideoPositions(
+    fileIds: string[],
+    scope: LocalScope,
+): Record<string, VideoPosition> {
+    try {
+        const summaries = localSummaries(scope);
+        return Object.fromEntries(
+            fileIds.flatMap((id) => {
+                const row = Object.hasOwn(summaries, id) ? summaries[id] : null;
+                return row &&
+                    row.position_seconds === readVideoPosition(id, scope)
+                    ? [[id, row]]
+                    : [];
+            }),
+        );
+    } catch {
+        return {};
+    }
+}
+
+export async function loadServerVideoPositions(
+    fileIds: string[],
+    signal: AbortSignal,
+): Promise<Record<string, VideoPosition>> {
+    const ids = new Set(fileIds);
+    if (ids.size > 128)
+        throw new Error("Video progress summaries are limited to 128 files.");
+    const result = await request<{ progress: unknown }>(
+        "/api/v1/video-progress/summaries",
+        { file_ids: [...ids] },
+        { signal, cache: "no-store", notifySessionExpiry: false },
+    );
+    if (
+        !result.progress ||
+        typeof result.progress !== "object" ||
+        Array.isArray(result.progress)
+    )
+        throw new Error("Saved video positions could not be verified.");
+    return Object.fromEntries(
+        Object.entries(result.progress).map(([id, value]) => {
+            const row = position(value);
+            if (!ids.has(id) || !row)
+                throw new Error("Saved video positions could not be verified.");
+            return [id, row];
+        }),
+    );
 }
 export async function loadServerVideoPosition(
     fileId: string,
@@ -88,151 +243,20 @@ export function createVideoProgressWriter(
     fileId: string,
     onProblem: (message: string) => void,
 ) {
-    let session: { session_id: string; save_interval_seconds: number } | null =
-        null;
-    let beginning: Promise<void> | null = null;
-    let writing: Promise<void> | null = null;
-    let latest: { position_seconds: number; duration_seconds: number } | null =
-        null;
-    let sequence = 0,
-        beginAttempts = 0;
-    let nextSaveAt = 0,
-        closed = false,
-        stopped = false,
-        dirty = false;
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    const problem = (cause: unknown) => {
-        const conflict =
-            cause instanceof ApiError &&
-            [
-                "VIDEO_PROGRESS_SESSION_CHANGED",
-                "VIDEO_PROGRESS_SEQUENCE_STALE",
-            ].includes(cause.code);
-        if (
-            cause instanceof ApiError &&
-            [401, 403, 404, 409, 410].includes(cause.status)
-        )
-            stopped = true;
-        if (cause instanceof ApiError && cause.status === 429)
-            nextSaveAt = Math.max(
-                nextSaveAt,
-                performance.now() + Math.max(1, cause.retryAfter) * 1000,
-            );
-        if (!closed)
-            onProblem(
-                conflict
-                    ? cause instanceof ApiError &&
-                      cause.code === "VIDEO_PROGRESS_SEQUENCE_STALE"
-                        ? "A newer video position is already saved. Reopen this video to save from here."
-                        : "Another playback session has newer video progress. Reopen this video to save from here."
-                    : "Video progress could not be saved to the server. Playback still works; reopen this video to reload saved progress.",
-            );
-    };
-    const put = async (final: boolean) => {
-        if (!session || !latest || stopped) return;
-        const result = await request<{ progress: unknown }>(
-            endpoint(fileId),
-            {
-                session_id: session.session_id,
-                sequence: ++sequence,
-                ...latest,
-                final,
-            },
-            { method: "PUT", keepalive: final, notifySessionExpiry: false },
-        );
-        position(result.progress);
-        if (!closed) onProblem("");
-    };
-    const schedule = () => {
-        if (
-            closed ||
-            stopped ||
-            !session ||
-            !latest ||
-            writing ||
-            timer ||
-            !dirty
-        )
-            return;
-        const remaining = nextSaveAt - performance.now();
-        if (remaining > 0) {
-            timer = setTimeout(() => {
-                timer = undefined;
-                schedule();
-            }, remaining);
-            return;
-        }
-        dirty = false;
-        writing = put(false)
-            .catch(problem)
-            .finally(() => {
-                writing = null;
-                nextSaveAt = Math.max(
-                    nextSaveAt,
-                    performance.now() + session!.save_interval_seconds * 1000,
-                );
-                schedule();
-            });
-    };
-    const begin = () => {
-        if (beginning || timer || closed || stopped || beginAttempts >= 2)
-            return;
-        beginAttempts++;
-        beginning = request<{
-            session_id: string;
-            progress: unknown;
-            save_interval_seconds: number;
-        }>(
-            endpoint(fileId) + "/session",
-            {},
-            { method: "POST", keepalive: true, notifySessionExpiry: false },
-        )
-            .then((result) => {
-                if (
-                    !/^[A-Za-z0-9_-]{32}$/.test(result.session_id) ||
-                    !Number.isFinite(result.save_interval_seconds) ||
-                    result.save_interval_seconds <= 0
-                )
-                    throw new Error(
-                        "The video progress session could not be verified.",
-                    );
-                position(result.progress);
-                session = result;
-                schedule();
-            })
-            .catch((cause) => {
-                // A confirmed rate rejection created no writer; retry it once after admission opens.
-                if (
-                    !closed &&
-                    beginAttempts < 2 &&
-                    cause instanceof ApiError &&
-                    cause.status === 429 &&
-                    cause.code === "VIDEO_PROGRESS_RATE_LIMITED"
-                ) {
-                    beginning = null;
-                    onProblem(
-                        "Video progress is waiting for server admission…",
-                    );
-                    timer = setTimeout(
-                        () => {
-                            timer = undefined;
-                            begin();
-                        },
-                        Math.max(1, cause.retryAfter) * 1000,
-                    );
-                } else problem(cause);
-            });
-    };
+    const writer = createOrderedProgressWriter(
+        endpoint(fileId),
+        position,
+        "video",
+        onProblem,
+        (saved) => notifyVideoPosition(fileId, "server", saved),
+    );
     return {
         get closed() {
-            return closed;
+            return writer.closed;
         },
-        start() {
-            begin();
-        },
+        start: writer.start,
         save(time: number, duration: number) {
             if (
-                closed ||
                 !Number.isFinite(time) ||
                 time < 0 ||
                 !Number.isFinite(duration) ||
@@ -240,24 +264,8 @@ export function createVideoProgressWriter(
                 time > duration
             )
                 return;
-            if (
-                latest?.position_seconds === time &&
-                latest.duration_seconds === duration
-            )
-                return;
-            latest = { position_seconds: time, duration_seconds: duration };
-            dirty = true;
-            schedule();
+            writer.save({ position_seconds: time, duration_seconds: duration });
         },
-        close() {
-            if (closed) return;
-            closed = true;
-            clearTimeout(timer);
-            void (async () => {
-                await beginning;
-                await writing;
-                await put(true);
-            })().catch(problem);
-        },
+        close: writer.close,
     };
 }

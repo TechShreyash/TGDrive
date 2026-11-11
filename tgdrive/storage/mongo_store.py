@@ -14,6 +14,7 @@ import copy
 import hashlib
 import hmac
 import json
+import mimetypes
 import re
 import secrets
 import threading
@@ -1477,9 +1478,10 @@ class MongoStore:
                     results[node["_id"]] = self._listed(node, chain)
             return results
 
-    # ------------------------------------------------------- video progress
+    # ---------------------------------------------------- reading progress
 
-    def _video_node(self, item_id, *, write=False):
+    def _progress_node(self, item_id, *, pdf=False, write=False):
+        from tgdrive.storage.pdf_progress import validate_pdf_state
         from tgdrive.storage.video_progress import validate_video_state
 
         _validate_id(item_id)
@@ -1489,14 +1491,63 @@ class MongoStore:
         self._visible(chain)
         if write:
             self._mutable(chain)
-        validate_video_state(node)
+        (validate_pdf_state if pdf else validate_video_state)(node)
         return node
 
     def video_progress(self, item_id):
         with self._transaction(snapshot=True):
-            return copy.deepcopy(self._video_node(item_id).get("video_progress"))
+            return copy.deepcopy(self._progress_node(item_id).get("video_progress"))
+
+    def pdf_progress(self, item_id):
+        with self._transaction(snapshot=True):
+            return copy.deepcopy(
+                self._progress_node(item_id, pdf=True).get("pdf_progress")
+            )
+
+    def video_progress_summaries(self, item_ids):
+        from tgdrive.storage.video_progress import (
+            MAX_SUMMARY_FILES,
+            validate_video_state,
+        )
+
+        if not isinstance(item_ids, list) or len(item_ids) > MAX_SUMMARY_FILES:
+            raise ValidationError("Request at most 128 video progress summaries")
+        for identity in item_ids:
+            _validate_id(identity, allow_root=True)
+        if not item_ids:
+            return {}
+        with self._transaction(snapshot=True):
+            nodes = [
+                row
+                for row in self._find(
+                    "nodes",
+                    {
+                        "_id": {"$in": sorted(set(item_ids))},
+                        "kind": "file",
+                        "video_progress": {"$exists": True},
+                    },
+                    {"_id": 1, "kind": 1, "name": 1, "video_progress": 1},
+                ).batch_size(MAX_SUMMARY_FILES)
+                if (mimetypes.guess_type(row["name"])[0] or "").startswith("video/")
+            ]
+            chains = self._chains({row["_id"] for row in nodes})
+            result = {}
+            for node in nodes:
+                chain = chains.get(node["_id"])
+                if chain is None or self._hidden(chain):
+                    continue
+                validate_video_state(node)
+                result[node["_id"]] = copy.deepcopy(node["video_progress"])
+            return result
 
     def begin_video_progress(self, item_id):
+        return self._begin_progress(item_id)
+
+    def begin_pdf_progress(self, item_id):
+        return self._begin_progress(item_id, pdf=True)
+
+    def _begin_progress(self, item_id, *, pdf=False):
+        from tgdrive.storage.pdf_progress import PdfProgressError, validate_pdf_state
         from tgdrive.storage.video_progress import (
             SESSION_INTERVAL_SECONDS,
             VideoProgressError,
@@ -1504,14 +1555,20 @@ class MongoStore:
             validate_video_state,
         )
 
+        field = "pdf_progress" if pdf else "video_progress"
+        session_field = field + "_session"
+        label = "PDF" if pdf else "video"
+        error_type = PdfProgressError if pdf else VideoProgressError
         with self._transaction(write=True):
-            node = self._video_node(item_id, write=True)
+            node = self._progress_node(item_id, pdf=pdf, write=True)
             now = time.time()
-            previous = node.get("video_progress_session")
+            previous = node.get(session_field)
             check_interval(
                 previous["started_at"] if previous else None,
                 now,
                 SESSION_INTERVAL_SECONDS,
+                error_type=error_type,
+                label=label,
             )
             writer = {
                 "id": secrets.token_urlsafe(24),
@@ -1520,21 +1577,23 @@ class MongoStore:
                 "saved_at": None,
                 "closed": False,
             }
-            validate_video_state(node | {"video_progress_session": writer})
+            (validate_pdf_state if pdf else validate_video_state)(
+                node | {session_field: writer}
+            )
             self.backend.fence(self._session)
             result = self.db.nodes.update_one(
                 {"_id": item_id, "kind": "file"},
-                {"$set": {"video_progress_session": writer}},
+                {"$set": {session_field: writer}},
                 session=self._session,
             )
             if result.matched_count != 1:
-                raise VideoProgressError(
-                    "The video file changed; reopen it.",
-                    code="VIDEO_PROGRESS_SESSION_CHANGED",
+                raise error_type(
+                    f"The {label} file changed; reopen it.",
+                    code=f"{label.upper()}_PROGRESS_SESSION_CHANGED",
                 )
             return {
                 "session_id": writer["id"],
-                "progress": copy.deepcopy(node.get("video_progress")),
+                "progress": copy.deepcopy(node.get(field)),
             }
 
     def save_video_progress(
@@ -1547,6 +1606,30 @@ class MongoStore:
         *,
         final=False,
     ):
+        return self._save_progress(
+            item_id,
+            session_id,
+            sequence,
+            (position_seconds, duration_seconds),
+            final=final,
+        )
+
+    def save_pdf_progress(
+        self, item_id, session_id, sequence, page_number, page_count, *, final=False
+    ):
+        return self._save_progress(
+            item_id,
+            session_id,
+            sequence,
+            (page_number, page_count),
+            pdf=True,
+            final=final,
+        )
+
+    def _save_progress(
+        self, item_id, session_id, sequence, values, *, pdf=False, final=False
+    ):
+        from tgdrive.storage.pdf_progress import PdfProgressError, page_record
         from tgdrive.storage.video_progress import (
             SAVE_INTERVAL_SECONDS,
             VideoProgressError,
@@ -1555,59 +1638,75 @@ class MongoStore:
             position_record,
         )
 
-        check_writer(session_id, sequence, final)
+        field = "pdf_progress" if pdf else "video_progress"
+        session_field = field + "_session"
+        label = "PDF" if pdf else "video"
+        activity = "reading" if pdf else "playback"
+        error_type = PdfProgressError if pdf else VideoProgressError
+        check_writer(session_id, sequence, final, label=label)
         with self._transaction(write=True):
-            node = self._video_node(item_id, write=True)
-            writer = node.get("video_progress_session")
+            node = self._progress_node(item_id, pdf=pdf, write=True)
+            writer = node.get(session_field)
             if writer is None or writer["id"] != session_id:
-                raise VideoProgressError(
-                    "Another playback session is now the writer.",
-                    code="VIDEO_PROGRESS_SESSION_CHANGED",
+                raise error_type(
+                    f"Another {activity} session is now the writer.",
+                    code=f"{label.upper()}_PROGRESS_SESSION_CHANGED",
                 )
             now = time.time()
-            progress = position_record(position_seconds, duration_seconds, now)
-            previous = node.get("video_progress")
+            progress = (page_record if pdf else position_record)(
+                values[0], values[1], now
+            )
+            previous = node.get(field)
             if sequence <= writer["sequence"]:
                 if (
                     sequence == writer["sequence"]
                     and previous is not None
-                    and previous["position_seconds"] == position_seconds
-                    and previous["duration_seconds"] == duration_seconds
+                    and all(
+                        previous[key] == value
+                        for key, value in progress.items()
+                        if key != "updated_at"
+                    )
                     and writer["closed"] == final
                 ):
                     return copy.deepcopy(previous)
-                raise VideoProgressError(
-                    "A newer video position is already saved.",
-                    code="VIDEO_PROGRESS_SEQUENCE_STALE",
+                raise error_type(
+                    f"A newer {label} position is already saved.",
+                    code=f"{label.upper()}_PROGRESS_SEQUENCE_STALE",
                 )
             if writer["closed"]:
-                raise VideoProgressError(
-                    "This playback writer is closed; start a new session.",
-                    code="VIDEO_PROGRESS_SESSION_CHANGED",
+                raise error_type(
+                    f"This {activity} writer is closed; start a new session.",
+                    code=f"{label.upper()}_PROGRESS_SESSION_CHANGED",
                 )
             if not final:
-                check_interval(writer["saved_at"], now, SAVE_INTERVAL_SECONDS)
+                check_interval(
+                    writer["saved_at"],
+                    now,
+                    SAVE_INTERVAL_SECONDS,
+                    error_type=error_type,
+                    label=label,
+                )
             self.backend.fence(self._session)
             result = self.db.nodes.update_one(
                 {
                     "_id": item_id,
                     "kind": "file",
-                    "video_progress_session.id": session_id,
-                    "video_progress_session.sequence": writer["sequence"],
+                    session_field + ".id": session_id,
+                    session_field + ".sequence": writer["sequence"],
                 },
                 {
                     "$set": {
-                        "video_progress": progress,
-                        "video_progress_session": writer
+                        field: progress,
+                        session_field: writer
                         | {"sequence": sequence, "saved_at": now, "closed": final},
                     }
                 },
                 session=self._session,
             )
             if result.matched_count != 1:
-                raise VideoProgressError(
-                    "Another playback session is now the writer.",
-                    code="VIDEO_PROGRESS_SESSION_CHANGED",
+                raise error_type(
+                    f"Another {activity} session is now the writer.",
+                    code=f"{label.upper()}_PROGRESS_SESSION_CHANGED",
                 )
             return progress
 
@@ -2360,10 +2459,12 @@ class MongoStore:
         """Portable schema-5 catalog from raw rows; also validates their shape."""
         try:
             portable, parents = {}, {}
+            from tgdrive.storage.pdf_progress import validate_pdf_state
             from tgdrive.storage.video_progress import validate_video_state
 
             for row in nodes:
                 validate_video_state(row)
+                validate_pdf_state(row)
                 key = row["_id"]
                 if row.get("id", key) != key or row.get("name_key") != _name_key(
                     row["name"]

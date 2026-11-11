@@ -9,6 +9,7 @@ from tgdrive.core.errors import ValidationError
 
 SAVE_INTERVAL_SECONDS = 5
 SESSION_INTERVAL_SECONDS = 1
+MAX_SUMMARY_FILES = 128
 MAX_SEQUENCE = 2**53 - 1
 SESSION_PATTERN = r"[A-Za-z0-9_-]{32}"
 
@@ -62,59 +63,65 @@ def validate_video_state(node):
             raise ValidationError("Invalid saved video progress")
         position_record(**value)
     if "video_progress_session" in node:
-        value = node["video_progress_session"]
-        if not isinstance(value, dict) or set(value) != {
-            "id",
-            "sequence",
-            "started_at",
-            "saved_at",
-            "closed",
-        }:
-            raise ValidationError("Invalid video writer session")
-        if (
-            not isinstance(value["id"], str)
-            or re.fullmatch(SESSION_PATTERN, value["id"]) is None
-        ):
-            raise ValidationError("Invalid video writer identity")
-        if (
-            (
-                isinstance(value["sequence"], bool)
-                or not isinstance(value["sequence"], int)
-            )
-            or not 0 <= value["sequence"] <= MAX_SEQUENCE
-            or type(value["closed"]) is not bool
-        ):
-            raise ValidationError("Invalid video writer sequence")
-        _seconds(value["started_at"], "started_at")
-        if value["saved_at"] is not None:
-            _seconds(value["saved_at"], "saved_at")
-        if value["sequence"] == 0:
-            if value["closed"] or value["saved_at"] is not None:
-                raise ValidationError("Invalid unused video writer")
-        elif value["saved_at"] is None or "video_progress" not in node:
-            raise ValidationError("Video writer has no saved position")
+        validate_writer_state(
+            node["video_progress_session"], "video_progress" in node, label="video"
+        )
 
 
-def check_writer(session_id, sequence, final):
+def validate_writer_state(value, has_progress, *, label):
+    """Video and PDF writers share ordering, pacing and activation rules."""
+    if not isinstance(value, dict) or set(value) != {
+        "id",
+        "sequence",
+        "started_at",
+        "saved_at",
+        "closed",
+    }:
+        raise ValidationError(f"Invalid {label} writer session")
+    if (
+        not isinstance(value["id"], str)
+        or re.fullmatch(SESSION_PATTERN, value["id"]) is None
+    ):
+        raise ValidationError(f"Invalid {label} writer identity")
+    if (
+        isinstance(value["sequence"], bool)
+        or not isinstance(value["sequence"], int)
+        or not 0 <= value["sequence"] <= MAX_SEQUENCE
+        or type(value["closed"]) is not bool
+    ):
+        raise ValidationError(f"Invalid {label} writer sequence")
+    _seconds(value["started_at"], "started_at")
+    if value["saved_at"] is not None:
+        _seconds(value["saved_at"], "saved_at")
+    if value["sequence"] == 0:
+        if value["closed"] or value["saved_at"] is not None:
+            raise ValidationError(f"Invalid unused {label} writer")
+    elif value["saved_at"] is None or not has_progress:
+        raise ValidationError(f"{label.capitalize()} writer has no saved position")
+
+
+def check_writer(session_id, sequence, final, *, label="video"):
     if (
         not isinstance(session_id, str)
         or re.fullmatch(SESSION_PATTERN, session_id) is None
     ):
-        raise ValidationError("Invalid video writer identity")
+        raise ValidationError(f"Invalid {label} writer identity")
     if (
         isinstance(sequence, bool) or not isinstance(sequence, int)
     ) or not 1 <= sequence <= MAX_SEQUENCE:
-        raise ValidationError("Invalid video writer sequence")
+        raise ValidationError(f"Invalid {label} writer sequence")
     if type(final) is not bool:
         raise ValidationError("final must be a boolean")
 
 
-def check_interval(previous, now, interval):
+def check_interval(
+    previous, now, interval, *, error_type=VideoProgressError, label="video"
+):
     if previous is not None and 0 <= now - previous < interval:
         retry_after = max(1, math.ceil(interval - (now - previous)))
-        raise VideoProgressError(
-            "Wait before saving video progress again.",
-            code="VIDEO_PROGRESS_RATE_LIMITED",
+        raise error_type(
+            f"Wait before saving {label} progress again.",
+            code=f"{label.upper()}_PROGRESS_RATE_LIMITED",
             status=429,
             retry_after=retry_after,
         )

@@ -372,6 +372,7 @@
     min-width: 0;
 }
 .file-tile-preview {
+    position: relative;
     display: flex;
     align-items: center;
     justify-content: center;
@@ -380,6 +381,25 @@
     background: var(--surface-subtle);
     border-radius: 7px 7px 0 0;
     border-bottom: 1px solid var(--line-subtle);
+}
+.file-playback-progress {
+    position: absolute;
+    inset: auto 8px 7px;
+    height: 5px;
+    border-radius: 999px;
+    overflow: hidden;
+    background: #181b22;
+    pointer-events: none;
+}
+.file-playback-progress > span {
+    display: block;
+    height: 100%;
+    background: #7aa7ff;
+    border-radius: inherit;
+}
+.file-list-thumbnail .file-playback-progress {
+    inset: auto 4px 4px;
+    height: 4px;
 }
 .file-tile-preview img {
     width: 100%;

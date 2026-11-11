@@ -348,10 +348,11 @@ export default function Preview({
     } | null>(null);
     const descriptor = preview?.path === path ? preview.value : null;
     const kind = nativeKind || (descriptor?.kind === "video" ? "video" : null);
+    const supportsProgress = kind === "video" || descriptor?.kind === "pdf";
     const [resolvedProgressMode, setResolvedProgressMode] =
         useState<VideoProgressMode | null>(null);
     useEffect(() => {
-        if (kind !== "video" || videoProgressMode !== undefined) return;
+        if (!supportsProgress || videoProgressMode !== undefined) return;
         const controller = new AbortController();
         setResolvedProgressMode(null);
         // Share tokens never prove owner identity; check the cookie session separately.
@@ -365,9 +366,7 @@ export default function Preview({
                     (session.demo_admin !== undefined &&
                         typeof session.demo_admin !== "boolean")
                 )
-                    throw new Error(
-                        "Video resume identity could not be verified.",
-                    );
+                    throw new Error("Resume identity could not be verified.");
                 if (!controller.signal.aborted)
                     setResolvedProgressMode(
                         session.authenticated && !session.demo_read_only
@@ -382,7 +381,7 @@ export default function Preview({
                     setResolvedProgressMode("unavailable");
             });
         return () => controller.abort();
-    }, [kind, videoProgressMode, auth]);
+    }, [supportsProgress, videoProgressMode, auth]);
     useEffect(() => {
         setFileStatus(null);
         // The player's own readiness state is authoritative for video. A server
@@ -990,6 +989,11 @@ export default function Preview({
                                     }
                                 >
                                     <PdfPreview
+                                        fileId={item.id}
+                                        progressMode={
+                                            videoProgressMode ??
+                                            resolvedProgressMode
+                                        }
                                         url={pdf}
                                         name={item.name}
                                         size={

@@ -11,6 +11,7 @@ from fastapi.testclient import TestClient
 from tests.support.app_fixtures import app_client as app_client
 from tests.support.app_fixtures import login
 from tests.web.test_demo_admin_auth import ADMIN, VISITOR, auth_client, sign_in
+from tgdrive.web.pdf_progress import _worker as pdf_worker
 from tgdrive.web.video_progress import _worker
 
 ORIGIN = {"Origin": "https://testserver"}
@@ -167,6 +168,48 @@ def test_share_authority_never_grants_progress_or_discloses_node_metadata(video)
     assert "video_progress" not in listing.text and writer not in listing.text
 
 
+def test_video_summary_batch_is_bounded_private_and_omits_unavailable_files(video):
+    client, store, identity, _clock = video
+    route = "/api/v1/video-progress/summaries"
+    payload = {"file_ids": [identity]}
+    assert client.post(route, json=payload, headers=ORIGIN).status_code == 401
+    login(client)
+    writer = client.post(path(identity) + "/session", json={}, headers=ORIGIN).json()[
+        "session_id"
+    ]
+    saved = client.put(path(identity), json=body(writer), headers=ORIGIN).json()[
+        "progress"
+    ]
+    empty = store.add_file("/", "unwatched.mp4", 8, 3)["id"]
+    text = store.add_file("/", "source.txt", 9, 3)["id"]
+    folder = store.create_folder("/", "Folder")["id"]
+    response = client.post(
+        route,
+        json={"file_ids": [identity, identity, empty, text, folder, "root", "missing"]},
+        headers=ORIGIN,
+    )
+    assert (
+        response.status_code == 200 and response.headers["cache-control"] == "no-store"
+    )
+    assert response.json() == {"progress": {identity: saved}}
+    assert writer not in response.text and "session" not in response.text
+    assert client.post(route, json={"file_ids": []}, headers=ORIGIN).json() == {
+        "progress": {}
+    }
+    for invalid in [[identity] * 129, ["invalid/id"], [True], [1]]:
+        assert (
+            client.post(route, json={"file_ids": invalid}, headers=ORIGIN).status_code
+            == 422
+        )
+    denied = client.post(route + "?auth=share", json=payload, headers=ORIGIN)
+    assert (
+        denied.status_code == 403
+        and denied.json()["code"] == "VIDEO_PROGRESS_OWNER_ONLY"
+    )
+    store.set_trashed("/" + identity, True)
+    assert client.post(route, json=payload, headers=ORIGIN).json() == {"progress": {}}
+
+
 @pytest.mark.parametrize("password,allowed", [(VISITOR, False), (ADMIN, True)])
 def test_public_demo_cannot_read_or_write_owner_progress(tmp_path, password, allowed):
     with auth_client(tmp_path) as (client, _settings, runtime):
@@ -175,7 +218,17 @@ def test_public_demo_cannot_read_or_write_owner_progress(tmp_path, password, all
         url = path(identity)
         read = client.get(url)
         begin = client.post(url + "/session", json={}, headers=ORIGIN)
-        assert read.status_code == begin.status_code == (200 if allowed else 403)
+        summaries = client.post(
+            "/api/v1/video-progress/summaries",
+            json={"file_ids": [identity]},
+            headers=ORIGIN,
+        )
+        assert (
+            read.status_code
+            == begin.status_code
+            == summaries.status_code
+            == (200 if allowed else 403)
+        )
         if not allowed:
             assert read.json()["code"] == "VIDEO_PROGRESS_OWNER_ONLY"
             node = runtime.store.db.nodes.find_one({"_id": identity})
@@ -184,14 +237,17 @@ def test_public_demo_cannot_read_or_write_owner_progress(tmp_path, password, all
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("kind", ["video", "pdf"])
 async def test_cancelled_progress_commit_is_drained_before_return(
-    tmp_path, monkeypatch
+    tmp_path, monkeypatch, kind
 ):
     from tests.support.mongo_fixtures import new_store
 
     store = new_store(tmp_path / "drive")
-    identity = store.add_file("/", "movie.mp4", 7, 3)["id"]
-    writer = store.begin_video_progress(identity)["session_id"]
+    identity = store.add_file(
+        "/", "movie.mp4" if kind == "video" else "reading.pdf", 7, 3
+    )["id"]
+    writer = getattr(store, "begin_" + kind + "_progress")(identity)["session_id"]
     entered, release = threading.Event(), threading.Event()
     update = store.db.nodes.update_one
 
@@ -201,8 +257,17 @@ async def test_cancelled_progress_commit_is_drained_before_return(
         return update(*args, **kwargs)
 
     monkeypatch.setattr(store.db.nodes, "update_one", delayed)
+    values = (20, 200) if kind == "video" else (2, 3)
+    worker = _worker if kind == "video" else pdf_worker
     task = asyncio.create_task(
-        _worker(store.save_video_progress, identity, writer, 1, 20, 200, final=True)
+        worker(
+            getattr(store, "save_" + kind + "_progress"),
+            identity,
+            writer,
+            1,
+            *values,
+            final=True,
+        )
     )
     try:
         assert await asyncio.to_thread(entered.wait, 1)
@@ -213,9 +278,12 @@ async def test_cancelled_progress_commit_is_drained_before_return(
         release.set()
         with pytest.raises(asyncio.CancelledError):
             await task
-        progress = store.video_progress(identity)
+        progress = getattr(store, kind + "_progress")(identity)
         assert progress is not None
-        assert progress["position_seconds"] == 20
+        assert (
+            progress["position_seconds" if kind == "video" else "page_number"]
+            == values[0]
+        )
     finally:
         release.set()
         await asyncio.gather(task, return_exceptions=True)

@@ -13,12 +13,15 @@ from tests.browser.test_browser_demo_access import (
     full_demo_server,  # noqa: F401 - pytest fixture
 )
 from tests.browser.test_browser_e2e import (
+    ARTIFACTS,
     Server,
     expect,
     login,
     open_admin,
     preview_dialog,
+    set_appearance,
 )
+from tests.browser.test_browser_file_views import choose_view
 
 pytestmark = pytest.mark.e2e
 pytest_plugins = ("tests.browser.test_browser_e2e",)
@@ -74,11 +77,24 @@ def _seek(page: Any, player: Any, seconds: float) -> None:
     )
 
 
-def _save_seek(page: Any, player: Any, item_id: str, seconds: float = 1.5) -> None:
+def _save_seek(page: Any, player: Any, item_id: str, seconds: float = 2.25) -> None:
     player.evaluate("el=>el.play()")
     page.wait_for_function("()=>document.querySelector('movi-player')?.currentTime>0.1")
     _seek(page, player, seconds)
     _wait_saved(page, item_id, seconds)
+
+
+def _resumed_paused(page: Any, player: Any, seconds: float) -> None:
+    duration = player.evaluate("el=>el.duration")
+    target = seconds if 2 < seconds < duration - 2 else 0
+    page.wait_for_function(
+        """target=>{const el=document.querySelector('movi-player');
+          return el&&!el.seeking&&el.paused&&Math.abs(el.currentTime-target)<0.1}""",
+        arg=target,
+    )
+    expect(page.get_by_role("button", name="Continue from", exact=False)).to_have_count(
+        0
+    )
 
 
 def _samples(page: Any, server: Server) -> None:
@@ -86,9 +102,7 @@ def _samples(page: Any, server: Server) -> None:
     page.get_by_role("button", name="Preview samples", exact=True).press("Enter")
 
 
-def test_continue_survives_close_and_reload_without_seeking_automatically(
-    server, desktop
-):
+def test_default_resume_survives_close_reload_and_waits_for_play(server, desktop):
     _, page = desktop
     _samples(page, server)
     file = page.get_by_role("button", name="multitrack.mkv", exact=True)
@@ -102,27 +116,25 @@ def test_continue_survives_close_and_reload_without_seeking_automatically(
         "request",
         lambda request: (
             writes.append(request)
-            if "/video-progress" in request.url and request.method in {"POST", "PUT"}
+            if request.url.endswith(("/video-progress", "/video-progress/session"))
+            and request.method in {"POST", "PUT"}
             else None
         ),
     )
     dialog, player, item_id = _open_video(page)
-    expect(
-        dialog.get_by_role("button", name="Continue from 0:03", exact=True)
-    ).to_have_count(0)
-    assert writes == []  # Loading/poster seeks do not acquire a writer.
+    assert writes == []
     _seek(page, player, 0.5)
-    assert writes == []  # A paused user seek also acquires no server writer.
+    assert writes == []
     _save_seek(page, player, item_id)
     dialog.get_by_role("button", name="Close Preview", exact=True).click()
-    _wait_saved(page, item_id, 1.5)
+    _wait_saved(page, item_id, 2.25)
     before = _position(page, server, item_id)
     before_writes = len(writes)
     dialog, player, _ = _open_video(page)
-    expect(
-        dialog.get_by_role("button", name="Continue from 0:01", exact=True)
-    ).to_be_visible()
-    assert player.evaluate("el=>el.paused&&el.currentTime<0.1")
+    assert player.evaluate("el=>el.duration>4.25"), (
+        "The fixture must have a resumable interior beyond both two-second margins"
+    )
+    _resumed_paused(page, player, 2.25)
     dialog.get_by_role("button", name="Close Preview", exact=True).click()
     assert _position(page, server, item_id) == before
     assert len(writes) == before_writes
@@ -131,16 +143,16 @@ def test_continue_survives_close_and_reload_without_seeking_automatically(
     page.reload()
     dialog = preview_dialog(page)
     player = dialog.locator("movi-player")
-    expect(
-        dialog.get_by_role("button", name="Continue from 0:01", exact=True)
-    ).to_be_visible()
-    assert player.evaluate("el=>el.paused&&el.currentTime<0.1")
-    dialog.get_by_role("button", name="Continue from 0:01", exact=True).click()
+    _resumed_paused(page, player, 2.25)
+    player.hover()
+    player.locator("button.movi-play-pause").click()
     page.wait_for_function("""()=>{const el=document.querySelector('movi-player');
-      return el&&!el.paused&&!el.seeking&&el.currentTime>=1.4}""")
-    expect(
-        dialog.get_by_role("button", name="Continue from 0:01", exact=True)
-    ).to_have_count(0)
+      return el&&!el.paused&&!el.seeking&&el.currentTime>=2.2}""")
+    expect(dialog.get_by_text("Resumed at 0:02", exact=True)).to_be_visible()
+    dialog.get_by_role("button", name="Start over", exact=True).click()
+    page.wait_for_function("""()=>{const el=document.querySelector('movi-player');
+      return el&&!el.seeking&&el.currentTime<2}""")
+    _wait_saved(page, item_id, 0)
 
 
 def test_pagehide_then_play_creates_one_replacement_writer_and_closes_it(
@@ -153,7 +165,8 @@ def test_pagehide_then_play_creates_one_replacement_writer_and_closes_it(
         "request",
         lambda request: (
             writes.append((request.method, request.post_data_json))
-            if "/video-progress" in request.url and request.method in {"POST", "PUT"}
+            if request.url.endswith(("/video-progress", "/video-progress/session"))
+            and request.method in {"POST", "PUT"}
             else None
         ),
     )
@@ -170,7 +183,7 @@ def test_pagehide_then_play_creates_one_replacement_writer_and_closes_it(
     with page.expect_response(is_final_save) as hidden_save:
         page.evaluate("window.dispatchEvent(new PageTransitionEvent('pagehide'))")
     assert hidden_save.value.ok
-    _wait_saved(page, item_id, 1.5)
+    _wait_saved(page, item_id, 2.25)
     _save_seek(page, player, item_id, 2.5)
     with page.expect_response(is_final_save) as closing_save:
         dialog.get_by_role("button", name="Close Preview", exact=True).click()
@@ -179,34 +192,25 @@ def test_pagehide_then_play_creates_one_replacement_writer_and_closes_it(
     page.wait_for_function("()=>!document.querySelector('movi-player')")
     assert sum(method == "POST" for method, _ in writes) == 2
     assert sum(method == "PUT" and body["final"] for method, body in writes) == 2
-    _open_video(page)
-    expect(
-        page.get_by_role("button", name="Continue from 0:02", exact=True)
-    ).to_be_visible()
+    _, player, _ = _open_video(page)
+    _resumed_paused(page, player, 2.5)
 
 
-def test_native_play_starts_at_beginning_and_completion_clears_position(
-    server, desktop
-):
+def test_normal_play_resumes_and_completion_clears_position(server, desktop):
     _, page = desktop
     _samples(page, server)
     dialog, player, item_id = _open_video(page)
     _save_seek(page, player, item_id)
     dialog.get_by_role("button", name="Close Preview", exact=True).click()
     dialog, player, _ = _open_video(page)
-    expect(
-        dialog.get_by_role("button", name="Continue from 0:01", exact=True)
-    ).to_be_visible()
+    _resumed_paused(page, player, 2.25)
     player.evaluate(
         "el=>el.addEventListener('ended',()=>{el.dataset.finished='true'},{once:true})"
     )
     player.hover()
     player.locator("button.movi-play-pause").click()
-    expect(
-        dialog.get_by_role("button", name="Continue from 0:01", exact=True)
-    ).to_have_count(0)
     page.wait_for_function("""()=>{const el=document.querySelector('movi-player');
-      return el&&!el.paused&&el.currentTime>0.1&&el.currentTime<1.5}""")
+      return el&&!el.paused&&el.currentTime>=2.2}""")
     page.wait_for_function(
         "()=>document.querySelector('movi-player')?.dataset.finished==='true'",
         timeout=30000,
@@ -242,9 +246,7 @@ def test_same_owner_in_another_context_resumes_and_old_writer_cannot_replace_it(
         _samples(other, server)
         other_dialog, other_player, other_id = _open_video(other)
         assert other_id == item_id
-        expect(
-            other_dialog.get_by_role("button", name="Continue from 0:01", exact=True)
-        ).to_be_visible()
+        _resumed_paused(other, other_player, 2.25)
         assert (
             other.evaluate(
                 "Object.keys(localStorage).filter(key=>key.startsWith('tgdrive.video.position'))"
@@ -290,26 +292,22 @@ def test_anonymous_share_never_reads_or_writes_owner_history(server, browser, de
     )
     try:
         other.add_init_script(
-            "localStorage.setItem('tgdrive.video.position.v1:" + item_id + "','3')"
+            "localStorage.setItem('tgdrive.video.position.v1:" + item_id + "','2.25')"
         )
         url = server.url + "/embed?path=/" + item_id + "&auth=" + share["auth"]
         other.goto(url)
-        expect(
-            other.get_by_role("button", name="Continue from 0:03", exact=True)
-        ).to_be_visible()
         local_player = other.locator("movi-player")
+        _resumed_paused(other, local_player, 2.25)
         _seek(other, local_player, 2.5)
         key = "tgdrive.video.position.v2:share:" + item_id
         other.wait_for_function(
             "key=>Math.abs(Number(localStorage.getItem(key))-2.5)<0.1", arg=key
         )
         other.reload()
-        expect(
-            other.get_by_role("button", name="Continue from 0:02", exact=True)
-        ).to_be_visible()
+        _resumed_paused(other, other.locator("movi-player"), 2.5)
         assert progress_requests == []
         assert _position(page, server, item_id)["position_seconds"] == pytest.approx(
-            1.5, abs=0.1
+            2.25, abs=0.1
         )
         assert (
             other.request.get(
@@ -328,9 +326,7 @@ def test_anonymous_share_never_reads_or_writes_owner_history(server, browser, de
             ),
         )
         page.goto(url)
-        expect(
-            page.get_by_role("button", name="Continue from 0:01", exact=True)
-        ).to_be_visible()
+        _resumed_paused(page, page.locator("movi-player"), 2.25)
         assert owner_progress and all("auth=" not in url for url in owner_progress)
     finally:
         context.close()
@@ -417,6 +413,7 @@ def test_delayed_final_save_cannot_replace_a_new_device_writer(
     context = browser.new_context(
         viewport={"width": 1440, "height": 960}, reduced_motion="reduce"
     )
+    context.tracing.start(screenshots=True, snapshots=True, sources=True)
     other = context.new_page()
     try:
         _samples(other, server)
@@ -436,6 +433,7 @@ def test_delayed_final_save_cannot_replace_a_new_device_writer(
             2.5, abs=0.1
         )
     finally:
+        context.tracing.stop(path=ARTIFACTS / "video-delayed-final-second-context.zip")
         context.close()
 
 
@@ -460,7 +458,7 @@ def test_late_position_response_does_not_replace_a_different_preview(server, des
     )
     dialog, _, _ = _open_video(page)
     dialog.get_by_role("button", name="Close Preview", exact=True).click()
-    current, _, _ = _open_video(page, "movtext-subtitles.mp4")
+    current, current_player, _ = _open_video(page, "movtext-subtitles.mp4")
     expect(
         current.get_by_text("Checking saved video position…", exact=True)
     ).to_have_count(0)
@@ -468,7 +466,7 @@ def test_late_position_response_does_not_replace_a_different_preview(server, des
     pending[0].fulfill(
         json={
             "progress": {
-                "position_seconds": 1.5,
+                "position_seconds": 2.25,
                 "duration_seconds": 5,
                 "updated_at": 1000,
             }
@@ -486,6 +484,7 @@ def test_late_position_response_does_not_replace_a_different_preview(server, des
     expect(
         current.get_by_role("button", name="Continue from 0:01", exact=True)
     ).to_have_count(0)
+    _resumed_paused(page, current_player, 0)
 
 
 def test_read_only_demo_share_progress_is_not_imported_for_demo_admin(
@@ -597,3 +596,326 @@ def test_unverified_share_session_does_not_publish_or_import_progress(server, de
     page.wait_for_function("()=>document.querySelector('movi-player')?.currentTime>0.2")
     expect(notice).to_be_visible()
     assert progress_requests == []
+
+
+def _seed_saved_position(page, server):
+    dialog, player, identity = _open_video(page)
+    duration = player.evaluate("el=>el.duration")
+    assert duration > 4.25
+    dialog.get_by_role("button", name="Close Preview", exact=True).click()
+    url = server.url + f"/api/v1/files/{identity}/video-progress"
+    session = page.request.post(url + "/session", data={})
+    assert session.ok, session.text()
+    response = page.request.put(
+        url,
+        data={
+            "session_id": session.json()["session_id"],
+            "sequence": 1,
+            "position_seconds": 2.25,
+            "duration_seconds": duration,
+            "final": True,
+        },
+    )
+    assert response.ok, response.text()
+    return identity, response.json()["progress"]
+
+
+@pytest.mark.parametrize("choice", ["Continue from 0:02", "Keep playing from here"])
+def test_play_before_saved_read_preserves_bookmark_until_explicit_choice(
+    server, desktop, choice
+):
+    _, page = desktop
+    _samples(page, server)
+    identity, saved = _seed_saved_position(page, server)
+    pending, writes = [], []
+
+    def hold_read(route):
+        if route.request.method == "GET":
+            pending.append(route)
+        else:
+            writes.append(route.request)
+            route.continue_()
+
+    page.route("**/api/v1/files/*/video-progress", hold_read)
+    dialog, player, _ = _open_video(page)
+    player.evaluate("el=>el.play()")
+    page.wait_for_function(
+        """()=>{const el=document.querySelector('movi-player');
+          return el&&!el.seeking&&!el.paused&&el.currentTime>0.2}"""
+    )
+    assert _position(page, server, identity) == saved
+    assert writes == []
+    player.evaluate(
+        "el=>{window.lateResumeSeeks=0;el.addEventListener('seeking',()=>window.lateResumeSeeks++)}"
+    )
+    assert pending
+    pending.pop().fulfill(json={"progress": saved})
+    expect(
+        dialog.get_by_role("button", name="Continue from 0:02", exact=True)
+    ).to_be_visible()
+    expect(
+        dialog.get_by_role("button", name="Keep playing from here", exact=True)
+    ).to_be_visible()
+    assert page.evaluate("window.lateResumeSeeks") == 0
+    assert _position(page, server, identity) == saved
+    with page.expect_response(
+        lambda response: (
+            response.request.method == "PUT"
+            and response.url.endswith("/video-progress")
+        )
+    ) as response:
+        dialog.get_by_role("button", name=choice, exact=True).click()
+    assert response.value.ok, response.value.text()
+    expect(
+        dialog.get_by_role("button", name="Keep playing from here", exact=True)
+    ).to_have_count(0)
+    if choice.startswith("Continue"):
+        assert page.evaluate("window.lateResumeSeeks") > 0
+
+
+@pytest.mark.parametrize("result", ["empty", "error", "manual"])
+def test_pending_progress_null_error_retry_and_manual_seek_remain_safe(
+    server, desktop, result
+):
+    _, page = desktop
+    _samples(page, server)
+    identity, saved = _seed_saved_position(page, server)
+    pending = []
+
+    def hold_read(route):
+        if route.request.method == "GET":
+            pending.append(route)
+        else:
+            route.continue_()
+
+    page.route("**/api/v1/files/*/video-progress", hold_read)
+    dialog, player, _ = _open_video(page)
+    player.evaluate("el=>el.play()")
+    page.wait_for_function("()=>document.querySelector('movi-player')?.currentTime>0.2")
+    assert pending
+    if result == "manual":
+        _seek(page, player, 0.75)
+        _wait_saved(page, identity, 0.75)
+        pending.pop().fulfill(json={"progress": saved})
+        expect(
+            dialog.get_by_role("button", name="Keep playing from here", exact=True)
+        ).to_have_count(0)
+        assert player.evaluate("el=>el.paused&&Math.abs(el.currentTime-.75)<.1")
+    elif result == "empty":
+        with page.expect_response(
+            lambda response: (
+                response.request.method == "PUT"
+                and response.url.endswith("/video-progress")
+            )
+        ) as response:
+            pending.pop().fulfill(json={"progress": None})
+        assert response.value.ok
+        expect(
+            dialog.get_by_role("button", name="Keep playing from here", exact=True)
+        ).to_have_count(0)
+    else:
+        pending.pop().fulfill(status=503, json={"detail": "Synthetic read unavailable"})
+        expect(
+            dialog.get_by_text("your saved position is unchanged", exact=False)
+        ).to_be_visible()
+        assert _position(page, server, identity) == saved
+        with page.expect_request(
+            lambda request: (
+                request.method == "GET" and request.url.endswith("/video-progress")
+            )
+        ):
+            dialog.get_by_role(
+                "button", name="Retry saved position", exact=True
+            ).click()
+        deadline = time.monotonic() + 5
+        while not pending and time.monotonic() < deadline:
+            page.wait_for_timeout(10)
+        assert pending
+        pending.pop().fulfill(json={"progress": saved})
+        expect(
+            dialog.get_by_role("button", name="Keep playing from here", exact=True)
+        ).to_be_visible()
+        assert _position(page, server, identity) == saved
+
+
+def test_resumed_notice_waits_while_start_over_has_keyboard_focus(server, desktop):
+    _, page = desktop
+    _samples(page, server)
+    _seed_saved_position(page, server)
+    dialog, player, _ = _open_video(page)
+    _resumed_paused(page, player, 2.25)
+    player.evaluate("el=>el.play()")
+    start_over = dialog.get_by_role("button", name="Start over", exact=True)
+    expect(start_over).to_be_visible()
+    player.evaluate("el=>el.pause()")
+    start_over.focus()
+    page.clock.install()
+    page.clock.fast_forward(11000)
+    expect(start_over).to_be_focused()
+    start_over.press("Tab")
+    page.clock.fast_forward(11000)
+    expect(start_over).to_have_count(0)
+
+
+@pytest.mark.parametrize("layout", ["Grid view", "List view"])
+@pytest.mark.parametrize("theme", ["light", "dark"])
+@pytest.mark.parametrize("new_position", [90, 0])
+def test_thumbnail_position_uses_one_batch_and_keeps_newer_confirmed_event(
+    server, desktop, layout, new_position, theme
+):
+    _, page = desktop
+    held, media = [], []
+    page.route("**/api/v1/video-progress/summaries", lambda route: held.append(route))
+    page.on(
+        "request",
+        lambda request: media.append(request.url) if "/file?" in request.url else None,
+    )
+    login(page, server.url)
+    set_appearance(page, theme)
+    choose_view(page, layout)
+    with page.expect_request("**/api/v1/video-progress/summaries"):
+        page.get_by_role("button", name="Preview samples", exact=True).press("Enter")
+    file = page.get_by_role("button", name="multitrack.mkv", exact=True)
+    card = file.locator("xpath=ancestor::*[@data-item-id][1]")
+    identity = card.get_attribute("data-item-id")
+    assert identity
+    deadline = time.monotonic() + 5
+    while not held and time.monotonic() < deadline:
+        page.wait_for_timeout(10)
+    assert len(held) == 1
+    query = held[0].request.post_data_json
+    assert identity in query["file_ids"] and len(query["file_ids"]) <= 128
+    expect(card.locator(".file-playback-progress")).to_have_count(0)
+    height = card.bounding_box()["height"]
+    page.evaluate(
+        """({id,value})=>window.dispatchEvent(
+        new CustomEvent('tgdrive:video-position-changed',{
+      detail:{fileId:id,mode:'server',position:{position_seconds:value,duration_seconds:120,updated_at:100}}
+    }))""",
+        {"id": identity, "value": new_position},
+    )
+    meter = card.get_by_role(
+        "meter", name="Saved playback position for multitrack.mkv", exact=True
+    )
+    if new_position:
+        expect(meter).to_have_attribute("value", "90")
+        expect(meter).to_have_attribute("max", "120")
+        expect(meter).to_have_attribute("aria-valuetext", "1:30 of 2:00")
+    else:
+        expect(meter).to_have_count(0)
+    assert card.bounding_box()["height"] == pytest.approx(height)
+    with page.expect_response("**/api/v1/video-progress/summaries") as response:
+        held.pop().fulfill(
+            json={
+                "progress": {
+                    identity: {
+                        "position_seconds": 30,
+                        "duration_seconds": 120,
+                        "updated_at": 100,
+                    }
+                }
+            }
+        )
+    response.value.finished()
+    page.evaluate(
+        """() => new Promise(resolve =>
+          requestAnimationFrame(() => requestAnimationFrame(resolve)))"""
+    )
+    if new_position:
+        expect(meter).to_have_attribute("value", "90")
+        expect(card.locator(".file-playback-progress > span")).to_have_attribute(
+            "style", "width: 75%;"
+        )
+        contrast = card.locator(".file-playback-progress").evaluate("""rail => {
+          const luminance = color => {
+            const rgb = color.match(/[\\d.]+/g).slice(0,3).map(Number)
+              .map(value => value / 255)
+              .map(value => value <= .04045 ? value / 12.92
+                : ((value + .055) / 1.055) ** 2.4);
+            return rgb.reduce((sum,value,index) =>
+              sum + value * [.2126,.7152,.0722][index],0);
+          };
+          const style = getComputedStyle(rail);
+          const track = style.backgroundColor;
+          const fillStyle = getComputedStyle(rail.firstElementChild);
+          const fill = fillStyle.backgroundColor;
+          return {ratio:(luminance(fill)+.05)/(luminance(track)+.05),track,fill,
+                height:rail.getBoundingClientRect().height,
+                cssHeight:parseFloat(style.height),
+                left:parseFloat(style.left),right:parseFloat(style.right),
+                bottom:parseFloat(style.bottom),radius:parseFloat(style.borderRadius),
+                fillRadius:parseFloat(fillStyle.borderRadius),shadow:style.boxShadow,
+                overflow:style.overflow};
+        }""")
+        assert contrast["track"] == "rgb(24, 27, 34)"
+        assert contrast["fill"] == "rgb(122, 167, 255)"
+        assert contrast["ratio"] >= 7
+        inset = 4 if layout == "List view" else 8
+        assert contrast["left"] == inset
+        assert contrast["right"] == inset
+        assert contrast["bottom"] == (4 if layout == "List view" else 7)
+        assert contrast["radius"] >= 3
+        assert contrast["fillRadius"] >= 3
+        assert contrast["shadow"] == "none"
+        assert contrast["overflow"] == "hidden"
+        thickness = 4 if layout == "List view" else 5
+        assert contrast["cssHeight"] == thickness
+        assert contrast["height"] == pytest.approx(thickness, abs=0.15)
+        page.screenshot(
+            path=ARTIFACTS / f"thumbnail-position-{theme}-{layout.split()[0]}.png",
+            full_page=True,
+        )
+    else:
+        expect(meter).to_have_count(0)
+        expect(card.locator(".file-playback-progress")).to_have_count(0)
+    assert media == []
+
+
+def test_public_thumbnails_ignore_owner_cookie_and_owner_save_events(server, desktop):
+    _, page = desktop
+    login(page, server.url)
+    folder = page.get_by_role("button", name="Preview samples", exact=True)
+    folder_id = folder.locator("xpath=ancestor::*[@data-item-id][1]").get_attribute(
+        "data-item-id"
+    )
+    assert folder_id
+    folder.press("Enter")
+    identity, saved = _seed_saved_position(page, server)
+    response = page.request.post(
+        server.url + "/api/v1/shares", data={"path": "/" + folder_id}
+    )
+    assert response.ok
+    token = response.json()["auth"]
+    page.evaluate(
+        """({id,duration})=>{
+      localStorage.setItem('tgdrive.video.position.v2:share:'+id,'1');
+      localStorage.setItem('tgdrive.video.summaries.v1:share',JSON.stringify({
+        [id]:{position_seconds:1,duration_seconds:duration,updated_at:100}
+      }));
+    }""",
+        {"id": identity, "duration": saved["duration_seconds"]},
+    )
+    batches = []
+    page.on(
+        "request",
+        lambda request: (
+            batches.append(request.url)
+            if "/video-progress/summaries" in request.url
+            else None
+        ),
+    )
+    page.goto(server.url + "/?path=/share_" + folder_id + "&auth=" + token)
+    card = page.locator('[data-item-id="' + identity + '"]')
+    meter = card.get_by_role(
+        "meter", name="Saved playback position for multitrack.mkv", exact=True
+    )
+    expect(meter).to_have_attribute("value", "1")
+    page.evaluate(
+        """({id,duration})=>window.dispatchEvent(
+        new CustomEvent('tgdrive:video-position-changed',{
+      detail:{fileId:id,mode:'server',position:{position_seconds:2.25,duration_seconds:duration,updated_at:101}}
+    }))""",
+        {"id": identity, "duration": saved["duration_seconds"]},
+    )
+    expect(meter).to_have_attribute("value", "1")
+    assert batches == []

@@ -1374,18 +1374,24 @@ def test_activation_writer_rejects_unreadable_phase_before_replacing_the_record(
 
 @pytest.mark.parametrize("staged", [False, True])
 @pytest.mark.parametrize("interrupted", [False, True])
-def test_activation_keeps_video_position_but_invalidates_writer(
-    settings, staged, interrupted
+@pytest.mark.parametrize("kind", ["video", "pdf"])
+def test_activation_keeps_reading_position_but_invalidates_writer(
+    settings, staged, interrupted, kind
 ):
     backend = cast(Backend, for_settings(settings))
     identity = next(
         row["_id"] for row in backend.data["nodes"] if row["kind"] == "file"
     )
-    progress = {
-        "position_seconds": 20.0,
-        "duration_seconds": 200.0,
-        "updated_at": 1000.0,
-    }
+    progress = (
+        {
+            "position_seconds": 20.0,
+            "duration_seconds": 200.0,
+            "updated_at": 1000.0,
+        }
+        if kind == "video"
+        else {"page_number": 2, "page_count": 3, "updated_at": 1000.0}
+    )
+    field = kind + "_progress"
     old_writer = {
         "id": "a" * 32,
         "sequence": 1,
@@ -1395,7 +1401,7 @@ def test_activation_keeps_video_position_but_invalidates_writer(
     }
     backend.db.nodes.update_one(
         {"_id": identity},
-        {"$set": {"video_progress": progress, "video_progress_session": old_writer}},
+        {"$set": {field: progress, field + "_session": old_writer}},
     )
     if staged:
         value, _index = staged_candidate(settings)
@@ -1410,12 +1416,12 @@ def test_activation_keeps_video_position_but_invalidates_writer(
             _apply(pending)
         preserved = backend.db.nodes.find_one({"_id": identity})
         assert preserved is not None
-        assert preserved["video_progress"] == progress
-        assert preserved["video_progress_session"] == old_writer
+        assert preserved[field] == progress
+        assert preserved[field + "_session"] == old_writer
     assert _apply(pending)
     restored = backend.db.nodes.find_one({"_id": identity})
     assert restored is not None
     assert restored["message_id"] == 1123
-    assert restored["video_progress"] == progress
-    assert "video_progress_session" not in restored
-    assert "video_progress" not in json_util.dumps(installed(settings))
+    assert restored[field] == progress
+    assert field + "_session" not in restored
+    assert field not in json_util.dumps(installed(settings))

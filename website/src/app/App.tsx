@@ -2140,6 +2140,15 @@ export default function App() {
                             refreshing={listingRefreshAction.refreshing}
                             error={listingPending ? "" : loadError}
                             isPublic={isPublic}
+                            progressMode={
+                                isPublic
+                                    ? "share"
+                                    : configLoad !== "ready"
+                                      ? undefined
+                                      : demoReadOnly
+                                        ? "demo"
+                                        : "server"
+                            }
                             isTrash={view === "trash"}
                             isStarred={view === "starred"}
                             isRecent={isRecent}

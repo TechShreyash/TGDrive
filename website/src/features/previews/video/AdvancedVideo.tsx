@@ -30,6 +30,7 @@ import {
     saveVideoPosition,
     createVideoProgressWriter,
     loadServerVideoPosition,
+    savedVideoResumeTime,
     type VideoProgressMode,
 } from "./videoWatchProgress";
 import "./AdvancedVideo.css";
@@ -401,13 +402,35 @@ export default function AdvancedVideo({
     const [playbackError, setPlaybackError] = useState("");
     const [continueTime, setContinueTime] = useState<number | null>(null);
     const [progressNotice, setProgressNotice] = useState("");
+    const [progressAttempt, setProgressAttempt] = useState(0);
+    const [progressDecision, setProgressDecision] = useState<
+        "pending" | "ready" | "choice" | "failed"
+    >("pending");
+    const decision = useRef(progressDecision);
+    const decide = (value: typeof progressDecision) => {
+        decision.current = value;
+        setProgressDecision(value);
+    };
+    const manualPosition = useRef(false);
+    const knownPosition = useRef<number | null>(null);
+    const scopeNeedsChoice = useRef(false);
+    const previousProgressMode = useRef(progressMode);
+    const resumeAppliedPlayer = useRef<MoviElement | null>(null);
+    const resumedPosition = useRef<number | null>(null);
+    const [resumedTime, setResumedTime] = useState<number | null>(null);
+    const [resumeNoticeFocused, setResumeNoticeFocused] = useState(false);
+    const seekSavedPosition = useRef<
+        ((time: number, play: boolean) => Promise<boolean>) | null
+    >(null);
+    const flushProgress = useRef<(() => void) | null>(null);
+    const cancelSavedSeek = useRef<(() => void) | null>(null);
+    const progressGeneration = useRef(0);
     const progressWriter = useRef<ReturnType<
         typeof createVideoProgressWriter
     > | null>(null);
     const progressAccess = useRef(progressMode);
     progressAccess.current = progressMode;
     const progressActive = useRef(false);
-    const progressRead = useRef<AbortController | null>(null);
     const hasStartedWatching = useRef(false);
     const playbackHasStarted = useRef(false);
     const closingPosition = useRef<
@@ -415,6 +438,44 @@ export default function AdvancedVideo({
     >(null);
     const newProgressWriter = () =>
         createVideoProgressWriter(fileId, setProgressNotice);
+    const showResumedNotice = () => {
+        if (resumedPosition.current === null || decision.current !== "ready")
+            return;
+        setResumedTime(resumedPosition.current);
+        resumedPosition.current = null;
+    };
+    const acceptCurrentProgress = (manual = false, time?: number) => {
+        if (manual) manualPosition.current = true;
+        if (manual) knownPosition.current = null;
+        scopeNeedsChoice.current = false;
+        decide("ready");
+        setContinueTime(null);
+        setProgressNotice("");
+        if (
+            progressAccess.current === "server" &&
+            (playbackHasStarted.current || time !== undefined)
+        ) {
+            if (progressWriter.current?.closed)
+                progressWriter.current = newProgressWriter();
+            progressWriter.current?.start();
+            if (time !== undefined && activePlayer.current)
+                progressWriter.current?.save(
+                    time,
+                    activePlayer.current.duration,
+                );
+        }
+        if (time === undefined) flushProgress.current?.();
+        else if (
+            progressAccess.current === "share" ||
+            progressAccess.current === "demo"
+        )
+            saveVideoPosition(
+                fileId,
+                time,
+                progressAccess.current,
+                activePlayer.current?.duration,
+            );
+    };
     const finalizeProgress = () => {
         const writer = progressWriter.current;
         if (!writer) return;
@@ -426,44 +487,70 @@ export default function AdvancedVideo({
     useEffect(() => {
         hasStartedWatching.current = false;
         playbackHasStarted.current = false;
+        manualPosition.current = false;
+        scopeNeedsChoice.current = false;
+        previousProgressMode.current = progressMode;
+        knownPosition.current = null;
+        resumeAppliedPlayer.current = null;
+        resumedPosition.current = null;
+        setResumedTime(null);
     }, [fileId]);
     useEffect(() => {
         const controller = new AbortController();
-        progressRead.current = controller;
+        progressGeneration.current++;
         progressActive.current = true;
+        const changedScope = Boolean(
+            progressMode &&
+            progressMode !== "unavailable" &&
+            previousProgressMode.current &&
+            previousProgressMode.current !== "unavailable" &&
+            previousProgressMode.current !== progressMode,
+        );
+        if (progressMode && progressMode !== "unavailable")
+            previousProgressMode.current = progressMode;
+        if (changedScope) manualPosition.current = false;
+        scopeNeedsChoice.current ||= changedScope;
+        knownPosition.current = null;
+        decide("pending");
+        resumeAppliedPlayer.current = null;
         setContinueTime(null);
         progressWriter.current =
             progressMode === "server" ? newProgressWriter() : null;
         if (progressMode === "server") {
-            if (hasStartedWatching.current) {
-                if (playbackHasStarted.current) progressWriter.current?.start();
-                setProgressNotice("");
+            if (manualPosition.current) {
+                acceptCurrentProgress();
             } else {
                 setProgressNotice("Checking saved video position…");
                 void loadServerVideoPosition(fileId, controller.signal)
                     .then((saved) => {
-                        if (
-                            controller.signal.aborted ||
-                            hasStartedWatching.current
-                        )
+                        if (controller.signal.aborted || manualPosition.current)
                             return;
-                        setContinueTime(
-                            saved && saved.position_seconds > 0
-                                ? saved.position_seconds
-                                : null,
-                        );
+                        knownPosition.current = saved?.position_seconds ?? null;
+                        if (saved && saved.position_seconds > 0)
+                            setContinueTime(saved.position_seconds);
+                        else if (scopeNeedsChoice.current) decide("choice");
+                        else acceptCurrentProgress();
                         setProgressNotice("");
                     })
                     .catch(() => {
-                        if (!controller.signal.aborted)
+                        if (
+                            !controller.signal.aborted &&
+                            !manualPosition.current
+                        ) {
+                            decide("failed");
                             setProgressNotice(
-                                "Saved video progress is unavailable. Playback still works; reopen the video to check again.",
+                                "Saved video progress is unavailable. Playback still works; your saved position is unchanged.",
                             );
+                        }
                     });
             }
         } else if (progressMode === "share" || progressMode === "demo") {
-            if (!hasStartedWatching.current)
-                setContinueTime(readVideoPosition(fileId, progressMode));
+            const saved = readVideoPosition(fileId, progressMode);
+            knownPosition.current = saved;
+            if (!manualPosition.current && saved !== null)
+                setContinueTime(saved);
+            else if (scopeNeedsChoice.current) decide("choice");
+            else acceptCurrentProgress();
             setProgressNotice("");
         } else
             setProgressNotice(
@@ -474,9 +561,63 @@ export default function AdvancedVideo({
         return () => {
             progressActive.current = false;
             controller.abort();
+            cancelSavedSeek.current?.();
+            progressGeneration.current++;
+            if (progressMode === "share" || progressMode === "demo") {
+                const saved = closingPosition.current?.();
+                if (saved)
+                    saveVideoPosition(
+                        fileId,
+                        saved.time,
+                        progressMode,
+                        saved.duration,
+                    );
+            }
             finalizeProgress();
+            decision.current = "pending";
         };
-    }, [fileId, progressMode]);
+    }, [fileId, progressMode, progressAttempt]);
+    useEffect(() => {
+        if (resumedTime === null || resumeNoticeFocused) return;
+        const timer = setTimeout(() => setResumedTime(null), 10000);
+        return () => clearTimeout(timer);
+    }, [resumedTime, resumeNoticeFocused]);
+    useEffect(() => {
+        const player = activePlayer.current;
+        const saved =
+            continueTime ??
+            (!hasStartedWatching.current ? knownPosition.current : null);
+        if (
+            saved === null ||
+            !state.ready ||
+            !player ||
+            !(player.duration > 0) ||
+            manualPosition.current ||
+            resumeAppliedPlayer.current === player
+        )
+            return;
+        const target = savedVideoResumeTime(saved, player.duration);
+        if (target === 0) {
+            if (scopeNeedsChoice.current) decide("choice");
+            else acceptCurrentProgress();
+        } else if (hasStartedWatching.current) {
+            decide("choice");
+        } else {
+            resumeAppliedPlayer.current = player;
+            const generation = progressGeneration.current;
+            void seekSavedPosition.current?.(target, false).then((applied) => {
+                if (
+                    activePlayer.current !== player ||
+                    progressGeneration.current !== generation ||
+                    !applied ||
+                    manualPosition.current
+                )
+                    return;
+                resumedPosition.current = target;
+                acceptCurrentProgress();
+            });
+        }
+    }, [continueTime, state.ready, attempt]);
     const [transfer, setTransfer] = useState<VideoBufferSnapshot | null>(null);
     const waitingForVideo = useRef(true);
     waitingForVideo.current = state.phase !== "ready";
@@ -564,6 +705,10 @@ export default function AdvancedVideo({
             duration: number;
         } | null = null;
         let watchStarted = false;
+        let progressSeek = false;
+        let progressSeekTarget: number | null = null;
+        let userSeek = false;
+        let cancelProgressSeek: (() => void) | undefined;
         let representativePoster = false;
         let posterSource: string | null = null;
         const posterController = new AbortController();
@@ -672,6 +817,8 @@ export default function AdvancedVideo({
             if (
                 !watchStarted ||
                 !lastPlayback ||
+                decision.current !== "ready" ||
+                progressSeek ||
                 (resume && !resume.positionApplied)
             )
                 return;
@@ -682,7 +829,7 @@ export default function AdvancedVideo({
             if (access === "server")
                 progressWriter.current?.save(time, lastPlayback.duration);
             else if (access === "share" || access === "demo")
-                saveVideoPosition(fileId, time, access);
+                saveVideoPosition(fileId, time, access, lastPlayback.duration);
             lastSavedAt = now;
         };
         const startWatching = (played = false) => {
@@ -691,15 +838,29 @@ export default function AdvancedVideo({
             const firstWatch = !hasStartedWatching.current;
             hasStartedWatching.current = true;
             if (played) playbackHasStarted.current = true;
-            progressRead.current?.abort();
+            if (
+                played &&
+                manualPosition.current &&
+                decision.current === "pending" &&
+                !progressSeek &&
+                !player?.seeking
+            )
+                acceptCurrentProgress(true);
+            if (!played) {
+                resumedPosition.current = null;
+                setResumedTime(null);
+                acceptCurrentProgress(true);
+            }
             if (
                 firstWatch &&
+                decision.current === "ready" &&
                 progressAccess.current !== null &&
                 progressAccess.current !== "unavailable"
             )
                 setProgressNotice("");
             if (
                 progressAccess.current === "server" &&
+                decision.current === "ready" &&
                 playbackHasStarted.current
             ) {
                 if (progressWriter.current?.closed)
@@ -707,7 +868,7 @@ export default function AdvancedVideo({
                 progressWriter.current?.start();
             }
             finished = false;
-            setContinueTime(null);
+            if (decision.current === "ready") setContinueTime(null);
         };
         const rememberPlayback = () => {
             if (
@@ -730,8 +891,82 @@ export default function AdvancedVideo({
             rememberPlayback();
             savePosition(true);
         };
+        flushProgress.current = flushPosition;
+        const seekSaved = async (time: number, play: boolean) => {
+            const target = player;
+            const core = target?.player;
+            if (
+                !target ||
+                !core ||
+                cancelled ||
+                posterController.signal.aborted
+            )
+                return false;
+            cancelProgressSeek?.();
+            progressSeek = true;
+            progressSeekTarget = time;
+            if (!watchStarted) target.setAttribute("startat", String(time));
+            target.removeAttribute("postertime");
+            const applied = await new Promise<boolean>((resolve) => {
+                let done = false;
+                const finish = (success: boolean) => {
+                    if (done) return;
+                    done = true;
+                    core.off("seeked", complete);
+                    core.off("error", failSeek);
+                    posterController.signal.removeEventListener("abort", abort);
+                    if (cancelProgressSeek === abort) {
+                        cancelProgressSeek = undefined;
+                        progressSeek = false;
+                        progressSeekTarget = null;
+                    }
+                    if (cancelSavedSeek.current === abort)
+                        cancelSavedSeek.current = null;
+                    resolve(success);
+                };
+                const complete = () => {
+                    if (Math.abs(target.currentTime - time) < 0.05)
+                        finish(true);
+                };
+                const failSeek = () => {
+                    if (done) return;
+                    if (!cancelled) {
+                        manualPosition.current = false;
+                        resumeAppliedPlayer.current = null;
+                        decide("failed");
+                        setProgressNotice(
+                            "The saved position could not be reached. Seek to choose a position or try again.",
+                        );
+                    }
+                    finish(false);
+                };
+                const abort = () => finish(false);
+                cancelProgressSeek = abort;
+                cancelSavedSeek.current = abort;
+                core.on("seeked", complete);
+                core.on("error", failSeek);
+                posterController.signal.addEventListener("abort", abort, {
+                    once: true,
+                });
+                void core
+                    .seek(videoResumeTime(time, target.duration))
+                    .catch(failSeek);
+            });
+            if (!applied || cancelled || activePlayer.current !== target)
+                return false;
+            resumedPosition.current = time > 0 ? time : null;
+            if (time === 0) lastSavedAt = performance.now();
+            if (play) await target.play().catch(() => {});
+            return true;
+        };
+        seekSavedPosition.current = seekSaved;
         const snapshotClosingPosition = () => {
-            if (!watchStarted || (resume && !resume.positionApplied))
+            if (
+                !watchStarted ||
+                decision.current !== "ready" ||
+                progressSeek ||
+                (resume && !resume.positionApplied)
+            )
                 return null;
             if (
                 usable &&
@@ -1015,14 +1250,67 @@ export default function AdvancedVideo({
                 });
                 listen("waiting", () => waiting("waiting"));
                 listen("stalled", () => waiting("waiting"));
-                listen("seeking", () => {
+                listen("seeking", (event) => {
+                    const target = (event as CustomEvent<unknown>).detail;
+                    const valid =
+                        typeof target === "number" && Number.isFinite(target);
+                    const owned =
+                        valid &&
+                        ((progressSeekTarget !== null &&
+                            Math.abs(target - progressSeekTarget) < 0.05) ||
+                            (resume &&
+                                !resume.positionApplied &&
+                                Math.abs(target - resume.target) < 0.05) ||
+                            (!manualPosition.current &&
+                                resumeAppliedPlayer.current === player &&
+                                knownPosition.current !== null &&
+                                Math.abs(
+                                    target -
+                                        savedVideoResumeTime(
+                                            knownPosition.current,
+                                            player!.duration,
+                                        ),
+                                ) < 0.05));
+                    if (valid && (userSeek || !owned)) {
+                        cancelProgressSeek?.();
+                        manualPosition.current = true;
+                        knownPosition.current = null;
+                        resumedPosition.current = null;
+                        setResumedTime(null);
+                        player?.setAttribute("startat", String(target));
+                        if (resume && !resume.positionApplied) {
+                            resume.positionApplied = true;
+                            resume.playRequested = true;
+                            if (playback.current === resume.source)
+                                playback.current = null;
+                        }
+                    }
                     setSeekAttempt((value) => value + 1);
                     waiting("seeking");
                 });
                 listen("seeked", () => {
+                    const restoring =
+                        progressSeek ||
+                        (resume && !resume.positionApplied) ||
+                        (!manualPosition.current &&
+                            resumeAppliedPlayer.current === player &&
+                            knownPosition.current !== null &&
+                            Math.abs(
+                                player!.currentTime -
+                                    savedVideoResumeTime(
+                                        knownPosition.current,
+                                        player!.duration,
+                                    ),
+                            ) < 0.05);
                     observeResumePosition();
-                    if (usable && player && player.currentTime > 0)
+                    if (
+                        !restoring &&
+                        usable &&
+                        player &&
+                        (player.currentTime > 0 || watchStarted || userSeek)
+                    )
                         startWatching();
+                    userSeek = false;
                     rememberPlayback();
                     settle("seeked");
                     // A new position can be available before its audio/video refill is ready.
@@ -1050,6 +1338,7 @@ export default function AdvancedVideo({
                             latestProgressAt = performance.now();
                             clearWaiting();
                             dispatch("playing");
+                            showResumedNotice();
                         }
                         previousTime = player.currentTime;
                     }
@@ -1085,6 +1374,47 @@ export default function AdvancedVideo({
                 listen("errordisplay", fail);
                 dispatch("engine-loaded");
                 host.current.append(player);
+                const seekIntent = (event: Event) => {
+                    const path = event.composedPath();
+                    const timeline = path.some(
+                        (node) =>
+                            node instanceof Element &&
+                            node.matches(
+                                ".movi-progress-bar, [part~=progress-bar]",
+                            ),
+                    );
+                    const key =
+                        event instanceof KeyboardEvent &&
+                        [
+                            "ArrowLeft",
+                            "ArrowRight",
+                            "Home",
+                            "End",
+                            "j",
+                            "l",
+                        ].includes(event.key) &&
+                        !path.some(
+                            (node) =>
+                                node instanceof Element &&
+                                node.matches(
+                                    "input, textarea, select, [contenteditable], [role=menu]",
+                                ),
+                        );
+                    if (!timeline && !key) return;
+                    userSeek = true;
+                    manualPosition.current = true;
+                    resumedPosition.current = null;
+                    setResumedTime(null);
+                    cancelProgressSeek?.();
+                };
+                player.addEventListener("pointerdown", seekIntent, {
+                    capture: true,
+                    signal: posterController.signal,
+                });
+                player.addEventListener("keydown", seekIntent, {
+                    capture: true,
+                    signal: posterController.signal,
+                });
                 player.setHostFullscreen(
                     document.fullscreenElement === host.current.parentElement,
                 );
@@ -1115,6 +1445,7 @@ export default function AdvancedVideo({
                         latestProgressAt = performance.now();
                         clearWaiting();
                         dispatch("playing");
+                        showResumedNotice();
                     }
                     previousTime = mediaTime ?? Number.NaN;
                     frameCallback =
@@ -1137,6 +1468,10 @@ export default function AdvancedVideo({
             document.removeEventListener("visibilitychange", saveWhenHidden);
             window.removeEventListener("pagehide", closeProgress);
             flushPosition();
+            if (flushProgress.current === flushPosition)
+                flushProgress.current = null;
+            if (seekSavedPosition.current === seekSaved)
+                seekSavedPosition.current = null;
             if (closingPosition.current === snapshotClosingPosition)
                 closingPosition.current = null;
             detachPresentation?.();
@@ -1281,38 +1616,99 @@ export default function AdvancedVideo({
             </div>
         ) : null;
     const continueButton =
-        continueTime !== null &&
-        state.ready &&
-        !playbackError &&
-        continueTime < (activePlayer.current?.duration ?? 0) ? (
+        progressDecision === "choice" && state.ready && !playbackError ? (
             <div className="advanced-state-actions advanced-continue">
+                {continueTime !== null &&
+                    savedVideoResumeTime(
+                        continueTime,
+                        activePlayer.current?.duration ?? 0,
+                    ) > 0 && (
+                        <button
+                            type="button"
+                            onClick={() => {
+                                const player = activePlayer.current;
+                                if (!player) return;
+                                player.focus({ preventScroll: true });
+                                const target = savedVideoResumeTime(
+                                    continueTime,
+                                    player.duration,
+                                );
+                                manualPosition.current = true;
+                                resumeAppliedPlayer.current = player;
+                                decide("pending");
+                                setContinueTime(null);
+                                const generation = progressGeneration.current;
+                                void seekSavedPosition
+                                    .current?.(target, true)
+                                    .then((applied) => {
+                                        if (
+                                            applied &&
+                                            progressGeneration.current ===
+                                                generation &&
+                                            activePlayer.current === player
+                                        )
+                                            acceptCurrentProgress(true);
+                                    });
+                            }}
+                        >
+                            <Play size={16} aria-hidden="true" /> Continue from{" "}
+                            {formatVideoTime(
+                                savedVideoResumeTime(
+                                    continueTime,
+                                    activePlayer.current?.duration ?? 0,
+                                ),
+                            )}
+                        </button>
+                    )}
+                <button
+                    type="button"
+                    onClick={() => {
+                        activePlayer.current?.focus({ preventScroll: true });
+                        acceptCurrentProgress(true);
+                    }}
+                >
+                    Keep playing from here
+                </button>
+            </div>
+        ) : null;
+    const resumedNotice =
+        resumedTime !== null && !playbackError ? (
+            <div
+                className="advanced-state-actions advanced-continue advanced-resumed"
+                role="status"
+                onFocusCapture={() => setResumeNoticeFocused(true)}
+                onBlurCapture={(event) => {
+                    if (!event.currentTarget.contains(event.relatedTarget))
+                        setResumeNoticeFocused(false);
+                }}
+            >
+                <span>Resumed at {formatVideoTime(resumedTime)}</span>
                 <button
                     type="button"
                     onClick={() => {
                         const player = activePlayer.current;
-                        const core = player?.player;
-                        if (!player || !core) return;
-                        setContinueTime(null);
+                        if (!player) return;
                         player.focus({ preventScroll: true });
-                        // Fresh paused loads need a settled seek before first play.
-                        const onSeeked = () => {
-                            if (activePlayer.current === player)
-                                void player.play().catch(() => {});
-                        };
-                        core.once("seeked", onSeeked);
-                        void core
-                            .seek(
-                                videoResumeTime(continueTime, player.duration),
-                            )
-                            .catch(() => {
-                                core.off("seeked", onSeeked);
-                                if (activePlayer.current === player)
-                                    setContinueTime(continueTime);
+                        const playing = !player.paused;
+                        manualPosition.current = true;
+                        decide("pending");
+                        setResumedTime(null);
+                        const generation = progressGeneration.current;
+                        void seekSavedPosition
+                            .current?.(0, false)
+                            .then((applied) => {
+                                if (
+                                    !applied ||
+                                    progressGeneration.current !== generation ||
+                                    activePlayer.current !== player
+                                )
+                                    return;
+                                acceptCurrentProgress(true, 0);
+                                if (playing) void player.play().catch(() => {});
                             });
                     }}
                 >
-                    <Play size={16} aria-hidden="true" /> Continue from{" "}
-                    {formatVideoTime(continueTime)}
+                    Start over
                 </button>
             </div>
         ) : null;
@@ -1320,9 +1716,26 @@ export default function AdvancedVideo({
         <>
             {loadingStatus}
             {continueButton}
+            {resumedNotice}
             {progressNotice && (
                 <p className="advanced-progress-notice" role="status">
                     {progressNotice}
+                    {progressDecision === "failed" &&
+                        progressMode !== null &&
+                        progressMode !== "unavailable" && (
+                            <button
+                                type="button"
+                                className="text-button"
+                                onClick={() => {
+                                    activePlayer.current?.focus({
+                                        preventScroll: true,
+                                    });
+                                    setProgressAttempt((value) => value + 1);
+                                }}
+                            >
+                                Retry saved position
+                            </button>
+                        )}
                 </p>
             )}
         </>

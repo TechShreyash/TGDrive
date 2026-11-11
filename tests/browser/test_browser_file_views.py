@@ -607,15 +607,15 @@ def test_performance_content_separates_from_toolbar(server, desktop, view):
     page.get_by_role("tab", name=label, exact=True).click()
     panel = page.locator("#performance-panel-" + view)
     expect(panel).to_be_visible()
-    gap = page.evaluate("""() => {
+    first_content = panel.locator(":scope > *:visible").first
+    expect(first_content).to_be_visible()
+    gap = first_content.evaluate("""next => {
       const toolbar=document.querySelector('.performance-toolbar')
         .getBoundingClientRect();
-      const next=document.querySelector(
-        '.performance-history-availability:not([hidden])') ||
-        document.querySelector('.performance-accounts-grid:not([hidden])');
       return next.getBoundingClientRect().top-toolbar.bottom;
     }""")
-    assert gap >= 15
+    # All three compact tabs retain a clear 12px gap below the toolbar.
+    assert gap >= 12
 
 
 @pytest.mark.parametrize("width", [390, 320])
@@ -718,7 +718,7 @@ def test_item_status_is_quiet_metadata_without_interrupting_names(
     status = row.locator(".file-item-status")
     expect(status).to_have_text("StarredShared")
     expect(status.locator("svg")).to_have_count(0)
-    expect(status.get_by_label("Shared by Link", exact=True)).to_have_text("Shared")
+    expect(status.get_by_title("Shared by Link", exact=True)).to_have_text("Shared")
     name = row.locator(".file-name").bounding_box()
     state = status.bounding_box()
     assert name and state

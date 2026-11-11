@@ -157,3 +157,44 @@ def test_zero_and_bson_integer_sequences_are_readable(video):
     )
     assert result["position_seconds"] == 0
     validate_video_state(store.db.nodes.find_one({"_id": identity}))
+
+
+def test_video_summaries_use_one_snapshot_batch_and_follow_visibility(
+    video, monkeypatch
+):
+    store, identity, _clock = video
+    writer = store.begin_video_progress(identity)["session_id"]
+    saved = store.save_video_progress(identity, writer, 1, 20, 200)
+    text = store.add_file("/", "source.txt", 8, 3)["id"]
+    text_writer = store.begin_video_progress(text)["session_id"]
+    store.save_video_progress(text, text_writer, 1, 20, 200)
+    folder = store.create_folder("/", "Moved")
+    store.move("/" + identity, "/" + folder["id"])
+    calls = []
+    find, aggregate = store._find, store.db.nodes.aggregate
+
+    def observed_find(collection, query, projection=None):
+        assert store._session is not None
+        calls.append((collection, query, projection))
+        return find(collection, query, projection)
+
+    def observed_ancestors(*args, **kwargs):
+        assert kwargs["session"] is store._session is not None
+        calls.append("ancestors")
+        return aggregate(*args, **kwargs)
+
+    monkeypatch.setattr(store, "_find", observed_find)
+    monkeypatch.setattr(store.db.nodes, "aggregate", observed_ancestors)
+    assert store.video_progress_summaries([]) == {} and calls == []
+    assert store.video_progress_summaries(
+        [identity, identity, text, folder["id"], "missing"]
+    ) == {identity: saved}
+    assert len(calls) == 2 and calls[-1] == "ancestors"
+    assert calls[0][0] == "nodes"
+    assert set(calls[0][2]) == {"_id", "name", "kind", "video_progress"}
+    monkeypatch.setattr(store, "_find", find)
+    monkeypatch.setattr(store.db.nodes, "aggregate", aggregate)
+    store.set_trashed("/" + folder["id"], True)
+    assert store.video_progress_summaries([identity]) == {}
+    with pytest.raises(ValidationError):
+        store.video_progress_summaries([identity] * 129)

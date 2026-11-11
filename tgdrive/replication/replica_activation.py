@@ -794,21 +794,27 @@ def _mongo_nodes(catalog):
 def _inline_nodes(catalog, database):
     # Legacy inline candidates are admission-bounded; keep catalog ID rebasing.
     positions = {
-        row["_id"]: row["video_progress"]
+        row["_id"]: {
+            field: row[field]
+            for field in ("video_progress", "pdf_progress")
+            if field in row
+        }
         for row in (database or {}).get("nodes", [])
-        if "video_progress" in row
+        if "video_progress" in row or "pdf_progress" in row
     }
     for node in _mongo_nodes(catalog):
         if node["_id"] in positions:
-            node["video_progress"] = positions[node["_id"]]
+            node.update(positions[node["_id"]])
         yield node
 
 
 def _database_nodes(rows):
+    from tgdrive.storage.pdf_progress import validate_pdf_state
     from tgdrive.storage.video_progress import validate_video_state
 
     for row in rows:
         validate_video_state(row)
+        validate_pdf_state(row)
         # Rebuild derived indexes; saved writer sessions never survive activation.
         values = {key: row[key] for key in ("upload_date", "trashed")}
         if row.get("starred"):
@@ -818,8 +824,9 @@ def _database_nodes(rows):
             for key in ("parts", "sha256"):
                 if row.get(key):
                     values[key] = row[key]
-            if "video_progress" in row:
-                values["video_progress"] = row["video_progress"]
+            for field in ("video_progress", "pdf_progress"):
+                if field in row:
+                    values[field] = row[field]
             if row.get("poster") is not None:
                 values["poster"] = row["poster"]
         values["part_count"] = len(values.get("parts") or [None])

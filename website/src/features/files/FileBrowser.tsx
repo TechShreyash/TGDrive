@@ -52,6 +52,14 @@ import { shareExpired } from "../shares/SharesView";
 import { FileIcon, Spinner, fileKind } from "../../shared/components";
 import SortMenu, { type FileSort } from "./SortMenu";
 import FileThumbnail from "./FileThumbnail";
+import {
+    loadServerVideoPositions,
+    readLocalVideoPositions,
+    videoPositionChange,
+    VIDEO_POSITION_CHANGED,
+    type VideoPosition,
+    type VideoProgressMode,
+} from "../previews/video/videoWatchProgress";
 import { thumbnailCandidate } from "./thumbnails";
 import "./FileBrowser.css";
 import { isExtractableArchive } from "./archiveApi";
@@ -144,6 +152,7 @@ export default function FileBrowser({
     refreshing = false,
     error,
     isPublic,
+    progressMode,
     isTrash,
     isStarred = false,
     isRecent = false,
@@ -174,6 +183,7 @@ export default function FileBrowser({
     refreshing?: boolean;
     error: string;
     isPublic: boolean;
+    progressMode?: VideoProgressMode;
     isTrash: boolean;
     isStarred?: boolean;
     isRecent?: boolean;
@@ -505,6 +515,89 @@ export default function FileBrowser({
                 .slice(0, 8),
         [allItems],
     );
+    const showRecent =
+        layout === "grid" &&
+        filter === "all" &&
+        page === 0 &&
+        !isSearch &&
+        !isTrash &&
+        !isStarred &&
+        !isRecent &&
+        !isPublic &&
+        (!paging || paging.complete) &&
+        recentItems.length >= 4 &&
+        allItems.length >= 12 &&
+        recentItems.some(
+            (item, index) =>
+                item.id !==
+                allItems.filter((entry) => entry.type === "file")[index]?.id,
+        );
+    const videoIds =
+        loading || error || isTrash
+            ? []
+            : [
+                  ...new Set(
+                      [...visibleItems, ...(showRecent ? recentItems : [])]
+                          .filter(
+                              (item) =>
+                                  item.type === "file" &&
+                                  fileKind(item.name) === "video",
+                          )
+                          .map((item) => item.id),
+                  ),
+              ];
+    const videoMode = isPublic ? "share" : progressMode;
+    const videoKey = JSON.stringify([listingKey, videoMode, videoIds]);
+    const [videoProgress, setVideoProgress] = useState<{
+        key: string;
+        values: Map<string, VideoPosition>;
+    }>({ key: "", values: new Map() });
+    const visibleVideoProgress =
+        videoProgress.key === videoKey ? videoProgress.values : undefined;
+    useEffect(() => {
+        if (!videoMode || videoMode === "unavailable" || !videoIds.length)
+            return;
+        const controller = new AbortController();
+        const ids = new Set(videoIds);
+        const changed = new Set<string>();
+        const rows = new Map(
+            videoProgress.key === videoKey ? videoProgress.values : [],
+        );
+        const publish = () =>
+            setVideoProgress({ key: videoKey, values: new Map(rows) });
+        const saved = (event: Event) => {
+            const value = videoPositionChange(event);
+            if (
+                controller.signal.aborted ||
+                !value ||
+                value.mode !== videoMode ||
+                !ids.has(value.fileId)
+            )
+                return;
+            changed.add(value.fileId);
+            rows.set(value.fileId, value.position);
+            publish();
+        };
+        window.addEventListener(VIDEO_POSITION_CHANGED, saved);
+        const merge = (snapshot: Record<string, VideoPosition>) => {
+            if (controller.signal.aborted) return;
+            for (const id of ids) {
+                if (changed.has(id)) continue;
+                if (Object.hasOwn(snapshot, id)) rows.set(id, snapshot[id]);
+                else rows.delete(id);
+            }
+            publish();
+        };
+        if (videoMode === "server")
+            void loadServerVideoPositions(videoIds, controller.signal)
+                .then(merge)
+                .catch(() => {});
+        else merge(readLocalVideoPositions(videoIds, videoMode));
+        return () => {
+            controller.abort();
+            window.removeEventListener(VIDEO_POSITION_CHANGED, saved);
+        };
+    }, [videoKey, shareRefreshKey]);
     const closeItemMenus = () => {
         const trigger = document.activeElement
             ?.closest(".item-actions")
@@ -1011,74 +1104,54 @@ export default function FileBrowser({
                     </div>
                 ) : (
                     <>
-                        {layout === "grid" &&
-                            filter === "all" &&
-                            page === 0 &&
-                            !isSearch &&
-                            !isTrash &&
-                            !isStarred &&
-                            !isRecent &&
-                            !isPublic &&
-                            (!paging || paging.complete) &&
-                            recentItems.length >= 4 &&
-                            allItems.length >= 12 &&
-                            recentItems.some(
-                                (item, index) =>
-                                    item.id !==
-                                    allItems.filter(
-                                        (entry) => entry.type === "file",
-                                    )[index]?.id,
-                            ) && (
-                                <section
-                                    className="recent-files"
-                                    aria-labelledby="recent-files-title"
-                                >
-                                    <h2 id="recent-files-title">
-                                        Recently added
-                                    </h2>
-                                    <ul>
-                                        {recentItems.map((item, index) => (
-                                            <li
-                                                key={item.id}
-                                                style={
-                                                    {
-                                                        "--i": index,
-                                                    } as CSSProperties
-                                                }
+                        {showRecent && (
+                            <section
+                                className="recent-files"
+                                aria-labelledby="recent-files-title"
+                            >
+                                <h2 id="recent-files-title">Recently added</h2>
+                                <ul>
+                                    {recentItems.map((item, index) => (
+                                        <li
+                                            key={item.id}
+                                            style={
+                                                {
+                                                    "--i": index,
+                                                } as CSSProperties
+                                            }
+                                        >
+                                            <button
+                                                type="button"
+                                                className="recent-file"
+                                                aria-label={"Open " + item.name}
+                                                onClick={() => onOpen(item)}
                                             >
-                                                <button
-                                                    type="button"
-                                                    className="recent-file"
-                                                    aria-label={
-                                                        "Open " + item.name
-                                                    }
-                                                    onClick={() => onOpen(item)}
-                                                >
-                                                    <FileThumbnail
-                                                        item={item}
-                                                        auth={auth}
+                                                <FileThumbnail
+                                                    item={item}
+                                                    progress={visibleVideoProgress?.get(
+                                                        item.id,
+                                                    )}
+                                                    auth={auth}
+                                                />
+                                                <span className="recent-file-name">
+                                                    <FileIcon
+                                                        name={item.name}
                                                     />
-                                                    <span className="recent-file-name">
-                                                        <FileIcon
-                                                            name={item.name}
-                                                        />
-                                                        <span>{item.name}</span>
-                                                    </span>
-                                                    <span className="recent-file-meta">
-                                                        {formatBytes(
-                                                            item.size,
-                                                        ) +
-                                                            " · " +
-                                                            formatShortDate(
-                                                                item.upload_date,
-                                                            )}
-                                                    </span>
-                                                </button>
-                                            </li>
-                                        ))}
-                                    </ul>
-                                </section>
-                            )}
+                                                    <span>{item.name}</span>
+                                                </span>
+                                                <span className="recent-file-meta">
+                                                    {formatBytes(item.size) +
+                                                        " · " +
+                                                        formatShortDate(
+                                                            item.upload_date,
+                                                        )}
+                                                </span>
+                                            </button>
+                                        </li>
+                                    ))}
+                                </ul>
+                            </section>
+                        )}
                         <div className="file-table-wrap">
                             <Collection
                                 className={
@@ -1327,6 +1400,9 @@ export default function FileBrowser({
                                                 {layout === "grid" && (
                                                     <FileThumbnail
                                                         item={item}
+                                                        progress={visibleVideoProgress?.get(
+                                                            item.id,
+                                                        )}
                                                         auth={auth}
                                                         disabled={isTrash}
                                                     />
@@ -1360,6 +1436,9 @@ export default function FileBrowser({
                                                     thumbnailCandidate(item) ? (
                                                         <FileThumbnail
                                                             item={item}
+                                                            progress={visibleVideoProgress?.get(
+                                                                item.id,
+                                                            )}
                                                             auth={auth}
                                                             disabled={isTrash}
                                                             compact

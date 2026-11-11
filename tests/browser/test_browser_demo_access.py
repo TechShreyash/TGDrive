@@ -62,6 +62,16 @@ def test_demo_passwords_switch_permissions_and_preserve_readable_samples(
     assert config["demo_mode"] and config["demo_read_only"]
     assert not config["demo_admin"]
 
+    navigate(page, "Cache settings")
+    expect(page.get_by_label("Media disk cache mode", exact=True)).to_be_disabled()
+    expect(page.get_by_label("Media memory cache mode", exact=True)).to_be_disabled()
+    page.get_by_text("Advanced storage protection", exact=True).click()
+    expect(page.get_by_label("Keep disk space free mode", exact=True)).to_be_disabled()
+    navigate(page, "Transfer limits")
+    expect(
+        page.get_by_label("Temporary upload storage mode", exact=True)
+    ).to_be_disabled()
+
     navigate(page, "My Files")
     demo_row = page.locator(".file-row").filter(
         has=page.get_by_role("button", name="Demo Files", exact=True)
@@ -109,6 +119,9 @@ def test_demo_passwords_switch_permissions_and_preserve_readable_samples(
         page.get_by_role("button", name="Save Performance Settings", exact=True).click()
     assert saved.value.ok
     expect(timezone).to_have_value("UTC")
+    navigate(page, "Cache settings")
+    expect(page.get_by_label("Media disk cache mode", exact=True)).to_be_enabled()
+    expect(page.get_by_label("Media memory cache mode", exact=True)).to_be_enabled()
 
     navigate(page, "My Files")
     page.get_by_role("button", name="Demo Files", exact=True).press("Enter")

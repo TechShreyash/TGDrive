@@ -11,6 +11,12 @@
     border: 1px solid var(--line);
     border-radius: 10px;
 }
+.pdf-progress-notice {
+    max-width: 36ch;
+    color: var(--muted);
+    font-size: 12px;
+    line-height: 1.4;
+}
 .pdf-password h2 {
     margin: 0 0 8px;
     font-size: 18px;

@@ -40,6 +40,15 @@ import { ErrorNotice, Spinner } from "../../../shared/components";
 import { errorMessage } from "../../../shared/api";
 import PageJump from "../PageJump";
 import { useMediaQuery } from "@mantine/hooks";
+import type { VideoProgressMode } from "../video/videoWatchProgress";
+import {
+    createPdfProgressWriter,
+    loadServerPdfPosition,
+    pdfResumePage,
+    readLocalPdfPosition,
+    saveLocalPdfPosition,
+    type PdfPosition,
+} from "./pdfProgress";
 import "./PdfPreview.css";
 
 GlobalWorkerOptions.workerSrc = workerUrl;
@@ -322,11 +331,15 @@ function PdfPage({
 }
 
 export default function PdfPreview({
+    fileId,
+    progressMode,
     url,
     name,
     size,
     toolbarTarget,
 }: {
+    fileId: string;
+    progressMode: VideoProgressMode | null;
     url: string;
     name: string;
     size: number;
@@ -353,12 +366,123 @@ export default function PdfPreview({
             window.document.removeEventListener("pointerdown", dismiss);
     }, [toolsOpen]);
     const [document, setDocument] = useState<PDFDocumentProxy | null>(null);
+    const documentRef = useRef(document);
+    documentRef.current = document;
     const [sizes, setSizes] = useState<Map<number, PageSize>>(new Map());
     const [busy, setBusy] = useState(true);
     const [received, setReceived] = useState(0);
     const [firstPaint, setFirstPaint] = useState(false);
     const onReady = useCallback(() => setFirstPaint(true), []);
     const [error, setError] = useState("");
+    const [savedPage, setSavedPage] = useState<PdfPosition | null>(null);
+    const [progressReady, setProgressReady] = useState(false);
+    const [progressNotice, setProgressNotice] = useState("");
+    const progressRead = useRef<AbortController | null>(null);
+    const progressWriter = useRef<ReturnType<
+        typeof createPdfProgressWriter
+    > | null>(null);
+    const previousProgressMode = useRef(progressMode);
+    const navigated = useRef(false);
+    const restored = useRef(false);
+    const lastSaved = useRef("");
+    const currentPage = useRef(1);
+    const closeProgress = useRef<(() => void) | null>(null);
+    // Capture scroll before ref detachment, including a pending animation frame.
+    useLayoutEffect(() => () => closeProgress.current?.(), [fileId, url, size]);
+    useEffect(() => {
+        const controller = new AbortController();
+        progressRead.current = controller;
+        const previous = previousProgressMode.current;
+        previousProgressMode.current = progressMode;
+        if (
+            progressMode === "server" &&
+            (previous === "share" || previous === "demo")
+        )
+            navigated.current = false;
+        restored.current = false;
+        lastSaved.current = "";
+        setSavedPage(null);
+        setProgressReady(false);
+        setProgressNotice("");
+        const writer =
+            progressMode === "server"
+                ? createPdfProgressWriter(fileId, setProgressNotice)
+                : null;
+        progressWriter.current = writer;
+        if (progressMode === "server" && navigated.current) {
+            setProgressReady(true);
+        } else if (progressMode === "server") {
+            void loadServerPdfPosition(fileId, controller.signal)
+                .then((saved) => {
+                    if (controller.signal.aborted) return;
+                    setSavedPage(saved);
+                    setProgressReady(true);
+                })
+                .catch(() => {
+                    if (controller.signal.aborted) return;
+                    setProgressReady(true);
+                    setProgressNotice(
+                        "Saved PDF page is unavailable. Reading still works; navigate to choose a new saved page.",
+                    );
+                });
+        } else if (progressMode === "share" || progressMode === "demo") {
+            try {
+                setSavedPage(readLocalPdfPosition(fileId, progressMode));
+            } catch {
+                setProgressNotice(
+                    "Browser storage is unavailable. Your PDF page cannot be saved on this device.",
+                );
+            }
+            setProgressReady(true);
+        } else if (progressMode === "unavailable") {
+            setProgressReady(true);
+            setProgressNotice(
+                "PDF resume access could not be checked. Reading still works; reopen the PDF to check again.",
+            );
+        }
+        const close = () => {
+            const currentWriter = progressWriter.current;
+            const count = documentRef.current?.numPages;
+            const pages = layoutRef.current.pages;
+            if (
+                navigated.current &&
+                restored.current &&
+                count &&
+                pages.length === count
+            ) {
+                const page = scroll.current
+                    ? pageAt(pages, scroll.current.scrollTop + 24) + 1
+                    : currentPage.current;
+                currentPage.current = page;
+                if (currentWriter) {
+                    currentWriter.start();
+                    currentWriter.save(page, count);
+                } else if (
+                    progressMode === "share" ||
+                    progressMode === "demo"
+                ) {
+                    try {
+                        saveLocalPdfPosition(fileId, progressMode, page, count);
+                    } catch {
+                        // Closing must still release PDF.js when storage is blocked.
+                    }
+                }
+            }
+            currentWriter?.close();
+        };
+        closeProgress.current = close;
+        window.addEventListener("pagehide", close);
+        return () => {
+            controller.abort();
+            close();
+            window.removeEventListener("pagehide", close);
+        };
+    }, [fileId, progressMode, url, size]);
+    const choosePosition = () => {
+        navigated.current = true;
+        progressRead.current?.abort();
+        setProgressReady(true);
+    };
     const [zoom, setZoom] = useState<number | null>(null);
     const [passwordChallenge, setPasswordChallenge] = useState<{
         reason: "required" | "incorrect";
@@ -456,6 +580,8 @@ export default function PdfPreview({
                 .catch(() => {});
         };
         setBusy(true);
+        navigated.current = false;
+        restored.current = false;
         setFirstPaint(false);
         setReceived(0);
         setError("");
@@ -609,6 +735,80 @@ export default function PdfPreview({
     const current = layout.pages.length
         ? pageAt(layout.pages, view.top + 24)
         : 0;
+    currentPage.current = current + 1;
+    useLayoutEffect(() => {
+        if (
+            !document ||
+            !progressReady ||
+            restored.current ||
+            !layout.pages.length ||
+            view.width <= 0 ||
+            view.height <= 0 ||
+            view.width !== scroll.current?.clientWidth ||
+            view.height !== scroll.current?.clientHeight
+        )
+            return;
+        restored.current = true;
+        if (navigated.current || !savedPage) return;
+        const page = pdfResumePage(savedPage, document.numPages);
+        if (page === null) {
+            setProgressNotice(
+                "The saved page belongs to a different PDF page count. Reading starts at page 1.",
+            );
+            return;
+        }
+        scroll.current?.scrollTo({ top: layout.pages[page - 1].top });
+        syncView();
+    }, [
+        document,
+        progressReady,
+        savedPage,
+        layout,
+        syncView,
+        view.width,
+        view.height,
+    ]);
+    useEffect(() => {
+        if (
+            !document ||
+            !firstPaint ||
+            !progressReady ||
+            !restored.current ||
+            !navigated.current
+        )
+            return;
+        const page = current + 1;
+        const key = page + ":" + document.numPages;
+        if (lastSaved.current === key) return;
+        lastSaved.current = key;
+        if (progressMode === "server") {
+            if (progressWriter.current?.closed)
+                progressWriter.current = createPdfProgressWriter(
+                    fileId,
+                    setProgressNotice,
+                );
+            progressWriter.current?.start();
+            progressWriter.current?.save(page, document.numPages);
+        } else if (progressMode === "share" || progressMode === "demo") {
+            // Coalesce scrolling; close/pagehide still flush the actual final page.
+            const timer = setTimeout(() => {
+                try {
+                    saveLocalPdfPosition(
+                        fileId,
+                        progressMode,
+                        page,
+                        document.numPages,
+                    );
+                    setProgressNotice("");
+                } catch {
+                    setProgressNotice(
+                        "Browser storage is unavailable. Your PDF page cannot be saved on this device.",
+                    );
+                }
+            }, 500);
+            return () => clearTimeout(timer);
+        }
+    }, [current, document, firstPaint, progressReady, progressMode, fileId]);
     const currentSize = sizes.get(current + 1) ?? firstSize;
     const scale =
         zoom ??
@@ -683,6 +883,7 @@ export default function PdfPreview({
         setZoom(normalized);
     }
     function goToPage(page: number) {
+        choosePosition();
         scroll.current?.scrollTo({ top: layout.pages[page - 1]?.top ?? 0 });
         syncView();
     }
@@ -765,6 +966,11 @@ export default function PdfPreview({
                                 <ChevronRight size={20} />
                             </button>
                         </div>
+                        {progressNotice && (
+                            <span className="pdf-progress-notice" role="status">
+                                {progressNotice}
+                            </span>
+                        )}
                         {compact && (
                             <button
                                 ref={toolsToggle}
@@ -958,6 +1164,23 @@ export default function PdfPreview({
                 role="region"
                 aria-label={name + " PDF pages"}
                 hidden={busy || !!error}
+                onPointerDown={choosePosition}
+                onWheel={choosePosition}
+                onTouchStart={choosePosition}
+                onKeyDown={(event) => {
+                    if (
+                        [
+                            "ArrowUp",
+                            "ArrowDown",
+                            "PageUp",
+                            "PageDown",
+                            "Home",
+                            "End",
+                            " ",
+                        ].includes(event.key)
+                    )
+                        choosePosition();
+                }}
                 onScroll={() => {
                     cancelAnimationFrame(animation.current);
                     animation.current = requestAnimationFrame(syncView);
