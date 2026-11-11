@@ -912,12 +912,12 @@
     );
 }
 .file-grid .file-tile-preview[data-kind="folder"] .file-icon {
-    width: 72px;
-    height: 72px;
+    width: 48px;
+    height: 48px;
 }
 .file-grid .file-tile-preview[data-kind="folder"] .file-icon svg {
-    width: 60px;
-    height: 60px;
+    width: 40px;
+    height: 40px;
     stroke-width: 1.4;
     fill: color-mix(in srgb, var(--kind, var(--kind-folder)) 22%, transparent);
 }
@@ -1380,7 +1380,7 @@
     animation: none;
 }
 .file-skeleton[data-layout="grid"] {
-    grid-template-columns: repeat(auto-fill, minmax(244px, 1fr));
+    grid-template-columns: repeat(auto-fill, 200px);
 }
 .file-skeleton[data-layout="list"] {
     display: flex !important;
@@ -1573,18 +1573,18 @@
     }
 }
 
-/* Give long filenames room without stretching a small folder across the page. */
+/* Bound desktop cards so wide or sparse folders keep a compact footprint. */
 .file-grid > ul,
 .file-skeleton[data-layout="grid"] {
-    grid-template-columns: repeat(auto-fill, minmax(244px, 1fr));
-    gap: 16px;
+    grid-template-columns: repeat(auto-fill, 200px);
+    gap: 12px;
 }
 .file-grid .file-tile-preview {
     height: auto;
     aspect-ratio: 16 / 10;
 }
 .file-grid .file-tile-preview[data-kind="folder"] {
-    aspect-ratio: 16 / 10;
+    aspect-ratio: 2 / 1;
 }
 .skeleton-block {
     height: auto;

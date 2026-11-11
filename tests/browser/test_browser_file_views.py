@@ -11,7 +11,7 @@ if os.environ.get("TGDRIVE_E2E") != "1":
     pytest.skip("Set TGDRIVE_E2E=1 for Chromium checks", allow_module_level=True)
 
 import tests.browser.test_browser_e2e as fixtures
-from tests.browser.node_pages import NODES
+from tests.browser.node_pages import NODES, fetch_with_rows
 from tests.browser.test_browser_e2e import ARTIFACTS, expect, login
 
 browser = fixtures.browser
@@ -136,7 +136,17 @@ def test_grid_views_preserve_selection_actions_and_bounded_thumbnails(
 
 
 @pytest.mark.parametrize(
-    "width,theme", [(1440, "light"), (1440, "dark"), (390, "light"), (320, "dark")]
+    "width,theme",
+    [
+        (1440, "light"),
+        (1440, "dark"),
+        (1536, "light"),
+        (1536, "dark"),
+        (1920, "light"),
+        (1920, "dark"),
+        (390, "light"),
+        (320, "dark"),
+    ],
 )
 def test_long_file_cards_and_compact_list_thumbnails(server, desktop, width, theme):
     _, page = desktop
@@ -217,7 +227,11 @@ def test_long_file_cards_and_compact_list_thumbnails(server, desktop, width, the
         first.locator(".size-cell").bounding_box(),
     )
     assert abs(preview["width"] / preview["height"] - 1.6) < 0.03
-    assert card["width"] >= (244 if width > 720 else 260 if width <= 360 else 160)
+    if width > 720:
+        assert 180 <= card["width"] <= 200
+        assert card["height"] <= 260
+    else:
+        assert card["width"] >= (260 if width <= 360 else 160)
     assert footer["y"] >= title.bounding_box()["y"] + title.bounding_box()["height"]
     assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
     page.mouse.move(0, 0)
@@ -238,6 +252,49 @@ def test_long_file_cards_and_compact_list_thumbnails(server, desktop, width, the
     page.get_by_role("checkbox", name="Select " + names[0], exact=True).check()
     expect(first).to_have_class("file-row selected")
     assert not originals
+
+
+@pytest.mark.parametrize("width", [1440, 1536, 1920])
+@pytest.mark.parametrize("theme", ["light", "dark"])
+def test_root_mixed_cards_keep_compact_desktop_bounds(server, desktop, width, theme):
+    _, page = desktop
+    page.set_viewport_size({"width": width, "height": 1080})
+    page.add_init_script(f"localStorage.setItem('tgdrive.appearance', '{theme}')")
+
+    def listing(route):
+        response, data = fetch_with_rows(
+            route,
+            [
+                {
+                    "id": "mixed-media-fixture",
+                    "name": "A root video with a longer filename.mkv",
+                    "path": "/",
+                    "type": "file",
+                    "size": 1024,
+                }
+            ],
+        )
+        route.fulfill(response=response, json=data)
+
+    page.route(NODES, listing)
+    login(page, server.url)
+    choose_view(page, "Grid view")
+    rows = page.locator(".file-grid .file-row")
+    expect(rows).to_have_count(4)
+    for row in rows.all():
+        box = row.bounding_box()
+        assert 180 <= box["width"] <= 200
+        folder = row.locator('.file-tile-preview[data-kind="folder"]')
+        assert box["height"] <= (230 if folder.count() else 260)
+        if folder.count():
+            preview = folder.bounding_box()
+            assert abs(preview["width"] / preview["height"] - 2) < 0.03
+    assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
+    page.mouse.move(0, 0)
+    page.screenshot(
+        path=ARTIFACTS / f"root-mixed-cards-compact-{width}-{theme}.png",
+        animations="disabled",
+    )
 
 
 def test_sort_direction_and_trash_original_location_work_in_both_views(server, desktop):
