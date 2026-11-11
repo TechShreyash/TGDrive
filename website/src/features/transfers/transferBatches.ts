@@ -2,7 +2,11 @@ import type { Transfer } from "./transfers";
 import { currentRate, transferDetails, transferProgress } from "./progress";
 import { deviceUploadProgress, needsDeviceUpload } from "./deviceUploadStatus";
 import type { BatchProgressMeters } from "./batchProgress";
-import { isFolderTransfer, isServerImport, transferTaskId } from "./transferTasks";
+import {
+    isFolderTransfer,
+    isServerImport,
+    transferTaskId,
+} from "./transferTasks";
 
 export interface TransferBatch {
     id: string;

@@ -666,7 +666,9 @@ describe("upload responsiveness", () => {
         expect(manager.snapshot().some((item) => item.key === "record-0")).toBe(
             false,
         );
-        expect(localStorage.getItem("tgdrive.uploads.v2:record-0")).toBe("null");
+        expect(localStorage.getItem("tgdrive.uploads.v2:record-0")).toBe(
+            "null",
+        );
         scans.mockRestore();
         reads.mockRestore();
         writes.mockRestore();

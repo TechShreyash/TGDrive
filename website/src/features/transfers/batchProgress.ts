@@ -22,9 +22,11 @@ export class BatchProgressTracker {
         for (const batch of batches) {
             if (
                 !batch.pending ||
-                batch.items.some((item) =>
-                    ["remote", "torrent", "delete"].includes(item.kind || "") ||
-                    isArchiveTransfer(item),
+                batch.items.some(
+                    (item) =>
+                        ["remote", "torrent", "delete"].includes(
+                            item.kind || "",
+                        ) || isArchiveTransfer(item),
                 )
             )
                 continue;

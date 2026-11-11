@@ -4,7 +4,9 @@ import type { Job } from "../../shared/types";
 import { TransferManager } from "./transfers";
 
 const managers: TransferManager[] = [];
-const requestJobs = vi.fn(async (_signal?: AbortSignal) => ({ jobs: [] as Job[] }));
+const requestJobs = vi.fn(async (_signal?: AbortSignal) => ({
+    jobs: [] as Job[],
+}));
 let visibility: EventTarget & { visibilityState: string };
 const flush = () => vi.advanceTimersByTimeAsync(0);
 const managerForTest = () => {
@@ -182,7 +184,9 @@ describe("adaptive jobs polling", () => {
         expect(requestJobs).toHaveBeenCalledTimes(2);
         releases[1]({ jobs: [current] });
         await flush();
-        expect(manager.snapshot().map((item) => item.jobId)).toEqual(["current"]);
+        expect(manager.snapshot().map((item) => item.jobId)).toEqual([
+            "current",
+        ]);
         await vi.advanceTimersByTimeAsync(1499);
         expect(requestJobs).toHaveBeenCalledTimes(2);
         await vi.advanceTimersByTimeAsync(1);

@@ -1086,9 +1086,9 @@ export default function ChannelBackup({
                                     </label>
                                 </div>
                                 <p id="recovery-file-help">
-                                    Choose your downloaded .tgdb backup. It opens with
-                                    this server's ENCRYPTION_KEY. Checking it does
-                                    not change the drive.
+                                    Choose your downloaded .tgdb backup. It
+                                    opens with this server's ENCRYPTION_KEY.
+                                    Checking it does not change the drive.
                                 </p>
                                 <details>
                                     <summary>Channel access changed?</summary>
