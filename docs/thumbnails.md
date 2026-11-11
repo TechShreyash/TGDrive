@@ -64,14 +64,14 @@ finish with the browser closed; on-demand preview decoding needs the viewer open
 
 ## Bandwidth and storage
 
-Grid view loads nearby covers. A missing local cover can be generated from the
+List and Grid views lazily load nearby covers. A missing local cover can be generated from the
 file's verified saved poster, fetching only that JPEG when needed. Older local
 or Telegram-provided covers remain fallbacks, followed by cached-original repair
-or an icon. It **never downloads an original from Telegram just to make a grid
+or an icon. Neither view **downloads an original from Telegram just to make a
 cover**.
 
-Loaded covers stay on the current grid page (up to 100 items). Unfinished
-requests cancel offscreen and retry when visible. Changing views, folders,
+Loaded covers stay in the current List or Grid layout (up to 100 items per
+page). Unfinished requests cancel offscreen and retry when visible. Changing views, folders,
 file details or access can request them again. Browsers revalidate saved covers;
 a **304** response reuses the image bytes. Data-saving browsers show icons.
 Access is checked on every request, including cache hits and 304s.
@@ -152,7 +152,7 @@ New encrypted uploads cache generated covers locally and do not attach plaintext
 Telegram thumbnails. Legacy plaintext uploads can have an attached provider
 cover. For a missing cover:
 
-1. Return to the folder in Grid view. If the file has a usable saved poster,
+1. Return to the folder in List or Grid view. If the file has a usable saved poster,
    TGDrive can generate a small cover from it without preloading the original.
 2. If no usable poster or provider cover is available, choose **Preload file**
    and wait for full **Ready** coverage in **Preloads**, then reopen the folder.

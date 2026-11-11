@@ -305,7 +305,9 @@
     height: 34px;
     border-radius: 6px;
     color: var(--muted);
-    transition: color 0.12s ease, background 0.12s ease;
+    transition:
+        color 0.12s ease,
+        background 0.12s ease;
 }
 .file-view-toggle button[aria-pressed="true"] {
     background: var(--selected);
@@ -362,6 +364,25 @@
     width: 100%;
     height: 100%;
     object-fit: contain;
+}
+.file-table:not(.file-grid) .file-list-thumbnail {
+    flex: 0 0 36px;
+    width: 36px;
+    height: 36px;
+    aspect-ratio: auto;
+    border: 0;
+    border-radius: 8px;
+}
+.file-list-thumbnail img {
+    object-fit: cover;
+}
+.file-table:not(.file-grid) .file-list-thumbnail .file-icon {
+    width: 36px;
+    height: 36px;
+}
+.file-table:not(.file-grid) .file-list-thumbnail .file-icon svg {
+    width: 20px;
+    height: 20px;
 }
 .file-tile-preview .file-icon {
     width: 48px;
@@ -829,6 +850,7 @@
 }
 .file-grid .name-cell {
     display: block;
+    flex: 1;
     padding: 0;
     min-width: 0;
 }
@@ -942,14 +964,14 @@
     }
 }
 
-/* Name row: type icon, name over "size · date", actions on the right. */
+/* The title uses the card width; metadata and actions share a separate footer. */
 .file-grid .name-cell-content {
     display: grid;
     grid-template-columns: 16px minmax(0, 1fr);
     column-gap: 8px;
-    align-items: center;
+    align-items: start;
     min-height: 0;
-    padding: 10px 44px 0 12px;
+    padding: 12px 12px 4px;
 }
 .file-kind-icon {
     display: inline-grid;
@@ -963,6 +985,7 @@
 .file-grid .name-cell-content > .file-kind-icon {
     width: 16px;
     height: 16px;
+    margin-top: 2px;
 }
 .file-grid .name-cell-content > .file-kind-icon svg {
     width: 16px;
@@ -977,14 +1000,14 @@
 .file-grid .file-name,
 .file-list-scroll .file-grid .file-name {
     display: -webkit-box;
-    -webkit-line-clamp: 2;
+    -webkit-line-clamp: 3;
     -webkit-box-orient: vertical;
     white-space: normal;
     overflow: hidden;
     text-overflow: ellipsis;
     overflow-wrap: anywhere;
-    min-height: 20px;
-    max-height: 40px;
+    min-height: 40px;
+    max-height: 60px;
     font-size: 13.5px;
     font-weight: 600;
     line-height: 20px;
@@ -997,7 +1020,10 @@
 .file-table.file-grid .size-cell {
     display: block;
     width: auto;
-    padding: 0 44px 10px 36px;
+    min-height: 44px;
+    margin-top: 8px;
+    padding: 10px 52px 10px 12px;
+    border-top: 1px solid var(--line-subtle);
     color: var(--muted);
     font-size: 12px;
     line-height: 18px;
@@ -1012,13 +1038,13 @@
 .file-grid .actions-cell {
     position: absolute;
     right: 6px;
-    bottom: 8px;
+    bottom: 6px;
     width: auto;
     padding: 0;
 }
 .file-grid .item-actions > summary {
-    width: 32px;
-    height: 32px;
+    width: 36px;
+    height: 36px;
     border-radius: 9px;
 }
 
@@ -1121,20 +1147,20 @@
         height: 112px;
     }
     .file-grid .name-cell-content {
-        padding: 8px 40px 0 10px;
+        padding: 10px 12px 4px;
     }
     .file-grid .size-cell,
     .file-table.file-grid .size-cell {
-        padding: 0 40px 8px 34px;
-        font-size: 11.5px;
+        padding: 10px 52px 10px 12px;
+        font-size: 12px;
     }
     .file-grid .actions-cell {
-        right: 2px;
-        bottom: 4px;
+        right: 4px;
+        bottom: 2px;
     }
     .file-grid .item-actions > summary {
-        width: 40px;
-        height: 40px;
+        width: 44px;
+        height: 44px;
     }
     .file-grid .file-title-line .file-item-status {
         top: 8px;
@@ -1354,7 +1380,7 @@
     animation: none;
 }
 .file-skeleton[data-layout="grid"] {
-    grid-template-columns: repeat(auto-fill, minmax(168px, 1fr)) !important;
+    grid-template-columns: repeat(auto-fill, minmax(244px, 1fr));
 }
 .file-skeleton[data-layout="list"] {
     display: flex !important;
@@ -1547,22 +1573,22 @@
     }
 }
 
-/* Denser, slightly landscape cards (the demo's proportions). */
+/* Give long filenames room without stretching a small folder across the page. */
 .file-grid > ul,
 .file-skeleton[data-layout="grid"] {
-    grid-template-columns: repeat(auto-fill, minmax(148px, 1fr));
-    gap: 11px;
+    grid-template-columns: repeat(auto-fill, minmax(244px, 1fr));
+    gap: 16px;
 }
 .file-grid .file-tile-preview {
     height: auto;
-    aspect-ratio: 16 / 11;
+    aspect-ratio: 16 / 10;
 }
 .file-grid .file-tile-preview[data-kind="folder"] {
-    aspect-ratio: 16 / 9.5;
+    aspect-ratio: 16 / 10;
 }
 .skeleton-block {
     height: auto;
-    aspect-ratio: 16 / 11;
+    aspect-ratio: 16 / 10;
 }
 .file-grid .file-name,
 .file-list-scroll .file-grid .file-name {
@@ -1581,21 +1607,10 @@
         gap: 10px;
     }
 }
-/* Give names the width: compact menu target on pointer devices. */
-@media (hover: hover) and (pointer: fine) {
-    .file-grid .name-cell-content {
-        padding-right: 34px;
-    }
-    .file-grid .size-cell,
-    .file-table.file-grid .size-cell {
-        padding-right: 34px;
-    }
-    .file-grid .actions-cell {
-        right: 4px;
-    }
-    .file-grid .item-actions > summary {
-        width: 28px;
-        height: 28px;
+@media (max-width: 360px) {
+    .file-grid > ul,
+    .file-skeleton[data-layout="grid"] {
+        grid-template-columns: minmax(0, 1fr);
     }
 }
 

@@ -11,6 +11,7 @@ if os.environ.get("TGDRIVE_E2E") != "1":
     pytest.skip("Set TGDRIVE_E2E=1 for Chromium checks", allow_module_level=True)
 
 import tests.browser.test_browser_e2e as fixtures
+from tests.browser.node_pages import NODES
 from tests.browser.test_browser_e2e import ARTIFACTS, expect, login
 
 browser = fixtures.browser
@@ -22,6 +23,11 @@ pytestmark = pytest.mark.e2e
 def choose_view(page, name):
     compact = page.get_by_role("button", name="View and sort", exact=True)
     if compact.count():
+        compact.scroll_into_view_if_needed()
+        page.evaluate(
+            "() => new Promise(resolve => "
+            "requestAnimationFrame(() => requestAnimationFrame(resolve)))"
+        )
         compact.click()
         page.get_by_role("menuitemradio", name=name, exact=True).click()
     else:
@@ -50,7 +56,10 @@ def test_grid_views_preserve_selection_actions_and_bounded_thumbnails(
     page.get_by_role("button", name="Preview samples", exact=True).press("Enter")
     expect(page.get_by_role("button", name="sample.png", exact=True)).to_be_visible()
     expect(page.locator(".file-table thead")).to_be_visible()
-    assert thumbnails == []
+    list_sample = page.locator(".file-row").filter(has_text="sample.png")
+    list_sample.scroll_into_view_if_needed()
+    expect(list_sample.locator(".file-list-thumbnail img")).to_be_visible()
+    assert thumbnails and not originals
     choose_view(page, "Grid view")
     grid = page.get_by_role("list", name="Files and folders", exact=True)
     expect(grid).to_be_visible()
@@ -124,6 +133,111 @@ def test_grid_views_preserve_selection_actions_and_bounded_thumbnails(
     page.screenshot(path=ARTIFACTS / f"grid-files-{width}.png")
     choose_view(page, "List view")
     expect(page.locator(".file-table thead")).to_be_visible()
+
+
+@pytest.mark.parametrize(
+    "width,theme", [(1440, "light"), (1440, "dark"), (390, "light"), (320, "dark")]
+)
+def test_long_file_cards_and_compact_list_thumbnails(server, desktop, width, theme):
+    _, page = desktop
+    page.set_viewport_size({"width": width, "height": 900})
+    page.add_init_script(f"localStorage.setItem('tgdrive.appearance', '{theme}')")
+    login(page, server.url)
+    names = [
+        "Cyberpunk.Edgerunners.S02E01.Last.Chance.for.a.Slow.Dance.1080p.WEB-DL.mkv",
+        "Cyberpunk.Edgerunners.S02E04.Someone.That.I.Used.To.Know.1080p.WEB-DL.mkv",
+    ]
+    identities = []
+    originals = []
+    page.on(
+        "request",
+        lambda request: (
+            originals.append(request.url)
+            if urlparse(request.url).path == "/file"
+            else None
+        ),
+    )
+
+    def listing(route):
+        response = route.fetch()
+        data = response.json()
+        if not any(item["name"] == "sample.png" for item in data["items"]):
+            route.fulfill(response=response)
+            return
+        items = [
+            next(item for item in data["items"] if item["name"] == name)
+            for name in ("sample.png", "multitrack.mkv")
+        ]
+        identities[:] = [item["id"] for item in items]
+        data.update(
+            items=[
+                {**item, "name": name} for item, name in zip(items, names, strict=True)
+            ],
+            total=2,
+            next_cursor=None,
+        )
+        route.fulfill(response=response, json=data)
+
+    def thumbnail(route):
+        path = parse_qs(urlparse(route.request.url).query)["path"][0]
+        if identities and path.endswith("/" + identities[1]):
+            route.fulfill(status=404, json={"detail": "Synthetic missing thumbnail"})
+        else:
+            route.continue_()
+
+    page.route(NODES, listing)
+    page.route("**/api/v1/thumbnail?**", thumbnail)
+    with page.expect_response(
+        lambda response: "/api/v1/thumbnail?" in response.url and response.status == 404
+    ):
+        page.get_by_role("button", name="Preview samples", exact=True).press("Enter")
+    rows = page.locator(".file-row")
+    expect(rows).to_have_count(2)
+    first, second = rows.nth(0), rows.nth(1)
+    expect(first.locator(".file-list-thumbnail img")).to_be_visible()
+    expect(second.locator(".thumbnail-loading")).to_have_count(0)
+    expect(second.locator(".file-list-thumbnail .file-icon")).to_be_visible()
+    expect(second.locator(".file-list-thumbnail img")).to_have_count(0)
+    assert first.locator(".file-list-thumbnail").bounding_box()["width"] == 36
+    fallback = second.locator(".file-list-thumbnail .file-icon").bounding_box()
+    assert fallback["width"] <= 36 and fallback["height"] <= 36
+    assert not originals
+    page.screenshot(
+        path=ARTIFACTS / f"file-list-thumbnails-{width}-{theme}.png",
+        animations="disabled",
+    )
+    choose_view(page, "Grid view")
+    expect(first.locator(".file-tile-preview img")).to_be_visible()
+    title = first.get_by_role("button", name=names[0], exact=True)
+    expect(title).to_have_attribute("title", names[0])
+    assert title.evaluate("node => getComputedStyle(node).webkitLineClamp") == "3"
+    card, preview, footer = (
+        first.bounding_box(),
+        first.locator(".file-tile-preview").bounding_box(),
+        first.locator(".size-cell").bounding_box(),
+    )
+    assert abs(preview["width"] / preview["height"] - 1.6) < 0.03
+    assert card["width"] >= (244 if width > 720 else 260 if width <= 360 else 160)
+    assert footer["y"] >= title.bounding_box()["y"] + title.bounding_box()["height"]
+    assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
+    page.mouse.move(0, 0)
+    page.screenshot(
+        path=ARTIFACTS / f"file-cards-long-names-{width}-{theme}.png",
+        animations="disabled",
+    )
+    page.keyboard.press("Tab")
+    title.focus()
+    expect(title).to_be_focused()
+    expect(title).to_have_css("outline-style", "solid")
+    assert first.bounding_box()["height"] == card["height"]
+    first.locator("summary").click()
+    expect(first.locator(".action-menu")).to_be_visible()
+    page.keyboard.press("Escape")
+    expect(first.locator(".action-menu")).not_to_be_visible()
+    page.get_by_role("button", name="Select", exact=True).click()
+    page.get_by_role("checkbox", name="Select " + names[0], exact=True).check()
+    expect(first).to_have_class("file-row selected")
+    assert not originals
 
 
 def test_sort_direction_and_trash_original_location_work_in_both_views(server, desktop):
@@ -258,6 +372,13 @@ def test_grid_respects_data_saver(server, desktop):
     )
     login(page, server.url)
     page.get_by_role("button", name="Preview samples", exact=True).press("Enter")
+    sample = page.locator(".file-row").filter(has_text="sample.png")
+    sample.scroll_into_view_if_needed()
+    fallback = sample.locator(".file-list-thumbnail .file-icon")
+    expect(fallback).to_be_visible()
+    bounds = fallback.bounding_box()
+    assert bounds["width"] <= 36 and bounds["height"] <= 36
+    assert not requests
     choose_view(page, "Grid view")
     expect(page.get_by_role("list", name="Files and folders")).to_be_visible()
     expect(page.locator(".file-tile-preview img")).to_have_count(0)

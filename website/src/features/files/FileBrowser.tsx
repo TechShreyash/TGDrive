@@ -52,6 +52,7 @@ import { shareExpired } from "../shares/SharesView";
 import { FileIcon, Spinner, fileKind } from "../../shared/components";
 import SortMenu, { type FileSort } from "./SortMenu";
 import FileThumbnail from "./FileThumbnail";
+import { thumbnailCandidate } from "./thumbnails";
 import "./FileBrowser.css";
 import { isExtractableArchive } from "./archiveApi";
 import { COMPACT_LAYOUT_QUERY } from "../../shared/responsive";
@@ -1354,16 +1355,27 @@ export default function FileBrowser({
                                                                 )}
                                                             </span>
                                                         )}
-                                                    <FileIcon
-                                                        name={item.name}
-                                                        folder={
-                                                            item.type ===
-                                                            "folder"
-                                                        }
-                                                        inline={
-                                                            layout === "grid"
-                                                        }
-                                                    />
+                                                    {layout === "list" &&
+                                                    thumbnailCandidate(item) ? (
+                                                        <FileThumbnail
+                                                            item={item}
+                                                            auth={auth}
+                                                            disabled={isTrash}
+                                                            compact
+                                                        />
+                                                    ) : (
+                                                        <FileIcon
+                                                            name={item.name}
+                                                            folder={
+                                                                item.type ===
+                                                                "folder"
+                                                            }
+                                                            inline={
+                                                                layout ===
+                                                                "grid"
+                                                            }
+                                                        />
+                                                    )}
                                                     <div className="file-name-details">
                                                         <div className="file-title-line">
                                                             <button

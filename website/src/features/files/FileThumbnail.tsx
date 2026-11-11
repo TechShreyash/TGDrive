@@ -8,10 +8,12 @@ export default function FileThumbnail({
     item,
     auth,
     disabled = false,
+    compact = false,
 }: {
     item: DriveItem;
     auth: string;
     disabled?: boolean;
+    compact?: boolean;
 }) {
     const target = useRef<HTMLDivElement>(null);
     const [source, setSource] = useState<string | null>(null);
@@ -82,7 +84,9 @@ export default function FileThumbnail({
         <div
             ref={target}
             className={
-                "file-tile-preview" + (loading ? " thumbnail-loading" : "")
+                "file-tile-preview" +
+                (compact ? " file-list-thumbnail" : "") +
+                (loading ? " thumbnail-loading" : "")
             }
             data-kind={fileKind(item.name, item.type === "folder")}
             data-has-image={source ? "true" : undefined}
@@ -96,19 +100,20 @@ export default function FileThumbnail({
                         decoding="async"
                         onError={() => setSource(null)}
                     />
-                    {fileKind(item.name) === "video" && (
+                    {!compact && fileKind(item.name) === "video" && (
                         <span className="file-tile-play">
                             <Play size={16} />
                         </span>
                     )}
                     {/* Photos and videos explain themselves; page-like thumbnails keep their format. */}
-                    {!["image", "video"].includes(fileKind(item.name)) && (
-                        <span className="file-tile-format">
-                            {(item.name.split(".").at(-1) || "File")
-                                .slice(0, 8)
-                                .toUpperCase()}
-                        </span>
-                    )}
+                    {!compact &&
+                        !["image", "video"].includes(fileKind(item.name)) && (
+                            <span className="file-tile-format">
+                                {(item.name.split(".").at(-1) || "File")
+                                    .slice(0, 8)
+                                    .toUpperCase()}
+                            </span>
+                        )}
                 </>
             ) : (
                 <>
@@ -116,7 +121,7 @@ export default function FileThumbnail({
                         name={item.name}
                         folder={item.type === "folder"}
                     />
-                    {item.type !== "folder" && (
+                    {!compact && item.type !== "folder" && (
                         <span className="file-tile-format">
                             {(item.name.split(".").at(-1) || "File")
                                 .slice(0, 8)
