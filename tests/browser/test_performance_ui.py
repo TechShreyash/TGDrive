@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from typing import Any
 
 import pytest
@@ -22,6 +23,25 @@ def preferences():
         "timezone": "Asia/Kolkata",
         "auto_preload": True,
         "upload_split_mib": 2000,
+        "cache_disk_limit_bytes": None,
+        "cache_memory_limit_bytes": None,
+        "staging_limit_bytes": None,
+        "protected_free_bytes": None,
+        "auto_resource_limits": {
+            "cache_disk_limit_bytes": 10 * GIB,
+            "cache_memory_limit_bytes": 256 * MIB,
+            "staging_limit_bytes": 16 * GIB,
+        },
+        "auto_free_space_reserve": {"minimum_bytes": GIB, "fraction": 0.05},
+        "defaults": {
+            "timezone": "Asia/Kolkata",
+            "auto_preload": True,
+            "upload_split_mib": 2000,
+            "cache_disk_limit_bytes": None,
+            "cache_memory_limit_bytes": None,
+            "staging_limit_bytes": None,
+            "protected_free_bytes": None,
+        },
     }
 
 
@@ -127,6 +147,99 @@ def test_settings_save_converts_units_guards_revision_and_recovers_conflict(
     assert len(patches) == 3
     section.get_by_role("button", name="Reload Latest Settings", exact=True).click()
     expect(split).to_have_value("1024")
+
+
+def test_resource_limits_keep_explicit_modes_drafts_and_reviewed_defaults(
+    server, desktop
+):
+    _, page = desktop
+    saved = preferences()
+    patches = []
+    fail_save = True
+
+    def settings(route):
+        if route.request.method == "PATCH":
+            assert route.request.headers["if-match"] == saved["revision"]
+            patches.append(route.request.post_data_json)
+            if fail_save:
+                route.fulfill(
+                    status=503, json={"detail": "Synthetic resource save failed"}
+                )
+                return
+            saved.update(route.request.post_data_json)
+            saved["revision"] = '"resource-revision-' + str(len(patches)) + '"'
+        route.fulfill(json=saved)
+
+    page.route("**/api/v1/settings/performance", settings)
+    login(page, server.url + "/?view=settings&section=cache")
+    disk_mode = page.get_by_label("Media disk cache mode", exact=True)
+    memory_mode = page.get_by_label("Media memory cache mode", exact=True)
+    expect(disk_mode).to_be_visible()
+    expect(memory_mode).to_be_visible()
+    expect(disk_mode).to_have_value("automatic")
+    expect(page.get_by_text("Automatic ceiling: 10 GiB", exact=True)).to_be_visible()
+    disk_mode.select_option("custom")
+    disk = page.get_by_label("Media disk cache (GiB)", exact=True)
+    disk.fill("2.5")
+    memory_mode.select_option("disabled")
+    page.get_by_text("Advanced storage protection", exact=True).click()
+    reserve_mode = page.get_by_label("Keep disk space free mode", exact=True)
+    reserve_mode.select_option("none")
+    save = page.get_by_role("button", name="Save Performance Settings", exact=True)
+    save.click()
+    expect(page.get_by_role("alert")).to_contain_text("Synthetic resource save failed")
+    expect(disk).to_have_value(re.compile(r"^2\.5"))
+    expect(memory_mode).to_have_value("disabled")
+    expect(reserve_mode).to_have_value("none")
+    fail_save = False
+    with page.expect_response(
+        lambda response: (
+            response.url.endswith("/api/v1/settings/performance")
+            and response.request.method == "PATCH"
+        )
+    ):
+        save.click()
+    assert patches[-1] == {
+        "cache_disk_limit_bytes": int(2.5 * GIB),
+        "cache_memory_limit_bytes": 0,
+        "protected_free_bytes": 0,
+    }
+    expect(save).to_be_disabled()
+    disk.fill("3")
+    page.get_by_role("button", name="Discard changes", exact=True).click()
+    expect(disk).to_have_value(re.compile(r"^2\.5"))
+    before_defaults = len(patches)
+    page.get_by_role("button", name="Restore defaults", exact=True).click()
+    expect(disk_mode).to_have_value("automatic")
+    expect(memory_mode).to_have_value("automatic")
+    expect(reserve_mode).to_have_value("automatic")
+    assert len(patches) == before_defaults
+    save.click()
+    expect(save).to_be_disabled()
+    assert patches[-1] == {
+        "cache_disk_limit_bytes": None,
+        "cache_memory_limit_bytes": None,
+        "protected_free_bytes": None,
+    }
+
+    page.goto(server.url + "/?view=settings&section=transfers")
+    staging_mode = page.get_by_label("Temporary upload storage mode", exact=True)
+    expect(staging_mode).to_be_visible()
+    staging_mode.select_option("custom")
+    staging = page.get_by_label("Temporary upload storage (GiB)", exact=True)
+    staging.fill("0")
+    before_invalid = len(patches)
+    save.click()
+    expect(page.get_by_role("alert")).to_contain_text("must be a positive limit")
+    assert len(patches) == before_invalid
+    staging.fill("4")
+    save.click()
+    expect(save).to_be_disabled()
+    assert patches[-1] == {"staging_limit_bytes": 4 * GIB}
+    staging_mode.select_option("automatic")
+    save.click()
+    expect(save).to_be_disabled()
+    assert patches[-1] == {"staging_limit_bytes": None}
 
 
 def test_preload_inventory_cancel_and_scoped_eviction(
@@ -293,7 +406,7 @@ def test_performance_real_samples_nullable_eta_and_mobile_tables(
     page.route("**/api/v1/performance", lambda route: route.fulfill(json=value))
     login(page, server.url + "/?view=performance")
     expect(
-        page.get_by_role("heading", name="Live file transfers", exact=True)
+        page.get_by_role("heading", name="Current activity", exact=True)
     ).to_be_visible()
     page.screenshot(path=ARTIFACTS / "performance-load-desktop.png")
     page.get_by_role("tab", name="Accounts", exact=True).click()

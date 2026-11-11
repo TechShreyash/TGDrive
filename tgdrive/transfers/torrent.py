@@ -7,10 +7,13 @@ import base64
 import contextlib
 import hashlib
 import ipaddress
+import json
 import os
 import secrets
 import shutil
 import socket
+import stat
+import sys
 import tempfile
 import time
 from collections.abc import Awaitable, Callable
@@ -21,17 +24,28 @@ from urllib.parse import parse_qs, urlsplit, urlunsplit
 import aiohttp
 
 from tgdrive.core.errors import InvalidNameError
+from tgdrive.storage.capacity import measure_capacity, require_headroom
 from tgdrive.storage.store import _normalize_name
 from tgdrive.transfers.remote import RemoteClient, address_is_forbidden
+from tgdrive.transfers.tasks import _journalled
 from tgdrive.transfers.uploads import ResumableUploads
 
-# Only metadata fetched over the network is bounded, so a hostile URL cannot
-# fill the disk before the owner sees what the torrent contains.
+# Serialized input and decoded allocation have separate bounds.
 MAX_METADATA_BYTES = 256 * 1024 * 1024
+MAX_RPC_BYTES = 16 * 1024 * 1024
+MAX_SANITIZED_BYTES = 12 * 1024 * 1024
+MAX_MANIFEST_BYTES = 4 * 1024 * 1024
+MAX_TOKENS = 100_000
+MAX_CONTAINERS = 10_000
+MAX_CONTAINER_ITEMS = 10_000
+MAX_VALUE_BYTES = 16 * 1024 * 1024
+MAX_FILES = 10_000
+MAX_PATH_COMPONENTS = 64_000
 METADATA_TIMEOUT = 120
 STALL_TIMEOUT = 300
 TORRENT_MAX_ATTEMPTS = 4
 _METADATA_DIRECTORY = ".tgdrive-torrent"
+_PACKAGE_ROOT = str(Path(__file__).resolve().parents[2])
 _worker = ResumableUploads._owned_worker
 
 
@@ -66,14 +80,19 @@ def available() -> bool:
     return shutil.which("aria2c") is not None
 
 
-def _decode(data: bytes):
+def _decode(data):
     """Accept canonical bencode so re-encoding preserves the info hash."""
+    if len(data) > MAX_METADATA_BYTES:
+        raise TorrentError("Torrent metadata exceeds the 256 MiB input limit.")
     if not data:
         raise TorrentError("Torrent metadata is empty.")
-    offset = 0
+    offset = tokens = containers = value_bytes = 0
 
     def read(depth=0):
-        nonlocal offset
+        nonlocal offset, tokens, containers, value_bytes
+        tokens += 1
+        if tokens > MAX_TOKENS:
+            raise TorrentError("Torrent metadata exceeds its decoded token limit.")
         # Folder depth is a flat path list in bencode, so nesting stays shallow;
         # this only stops runaway recursion on malformed input.
         if depth > 128 or offset >= len(data):
@@ -81,9 +100,11 @@ def _decode(data: bytes):
         marker = data[offset : offset + 1]
         offset += 1
         if marker == b"i":
-            end = data.find(b"e", offset)
+            end = data.find(b"e", offset, offset + 21)
+            if end < 0:
+                raise TorrentError("Invalid torrent integer.")
             raw = data[offset:end]
-            if end < 0 or len(raw) > 20:
+            if len(raw) > 20:
                 raise TorrentError("Invalid torrent integer.")
             try:
                 value = int(raw)
@@ -94,12 +115,24 @@ def _decode(data: bytes):
             offset = end + 1
             return value
         if marker in (b"l", b"d"):
-            sequence = []
-            mapping = {}
+            containers += 1
+            if containers > MAX_CONTAINERS:
+                raise TorrentError(
+                    "Torrent metadata exceeds its decoded container limit."
+                )
+            sequence = [] if marker == b"l" else None
+            mapping = {} if marker == b"d" else None
             previous = None
+            count = 0
             while data[offset : offset + 1] != b"e":
+                count += 1
+                if count > MAX_CONTAINER_ITEMS:
+                    raise TorrentError(
+                        "Torrent metadata has too many container entries."
+                    )
                 key = read(depth + 1)
                 if marker == b"l":
+                    assert sequence is not None
                     sequence.append(key)
                 else:
                     if not isinstance(key, bytes) or (
@@ -109,17 +142,23 @@ def _decode(data: bytes):
                             "Invalid or duplicate torrent dictionary key."
                         )
                     previous = key
+                    assert mapping is not None
                     mapping[key] = read(depth + 1)
             offset += 1
             return sequence if marker == b"l" else mapping
         offset -= 1
-        end = data.find(b":", offset)
+        end = data.find(b":", offset, offset + 9)
+        if end < 0:
+            raise TorrentError("Invalid torrent byte string.")
         raw = data[offset:end]
-        if end < 0 or not raw.isdigit() or len(raw) > 8:
+        if not raw.isdigit() or len(raw) > 8:
             raise TorrentError("Invalid torrent byte string.")
         size = int(raw)
         if str(size).encode() != raw or end + 1 + size > len(data):
             raise TorrentError("Invalid torrent byte string length.")
+        value_bytes += size
+        if size > MAX_SANITIZED_BYTES or value_bytes > MAX_VALUE_BYTES:
+            raise TorrentError("Torrent metadata exceeds its decoded byte limit.")
         offset = end + 1 + size
         return data[end + 1 : offset]
 
@@ -181,7 +220,10 @@ def _manifest(metadata: dict) -> TorrentManifest:
     entries = info.get(b"files") if is_folder else [info]
     if not isinstance(entries, list) or not entries:
         raise TorrentError("A torrent must contain at least one file.")
+    if len(entries) > MAX_FILES:
+        raise TorrentError("Torrent contains too many files.")
     files, paths, folders = [], set(), {}
+    components = path_bytes = 0
     for entry in entries:
         if not isinstance(entry, dict):
             raise TorrentError("Invalid torrent file entry.")
@@ -198,7 +240,15 @@ def _manifest(metadata: dict) -> TorrentManifest:
         raw_parts = entry.get(b"path.utf-8", entry.get(b"path")) if is_folder else []
         if not isinstance(raw_parts, list) or (is_folder and not raw_parts):
             raise TorrentError("Invalid torrent file path.")
+        components += len(raw_parts) + 1
+        if len(raw_parts) >= 64 or components > MAX_PATH_COMPONENTS:
+            raise TorrentError("Torrent paths exceed their component limit.")
         parts = (name, *(_name(part) for part in raw_parts))
+        path = "/".join(parts)
+        encoded_length = len(path.encode())
+        path_bytes += encoded_length
+        if encoded_length > 4096 or path_bytes > MAX_MANIFEST_BYTES:
+            raise TorrentError("Torrent paths exceed their byte limit.")
         key = tuple(part.casefold() for part in parts)
         if key in paths:
             raise TorrentError("Torrent contains duplicate file names.")
@@ -208,7 +258,7 @@ def _manifest(metadata: dict) -> TorrentManifest:
             if folder_key in folders and folders[folder_key] != folder_name:
                 raise TorrentError("Torrent has conflicting folder names.")
             folders[folder_key] = folder_name
-        files.append(TorrentFile("/".join(parts), size))
+        files.append(TorrentFile(path, size))
     if paths.intersection(folders):
         raise TorrentError("Torrent has conflicting file and folder paths.")
     total = sum(item.size for item in files)
@@ -310,17 +360,17 @@ async def _udp_trackers(values: list[str]) -> list[str]:
 
 
 def _tracker_urls(metadata: dict) -> list[str]:
-    raw = [metadata.get(b"announce")]
+    values = [metadata.get(b"announce")]
     tiers = metadata.get(b"announce-list", [])
     if isinstance(tiers, list):
         for tier in tiers[:32]:
             if isinstance(tier, list):
-                raw.extend(tier[:32])
+                values.extend(tier[:32])
     return [
-        value.decode("utf-8", errors="replace")
-        for value in raw
-        if isinstance(value, bytes)
-    ]
+        item.decode("utf-8", "replace")
+        for item in values
+        if isinstance(item, bytes) and len(item) <= 2048
+    ][:32]
 
 
 class _Aria2:
@@ -394,6 +444,7 @@ class _Aria2:
             await self.__aexit__(None, None, None)
             raise
 
+    @_journalled
     async def __aexit__(self, *_args):
         if self.process is not None and self.process.returncode is None:
             with contextlib.suppress(ProcessLookupError):
@@ -411,15 +462,22 @@ class _Aria2:
     async def call(self, method, *params):
         if self.session is None:
             raise TorrentError("The torrent service is not running.")
-        try:
-            async with self.session.post(
-                self.url,
-                json={
+        payload = await _worker(
+            lambda: json.dumps(
+                {
                     "jsonrpc": "2.0",
                     "id": 1,
                     "method": f"aria2.{method}",
                     "params": [f"token:{self.secret}", *params],
                 },
+                separators=(",", ":"),
+            ).encode()
+        )
+        if len(payload) > MAX_RPC_BYTES:
+            raise TorrentError("Torrent metadata exceeds the 16 MiB RPC request limit.")
+        try:
+            async with self.session.post(
+                self.url, data=payload, headers={"Content-Type": "application/json"}
             ) as response:
                 response.raise_for_status()
                 result = await response.json()
@@ -464,6 +522,113 @@ class _Aria2:
             await asyncio.sleep(1)
 
 
+@_journalled
+async def _stop_parser(process):
+    if process.returncode is None:
+        with contextlib.suppress(ProcessLookupError):
+            process.kill()
+    if process.stdout is not None:
+        while await process.stdout.read(64 * 1024):
+            pass
+    await process.wait()
+
+
+def _parsed_metadata(line, sanitized):
+    try:
+        plan = json.loads(line)
+        if "error" in plan:
+            raise TorrentError(plan["error"])
+        files = plan["files"]
+        if not isinstance(files, list) or not 0 < len(files) <= MAX_FILES:
+            raise ValueError
+        manifest = TorrentManifest(
+            plan["name"],
+            tuple(TorrentFile(item["path"], item["size"]) for item in files),
+            plan["total_size"],
+            plan["is_folder"],
+            plan["info_hash"],
+        )
+        with sanitized.open("rb") as source:
+            details = os.fstat(source.fileno())
+            if (
+                not stat.S_ISREG(details.st_mode)
+                or not 0 < details.st_size <= MAX_SANITIZED_BYTES
+            ):
+                raise ValueError
+            data = source.read(MAX_SANITIZED_BYTES + 1)
+        if len(data) != details.st_size:
+            raise ValueError
+        return manifest, data, plan["trackers"], plan["private"]
+    except (KeyError, TypeError, ValueError, OSError, RecursionError) as error:
+        if isinstance(error, TorrentError):
+            raise
+        raise TorrentError(
+            "The torrent processor returned invalid metadata."
+        ) from error
+
+
+async def _parse_metadata(source, sanitized):
+    environment = {
+        "PATH": os.defpath,
+        "LANG": "C.UTF-8",
+        "PYTHONPATH": _PACKAGE_ROOT,
+    }
+    launch = asyncio.create_task(
+        asyncio.create_subprocess_exec(
+            sys.executable,
+            "-m",
+            "tgdrive.transfers.torrent_worker",
+            str(source),
+            str(sanitized),
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.DEVNULL,
+            env=environment,
+            limit=MAX_MANIFEST_BYTES + 1024,
+        )
+    )
+    interrupted = False
+    while True:
+        try:
+            process = await asyncio.shield(launch)
+            break
+        except asyncio.CancelledError:
+            if launch.cancelled():
+                raise
+            interrupted = True
+    try:
+        if interrupted:
+            raise asyncio.CancelledError
+        assert process.stdout is not None
+        async with asyncio.timeout(30):
+            try:
+                line = await process.stdout.readline()
+            except ValueError:
+                raise TorrentError(
+                    "Torrent processor exceeded its response limit."
+                ) from None
+            if (
+                not line
+                or len(line) > MAX_MANIFEST_BYTES
+                or await process.stdout.read(1)
+            ):
+                raise TorrentError("Torrent processor returned an invalid response.")
+            await process.wait()
+            if process.returncode:
+                raise TorrentError("Torrent metadata could not be processed safely.")
+            return await _worker(_parsed_metadata, line, sanitized)
+    except TimeoutError:
+        raise TorrentError("Torrent metadata processing timed out.") from None
+    finally:
+        await _stop_parser(process)
+
+
+@_journalled
+async def _stop_download(worker, cancelled):
+    worker.cancel()
+    cancelled.cancel()
+    await asyncio.gather(worker, cancelled, return_exceptions=True)
+
+
 async def download_torrent(
     source: str,
     output_dir: Path,
@@ -472,14 +637,18 @@ async def download_torrent(
     cancel_event: asyncio.Event,
     progress: Callable[[int, int | None], Awaitable[None]],
     admit: Callable[[TorrentManifest], Awaitable[list[int] | None]],
+    check_capacity: Callable[[int], Awaitable[None]] | None = None,
 ) -> TorrentManifest:
     """Validate metadata and reserve staging before any payload is downloaded.
 
     ``admit`` returns the 0-based file indexes to download, or None for all.
+    ``check_capacity`` checks extra writes against live staging reservations.
     """
     if cancel_event.is_set():
         raise TorrentCancelled("Torrent import cancelled.")
-    worker = asyncio.create_task(_download(source, output_dir, remote, progress, admit))
+    worker = asyncio.create_task(
+        _download(source, output_dir, remote, progress, admit, check_capacity)
+    )
     cancelled = asyncio.create_task(cancel_event.wait())
     try:
         await asyncio.wait((worker, cancelled), return_when=asyncio.FIRST_COMPLETED)
@@ -487,18 +656,37 @@ async def download_torrent(
             raise TorrentCancelled("Torrent import cancelled.")
         return await worker
     finally:
-        worker.cancel()
-        cancelled.cancel()
-        await asyncio.gather(worker, cancelled, return_exceptions=True)
+        await _stop_download(worker, cancelled)
 
 
-async def _download(source, output_dir, remote, progress, admit):
+async def _download(source, output_dir, remote, progress, admit, check_capacity):
     validate_source(source)
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
     cached = output_dir / _METADATA_DIRECTORY / "source.torrent"
     if cached.is_symlink() or cached.parent.is_symlink():
         raise TorrentError("Torrent staging metadata contains an unsafe symbolic link.")
+
+    async def capacity(required_bytes):
+        if check_capacity is not None:
+            await check_capacity(required_bytes)
+            return
+        try:
+            await _worker(
+                lambda: require_headroom(
+                    measure_capacity(output_dir),
+                    required_bytes,
+                    reserve_bytes=remote.min_free_bytes,
+                )
+            )
+        except OSError:
+            raise TorrentError(
+                "Temporary storage is full or unavailable. "
+                "Check free disk space and retry."
+            ) from None
+
+    if not cached.exists():
+        await capacity(MAX_METADATA_BYTES)
     with tempfile.TemporaryDirectory(
         prefix=".torrent-", dir=output_dir.parent
     ) as temporary:
@@ -540,32 +728,30 @@ async def _download(source, output_dir, remote, progress, admit):
                     filename="source.torrent",
                     max_bytes=MAX_METADATA_BYTES,
                     single_threaded=True,
+                    check_capacity=capacity,
                 )
                 metadata_path = result.path
                 trackers = []
-            metadata = _decode(metadata_path.read_bytes())
-            manifest = _manifest(metadata)
+            await capacity(MAX_SANITIZED_BYTES)
+            manifest, sanitized, raw_trackers, private = await _parse_metadata(
+                metadata_path, metadata_dir / "sanitized.torrent"
+            )
             trackers = list(
-                dict.fromkeys(
-                    [
-                        *trackers,
-                        *await _udp_trackers(_tracker_urls(metadata)),
-                    ]
-                )
+                dict.fromkeys([*trackers, *await _udp_trackers(raw_trackers)])
             )[:32]
-            if metadata[b"info"].get(b"private") and not trackers:
+            if private and not trackers:
                 raise TorrentError(
                     "Private torrents require a public UDP tracker; "
                     "HTTP-only trackers are unsupported."
                 )
-            # Keep only info: web seeds, DHT bootstrap nodes and tracker redirects
-            # must never bypass the guarded HTTP source downloader.
-            sanitized = _encode({b"info": metadata[b"info"]})
-            cached_metadata = {b"info": metadata[b"info"]}
+            # The child returns info-only bytes; never reconstruct its raw graph.
+            cached_metadata = sanitized
             if trackers:
-                cached_metadata[b"announce-list"] = [
-                    [value.encode()] for value in trackers
-                ]
+                cached_metadata = (
+                    b"d13:announce-list"
+                    + _encode([[value.encode()] for value in trackers])
+                    + sanitized[1:]
+                )
 
             def save_metadata():
                 cached.parent.mkdir(exist_ok=True)
@@ -574,7 +760,7 @@ async def _download(source, output_dir, remote, progress, admit):
                 ) as saved:
                     saved_path = Path(saved.name)
                     try:
-                        saved.write(_encode(cached_metadata))
+                        saved.write(cached_metadata)
                         saved.flush()
                         os.fsync(saved.fileno())
                     except BaseException:
@@ -587,6 +773,7 @@ async def _download(source, output_dir, remote, progress, admit):
 
             # Saved before admission so a pause for file selection never has to
             # ask peers for the metadata again.
+            await capacity(len(cached_metadata))
             await _worker(save_metadata)
             selected = await admit(manifest)
             wanted = [
@@ -628,11 +815,8 @@ async def _download(source, output_dir, remote, progress, admit):
             await engine.call("unpause", gid)
 
             async def received(current, total):
-                if shutil.disk_usage(output_dir).free < remote.min_free_bytes:
-                    raise TorrentError(
-                        "Temporary storage is full. Free disk space and retry."
-                    )
                 await progress(current, total)
+                await capacity(0)
 
             await engine.wait(gid, progress=received)
             for item in wanted:

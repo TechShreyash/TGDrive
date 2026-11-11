@@ -8,7 +8,6 @@ import json
 import logging
 import math
 import secrets
-import shutil
 import sqlite3
 import tempfile
 import time
@@ -38,6 +37,12 @@ from tgdrive.replication.replica_state import (
     validate_catalog,
 )
 from tgdrive.settings.managed_settings import SettingsProblem
+from tgdrive.storage.capacity import (
+    CapacityUnavailable,
+    measure_capacity,
+    probe_for_directory,
+    require_headroom,
+)
 from tgdrive.transfers.tasks import _journalled
 
 _worker = _journalled(asyncio.to_thread)
@@ -54,9 +59,18 @@ def now():
 class _CopyMapping:
     """Disposable copy lookup; the MongoDB journal remains authoritative."""
 
-    def __init__(self, directory, reserve):
+    def __init__(
+        self, directory, reserve, *, probe_directory=None, outstanding_bytes=0
+    ):
         import os
 
+        self.probe_directory = probe_directory
+        require_headroom(
+            measure_capacity(directory, probe_directory=probe_directory),
+            65536,
+            reserve_bytes=reserve,
+            outstanding_bytes=outstanding_bytes,
+        )
         descriptor, path = tempfile.mkstemp(prefix=".replica-mapping-", dir=directory)
         os.close(descriptor)
         self.path, self.reserve = Path(path), reserve
@@ -71,11 +85,22 @@ class _CopyMapping:
             self.path.unlink(missing_ok=True)
             raise
 
-    def put(self, source, destination):
-        if shutil.disk_usage(self.path.parent).free < self.reserve + 65536:
-            raise SettingsProblem(
-                "Free local disk space before retrying recovery.", status=507
+    def put(self, source, destination, *, outstanding_bytes=0):
+        try:
+            require_headroom(
+                measure_capacity(
+                    self.path.parent, probe_directory=self.probe_directory
+                ),
+                65536,
+                reserve_bytes=self.reserve,
+                outstanding_bytes=outstanding_bytes,
             )
+        except OSError as error:
+            raise SettingsProblem(
+                "Recovery mapping storage capacity is unavailable or full. "
+                "Check the backing-capacity probe and free local disk space.",
+                status=503 if isinstance(error, CapacityUnavailable) else 507,
+            ) from None
         with closing(sqlite3.connect(self.path)) as db:
             db.execute(
                 "INSERT INTO copies VALUES(?,?) ON CONFLICT(source) "
@@ -696,7 +721,7 @@ class ChannelReplica:
 
         return collect_credentials(self.settings, self.runtime)
 
-    def _capture(self):
+    def _capture(self, *, outstanding_bytes=0):
         from tgdrive.recovery.snapshot_stream import write_recovery_snapshot
         from tgdrive.recovery.staged_snapshot import validate_snapshot
 
@@ -708,18 +733,24 @@ class ChannelReplica:
                 bytes.fromhex(self.key()),
                 self.settings,
                 validate_snapshot=partial(
-                    validate_snapshot, min_free_bytes=self.settings.min_free_bytes
+                    validate_snapshot,
+                    min_free_bytes=self.settings.min_free_bytes,
+                    probe_directory=probe_for_directory(self.settings, path.parent),
+                    outstanding_bytes=outstanding_bytes,
                 ),
+                outstanding_bytes=outstanding_bytes,
                 max_records=None,
                 max_database_bytes=None,
                 max_expanded_bytes=None,
                 max_recovery_bytes=MAX_STAGED_RECOVERY_BYTES,
             )
-            return self._read_bundle(path, self.key())
+            return self._read_bundle(
+                path, self.key(), outstanding_bytes=outstanding_bytes
+            )
         finally:
             path.unlink(missing_ok=True)
 
-    def _read_bundle(self, path, key):
+    def _read_bundle(self, path, key, *, outstanding_bytes=0):
         from cryptography.exceptions import InvalidTag
 
         from tgdrive.recovery.recovery_file import LEGACY_MAGICS, MAGIC
@@ -757,10 +788,15 @@ class ChannelReplica:
                 self.settings,
                 max_recovery_bytes=MAX_STAGED_RECOVERY_BYTES,
                 max_expanded_bytes=None,
+                outstanding_bytes=outstanding_bytes,
             )
             authenticated = True
             staged = stage_snapshot(
-                plaintext, index, min_free_bytes=self.settings.min_free_bytes
+                plaintext,
+                index,
+                min_free_bytes=self.settings.min_free_bytes,
+                probe_directory=probe_for_directory(self.settings, index.parent),
+                outstanding_bytes=outstanding_bytes,
             )
             with closing(staged.records("settings")) as rows:
                 check_recovery_key(self.settings, {"settings": rows})
@@ -885,7 +921,9 @@ class ChannelReplica:
             try:
                 if await self._stopped(True):
                     return True
-                await _worker(self.activate)
+                await _worker(
+                    self.activate, outstanding_bytes=self._remaining_staging_bytes()
+                )
             finally:
                 self.control.release()
         return True
@@ -926,6 +964,15 @@ class ChannelReplica:
                 )
             self.journal.set("job", None)
             return True
+
+    def _remaining_staging_bytes(self) -> int:
+        callback = getattr(
+            getattr(self, "runtime", None), "_remaining_staging_bytes", None
+        )
+        value = callback() if callable(callback) else 0
+        if type(value) is not int or value < 0:
+            raise CapacityUnavailable("Cannot read current upload storage commitments")
+        return value
 
     async def _staged_worker(self, function, *args, **kwargs):
         result = {}
@@ -987,9 +1034,15 @@ class ChannelReplica:
         created = []
         complete = False
         try:
+            outstanding_bytes = self._remaining_staging_bytes()
 
             def allocate():
-                value = _CopyMapping(self.directory, self.settings.min_free_bytes)
+                value = _CopyMapping(
+                    self.directory,
+                    self.settings.min_free_bytes,
+                    probe_directory=probe_for_directory(self.settings, self.directory),
+                    outstanding_bytes=outstanding_bytes,
+                )
                 created.append(value)
                 return value
 
@@ -1007,7 +1060,12 @@ class ChannelReplica:
                             [(message, length) for _, message, length in batch],
                         )
                         for original, message, _length in batch:
-                            await _worker(mapping.put, original, message)
+                            await _worker(
+                                mapping.put,
+                                original,
+                                message,
+                                outstanding_bytes=self._remaining_staging_bytes(),
+                            )
                         batch.clear()
 
                 async for node in self._staged_files(staged, source):
@@ -1055,7 +1113,12 @@ class ChannelReplica:
                             verified = None
                         if verified != message:
                             await transport.verify(destination, message, part["size"])
-                    await _worker(mapping.put, part["message_id"], message)
+                    await _worker(
+                        mapping.put,
+                        part["message_id"],
+                        message,
+                        outstanding_bytes=self._remaining_staging_bytes(),
+                    )
                     done_parts += 1
                     done_bytes += part["size"]
                     if time.monotonic() >= next_progress:
@@ -1198,7 +1261,15 @@ class ChannelReplica:
             await progress(complete=True)
 
     def _stage_bundle(
-        self, catalog, replica, credentials, key, database, recovery_token
+        self,
+        catalog,
+        replica,
+        credentials,
+        key,
+        database,
+        recovery_token,
+        *,
+        outstanding_bytes=0,
     ):
         """Prepare and verify one immutable bundle away from the event loop."""
         identity = [
@@ -1231,16 +1302,20 @@ class ChannelReplica:
                 if recovery_token:
                     payload["recovery_token"] = recovery_token
             content = encode_bundle(payload, key)
-            if (
-                shutil.disk_usage(self.directory).free
-                < len(content) + self.settings.min_free_bytes
-            ):
-                raise SettingsProblem(
-                    "Not enough local disk space to stage a recovery bundle. "
-                    "Free space and retry.",
-                    status=507,
+            try:
+                atomic_private(
+                    path,
+                    content,
+                    min_free_bytes=self.settings.min_free_bytes,
+                    probe_directory=probe_for_directory(self.settings, path.parent),
+                    outstanding_bytes=outstanding_bytes,
                 )
-            atomic_private(path, content)
+            except OSError as error:
+                raise SettingsProblem(
+                    "Recovery bundle storage capacity is unavailable or full. "
+                    "Check the backing-capacity probe and free space, then retry.",
+                    status=503 if isinstance(error, CapacityUnavailable) else 507,
+                ) from None
         staged = decode_bundle(read_private(path), key)
         if (
             staged["catalog"] != catalog
@@ -1297,6 +1372,7 @@ class ChannelReplica:
                 key,
                 recovery_token,
                 staged_options or {},
+                outstanding_bytes=self._remaining_staging_bytes(),
             )
             if staged_value is not None
             else await _worker(
@@ -1307,6 +1383,7 @@ class ChannelReplica:
                 key,
                 database,
                 recovery_token,
+                outstanding_bytes=self._remaining_staging_bytes(),
             )
         )
         ids = []
@@ -1388,7 +1465,9 @@ class ChannelReplica:
                         )
         return ids
 
-    def _stage_staged_bundle(self, value, credentials, key, recovery_token, options):
+    def _stage_staged_bundle(
+        self, value, credentials, key, recovery_token, options, *, outstanding_bytes=0
+    ):
         from tgdrive.recovery.snapshot_stream import write_staged_snapshot
         from tgdrive.recovery.staged_snapshot import validate_snapshot
 
@@ -1427,10 +1506,14 @@ class ChannelReplica:
                 bytes.fromhex(key.strip()),
                 self.settings,
                 validate_snapshot=partial(
-                    validate_snapshot, min_free_bytes=self.settings.min_free_bytes
+                    validate_snapshot,
+                    min_free_bytes=self.settings.min_free_bytes,
+                    probe_directory=probe_for_directory(self.settings, path.parent),
+                    outstanding_bytes=outstanding_bytes,
                 ),
                 credentials=credentials,
                 recovery_token=recovery_token,
+                outstanding_bytes=outstanding_bytes,
                 **writer_options,
                 max_expanded_bytes=None,
                 max_recovery_bytes=MAX_STAGED_RECOVERY_BYTES,
@@ -1519,7 +1602,9 @@ class ChannelReplica:
                     return
                 job = None
         if job is None and not check_only:
-            job = await self._staged_worker(self._capture)
+            job = await self._staged_worker(
+                self._capture, outstanding_bytes=self._remaining_staging_bytes()
+            )
             try:
                 catalog = job["catalog"]
                 if await self._stopped():
@@ -1652,9 +1737,19 @@ class ChannelReplica:
         try:
             await transport.start()
             await transport.inspect(source)
-            inspected_id = await transport.download(source, message_id, path)
+            inspected_id = await transport.download(
+                source,
+                message_id,
+                path,
+                outstanding_bytes=self._remaining_staging_bytes(),
+            )
             key = key or self.key()
-            bundle = await self._staged_worker(self._read_bundle, path, key)
+            bundle = await self._staged_worker(
+                self._read_bundle,
+                path,
+                key,
+                outstanding_bytes=self._remaining_staging_bytes(),
+            )
             from tgdrive.replication.replica_activation import check_recovery_key
 
             check_recovery_key(self.settings, bundle.get("database"))
@@ -1735,13 +1830,23 @@ class ChannelReplica:
                 if await transport.pinned_message(channel) is None:
                     return False
                 try:
-                    await transport.download(channel, None, path)
+                    await transport.download(
+                        channel,
+                        None,
+                        path,
+                        outstanding_bytes=self._remaining_staging_bytes(),
+                    )
                 except ReplicaTransportError as error:
                     if error.code == "REPLICA_DOCUMENT_TYPE":
                         return False
                     raise
                 try:
-                    bundle = await self._staged_worker(self._read_bundle, path, key)
+                    bundle = await self._staged_worker(
+                        self._read_bundle,
+                        path,
+                        key,
+                        outstanding_bytes=self._remaining_staging_bytes(),
+                    )
                 except LegacyRecoveryFile as error:
                     raise SettingsProblem(
                         str(error), code="LEGACY_BACKUP_REQUIRES_UPGRADE", status=409
@@ -1819,7 +1924,12 @@ class ChannelReplica:
                 "Wait for the displayed retry time.",
                 status=409,
             )
-        bundle = await self._staged_worker(self._read_bundle, path, key)
+        bundle = await self._staged_worker(
+            self._read_bundle,
+            path,
+            key,
+            outstanding_bytes=self._remaining_staging_bytes(),
+        )
         try:
             return await self._inspect_file_bundle(bundle, key, source, token)
         finally:
@@ -2256,7 +2366,7 @@ class ChannelReplica:
             await transport.close()
             await _worker(self._discard_staged, candidate)
 
-    def _derive_staged(self, candidate, credentials, options):
+    def _derive_staged(self, candidate, credentials, options, *, outstanding_bytes=0):
         from tgdrive.recovery.snapshot_stream import write_staged_json
         from tgdrive.recovery.staged_snapshot import stage_snapshot
         from tgdrive.replication.replica_activation import _staged_catalog
@@ -2275,12 +2385,17 @@ class ChannelReplica:
                 self.settings,
                 credentials=credentials,
                 max_expanded_bytes=None,
+                outstanding_bytes=outstanding_bytes,
                 **self._staged_writer_options(
                     staged, options.get("copy_mapping"), options
                 ),
             )
             result = stage_snapshot(
-                plaintext, index, min_free_bytes=self.settings.min_free_bytes
+                plaintext,
+                index,
+                min_free_bytes=self.settings.min_free_bytes,
+                probe_directory=probe_for_directory(self.settings, index.parent),
+                outstanding_bytes=outstanding_bytes,
             )
             return {
                 "staged": {
@@ -2365,7 +2480,11 @@ class ChannelReplica:
             elif candidate.get("backup_config"):
                 options["replica_channel"] = candidate["backup_config"]["channel"]
             derived = await self._staged_worker(
-                self._derive_staged, candidate, credentials, options
+                self._derive_staged,
+                candidate,
+                credentials,
+                options,
+                outstanding_bytes=self._remaining_staging_bytes(),
             )
             if await self._stopped(True):
                 return
@@ -2453,9 +2572,17 @@ class ChannelReplica:
         path = self.directory / (".replica-pin-" + secrets.token_hex(12))
         pinned = None
         try:
-            await transport.download(channel, message, path)
+            await transport.download(
+                channel,
+                message,
+                path,
+                outstanding_bytes=self._remaining_staging_bytes(),
+            )
             pinned = await self._staged_worker(
-                self._read_bundle, path, candidate["key"]
+                self._read_bundle,
+                path,
+                candidate["key"],
+                outstanding_bytes=self._remaining_staging_bytes(),
             )
             if not await _worker(
                 self._staged_pin_matches, pinned, candidate, mapping, channel
@@ -2469,7 +2596,7 @@ class ChannelReplica:
             if pinned is not None and "staged" in pinned:
                 await _worker(self._discard_staged, pinned)
 
-    def activate(self):
+    def activate(self, *, outstanding_bytes=0):
         self._check_saved_state()
         candidate = self.journal.get("candidate")
         if not candidate or not candidate.get("complete"):
@@ -2478,7 +2605,16 @@ class ChannelReplica:
             )
         from tgdrive.replication.replica_activation import prepare_activation
 
-        prepare_activation(self.settings, candidate)
+        try:
+            prepare_activation(
+                self.settings, candidate, outstanding_bytes=outstanding_bytes
+            )
+        except OSError as error:
+            raise SettingsProblem(
+                "Cannot stage recovery activation intent. Check the backing-capacity "
+                "probe and free space after upload commitments, then retry.",
+                status=503 if isinstance(error, CapacityUnavailable) else 507,
+            ) from None
         self.journal.set("activation", True)
         self.update(phase="restart_required")
         self.report(
@@ -2493,7 +2629,12 @@ class ChannelReplica:
     ):
         path = self.directory / (".replica-pin-" + secrets.token_hex(12))
         try:
-            await transport.download(channel, message_id, path)
+            await transport.download(
+                channel,
+                message_id,
+                path,
+                outstanding_bytes=self._remaining_staging_bytes(),
+            )
             bundle = await asyncio.to_thread(
                 lambda: decode_bundle(read_private(path), candidate["key"])
             )

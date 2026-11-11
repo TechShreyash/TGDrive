@@ -11,7 +11,6 @@ import hashlib
 import math
 import os
 import re
-import shutil
 import sqlite3
 import tempfile
 from contextlib import closing
@@ -23,6 +22,7 @@ from bson import BSON, Decimal128, json_util
 from bson.codec_options import CodecOptions
 from bson.errors import InvalidDocument
 
+from tgdrive.storage.capacity import measure_capacity, require_headroom
 from tgdrive.storage.mongo_store import MongoStore
 from tgdrive.storage.store import (
     ROOT_ID,
@@ -175,9 +175,13 @@ def _object(value):
 
 
 class _DiskBudget:
-    def __init__(self, directory, min_free_bytes):
+    def __init__(
+        self, directory, min_free_bytes, *, probe_directory=None, outstanding_bytes=0
+    ):
         self.directory = directory
         self.minimum = _strict_int(min_free_bytes, "min_free_bytes")
+        self.probe_directory = probe_directory
+        self.outstanding_bytes = outstanding_bytes
         self.bytes = self.records = 0
         self.check(force=True)
 
@@ -185,13 +189,20 @@ class _DiskBudget:
         self.bytes += added_bytes
         self.records += 1
         if force or self.bytes >= READ_BYTES or self.records >= 100:
-            if shutil.disk_usage(self.directory).free < self.minimum + max(
-                added_bytes, READ_BYTES
-            ):
-                raise OSError(
-                    "Not enough temporary space to stage recovery metadata; "
-                    "free space and retry"
+            try:
+                require_headroom(
+                    measure_capacity(
+                        self.directory, probe_directory=self.probe_directory
+                    ),
+                    max(added_bytes, READ_BYTES),
+                    reserve_bytes=self.minimum,
+                    outstanding_bytes=self.outstanding_bytes,
                 )
+            except OSError as error:
+                raise OSError(
+                    "Not enough temporary space or unavailable recovery capacity; "
+                    "check the backing-capacity probe and free space, then retry"
+                ) from error
             self.bytes = self.records = 0
 
 
@@ -779,10 +790,22 @@ class StagedSnapshot:
             return found[0], self._remap_node(db, _unpack(found[1]), channel)
 
 
-def stage_snapshot(json_path, destination, *, min_free_bytes=0):
+def stage_snapshot(
+    json_path,
+    destination,
+    *,
+    min_free_bytes=0,
+    probe_directory=None,
+    outstanding_bytes=0,
+):
     """Stage completely authenticated plaintext; delete partial indexes on failure."""
     destination = Path(destination)
-    budget = _DiskBudget(destination.parent, min_free_bytes)
+    budget = _DiskBudget(
+        destination.parent,
+        min_free_bytes,
+        probe_directory=probe_directory,
+        outstanding_bytes=outstanding_bytes,
+    )
     descriptor = os.open(destination, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
     os.close(descriptor)
     try:
@@ -843,11 +866,17 @@ def stage_snapshot(json_path, destination, *, min_free_bytes=0):
         raise
 
 
-def validate_snapshot(json_path, *, min_free_bytes=0):
+def validate_snapshot(
+    json_path, *, min_free_bytes=0, probe_directory=None, outstanding_bytes=0
+):
     """Validate an exporter file with an automatically removed private index."""
     with tempfile.TemporaryDirectory(
         prefix=".snapshot-", dir=Path(json_path).parent
     ) as directory:
         stage_snapshot(
-            json_path, Path(directory) / "index.sqlite", min_free_bytes=min_free_bytes
+            json_path,
+            Path(directory) / "index.sqlite",
+            min_free_bytes=min_free_bytes,
+            probe_directory=probe_directory,
+            outstanding_bytes=outstanding_bytes,
         )

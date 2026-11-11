@@ -87,15 +87,36 @@ def test_neutral_theme_surfaces_and_monitor_layout(server, desktop, theme):
         page.screenshot(
             path=ARTIFACTS / f"neutral-{view}-{theme}.png", animations="disabled"
         )
-    network = page.get_by_role("region", name="Network traffic", exact=True)
-    resources = page.get_by_role("region", name="Resources", exact=True)
-    network_box, resource_box = network.bounding_box(), resources.bounding_box()
-    assert abs(network_box["y"] - resource_box["y"]) < 2
-    assert network_box["width"] > resource_box["width"] * 1.5
-    assert network_box["y"] < 650
+    activity = page.get_by_role("region", name="Current activity", exact=True)
+    assert activity.bounding_box()["height"] < 360
+    expect(
+        page.get_by_role("region", name="Automatic tuning", exact=True)
+    ).not_to_be_visible()
+    expect(
+        page.get_by_role("combobox", name="Time range", exact=True)
+    ).not_to_be_visible()
     page.set_viewport_size({"width": 390, "height": 844})
     assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
-    assert resources.bounding_box()["y"] > network.bounding_box()["y"]
+    assert activity.bounding_box()["height"] < 440
+    resources = page.get_by_role("region", name="Server resources", exact=True)
+    expect(resources).to_be_visible()
+    for width in (390, 320):
+        page.set_viewport_size({"width": width, "height": 844})
+        actions = [
+            activity.get_by_role("link", name="View Transfers", exact=True),
+            activity.get_by_role("link", name="Upload storage limits", exact=True),
+            resources.get_by_role("link", name="Cache limits", exact=True),
+            resources.get_by_role("button", name="View resource history", exact=True),
+        ]
+        for link in actions:
+            assert link.bounding_box()["height"] >= 44
+        assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
+    page.set_viewport_size({"width": 390, "height": 844})
+    page.get_by_role("tab", name="Resources", exact=True).click()
+    expect(
+        page.get_by_role("region", name="Server network", exact=True)
+    ).to_be_visible()
+    expect(page.get_by_role("combobox", name="Time range", exact=True)).to_be_visible()
     page.screenshot(
         path=ARTIFACTS / f"neutral-performance-mobile-{theme}.png",
         full_page=True,
@@ -106,6 +127,195 @@ def test_neutral_theme_surfaces_and_monitor_layout(server, desktop, theme):
     )
 
 
+@pytest.mark.parametrize("width", [1440, 390, 320])
+@pytest.mark.parametrize("known", [True, False])
+def test_overview_exposes_real_resources_and_idle_rates(server, desktop, width, known):
+    _, page = desktop
+    page.emulate_media(reduced_motion="reduce")
+    login(page, server.url)
+    snapshot = page.request.get(server.url + "/api/v1/performance").json()
+    mib = 1024**2
+    snapshot["traffic"].update(download_bytes_per_second=0, upload_bytes_per_second=0)
+    snapshot["telegram"].update(active=0, queued=0)
+    snapshot["diagnosis"] = {
+        "sampled_at": snapshot["traffic"]["at"],
+        "window_seconds": 30,
+        "observed_seconds": 12,
+        "stale_after_seconds": 15,
+        "state": "idle",
+        "workload": dict.fromkeys(
+            [
+                "playback_requests",
+                "download_requests",
+                "unknown_file_requests",
+                "upload_requests",
+            ],
+            0,
+        ),
+        "constraints": [],
+    }
+    snapshot["server"]["cpu"] = {"percent": 25 if known else None, "scope": "host"}
+    snapshot["server"]["memory"].update(
+        cgroup_current=512 * mib if known else 0,
+        cgroup_limit=1024 * mib if known else None,
+    )
+    snapshot["cache"]["disk"].update(
+        available=known, bytes=128 * mib if known else 0, max_bytes=1024 * mib
+    )
+    snapshot["cache"]["memory"].update(
+        bytes=32 * mib if known else 0, effective_max_bytes=64 * mib if known else 0
+    )
+    page.route("**/api/v1/performance", lambda route: route.fulfill(json=snapshot))
+    page.set_viewport_size({"width": width, "height": 900})
+    page.goto(server.url + "/?view=performance")
+    activity = page.get_by_role("region", name="Current activity", exact=True)
+    resources = page.get_by_role("region", name="Server resources", exact=True)
+    expect(activity).to_contain_text("Nothing is transferring right now")
+    expect(activity.locator(".performance-file-rates dd")).to_have_text(
+        ["0 B/s", "0 B/s"]
+    )
+    expect(resources.get_by_role("progressbar")).to_have_count(4 if known else 0)
+    activity_box = activity.bounding_box()
+    resources_box = resources.bounding_box()
+    if width == 1440:
+        assert resources_box["x"] > activity_box["x"] + activity_box["width"]
+        assert abs(resources_box["y"] - activity_box["y"]) < 2
+    else:
+        assert resources_box["y"] >= activity_box["y"] + activity_box["height"]
+    expect(
+        activity.locator(".performance-activity-actions").get_by_role("link")
+    ).to_have_count(2)
+    if known:
+        expect(
+            resources.get_by_role("progressbar", name="CPU usage", exact=True)
+        ).to_have_attribute("value", "25")
+        expect(resources).to_contain_text("512 MiB / 1 GiB")
+    else:
+        expect(resources).to_contain_text("0 B in use")
+        expect(resources).to_contain_text("No container limit reported")
+        expect(resources).to_contain_text("Disabled")
+        expect(resources).to_contain_text("Unavailable")
+    assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
+    page.screenshot(
+        path=ARTIFACTS / f"performance-overview-{width}-{known}.png", full_page=True
+    )
+    resources.get_by_role("button", name="View resource history", exact=True).click()
+    expect(page.get_by_role("tab", name="Resources", exact=True)).to_have_attribute(
+        "aria-selected", "true"
+    )
+
+
+@pytest.mark.parametrize("state", ["unconfigured", "available", "zero", "unavailable"])
+def test_storage_measurements_distinguish_guest_backing_and_headroom(
+    server, desktop, state
+):
+    _, page = desktop
+    login(page, server.url)
+    snapshot = page.request.get(server.url + "/api/v1/performance").json()
+    gib = 1024**3
+    snapshot["database"] = {
+        "used_bytes": 0,
+        "index_bytes": 0,
+        "objects": 0,
+        "volume_total_bytes": 0,
+    }
+    available = state in ("available", "zero")
+    snapshot["server"]["disk"].update(
+        available=True,
+        total_bytes=1000 * gib,
+        used_bytes=200 * gib,
+        free_bytes=800 * gib,
+        capacity={
+            "filesystem": {
+                "available": True,
+                "total_bytes": 1000 * gib,
+                "used_bytes": 200 * gib,
+                "free_bytes": 800 * gib,
+            },
+            "backing": {
+                "configured": state != "unconfigured",
+                "available": available,
+                "total_bytes": 100 * gib if available else None,
+                "used_bytes": 60 * gib if available else None,
+                "free_bytes": (40 * gib if state == "available" else 0)
+                if available
+                else None,
+            },
+            "effective": {
+                "available": available,
+                "free_bytes": (40 * gib if state == "available" else 0)
+                if available
+                else None,
+                "headroom_bytes": (20 * gib if state == "available" else 0)
+                if available
+                else None,
+            },
+            "scope": "filesystem_only"
+            if state == "unconfigured"
+            else "backing_filesystem"
+            if available
+            else "backing_unavailable",
+        },
+    )
+    page.route("**/api/v1/performance", lambda route: route.fulfill(json=snapshot))
+    page.goto(server.url + "/?view=performance")
+    page.get_by_role("tab", name="Resources", exact=True).click()
+    expect(
+        page.get_by_role("progressbar", name="Data filesystem", exact=True)
+    ).to_have_attribute("max", str(1000 * gib))
+    database = page.locator(".performance-usage").filter(
+        has=page.get_by_text("MongoDB", exact=True)
+    )
+    expect(database.locator("strong")).to_have_text("0 B")
+    expect(database.get_by_role("progressbar")).to_have_count(0)
+    readings = page.get_by_role("group", name="Storage capacity measurements")
+    if state == "unconfigured":
+        expect(readings).not_to_be_attached()
+        page.get_by_text("Resource measurement details", exact=True).click()
+        expect(
+            page.get_by_text("Backing storage is not separately measured", exact=False)
+        ).to_be_visible()
+    else:
+        expect(readings.get_by_role("definition")).to_have_text(
+            ["40 GiB", "20 GiB"]
+            if state == "available"
+            else ["0 B", "0 B"]
+            if state == "zero"
+            else ["Unavailable", "Unavailable"]
+        )
+        if state == "unavailable":
+            expect(readings.get_by_role("status")).to_contain_text(
+                "New writes are unavailable"
+            )
+        else:
+            expect(readings.get_by_role("status")).not_to_be_attached()
+    management = page.request.get(server.url + "/api/v1/settings").json()
+    management["stats"].update(
+        free_disk_bytes=800 * gib,
+        disk_capacity=snapshot["server"]["disk"]["capacity"],
+    )
+    page.route("**/api/v1/settings", lambda route: route.fulfill(json=management))
+    page.goto(server.url + "/?view=storage")
+    staging = page.get_by_role("region", name="Temporary Storage", exact=True)
+    expect(staging).to_contain_text("800 GiB reported staging-filesystem free")
+    if state == "unconfigured":
+        expect(staging).not_to_contain_text("Backing filesystem free:")
+    else:
+        backing, after_reserve = (
+            ("40 GiB", "20 GiB")
+            if state == "available"
+            else ("0 B", "0 B")
+            if state == "zero"
+            else ("Unavailable", "Unavailable")
+        )
+        expect(staging).to_contain_text("Backing filesystem free: " + backing)
+        expect(staging).to_contain_text("Free after reserve: " + after_reserve)
+        if state == "unavailable":
+            expect(staging.get_by_role("status")).to_contain_text(
+                "New writes are unavailable"
+            )
+
+
 def test_performance_explanation_without_backend_support(server, desktop):
     _, page = desktop
     login(page, server.url)
@@ -114,8 +324,8 @@ def test_performance_explanation_without_backend_support(server, desktop):
     page.route("**/api/v1/performance", lambda route: route.fulfill(json=snapshot))
     page.goto(server.url + "/?view=performance")
     explanation = page.get_by_role("region", name="Current activity", exact=True)
-    expect(explanation).to_contain_text("Performance explanations are unavailable")
-    expect(page.get_by_role("heading", name="Live file transfers")).to_be_visible()
+    expect(explanation).to_contain_text("Current information is unavailable")
+    expect(page.get_by_role("link", name="View Transfers", exact=True)).to_be_visible()
     summary = explanation.locator("summary")
     summary.focus()
     page.keyboard.press("Enter")
@@ -152,8 +362,8 @@ def test_performance_diagnosis_evidence_states_and_expiry(server, desktop, width
         "stale_after_seconds": 15,
         "state": "idle",
         "workload": {
-            "playback_requests": 1,
-            "download_requests": 2,
+            "playback_requests": 0,
+            "download_requests": 0,
             "unknown_file_requests": 0,
             "upload_requests": 0,
         },
@@ -177,10 +387,11 @@ def test_performance_diagnosis_evidence_states_and_expiry(server, desktop, width
     page.clock.install()
     page.goto(server.url + "/?view=performance")
     explanation = page.get_by_role("region", name="Current activity", exact=True)
-    expect(explanation).to_contain_text("No workload activity was observed")
+    expect(explanation).to_contain_text("Nothing is transferring right now")
     diagnosis["state"] = "observing"
+    diagnosis["workload"].update(playback_requests=1, download_requests=2)
     page.get_by_role("button", name="Refresh Performance", exact=True).click()
-    expect(explanation).to_contain_text("Collecting samples")
+    expect(explanation).to_contain_text("Checking recent activity")
     diagnosis["state"] = "active"
     diagnosis["constraints"] = [
         {
@@ -211,6 +422,10 @@ def test_performance_diagnosis_evidence_states_and_expiry(server, desktop, width
     ]
     page.get_by_role("button", name="Refresh Performance", exact=True).click()
     expect(explanation.locator(".performance-wait > summary")).to_have_count(3)
+    measurements = explanation.locator("summary").filter(
+        has_text="Measurements and scope"
+    )
+    measurements.click()
     expect(explanation).to_contain_text("12 s observed")
     expect(explanation).to_contain_text("30 s window")
     page.screenshot(
@@ -222,13 +437,9 @@ def test_performance_diagnosis_evidence_states_and_expiry(server, desktop, width
     evidence.first.focus()
     page.keyboard.press("Enter")
     expect(explanation.get_by_text("3 operations", exact=True)).to_be_visible()
-    measurements = explanation.locator("summary").filter(
-        has_text="Measurements and scope"
-    )
-    measurements.click()
-    expect(explanation.get_by_text("1 KB/s", exact=True)).to_be_visible()
+    expect(explanation.get_by_text("1 KiB/s", exact=True)).to_be_visible()
     expect(explanation).to_contain_text(
-        "Telegram inbound · reporting accountsUnavailable"
+        "Telegram inbound - reporting accountsUnavailable"
     )
     assert explanation.evaluate("node => node.scrollWidth <= node.clientWidth")
     page.screenshot(
@@ -239,8 +450,8 @@ def test_performance_diagnosis_evidence_states_and_expiry(server, desktop, width
     # A failed refresh must not keep the retained sample's evidence current.
     failing = True
     page.clock.fast_forward(16000)
-    expect(explanation).to_contain_text("unavailable or stale")
-    expect(explanation.get_by_text("1 KB/s", exact=True)).to_have_count(0)
+    expect(explanation).to_contain_text("Current information is unavailable")
+    expect(explanation.get_by_text("1 KiB/s", exact=True)).to_have_count(0)
     expect(explanation.locator(".performance-wait > summary")).to_have_count(0)
     failing = False
     snapshot["traffic"]["at"] = diagnosis["sampled_at"] = 2000
@@ -248,7 +459,7 @@ def test_performance_diagnosis_evidence_states_and_expiry(server, desktop, width
     expect(explanation.locator(".performance-wait > summary")).to_have_count(3)
     diagnosis["state"] = "unavailable"
     page.get_by_role("button", name="Refresh Performance", exact=True).click()
-    expect(explanation).to_contain_text("unavailable or stale")
+    expect(explanation).to_contain_text("Current information is unavailable")
 
 
 def test_missing_request_history_does_not_imply_zero_errors(server, desktop):
@@ -258,12 +469,14 @@ def test_missing_request_history_does_not_imply_zero_errors(server, desktop):
     snapshot.pop("traffic", None)
     page.route("**/api/v1/performance", lambda route: route.fulfill(json=snapshot))
     page.goto(server.url + "/?view=performance")
+    page.get_by_role("tab", name="Accounts", exact=True).click()
     status = page.get_by_role("region", name="Account and request status", exact=True)
     expect(status).to_contain_text("recent request error history unavailable")
     expect(status).not_to_contain_text("no recent failed requests")
     expect(status).not_to_contain_text("Healthy")
+    page.get_by_role("tab", name="Resources", exact=True).click()
     expect(
-        page.get_by_role("heading", name="Network traffic", exact=True)
+        page.get_by_role("heading", name="Server network", exact=True)
     ).to_be_visible()
 
 
@@ -687,6 +900,25 @@ def test_performance_views_keyboard_navigation_and_settings_groups(server, deskt
             }
         ],
     )
+    snapshot["traffic"]["at"] = now
+    snapshot["diagnosis"] = {
+        "sampled_at": now,
+        "window_seconds": 30,
+        "observed_seconds": 12,
+        "stale_after_seconds": 15,
+        "state": "active",
+        "workload": {
+            "playback_requests": 1,
+            "download_requests": 0,
+            "unknown_file_requests": 0,
+            "upload_requests": 1,
+        },
+        "telegram_inbound_bytes_per_second": None,
+        "http_delivered_bytes_per_second": None,
+        "cache_hits": None,
+        "cache_misses": None,
+        "constraints": [],
+    }
     snapshot["tuning"] = {
         "running": True,
         "values": {"cache_memory_bytes": 256 * 1024**2},
@@ -697,16 +929,12 @@ def test_performance_views_keyboard_navigation_and_settings_groups(server, deskt
     overview = page.get_by_role("tab", name="Overview", exact=True)
     expect(overview).to_have_attribute("aria-selected", "true")
     expect(page.get_by_role("tabpanel", name="Overview")).to_be_visible()
-    tuning = page.get_by_role("region", name="Automatic tuning", exact=True)
-    expect(tuning.get_by_text("Memory cache", exact=True)).not_to_be_visible()
-    tuning.locator("summary").focus()
-    page.keyboard.press("Enter")
-    expect(tuning.get_by_text("Memory cache", exact=True)).to_be_visible()
-    expect(tuning.get_by_role("definition")).to_have_text("256 MB")
-    expect(tuning).to_contain_text("Sized from free memory")
-    expect(page.get_by_role("heading", name="Live file transfers")).to_be_visible()
-    expect(page.get_by_text("3 MB/s", exact=True)).to_be_visible()
-    expect(page.get_by_text("1 MB/s", exact=True)).to_be_visible()
+    expect(
+        page.get_by_role("region", name="Automatic tuning", exact=True)
+    ).not_to_be_visible()
+    expect(page.get_by_role("link", name="View Transfers", exact=True)).to_be_visible()
+    expect(page.get_by_text("3 MiB/s", exact=True)).to_be_visible()
+    expect(page.get_by_text("1 MiB/s", exact=True)).to_be_visible()
     expect(
         page.get_by_role("region", name="Container RAM", exact=True)
     ).not_to_be_visible()
@@ -727,7 +955,7 @@ def test_performance_views_keyboard_navigation_and_settings_groups(server, deskt
         page.get_by_role("heading", name="Storage & cache", exact=True)
     ).to_be_visible()
     expect(
-        page.get_by_role("progressbar", name="Cache filesystem", exact=True)
+        page.get_by_role("progressbar", name="Data filesystem", exact=True)
     ).to_be_visible()
     assert (
         page.get_by_role("heading", name="Storage & cache")
@@ -735,6 +963,13 @@ def test_performance_views_keyboard_navigation_and_settings_groups(server, deskt
         .count()
         == 0
     )
+    tuning = page.get_by_role("region", name="Automatic tuning", exact=True)
+    expect(tuning.get_by_text("Memory cache", exact=True)).not_to_be_visible()
+    tuning.locator("summary").focus()
+    page.keyboard.press("Enter")
+    expect(tuning.get_by_text("Memory cache", exact=True)).to_be_visible()
+    expect(tuning.get_by_role("definition")).to_have_text("256 MiB")
+    expect(tuning).to_contain_text("Sized from free memory")
     page.screenshot(path=ARTIFACTS / "owner-performance-resources.png", full_page=True)
     page.get_by_role("tab", name="Overview", exact=True).click()
     page.screenshot(
@@ -758,9 +993,10 @@ def test_performance_views_keyboard_navigation_and_settings_groups(server, deskt
             full_page=True,
         )
     page.goto(server.url + "/?view=settings&section=cache")
-    # c24bc4a replaced the cache budgets with automatic tuning.
+    # Owner ceilings are distinct from the governor effective budgets.
     expect(page.get_by_role("group", name="Cache storage", exact=True)).to_have_count(0)
-    expect(page.get_by_label("Memory cache (MiB)", exact=True)).to_have_count(0)
+    expect(page.get_by_label("Media disk cache mode", exact=True)).to_be_visible()
+    expect(page.get_by_label("Media memory cache mode", exact=True)).to_be_visible()
     expect(
         page.get_by_role("group", name="Automatic preloading", exact=True)
     ).to_be_visible()
@@ -852,13 +1088,14 @@ def test_network_includes_url_downloads_and_resources_use_container_limits(
     ]
     page.route("**/api/v1/performance", lambda route: route.fulfill(json=snapshot))
     page.goto(server.url + "/?view=performance")
-    network = page.get_by_role("region", name="Network traffic", exact=True)
-    expect(network).to_contain_text("12 MB/s")
+    page.get_by_role("tab", name="Resources", exact=True).click()
+    network = page.get_by_role("region", name="Server network", exact=True)
+    expect(network).to_contain_text("12 MiB/s")
     expect(network).to_contain_text(
-        "Includes Telegram, URL downloads, device uploads and viewer downloads"
+        "All traffic on the reported network interface; not Telegram alone"
     )
     expect(
-        page.get_by_role("img", name="Network traffic over time", exact=True)
+        page.get_by_role("img", name="Server network over time", exact=True)
     ).to_be_visible()
     expect(network.locator("polyline.performance-plot-active")).to_have_count(2)
     plot = network.locator(".performance-chart-plot")
@@ -879,14 +1116,9 @@ def test_network_includes_url_downloads_and_resources_use_container_limits(
     assert max(positions) - min(positions) > 10
     expect(network.locator("svg title")).to_have_count(0)
 
-    expect(
-        page.get_by_role("region", name="Container RAM", exact=True)
-    ).not_to_be_visible()
-    file_traffic = page.locator(
-        "section",
-        has=page.get_by_role("heading", name="Live file transfers", exact=True),
-    ).last
-    expect(file_traffic).to_contain_text("0 B/s")
+    expect(page.get_by_role("region", name="Container RAM", exact=True)).to_be_visible()
+    page.get_by_role("tab", name="Overview", exact=True).click()
+    expect(page.locator(".performance-file-rates dd")).to_have_text(["0 B/s", "0 B/s"])
 
     def record_overview_style(label):
         activity = page.get_by_role("region", name="Current activity", exact=True)
@@ -950,8 +1182,8 @@ def test_network_includes_url_downloads_and_resources_use_container_limits(
     cpu.get_by_role("button", name="Live", exact=True).click()
     expect(cpu.locator(".performance-chart-readout")).to_contain_text("25.0%")
     ram = page.get_by_role("region", name="Container RAM", exact=True)
-    expect(ram.locator(".performance-chart-heading")).to_contain_text("2 GB / 8 GB")
-    expect(ram.locator(".performance-chart-axis")).to_contain_text("8 GB")
+    expect(ram.locator(".performance-chart-heading")).to_contain_text("2 GiB / 8 GiB")
+    expect(ram.locator(".performance-chart-axis")).to_contain_text("8 GiB")
     page.set_viewport_size({"width": 1440, "height": 1100})
     page.get_by_role(
         "heading", name="Performance", exact=True
@@ -982,8 +1214,10 @@ def test_network_includes_url_downloads_and_resources_use_container_limits(
     snapshot["server"]["history"] = []
     page.get_by_role("button", name="Refresh Performance", exact=True).click()
     expect(
-        page.get_by_role("img", name="Network traffic over time", exact=True)
+        page.get_by_role("img", name="Server network over time", exact=True)
     ).to_have_count(0)
     page.get_by_role("tab", name="Overview", exact=True).click()
-    expect(network.locator(".performance-chart-heading")).to_contain_text("12 MB/s")
+    expect(network).not_to_be_visible()
+    page.get_by_role("tab", name="Resources", exact=True).click()
+    expect(network.locator(".performance-chart-heading")).to_contain_text("12 MiB/s")
     expect(network.locator(".performance-chart-collecting")).to_be_visible()

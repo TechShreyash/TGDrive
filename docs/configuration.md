@@ -2,14 +2,15 @@
 
 [Docs home](README.md) · [Setup](setup.md) · [Configuration reference](reference.md)
 
-TGDrive sizes cache/storage from server resources and caps preload jobs by CPU.
-Configured concurrency ceilings remain; Telegram applies per-account cooldown
-and recovery within them. **Configuration** holds the choices you can save here.
+Choose how much retained cache and temporary staging TGDrive may use before
+large uploads or playback on a shared host. Leave **Auto** selected for bounded
+defaults, or save lower ceilings to leave more room for other applications.
+**Configuration** also holds playback preloading, split size and timezone.
 
 | I want to… | Where |
 | --- | --- |
-| See what TGDrive chose and why | **Performance → Automatic tuning** ([how it works](performance.md#automatic-tuning)) |
-| Cap TGDrive on a shared server | [Cap TGDrive with Docker limits](#cap-tgdrive-with-docker-limits) |
+| See what TGDrive chose and why | **Performance → Resources → Applied limits and reasons** ([how it works](performance.md#automatic-tuning)) |
+| Limit resource use on a shared host | [Cache ceilings](#cache-settings) · [Transfer limits](#transfer-limits) · [Docker limits](#cap-tgdrive-with-docker-limits) |
 | Turn playback preloading on or off | [Cache settings](#cache-settings) |
 | Split files into smaller Telegram documents | [Transfer limits](#transfer-limits) |
 | Change displayed dates | [Timezone](#timezone) |
@@ -32,9 +33,12 @@ If another session changes settings first, reload before saving.
 | Setting | Default | Meaning |
 | --- | --- | --- |
 | Preload during playback | On | Prepare upcoming original audio/video bytes. Off still allows requested-range read-ahead and manual **Preload file**. |
+| Retained media RAM ceiling | Auto: 256 MiB | Lower it to leave more RAM for other work; zero disables this payload-retention tier. |
+| Media disk-cache ceiling | Auto: 10 GiB | Limit retained media bytes on disk; zero disables this payload-retention tier. |
 
-Cache memory and disk budgets are automatic. Clearing or expiring cache leaves
-Telegram originals and MongoDB records intact.
+Choose **Save changes** after editing a ceiling. TGDrive adapts within that
+ceiling rather than reserving the full amount in advance. Clearing or expiring
+cache leaves Telegram originals and MongoDB records intact.
 See [preloading](usage.md#preload-a-file-for-smoother-playback-and-downloads).
 
 **Regenerate all thumbnails** refreshes existing file covers in the background
@@ -46,15 +50,29 @@ after confirmation. See [rebuild progress and limits](thumbnails.md#rebuild-exis
 | --- | --- | --- |
 | File split size | 2000 MiB | TGDrive's maximum document size for every account. Choose 1–2000; 0 also uses 2000. Existing transfers keep their plan. |
 
-New work must fit the logical file ceiling, existing staging reservations and
-actual disk space after the reserve. Startup values set uploads per bot, URL
-downloads and Telegram request ceilings. **Bot uploads** (folder and encryption) also live
-on this page. [Staging policy](performance.md#automatic-tuning).
+| Resource control | Auto | When to change it |
+| --- | --- | --- |
+| Temporary staging ceiling | 16 GiB | Bound unfinished upload/import work; an explicit value must be positive. |
+| Protected free space | Larger of 1 GiB and 5% of each relevant filesystem | Leave more space for other applications; zero removes this extra TGDrive floor. |
+
+Save before starting more work. A lower staging ceiling preserves unchanged
+or shrinking claims for already admitted work. New or growing claims must fit
+the new ceiling, other reservations and actual free space. Startup values set uploads per bot, URL downloads and Telegram request
+ceilings. **Bot uploads** (folder and encryption) also live on this page. [Staging policy](performance.md#automatic-tuning).
 
 ## Cap TGDrive with Docker limits
 
-The automatic tuning reads the container's own memory and CPU limits, so on a
-server shared with other apps, cap TGDrive in Docker instead of in TGDrive:
+The saved ceilings do not cap whole-process memory or every disk write. Use
+Docker limits too when sharing a server.
+
+In a VM or WSL, the data filesystem can report more free space than its physical
+backing drive. Check host free space too. Optional deployment-owned backing
+probes let TGDrive check that filesystem as well; a missing required measurement
+refuses new writes rather than falling back to the larger guest value. These
+are observed headroom checks, not an atomic quota against other applications.
+[Backing-probe setup and scope](reference.md#deployment-variables-outside-application-settings).
+
+Use Docker memory and CPU limits as well when sharing a server:
 
 ~~~yaml
 services:
@@ -63,11 +81,21 @@ services:
         cpus: 2
 ~~~
 
-Earlier resource variables seed startup values; they are not saved dashboard
-preferences. The governor replaces measured resource budgets while running and
-keeps configured concurrency ceilings, apart from the preload CPU cap. Pacing,
-queue size and cache retention keep their startup values. See
+<details>
+<summary>What the ceilings cover and how tuning applies them</summary>
+
+Small-cover and poster caches each have a separate 128 MiB disk budget, and
+protected recovery files are separate. No ceiling guarantees that other host
+applications leave space available.
+
+Earlier managed resource variables seed startup; saved owner ceilings bound
+the live governor budgets. Save applies reductions immediately; growth can wait
+for the normal five-second governor pass. Configured concurrency ceilings remain,
+apart from the preload CPU cap. Pacing, queue size and cache retention keep
+their startup values. See
 [which settings are managed](reference.md#performance-and-cache-settings).
+
+</details>
 
 ## Timezone
 

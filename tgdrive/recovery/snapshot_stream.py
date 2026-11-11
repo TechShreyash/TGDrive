@@ -6,7 +6,6 @@ import hashlib
 import json
 import os
 import secrets
-import shutil
 import stat
 import tempfile
 import zlib
@@ -27,16 +26,33 @@ from tgdrive.recovery.recovery_file import (
     sanitize_database,
 )
 from tgdrive.replication.replica_settings import POLICIES, credentials_from_snapshot
+from tgdrive.storage.capacity import (
+    CapacityUnavailable,
+    measure_capacity,
+    probe_for_directory,
+    require_headroom,
+)
 
 IO_CHUNK_BYTES = 64 * 1024
 CURSOR_BATCH_RECORDS = 100
 
 
 class _Writer:
-    def __init__(self, stream, directory, reserve, maximum):
+    def __init__(
+        self,
+        stream,
+        directory,
+        reserve,
+        maximum,
+        *,
+        probe_directory=None,
+        outstanding_bytes=0,
+    ):
         self.stream = stream
         self.directory = directory
         self.reserve = reserve
+        self.probe_directory = probe_directory
+        self.outstanding_bytes = outstanding_bytes
         self.maximum = maximum
         self.size = 0
         self.checksum = hashlib.sha256()
@@ -58,11 +74,23 @@ class _Writer:
     def flush(self):
         if not self.buffer:
             return
-        if shutil.disk_usage(self.directory).free < self.reserve + len(self.buffer):
+        try:
+            require_headroom(
+                measure_capacity(self.directory, probe_directory=self.probe_directory),
+                len(self.buffer),
+                reserve_bytes=self.reserve,
+                outstanding_bytes=self.outstanding_bytes,
+            )
+        except CapacityUnavailable:
+            raise BackupError(
+                "Temporary storage capacity is unavailable; check the configured "
+                "backing-capacity probe and retry"
+            ) from None
+        except OSError:
             raise BackupError(
                 "Not enough temporary space to stage a recovery file; "
                 "free space and retry"
-            )
+            ) from None
         if self.stream.write(self.buffer) != len(self.buffer):
             raise OSError("Incomplete recovery staging write")
         self.buffer.clear()
@@ -156,6 +184,7 @@ def write_recovery_snapshot(
     max_database_bytes: int | None = MAX_DATABASE_BYTES,
     max_expanded_bytes: int | None = MAX_EXPANDED_BYTES,
     max_recovery_bytes=MAX_RECOVERY_BYTES,
+    outstanding_bytes=0,
 ):
     """Validate staged JSON, then atomically publish its existing V2 ciphertext.
 
@@ -179,7 +208,12 @@ def write_recovery_snapshot(
         temporaries.append(plaintext)
         with os.fdopen(descriptor, "wb", buffering=0) as destination:
             writer = _Writer(
-                destination, path.parent, settings.min_free_bytes, max_expanded_bytes
+                destination,
+                path.parent,
+                settings.min_free_bytes,
+                max_expanded_bytes,
+                probe_directory=probe_for_directory(settings, path.parent),
+                outstanding_bytes=outstanding_bytes,
             )
             revision, counts = _capture(
                 backend, writer, settings, max_records, max_database_bytes
@@ -187,7 +221,14 @@ def write_recovery_snapshot(
             writer.flush()
             os.fsync(destination.fileno())
         validate_snapshot(plaintext)
-        digest = _encrypt_snapshot(plaintext, path, key, settings, max_recovery_bytes)
+        digest = _encrypt_snapshot(
+            plaintext,
+            path,
+            key,
+            settings,
+            max_recovery_bytes,
+            outstanding_bytes=outstanding_bytes,
+        )
         return revision, counts, digest
     finally:
         cleanup_error = None
@@ -205,7 +246,7 @@ def write_recovery_snapshot(
             raise cleanup_error
 
 
-def _encrypt_snapshot(plaintext, path, key, settings, maximum):
+def _encrypt_snapshot(plaintext, path, key, settings, maximum, *, outstanding_bytes=0):
     if isinstance(key, str):
         key = bytes.fromhex(key.strip())
     if not isinstance(key, bytes) or len(key) != 32:
@@ -219,7 +260,14 @@ def _encrypt_snapshot(plaintext, path, key, settings, maximum):
             os.fdopen(descriptor, "wb", buffering=0) as destination,
             plaintext.open("rb", buffering=0) as source,
         ):
-            writer = _Writer(destination, path.parent, settings.min_free_bytes, maximum)
+            writer = _Writer(
+                destination,
+                path.parent,
+                settings.min_free_bytes,
+                maximum,
+                probe_directory=probe_for_directory(settings, path.parent),
+                outstanding_bytes=outstanding_bytes,
+            )
             nonce = secrets.token_bytes(12)
             cipher = Cipher(algorithms.AES(key), modes.GCM(nonce)).encryptor()
             cipher.authenticate_additional_data(MAGIC)
@@ -252,6 +300,7 @@ def write_staged_json(
     credentials=None,
     recovery_token=None,
     max_expanded_bytes: int | None = MAX_EXPANDED_BYTES,
+    outstanding_bytes=0,
 ):
     """Render bounded staged rows, optionally rebasing verified message locations."""
     from tgdrive.recovery.mongo_backup import COLLECTIONS
@@ -269,7 +318,12 @@ def write_staged_json(
     try:
         with os.fdopen(descriptor, "wb", buffering=0) as target:
             writer = _Writer(
-                target, path.parent, settings.min_free_bytes, max_expanded_bytes
+                target,
+                path.parent,
+                settings.min_free_bytes,
+                max_expanded_bytes,
+                probe_directory=probe_for_directory(settings, path.parent),
+                outstanding_bytes=outstanding_bytes,
             )
             header = dict(
                 staged.header, credentials=credentials or staged.header["credentials"]
@@ -370,6 +424,7 @@ def write_staged_snapshot(
     *,
     validate_snapshot,
     max_recovery_bytes=MAX_RECOVERY_BYTES,
+    outstanding_bytes=0,
     **options,
 ):
     """Validate derived staged JSON before publishing compatible V2 ciphertext."""
@@ -381,9 +436,18 @@ def write_staged_snapshot(
     os.close(descriptor)
     plaintext = Path(filename)
     try:
-        revision, counts = write_staged_json(staged, plaintext, settings, **options)
+        revision, counts = write_staged_json(
+            staged, plaintext, settings, outstanding_bytes=outstanding_bytes, **options
+        )
         validate_snapshot(plaintext)
-        digest = _encrypt_snapshot(plaintext, path, key, settings, max_recovery_bytes)
+        digest = _encrypt_snapshot(
+            plaintext,
+            path,
+            key,
+            settings,
+            max_recovery_bytes,
+            outstanding_bytes=outstanding_bytes,
+        )
         return revision, counts, digest
     finally:
         plaintext.unlink(missing_ok=True)
@@ -397,6 +461,7 @@ def decrypt_snapshot(
     *,
     max_recovery_bytes=MAX_RECOVERY_BYTES,
     max_expanded_bytes: int | None = MAX_EXPANDED_BYTES,
+    outstanding_bytes=0,
 ):
     """Authenticate all ciphertext before decompressing into private staged JSON.
 
@@ -443,6 +508,8 @@ def decrypt_snapshot(
                     destination.parent,
                     settings.min_free_bytes,
                     max_recovery_bytes,
+                    probe_directory=probe_for_directory(settings, destination.parent),
+                    outstanding_bytes=outstanding_bytes,
                 )
                 remaining = info.st_size - len(MAGIC) - 28
                 while remaining:
@@ -471,6 +538,8 @@ def decrypt_snapshot(
                 destination.parent,
                 settings.min_free_bytes,
                 max_expanded_bytes,
+                probe_directory=probe_for_directory(settings, destination.parent),
+                outstanding_bytes=outstanding_bytes,
             )
             decoder = zlib.decompressobj()
             while block := source.read(IO_CHUNK_BYTES):

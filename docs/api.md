@@ -203,8 +203,8 @@ All routes are **Owner**. Field meanings and limits are in
 
 | Method and route | Purpose | Notes and errors |
 | --- | --- | --- |
-| `GET /api/v1/settings/performance` | Owner preferences, revision and defaults; excludes managed resource values | Live managed values are under `/api/v1/performance` → `tuning` |
-| `PATCH /api/v1/settings/performance` | Only `timezone`, `auto_preload` and `upload_split_mib` | Optional revision in `If-Match`; stale edits return `409`. Managed keys (including `max_file_size`, `staging_budget_bytes`, `min_free_bytes`) and unknown fields return `422` |
+| `GET /api/v1/settings/performance` | Owner preferences, revision, defaults, `auto_resource_limits` and `auto_free_space_reserve`; excludes managed live resource values | Live managed values are under `/api/v1/performance` → `tuning` |
+| `PATCH /api/v1/settings/performance` | `timezone`, `auto_preload`, `upload_split_mib` and nullable `cache_disk_limit_bytes`, `cache_memory_limit_bytes`, `staging_limit_bytes`, `protected_free_bytes` ([bounds](reference.md#performance-and-cache-settings)) | Optional revision in `If-Match`; stale edits return `409`. Managed keys (including `max_file_size`, `staging_budget_bytes`, `min_free_bytes`) and unknown fields return `422` |
 | `GET /api/v1/performance` | Live accounts, queues, `traffic`, `server`, `drive`/`database` readings, `tuning` and `diagnosis` | Live samples reset on restart; recorded history/totals use the history route |
 | `GET /api/v1/performance/history` | `start`, `end` (Unix seconds, within 31 days): up to 360 bins plus lifetime `totals` | `422` bad range; `503` storage unavailable. Don't add the totals together |
 | `GET /api/v1/preloads` | Cached files, coverage as `[start, end)` intervals and jobs | |
@@ -450,12 +450,25 @@ cancel and retry. The source link is never shown in snapshots.
 | Engine | `aria2c` on `PATH`; included in Docker |
 | Concurrency | `MAX_CONCURRENT_TRANSFERS` engines (default 2) |
 | Sources | BitTorrent v1 (including hybrid); v2-only unsupported |
-| Metadata | `.torrent` up to 256 MiB; magnet lookup times out after 120 seconds |
+| Metadata | `.torrent` up to 256 MiB input; decoded complexity and parser-worker limits also apply. Magnet lookup times out after 120 seconds |
 | File choice | With `select_files: true`, the job waits in `torrent_select` with `torrent_choice`; send indexes to `/torrent-files` |
 | Peers | IPv4 DHT and public UDP trackers; HTTP trackers and web seeds are ignored |
 | Stall | Five minutes without progress fails with a retry option |
 | Automatic retry | Typed timeout/network interruptions only; four total attempts with 15/30/60-second waits. Waiting releases the download slot while retaining staging and file selection |
 | Terminal failures / manual retry | No-peer stalls and permanent peer, disk or input errors need owner action. Verified pieces and already uploaded files are kept; manual retry starts a fresh attempt budget |
+
+<details>
+<summary>Torrent metadata processing limits</summary>
+
+Metadata decoding runs in an owned child with a 30-second parent deadline,
+512 MiB address-space limit and 10 CPU seconds. Decoding also bounds tokens
+(100,000), containers and entries per container (10,000 each), and total decoded
+value bytes (16 MiB). Accepted output is at most 10,000 files, 12 MiB sanitized
+metadata and a 4 MiB manifest. A file below the serialized input limit can still
+be rejected for complexity. Cancellation drains the child; these are admission
+limits, not a promise that a swarm has peers or that payload downloads will fit.
+
+</details>
 
 Phases run `torrent_metadata`, `downloading`, then `torrent_uploading`, with
 `torrent_files: {total, completed}`. Cancelling keeps files already saved, so a

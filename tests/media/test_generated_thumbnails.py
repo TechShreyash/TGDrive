@@ -532,3 +532,45 @@ async def test_audio_embedded_artwork_generates_cover_without_altering_audio(tmp
     cover = await generate(audio, audio.name)
     assert cover and cover.startswith(b"\xff\xd8\xff")
     assert audio.read_bytes() == original
+
+
+def test_cover_save_skips_unavailable_backing_and_preserves_existing_derivative(
+    tmp_path,
+):
+    target = tmp_path / "covers"
+    probe = tmp_path / "probe"
+    probe.mkdir()
+    original = b"\xff\xd8\xffold"
+    save(target, 1, 2, original, backing_capacity_dir=probe)
+    (probe / "unexpected").write_bytes(b"x")
+    save(target, 1, 2, b"\xff\xd8\xffnew", backing_capacity_dir=probe)
+    assert read(target, 1, 2) == original
+    assert not list(target.glob(".thumbnail-*"))
+
+
+@pytest.mark.parametrize("layout", ["nested_data", "conflicting_equal_roots"])
+def test_cover_save_resolves_actual_target_probe_before_replacing_bytes(
+    tmp_path, layout
+):
+    from tgdrive.media.media_reader import media_capacity_options
+
+    cache_root = tmp_path / "cache"
+    data_root = cache_root / "thumbnails" if layout == "nested_data" else cache_root
+    target = cache_root / "thumbnails"
+    cache_probe = None
+    if layout == "conflicting_equal_roots":
+        cache_probe = tmp_path / "valid-cache-probe"
+        cache_probe.mkdir()
+    settings = SimpleNamespace(
+        resolved_data_dir=data_root,
+        resolved_cache_dir=cache_root,
+        data_backing_capacity_dir=tmp_path / "missing-data-probe",
+        cache_backing_capacity_dir=cache_probe,
+        min_free_bytes=0,
+    )
+    pool = SimpleNamespace(storage_settings=settings, remaining_staging_bytes=lambda: 0)
+    previous = b"\xff\xd8\xffold"
+    save(target, 1, 2, previous)
+    save(target, 1, 2, b"\xff\xd8\xffnew", **media_capacity_options(pool))
+    assert read(target, 1, 2) == previous
+    assert not list(target.glob(".thumbnail-*"))

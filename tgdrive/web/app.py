@@ -409,8 +409,15 @@ def create_app(
     app.state.posters = ThumbnailCache(max_image_bytes=MAX_POSTER_BYTES)
     from tgdrive.media.generated_thumbnails import CachedThumbnailRepair
 
+    def remaining_staging_bytes():
+        pool = getattr(app.state.runtime, "pool", None)
+        remaining = getattr(pool, "remaining_staging_bytes", None)
+        return remaining() if remaining else 0
+
     app.state.thumbnail_repair = CachedThumbnailRepair(
-        settings.resolved_cache_dir / "thumbnails"
+        settings.resolved_cache_dir / "thumbnails",
+        storage_settings=settings,
+        remaining_staging_bytes=remaining_staging_bytes,
     )
     from tgdrive.media.thumbnail_rebuild import register_thumbnail_routes
 
@@ -1266,6 +1273,7 @@ def create_app(
 
         async def load_cover():
             from tgdrive.media.generated_thumbnails import _owned_disk_call, read, save
+            from tgdrive.media.media_reader import media_capacity_options
             from tgdrive.media.thumbnails import Thumbnail
 
             content = await asyncio.to_thread(
@@ -1301,6 +1309,7 @@ def create_app(
                                 file_data["message_id"],
                                 content,
                                 version=poster_identity(file_data),
+                                **media_capacity_options(app.state.runtime.pool),
                             )
                             await recheck()
                             return Thumbnail(content, "image/jpeg")

@@ -9,7 +9,6 @@ import logging
 import mimetypes
 import os
 import re
-import shutil
 import socket
 import tempfile
 import time
@@ -24,6 +23,12 @@ from urllib.parse import unquote, urljoin, urlsplit, urlunsplit
 import aiohttp
 from aiohttp.abc import AbstractResolver, ResolveResult
 from aiohttp.resolver import DefaultResolver
+
+from tgdrive.storage.capacity import (
+    measure_capacity,
+    probe_for_directory,
+    require_headroom,
+)
 
 if TYPE_CHECKING:
     from tgdrive.transfers.remote_ranges import RangePolicy
@@ -304,6 +309,8 @@ class RemoteClient:
         max_bytes: int = DEFAULT_MAX_BYTES,
         max_redirects: int = 5,
         min_free_bytes: int = 0,
+        backing_capacity_dir: Path | None = None,
+        storage_settings: Any = None,
         chunk_size: int = DEFAULT_CHUNK_SIZE,
         timeouts: RemoteTimeouts | None = None,
         allow_private: bool = False,
@@ -334,6 +341,11 @@ class RemoteClient:
         self.allow_private = allow_private
         self.max_bytes = max_bytes
         self.min_free_bytes = min_free_bytes
+        self.backing_capacity_dir = backing_capacity_dir
+        self.storage_settings = storage_settings
+        self._capacity_check: ContextVar[Callable[[int], Awaitable[None]] | None] = (
+            ContextVar("remote_capacity_check", default=None)
+        )
         self.max_redirects = max_redirects
         self.chunk_size = chunk_size
         self.timeouts = timeouts or RemoteTimeouts()
@@ -406,11 +418,13 @@ class RemoteClient:
         mode_changed: Callable[[str], Awaitable[None] | None] | None = None,
         retry: RetryCallback | None = None,
         retry_not_before: float = 0,
+        check_capacity: Callable[[int], Awaitable[None]] | None = None,
     ) -> DownloadResult:
         """Retry temporary source failures within one shared operation budget."""
         from tgdrive.transfers.remote_ranges import RangeFallback, _retry_after
 
         parallel = not single_threaded
+        capacity_token = self._capacity_check.set(check_capacity)
         try:
             async with asyncio.timeout(self.timeouts.total):
                 if retry_not_before:
@@ -488,6 +502,8 @@ class RemoteClient:
                     await self._wait_for_retry(delay, cancel_event)
         except TimeoutError as error:
             raise RemoteTimeout("remote download timed out") from error
+        finally:
+            self._capacity_check.reset(capacity_token)
         raise AssertionError("remote retry loop exhausted unexpectedly")
 
     async def _wait_for_retry(self, delay: float, cancel_event) -> None:
@@ -581,6 +597,14 @@ class RemoteClient:
                     f"destination {chosen_name!r} already exists"
                 )
 
+            downloaded = 0
+            # The journal owner admits storage before temp-file checks or body
+            # reads, including when a restarted source retains an old claim.
+            await self._report_progress(progress, downloaded, declared_size)
+            capacity_check = self._capacity_check.get()
+            if capacity_check is not None:
+                await capacity_check(4096)
+            await self._disk_io(self._check_output_capacity, output_dir, 4096)
             temp_file = tempfile.NamedTemporaryFile(  # noqa: SIM115
                 mode="wb",
                 prefix=f".{chosen_name}.",
@@ -589,8 +613,6 @@ class RemoteClient:
                 delete=False,
             )
             temp_path = Path(temp_file.name)
-            downloaded = 0
-            await self._report_progress(progress, downloaded, declared_size)
 
             from tgdrive.transfers.remote_ranges import download_ranges, range_validator
 
@@ -777,13 +799,28 @@ class RemoteClient:
                 )
             return self._session
 
+    def _check_output_capacity(self, directory, required_bytes):
+        try:
+            probe = (
+                probe_for_directory(self.storage_settings, directory)
+                if self.storage_settings is not None
+                else self.backing_capacity_dir
+            )
+            require_headroom(
+                measure_capacity(directory, probe_directory=probe),
+                required_bytes,
+                reserve_bytes=self.min_free_bytes,
+            )
+        except OSError as error:
+            raise RemoteError(
+                "Temporary storage is full or its capacity is unavailable. "
+                "Check server storage and retry."
+            ) from error
+
     def _write_chunk(
         self, output: Any, chunk: bytes, directory: Path, offset: int | None = None
     ) -> None:
-        if self.min_free_bytes and shutil.disk_usage(directory).free < (
-            self.min_free_bytes + len(chunk)
-        ):
-            raise RemoteError("Temporary storage is full. Free disk space and retry.")
+        self._check_output_capacity(directory, len(chunk))
         if offset is None:
             output.write(chunk)
         else:
@@ -795,8 +832,14 @@ class RemoteClient:
                 remaining = remaining[written:]
                 offset += written
 
-    @staticmethod
-    async def _disk_io(operation: Callable[..., Any], *args: Any, **kwargs: Any) -> Any:
+    async def _disk_io(
+        self, operation: Callable[..., Any], *args: Any, **kwargs: Any
+    ) -> Any:
+        capacity_check = self._capacity_check.get()
+        if operation == self._write_chunk and capacity_check is not None:
+            # Range workers inherit the per-download context. Journal owners
+            # decide whether these bytes are already covered by their claim.
+            await capacity_check(len(args[1]))
         # Cancelling an await does not stop its thread. Drain the write before
         # any worker/file cleanup can close or reuse its descriptor.
         worker = asyncio.create_task(asyncio.to_thread(operation, *args, **kwargs))

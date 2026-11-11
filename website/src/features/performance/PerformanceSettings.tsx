@@ -20,6 +20,7 @@ import {
     Button,
     Fieldset,
     NumberInput,
+    NativeSelect,
     TextInput,
     Switch,
     type NumberInputHandlers,
@@ -29,6 +30,7 @@ import { ErrorNotice, Spinner } from "../../shared/components";
 import { useManualRefresh } from "../../shared/useManualRefresh";
 import {
     numericPreferences,
+    resourceLimits,
     performanceApi,
     performanceChanges,
     performanceDraft,
@@ -36,6 +38,7 @@ import {
     performanceCategoryKeys,
     type PerformanceDraft,
     type PerformancePreferences,
+    type ResourceLimitDraft,
 } from "./performanceApi";
 import "./Performance.css";
 import DemoModeNotice from "../../shared/DemoModeNotice";
@@ -145,7 +148,7 @@ export default function PerformanceSettings({
             ) as (keyof PerformanceDraft)[])
                 if (
                     performanceCategoryKeys(category).includes(key) ||
-                    draft[key] === baseline[key]
+                    JSON.stringify(draft[key]) === JSON.stringify(baseline[key])
                 )
                     Object.assign(next, { [key]: refreshed[key] });
             setDraft(next);
@@ -239,6 +242,113 @@ export default function PerformanceSettings({
             </div>
         </div>
     );
+    const limitField = (definition: (typeof resourceLimits)[number]) => {
+        const value = draft![definition.key];
+        const automatic =
+            definition.key === "protected_free_bytes"
+                ? saved?.auto_free_space_reserve
+                : saved?.auto_resource_limits?.[definition.key];
+        const automaticLabel =
+            typeof automatic === "number"
+                ? "Automatic ceiling: " +
+                  (automatic / definition.unit).toLocaleString() +
+                  " " +
+                  definition.unitLabel
+                : automatic && typeof automatic === "object"
+                  ? "Automatic: the larger of " +
+                    (
+                        automatic.minimum_bytes / definition.unit
+                    ).toLocaleString() +
+                    " " +
+                    definition.unitLabel +
+                    " and " +
+                    automatic.fraction * 100 +
+                    "% of the reported volume."
+                  : "Automatic limit unavailable.";
+        const update = (next: ResourceLimitDraft) => {
+            setDraft({ ...draft!, [definition.key]: next });
+            setNotice("");
+        };
+        return (
+            <div className="performance-field" key={definition.key}>
+                <div>
+                    <label htmlFor={"limit-mode-" + definition.key}>
+                        {definition.label}
+                    </label>
+                    <p id={"limit-help-" + definition.key}>
+                        {value.mode === "automatic"
+                            ? automaticLabel
+                            : value.mode === "disabled"
+                              ? "This media retention tier is disabled."
+                              : value.mode === "none"
+                                ? "No additional TGDrive free-space reserve."
+                                : definition.key === "protected_free_bytes"
+                                  ? "Minimum free space on media-cache and upload volumes."
+                                  : "Maximum " +
+                                    definition.unitLabel +
+                                    "; automatic tuning may use less."}
+                    </p>
+                </div>
+                <div className="configuration-value resource-limit-controls">
+                    <NativeSelect
+                        id={"limit-mode-" + definition.key}
+                        aria-label={definition.label + " mode"}
+                        aria-describedby={"limit-help-" + definition.key}
+                        disabled={demoMode || busy}
+                        value={value.mode}
+                        data={[
+                            { value: "automatic", label: "Automatic" },
+                            {
+                                value: "custom",
+                                label:
+                                    definition.key === "protected_free_bytes"
+                                        ? "Custom reserve"
+                                        : "Custom limit",
+                            },
+                            ...(definition.zeroMode
+                                ? [
+                                      {
+                                          value: definition.zeroMode,
+                                          label:
+                                              definition.zeroMode === "disabled"
+                                                  ? "Disabled"
+                                                  : "No extra reserve",
+                                      },
+                                  ]
+                                : []),
+                        ]}
+                        onChange={(event) =>
+                            update({
+                                ...value,
+                                mode: event.currentTarget
+                                    .value as ResourceLimitDraft["mode"],
+                            })
+                        }
+                    />
+                    {value.mode === "custom" && (
+                        <NumberInput
+                            aria-label={
+                                definition.label +
+                                " (" +
+                                definition.unitLabel +
+                                ")"
+                            }
+                            min={0}
+                            allowNegative={false}
+                            step={definition.unitLabel === "MiB" ? 1 : 0.25}
+                            suffix={" " + definition.unitLabel}
+                            required
+                            disabled={demoMode || busy}
+                            value={value.value}
+                            onChange={(amount) =>
+                                update({ ...value, value: String(amount) })
+                            }
+                        />
+                    )}
+                </div>
+            </div>
+        );
+    };
     return (
         <section
             className="settings-section performance-settings"
@@ -259,9 +369,9 @@ export default function PerformanceSettings({
                     <p>
                         {
                             {
-                                cache: "Cache sizes are set automatically from server memory and disk; see Performance.",
+                                cache: "Automatic tuning stays within your media cache limits.",
                                 transfers:
-                                    "Upload capacity follows staging space. See Performance for concurrency limits and Telegram account cooldowns.",
+                                    "Control temporary upload storage and Telegram file splitting.",
                                 regional:
                                     "Choose the timezone used for dates and share expiry across this installation.",
                             }[category]
@@ -292,6 +402,54 @@ export default function PerformanceSettings({
                 </p>
             ) : saved && draft ? (
                 <form noValidate onSubmit={(event) => void save(event)}>
+                    {category === "cache" && (
+                        <Fieldset
+                            className="performance-setting-group"
+                            legend="Media cache limits"
+                        >
+                            <p className="settings-help">
+                                Local file chunks and preloads; the memory limit
+                                also includes queued cache writes.
+                            </p>
+                            {resourceLimits
+                                .filter(
+                                    (item) =>
+                                        item.category === "cache" &&
+                                        !item.advanced,
+                                )
+                                .map(limitField)}
+                            <details className="performance-detail-note">
+                                <summary>Advanced storage protection</summary>
+                                {resourceLimits
+                                    .filter((item) => item.advanced)
+                                    .map(limitField)}
+                                <p className="settings-help">
+                                    The reserve applies to media-cache and
+                                    upload volumes. A VM's reported free space
+                                    can differ from its physical host.
+                                    Thumbnail/poster caches and recovery
+                                    archives are separate from media payload
+                                    limits; this memory limit is not total
+                                    process RAM.
+                                </p>
+                            </details>
+                        </Fieldset>
+                    )}
+                    {category === "transfers" && (
+                        <Fieldset
+                            className="performance-setting-group"
+                            legend="Temporary upload storage"
+                        >
+                            {resourceLimits
+                                .filter((item) => item.category === "transfers")
+                                .map(limitField)}
+                            <p className="settings-help">
+                                Uploads, imports and archive work share this
+                                budget. Existing jobs keep their reservations.
+                                New work needs space within this limit.
+                            </p>
+                        </Fieldset>
+                    )}
                     <Fieldset
                         className="performance-setting-group"
                         data-hue="green"

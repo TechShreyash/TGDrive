@@ -1,21 +1,36 @@
 import { request } from "../../shared/api";
+import { formatBytes, type StorageCapacity } from "../../shared/types";
 
 export const MIB = 1024 ** 2;
 export const GIB = 1024 ** 3;
-/** Owner choices; cache and staging budgets follow server resources. */
+/** Resource counters use binary units, including rates derived from byte counters. */
+export function resourceBytes(bytes: number) {
+    return formatBytes(bytes).replace(/\b([KMGT])B\b/g, "$1iB");
+}
+/** Saved owner ceilings; the governor may choose smaller effective budgets. */
 export interface PerformancePolicy {
     timezone: string;
     auto_preload: boolean;
     upload_split_mib: number;
+    cache_disk_limit_bytes: number | null;
+    cache_memory_limit_bytes: number | null;
+    staging_limit_bytes: number | null;
+    protected_free_bytes: number | null;
 }
 export interface PerformancePreferences extends PerformancePolicy {
     revision: string;
     documentation_url?: string;
     defaults?: PerformancePolicy;
+    auto_resource_limits?: {
+        cache_disk_limit_bytes: number;
+        cache_memory_limit_bytes: number;
+        staging_limit_bytes: number;
+    };
+    auto_free_space_reserve?: { minimum_bytes: number; fraction: number };
 }
 export type NumericPreference = Exclude<
     keyof PerformancePolicy,
-    "timezone" | "auto_preload"
+    "timezone" | "auto_preload" | ResourceLimitKey
 >;
 export const numericPreferences: {
     key: NumericPreference;
@@ -39,16 +54,75 @@ export const numericPreferences: {
         help: "Default and maximum: 2000 MiB per Telegram document for every account. Choose a smaller size to split sooner; 0 uses 2000 MiB. Existing transfers keep their plan.",
     },
 ];
-export type PerformanceDraft = Record<NumericPreference, string> & {
-    timezone: string;
-    auto_preload: boolean;
-};
+export type ResourceLimitKey =
+    | "cache_disk_limit_bytes"
+    | "cache_memory_limit_bytes"
+    | "staging_limit_bytes"
+    | "protected_free_bytes";
+export interface ResourceLimitDraft {
+    mode: "automatic" | "custom" | "disabled" | "none";
+    value: string;
+}
+export const resourceLimits: {
+    key: ResourceLimitKey;
+    label: string;
+    unit: number;
+    unitLabel: string;
+    category: "cache" | "transfers";
+    zeroMode?: "disabled" | "none";
+    advanced?: boolean;
+}[] = [
+    {
+        key: "cache_disk_limit_bytes",
+        label: "Media disk cache",
+        unit: GIB,
+        unitLabel: "GiB",
+        category: "cache",
+        zeroMode: "disabled",
+    },
+    {
+        key: "cache_memory_limit_bytes",
+        label: "Media memory cache",
+        unit: MIB,
+        unitLabel: "MiB",
+        category: "cache",
+        zeroMode: "disabled",
+    },
+    {
+        key: "staging_limit_bytes",
+        label: "Temporary upload storage",
+        unit: GIB,
+        unitLabel: "GiB",
+        category: "transfers",
+    },
+    {
+        key: "protected_free_bytes",
+        label: "Keep disk space free",
+        unit: GIB,
+        unitLabel: "GiB",
+        category: "cache",
+        zeroMode: "none",
+        advanced: true,
+    },
+];
+export type PerformanceDraft = Record<NumericPreference, string> &
+    Record<ResourceLimitKey, ResourceLimitDraft> & {
+        timezone: string;
+        auto_preload: boolean;
+    };
 export type PerformanceCategory = "cache" | "transfers" | "regional";
 export function performanceCategoryKeys(
     category: PerformanceCategory,
 ): (keyof PerformanceDraft)[] {
     if (category === "regional") return ["timezone"];
-    return category === "cache" ? ["auto_preload"] : ["upload_split_mib"];
+    return [
+        ...(category === "cache"
+            ? ["auto_preload" as const]
+            : ["upload_split_mib" as const]),
+        ...resourceLimits
+            .filter((item) => item.category === category)
+            .map((item) => item.key),
+    ];
 }
 export function performanceCategoryDraft(
     draft: PerformanceDraft,
@@ -65,6 +139,21 @@ export function performanceDraft(saved: PerformancePolicy): PerformanceDraft {
         ...numericPreferences.map(({ key, unit }) => [
             key,
             String((saved[key] ?? 0) / unit),
+        ]),
+        ...resourceLimits.map(({ key, unit, zeroMode }) => [
+            key,
+            {
+                mode:
+                    saved[key] == null
+                        ? "automatic"
+                        : saved[key] === 0
+                          ? zeroMode
+                          : "custom",
+                value:
+                    saved[key] != null && saved[key]! > 0
+                        ? String(saved[key]! / unit)
+                        : "",
+            },
         ]),
         ["timezone", saved.timezone],
         ["auto_preload", saved.auto_preload],
@@ -99,6 +188,27 @@ export function performanceChanges(
             throw new Error(label + " is too large.");
         if (converted !== Math.round(Number(baseline[key]) * unit))
             changes[key] = converted;
+    }
+    for (const { key, label, unit, unitLabel, zeroMode } of resourceLimits) {
+        const { mode, value } = draft[key];
+        let converted: number | null;
+        if (mode === "automatic") converted = null;
+        else if (zeroMode && mode === zeroMode) converted = 0;
+        else if (mode === "custom") {
+            const amount = Number(value);
+            converted = Math.round(amount * unit);
+            if (
+                !value.trim() ||
+                !Number.isFinite(amount) ||
+                amount <= 0 ||
+                !Number.isSafeInteger(converted) ||
+                converted <= 0
+            )
+                throw new Error(
+                    label + " must be a positive limit in " + unitLabel + ".",
+                );
+        } else throw new Error("Choose a valid mode for " + label + ".");
+        if (converted !== (saved[key] ?? null)) changes[key] = converted;
     }
     const timezone = draft.timezone.trim();
     try {
@@ -269,7 +379,13 @@ export interface PerformanceSnapshot {
             scope: string;
         };
         load_average: number[];
-        disk: { total_bytes: number; free_bytes: number; used_bytes: number };
+        disk: {
+            total_bytes: number;
+            free_bytes: number;
+            used_bytes: number;
+            available?: boolean;
+            capacity?: StorageCapacity;
+        };
         staging_budget_bytes: number;
     };
     drive: { files: number; folders: number; total_bytes: number };

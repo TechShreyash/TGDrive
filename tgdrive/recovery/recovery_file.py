@@ -9,6 +9,7 @@ import re
 import secrets
 import zlib
 from functools import partial
+from pathlib import Path
 
 from bson import BSON, json_util
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
@@ -400,9 +401,10 @@ def decode_recovery_file(content, key):
         ) from None
 
 
-def write_recovery_snapshot(backend, path, key, settings):
+def write_recovery_snapshot(backend, path, key, settings, *, outstanding_bytes=0):
     from tgdrive.recovery.snapshot_stream import write_recovery_snapshot as write_staged
     from tgdrive.recovery.staged_snapshot import validate_snapshot
+    from tgdrive.storage.capacity import probe_for_directory
 
     return write_staged(
         backend,
@@ -410,8 +412,12 @@ def write_recovery_snapshot(backend, path, key, settings):
         key,
         settings,
         validate_snapshot=partial(
-            validate_snapshot, min_free_bytes=settings.min_free_bytes
+            validate_snapshot,
+            min_free_bytes=settings.min_free_bytes,
+            probe_directory=probe_for_directory(settings, Path(path).parent),
+            outstanding_bytes=outstanding_bytes,
         ),
+        outstanding_bytes=outstanding_bytes,
         max_records=None,
         max_database_bytes=None,
         max_expanded_bytes=None,

@@ -309,9 +309,10 @@ def test_encryption_rechecks_disk_reserve_after_validation(
     def validate(path):
         _validate_fixture(path)
         monkeypatch.setattr(
-            snapshot_stream.shutil,
-            "disk_usage",
-            lambda _: SimpleNamespace(free=settings.min_free_bytes),
+            "tgdrive.storage.capacity.shutil.disk_usage",
+            lambda _: SimpleNamespace(
+                total=1024**4, used=0, free=settings.min_free_bytes
+            ),
         )
 
     with pytest.raises(BackupError, match="Not enough temporary space"):

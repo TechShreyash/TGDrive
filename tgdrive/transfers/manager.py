@@ -37,7 +37,12 @@ from tgdrive.transfers.remote import (
     RemoteFileInfo,
     RemoteTooLarge,
 )
-from tgdrive.transfers.staging import StorageUnavailable, check_staging
+from tgdrive.transfers.staging import (
+    StorageUnavailable,
+    check_staging,
+    check_staging_capacity,
+    staging_usage,
+)
 from tgdrive.transfers.tasks import (
     TransferRecord,
     TransferRegistry,
@@ -50,6 +55,7 @@ if TYPE_CHECKING:
     from tgdrive.transfers.uploads import ResumableUploads
 
 logger = logging.getLogger(__name__)
+_worker = _journalled(asyncio.to_thread)
 _CHUNK_SIZE = 1024 * 1024
 _UPLOAD_CLEANUP_TIMEOUT = 1.0
 _MEDIA_ATTRIBUTES = (
@@ -177,6 +183,16 @@ class TransferManager:
         self._pending_staging: dict[str, int] = {}
         self._archive_cleanup_pending: set[str] = set()
 
+    async def _check_capacity(self, directory, required_bytes=0):
+        remaining = staging_usage(self)[1]
+        await _worker(
+            check_staging_capacity,
+            self.settings,
+            directory,
+            required_bytes,
+            outstanding_bytes=remaining,
+        )
+
     async def _resolve_upload_destination(
         self, record: TransferRecord, path: str
     ) -> str:
@@ -293,6 +309,7 @@ class TransferManager:
                 raise TransferCancelled("Transfer cancelled")
             file_name = safe_name(upload.filename)
             upload_dir.mkdir(parents=True, exist_ok=True)
+            await self._check_capacity(upload_dir)
             async with self._semaphore, aiofiles.open(local_path, "xb") as output:
                 while True:
                     if record.cancel_event.is_set():
@@ -311,6 +328,7 @@ class TransferManager:
                         record.context["staging_size"],
                         exclude=record.id,
                         written=written - len(chunk),
+                        directory=upload_dir,
                     )
                     await output.write(chunk)
                     record.context["staging_written"] = written
@@ -593,6 +611,9 @@ class TransferManager:
                                 cancel_event=record.cancel_event,
                                 progress=progress,
                                 admit=admit,
+                                check_capacity=lambda required: self._check_capacity(
+                                    directory, required
+                                ),
                             )
                         break
                     except TorrentTransportError:
@@ -977,6 +998,21 @@ class TransferManager:
                     checkpoint_progress=False,
                 )
 
+            async def check_capacity(_required):
+                # Payload is already included in the journal's future bytes.
+                # A temporary storage loss keeps the admitted job cancellable
+                # instead of converting the new per-write guard into a failure.
+                while True:
+                    try:
+                        await self._check_capacity(download_dir)
+                        break
+                    except StorageUnavailable:
+                        record.context["download_mode"] = "waiting_storage"
+                        await self.remote._cancelable(
+                            asyncio.sleep(1), record.cancel_event
+                        )
+                record.context["download_mode"] = mode
+
             result = await self.remote.download(
                 url,
                 download_dir,
@@ -991,6 +1027,7 @@ class TransferManager:
                 mode_changed=mode_changed,
                 retry=retry_scheduled,
                 retry_not_before=retry_not_before,
+                check_capacity=check_capacity,
             )
             record.context.pop("source_retry_at", None)
             await self._upload_path(

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import errno
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -39,8 +40,8 @@ def test_governor_keeps_allocated_torrent_bytes_in_total_budget(tmp_path, monkey
     previous = dict(values=dict.fromkeys(CONCURRENCY, 1))
     free = sample["disk_free"]
     monkeypatch.setattr(
-        "tgdrive.transfers.staging.shutil.disk_usage",
-        lambda _: SimpleNamespace(free=free),
+        "tgdrive.storage.capacity.shutil.disk_usage",
+        lambda _: SimpleNamespace(total=1024**5, used=0, free=free),
     )
     for written in (0, 4 * GIB, 6 * GIB):
         job.context["staging_written"] = written
@@ -73,8 +74,8 @@ async def test_upload_reservations_prevent_overbooking_and_release_after_cancel(
         tmp_path, min_free_bytes=20, upload_limit=100, staging_budget_bytes=1000
     )
     monkeypatch.setattr(
-        "tgdrive.transfers.staging.shutil.disk_usage",
-        lambda path: SimpleNamespace(free=150),
+        "tgdrive.storage.capacity.shutil.disk_usage",
+        lambda path: SimpleNamespace(total=1024**5, used=0, free=150),
     )
 
     async def admit(name):
@@ -101,8 +102,8 @@ async def test_browser_admission_includes_url_reservations_and_retained_bytes(
     job.context.update(staging_size=100, staging_written=40)
     (await manager.registry.update(job.id, status=TransferStatus.RUNNING))
     monkeypatch.setattr(
-        "tgdrive.transfers.staging.shutil.disk_usage",
-        lambda path: SimpleNamespace(free=150),
+        "tgdrive.storage.capacity.shutil.disk_usage",
+        lambda path: SimpleNamespace(total=1024**5, used=0, free=150),
     )
     with pytest.raises(UploadError) as error:
         uploads.create("b", "/", 90)
@@ -130,13 +131,13 @@ def test_large_declared_upload_can_exceed_16_gib_without_allocating_file(
 
     def disk(path):
         seen.append(path)
-        return SimpleNamespace(free=100 * 1024**3)
+        return SimpleNamespace(total=1024**5, used=0, free=100 * 1024**3)
 
-    monkeypatch.setattr("tgdrive.transfers.staging.shutil.disk_usage", disk)
+    monkeypatch.setattr("tgdrive.storage.capacity.shutil.disk_usage", disk)
     item = uploads.create("large.bin", "/", size)
     assert item["total_size"] == size
     assert uploads.path(item["id"]).stat().st_size == 0
-    assert seen == [uploads.settings.resolved_cache_dir]
+    assert seen == [uploads.settings.resolved_cache_dir, uploads.root]
 
 
 async def test_restart_keeps_future_bytes_reserved_and_does_not_double_count_job(
@@ -157,8 +158,8 @@ async def test_restart_keeps_future_bytes_reserved_and_does_not_double_count_job
     manager.uploads = resumed
     assert staging_usage(manager) == (80, 80)
     monkeypatch.setattr(
-        "tgdrive.transfers.staging.shutil.disk_usage",
-        lambda path: SimpleNamespace(free=150),
+        "tgdrive.storage.capacity.shutil.disk_usage",
+        lambda path: SimpleNamespace(total=1024**5, used=0, free=150),
     )
     with pytest.raises(UploadError):
         resumed.create("b", "/", 80)
@@ -209,7 +210,7 @@ def test_unavailable_disk_fails_before_creating_receipt(tmp_path, monkeypatch):
     def missing(path):
         raise OSError("drive offline")
 
-    monkeypatch.setattr("tgdrive.transfers.staging.shutil.disk_usage", missing)
+    monkeypatch.setattr("tgdrive.storage.capacity.shutil.disk_usage", missing)
     with pytest.raises(UploadError) as error:
         uploads.create("a", "/", 3)
     assert error.value.status == 503
@@ -241,8 +242,8 @@ async def test_url_import_checks_shared_space_before_reading_body(
         resolver=FakeResolver(PUBLIC_DNS),
     )
     monkeypatch.setattr(
-        "tgdrive.transfers.staging.shutil.disk_usage",
-        lambda path: SimpleNamespace(free=50),
+        "tgdrive.storage.capacity.shutil.disk_usage",
+        lambda path: SimpleNamespace(total=1024**5, used=0, free=50),
     )
     record = await manager.start_remote(
         url="https://files.example/a", destination="/", filename=None
@@ -404,5 +405,184 @@ async def test_waiting_url_reserves_a_window_instead_of_the_whole_file(
             record.cancel_event.set()
         await asyncio.gather(*(record.task for record in records))
         await manager.close()
+        await pool.stop()
+        store.close()
+
+
+@pytest.mark.parametrize("kind", ["pending", "receipt", "url", "torrent", "extract"])
+def test_lower_cap_preserves_only_existing_claim_and_keeps_free_space_guard(
+    tmp_path, monkeypatch, kind
+):
+    from tgdrive.transfers.staging import StorageUnavailable, check_staging
+
+    manager = SimpleNamespace(_pending_staging={"other": 10})
+    if kind == "pending":
+        manager._pending_staging["admitted"] = 80
+    elif kind == "receipt":
+        manager.uploads = SimpleNamespace(
+            _all=lambda: [
+                {
+                    "id": "admitted",
+                    "state": "receiving",
+                    "total_size": 80,
+                    "offset": 0,
+                }
+            ]
+        )
+    else:
+        job = SimpleNamespace(
+            id="admitted",
+            terminal=False,
+            task=None,
+            context={
+                "kind": kind,
+                "staging_size": 80,
+                "staging_written": 0,
+                "staging_directory": str(tmp_path),
+            },
+        )
+        manager.registry = SimpleNamespace(staging_records=lambda: [job])
+    settings = SimpleNamespace(
+        staging_budget_bytes=50, min_free_bytes=10, resolved_cache_dir=tmp_path
+    )
+    free = 200
+    monkeypatch.setattr(
+        "tgdrive.storage.capacity.shutil.disk_usage",
+        lambda _: SimpleNamespace(total=1024**5, used=0, free=free),
+    )
+    check_staging(settings, manager, 80, exclude="admitted")
+    check_staging(settings, manager, 70, exclude="admitted")
+    for size, identity in [(81, "admitted"), (1, "new")]:
+        with pytest.raises(StorageUnavailable, match="reserved"):
+            check_staging(settings, manager, size, exclude=identity)
+    free = 99
+    with pytest.raises(StorageUnavailable, match="free disk space"):
+        check_staging(settings, manager, 80, exclude="admitted")
+
+
+@pytest.mark.parametrize("probe_state", ["limited", "unavailable"])
+def test_backing_capacity_limits_staging_without_guest_fallback(
+    tmp_path, monkeypatch, probe_state
+):
+    from tgdrive.transfers.staging import StorageUnavailable, check_staging
+
+    target = tmp_path / "cache"
+    target.mkdir()
+    probe = tmp_path / "backing"
+    probe.mkdir()
+    if probe_state == "unavailable":
+        (probe / "unexpected").write_bytes(b"x")
+    settings = SimpleNamespace(
+        resolved_cache_dir=target,
+        cache_backing_capacity_dir=probe,
+        staging_budget_bytes=1000,
+        min_free_bytes=10,
+    )
+    monkeypatch.setattr(
+        "tgdrive.storage.capacity.shutil.disk_usage",
+        lambda path: SimpleNamespace(
+            total=1000, used=0, free=1000 if Path(path) == target else 29
+        ),
+    )
+    with pytest.raises(StorageUnavailable) as caught:
+        check_staging(settings, SimpleNamespace(), 20)
+    assert caught.value.status == (503 if probe_state == "unavailable" else 507)
+
+
+def test_staging_physical_guard_subtracts_only_future_other_reservations(
+    tmp_path, monkeypatch
+):
+    from tgdrive.transfers.staging import check_staging
+
+    own = SimpleNamespace(
+        id="own",
+        terminal=False,
+        task=None,
+        context={"staging_size": 80, "staging_written": 60},
+    )
+    other = SimpleNamespace(
+        id="other",
+        terminal=False,
+        task=None,
+        context={"staging_size": 40, "staging_written": 30},
+    )
+    manager = SimpleNamespace(
+        registry=SimpleNamespace(staging_records=lambda: [own, other])
+    )
+    settings = SimpleNamespace(
+        resolved_cache_dir=tmp_path,
+        staging_budget_bytes=200,
+        min_free_bytes=10,
+    )
+    monkeypatch.setattr(
+        "tgdrive.storage.capacity.shutil.disk_usage",
+        lambda _: SimpleNamespace(total=1000, used=960, free=40),
+    )
+    # 20 own future bytes + 10 other future bytes + 10 reserve, exactly.
+    check_staging(settings, manager, 80, exclude="own", written=60)
+
+
+async def test_admitted_url_waits_cancellably_if_capacity_disappears_before_write(
+    tmp_path, monkeypatch
+):
+    from tests.transfers.test_remote import (
+        PUBLIC_DNS,
+        FakeResolver,
+        FakeResponse,
+        FakeSession,
+    )
+    from tests.transfers.test_transfers import make_manager
+    from tgdrive.transfers.remote import RemoteClient
+
+    manager, store, _, pool = await make_manager(tmp_path, max_size=100)
+    manager.settings.min_free_bytes = 10
+    response = FakeResponse(200, headers={"Content-Length": "80"}, chunks=[b"x" * 80])
+    manager.remote = RemoteClient(
+        max_bytes=100,
+        session=FakeSession([response]),
+        resolver=FakeResolver(PUBLIC_DNS),
+    )
+    free = 10000
+    monkeypatch.setattr(
+        "tgdrive.storage.capacity.shutil.disk_usage",
+        lambda _: SimpleNamespace(total=10000, used=10000 - free, free=free),
+    )
+    read = response.content.read
+
+    async def consume_available_space(size):
+        nonlocal free
+        chunk = await read(size)
+        free = 50
+        return chunk
+
+    monkeypatch.setattr(response.content, "read", consume_available_space)
+    record = await manager.start_remote(
+        url="https://files.example/a", destination="/", filename=None
+    )
+    waiting = asyncio.Event()
+    cancelable = manager.remote._cancelable
+
+    async def observe_wait(operation, event, **kwargs):
+        if record.context.get("download_mode") == "waiting_storage":
+            waiting.set()
+        return await cancelable(operation, event, **kwargs)
+
+    monkeypatch.setattr(manager.remote, "_cancelable", observe_wait)
+    try:
+        await asyncio.wait_for(waiting.wait(), 3)
+        assert record.task is not None and not record.task.done()
+        # One admitted chunk is bounded in memory; none reached staging.
+        assert list(response.content.chunks) == []
+        parts = list((tmp_path / "cache" / "remote" / record.id).glob("*.part"))
+        assert len(parts) == 1 and parts[0].stat().st_size == 0
+        record.cancel_event.set()
+        await record.task
+        assert record.status == TransferStatus.CANCELLED
+        assert not list((tmp_path / "cache" / "remote" / record.id).glob("*.part"))
+    finally:
+        record.cancel_event.set()
+        if record.task is not None:
+            await record.task
+        await manager.remote.close()
         await pool.stop()
         store.close()

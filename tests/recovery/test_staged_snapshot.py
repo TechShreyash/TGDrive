@@ -490,12 +490,14 @@ def test_disk_reserve_is_checked_before_and_during_staging(
     def usage(_directory):
         nonlocal calls
         calls += 1
-        return SimpleNamespace(free=1024**2 if late and calls < 4 else 128 * 1024)
+        return SimpleNamespace(
+            total=1024**4, used=0, free=1024**2 if late and calls < 4 else 128 * 1024
+        )
 
     snapshot["database"]["jobs"] = [{"_id": f"job-{index}"} for index in range(500)]
     source = tmp_path / "snapshot.json"
     source.write_text(json_util.dumps(snapshot), encoding="utf-8")
-    monkeypatch.setattr(staged_snapshot.shutil, "disk_usage", usage)
+    monkeypatch.setattr("tgdrive.storage.capacity.shutil.disk_usage", usage)
     with pytest.raises(OSError, match="temporary space"):
         staged_snapshot.stage_snapshot(
             source, tmp_path / "index.sqlite", min_free_bytes=128 * 1024

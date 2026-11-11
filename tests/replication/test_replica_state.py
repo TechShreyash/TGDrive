@@ -437,7 +437,7 @@ async def test_blocking_replica_work_keeps_loop_responsive_and_drains_cancellati
     )
     loop_thread = threading.get_ident()
 
-    def blocked(*_args):
+    def blocked(*_args, **_kwargs):
         assert threading.get_ident() != loop_thread
         entered.set()
         assert release.wait(3)

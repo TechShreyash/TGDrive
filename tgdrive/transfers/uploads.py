@@ -10,7 +10,6 @@ import logging
 import os
 import re
 import secrets
-import shutil
 import time
 from contextlib import suppress
 from pathlib import Path
@@ -20,7 +19,12 @@ from weakref import WeakValueDictionary
 from tgdrive.core.errors import DriveError
 from tgdrive.core.security import safe_name
 from tgdrive.storage.store import ROOT_ID, _normalize_path
-from tgdrive.transfers.staging import StorageUnavailable, check_staging
+from tgdrive.transfers.staging import (
+    StorageUnavailable,
+    check_staging,
+    check_staging_capacity,
+    staging_usage,
+)
 from tgdrive.transfers.tasks import _journalled
 from tgdrive.web.schemas import FolderUploadMetadata
 
@@ -216,7 +220,12 @@ class ResumableUploads:
             ):
                 self._cancel_receiving(item)
         item = self._admit(name, parent_id, total_size, folder_upload)
-        self._open_receipt(item)
+        self._open_receipt(
+            item,
+            outstanding_bytes=staging_usage(
+                self.manager, receipts=self, exclude=item["id"]
+            )[1],
+        )
         return item
 
     def _admit(
@@ -281,7 +290,16 @@ class ResumableUploads:
             item["folder_upload"] = folder_upload
         return item
 
-    def _open_receipt(self, item: dict[str, Any]) -> None:
+    def _open_receipt(self, item: dict[str, Any], *, outstanding_bytes=0) -> None:
+        try:
+            check_staging_capacity(
+                self.settings,
+                self.root,
+                item["total_size"],
+                outstanding_bytes=outstanding_bytes,
+            )
+        except StorageUnavailable as error:
+            raise UploadError(str(error), error.status) from error
         upload_id = item["id"]
         path = self.root / (upload_id + ".part")
         descriptor = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
@@ -380,8 +398,13 @@ class ResumableUploads:
             await self._reconcile_for_creation()
             item = self._admit(name, parent_id, total_size, folder_upload)
             self._pending[item["id"]] = item
+            remaining = staging_usage(self.manager, receipts=self, exclude=item["id"])[
+                1
+            ]
             try:
-                await self._owned_worker(self._open_receipt, item)
+                await self._owned_worker(
+                    lambda: self._open_receipt(item, outstanding_bytes=remaining)
+                )
             finally:
                 self._pending.pop(item["id"], None)
             return item
@@ -410,17 +433,25 @@ class ResumableUploads:
                     "Only the last chunk may be smaller than chunk_size", 422
                 )
             path = self.path(upload_id)
+            # Capture live journals on the event loop; the disk worker receives
+            # only immutable future-byte totals, excluding this receipt.
+            remaining = staging_usage(self.manager, receipts=self, exclude=upload_id)[1]
+            required = max(0, item["total_size"] - offset)
 
             def preflight() -> None:
                 if not path.exists() or path.stat().st_size < offset:
                     raise UploadError(
                         "Staged bytes are missing. Cancel and select the file again."
                     )
-                if (
-                    shutil.disk_usage(self.root).free - len(body)
-                    < self.settings.min_free_bytes
-                ):
-                    raise UploadError("Temporary storage is full", 507)
+                try:
+                    check_staging_capacity(
+                        self.settings,
+                        self.root,
+                        required,
+                        outstanding_bytes=remaining,
+                    )
+                except StorageUnavailable as error:
+                    raise UploadError(str(error), error.status) from error
 
             await self._owned_worker(preflight)
 

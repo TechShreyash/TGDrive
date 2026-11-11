@@ -593,3 +593,77 @@ async def test_folder_worker_restores_demo_write_policy(tmp_path):
         assert manager.store.revision == revision
     finally:
         await dispose(manager)
+
+
+@pytest.mark.parametrize("grow", [False, True])
+async def test_lower_staging_cap_preserves_admitted_extraction_only(
+    tmp_path, monkeypatch, grow
+):
+    manager, ledger, _ = await manager_for(tmp_path)
+    original_check = archives.check_staging
+    lowered = False
+    admitted = 0
+
+    def check(settings, owner, size, **kwargs):
+        nonlocal lowered, admitted
+        original_check(settings, owner, size, **kwargs)
+        identity = kwargs.get("exclude")
+        if identity is not None and not lowered:
+            record = manager.registry.get(identity)
+            if size > record.context["archive_source"]["size"]:
+                lowered = True
+                admitted = size
+                settings.staging_budget_bytes = settings.upload_limit = 1
+
+    monkeypatch.setattr(archives, "check_staging", check)
+    try:
+        entries = [("first.txt", b"one")]
+        if grow:
+            entries.append(("second.txt", b"two"))
+        item = source(manager, ledger, "source.zip", zip_bytes(entries))
+        job = await manager.start_extraction(
+            path=manager.store.resolve_id(item["id"]),
+            destination="/",
+            folder_name="Output",
+        )
+        await finish(job)
+        assert lowered
+        directory = manager.cache_dir / "archives" / job.id
+        if grow:
+            assert job.status is TransferStatus.ERROR
+            assert "reserved by other transfers" in job.error
+            assert job.context["staging_size"] == admitted
+            assert directory.exists() and not job.cancel_event.is_set()
+            assert (directory / "0.file").read_bytes() == b"one"
+        else:
+            assert job.status is TransferStatus.COMPLETED, job.error
+            assert job.context["archive_plan"]["size"] == 3
+    finally:
+        await dispose(manager)
+
+
+async def test_lower_staging_cap_preserves_admitted_zip_creation(tmp_path, monkeypatch):
+    manager, ledger, _ = await manager_for(tmp_path)
+    original_check = archives.check_staging
+    lowered = False
+
+    def check(settings, owner, size, **kwargs):
+        nonlocal lowered
+        original_check(settings, owner, size, **kwargs)
+        if kwargs.get("exclude") is not None:
+            lowered = True
+            settings.staging_budget_bytes = settings.upload_limit = 1
+
+    monkeypatch.setattr(archives, "check_staging", check)
+    try:
+        item = source(manager, ledger, "file.txt", b"hello")
+        job = await manager.start_archive(
+            paths=[manager.store.resolve_id(item["id"])],
+            destination="/",
+            name="output.zip",
+        )
+        await finish(job)
+        assert lowered
+        assert job.status is TransferStatus.COMPLETED, job.error
+    finally:
+        await dispose(manager)

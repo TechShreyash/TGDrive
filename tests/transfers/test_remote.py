@@ -283,17 +283,61 @@ class RemoteDownloadTests(unittest.IsolatedAsyncioTestCase):
 
         def disk_usage(_directory):
             self.assertNotEqual(threading.get_ident(), loop_thread)
-            return SimpleNamespace(free=12)
+            return SimpleNamespace(total=1024**5, used=0, free=12)
 
         with tempfile.TemporaryDirectory() as directory:
             with (
                 patch(
-                    "tgdrive.transfers.remote.shutil.disk_usage", side_effect=disk_usage
+                    "tgdrive.storage.capacity.shutil.disk_usage", side_effect=disk_usage
                 ),
                 self.assertRaisesRegex(RemoteError, "Temporary storage is full"),
             ):
                 await client.download("https://files.example/a", directory)
             self.assertEqual(list(Path(directory).iterdir()), [])
+        self.assertTrue(response.released)
+
+    async def test_capacity_callback_runs_on_loop_before_each_unreserved_chunk(self):
+        response = FakeResponse(200, headers={"Content-Length": "3"}, chunks=[b"abc"])
+        client = RemoteClient(
+            session=FakeSession([response]),
+            resolver=FakeResolver(PUBLIC_DNS),
+        )
+        loop_thread = threading.get_ident()
+        requests = []
+
+        async def check_capacity(required):
+            self.assertEqual(threading.get_ident(), loop_thread)
+            requests.append(required)
+            if required == 3:
+                raise RemoteError("headroom disappeared")
+
+        with tempfile.TemporaryDirectory() as directory:
+            with self.assertRaisesRegex(RemoteError, "headroom disappeared"):
+                await client.download(
+                    "https://files.example/a",
+                    directory,
+                    check_capacity=check_capacity,
+                )
+            self.assertEqual(list(Path(directory).iterdir()), [])
+        self.assertEqual(requests, [4096, 3])
+        self.assertTrue(response.released)
+
+    async def test_configured_unavailable_backing_refuses_even_zero_reserve(self):
+        response = FakeResponse(200, headers={"Content-Length": "3"}, chunks=[b"abc"])
+        with tempfile.TemporaryDirectory() as root:
+            probe = Path(root) / "probe"
+            probe.mkdir()
+            (probe / "unexpected").write_bytes(b"x")
+            output = Path(root) / "output"
+            client = RemoteClient(
+                session=FakeSession([response]),
+                resolver=FakeResolver(PUBLIC_DNS),
+                backing_capacity_dir=probe,
+                min_free_bytes=0,
+            )
+            with self.assertRaisesRegex(RemoteError, "capacity is unavailable"):
+                await client.download("https://files.example/a", output)
+            self.assertEqual(list(output.iterdir()), [])
         self.assertTrue(response.released)
 
     async def test_successful_single_stream_download_and_progress(self) -> None:

@@ -156,7 +156,6 @@ async def test_one_viewer_replaying_a_segment_does_not_promote_whole_file(tmp_pa
             )
         await asyncio.sleep(0)
         assert len(manager._jobs) == 1
-        assert manager._observed[identity]["hot_until"] == 0
     finally:
         await manager.close()
         await pool.stop()
@@ -185,7 +184,7 @@ async def test_disk_failure_never_claims_whole_file_ready(tmp_path, monkeypatch)
     manager, pool, _client = await manager_for(
         tmp_path, b"x" * (4 * BLOCK), memory_max_bytes=0
     )
-    monkeypatch.setattr(manager.cache.disk, "write", lambda *args: False)
+    monkeypatch.setattr(manager.cache.disk, "write", lambda *args, **kwargs: False)
     try:
         job = await manager.prepare(channel_id=CHANNEL, message_id=77, size=4 * BLOCK)
         row = await finish(manager, job)
@@ -385,14 +384,16 @@ async def test_ahead_window_uses_consumption_and_fill_speed(
 
 
 @pytest.mark.asyncio
-async def test_two_qualified_overlapping_viewers_earn_full_completion(tmp_path):
+@pytest.mark.parametrize("reload", [False, True])
+async def test_repeated_short_visits_only_prepare_bounded_ahead(tmp_path, reload):
     gate = asyncio.Event()
     manager, pool, _client = await manager_for(
         tmp_path, b"x" * (8 * BLOCK), gate, auto_preload=True
     )
+    now = 1.0
+    manager._clock = lambda: now
     try:
-        identity = None
-        for viewer in ("friend-one", "friend-two"):
+        for viewer in ("first-page", "second-page"):
             identity = manager.observe(
                 channel_id=CHANNEL, message_id=77, size=8 * BLOCK, request_id=viewer
             )
@@ -405,17 +406,27 @@ async def test_two_qualified_overlapping_viewers_earn_full_completion(tmp_path):
                     length=BLOCK,
                     request_id=viewer,
                 )
-            for _ in range(100):
-                expected = 1 if viewer == "friend-one" else 2
-                if len(manager._jobs) >= expected:
-                    break
-                await asyncio.sleep(0.001)
-        full = list(manager._jobs.values())[-1]
-        assert full["target_bytes"] == 8 * BLOCK
-        manager.finished(identity, "friend-one")
-        manager.finished(identity, "friend-two")
-        gate.set()
-        assert (await finish(manager, full))["state"] == "ready"
+            task = manager._auto_tasks.get(identity)
+            if task is not None:
+                await asyncio.wait_for(asyncio.shield(task), 3)
+            assert manager._jobs
+            if reload and viewer == "first-page":
+                manager.finished(identity, viewer)
+                await asyncio.gather(
+                    *list(manager._tasks.values()), return_exceptions=True
+                )
+                now += 31
+        assert all(
+            job["mode"] == "auto"
+            and job["start"] == 4 * BLOCK
+            and job["target_bytes"] == BLOCK
+            for job in manager._jobs.values()
+        )
+        manager.finished(identity, "first-page")
+        manager.finished(identity, "second-page")
+        await asyncio.gather(*list(manager._tasks.values()), return_exceptions=True)
+        assert all(job["state"] == "cancelled" for job in manager._jobs.values())
+        assert not manager.cache.memory.flights
     finally:
         gate.set()
         await manager.close()
@@ -605,11 +616,13 @@ async def test_multipart_preload_reserves_a_digest_for_each_telegram_part(tmp_pa
 
 
 @pytest.mark.asyncio
-async def test_manual_preload_replaces_full_automatic_job_and_its_authorization(
+async def test_manual_preload_replaces_ahead_job_and_retains_its_own_authorization(
     tmp_path,
 ):
     gate = asyncio.Event()
-    manager, pool, _client = await manager_for(tmp_path, b"x" * (4 * BLOCK), gate)
+    manager, pool, _client = await manager_for(
+        tmp_path, b"x" * (4 * BLOCK), gate, auto_preload=True
+    )
     revoked = False
 
     async def authorize_auto():
@@ -617,11 +630,16 @@ async def test_manual_preload_replaces_full_automatic_job_and_its_authorization(
             raise PermissionError("The original viewer's share was revoked")
 
     try:
+        identity = manager.observe(channel_id=CHANNEL, message_id=77, size=4 * BLOCK)
+        manager.begin(identity, None)
+        manager.delivered(channel_id=CHANNEL, message_id=77, offset=0, length=1)
         automatic = await manager.prepare(
             channel_id=CHANNEL,
             message_id=77,
             size=4 * BLOCK,
             mode="auto",
+            start=1,
+            end=2 * BLOCK,
             authorize=authorize_auto,
         )
         manual = await manager.prepare(
@@ -630,6 +648,10 @@ async def test_manual_preload_replaces_full_automatic_job_and_its_authorization(
         assert manual["id"] != automatic["id"] and manual["mode"] == "manual"
         assert manager._jobs[automatic["id"]]["state"] == "cancelled"
         revoked = True
+        manager.delivered(channel_id=CHANNEL, message_id=77, offset=3 * BLOCK, length=1)
+        manager.finished(identity, None)
+        assert not manager._tasks[manual["id"]].done()
+        assert manual["start"] == 0 and manual["target_bytes"] == 4 * BLOCK
         gate.set()
         assert (await finish(manager, manual))["state"] == "ready"
         assert (await manager.snapshot())["cache"]["files"][0]["complete"]
@@ -640,9 +662,9 @@ async def test_manual_preload_replaces_full_automatic_job_and_its_authorization(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("blocks,complete", [(20, False), (8, True)])
-async def test_hot_auto_admission_after_last_viewer_leaves_only_allows_full_file(
-    tmp_path, monkeypatch, blocks, complete
+@pytest.mark.parametrize("blocks", [8, 20])
+async def test_repeated_viewer_admission_stops_after_last_viewer_leaves(
+    tmp_path, monkeypatch, blocks
 ):
     manager, pool, client = await manager_for(
         tmp_path, b"x" * (blocks * BLOCK), auto_preload=True
@@ -663,12 +685,9 @@ async def test_hot_auto_admission_after_last_viewer_leaves_only_allows_full_file
 
     monkeypatch.setattr(manager, "_capacity", capacity)
     try:
-        identity = manager.observe(
-            channel_id=CHANNEL, message_id=77, size=blocks * BLOCK
-        )
-        # Independent viewers qualify overlapping runs as hot-file demand.
+        identity = None
         for viewer in ("first", "second"):
-            manager.observe(
+            identity = manager.observe(
                 channel_id=CHANNEL,
                 message_id=77,
                 size=blocks * BLOCK,
@@ -685,17 +704,13 @@ async def test_hot_auto_admission_after_last_viewer_leaves_only_allows_full_file
                 )
         await asyncio.wait_for(at_admission.wait(), 3)
         assert not manager._jobs
+        pending = manager._auto_tasks[identity]
         manager.finished(identity, "first")
         manager.finished(identity, "second")
         release_admission.set()
-        await asyncio.wait_for(manager._auto_tasks[identity], 3)
-        if complete:
-            job = next(iter(manager._jobs.values()))
-            assert job["target_bytes"] == blocks * BLOCK
-            assert (await finish(manager, job))["state"] == "ready"
-        else:
-            assert not manager._jobs and not client.native.requests
-            assert not manager.cache.memory.flights
+        await asyncio.gather(pending, return_exceptions=True)
+        assert not manager._jobs and not client.native.requests
+        assert not manager.cache.memory.flights
     finally:
         release_admission.set()
         await manager.close()
@@ -872,75 +887,6 @@ async def test_fill_rate_for_another_file_does_not_change_playback_ahead(tmp_pat
             job["file_id"]: job["target_bytes"] for job in manager._jobs.values()
         }
         assert targets == {identities[0]: 16 * BLOCK, identities[1]: 8 * BLOCK}
-    finally:
-        await manager.close()
-        await pool.stop()
-
-
-@pytest.mark.asyncio
-async def test_anonymous_player_requests_do_not_qualify_as_distinct_full_file_viewers(
-    tmp_path,
-):
-    manager, pool, _client = await manager_for(tmp_path, b"", auto_preload=True)
-    identity = None
-    try:
-        for index in range(3):
-            viewer = f"anonymous-http-{index}"
-            identity = manager.observe(
-                channel_id=CHANNEL,
-                message_id=77,
-                size=8 * BLOCK,
-                request_id=viewer,
-                allow_full=False,
-            )
-            manager.begin(identity, viewer)
-            for block in range(4):
-                manager.delivered(
-                    channel_id=CHANNEL,
-                    message_id=77,
-                    offset=block * BLOCK,
-                    length=BLOCK,
-                    request_id=viewer,
-                )
-        assert identity is not None
-        assert manager._observed[identity]["hot_until"] == 0
-    finally:
-        await manager.close()
-        await pool.stop()
-
-
-@pytest.mark.asyncio
-async def test_independent_playback_runs_can_qualify_after_growing_into_overlap(
-    tmp_path,
-):
-    manager, pool, _client = await manager_for(tmp_path, b"", auto_preload=True)
-    try:
-        identity = manager.observe(
-            channel_id=CHANNEL, message_id=77, size=16 * BLOCK, request_id="first"
-        )
-        for viewer, start in (("first", 0), ("second", 8)):
-            manager.observe(
-                channel_id=CHANNEL, message_id=77, size=16 * BLOCK, request_id=viewer
-            )
-            manager.begin(identity, viewer)
-            for index in range(start, start + 4):
-                manager.delivered(
-                    channel_id=CHANNEL,
-                    message_id=77,
-                    offset=index * BLOCK,
-                    length=BLOCK,
-                    request_id=viewer,
-                )
-        assert manager._observed[identity]["hot_until"] == 0
-        for index in range(4, 12):
-            manager.delivered(
-                channel_id=CHANNEL,
-                message_id=77,
-                offset=index * BLOCK,
-                length=BLOCK,
-                request_id="first",
-            )
-        assert manager._observed[identity]["hot_until"] > manager._clock()
     finally:
         await manager.close()
         await pool.stop()

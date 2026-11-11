@@ -29,6 +29,11 @@ from tgdrive.transfers.manager import (
     TransferError,
     _media_from_message,
 )
+from tgdrive.transfers.staging import (
+    StorageUnavailable,
+    check_staging_capacity,
+    staging_usage,
+)
 from tgdrive.transfers.tasks import TransferStatus, upload_effects
 
 
@@ -44,7 +49,11 @@ def discard_upload_images(path):
         image.unlink(missing_ok=True)
 
 
-def _stage_image(path, content):
+def _stage_image(path, content, *, settings=None, outstanding_bytes=0):
+    if settings is not None:
+        check_staging_capacity(
+            settings, path.parent, len(content), outstanding_bytes=outstanding_bytes
+        )
     descriptor, temporary = tempfile.mkstemp(dir=path.parent, prefix=".upload-image-")
     try:
         with os.fdopen(descriptor, "wb") as output:
@@ -308,9 +317,21 @@ async def upload_multipart(manager, record, local_path, destination, file_name, 
             thumbnail, poster_bytes = await generate_video_images(local_path, file_name)
             try:
                 if thumbnail:
-                    await _owned_disk_call(_stage_image, thumbnail_path, thumbnail)
+                    await _owned_disk_call(
+                        _stage_image,
+                        thumbnail_path,
+                        thumbnail,
+                        settings=manager.settings,
+                        outstanding_bytes=staging_usage(manager)[1],
+                    )
                 if poster_bytes:
-                    await _owned_disk_call(_stage_image, poster_path, poster_bytes)
+                    await _owned_disk_call(
+                        _stage_image,
+                        poster_path,
+                        poster_bytes,
+                        settings=manager.settings,
+                        outstanding_bytes=staging_usage(manager)[1],
+                    )
                     plan["poster"] = dict(
                         index=-1,
                         offset=0,
@@ -323,7 +344,7 @@ async def upload_multipart(manager, record, local_path, destination, file_name, 
                         message_id=None,
                         confirmed=False,
                     )
-            except OSError:
+            except OSError, StorageUnavailable:
                 pass  # Optional image staging must not fail the original upload.
             plan["images_generated"] = True
             await persist()

@@ -360,6 +360,27 @@ export interface ManagedClient {
     active_leases: number;
     error: string | null;
 }
+export interface StorageCapacity {
+    filesystem: {
+        available: boolean;
+        total_bytes: number | null;
+        used_bytes: number | null;
+        free_bytes: number | null;
+    };
+    backing: {
+        configured: boolean;
+        available: boolean;
+        total_bytes: number | null;
+        used_bytes: number | null;
+        free_bytes: number | null;
+    };
+    effective: {
+        available: boolean;
+        free_bytes: number | null;
+        headroom_bytes: number | null;
+    };
+    scope: string;
+}
 export interface ManagementStats {
     files: number;
     folders: number;
@@ -372,6 +393,7 @@ export interface ManagementStats {
     staging_budget_bytes: number;
     staging_reserved_bytes: number;
     free_disk_bytes: number | null;
+    disk_capacity?: StorageCapacity;
 }
 export interface ManagementSettings {
     revision: number;

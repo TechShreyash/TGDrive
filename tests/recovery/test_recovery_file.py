@@ -312,8 +312,8 @@ def test_standalone_recovery_file_keeps_free_space_reserve(
     configured, backend, _store = source
     path = tmp_path / "blocked-backup.tgdb"
     monkeypatch.setattr(
-        "tgdrive.recovery.snapshot_stream.shutil.disk_usage",
-        lambda _path: SimpleNamespace(free=0),
+        "tgdrive.storage.capacity.shutil.disk_usage",
+        lambda _path: SimpleNamespace(total=1024**4, used=0, free=0),
     )
     with pytest.raises(BackupError, match="temporary space"):
         recovery_file.write_recovery_snapshot(

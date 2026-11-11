@@ -27,6 +27,7 @@ import {
 } from "../../shared/useManualRefresh";
 import StartNewDrive from "./StartNewDrive";
 import ChannelBackup from "../backup/ChannelBackup";
+import { resourceBytes } from "../performance/performanceApi";
 import { transfers, uploadBackupState } from "../transfers/transfers";
 import "./StorageView.css";
 
@@ -164,6 +165,7 @@ export default function StorageView({
             }
         }
     };
+    const storageCapacity = usage?.disk_capacity;
     return (
         <div className="storage-page page-body">
             {demoMode && <DemoModeNotice />}
@@ -394,9 +396,9 @@ export default function StorageView({
                         <div className="storage-secondary-facts">
                             <span>
                                 {usage.free_disk_bytes == null
-                                    ? "Free Disk Unavailable"
-                                    : formatBytes(usage.free_disk_bytes) +
-                                      " free on the staging disk"}
+                                    ? "Staging-filesystem free unavailable"
+                                    : resourceBytes(usage.free_disk_bytes) +
+                                      " reported staging-filesystem free"}
                             </span>
                             <span>
                                 File limit:{" "}
@@ -407,6 +409,38 @@ export default function StorageView({
                                 )}
                             </span>
                         </div>
+                        {storageCapacity?.backing.configured && (
+                            <div className="storage-secondary-facts">
+                                <span>
+                                    Backing filesystem free:{" "}
+                                    {storageCapacity.backing.available &&
+                                    storageCapacity.backing.free_bytes !== null
+                                        ? resourceBytes(
+                                              storageCapacity.backing
+                                                  .free_bytes,
+                                          )
+                                        : "Unavailable"}
+                                </span>
+                                <span>
+                                    Free after reserve:{" "}
+                                    {storageCapacity.effective.available &&
+                                    storageCapacity.effective.headroom_bytes !==
+                                        null
+                                        ? resourceBytes(
+                                              storageCapacity.effective
+                                                  .headroom_bytes,
+                                          )
+                                        : "Unavailable"}
+                                </span>
+                            </div>
+                        )}
+                        {storageCapacity?.backing.configured &&
+                            !storageCapacity.effective.available && (
+                                <p className="settings-help" role="status">
+                                    New writes are unavailable because required
+                                    storage capacity could not be measured.
+                                </p>
+                            )}
                     </div>
                 )}
             </section>

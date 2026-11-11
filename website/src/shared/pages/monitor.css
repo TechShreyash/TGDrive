@@ -91,13 +91,29 @@
 
 /* ---------- Performance: overview ---------- */
 .performance-page .performance-overview-grid:not([hidden]) {
-    grid-template-columns: minmax(0, 2fr) minmax(280px, 1fr);
-    gap: 16px;
+    display: grid;
+    grid-template-columns: minmax(0, 1.4fr) minmax(320px, 1fr);
+    align-items: start;
+    gap: 40px;
+    padding-top: 20px;
+    border-top: 1px solid var(--line);
 }
 .performance-page
     .performance-overview-grid
     > :is(.performance-health, .performance-all-time) {
     grid-column: 1 / -1;
+}
+.performance-page .performance-explanation-heading h3,
+.performance-page
+    .performance-overview-resources
+    .performance-section-title
+    h3 {
+    font-size: 20px;
+    letter-spacing: -0.02em;
+}
+.performance-page .performance-explanation > .performance-detail-note {
+    border-block: 1px solid var(--line);
+    padding-block: 8px;
 }
 /* Account status stays secondary to the measured activity and charts. */
 .performance-page .performance-health {
@@ -639,6 +655,21 @@
 .performance-page .performance-usage:nth-child(3) progress::-moz-progress-bar,
 .preloads-page .preload-capacity-tier:last-child progress::-moz-progress-bar {
     background: var(--hue-teal);
+}
+.performance-page .performance-overview-meters .performance-usage progress {
+    height: 6px;
+}
+.performance-page
+    .performance-overview-meters
+    .performance-usage
+    progress::-webkit-progress-value {
+    background: var(--action);
+}
+.performance-page
+    .performance-overview-meters
+    .performance-usage
+    progress::-moz-progress-bar {
+    background: var(--action);
 }
 .performance-page .performance-cache-link {
     align-items: center;

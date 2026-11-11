@@ -372,7 +372,6 @@ async def test_tiny_http_range_probes_do_not_count_whole_telegram_blocks_as_play
             assert await response_body(probe) == b"x"
         assert not manager._jobs and not manager._auto_tasks
         row = next(iter(manager._observed.values()))
-        assert not row["runs"]
         assert all(not viewer["active"] for viewer in row["viewers"].values())
     finally:
         await manager.close()
@@ -450,7 +449,6 @@ async def test_only_identified_playback_uses_media_duration_for_background_warmi
             observed = next(iter(manager._observed.values()))
             viewer = next(iter(observed["viewers"].values()))
             assert viewer["media_rate"] == len(payload) / 3600
-            assert not viewer["allow_full"]
     finally:
         await manager.close()
         await pool.stop()

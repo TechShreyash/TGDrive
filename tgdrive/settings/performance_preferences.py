@@ -1,6 +1,4 @@
-"""Owner choices (timezone, preloading, split size) plus live-applied
-resource values. The resource values are chosen by the governor
-(tgdrive/core/governor.py) and are never saved or edited by the owner."""
+"""Saved owner policies and ceilings, plus unsaved governor resource budgets."""
 
 from __future__ import annotations
 
@@ -19,6 +17,10 @@ from tgdrive.transfers.tasks import _journalled
 class PerformancePreferences(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
     timezone: str = "Asia/Kolkata"
+    cache_disk_limit_bytes: int | None = Field(default=None, ge=0, le=2**53 - 1)
+    cache_memory_limit_bytes: int | None = Field(default=None, ge=0, le=2**53 - 1)
+    staging_limit_bytes: int | None = Field(default=None, gt=0, le=2**53 - 1)
+    protected_free_bytes: int | None = Field(default=None, ge=0, le=2**53 - 1)
     cache_memory_bytes: int = Field(default=256 * 1024**2, ge=0)
     cache_disk_bytes: int = Field(default=10 * 1024**3, ge=0)
     cache_min_free_bytes: int = Field(default=1024**3, ge=0)
@@ -103,7 +105,23 @@ class PerformanceSettings:
         )
 
     async def _apply(self, value):
+        from tgdrive.core.governor import constrain, measure
+
         values = value.model_dump()
+        measurements = None
+        if value.protected_free_bytes != self.value.protected_free_bytes and (
+            value.protected_free_bytes is None
+        ):
+            pool = getattr(self.runtime, "pool", None)
+            media = getattr(pool, "media_cache_dir", None) or (
+                self.settings.resolved_data_dir / "media-cache"
+            )
+            directory = self.settings.resolved_cache_dir
+            while not directory.exists():
+                directory = directory.parent
+            measurements = await asyncio.to_thread(measure, directory, media)
+        values = constrain(values, values, measurements)
+        value = PerformancePreferences.model_validate(values)
         changed = {
             key
             for key, item in values.items()
@@ -213,7 +231,11 @@ class PerformanceSettings:
 
     async def snapshot(self):
         await self.initialize()
-        from tgdrive.core.governor import MANAGED
+        from tgdrive.core.governor import (
+            AUTO_FREE_SPACE_RESERVE,
+            AUTO_RESOURCE_LIMITS,
+            MANAGED,
+        )
 
         return {
             key: value
@@ -221,6 +243,8 @@ class PerformanceSettings:
             if key not in MANAGED
         } | {
             "revision": self.etag(),
+            "auto_resource_limits": dict(AUTO_RESOURCE_LIMITS),
+            "auto_free_space_reserve": dict(AUTO_FREE_SPACE_RESERVE),
             "defaults": {
                 key: value
                 for key, value in PerformancePreferences().model_dump().items()
@@ -234,9 +258,8 @@ class PerformanceSettings:
 
         if MANAGED.intersection(changes):
             raise SettingsProblem(
-                "TGDrive tunes cache, storage and transfer limits automatically "
-                "from server resources. To cap TGDrive, set Docker memory and "
-                "CPU limits.",
+                "TGDrive tunes effective budgets automatically. "
+                "Save resource ceilings instead of effective budget fields.",
                 status=422,
             )
         await self.initialize()

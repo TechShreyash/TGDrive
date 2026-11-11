@@ -51,11 +51,19 @@ class Runtime:
 
         self.mongo = for_settings(settings)
         self.pool = pool or build_client_pool(settings)
-        self.backup = MongoProtection(settings, self.pool, self.mongo)
+        self.pool.storage_settings = settings
+        self.pool.remaining_staging_bytes = self._remaining_staging_bytes
+        self.backup = MongoProtection(
+            settings,
+            self.pool,
+            self.mongo,
+            remaining_staging_bytes=self._remaining_staging_bytes,
+        )
         self.remote = RemoteClient(
             download_concurrency=settings.remote_download_concurrency,
             max_bytes=settings.upload_limit,
             min_free_bytes=settings.min_free_bytes,
+            storage_settings=settings,
             max_redirects=settings.remote_max_redirects,
             allow_private=settings.allow_private_remote_urls,
             timeouts=RemoteTimeouts(
@@ -75,6 +83,11 @@ class Runtime:
         self._channel_check_lock = asyncio.Lock()
         self._channel_verified_until = 0.0
         self.storage_channel_error: str | None = None
+
+    def _remaining_staging_bytes(self):
+        from tgdrive.transfers.staging import staging_usage
+
+        return staging_usage(self.transfers)[1] if self.transfers else 0
 
     async def start(self) -> None:
         if self.ready:

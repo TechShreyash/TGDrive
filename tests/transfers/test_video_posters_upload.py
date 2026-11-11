@@ -184,10 +184,10 @@ async def test_predispatch_poster_failures_fall_back_to_original(
     if failure == "staging":
         stage_image = multipart_transfer._stage_image
 
-        def stage(path, content):
+        def stage(path, content, **kwargs):
             if path.name.endswith(".poster.jpg"):
                 raise OSError("synthetic optional image staging failure")
-            stage_image(path, content)
+            stage_image(path, content, **kwargs)
 
         monkeypatch.setattr(multipart_transfer, "_stage_image", stage)
     else:

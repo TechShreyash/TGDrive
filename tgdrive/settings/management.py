@@ -5,7 +5,6 @@ from __future__ import annotations
 import asyncio
 import logging
 import secrets
-import shutil
 import time
 from collections import Counter
 from collections.abc import Awaitable, Callable, Sequence
@@ -649,10 +648,18 @@ class ConnectionManager:
             )
             if row["_id"] not in finished
         )
-        with suppress(OSError):
-            result["free_disk_bytes"] = shutil.disk_usage(
-                self.settings.resolved_cache_dir
-            ).free
+        from tgdrive.storage.capacity import measure_capacity
+
+        capacity = measure_capacity(
+            self.settings.resolved_cache_dir,
+            probe_directory=getattr(self.settings, "cache_backing_capacity_dir", None),
+        )
+        result["free_disk_bytes"] = (
+            capacity.filesystem.free if capacity.filesystem else None
+        )
+        result["disk_capacity"] = capacity.as_dict(
+            reserve_bytes=self.settings.min_free_bytes
+        )
         return result
 
     async def _credential_repair(

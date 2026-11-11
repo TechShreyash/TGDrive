@@ -183,8 +183,8 @@ async def test_snapshot_record_uses_exported_revision_when_catalog_advances(
     service, store, backend = snapshot_source
     exported_revision = store.revision
 
-    def export_then_advance(*args):
-        result = write_recovery_snapshot(*args)
+    def export_then_advance(*args, **kwargs):
+        result = write_recovery_snapshot(*args, **kwargs)
         store.create_folder("/", "Arrived after the snapshot")
         return result
 
@@ -405,8 +405,8 @@ async def test_cancelled_snapshot_drains_export_before_removing_unadmitted_file(
     service, store, backend = snapshot_source
     entered, release = threading.Event(), threading.Event()
 
-    def held_export(*args):
-        result = write_recovery_snapshot(*args)
+    def held_export(*args, **kwargs):
+        result = write_recovery_snapshot(*args, **kwargs)
         entered.set()
         assert release.wait(3), "The event loop could not release the export"
         return result

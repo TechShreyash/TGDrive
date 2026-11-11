@@ -1425,3 +1425,23 @@ def test_activation_keeps_reading_position_but_invalidates_writer(
     assert restored[field] == progress
     assert field + "_session" not in restored
     assert field not in json_util.dumps(installed(settings))
+
+
+def test_missing_backing_probe_preserves_prepared_activation_and_original_catalog(
+    settings,
+):
+    import tgdrive.replication.replica_activation as module
+
+    backend = cast(Backend, for_settings(settings))
+    before = copy.deepcopy(backend.data)
+    prepare_activation(settings, candidate(catalog(settings)))
+    manifest = settings.resolved_data_dir / MANIFEST
+    original = manifest.read_bytes()
+    settings.data_backing_capacity_dir = settings.resolved_data_dir / "missing-probe"
+    with pytest.raises(OSError):
+        _apply(settings)
+    assert manifest.read_bytes() == original
+    assert backend.data == before
+    value = module._load(settings)
+    assert value is not None and value["phase"] == "prepared"
+    assert not list((settings.resolved_data_dir / "recovery-archive").rglob("*.tmp"))

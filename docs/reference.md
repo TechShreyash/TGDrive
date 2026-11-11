@@ -153,9 +153,10 @@ connectivity, not merely a nonempty STRING_SESSIONS value. See
 <details>
 <summary>Live preferences, defaults and cache limits</summary>
 
-Resource values are not editable dashboard preferences. Environment variables
-seed startup; the [governor](performance.md#automatic-tuning) can update cache
-and staging budgets, free-space reserves and the file ceiling. Configured
+Managed live resource values are not direct dashboard preferences. Environment
+variables seed startup. Saved owner ceilings bound the
+[governor](performance.md#automatic-tuning), which updates cache and staging
+budgets, free-space reserves and the file ceiling. Configured
 concurrency ceilings remain; preloads also stay within 4 jobs per CPU and 8 total. Per-account Telegram
 cooldown/recovery is separate and survives resource-only updates.
 Pacing (`TELEGRAM_PARTS_PER_SECOND`), queue size (`TELEGRAM_MAX_QUEUE`) and cache
@@ -166,8 +167,27 @@ The managed variable names are `CACHE_MEMORY_BYTES`,
 `TELEGRAM_MEDIA_PER_BOT`, `TELEGRAM_MAX_QUEUE`, `TELEGRAM_UPLOADS_PER_BOT`,
 `REMOTE_DOWNLOAD_CONCURRENCY`, `MAX_FILE_SIZE`, `STAGING_BUDGET_BYTES`,
 `MIN_FREE_BYTES`.
-`PATCH /api/v1/settings/performance` rejects them with `422`; it accepts only
-the owner choices below, saved in MongoDB and applied immediately.
+`PATCH /api/v1/settings/performance` rejects those managed names with `422`.
+It also accepts the four nullable owner byte ceilings below, saved in MongoDB.
+`null` selects Auto. Values must be strict integers up to `2^53 - 1`; cache
+ceilings and reserve allow zero, while staging must be positive.
+
+| JSON key | Auto | Scope |
+| --- | --- | --- |
+| `cache_memory_limit_bytes` | 256 MiB | Retained media payload in RAM; zero disables this retention tier |
+| `cache_disk_limit_bytes` | 10 GiB | Retained media payload on disk; zero disables this retention tier |
+| `staging_limit_bytes` | 16 GiB | Temporary staging and the logical-file ceiling |
+| `protected_free_bytes` | Larger of 1 GiB and 5% of each relevant filesystem | Extra TGDrive free-space floor; zero removes that floor |
+
+GET returns authoritative `auto_resource_limits` and `auto_free_space_reserve`.
+Saves retain revision/ETag conflict checks (`409`) and rollback on apply failure.
+Reductions apply immediately; expansion may wait for the five-second governor
+pass. Lowering staging preserves unchanged/shrinking admitted claims, not new
+or growing claims. Limits reserve no physical space and actual free-space checks
+remain. Cover/poster caches and protected recovery files are separate; these
+values do not cap process RSS.
+
+Other owner choices are saved in MongoDB:
 
 | Variable | Default | Meaning and bounds |
 | --- | --- | --- |
@@ -372,8 +392,26 @@ rejected alongside private, loopback, link-local, multicast and reserved ranges.
 | `FORWARDED_ALLOW_IPS` | Optional explicit Uvicorn proxy trust override. The container launcher defaults to loopback plus the private IPs resolved from `TGDRIVE_PROXY_HOSTS`; the hosted Compose file sets that hostname to `coolify-proxy`. Unset or `auto` enables discovery. |
 | `TGDRIVE_PROXY_HOSTS` | Deployment-owned, comma-separated internal proxy hostnames. Only their resolved private IPs are trusted. A DNS failure retains loopback trust and logs an actionable warning; it never enables wildcard trust. |
 | `TGDRIVE_AUTO_SECRETS` | Standard Compose sets true in the container environment. Generates a missing `SESSION_SECRET` once for a new drive in persistent DATA_DIR. It never generates `ENCRYPTION_KEY`; existing drives must reuse their original secrets. |
+| `DATA_BACKING_CAPACITY_DIR` | Optional absolute path to an existing empty directory on the verified backing filesystem for `DATA_DIR`; deployment-only, not restored from backups. |
+| `CACHE_BACKING_CAPACITY_DIR` | Equivalent backing probe for `CACHE_DIR`; configure separately for distinct backing filesystems. |
 | `TGDRIVE_RESTART_POLICY` | Compose interpolation only. Laptop override defaults to no, hosted/server mode to unless-stopped. Choose deliberately; restart policies do not restart a running container merely because it is unhealthy. |
 | --workers | Must remain 1. This is a launch argument, not an environment feature for scaling the drive. |
+
+Backing probes are optional operator configuration. Verify the real host/backing
+filesystem first, then expose its existing empty probe directory to the app
+(for containers, through a mount) and use the path visible inside the app.
+A probe must not be a symlink. Missing, unreadable, nonempty or conflicting
+configured probes are unavailable; TGDrive does not silently fall back to guest
+capacity. Without a probe, backing capacity remains unknown.
+
+Measurements use the smaller free-space reading of the destination and its
+configured backing filesystem. Each writer also applies its reserve and captured
+outstanding staging claims as appropriate. Data/cache paths select their matching
+probe; equal roots need consistent probe configuration. Reporting exposes no
+probe path. **Free after reserve** excludes outstanding claims. These measured
+checks and OS write errors do not form an atomic quota or protect against every
+external host write. Required measurement failure refuses writes; existing
+committed files remain preserved.
 
 `BIND_ADDRESS` only affects the local override. The server override always binds
 its published port to 127.0.0.1; Coolify's base Compose publishes no host port.

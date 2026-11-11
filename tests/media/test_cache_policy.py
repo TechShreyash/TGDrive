@@ -34,7 +34,7 @@ async def test_download_during_inventory_write_is_persisted_before_close(
     original = cache._write_index
     writes = 0
 
-    def delayed_write(value):
+    def delayed_write(value, **kwargs):
         nonlocal writes
         writes += 1
         if writes == 1:
@@ -43,7 +43,7 @@ async def test_download_during_inventory_write_is_persisted_before_close(
             value = json.loads(json.dumps(value))
             started.set()
             assert release.wait(5)
-        original(value)
+        original(value, **kwargs)
 
     monkeypatch.setattr(cache, "_write_index", delayed_write)
     try:
@@ -72,7 +72,6 @@ async def test_download_during_inventory_write_is_persisted_before_close(
         {"memory_max_bytes": True},
         {"ttl_seconds": float("nan")},
         {"max_background_jobs": 0},
-        {"max_file_fraction": 0},
         {"protected_fraction": 1},
     ],
 )
@@ -110,8 +109,8 @@ def test_disk_reserves_free_space_and_never_recursively_removes_other_files(
     sentinel.write_text("keep")
     cache = DiskMediaCache(tmp_path, max_bytes=4096, min_free_bytes=1024)
     monkeypatch.setattr(
-        "tgdrive.media.media_cache.shutil.disk_usage",
-        lambda _: SimpleNamespace(free=100),
+        "tgdrive.storage.capacity.shutil.disk_usage",
+        lambda _: SimpleNamespace(total=1024**5, used=0, free=100),
     )
     assert cache.write((1,), b"payload") is False
     cache.clear()
@@ -140,10 +139,10 @@ async def test_disk_write_is_deferred_and_included_in_memory_budget(
     assert cache.disk is not None
     original = cache.disk.write
 
-    def slow_write(*args):
+    def slow_write(*args, **kwargs):
         started.set()
         release.wait(5)
-        return original(*args)
+        return original(*args, **kwargs)
 
     monkeypatch.setattr(cache.disk, "write", slow_write)
     try:
@@ -494,3 +493,157 @@ async def test_inventory_orders_actual_downloads_not_cache_hits_and_retains_orde
         ]
     finally:
         await cache.close()
+
+
+def test_disk_cache_backing_failure_is_unavailable_even_when_retention_is_zero(
+    tmp_path,
+):
+    probe = tmp_path / "probe"
+    probe.mkdir()
+    cache = DiskMediaCache(
+        tmp_path / "media",
+        max_bytes=0,
+        backing_capacity_dir=probe,
+    )
+    (probe / "unexpected").write_bytes(b"x")
+    status = cache.snapshot()
+    assert status["available"] is False
+    assert status["enabled"] is False
+    assert status["capacity"]["scope"] == "backing_unavailable"
+    assert status["capacity"]["effective"]["headroom_bytes"] is None
+
+
+def test_disk_cache_leaves_payload_and_foreign_files_when_backing_is_unavailable(
+    tmp_path,
+):
+    probe = tmp_path / "probe"
+    probe.mkdir()
+    cache = DiskMediaCache(
+        tmp_path / "media",
+        max_bytes=1024,
+        backing_capacity_dir=probe,
+    )
+    assert cache.write((1,), b"old")
+    sentinel = cache.directory / "original.upload"
+    sentinel.write_bytes(b"protected")
+    (probe / "unexpected").write_bytes(b"x")
+    assert cache.write((1,), b"new", outstanding_bytes=10) is False
+    assert cache.read((1,), 3) == b"old"
+    assert sentinel.read_bytes() == b"protected"
+
+
+def test_disk_cache_uses_backing_headroom_and_other_future_reservations(
+    tmp_path, monkeypatch
+):
+    probe = tmp_path / "probe"
+    probe.mkdir()
+    target = tmp_path / "media"
+    cache = DiskMediaCache(
+        target,
+        max_bytes=1024,
+        min_free_bytes=10,
+        backing_capacity_dir=probe,
+    )
+    monkeypatch.setattr(
+        "tgdrive.storage.capacity.shutil.disk_usage",
+        lambda path: SimpleNamespace(
+            total=1000, used=0, free=1000 if path == target else 50
+        ),
+    )
+    # 35 bytes payload+digest, plus 10 reserve and 6 other future bytes.
+    assert cache.write((1,), b"one", outstanding_bytes=6) is False
+    assert cache.write((1,), b"one", outstanding_bytes=5) is True
+
+
+async def test_lazy_media_cache_factory_injects_probe_and_event_loop_reservations(
+    tmp_path,
+):
+    from tgdrive.media.media_reader import media_cache_for
+
+    probe = tmp_path / "probe"
+    probe.mkdir()
+    (probe / "unexpected").write_bytes(b"x")
+    pool = SimpleNamespace(
+        _media_read_cache=None,
+        media_cache_dir=tmp_path / "media",
+        storage_settings=SimpleNamespace(data_backing_capacity_dir=probe),
+        remaining_staging_bytes=lambda: 17,
+    )
+    cache = media_cache_for(pool, MediaCachePolicy(disk_max_bytes=0, min_free_bytes=0))
+    assert media_cache_for(pool) is cache
+    status = await cache.snapshot()
+    assert status["disk"]["available"] is False
+    assert status["disk"]["capacity"]["scope"] == "backing_unavailable"
+    await cache.close()
+
+
+def test_disk_cache_remeasures_space_after_retention_trim(tmp_path, monkeypatch):
+    block_bytes = 132  # 100 payload bytes and the stored SHA-256 digest.
+    capacity_bytes = 2 * block_bytes
+    cache = DiskMediaCache(tmp_path, max_bytes=capacity_bytes, min_free_bytes=0)
+
+    def disk_usage(directory):
+        used = sum(path.stat().st_size for path in directory.glob("*.block"))
+        return SimpleNamespace(
+            total=capacity_bytes, used=used, free=capacity_bytes - used
+        )
+
+    monkeypatch.setattr("tgdrive.storage.capacity.shutil.disk_usage", disk_usage)
+    assert cache.write((1,), b"a" * 100)
+    assert cache.write((2,), b"b" * 100)
+    assert disk_usage(tmp_path).free == 0
+
+    assert cache.write((3,), b"c" * 100)
+    assert cache.read((1,), 100) is None
+    assert cache.read((2,), 100) == b"b" * 100
+    assert cache.read((3,), 100) == b"c" * 100
+    assert cache.snapshot()["evictions"] == 1
+
+
+@pytest.mark.parametrize("layout", ["nested_cache", "conflicting_equal_roots"])
+async def test_payload_cache_resolves_actual_target_probe_and_preserves_cached_bytes(
+    tmp_path, layout
+):
+    from tgdrive.media.media_reader import media_cache_for
+
+    data_root = tmp_path / "data"
+    cache_root = data_root / "media-cache" if layout == "nested_cache" else data_root
+    target = data_root / "media-cache"
+    data_probe = None
+    cache_probe = tmp_path / "missing-cache-probe"
+    if layout == "conflicting_equal_roots":
+        data_probe = tmp_path / "valid-data-probe"
+        data_probe.mkdir()
+    settings = SimpleNamespace(
+        resolved_data_dir=data_root,
+        resolved_cache_dir=cache_root,
+        data_backing_capacity_dir=data_probe,
+        cache_backing_capacity_dir=cache_probe,
+    )
+    # Seed committed data independently of the currently unavailable mapping.
+    seed = DiskMediaCache(target, max_bytes=1024)
+    assert seed.write((1,), b"old")
+    inventory = target / "inventory.json"
+    previous = b'{"files":[],"blocks":[]}'
+    inventory.write_bytes(previous)
+    pool = SimpleNamespace(
+        _media_read_cache=None,
+        media_cache_dir=target,
+        storage_settings=settings,
+        remaining_staging_bytes=lambda: 0,
+    )
+    cache = media_cache_for(
+        pool, MediaCachePolicy(disk_max_bytes=1024, min_free_bytes=0)
+    )
+    assert cache.disk is not None
+    assert cache.disk.write((1,), b"new") is False
+    assert cache.disk.read((1,), 3) == b"old"
+    with pytest.raises(OSError):
+        cache._write_index({"files": [{"id": "new"}], "blocks": []})
+    assert inventory.read_bytes() == previous
+    status = await cache.snapshot()
+    assert status["disk"]["available"] is False
+    assert status["disk"]["capacity"]["filesystem"]["available"] is True
+    assert status["disk"]["capacity"]["effective"]["available"] is False
+    assert status["disk"]["capacity"]["scope"] == "backing_unavailable"
+    await cache.close()

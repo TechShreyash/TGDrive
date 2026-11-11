@@ -1,28 +1,32 @@
 import { useEffect, useState } from "react";
-import { formatBytes, formatTimestamp } from "../../shared/types";
-import type { PerformanceDiagnosis } from "./performanceApi";
+import { ArrowDown, ArrowUp } from "lucide-react";
+import { formatTimestamp } from "../../shared/types";
+import {
+    resourceBytes as formatBytes,
+    type PerformanceDiagnosis,
+} from "./performanceApi";
 
 const WAITS: Record<
     string,
     { title: string; action: string; metric: string; metricLabel: string }
 > = {
     telegram_queue: {
-        title: "Telegram queue",
+        title: "Waiting for Telegram",
         metric: "pool_queued_operations",
-        metricLabel: "Pool queue",
+        metricLabel: "Waiting operations",
         action: "Open Accounts to inspect queues and configured limits.",
     },
     telegram_cooldown: {
-        title: "Telegram cooldown",
+        title: "Telegram asked us to pause",
         metric: "longest_cooldown_seconds",
-        metricLabel: "Longest cooldown",
+        metricLabel: "Pause remaining",
         action: "Wait for the reported cooldown, then recheck Accounts.",
     },
     scratch_wait: {
-        title: "Stream-buffer wait",
+        title: "Waiting for a stream buffer",
         metric: "waiting_heads",
         metricLabel: "Streams waiting",
-        action: "Let current reads finish or reduce simultaneous reads.",
+        action: "Let current reads finish or reduce simultaneous streams.",
     },
 };
 const EVIDENCE: Record<string, string> = {
@@ -38,7 +42,7 @@ const EVIDENCE: Record<string, string> = {
     effective_limit_bytes: "Effective stream-buffer memory limit",
 };
 const WORKLOAD = {
-    playback_requests: "Playback",
+    playback_requests: "Streaming",
     download_requests: "Downloads",
     unknown_file_requests: "Other files",
     upload_requests: "Device uploads",
@@ -57,9 +61,15 @@ function measured(value: number | null | undefined, unit = "") {
 export default function PerformanceExplanation({
     diagnosis,
     serverAt,
+    liveRates,
+    telegram,
+    onAccounts,
 }: {
     diagnosis?: PerformanceDiagnosis | null;
     serverAt?: number;
+    liveRates?: { toViewers: number | null; fromDevices: number | null };
+    telegram?: { active: number; queued: number };
+    onAccounts?: () => void;
 } = {}) {
     const [expired, setExpired] = useState<PerformanceDiagnosis | null>(null);
     // Compare clocks only on the server; expire retained responses locally.
@@ -83,17 +93,52 @@ export default function PerformanceExplanation({
         );
         return () => clearTimeout(timer);
     }, [diagnosis, age, validAge]);
-    const summary = !diagnosis
-        ? "Performance explanations are unavailable. Raw measurements remain available below."
+    const activeWorkload = diagnosis
+        ? Object.entries(WORKLOAD).filter(
+              ([key]) => diagnosis.workload[key as keyof typeof WORKLOAD] > 0,
+          )
+        : [];
+    const activeOperations =
+        (telegram?.active ?? 0) + (telegram?.queued ?? 0) > 0;
+    const liveWork = activeWorkload.length > 0 || activeOperations;
+    const measuredActivity =
+        liveWork ||
+        (liveRates?.toViewers ?? 0) > 0 ||
+        (liveRates?.fromDevices ?? 0) > 0;
+    const currentState = !diagnosis
+        ? "unavailable"
         : !available
-          ? "Evidence is unavailable or stale. Refresh Performance to update."
-          : diagnosis.state === "idle"
-            ? "No workload activity was observed in this window."
-            : diagnosis.state === "observing"
-              ? "Collecting samples; early readings are inconclusive."
-              : diagnosis.constraints.length
-                ? "Reported waits in the latest sample."
-                : "No supported wait identified; spare capacity is unknown.";
+          ? diagnosis.state === "unavailable"
+              ? "unavailable"
+              : "stale"
+          : diagnosis.state === "idle" && measuredActivity
+            ? "active"
+            : diagnosis.state;
+    const summary = !available
+        ? "Current information is unavailable. Refresh to try again."
+        : currentState === "idle"
+          ? "Nothing is transferring right now."
+          : currentState === "observing"
+            ? "Checking recent activity..."
+            : diagnosis!.constraints.length
+              ? "A transfer is waiting. See the reason below."
+              : measuredActivity
+                ? "Transfers are running; no measured wait reported."
+                : "Nothing is transferring in the latest reading.";
+    const state =
+        currentState === "unavailable"
+            ? "Unavailable"
+            : currentState === "stale"
+              ? "Out of date"
+              : currentState === "observing"
+                ? "Checking"
+                : currentState === "idle"
+                  ? "Idle"
+                  : measuredActivity
+                    ? "Active"
+                    : "Recent activity";
+    const deliveryRate = measured(liveRates?.toViewers, "bytes/s");
+    const uploadRate = measured(liveRates?.fromDevices, "bytes/s");
     return (
         <section
             className="performance-section performance-explanation"
@@ -104,57 +149,46 @@ export default function PerformanceExplanation({
                 <span
                     className="performance-sample-state"
                     data-current={available}
+                    data-state={currentState}
                 >
-                    {!diagnosis
-                        ? "Unavailable"
-                        : !available
-                          ? diagnosis.state === "unavailable"
-                              ? "Unavailable"
-                              : "Stale"
-                          : diagnosis.state === "idle"
-                            ? "Idle"
-                            : diagnosis.state === "observing"
-                              ? "Observing"
-                              : "Active"}
+                    {state}
                 </span>
             </div>
             <p className="performance-explanation-summary" role="status">
                 {summary}
             </p>
-            {diagnosis && (
-                <p className="performance-sample-meta">
-                    {available
-                        ? "Latest sample: "
-                        : "Last sample (not current): "}
-                    {typeof diagnosis.sampled_at === "number" &&
-                    Number.isFinite(diagnosis.sampled_at)
-                        ? formatTimestamp(diagnosis.sampled_at)
-                        : "Unavailable"}
-                    {" · "}
-                    {measured(diagnosis.observed_seconds, "s")} observed
-                    {" · "}
-                    {measured(diagnosis.window_seconds, "s")} window
-                </p>
+
+            {liveRates && (
+                <dl className="performance-file-rates">
+                    <div>
+                        <dt>
+                            <ArrowDown size={18} aria-hidden="true" />
+                            <span>Streaming &amp; downloads</span>
+                        </dt>
+                        <dd data-unavailable={deliveryRate === "Unavailable"}>
+                            {deliveryRate}
+                        </dd>
+                    </div>
+                    <div>
+                        <dt>
+                            <ArrowUp size={18} aria-hidden="true" />
+                            <span>Device uploads</span>
+                        </dt>
+                        <dd data-unavailable={uploadRate === "Unavailable"}>
+                            {uploadRate}
+                        </dd>
+                    </div>
+                </dl>
             )}
             {available && diagnosis && (
                 <>
-                    <p className="performance-workload-scope">
-                        In-flight requests · latest sample
-                    </p>
-                    <dl className="performance-workload">
-                        {Object.entries(WORKLOAD).map(([key, label]) => (
-                            <div key={key}>
-                                <dt>{label}</dt>
-                                <dd>
-                                    {measured(
-                                        diagnosis.workload[
-                                            key as keyof typeof WORKLOAD
-                                        ],
-                                    )}
-                                </dd>
-                            </div>
-                        ))}
-                    </dl>
+                    {activeWorkload.length > 0 && (
+                        <p className="performance-workload-scope">
+                            {activeWorkload
+                                .map(([, label]) => label)
+                                .join(" / ")}
+                        </p>
+                    )}
                     {diagnosis.constraints.length > 0 && (
                         <ul className="performance-waits">
                             {diagnosis.constraints.map((constraint, index) => {
@@ -197,7 +231,6 @@ export default function PerformanceExplanation({
                                                     </span>
                                                 )}
                                             </summary>
-                                            {wait && <p>{wait.action}</p>}
                                             <dl className="performance-facts">
                                                 {constraint.evidence.map(
                                                     (item, itemIndex) => (
@@ -227,19 +260,71 @@ export default function PerformanceExplanation({
                                                 . Scope: latest sample.
                                             </p>
                                         </details>
+                                        {wait && (
+                                            <p className="performance-wait-action">
+                                                {wait.action}
+                                            </p>
+                                        )}
                                     </li>
                                 );
                             })}
                         </ul>
                     )}
+                    {onAccounts &&
+                        diagnosis.constraints.some(
+                            (item) =>
+                                item.code === "telegram_queue" ||
+                                item.code === "telegram_cooldown",
+                        ) && (
+                            <button
+                                type="button"
+                                className="secondary-button"
+                                onClick={onAccounts}
+                            >
+                                View Accounts
+                            </button>
+                        )}
                 </>
             )}
             <details className="performance-detail-note">
                 <summary>Measurements and scope</summary>
+                {diagnosis && (
+                    <p className="performance-sample-meta">
+                        {available
+                            ? "Latest sample: "
+                            : "Last sample (not current): "}
+                        {typeof diagnosis.sampled_at === "number" &&
+                        Number.isFinite(diagnosis.sampled_at)
+                            ? formatTimestamp(diagnosis.sampled_at)
+                            : "Unavailable"}
+                        {" / "}
+                        {measured(diagnosis.observed_seconds, "s")} observed
+                        {" / "}
+                        {measured(diagnosis.window_seconds, "s")} window
+                    </p>
+                )}
+                {available && activeOperations && (
+                    <p>
+                        Telegram operations: {telegram!.active} active,{" "}
+                        {telegram!.queued} waiting.
+                    </p>
+                )}
                 {available && diagnosis && (
                     <dl className="performance-facts">
+                        {Object.entries(WORKLOAD).map(([key, label]) => (
+                            <div key={key}>
+                                <dt>{label} requests</dt>
+                                <dd>
+                                    {measured(
+                                        diagnosis.workload[
+                                            key as keyof typeof WORKLOAD
+                                        ],
+                                    )}
+                                </dd>
+                            </div>
+                        ))}
                         <div>
-                            <dt>Telegram inbound · reporting accounts</dt>
+                            <dt>Telegram inbound - reporting accounts</dt>
                             <dd>
                                 {measured(
                                     diagnosis.telegram_inbound_bytes_per_second,
@@ -248,7 +333,7 @@ export default function PerformanceExplanation({
                             </dd>
                         </div>
                         <div>
-                            <dt>HTTP delivered · server-wide</dt>
+                            <dt>HTTP delivered - server-wide</dt>
                             <dd>
                                 {measured(
                                     diagnosis.http_delivered_bytes_per_second,
@@ -257,11 +342,11 @@ export default function PerformanceExplanation({
                             </dd>
                         </div>
                         <div>
-                            <dt>Media cache hits · observed window</dt>
+                            <dt>Media cache hits - observed window</dt>
                             <dd>{measured(diagnosis.cache_hits)}</dd>
                         </div>
                         <div>
-                            <dt>Media cache misses · observed window</dt>
+                            <dt>Media cache misses - observed window</dt>
                             <dd>{measured(diagnosis.cache_misses)}</dd>
                         </div>
                     </dl>
@@ -283,6 +368,17 @@ export default function PerformanceExplanation({
                     resources can be appropriate when no work can benefit.
                 </p>
             </details>
+            <div className="performance-activity-actions">
+                <a className="secondary-button" href="/?view=transfers">
+                    View Transfers
+                </a>
+                <a
+                    className="inline-link"
+                    href="/?view=settings&section=transfers"
+                >
+                    Upload storage limits
+                </a>
+            </div>
         </section>
     );
 }

@@ -5,7 +5,6 @@ from __future__ import annotations
 import asyncio
 import os
 import resource
-import shutil
 import sys
 import time
 from pathlib import Path
@@ -16,6 +15,7 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from tgdrive.settings.performance_preferences import get_performance_settings
+from tgdrive.storage.capacity import measure_capacity
 
 
 class PrepareFile(BaseModel):
@@ -29,16 +29,20 @@ class ClearCache(BaseModel):
 
 
 def system_snapshot(settings):
-    try:
-        usage = shutil.disk_usage(settings.resolved_data_dir)
-        disk = {
-            "available": True,
-            "total_bytes": usage.total,
-            "free_bytes": usage.free,
-            "used_bytes": usage.used,
-        }
-    except OSError:
-        disk = {"available": False, "total_bytes": 0, "free_bytes": 0, "used_bytes": 0}
+    capacity = measure_capacity(
+        settings.resolved_data_dir,
+        probe_directory=getattr(settings, "data_backing_capacity_dir", None),
+    )
+    usage = capacity.filesystem
+    disk = {
+        "available": usage is not None,
+        "total_bytes": usage.total if usage else 0,
+        "free_bytes": usage.free if usage else 0,
+        "used_bytes": usage.used if usage else 0,
+        "capacity": capacity.as_dict(
+            reserve_bytes=getattr(settings, "cache_min_free_bytes", 0)
+        ),
+    }
     memory = {}
     try:
         for line in Path("/proc/meminfo").read_text().splitlines():
@@ -88,8 +92,14 @@ def database_snapshot(runtime):
         stats = runtime.mongo.db.command("dbStats")
     except Exception:
         return None
+    total = stats.get("totalSize")
+    if total is None:
+        storage, indexes = stats.get("storageSize"), stats.get("indexSize")
+        if storage is None or indexes is None:
+            return None
+        total = storage + indexes
     return {
-        "used_bytes": int(stats.get("totalSize") or 0),
+        "used_bytes": int(total),
         "index_bytes": int(stats.get("indexSize") or 0),
         "objects": int(stats.get("objects") or 0),
         "volume_total_bytes": int(stats.get("fsTotalSize") or 0),

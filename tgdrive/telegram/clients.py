@@ -1446,6 +1446,7 @@ def build_client_pool(settings: Settings) -> ClientPool:
         media_send_interval=1.0,
         uploads_per_bot=settings.telegram_uploads_per_bot,
         media_cache_dir=settings.resolved_data_dir / "media-cache",
+        storage_settings=settings,
         media_per_bot=getattr(settings, "telegram_media_per_bot", 3),
         max_media_queue=getattr(settings, "telegram_max_queue", 256),
     )

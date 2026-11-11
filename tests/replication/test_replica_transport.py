@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import asyncio
 import copy
+import hashlib
 import stat
+import threading
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock
@@ -908,6 +910,72 @@ async def test_publish_verifies_remote_capsule_then_pins_backup(tmp_path):
         MAIN, source, random_id=13, caption="TGDrive replica", pin=False
     )
     assert result == 902 and MAIN not in native.pins
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("stage", ["open", "hash"])
+@pytest.mark.parametrize("cancellations", [1, 2])
+async def test_cancelled_publish_drains_file_worker_before_closing(
+    tmp_path, monkeypatch, stage, cancellations
+):
+    transport, native = await started()
+    path = tmp_path / "snapshot.tgdb"
+    path.write_bytes(b"authenticated encrypted bytes")
+    entered, release, finished = threading.Event(), threading.Event(), threading.Event()
+    handles = []
+    original_open, original_digest = Path.open, hashlib.file_digest
+
+    def opening(current, *args, **kwargs):
+        source = original_open(current, *args, **kwargs)
+        if current != path:
+            return source
+        handles.append(source)
+        if stage == "open":
+            entered.set()
+            try:
+                assert release.wait(5)
+            finally:
+                finished.set()
+        return source
+
+    def digest(source, *args, **kwargs):
+        if stage == "hash" and source in handles:
+            entered.set()
+            try:
+                assert release.wait(5)
+                return original_digest(source, *args, **kwargs)
+            finally:
+                finished.set()
+        return original_digest(source, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "open", opening)
+    monkeypatch.setattr(hashlib, "file_digest", digest)
+    task = asyncio.create_task(
+        transport.publish(BACKUP, path, random_id=12, caption="safe", pin=True)
+    )
+    try:
+        assert await asyncio.to_thread(entered.wait, 2)
+        for _ in range(cancellations):
+            task.cancel()
+            await asyncio.sleep(0)
+        done, _ = await asyncio.wait({task}, timeout=0.02)
+        assert not done, "Cancellation abandoned an active replica file worker"
+        assert handles and not handles[0].closed
+        assert transport._lock.locked()
+        assert not native.uploads and not native.pins
+    finally:
+        release.set()
+        assert await asyncio.to_thread(finished.wait, 2)
+        await asyncio.gather(task, return_exceptions=True)
+        files_closed = bool(handles) and all(handle.closed for handle in handles)
+        for handle in handles:
+            handle.close()
+        await transport.close()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    assert files_closed
+    assert not transport._lock.locked()
+    assert not native.uploads and not native.pins
 
 
 @pytest.mark.asyncio

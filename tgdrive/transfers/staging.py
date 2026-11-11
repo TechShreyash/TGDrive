@@ -8,8 +8,14 @@ Physical free space already excludes written bytes; subtract only future writes.
 from __future__ import annotations
 
 import contextlib
-import shutil
 from pathlib import Path
+
+from tgdrive.storage.capacity import (
+    CapacityUnavailable,
+    measure_capacity,
+    probe_for_directory,
+    require_headroom,
+)
 
 
 class StorageUnavailable(ValueError):
@@ -76,24 +82,52 @@ def staging_usage(manager, *, receipts=None, exclude=None):
     return reserved, remaining
 
 
-def check_staging(settings, manager, size, *, receipts=None, exclude=None, written=0):
+def check_staging(
+    settings, manager, size, *, receipts=None, exclude=None, written=0, directory=None
+):
     reserved, remaining = staging_usage(manager, receipts=receipts, exclude=exclude)
     if reserved + size > settings.staging_budget_bytes:
-        raise StorageUnavailable(
-            "Temporary upload storage is reserved by other transfers. "
-            "Finish or cancel a transfer, or increase the upload budget."
-        )
+        # Lowering a ceiling blocks new/growing claims, not work admitted before
+        # the change. Written bytes still participate in the physical-space guard.
+        total, _ = staging_usage(manager, receipts=receipts)
+        existing = total - reserved if exclude is not None else 0
+        if size > existing:
+            raise StorageUnavailable(
+                "Temporary upload storage is reserved by other transfers. "
+                "Finish or cancel a transfer, or increase the upload budget."
+            )
+    check_staging_capacity(
+        settings,
+        settings.resolved_cache_dir if directory is None else directory,
+        max(0, size - written),
+        outstanding_bytes=remaining,
+    )
+
+
+def check_staging_capacity(settings, directory, required_bytes, *, outstanding_bytes=0):
+    """Check an immutable event-loop reservation snapshot in a disk worker.
+
+    Callers capture outstanding future writes with staging_usage before dispatch;
+    this helper never reads live receipt or transfer journals from a worker.
+    """
     try:
-        free = shutil.disk_usage(settings.resolved_cache_dir).free
-    except OSError:
+        require_headroom(
+            measure_capacity(
+                directory,
+                probe_directory=probe_for_directory(settings, directory),
+            ),
+            required_bytes,
+            reserve_bytes=settings.min_free_bytes,
+            outstanding_bytes=outstanding_bytes,
+        )
+    except CapacityUnavailable:
         raise StorageUnavailable(
-            "Cannot check free space on the upload drive. "
-            "Check server storage and retry.",
+            "Cannot check free space on the upload drive or its configured backing "
+            "storage. Check server storage and retry.",
             status=503,
         ) from None
-    required = remaining + max(0, size - written)
-    if free - required < settings.min_free_bytes:
+    except OSError:
         raise StorageUnavailable(
             "Not enough free disk space for this upload after existing reservations "
             "and the free-space reserve. Free space or finish another transfer first."
-        )
+        ) from None

@@ -30,7 +30,7 @@ def test_missing_memory_metrics_preserve_cache_and_allow_disk_policy(tmp_path):
     sample = measurements() | {"memory_limit": None, "memory_available": None}
     result = decide(sample, state(cache_memory_bytes=1024))
     assert result["values"]["cache_memory_bytes"] == 1024
-    assert result["values"]["staging_budget_bytes"] == 45 * GIB
+    assert result["values"]["staging_budget_bytes"] == 16 * GIB
 
 
 def measurements(available=8 * GIB):
@@ -50,13 +50,13 @@ def state(**values):
 
 def test_memory_pressure_shrinks_cache_with_hysteresis():
     first = decide(measurements(), state())
-    assert first["values"]["cache_memory_bytes"] == 2 * GIB
-    assert first["values"]["staging_budget_bytes"] == 45 * GIB
+    assert first["values"]["cache_memory_bytes"] == 256 * 1024**2
+    assert first["values"]["staging_budget_bytes"] == 16 * GIB
     assert first["values"]["min_free_bytes"] == 5 * GIB
     steady = decide(measurements(int(7.8 * GIB)), first)
-    assert steady["values"]["cache_memory_bytes"] == 2 * GIB
-    tight = decide(measurements(2 * GIB), steady)
-    assert tight["values"]["cache_memory_bytes"] == GIB // 2
+    assert steady["values"]["cache_memory_bytes"] == 256 * 1024**2
+    tight = decide(measurements(GIB // 2), steady)
+    assert tight["values"]["cache_memory_bytes"] == GIB // 8
     assert "25%" in tight["reasons"]["cache_memory_bytes"]
 
 
@@ -66,7 +66,7 @@ def test_staging_and_media_cache_use_their_own_disk_budgets():
         "cache_disk_free": 5 * GIB,
     }
     result = decide(sample, state())
-    assert result["values"]["staging_budget_bytes"] == 45 * GIB
+    assert result["values"]["staging_budget_bytes"] == 16 * GIB
     assert result["values"]["min_free_bytes"] == 5 * GIB
     assert result["values"]["cache_disk_bytes"] == 2 * GIB
     assert result["values"]["cache_min_free_bytes"] == GIB
@@ -74,15 +74,16 @@ def test_staging_and_media_cache_use_their_own_disk_budgets():
 
 def test_measure_finds_the_media_volume_before_the_cache_exists(tmp_path, monkeypatch):
     staging = tmp_path / "staging"
+    staging.mkdir()
     media = tmp_path / "data"
     media.mkdir()
     measured = []
 
     def usage(path):
         measured.append(path)
-        return SimpleNamespace(total=100 if path == staging else 20, free=10)
+        return SimpleNamespace(total=100 if path == staging else 20, used=5, free=10)
 
-    monkeypatch.setattr(governor.shutil, "disk_usage", usage)
+    monkeypatch.setattr("tgdrive.storage.capacity.shutil.disk_usage", usage)
     sample = governor.measure(staging, media / "media-cache")
     assert measured == [staging, media]
     assert sample["disk_total"] == 100
@@ -150,7 +151,7 @@ def test_tick_applies_through_performance_settings(monkeypatch):
 
     asyncio.run(item.tick())
     assert len(applied) == 1
-    assert applied[0]["cache_memory_bytes"] == 2 * GIB
+    assert applied[0]["cache_memory_bytes"] == 256 * 1024**2
     asyncio.run(item.tick())
     assert len(applied) == 1
     assert applied[-1]["telegram_request_limit"] == 2
@@ -160,3 +161,64 @@ def test_tick_applies_through_performance_settings(monkeypatch):
     runtime.mongo.db.command.assert_not_called()
     # The largest accepted file follows the staging budget; no fixed cap.
     assert applied[0]["max_file_size"] == applied[0]["staging_budget_bytes"]
+
+
+def test_owner_ceilings_bound_automatic_budgets_and_pressure():
+    policy = dict(
+        cache_disk_limit_bytes=3 * GIB,
+        cache_memory_limit_bytes=100 * 1024**2,
+        staging_limit_bytes=7 * GIB,
+        protected_free_bytes=0,
+    )
+    result = decide(measurements(), state(), policy)
+    assert result["values"]["cache_disk_bytes"] == 3 * GIB
+    assert result["values"]["cache_memory_bytes"] == 100 * 1024**2
+    assert result["values"]["staging_budget_bytes"] == 7 * GIB
+    assert result["values"]["max_file_size"] == 7 * GIB
+    assert result["values"]["min_free_bytes"] == 0
+    assert result["values"]["cache_min_free_bytes"] == 0
+    lowered = policy | {
+        "cache_disk_limit_bytes": 29 * GIB // 10,
+        "cache_memory_limit_bytes": 99 * 1024**2,
+    }
+    result = decide(measurements(), result, lowered)
+    assert result["values"]["cache_disk_bytes"] == lowered["cache_disk_limit_bytes"]
+    assert result["values"]["cache_memory_bytes"] == lowered["cache_memory_limit_bytes"]
+    disabled = decide(
+        measurements(),
+        result,
+        policy | {"cache_disk_limit_bytes": 0, "cache_memory_limit_bytes": 0},
+    )
+    assert disabled["values"]["cache_disk_bytes"] == 0
+    assert disabled["values"]["cache_memory_bytes"] == 0
+    tight = decide(measurements() | {"disk_free": GIB}, result, policy)
+    assert tight["values"]["staging_budget_bytes"] == GIB
+
+
+def test_automatic_ceilings_do_not_inherit_effective_values():
+    result = decide(
+        measurements(), state(cache_disk_bytes=400 * GIB, cache_memory_bytes=2 * GIB)
+    )
+    assert result["values"]["cache_disk_bytes"] == 10 * GIB
+    assert result["values"]["cache_memory_bytes"] == 256 * 1024**2
+    assert result["values"]["staging_budget_bytes"] == 16 * GIB
+
+
+def test_effective_backing_headroom_limits_governor_and_failure_disables_retention():
+    sample = measurements() | {
+        "disk_effective_free": 6 * GIB,
+        "cache_disk_effective_free": 7 * GIB,
+    }
+    result = decide(sample, state())
+    assert result["values"]["staging_budget_bytes"] == GIB
+    assert result["values"]["cache_disk_bytes"] == GIB
+    unavailable = decide(
+        sample
+        | {
+            "disk_effective_free": None,
+            "cache_disk_effective_free": None,
+        },
+        result,
+    )
+    assert unavailable["values"]["cache_disk_bytes"] == 0
+    assert unavailable["values"]["staging_budget_bytes"] == 1

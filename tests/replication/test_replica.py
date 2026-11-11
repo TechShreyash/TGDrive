@@ -147,7 +147,7 @@ class Transport:
                 "Remote verification failed.", "REPLICA_VERIFY_FAILED"
             )
 
-    async def download(self, channel, message_id, destination):
+    async def download(self, channel, message_id, destination, *, outstanding_bytes=0):
         identity = message_id or self.remote.pins[channel]
         content = self.remote.messages[channel, identity]
         if content.startswith(b"{"):
@@ -349,7 +349,7 @@ def capture_for(replica, store):
     from tgdrive.replication.replica_activation import _mongo_nodes
     from tgdrive.replication.replica_settings import credentials_from_snapshot
 
-    def capture():
+    def capture(*, outstanding_bytes=0):
         from tgdrive.core.encryption import key_record
 
         catalog = store.export()
@@ -516,8 +516,8 @@ async def test_cancelled_mapping_creation_drains_and_closes_created_index(
     operation = None
     allocate = replica_module._CopyMapping
 
-    def delayed_mapping(*args):
-        mapping = allocate(*args)
+    def delayed_mapping(*args, **kwargs):
+        mapping = allocate(*args, **kwargs)
         entered.set()
         release.wait()
         return mapping
@@ -563,7 +563,7 @@ async def test_missing_normal_job_index_recaptures_without_losing_confirmed_stat
         capture = replica._capture
         captured = []
 
-        def recapture():
+        def recapture(**kwargs):
             assert replica.journal.get("restore_point") == confirmed
             assert replica.status()["protected_revision"] == protected
             assert replica.journal.intent("pending-original-part", 3) == (
@@ -571,7 +571,7 @@ async def test_missing_normal_job_index_recaptures_without_losing_confirmed_stat
                 None,
             )
             captured.append(True)
-            return capture()
+            return capture(**kwargs)
 
         monkeypatch.setattr(replica, "_capture", recapture)
         await replica._sync(config, force_snapshot=True)
@@ -2493,7 +2493,9 @@ async def test_discovery_stops_at_real_legacy_drive_json_marker(tmp_path):
     configured, store, remote, replica, _config = setup(tmp_path)
 
     class LegacyPinned(DiscoveryTransport):
-        async def download(self, channel, message_id, destination):
+        async def download(
+            self, channel, message_id, destination, *, outstanding_bytes=0
+        ):
             ReplicaTransport._capsule(
                 SimpleNamespace(
                     size=123,

@@ -283,19 +283,9 @@
     display: grid;
 }
 .performance-explanation {
-    grid-column: 1 / -1;
-    display: grid;
-    grid-template-columns: minmax(0, 1fr) minmax(280px, 1fr);
-    column-gap: 32px;
-    align-items: start;
+    display: block;
     margin-top: 0;
-    padding: 12px 20px 4px;
-    border: 1px solid var(--line);
-    border-radius: 12px;
-    background: var(--surface-raised);
-}
-.performance-explanation:not(:has(.performance-workload)) {
-    grid-template-columns: 1fr;
+    padding: 0;
 }
 .performance-explanation-heading {
     display: flex;
@@ -337,12 +327,10 @@
     color: var(--muted);
 }
 .performance-workload {
-    grid-column: 2;
-    grid-row: 2 / 4;
-    display: grid;
-    grid-template-columns: repeat(4, minmax(0, 1fr));
-    gap: 12px;
-    margin: 0;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 12px 24px;
+    margin: 12px 0;
 }
 .performance-workload > div {
     min-width: 0;
@@ -1548,4 +1536,149 @@
         display: flex;
         margin: 6px 0 0 16px;
     }
+}
+
+.performance-measurements-heading {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 12px 20px;
+    justify-content: space-between;
+}
+.performance-file-rates {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 16px 24px;
+    margin: 28px 0;
+}
+.performance-file-rates > div {
+    min-width: 0;
+}
+.performance-file-rates > div + div {
+    border-inline-start: 1px solid var(--line);
+    padding-inline-start: 24px;
+}
+.performance-file-rates dt {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    color: var(--muted);
+    font-size: 13px;
+}
+.performance-file-rates dt svg {
+    color: var(--action);
+}
+.performance-file-rates dd {
+    margin: 8px 0 0;
+    font-size: clamp(24px, 2.6vw, 36px);
+    font-weight: 600;
+    line-height: 1.2;
+    letter-spacing: -0.025em;
+    font-variant-numeric: tabular-nums;
+}
+.performance-file-rates dd[data-unavailable="true"] {
+    font-size: 16px;
+    letter-spacing: 0;
+    color: var(--muted);
+}
+.performance-activity-actions {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px 20px;
+    margin-top: 20px;
+    font-size: 13px;
+}
+.performance-overview-resources {
+    border-inline-start: 1px solid var(--line);
+    padding-inline-start: 28px;
+}
+.performance-page .performance-overview-meters {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    margin-block: 8px 0;
+}
+.performance-page .performance-overview-meters .performance-usage {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    min-width: 0;
+    padding-block: 16px;
+    border-bottom: 1px solid var(--line-subtle);
+}
+.performance-page .performance-overview-meters .performance-usage > div {
+    flex-direction: row;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 12px;
+}
+.performance-page .performance-overview-meters .performance-usage strong {
+    font-size: 16px;
+    text-align: end;
+}
+.performance-overview-meters .performance-usage small {
+    order: 1;
+}
+.performance-page .performance-overview-meters progress {
+    order: 2;
+    height: 6px;
+    accent-color: var(--action);
+}
+.performance-overview-resource-note {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 4px 16px;
+    margin: 8px 0 0;
+    font-size: 13px;
+    color: var(--muted);
+}
+.performance-overview-grid .inline-link {
+    display: inline-flex;
+    align-items: center;
+    min-height: 44px;
+}
+@media (max-width: 1100px) {
+    .performance-overview-resources {
+        border-inline-start: 0;
+        padding-inline-start: 0;
+        padding-top: 24px;
+        border-top: 1px solid var(--line);
+    }
+}
+@media (max-width: 540px) {
+    .performance-file-rates {
+        gap: 12px;
+        margin-block: 24px;
+    }
+    .performance-file-rates > div + div {
+        padding-inline-start: 12px;
+    }
+    .performance-file-rates dt {
+        align-items: flex-start;
+        min-height: 40px;
+        line-height: 20px;
+        gap: 4px;
+    }
+    .performance-explanation-heading,
+    .performance-overview-resources .performance-section-title {
+        flex-wrap: wrap;
+        gap: 0 12px;
+    }
+}
+.performance-wait-action {
+    margin: 6px 0 12px;
+    color: var(--muted);
+    font-size: 13px;
+}
+
+.performance-resource-charts:not([hidden]) {
+    display: grid;
+}
+.performance-accounts-grid > .performance-health {
+    grid-column: 1 / -1;
+}
+.performance-explanation-summary,
+.performance-sample-meta {
+    max-width: 75ch;
 }

@@ -1,15 +1,16 @@
 import { Tabs, Paper } from "@mantine/core";
 import { useCallback, useEffect, useRef, useState } from "react";
-import { ArrowDownToLine, ArrowUpFromLine, RefreshCw } from "lucide-react";
+import { RefreshCw } from "lucide-react";
 import { errorMessage } from "../../shared/api";
 import { ErrorNotice, Spinner } from "../../shared/components";
-import { formatBytes, formatTimestamp, getTimezone } from "../../shared/types";
+import { formatTimestamp, getTimezone } from "../../shared/types";
 import StreamMemoryFact from "./StreamMemoryFact";
 import PerformanceExplanation from "./PerformanceExplanation";
 import { cachedFileComplete } from "./Preloads";
 import { useManualRefresh } from "../../shared/useManualRefresh";
 import {
     performanceApi,
+    resourceBytes as formatBytes,
     type LoadSample,
     type PerformanceSnapshot,
     type TrafficSample,
@@ -161,8 +162,8 @@ function AutomaticTuning({
                     ))}
                 </div>
                 <p className="settings-help">
-                    To set a hard ceiling on a shared server, configure Docker
-                    memory and CPU limits.
+                    These are effective budgets, not reserved physical capacity.
+                    Set owner ceilings in Cache settings and Transfer limits.
                 </p>
             </details>
         </section>
@@ -303,10 +304,12 @@ function MetricChart({
         >
             <div className="performance-chart-heading">
                 <h3>{title}</h3>
-                <strong title="Current reading">
-                    {current}
-                    <small className="performance-chart-now">Now</small>
-                </strong>
+                {!historical && (
+                    <strong title="Current reading">
+                        {current}
+                        <small className="performance-chart-now">Now</small>
+                    </strong>
+                )}
             </div>
             {series.length > 1 && (
                 <div className="performance-chart-legend">
@@ -1000,6 +1003,7 @@ export default function PerformancePanel({
         (sample) => sample.active > 0 || sample.queued > 0,
     );
     const memory = snapshot?.server.memory;
+    const diskCapacity = snapshot?.server.disk.capacity;
     const memoryUsed = memory?.cgroup_current ?? NaN;
     const network = snapshot?.server.network;
     const cpu = snapshot?.server.cpu;
@@ -1116,36 +1120,6 @@ export default function PerformancePanel({
                     <Tabs.Tab value="server">Resources</Tabs.Tab>
                 </Tabs.List>
                 <div className="performance-history-controls">
-                    <label hidden={view === "telegram"}>
-                        Time range
-                        <select
-                            aria-label="Time range"
-                            disabled={refreshing}
-                            value={range}
-                            onChange={(event) => {
-                                const value = event.target
-                                    .value as HistoryRange;
-                                setRange(value);
-                                setCustomError("");
-                                try {
-                                    if (value !== "custom")
-                                        window.localStorage.setItem(
-                                            HISTORY_WINDOW_KEY,
-                                            value,
-                                        );
-                                } catch {
-                                    /* Keep working without storage. */
-                                }
-                            }}
-                        >
-                            <option value="live">Live (5 min)</option>
-                            <option value="hour">Last hour</option>
-                            <option value="day">Last 24 hours</option>
-                            <option value="week">Last 7 days</option>
-                            <option value="month">Last month (30 days)</option>
-                            <option value="custom">Custom range</option>
-                        </select>
-                    </label>
                     <button
                         className="secondary-button"
                         disabled={refreshing}
@@ -1158,94 +1132,6 @@ export default function PerformancePanel({
                     </button>
                 </div>
             </div>
-            {range === "custom" && (
-                <form
-                    className="performance-custom-range"
-                    hidden={view === "telegram"}
-                    onSubmit={(event) => {
-                        event.preventDefault();
-                        try {
-                            setCustomBounds(
-                                customHistoryBounds(customStart, customEnd),
-                            );
-                            setCustomError("");
-                        } catch (cause) {
-                            setCustomError(errorMessage(cause));
-                        }
-                    }}
-                >
-                    <label>
-                        Start (UTC)
-                        <input
-                            type="datetime-local"
-                            required
-                            value={customStart}
-                            onChange={(event) =>
-                                setCustomStart(event.target.value)
-                            }
-                        />
-                    </label>
-                    <label>
-                        End (UTC)
-                        <input
-                            type="datetime-local"
-                            required
-                            value={customEnd}
-                            onChange={(event) =>
-                                setCustomEnd(event.target.value)
-                            }
-                        />
-                    </label>
-                    <button
-                        className="secondary-button"
-                        type="submit"
-                        disabled={refreshing}
-                    >
-                        Apply Range
-                    </button>
-                    <p className="settings-help">
-                        Enter UTC times. Chart timestamps use {getTimezone()}.
-                        Up to 31 days; gaps mean no readings were recorded.
-                    </p>
-                    {customBounds && (
-                        <p className="settings-help">
-                            Applied: {formatTimestamp(customBounds.start)} –{" "}
-                            {formatTimestamp(customBounds.end)} ({getTimezone()}
-                            )
-                        </p>
-                    )}
-                    <ErrorNotice message={customError} />
-                </form>
-            )}
-            {view !== "telegram" && historyLoading && historical && (
-                <p className="performance-history-status" role="status">
-                    <Spinner /> Loading selected history…
-                    {recorded && loadedRange !== rangeKey
-                        ? " Previous range remains visible until it is ready."
-                        : ""}
-                </p>
-            )}
-            {view !== "telegram" && historyError && (
-                <div className="performance-history-error">
-                    <ErrorNotice
-                        message={
-                            (historical && recorded
-                                ? "Showing previously loaded history. "
-                                : "") + historyError
-                        }
-                    />
-                    <button
-                        type="button"
-                        className="text-button"
-                        disabled={refreshing}
-                        aria-busy={refreshing}
-                        onClick={refreshPerformance}
-                    >
-                        {refreshing && <Spinner />}
-                        {refreshing ? "Refreshing…" : "Retry History"}
-                    </button>
-                </div>
-            )}
             {loading && (
                 <p className="performance-loading" role="status">
                     <Spinner /> Loading server performance…
@@ -1254,23 +1140,106 @@ export default function PerformancePanel({
             <ErrorNotice message={error} />
             {snapshot && telegram && (
                 <>
-                    <p
-                        className="performance-history-availability"
-                        hidden={view === "telegram"}
-                    >
-                        {historical
-                            ? recorded && loadedRange === rangeKey
-                                ? `Recorded interval averages (${historyDuration(recorded.bucket_seconds)} per point). Current values marked Now stay live. ${recorded.samples.some((sample) => sample.cpu_percent !== null || sample.memory_bytes !== null || sample.received_bytes_per_second !== null || sample.sent_bytes_per_second !== null) ? `Available history begins ${formatTimestamp(recorded.earliest_at)}.` : "No readings were recorded for this range."}`
-                                : range === "custom" && !customBounds
-                                  ? "Choose dates and apply a range to inspect recorded history."
-                                  : "Selected range has not loaded yet."
-                            : resourceHistory.length > 1
-                              ? `Showing ${historyDuration(resourceHistory.at(-1)!.at - resourceHistory[0].at)} of collected live history; up to 5 min selected.`
-                              : "Collecting live history; earlier readings are not available yet."}
-                    </p>
                     <Tabs.Panel
                         value="overview"
                         className="performance-overview-grid"
+                    >
+                        <PerformanceExplanation
+                            diagnosis={snapshot.diagnosis}
+                            serverAt={snapshot.traffic?.at}
+                            liveRates={{
+                                toViewers: sendRate ?? null,
+                                fromDevices: receiveRate ?? null,
+                            }}
+                            telegram={{
+                                active: telegram.active,
+                                queued: telegram.queued,
+                            }}
+                            onAccounts={() => setView("telegram")}
+                        />
+                        <section
+                            className="performance-section performance-overview-resources"
+                            aria-labelledby="overview-resources-heading"
+                        >
+                            <div className="performance-section-title">
+                                <h3 id="overview-resources-heading">
+                                    Server resources
+                                </h3>
+                                <button
+                                    type="button"
+                                    className="inline-link"
+                                    onClick={() => setView("server")}
+                                >
+                                    View resource history
+                                </button>
+                            </div>
+                            <div className="performance-overview-meters">
+                                <UsageMeter
+                                    label="CPU usage"
+                                    used={cpu?.percent ?? NaN}
+                                    total={100}
+                                    percent
+                                    detail={
+                                        cpu?.scope === "cgroup"
+                                            ? "Container CPU"
+                                            : cpu?.scope === "host"
+                                              ? "System CPU"
+                                              : "Scope unavailable"
+                                    }
+                                />
+                                <UsageMeter
+                                    label="Container RAM"
+                                    used={memoryUsed}
+                                    total={memoryLimit || NaN}
+                                    unavailableLabel={
+                                        Number.isFinite(memoryUsed)
+                                            ? formatBytes(memoryUsed) +
+                                              " in use"
+                                            : "Unavailable"
+                                    }
+                                    detail={
+                                        memoryLimit > 0
+                                            ? "All processes in this container"
+                                            : "No container limit reported"
+                                    }
+                                />
+                                <UsageMeter
+                                    label="Disk cache"
+                                    used={
+                                        snapshot.cache.disk.available
+                                            ? snapshot.cache.disk.bytes
+                                            : NaN
+                                    }
+                                    total={snapshot.cache.disk.max_bytes}
+                                    detail="Retained media copies"
+                                />
+                                <UsageMeter
+                                    label="RAM cache"
+                                    used={snapshot.cache.memory.bytes}
+                                    total={
+                                        snapshot.cache.memory
+                                            .effective_max_bytes
+                                    }
+                                    detail="Retained media in memory"
+                                />
+                            </div>
+                            <p className="performance-overview-resource-note">
+                                <a
+                                    className="inline-link"
+                                    href="/?view=settings&section=cache"
+                                >
+                                    Cache limits
+                                </a>
+                                <span>
+                                    Cache copies are disposable; originals stay
+                                    in Telegram.
+                                </span>
+                            </p>
+                        </section>
+                    </Tabs.Panel>
+                    <Tabs.Panel
+                        value="telegram"
+                        className="performance-accounts-grid"
                     >
                         <section
                             className="performance-health"
@@ -1288,329 +1257,6 @@ export default function PerformancePanel({
                             </strong>
                             <span>{healthDetail}</span>
                         </section>
-                        <PerformanceExplanation
-                            diagnosis={snapshot.diagnosis}
-                            serverAt={snapshot.traffic?.at}
-                        />
-                        <MetricChart
-                            windowSeconds={windowSeconds}
-                            historical={historical}
-                            bucketSeconds={
-                                historical ? recorded?.bucket_seconds || 60 : 3
-                            }
-                            title="Network traffic"
-                            samples={resourceHistory}
-                            series={[
-                                {
-                                    key: "received_bytes_per_second",
-                                    label: "Download to server",
-                                    hint: "from Telegram, URLs and devices",
-                                },
-                                {
-                                    key: "sent_bytes_per_second",
-                                    label: "Upload from server",
-                                    hint: "to viewers and Telegram",
-                                    secondary: true,
-                                },
-                            ]}
-                            maximum={networkCeiling}
-                            format={(value) => formatBytes(value) + "/s"}
-                            scope="network_interface"
-                            current={
-                                "Download " +
-                                networkRate(
-                                    network?.received_bytes_per_second,
-                                ) +
-                                " · Upload " +
-                                networkRate(network?.sent_bytes_per_second)
-                            }
-                            note={
-                                "Includes Telegram, URL downloads, device uploads and viewer downloads" +
-                                (network?.interface
-                                    ? " on " + network.interface
-                                    : "") +
-                                "."
-                            }
-                        />
-                        <section
-                            className="performance-section performance-limits"
-                            aria-labelledby="speed-limits-heading"
-                        >
-                            <h3 id="speed-limits-heading">Resources</h3>
-                            <div className="performance-resource-meters">
-                                <UsageMeter
-                                    label="CPU"
-                                    percent
-                                    used={cpu?.percent ?? NaN}
-                                    total={100}
-                                    unavailableLabel="Measuring…"
-                                />
-                                <UsageMeter
-                                    label="Memory"
-                                    used={memoryUsed}
-                                    total={memoryLimit}
-                                    unavailableLabel={
-                                        Number.isFinite(memoryUsed)
-                                            ? formatBytes(memoryUsed) +
-                                              " in use · limit unavailable"
-                                            : "Unavailable"
-                                    }
-                                />
-                                <UsageMeter
-                                    label="Cache volume"
-                                    used={snapshot.server.disk.used_bytes}
-                                    total={snapshot.server.disk.total_bytes}
-                                />
-                            </div>
-                            <details className="performance-detail-note">
-                                <summary>
-                                    Account capacity and cooldowns
-                                </summary>
-                                <p className="settings-help">
-                                    Slots are configured limits. Flood waits are
-                                    pauses imposed by Telegram.
-                                </p>
-                                {telegram.accounts.length ? (
-                                    <ul className="performance-limit-list">
-                                        {telegram.accounts.map((account) => {
-                                            const busy =
-                                                account.uploads +
-                                                account.downloads;
-                                            const wait = Math.max(
-                                                account.cooldown_seconds,
-                                                account.requests
-                                                    ?.cooldown_seconds || 0,
-                                            );
-                                            return (
-                                                <li key={account.name}>
-                                                    <span className="performance-limit-name">
-                                                        <strong>
-                                                            {account.name}
-                                                        </strong>
-                                                        <small>
-                                                            {account.kind ===
-                                                            "user"
-                                                                ? "Premium account"
-                                                                : "Storage bot"}
-                                                        </small>
-                                                    </span>
-                                                    <span className="performance-limit-meter">
-                                                        <small>
-                                                            {busy} of{" "}
-                                                            {
-                                                                account.combined_limit
-                                                            }{" "}
-                                                            transfer slots
-                                                        </small>
-                                                        <progress
-                                                            aria-label={
-                                                                account.name +
-                                                                " transfer slots"
-                                                            }
-                                                            value={Math.min(
-                                                                busy,
-                                                                account.combined_limit,
-                                                            )}
-                                                            max={Math.max(
-                                                                1,
-                                                                account.combined_limit,
-                                                            )}
-                                                        />
-                                                    </span>
-                                                    <span
-                                                        className="performance-limit-state"
-                                                        data-state={
-                                                            wait > 0
-                                                                ? "wait"
-                                                                : "ready"
-                                                        }
-                                                    >
-                                                        {wait > 0
-                                                            ? "Flood wait " +
-                                                              historyDuration(
-                                                                  Math.ceil(
-                                                                      wait,
-                                                                  ),
-                                                              )
-                                                            : "Ready"}
-                                                        {account.requests && (
-                                                            <small>
-                                                                {
-                                                                    account
-                                                                        .requests
-                                                                        .floods
-                                                                }{" "}
-                                                                flood waits this
-                                                                session
-                                                            </small>
-                                                        )}
-                                                    </span>
-                                                </li>
-                                            );
-                                        })}
-                                    </ul>
-                                ) : (
-                                    <p className="performance-empty">
-                                        No account samples are available. Check
-                                        Connections.
-                                    </p>
-                                )}
-                            </details>
-                        </section>
-                        {traffic && (
-                            <section
-                                className="performance-section performance-live-traffic"
-                                aria-labelledby="http-traffic-heading"
-                            >
-                                <div className="performance-section-title">
-                                    <h3 id="http-traffic-heading">
-                                        Live file transfers
-                                    </h3>
-                                    <span className="performance-chart-now">
-                                        Now
-                                    </span>
-                                </div>
-                                <dl className="performance-live-strip">
-                                    <div data-series="out">
-                                        <dt>
-                                            <ArrowDownToLine
-                                                size={14}
-                                                aria-hidden="true"
-                                            />
-                                            To viewers
-                                        </dt>
-                                        <dd>
-                                            {typeof sendRate === "number"
-                                                ? formatBytes(sendRate) + "/s"
-                                                : "Measuring…"}
-                                        </dd>
-                                    </div>
-                                    <div data-series="in">
-                                        <dt>
-                                            <ArrowUpFromLine
-                                                size={14}
-                                                aria-hidden="true"
-                                            />
-                                            From devices
-                                        </dt>
-                                        <dd>
-                                            {typeof receiveRate === "number"
-                                                ? formatBytes(receiveRate) +
-                                                  "/s"
-                                                : "Measuring…"}
-                                        </dd>
-                                    </div>
-                                    <div>
-                                        <dt>Active requests</dt>
-                                        <dd>
-                                            {traffic.active.toLocaleString()}
-                                        </dd>
-                                    </div>
-                                    <div>
-                                        <dt>Telegram operations</dt>
-                                        <dd>
-                                            {telegram.active} active ·{" "}
-                                            {telegram.queued} waiting
-                                        </dd>
-                                    </div>
-                                </dl>
-                                <details className="performance-detail-note">
-                                    <summary>Traffic scope</summary>
-                                    <p>
-                                        Current file-body traffic, including
-                                        cached downloads. Device uploads and
-                                        viewer delivery are separate from
-                                        server-network traffic.
-                                    </p>
-                                </details>
-                            </section>
-                        )}
-                        {snapshot.tuning && (
-                            <AutomaticTuning tuning={snapshot.tuning} />
-                        )}
-                        {recorded && (
-                            <details
-                                className="performance-all-time performance-detail-note"
-                                aria-labelledby="all-time-heading"
-                            >
-                                <summary>
-                                    <h3 id="all-time-heading">
-                                        All-time totals
-                                    </h3>
-                                </summary>
-                                <p className="settings-help">
-                                    {recorded.tracked_since
-                                        ? `Since ${formatTimestamp(recorded.tracked_since)}.`
-                                        : "Tracking has just started."}{" "}
-                                    Totals survive restart and are independent
-                                    of the time range.
-                                </p>
-                                <table className="performance-totals-table">
-                                    <thead>
-                                        <tr>
-                                            <th scope="col">Traffic source</th>
-                                            <th scope="col">
-                                                Received by server
-                                            </th>
-                                            <th scope="col">Sent by server</th>
-                                        </tr>
-                                    </thead>
-                                    <tbody>
-                                        {(
-                                            [
-                                                [
-                                                    "Server network",
-                                                    recorded.totals
-                                                        .network_received_bytes,
-                                                    recorded.totals
-                                                        .network_sent_bytes,
-                                                ],
-                                                [
-                                                    "TGDrive files",
-                                                    recorded.totals
-                                                        .http_upload_bytes,
-                                                    recorded.totals
-                                                        .http_download_bytes,
-                                                ],
-                                                [
-                                                    "Telegram",
-                                                    recorded.totals
-                                                        .telegram_download_bytes,
-                                                    recorded.totals
-                                                        .telegram_upload_bytes,
-                                                ],
-                                            ] as const
-                                        ).map(([label, received, sent]) => (
-                                            <tr key={label}>
-                                                <th scope="row">{label}</th>
-                                                <td>
-                                                    {typeof received ===
-                                                    "number"
-                                                        ? formatBytes(received)
-                                                        : "Not available"}
-                                                </td>
-                                                <td>
-                                                    {typeof sent === "number"
-                                                        ? formatBytes(sent)
-                                                        : "Not available"}
-                                                </td>
-                                            </tr>
-                                        ))}
-                                    </tbody>
-                                </table>
-                                <p className="settings-help">
-                                    Network includes Telegram, URL imports and
-                                    device traffic. The rows overlap; do not add
-                                    them together. Usage before tracking began
-                                    is not included.
-                                </p>
-                            </details>
-                        )}
-                    </Tabs.Panel>
-                    <Tabs.Panel
-                        value="telegram"
-                        className="performance-accounts-grid"
-                    >
                         <section
                             className="performance-section performance-account-section"
                             aria-labelledby="account-load-heading"
@@ -1695,11 +1341,16 @@ export default function PerformancePanel({
                                                                     )}{" "}
                                                                     uploaded
                                                                     <small>
-                                                                        {formatBytes(
-                                                                            account
-                                                                                .requests
-                                                                                .download_bytes,
-                                                                        )}{" "}
+                                                                        {typeof account
+                                                                            .requests
+                                                                            .download_bytes ===
+                                                                        "number"
+                                                                            ? formatBytes(
+                                                                                  account
+                                                                                      .requests
+                                                                                      .download_bytes,
+                                                                              )
+                                                                            : "Unavailable"}{" "}
                                                                         downloaded
                                                                     </small>
                                                                 </>
@@ -1927,7 +1578,203 @@ export default function PerformancePanel({
                         </section>
                     </Tabs.Panel>
                     <Tabs.Panel value="server">
-                        <div className="performance-overview-grid performance-resource-charts">
+                        <div className="performance-measurements-heading">
+                            <h3>Charts and history</h3>
+                            <div className="performance-history-controls">
+                                {" "}
+                                <label>
+                                    Time range
+                                    <select
+                                        aria-label="Time range"
+                                        disabled={refreshing}
+                                        value={range}
+                                        onChange={(event) => {
+                                            const value = event.target
+                                                .value as HistoryRange;
+                                            setRange(value);
+                                            setCustomError("");
+                                            try {
+                                                if (value !== "custom")
+                                                    window.localStorage.setItem(
+                                                        HISTORY_WINDOW_KEY,
+                                                        value,
+                                                    );
+                                            } catch {
+                                                /* Keep working without storage. */
+                                            }
+                                        }}
+                                    >
+                                        <option value="live">
+                                            Live (5 min)
+                                        </option>
+                                        <option value="hour">Last hour</option>
+                                        <option value="day">
+                                            Last 24 hours
+                                        </option>
+                                        <option value="week">
+                                            Last 7 days
+                                        </option>
+                                        <option value="month">
+                                            Last month (30 days)
+                                        </option>
+                                        <option value="custom">
+                                            Custom range
+                                        </option>
+                                    </select>
+                                </label>
+                            </div>
+                        </div>
+                        {range === "custom" && (
+                            <form
+                                className="performance-custom-range"
+
+                                onSubmit={(event) => {
+                                    event.preventDefault();
+                                    try {
+                                        setCustomBounds(
+                                            customHistoryBounds(
+                                                customStart,
+                                                customEnd,
+                                            ),
+                                        );
+                                        setCustomError("");
+                                    } catch (cause) {
+                                        setCustomError(errorMessage(cause));
+                                    }
+                                }}
+                            >
+                                <label>
+                                    Start (UTC)
+                                    <input
+                                        type="datetime-local"
+                                        required
+                                        value={customStart}
+                                        onChange={(event) =>
+                                            setCustomStart(event.target.value)
+                                        }
+                                    />
+                                </label>
+                                <label>
+                                    End (UTC)
+                                    <input
+                                        type="datetime-local"
+                                        required
+                                        value={customEnd}
+                                        onChange={(event) =>
+                                            setCustomEnd(event.target.value)
+                                        }
+                                    />
+                                </label>
+                                <button
+                                    className="secondary-button"
+                                    type="submit"
+                                    disabled={refreshing}
+                                >
+                                    Apply Range
+                                </button>
+                                <p className="settings-help">
+                                    Enter UTC times. Chart timestamps use{" "}
+                                    {getTimezone()}. Up to 31 days; gaps mean no
+                                    readings were recorded.
+                                </p>
+                                {customBounds && (
+                                    <p className="settings-help">
+                                        Applied:{" "}
+                                        {formatTimestamp(customBounds.start)} –{" "}
+                                        {formatTimestamp(customBounds.end)} (
+                                        {getTimezone()})
+                                    </p>
+                                )}
+                                <ErrorNotice message={customError} />
+                            </form>
+                        )}
+                        {historyLoading && historical && (
+                            <p
+                                className="performance-history-status"
+                                role="status"
+                            >
+                                <Spinner /> Loading selected history…
+                                {recorded && loadedRange !== rangeKey
+                                    ? " Previous range remains visible until it is ready."
+                                    : ""}
+                            </p>
+                        )}
+                        {historyError && (
+                            <div className="performance-history-error">
+                                <ErrorNotice
+                                    message={
+                                        (historical && recorded
+                                            ? "Showing previously loaded history. "
+                                            : "") + historyError
+                                    }
+                                />
+                                <button
+                                    type="button"
+                                    className="text-button"
+                                    disabled={refreshing}
+                                    aria-busy={refreshing}
+                                    onClick={refreshPerformance}
+                                >
+                                    {refreshing && <Spinner />}
+                                    {refreshing
+                                        ? "Refreshing…"
+                                        : "Retry History"}
+                                </button>
+                            </div>
+                        )}
+                        <p className="performance-history-availability">
+                            {historical
+                                ? recorded && loadedRange === rangeKey
+                                    ? `Recorded interval averages (${historyDuration(recorded.bucket_seconds)} per point). Current resource usage below stays live; chart points belong to the selected range. ${recorded.samples.some((sample) => sample.cpu_percent !== null || sample.memory_bytes !== null || sample.received_bytes_per_second !== null || sample.sent_bytes_per_second !== null) ? `Available history begins ${formatTimestamp(recorded.earliest_at)}.` : "No readings were recorded for this range."}`
+                                    : range === "custom" && !customBounds
+                                      ? "Choose dates and apply a range to inspect recorded history."
+                                      : "Selected range has not loaded yet."
+                                : resourceHistory.length > 1
+                                  ? `Showing ${historyDuration(resourceHistory.at(-1)!.at - resourceHistory[0].at)} of collected live history; up to 5 min selected.`
+                                  : "Collecting live history; earlier readings are not available yet."}
+                        </p>
+                        <MetricChart
+                            windowSeconds={windowSeconds}
+                            historical={historical}
+                            bucketSeconds={
+                                historical ? recorded?.bucket_seconds || 60 : 3
+                            }
+                            title="Server network"
+                            samples={resourceHistory}
+                            series={[
+                                {
+                                    key: "received_bytes_per_second",
+                                    label: "Received by server",
+                                    hint: "all traffic on the reported interface",
+                                },
+                                {
+                                    key: "sent_bytes_per_second",
+                                    label: "Sent by server",
+                                    hint: "all traffic on the reported interface",
+                                    secondary: true,
+                                },
+                            ]}
+                            maximum={networkCeiling}
+                            format={(value) => formatBytes(value) + "/s"}
+                            scope="network_interface"
+                            current={
+                                "Received " +
+                                networkRate(
+                                    network?.received_bytes_per_second,
+                                ) +
+                                " / Sent " +
+                                networkRate(network?.sent_bytes_per_second)
+                            }
+                            note={
+                                "All traffic on the reported network interface; not Telegram alone" +
+                                (network?.interface
+                                    ? " on " + network.interface
+                                    : "") +
+                                "."
+                            }
+                        />
+
+                        <div className="performance-resource-charts">
                             <MetricChart
                                 windowSeconds={windowSeconds}
                                 historical={historical}
@@ -1938,8 +1785,10 @@ export default function PerformancePanel({
                                 }
                                 title={
                                     cpu?.scope === "host"
-                                        ? "Host CPU"
-                                        : "Container CPU"
+                                        ? "System CPU"
+                                        : cpu?.scope === "cgroup"
+                                          ? "Container CPU"
+                                          : "CPU"
                                 }
                                 samples={resourceHistory}
                                 series={[
@@ -1955,9 +1804,9 @@ export default function PerformancePanel({
                                 }
                                 note={
                                     cpu?.capacity_cores
-                                        ? "100% uses the available " +
+                                        ? "Reported CPU capacity: " +
                                           cpu.capacity_cores.toLocaleString() +
-                                          " CPU cores."
+                                          " CPU equivalents."
                                         : "Measured CPU utilization; missing readings remain gaps."
                                 }
                             />
@@ -2007,13 +1856,21 @@ export default function PerformancePanel({
                             </div>
                             <div className="performance-resource-summary">
                                 <UsageMeter
-                                    label="Cache filesystem"
-                                    used={snapshot.server.disk.used_bytes}
+                                    label="Data filesystem"
+                                    used={
+                                        snapshot.server.disk.available === false
+                                            ? NaN
+                                            : snapshot.server.disk.used_bytes
+                                    }
                                     total={snapshot.server.disk.total_bytes}
                                     detail={
-                                        formatBytes(
-                                            snapshot.server.disk.free_bytes,
-                                        ) + " free on the cache volume"
+                                        snapshot.server.disk.available === false
+                                            ? "Filesystem measurement unavailable"
+                                            : formatBytes(
+                                                  snapshot.server.disk
+                                                      .free_bytes,
+                                              ) +
+                                              " reported free on this filesystem"
                                     }
                                 />
                                 {snapshot.database && (
@@ -2021,7 +1878,8 @@ export default function PerformancePanel({
                                         label="MongoDB"
                                         used={snapshot.database.used_bytes}
                                         total={
-                                            snapshot.database.volume_total_bytes
+                                            snapshot.database
+                                                .volume_total_bytes || NaN
                                         }
                                         unavailableLabel={formatBytes(
                                             snapshot.database.used_bytes,
@@ -2062,6 +1920,54 @@ export default function PerformancePanel({
                                     }
                                 />
                             </div>
+                            {diskCapacity?.backing.configured && (
+                                <div
+                                    className="performance-capacity-readings"
+                                    role="group"
+                                    aria-label="Storage capacity measurements"
+                                >
+                                    <dl className="performance-facts">
+                                        <div>
+                                            <dt>Backing filesystem free</dt>
+                                            <dd>
+                                                {diskCapacity.backing
+                                                    .available &&
+                                                diskCapacity.backing
+                                                    .free_bytes !== null
+                                                    ? formatBytes(
+                                                          diskCapacity.backing
+                                                              .free_bytes,
+                                                      )
+                                                    : "Unavailable"}
+                                            </dd>
+                                        </div>
+                                        <div>
+                                            <dt>Free after reserve</dt>
+                                            <dd>
+                                                {diskCapacity.effective
+                                                    .available &&
+                                                diskCapacity.effective
+                                                    .headroom_bytes !== null
+                                                    ? formatBytes(
+                                                          diskCapacity.effective
+                                                              .headroom_bytes,
+                                                      )
+                                                    : "Unavailable"}
+                                            </dd>
+                                        </div>
+                                    </dl>
+                                    {!diskCapacity.effective.available && (
+                                        <p
+                                            className="settings-help"
+                                            role="status"
+                                        >
+                                            New writes are unavailable because
+                                            required storage capacity could not
+                                            be measured.
+                                        </p>
+                                    )}
+                                </div>
+                            )}
                             <p className="performance-cache-link">
                                 <a
                                     className="inline-link"
@@ -2158,6 +2064,16 @@ export default function PerformancePanel({
                             <details className="performance-detail-note">
                                 <summary>Resource measurement details</summary>
                                 <p className="settings-help">
+                                    Data filesystem readings describe the
+                                    filesystem visible to TGDrive. Free after
+                                    reserve uses the smaller measured free space
+                                    and subtracts the configured reserve; it
+                                    does not subtract outstanding upload
+                                    reservations.
+                                    {!diskCapacity?.backing.configured &&
+                                        " Backing storage is not separately measured; a virtual filesystem can report more free space than its host can provide."}
+                                </p>
+                                <p className="settings-help">
                                     {network?.scope ||
                                         "Network interface scope unavailable."}{" "}
                                     {snapshot.server.load_average.length
@@ -2170,6 +2086,87 @@ export default function PerformancePanel({
                                 </p>
                             </details>
                         </section>
+                        {snapshot.tuning && (
+                            <AutomaticTuning tuning={snapshot.tuning} />
+                        )}
+                        {recorded && (
+                            <details
+                                className="performance-all-time performance-detail-note"
+                                aria-labelledby="all-time-heading"
+                            >
+                                <summary>
+                                    <h3 id="all-time-heading">
+                                        All-time totals
+                                    </h3>
+                                </summary>
+                                <p className="settings-help">
+                                    {recorded.tracked_since
+                                        ? `Since ${formatTimestamp(recorded.tracked_since)}.`
+                                        : "Tracking has just started."}{" "}
+                                    Totals survive restart and are independent
+                                    of the time range.
+                                </p>
+                                <table className="performance-totals-table">
+                                    <thead>
+                                        <tr>
+                                            <th scope="col">Traffic source</th>
+                                            <th scope="col">
+                                                Received by server
+                                            </th>
+                                            <th scope="col">Sent by server</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        {(
+                                            [
+                                                [
+                                                    "Server network",
+                                                    recorded.totals
+                                                        .network_received_bytes,
+                                                    recorded.totals
+                                                        .network_sent_bytes,
+                                                ],
+                                                [
+                                                    "TGDrive files",
+                                                    recorded.totals
+                                                        .http_upload_bytes,
+                                                    recorded.totals
+                                                        .http_download_bytes,
+                                                ],
+                                                [
+                                                    "Telegram",
+                                                    recorded.totals
+                                                        .telegram_download_bytes,
+                                                    recorded.totals
+                                                        .telegram_upload_bytes,
+                                                ],
+                                            ] as const
+                                        ).map(([label, received, sent]) => (
+                                            <tr key={label}>
+                                                <th scope="row">{label}</th>
+                                                <td>
+                                                    {typeof received ===
+                                                    "number"
+                                                        ? formatBytes(received)
+                                                        : "Not available"}
+                                                </td>
+                                                <td>
+                                                    {typeof sent === "number"
+                                                        ? formatBytes(sent)
+                                                        : "Not available"}
+                                                </td>
+                                            </tr>
+                                        ))}
+                                    </tbody>
+                                </table>
+                                <p className="settings-help">
+                                    Network includes Telegram, URL imports and
+                                    device traffic. The rows overlap; do not add
+                                    them together. Usage before tracking began
+                                    is not included.
+                                </p>
+                            </details>
+                        )}
                     </Tabs.Panel>
                 </>
             )}

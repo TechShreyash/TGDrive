@@ -77,6 +77,7 @@ def owner_client(tmp_path, *, demo_mode=True, root_path=""):
         set_uploads_per_bot=AsyncMock(),
     )
     runtime.preloads = SimpleNamespace(
+        cache=SimpleNamespace(backfill_metadata=Mock()),
         reconfigure=AsyncMock(),
         snapshot=AsyncMock(return_value={"jobs": [], "cache": {"files": []}}),
         prepare=AsyncMock(return_value={"id": "demo-preload", "state": "queued"}),

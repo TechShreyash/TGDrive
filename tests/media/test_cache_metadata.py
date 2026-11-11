@@ -275,11 +275,11 @@ async def test_clear_waits_for_metadata_inventory_writer_before_removing_entry(
     entered, release, finished = threading.Event(), threading.Event(), threading.Event()
     write = cache._write_index
 
-    def held(value):
+    def held(value, **kwargs):
         entered.set()
         assert release.wait(3)
         try:
-            write(value)
+            write(value, **kwargs)
         finally:
             finished.set()
 
@@ -321,3 +321,28 @@ async def test_failed_pass_keeps_bytes_and_does_not_repeat_on_each_poll(caplog):
     assert cache._files[identity]["purpose"] == "unknown"
     assert "private query" not in caplog.text
     await cache.close()
+
+
+def test_inventory_replacement_preserves_previous_state_when_backing_is_unavailable(
+    tmp_path,
+):
+    probe = tmp_path / "probe"
+    probe.mkdir()
+    cache = MediaReadCache(
+        tmp_path / "media",
+        MediaCachePolicy(min_free_bytes=0),
+        storage_settings=SimpleNamespace(
+            data_backing_capacity_dir=probe,
+            resolved_data_dir=tmp_path / "media",
+        ),
+    )
+    previous = {"files": [], "blocks": []}
+    cache._write_index(previous)
+    assert cache.directory is not None
+    path = cache.directory / "inventory.json"
+    original = path.read_bytes()
+    (probe / "unexpected").write_bytes(b"x")
+    with pytest.raises(OSError):
+        cache._write_index({"files": [{"id": "new"}], "blocks": []})
+    assert path.read_bytes() == original
+    assert not list(cache.directory.glob("*.tmp"))

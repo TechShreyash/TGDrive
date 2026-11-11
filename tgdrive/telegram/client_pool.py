@@ -197,11 +197,14 @@ class ClientPool:
         media_send_interval: float = 0.0,
         uploads_per_bot: int = 1,
         media_cache_dir: Any = None,
+        storage_settings: Any = None,
         media_per_bot: int = 3,
         max_media_queue: int = 256,
     ) -> None:
         self._allow_partial_start = allow_partial_start
         self.media_cache_dir = media_cache_dir
+        self.storage_settings = storage_settings
+        self.remaining_staging_bytes: Callable[[], int] | None = None
         self._media_read_cache: Any = None
         self._validate_upload_limit(uploads_per_bot)
         self._uploads_per_bot = uploads_per_bot

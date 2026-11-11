@@ -6,7 +6,6 @@ import asyncio
 import hashlib
 import os
 import secrets
-import shutil
 import signal
 import stat
 import sys
@@ -22,6 +21,11 @@ from tgdrive.media.thumbnail_worker import (
     VIDEO_FORMATS,
     VIDEO_IMAGES_HEADER,
     VIDEO_IMAGES_MAGIC,
+)
+from tgdrive.storage.capacity import (
+    measure_capacity,
+    probe_for_directory,
+    require_headroom,
 )
 
 MAX_BYTES = 64 * 1024
@@ -111,8 +115,12 @@ async def _owned_disk_call(function, *args, **kwargs):
 class CachedThumbnailRepair:
     """One bounded local repair; missing bytes never initiate Telegram reads."""
 
-    def __init__(self, directory: Path):
+    def __init__(
+        self, directory: Path, *, storage_settings=None, remaining_staging_bytes=None
+    ):
         self.directory = directory
+        self.storage_settings = storage_settings
+        self.remaining_staging_bytes = remaining_staging_bytes
         self._slot = asyncio.Lock()
         self._attempts = weakref.WeakKeyDictionary()
 
@@ -152,13 +160,27 @@ class CachedThumbnailRepair:
             except OSError:
                 continue
 
-    def _open_source(self, size, reserve):
+    def _outstanding_staging(self):
+        return self.remaining_staging_bytes() if self.remaining_staging_bytes else 0
+
+    def _open_source(self, size, reserve, *, outstanding_bytes=0):
         self.directory.mkdir(parents=True, exist_ok=True, mode=0o700)
         if self.directory.is_symlink():
             raise OSError("Thumbnail directory must not be a symbolic link")
         self._cleanup_stale_sources()
-        if shutil.disk_usage(self.directory).free < size + reserve:
-            raise OSError("Insufficient temporary thumbnail space")
+        require_headroom(
+            measure_capacity(
+                self.directory,
+                probe_directory=probe_for_directory(
+                    self.storage_settings, self.directory
+                ),
+            ),
+            size,
+            reserve_bytes=max(
+                reserve, getattr(self.storage_settings, "min_free_bytes", 0)
+            ),
+            outstanding_bytes=outstanding_bytes,
+        )
         path = self.directory / (".repair-" + secrets.token_hex(16) + ".source")
         descriptor = os.open(path, os.O_CREAT | os.O_EXCL | os.O_RDWR, 0o600)
         output = os.fdopen(descriptor, "w+b")
@@ -172,6 +194,24 @@ class CachedThumbnailRepair:
             self._cleanup_source(output, path)
             raise
         return output, path
+
+    def _write_source(
+        self, output, content, remaining, reserve, *, outstanding_bytes=0
+    ):
+        require_headroom(
+            measure_capacity(
+                self.directory,
+                probe_directory=probe_for_directory(
+                    self.storage_settings, self.directory
+                ),
+            ),
+            remaining,
+            reserve_bytes=max(
+                reserve, getattr(self.storage_settings, "min_free_bytes", 0)
+            ),
+            outstanding_bytes=outstanding_bytes,
+        )
+        return output.write(content)
 
     @staticmethod
     def _cleanup_source(output, path):
@@ -202,7 +242,12 @@ class CachedThumbnailRepair:
         try:
             async with asyncio.timeout(None if background else REPAIR_SECONDS):
                 opening = asyncio.create_task(
-                    asyncio.to_thread(self._open_source, len(content), 64 * 1024**2)
+                    asyncio.to_thread(
+                        self._open_source,
+                        len(content),
+                        64 * 1024**2,
+                        outstanding_bytes=self._outstanding_staging(),
+                    )
                 )
                 opened, interrupted = await _finish_owned(opening)
                 if opened is not None:
@@ -210,7 +255,14 @@ class CachedThumbnailRepair:
                 if interrupted:
                     raise asyncio.CancelledError
                 assert output is not None and path is not None
-                written = await _owned_disk_call(output.write, content)
+                written = await _owned_disk_call(
+                    self._write_source,
+                    output,
+                    content,
+                    len(content),
+                    64 * 1024**2,
+                    outstanding_bytes=self._outstanding_staging(),
+                )
                 if written != len(content):
                     raise OSError("Thumbnail source ended early")
                 await _owned_disk_call(output.flush)
@@ -279,6 +331,7 @@ class CachedThumbnailRepair:
                                 self._open_source,
                                 source["size"],
                                 max(64 * 1024**2, cache.policy.min_free_bytes),
+                                outstanding_bytes=self._outstanding_staging(),
                             )
                         )
                         opened, interrupted = await _finish_owned(opening)
@@ -288,7 +341,14 @@ class CachedThumbnailRepair:
                             raise asyncio.CancelledError
                     if output is None or path is None:
                         raise CachedSourceUnavailable
-                    count = await _owned_disk_call(output.write, block)
+                    count = await _owned_disk_call(
+                        self._write_source,
+                        output,
+                        block,
+                        source["size"] - written,
+                        max(64 * 1024**2, cache.policy.min_free_bytes),
+                        outstanding_bytes=self._outstanding_staging(),
+                    )
                     assert count is not None
                     if count != len(block):
                         raise CachedSourceUnavailable
@@ -313,6 +373,11 @@ class CachedThumbnailRepair:
                         source["channel_id"],
                         source["message_id"],
                         cover,
+                        storage_settings=self.storage_settings,
+                        min_free_bytes=getattr(
+                            self.storage_settings, "min_free_bytes", 0
+                        ),
+                        outstanding_bytes=self._outstanding_staging(),
                     )
                     await authorize()
                     if cache.cached_source_version(**source) != version:
@@ -554,11 +619,27 @@ def save(
     *,
     maximum=MAX_BYTES,
     version=None,
+    backing_capacity_dir=None,
+    storage_settings=None,
+    min_free_bytes=0,
+    outstanding_bytes=0,
 ) -> None:
     if not 0 < len(data) <= maximum or not data.startswith(b"\xff\xd8\xff"):
         return
     directory.mkdir(parents=True, exist_ok=True, mode=0o700)
-    if shutil.disk_usage(directory).free < 64 * 1024**2:
+    try:
+        probe = (
+            probe_for_directory(storage_settings, directory)
+            if storage_settings is not None
+            else backing_capacity_dir
+        )
+        require_headroom(
+            measure_capacity(directory, probe_directory=probe),
+            len(data),
+            reserve_bytes=max(64 * 1024**2, min_free_bytes),
+            outstanding_bytes=outstanding_bytes,
+        )
+    except OSError:
         return
     descriptor, temporary = tempfile.mkstemp(dir=directory, prefix=".thumbnail-")
     try:

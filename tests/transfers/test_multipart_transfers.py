@@ -932,3 +932,26 @@ async def test_multipart_workers_follow_live_per_bot_limit(tmp_path):
     finally:
         ledger.release.set()
         await dispose(manager)
+
+
+def test_upload_image_sidecar_preserves_existing_bytes_when_backing_unavailable(
+    tmp_path,
+):
+    from tgdrive.transfers.multipart_transfer import _stage_image
+    from tgdrive.transfers.staging import StorageUnavailable
+
+    probe = tmp_path / "probe"
+    probe.mkdir()
+    settings = SimpleNamespace(
+        cache_backing_capacity_dir=probe,
+        min_free_bytes=0,
+        resolved_cache_dir=tmp_path,
+    )
+    path = tmp_path / "poster.jpg"
+    path.write_bytes(b"old")
+    (probe / "unexpected").write_bytes(b"x")
+    with pytest.raises(StorageUnavailable) as unavailable:
+        _stage_image(path, b"new", settings=settings, outstanding_bytes=10)
+    assert unavailable.value.status == 503
+    assert path.read_bytes() == b"old"
+    assert not list(tmp_path.glob(".upload-image-*"))

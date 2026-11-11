@@ -197,5 +197,55 @@ def test_database_snapshot_reports_size_and_tolerates_failures():
         "objects": 7,
         "volume_total_bytes": 900,
     }
+    runtime.mongo.db.command.return_value = {
+        "storageSize": 200,
+        "indexSize": 100,
+        "objects": 7,
+    }
+    assert database_snapshot(runtime) == {
+        "used_bytes": 300,
+        "index_bytes": 100,
+        "objects": 7,
+        "volume_total_bytes": 0,
+    }
+    runtime.mongo.db.command.return_value = {"indexSize": 100}
+    assert database_snapshot(runtime) is None
     runtime.mongo.db.command.side_effect = RuntimeError("not authorized")
     assert database_snapshot(runtime) is None
+
+
+async def test_failed_owner_ceiling_apply_restores_saved_and_effective_policy(
+    tmp_path, mongo_backend
+):
+    state = performance_runtime(mongo_backend)
+    service = PerformanceSettings(make_settings(tmp_path), state)
+    before = await service.snapshot()
+    previous = service.value
+    original = state.preloads.reconfigure
+    attempts = 0
+
+    async def reconfigure(policy):
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            raise OSError("temporary cache failure")
+        await original(policy)
+
+    state.preloads.reconfigure = reconfigure
+    try:
+        with pytest.raises(SettingsProblem, match="restored"):
+            await service.save(
+                {
+                    "cache_disk_limit_bytes": 0,
+                    "cache_memory_limit_bytes": 0,
+                    "staging_limit_bytes": 1234,
+                }
+            )
+        assert service.value == previous
+        assert service.settings.cache_disk_bytes == previous.cache_disk_bytes
+        assert service.settings.staging_budget_bytes == previous.staging_budget_bytes
+        assert await service.snapshot() == before
+        row = mongo_backend.db.settings.find_one({"_id": "performance-preferences"})
+        assert row["document"]["cache_disk_limit_bytes"] is None
+    finally:
+        await state.preloads.close()

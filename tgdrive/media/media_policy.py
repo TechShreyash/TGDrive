@@ -21,7 +21,6 @@ class MediaCachePolicy:
     protected_fraction: float = 0.75
     max_background_jobs: int = 2
     background_blocks: int = 2
-    max_file_fraction: float = 0.5
     read_ahead_blocks: int = 32
     scratch_max_bytes: int = 32 * MIB
     auto_preload: bool = False
@@ -41,8 +40,6 @@ class MediaCachePolicy:
                 raise ValueError(f"{name} must be finite and positive")
         if not 0 <= self.protected_fraction < 1:
             raise ValueError("protected_fraction must be between zero and one")
-        if not 0 < self.max_file_fraction <= 1:
-            raise ValueError("max_file_fraction must be positive and at most one")
         for name, ceiling in (
             ("max_background_jobs", 8),
             ("background_blocks", 8),

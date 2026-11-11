@@ -7,8 +7,8 @@ import json
 import os
 import re
 import secrets
-import shutil
 from collections.abc import Callable
+from functools import partial
 from pathlib import Path
 from typing import BinaryIO
 
@@ -17,6 +17,12 @@ from pydantic import Field, SecretStr, StrictBool
 
 from tgdrive.recovery.recovery_file import MAX_STAGED_RECOVERY_BYTES, LegacyRecoveryFile
 from tgdrive.settings.managed_settings import PrivateModel, SettingsProblem
+from tgdrive.storage.capacity import (
+    CapacityUnavailable,
+    measure_capacity,
+    probe_for_directory,
+    require_headroom,
+)
 from tgdrive.transfers.uploads import ResumableUploads
 
 
@@ -197,7 +203,7 @@ def register_replica_routes(app, settings, require_admin, get_runtime):
             async with current._operation:
                 path = current.directory / (".replica-import-" + secrets.token_hex(16))
                 try:
-                    with path.open("xb") as target:
+                    with path.open("xb", buffering=0) as target:
                         path.chmod(0o600)
                         size = 0
                         async for part in request.stream():
@@ -208,25 +214,36 @@ def register_replica_routes(app, settings, require_admin, get_runtime):
                                     "The encrypted recovery file exceeds "
                                     "its size limit",
                                 )
-                            if (
-                                shutil.disk_usage(current.directory).free
-                                < len(part) + settings.min_free_bytes
+
+                            outstanding_bytes = current._remaining_staging_bytes()
+
+                            def write_part(
+                                part=part, outstanding_bytes=outstanding_bytes
                             ):
-                                raise HTTPException(
-                                    507,
-                                    "Not enough temporary space "
-                                    "to open the recovery file",
+                                require_headroom(
+                                    measure_capacity(
+                                        path.parent,
+                                        probe_directory=probe_for_directory(
+                                            settings, path.parent
+                                        ),
+                                    ),
+                                    len(part),
+                                    reserve_bytes=settings.min_free_bytes,
+                                    outstanding_bytes=outstanding_bytes,
                                 )
-                            await ResumableUploads._owned_worker(target.write, part)
+                                if target.write(part) != len(part):
+                                    raise OSError("Incomplete recovery import write")
+
+                            await ResumableUploads._owned_worker(write_part)
                     await require_admin(request)
                     return await invoke(
                         current.inspect_file(path, current.key(), source, token)
                     )
-                except OSError:
+                except OSError as error:
                     raise HTTPException(
-                        507,
-                        "The recovery file could not be staged. "
-                        "Check temporary space and permissions.",
+                        503 if isinstance(error, CapacityUnavailable) else 507,
+                        "The recovery file could not be staged. Check backing-capacity "
+                        "probe availability, free space and permissions.",
                     ) from None
                 finally:
                     path.unlink(missing_ok=True)
@@ -287,7 +304,12 @@ def register_replica_routes(app, settings, require_admin, get_runtime):
                                 "to confirm activation.",
                                 status=422,
                             )
-                    return await ResumableUploads._owned_worker(current.activate)
+                    return await ResumableUploads._owned_worker(
+                        partial(
+                            current.activate,
+                            outstanding_bytes=current._remaining_staging_bytes(),
+                        )
+                    )
                 if payload.target_channel is not None:
                     return await invoke(
                         current.recover_to(

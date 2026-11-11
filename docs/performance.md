@@ -44,25 +44,27 @@ connection. [Choosing server capacity](performance-tuning.md#what-a-server-upgra
 ## Automatic tuning
 
 The resource governor sizes budgets at startup, then re-measures the server every
-5 seconds and applies resource changes live. These are not editable dashboard preferences:
-the Configuration page and API no longer accept them. Expand **Performance →
-Automatic tuning** to inspect the chosen values and reasons. The API returns
+5 seconds and applies resource changes live within saved owner ceilings. Owners
+can cap retained RAM cache, payload disk cache and staging, and set a protected
+free-space floor. Managed live values are not direct PATCH inputs. Open
+**Performance → Resources → Applied limits and reasons** to inspect the chosen
+values and reasons. The API returns
 current values, a reason for each value and the latest measurements under
 `tuning` in `GET /api/v1/performance`.
 
 | Value | Rule |
 | --- | --- |
-| Memory cache | 25% of available memory; changes only when the target moves by more than 10% |
-| Disk reserves (`min_free_bytes`, `cache_min_free_bytes`) | Larger of 1 GiB and 5% of each relevant filesystem: staging (`CACHE_DIR`) and media cache respectively |
-| Disk cache | 50% of free media-cache disk after its reserve; cache admission also checks that filesystem |
-| Total staging budget, logical file ceiling | Free staging disk after reserve plus bytes already allocated to admitted staging; admission still subtracts other reservations and checks remaining writes against actual free space |
+| Memory cache | Up to 25% of available memory, bounded by the saved ceiling; Auto ceiling 256 MiB |
+| Disk reserves (`min_free_bytes`, `cache_min_free_bytes`) | Saved protected-free-space value, or Auto: larger of 1 GiB and 5% of each relevant filesystem |
+| Disk cache | Up to 50% of free media-cache disk after reserve, bounded by the saved ceiling; Auto ceiling 10 GiB |
+| Total staging budget, logical file ceiling | Free staging disk after reserve plus allocated staging, bounded by the saved ceiling; Auto ceiling 16 GiB. Admission still checks other reservations and actual free space |
 | Concurrency | Preserve configured startup ceilings; preloads also stay within 4 jobs per CPU and 8 jobs total. The resource governor does not cut or raise unrelated queues from throughput, FloodWait or database latency |
 
 Memory comes from cgroup v2 (`memory.max`, `memory.current`), with
 `/proc/meminfo` as the fallback. If memory metrics are unavailable, the current
 memory value is retained while disk/CPU policy continues. CPU count comes from
 `cpu.max`, falling back to the host CPU count. Byte values use the same 10%
-hysteresis. The governor does not sample MongoDB latency. Per-account request
+growth hysteresis; reductions apply immediately. The governor does not sample MongoDB latency. Per-account request
 schedulers separately reduce effective rate/concurrency after FloodWait and
 recover toward their configured ceilings after successful requests. Cache and
 staging updates preserve that cooldown/recovery state.
@@ -75,13 +77,20 @@ staging updates preserve that cooldown/recovery state.
   it writes. Unrelated disk exhaustion can still stop it.
 - cgroup `memory.current` includes the page cache, so heavy file I/O lowers
   the measured available memory and shrinks the memory cache.
-- Governor resource values are not saved; restart recomputes them from the
-  configured startup values and available measurements. It does not bypass saved
+- Owner ceilings are saved; live resource values are recomputed at restart
+  within those ceilings from startup values and available measurements. It does not bypass saved
   Telegram waits or learn a new concurrency ceiling from traffic.
 - To leave room for other apps on a shared server, set Docker `mem_limit` and
   `cpus`; the governor reads those cgroup limits.
 
 </details>
+
+These ceilings cover retained media payload, not whole-process RAM or every disk
+write. Cover and poster caches each have separate 128 MiB disk budgets; recovery
+files are separate. VM/WSL filesystem readings do not prove physical backing-disk
+headroom. Configured backing probes add a separate measurement; failed required
+measurements refuse writes. Checks include captured outstanding staging claims
+where applicable but remain observations, not atomic filesystem quotas.
 
 ## Cache limits
 
@@ -94,9 +103,9 @@ and disk; see their current values on **Performance**.
 
 | Budget | Value |
 | --- | --- |
-| Retained RAM | ¼ of available host/container memory |
-| Retained disk | Half of free disk after the reserve |
-| Cache free-disk reserve | Larger of 1 GiB and 5% of the disk |
+| Retained RAM | Up to ¼ of available memory, within the owner ceiling (Auto: 256 MiB) |
+| Retained disk | Up to half of free disk after reserve, within the owner ceiling (Auto: 10 GiB) |
+| Cache free-disk reserve | Saved reserve or Auto: larger of 1 GiB and 5% of the filesystem |
 | Disk expiry | 24 hours since last reuse |
 | RAM expiry | 10 idle minutes |
 | Transient streaming payload | 32 MiB, availability-clamped with a 2 MiB floor |
@@ -155,6 +164,12 @@ the requested interval; the HTTP response bytes remain exact.
 **Preload during playback** defaults to enabled. Disabling it leaves in-response
 read-ahead and manual whole-file preloads available. Manual preparation always
 targets the original, even when a lower-quality preview is selected.
+Playback warms a bounded region ahead of the current position. Choose **Preload
+file** when you want to prepare the whole original. A small file can naturally
+fit entirely inside the bounded ahead window; repeated visits do not request a
+separate whole-file automatic job. Previously cached bytes are not cleared by
+this policy change.
+
 
 <details>
 <summary>Playback qualification and preparation thresholds</summary>
@@ -174,13 +189,12 @@ or the bitrate of each variable-rate scene.
 | Qualify playback | Deliver roughly 4 seconds at estimated media rate, clipped to 1–4 MiB; 4 MiB when duration is unknown |
 | Ahead target | 8 seconds; extend to 16 when same-file fills lag estimated demand |
 | Ahead byte bounds | Block-rounded 1–128 MiB, at most ¼ of effective preparation capacity; skip if 1 MiB cannot fit |
-| Whole-file promotion | Qualifying, overlapping runs from distinct identified viewers within 10 minutes; overlap reaches qualification threshold; file plus overhead fits ½ of an effective tier |
-| Start cooldown | 30 seconds per file; new repeated use may promote immediately |
+| Start cooldown | 30 seconds per file; renewal follows delivered progress |
 | Renewal | Renew after delivery reaches halfway through the warmed region |
 | Concurrent preparations | 2 by default, shared by manual/automatic jobs, with bounded block concurrency |
 
-Metadata/HEAD never qualify. Parallel requests, retries or replays by one viewer
-cannot count as distinct viewers; anonymous ranges cannot earn whole-file promotion.
+Metadata/HEAD never qualify. Repeated requests, seeks or different viewer
+identities do not promote automatic work into a whole-file preload.
 Block alignment/integrity overhead count at admission, so high-rate files can
 receive less than the target duration.
 
@@ -188,8 +202,9 @@ Successful playback range responses keep their logical viewer eligible for up
 to 5 seconds between requests, so a finite range can warm the next one. The same
 byte/cache/job limits apply during this gap. A real response abort cancels owned
 ahead work immediately; expiry cancels unfinished work if no next range arrives.
-Distant seeks abandon stale ahead work, including pending admission; already
-justified whole-file preparation may finish. Demand precedes queued speculation.
+Distant seeks abandon stale automatic ahead work, including pending admission.
+Explicit manual whole-file preparation is separate. Demand precedes queued
+speculation.
 Closing/seeking drains unused read-ahead; cancelling one subscriber does not
 abort an in-flight fill still needed by another authorized subscriber. Clearing
 cache data isolates the previous response's tracking, so its late progress or
@@ -454,6 +469,11 @@ WebAssembly (WASM). A file playing in a browser's native player does not establi
 that this separate pipeline can decode it smoothly. **Try again** and
 **Download Original** remain available for slow starts or unsupported files.
 [Player controls](usage.md#open-preview-and-download).
+
+Unknown-duration HTTP media stays subject to network scan limits, including on
+localhost; a duration may remain unavailable. Closing the preview also closes
+its owned background duration scan. This is separate from bounded server
+read-ahead and does not promise fast startup for every container or codec.
 
 The waiting copy follows the player's engine, opening, track-preparation,
 buffering and seek phases. Retry appears on an explicit error or a sustained

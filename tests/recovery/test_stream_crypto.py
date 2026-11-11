@@ -85,7 +85,8 @@ def test_ciphertext_limit_before_decryption(tmp_path):
 
 def test_disk_exhaustion_cleans_compressed_staging(tmp_path, monkeypatch):
     monkeypatch.setattr(
-        snapshot_stream.shutil, "disk_usage", lambda _path: SimpleNamespace(free=0)
+        "tgdrive.storage.capacity.shutil.disk_usage",
+        lambda _path: SimpleNamespace(total=1024**4, used=0, free=0),
     )
     with pytest.raises(BackupError, match="temporary space"):
         stage(tmp_path, encrypted(zlib.compress(b"secret")))

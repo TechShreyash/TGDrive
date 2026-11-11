@@ -2,6 +2,7 @@
 
 import asyncio
 import base64
+import json
 from pathlib import Path
 from types import SimpleNamespace
 from typing import cast
@@ -236,6 +237,7 @@ async def test_validates_and_admits_before_unpausing_payload(monkeypatch, tmp_pa
 
     monkeypatch.setattr(torrent, "_Aria2", Engine)
     remote = SimpleNamespace(download=AsyncMock(side_effect=download), min_free_bytes=0)
+    capacity = AsyncMock()
     manifest = await torrent.download_torrent(
         "https://files.example/source.torrent",
         tmp_path,
@@ -243,13 +245,21 @@ async def test_validates_and_admits_before_unpausing_payload(monkeypatch, tmp_pa
         cancel_event=asyncio.Event(),
         progress=AsyncMock(),
         admit=admit,
+        check_capacity=capacity,
     )
 
+    assert [call.args[0] for call in capacity.await_args_list] == [
+        torrent.MAX_METADATA_BYTES,
+        torrent.MAX_SANITIZED_BYTES,
+        len(torrent._encode({b"info": source[b"info"]})),
+        0,
+    ]
     assert manifest.total_size == 4
     assert calls == ["admit", "addTorrent", "getFiles", "unpause", "stopped"]
     assert metadata_dir is not None
     assert not Path(metadata_dir).exists()
 
+    capacity.reset_mock()
     retried = await torrent.download_torrent(
         "https://files.example/expired.torrent",
         tmp_path,
@@ -257,7 +267,13 @@ async def test_validates_and_admits_before_unpausing_payload(monkeypatch, tmp_pa
         cancel_event=asyncio.Event(),
         progress=AsyncMock(),
         admit=AsyncMock(),
+        check_capacity=capacity,
     )
+    assert [call.args[0] for call in capacity.await_args_list] == [
+        torrent.MAX_SANITIZED_BYTES,
+        len(torrent._encode({b"info": source[b"info"]})),
+        0,
+    ]
     assert retried.info_hash == manifest.info_hash
     remote.download.assert_awaited_once()
 
@@ -361,3 +377,237 @@ async def test_retry_progress_counts_verified_pieces_instead_of_restarting(tmp_p
     finally:
         torrent.asyncio.sleep = original
     assert seen == [600, 1000]
+
+
+@pytest.mark.parametrize(
+    "limit,value,source,match",
+    [
+        ("MAX_CONTAINERS", 3, b"d1:al" + b"le" * 3 + b"ee", "container limit"),
+        ("MAX_TOKENS", 5, b"d1:ali1ei2ei3eee", "token limit"),
+        ("MAX_CONTAINER_ITEMS", 2, b"d1:ali1ei2ei3eee", "container entries"),
+        ("MAX_SANITIZED_BYTES", 4, b"d1:a5:12345e", "byte limit"),
+        ("MAX_VALUE_BYTES", 9, b"d1:a4:12341:b4:5678e", "byte limit"),
+    ],
+)
+def test_decoded_budgets_reject_before_next_allocation(
+    monkeypatch, limit, value, source, match
+):
+    monkeypatch.setattr(torrent, limit, value)
+    with pytest.raises(torrent.TorrentError, match=match):
+        torrent._decode(source)
+
+
+def test_torrent_path_components_are_bounded_before_folder_expansion(monkeypatch):
+    monkeypatch.setattr(torrent, "MAX_PATH_COMPONENTS", 3)
+    with pytest.raises(torrent.TorrentError, match="component limit"):
+        torrent._manifest(
+            metadata(
+                [
+                    {b"length": 4, b"path": [b"one"]},
+                    {b"length": 5, b"path": [b"two"]},
+                ]
+            )
+        )
+
+
+async def test_child_returns_only_bounded_sanitized_metadata(tmp_path, monkeypatch):
+    source = metadata()
+    source[b"url-list"] = b"http://127.0.0.1/private"
+    source[b"announce"] = b"udp://tracker.example:80/announce"
+    raw = tmp_path / "source.torrent"
+    raw.write_bytes(torrent._encode(source))
+    expected = torrent._manifest(source)
+    sanitized = torrent._encode({b"info": source[b"info"]})
+
+    def no_parent_decode(_data):
+        pytest.fail("The parent must never reconstruct the raw metadata graph.")
+
+    monkeypatch.setattr(torrent, "_decode", no_parent_decode)
+    actual, payload, trackers, private = await torrent._parse_metadata(
+        raw, tmp_path / "sanitized.torrent"
+    )
+    assert actual == expected
+    assert payload == sanitized
+    assert trackers == ["udp://tracker.example:80/announce"]
+    assert private is False
+    assert raw.read_bytes() == torrent._encode(source)
+
+
+async def test_child_rejects_container_expansion_without_producing_metadata(tmp_path):
+    raw = tmp_path / "hostile.torrent"
+    raw.write_bytes(b"d1:al" + b"le" * torrent.MAX_CONTAINERS + b"ee")
+    output = tmp_path / "sanitized.torrent"
+    with pytest.raises(torrent.TorrentError, match="container limit"):
+        await torrent._parse_metadata(raw, output)
+    assert not output.exists()
+
+
+async def test_child_rechecks_serialized_limit_for_cached_or_magnet_metadata(tmp_path):
+    raw = tmp_path / "source.torrent"
+    with raw.open("wb") as source:
+        source.truncate(torrent.MAX_METADATA_BYTES + 1)
+    output = tmp_path / "sanitized.torrent"
+    with pytest.raises(torrent.TorrentError, match="256 MiB"):
+        await torrent._parse_metadata(raw, output)
+    assert not output.exists()
+
+
+async def test_rpc_size_bound_covers_exact_body_and_sends_checked_bytes(
+    tmp_path, monkeypatch
+):
+    engine = torrent._Aria2(tmp_path)
+    engine.url = "http://127.0.0.1/jsonrpc"
+    sent = []
+
+    class Response:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            pass
+
+        def raise_for_status(self):
+            pass
+
+        async def json(self):
+            return {"result": "gid"}
+
+    def post(_url, **kwargs):
+        sent.append(kwargs)
+        return Response()
+
+    engine.session = cast(aiohttp.ClientSession, SimpleNamespace(post=post))
+    arguments = ["encoded", [], {"dir": "/é", "pause": "true"}]
+    expected = json.dumps(
+        {
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "aria2.addTorrent",
+            "params": [f"token:{engine.secret}", *arguments],
+        },
+        separators=(",", ":"),
+    ).encode()
+    monkeypatch.setattr(torrent, "MAX_RPC_BYTES", len(expected))
+    assert await engine.call("addTorrent", *arguments) == "gid"
+    assert sent == [{"data": expected, "headers": {"Content-Type": "application/json"}}]
+    monkeypatch.setattr(torrent, "MAX_RPC_BYTES", len(expected) - 1)
+    with pytest.raises(torrent.TorrentError, match="RPC request limit"):
+        await engine.call("addTorrent", *arguments)
+    assert len(sent) == 1
+
+
+async def test_parser_kills_and_reaps_child_after_repeated_cancellation(
+    monkeypatch, tmp_path
+):
+    reading, stopping, release = asyncio.Event(), asyncio.Event(), asyncio.Event()
+
+    async def readline():
+        reading.set()
+        await asyncio.Event().wait()
+
+    async def wait():
+        stopping.set()
+        await release.wait()
+
+    process = SimpleNamespace(
+        stdout=SimpleNamespace(readline=readline, read=AsyncMock(return_value=b"")),
+        returncode=None,
+        wait=wait,
+    )
+    process.kill = lambda: setattr(process, "returncode", -9)
+    monkeypatch.setattr(
+        asyncio, "create_subprocess_exec", AsyncMock(return_value=process)
+    )
+    task = asyncio.create_task(
+        torrent._parse_metadata(tmp_path / "in", tmp_path / "out")
+    )
+    await reading.wait()
+    task.cancel()
+    await stopping.wait()
+    task.cancel()
+    await asyncio.sleep(0)
+    assert not task.done()
+    release.set()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    assert process.returncode == -9
+
+
+async def test_parser_owns_child_even_if_cancelled_during_spawn(monkeypatch, tmp_path):
+    starting, release = asyncio.Event(), asyncio.Event()
+    process = SimpleNamespace(returncode=None, stdout=None, wait=AsyncMock())
+    process.kill = lambda: setattr(process, "returncode", -9)
+
+    async def launch(*_args, **_kwargs):
+        starting.set()
+        await release.wait()
+        return process
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", launch)
+    task = asyncio.create_task(
+        torrent._parse_metadata(tmp_path / "in", tmp_path / "out")
+    )
+    await starting.wait()
+    task.cancel()
+    await asyncio.sleep(0)
+    task.cancel()
+    release.set()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    assert process.returncode == -9
+    process.wait.assert_awaited_once()
+
+
+async def test_parser_rejects_oversized_child_response(monkeypatch, tmp_path):
+    monkeypatch.setattr(torrent, "MAX_MANIFEST_BYTES", 64)
+    output = asyncio.StreamReader()
+    output.feed_data(b"x" * 65 + b"\n")
+    output.feed_eof()
+    process = SimpleNamespace(stdout=output, returncode=None, wait=AsyncMock())
+    process.kill = lambda: setattr(process, "returncode", -9)
+    monkeypatch.setattr(
+        asyncio, "create_subprocess_exec", AsyncMock(return_value=process)
+    )
+    with pytest.raises(torrent.TorrentError, match="invalid response"):
+        await torrent._parse_metadata(tmp_path / "in", tmp_path / "out")
+    assert process.returncode == -9
+    process.wait.assert_awaited_once()
+
+
+async def test_metadata_capacity_rejected_before_downloader_or_network(
+    tmp_path, monkeypatch
+):
+    engine = AsyncMock()
+    monkeypatch.setattr(torrent, "_Aria2", engine)
+    remote = SimpleNamespace(download=AsyncMock(), min_free_bytes=0)
+    capacity = AsyncMock(side_effect=torrent.TorrentError("Backing storage is full."))
+    with pytest.raises(torrent.TorrentError, match="Backing storage"):
+        await torrent.download_torrent(
+            "https://files.example/source.torrent",
+            tmp_path,
+            remote=cast(RemoteClient, remote),
+            cancel_event=asyncio.Event(),
+            progress=AsyncMock(),
+            admit=AsyncMock(),
+            check_capacity=capacity,
+        )
+    capacity.assert_awaited_once_with(torrent.MAX_METADATA_BYTES)
+    engine.assert_not_called()
+    remote.download.assert_not_awaited()
+
+
+async def test_child_bounds_sanitized_output_before_parent_reads_it(tmp_path):
+    # One byte string fits its own budget; dictionary framing pushes info over
+    # the independent sanitized-output limit.
+    source = metadata()
+    pieces = torrent.MAX_SANITIZED_BYTES // 20
+    info = cast(dict[bytes, object], source[b"info"])
+    info[b"pieces"] = b"x" * (pieces * 20)
+    info[b"length"] = pieces
+    info[b"piece length"] = 1
+    raw = tmp_path / "source.torrent"
+    raw.write_bytes(torrent._encode(source))
+    output = tmp_path / "sanitized.torrent"
+    with pytest.raises(torrent.TorrentError, match="Sanitized torrent metadata"):
+        await torrent._parse_metadata(raw, output)
+    assert not output.exists()

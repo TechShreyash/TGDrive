@@ -204,8 +204,8 @@ async def test_startup_tunes_restored_staging_before_transfer_or_bot_admission(
     monkeypatch.setattr(TransferManager, "recover", recover)
     monkeypatch.setattr(runtime_module, "build_bot_mode_client", bot_client)
     monkeypatch.setattr(
-        "tgdrive.transfers.staging.shutil.disk_usage",
-        lambda _: SimpleNamespace(free=8 * gib),
+        "tgdrive.storage.capacity.shutil.disk_usage",
+        lambda _: SimpleNamespace(total=100 * gib, used=92 * gib, free=8 * gib),
     )
     try:
         await runtime.start()
@@ -498,7 +498,7 @@ async def test_known_legacy_pin_stops_fresh_initialization(
         async def pinned_message(self, _channel):
             return 77
 
-        async def download(self, *_args):
+        async def download(self, *_args, **_kwargs):
             ReplicaTransport._capsule(
                 SimpleNamespace(
                     size=123,

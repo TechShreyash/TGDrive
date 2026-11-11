@@ -40,11 +40,78 @@ export const preferences: PerformancePreferences = {
     timezone: "Asia/Kolkata",
     auto_preload: true,
     upload_split_mib: 2000,
+    cache_disk_limit_bytes: null,
+    cache_memory_limit_bytes: null,
+    staging_limit_bytes: null,
+    protected_free_bytes: null,
 };
 beforeEach(() => vi.stubGlobal("window", new EventTarget()));
 afterEach(() => vi.unstubAllGlobals());
 
 describe("performance settings and HTTP boundaries", () => {
+    it("keeps explicit resource modes and strict unit conversion separate from effective budgets", () => {
+        const draft = performanceDraft(preferences);
+        expect(draft.cache_disk_limit_bytes.mode).toBe("automatic");
+        expect(
+            performanceChanges(
+                {
+                    ...draft,
+                    cache_disk_limit_bytes: { mode: "custom", value: "2.5" },
+                    cache_memory_limit_bytes: { mode: "disabled", value: "" },
+                    protected_free_bytes: { mode: "none", value: "" },
+                },
+                preferences,
+            ),
+        ).toEqual({
+            cache_disk_limit_bytes: 2.5 * GIB,
+            cache_memory_limit_bytes: 0,
+            protected_free_bytes: 0,
+        });
+        expect(
+            performanceDraft({ ...preferences, cache_disk_limit_bytes: 0 })
+                .cache_disk_limit_bytes.mode,
+        ).toBe("disabled");
+        expect(
+            performanceDraft({ ...preferences, protected_free_bytes: 0 })
+                .protected_free_bytes.mode,
+        ).toBe("none");
+    });
+    it.each(["", "0", "-1", "not-a-number", "Infinity", "1e30"])(
+        "rejects custom resource input %s without silently selecting automatic or disabled",
+        (value) => {
+            expect(() =>
+                performanceChanges(
+                    {
+                        ...performanceDraft(preferences),
+                        cache_disk_limit_bytes: { mode: "custom", value },
+                    },
+                    preferences,
+                ),
+            ).toThrow("Media disk cache");
+        },
+    );
+    it("rejects an unsupported staging disable mode and preserves category drafts", () => {
+        const draft = {
+            ...performanceDraft(preferences),
+            cache_disk_limit_bytes: { mode: "custom" as const, value: "" },
+            staging_limit_bytes: { mode: "custom" as const, value: "4" },
+        };
+        expect(
+            performanceChanges(
+                performanceCategoryDraft(draft, preferences, "transfers"),
+                preferences,
+            ),
+        ).toEqual({ staging_limit_bytes: 4 * GIB });
+        expect(() =>
+            performanceChanges(
+                {
+                    ...performanceDraft(preferences),
+                    staging_limit_bytes: { mode: "disabled", value: "" },
+                },
+                preferences,
+            ),
+        ).toThrow("valid mode");
+    });
     it("saves only the visible category's owner choices", () => {
         const draft = {
             ...performanceDraft(preferences),
@@ -217,10 +284,12 @@ describe("cache coverage and observed queue estimates", () => {
                 limit={256 * MIB}
             />,
         );
-        expect(usage).toContain("80 MB");
-        expect(usage).toContain("256 MB");
+        expect(usage).toContain("80 MiB");
+        expect(usage).toContain("256 MiB");
         expect(usage).toContain("31%");
-        expect(usage).toContain('aria-valuetext="80 / 256 MB used (31%)"');
+        expect(usage).toContain(
+            'aria-valuetext="80 MiB of 256 MiB used (31%)"',
+        );
         const disabled = renderToStaticMarkup(
             <CacheCapacity
                 label="Disk cache"

@@ -14,6 +14,7 @@ from typing import Any
 
 from bson import json_util
 
+from tgdrive.storage.capacity import measure_capacity, require_headroom
 from tgdrive.storage.mongo_store import MongoStore
 
 
@@ -149,13 +150,35 @@ class _JournalChunks:
         return bytes(output)
 
 
-def atomic_private(path: Path, content: bytes):
+def atomic_private(
+    path: Path,
+    content: bytes,
+    *,
+    min_free_bytes=0,
+    probe_directory=None,
+    outstanding_bytes=0,
+):
     path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    require_headroom(
+        measure_capacity(path.parent, probe_directory=probe_directory),
+        len(content),
+        reserve_bytes=min_free_bytes,
+        outstanding_bytes=outstanding_bytes,
+    )
     temporary = path.with_name("." + path.name + "-" + secrets.token_hex(12))
     fd = os.open(temporary, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
     try:
-        with os.fdopen(fd, "wb") as stream:
-            stream.write(content)
+        with os.fdopen(fd, "wb", buffering=0) as stream:
+            for offset in range(0, len(content), 64 * 1024):
+                chunk = memoryview(content)[offset : offset + 64 * 1024]
+                require_headroom(
+                    measure_capacity(path.parent, probe_directory=probe_directory),
+                    len(chunk),
+                    reserve_bytes=min_free_bytes,
+                    outstanding_bytes=outstanding_bytes,
+                )
+                if stream.write(chunk) != len(chunk):
+                    raise OSError("Incomplete private recovery write")
             stream.flush()
             os.fsync(stream.fileno())
         os.replace(temporary, path)

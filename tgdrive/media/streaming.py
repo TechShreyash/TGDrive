@@ -301,14 +301,12 @@ def _observe_media_request(
             authorize=authorize,
             request_id=viewer,
             media_rate=media_rate,
-            allow_full=request_id is not None,
         )
         return (manager, identity, viewer) if request.method == "GET" else None
     elif callable(getattr(pool, "download_capacity", None)):
-        from tgdrive.media.media_reader import MediaReadCache
+        from tgdrive.media.media_reader import media_cache_for
 
-        if pool._media_read_cache is None:
-            pool._media_read_cache = MediaReadCache(pool.media_cache_dir)
+        media_cache_for(pool)
         pool._media_read_cache.register_file(
             channel_id=channel_id,
             message_id=message_id,

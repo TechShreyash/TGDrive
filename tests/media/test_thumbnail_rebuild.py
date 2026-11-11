@@ -478,8 +478,8 @@ async def test_pdf_deferral_closes_staging_before_wait_and_reuses_source(
     opened = []
     open_source = manager.staging._open_source
 
-    def track_source(*args):
-        result = open_source(*args)
+    def track_source(*args, **kwargs):
+        result = open_source(*args, **kwargs)
         opened.append(result)
         return result
 
@@ -711,3 +711,16 @@ def test_rebuild_routes_require_owner_confirmation_and_offer_progress(
         assert response.json()["id"]
         assert client.post(url + "/cancel", json={}).status_code == 200
     store.close()
+
+
+def test_rebuild_state_preserves_last_snapshot_when_backing_is_unavailable(tmp_path):
+    probe = tmp_path / "probe"
+    probe.mkdir()
+    path = tmp_path / "data" / "thumbnail-rebuild.json"
+    module.write_state(path, {"status": "idle"}, backing_capacity_dir=probe)
+    previous = path.read_bytes()
+    (probe / "unexpected").write_bytes(b"x")
+    with pytest.raises(OSError):
+        module.write_state(path, {"status": "running"}, backing_capacity_dir=probe)
+    assert path.read_bytes() == previous
+    assert not list(path.parent.glob(".thumbnail-job-*"))

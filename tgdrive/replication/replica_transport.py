@@ -16,11 +16,10 @@ import math
 import os
 import re
 import secrets
-import shutil
 import stat
 import time
 from collections.abc import Awaitable, Callable
-from contextlib import asynccontextmanager, suppress
+from contextlib import ExitStack, asynccontextmanager, suppress
 from pathlib import Path
 from typing import Any, cast
 
@@ -28,6 +27,11 @@ from telethon import TelegramClient, functions, types, utils
 from telethon.errors import NetworkMigrateError, PhoneMigrateError, UserMigrateError
 
 from tgdrive.recovery.recovery_file import MAX_STAGED_RECOVERY_BYTES
+from tgdrive.storage.capacity import (
+    measure_capacity,
+    probe_for_directory,
+    require_headroom,
+)
 from tgdrive.transfers.tasks import _journalled
 
 BACKUP_NAME = "tgdrive-backup.tgdb"
@@ -727,7 +731,9 @@ class ReplicaTransport:
             )
         return size
 
-    async def _read_to(self, document, target, size: int) -> str:
+    async def _read_to(
+        self, document, target, size: int, *, outstanding_bytes=0
+    ) -> str:
         client = self._ready()
         digest = hashlib.sha256()
         count = 0
@@ -751,14 +757,25 @@ class ReplicaTransport:
                 if target is not None:
 
                     def write_block(block=block):
-                        if shutil.disk_usage(Path(target.name).parent).free < (
-                            len(block) + self._settings.min_free_bytes
-                        ):
-                            raise ReplicaTransportError(
-                                "Not enough temporary space to download "
-                                "the recovery file.",
-                                "REPLICA_LOCAL_SPACE",
+                        directory = Path(target.name).parent
+                        try:
+                            require_headroom(
+                                measure_capacity(
+                                    directory,
+                                    probe_directory=probe_for_directory(
+                                        self._settings, directory
+                                    ),
+                                ),
+                                len(block),
+                                reserve_bytes=self._settings.min_free_bytes,
+                                outstanding_bytes=outstanding_bytes,
                             )
+                        except OSError:
+                            raise ReplicaTransportError(
+                                "Recovery download capacity is unavailable or full. "
+                                "Check the backing-capacity probe and free space.",
+                                "REPLICA_LOCAL_SPACE",
+                            ) from None
                         if target.write(block) != len(block):
                             raise OSError("Incomplete recovery archive write")
 
@@ -800,8 +817,10 @@ class ReplicaTransport:
                     "The recovery file exceeds Telegram's 2000 MiB document limit.",
                     "REPLICA_ARCHIVE_TOO_LARGE",
                 )
-            with await asyncio.to_thread(path.open, "rb") as source:
-                digest = await asyncio.to_thread(
+            with ExitStack() as opened:
+                # Own a late open even if cancellation discards its returned handle.
+                source = await _worker(lambda: opened.enter_context(path.open("rb")))
+                digest = await _worker(
                     lambda: hashlib.file_digest(source, "sha256").hexdigest()
                 )
                 source.seek(0)
@@ -860,6 +879,7 @@ class ReplicaTransport:
         destination: Path,
         *,
         filename: str,
+        outstanding_bytes=0,
     ) -> int:
         self._ready()
         channel, destination = _channel(channel), Path(destination)
@@ -897,9 +917,11 @@ class ReplicaTransport:
                 destination.name + "." + secrets.token_hex(8)
             )
             try:
-                with temporary.open("xb") as target:
+                with temporary.open("xb", buffering=0) as target:
                     temporary.chmod(0o600)
-                    await self._read_to(document, target, size)
+                    await self._read_to(
+                        document, target, size, outstanding_bytes=outstanding_bytes
+                    )
                     target.flush()
                     os.fsync(target.fileno())
                 # Link creates the final name exclusively; a concurrent file is
@@ -910,11 +932,20 @@ class ReplicaTransport:
             return message_id
 
     async def download(
-        self, channel: int, message_id: int | None, destination: Path
+        self,
+        channel: int,
+        message_id: int | None,
+        destination: Path,
+        *,
+        outstanding_bytes=0,
     ) -> int:
         """Download a confirmed replica capsule by ID or latest pinned message."""
         return await self._download(
-            channel, message_id, destination, filename=BACKUP_NAME
+            channel,
+            message_id,
+            destination,
+            filename=BACKUP_NAME,
+            outstanding_bytes=outstanding_bytes,
         )
 
     async def publish(

@@ -593,3 +593,11 @@
     min-width: 0;
     padding-inline: 0;
 }
+
+.performance-settings .resource-limit-controls {
+    width: min(230px, 100%);
+    grid-template-columns: minmax(0, 1fr);
+}
+.performance-settings .resource-limit-controls > * {
+    width: 100%;
+}

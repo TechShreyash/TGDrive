@@ -119,6 +119,10 @@ def test_owner_api_resource_policy_and_share_capability(tmp_path, mongo_backend)
                 "timezone",
                 "auto_preload",
                 "upload_split_mib",
+                "cache_disk_limit_bytes",
+                "cache_memory_limit_bytes",
+                "staging_limit_bytes",
+                "protected_free_bytes",
             }
             assert result.json()["documentation_url"].endswith("/docs/configuration.md")
             assert result.headers["cache-control"] == "no-store"
@@ -459,3 +463,186 @@ async def test_policy_loading_stays_cancellable_before_commit(
         release.set()
         await asyncio.gather(task, return_exceptions=True)
         assert await asyncio.to_thread(finished.wait, 2)
+
+
+async def test_owner_resource_limits_persist_apply_and_restart(tmp_path, mongo_backend):
+    settings = make_settings(tmp_path)
+    state = runtime(mongo_backend)
+    service = PerformanceSettings(settings, state)
+    restarted = None
+    try:
+        before = await service.snapshot()
+        assert before["auto_resource_limits"] == {
+            "cache_disk_limit_bytes": 10 * 1024**3,
+            "cache_memory_limit_bytes": 256 * 1024**2,
+            "staging_limit_bytes": 16 * 1024**3,
+        }
+        assert before["auto_free_space_reserve"] == {
+            "minimum_bytes": 1024**3,
+            "fraction": 0.05,
+        }
+        limits = dict(
+            cache_disk_limit_bytes=0,
+            cache_memory_limit_bytes=0,
+            staging_limit_bytes=12345,
+            protected_free_bytes=0,
+        )
+        saved = await service.save(limits, expected=before["revision"])
+        assert all(saved[key] == value for key, value in limits.items())
+        assert saved["revision"] != before["revision"]
+        assert all(saved["defaults"][key] is None for key in limits)
+        assert settings.cache_disk_bytes == settings.cache_memory_bytes == 0
+        assert settings.staging_budget_bytes == settings.max_file_size == 12345
+        assert settings.min_free_bytes == settings.cache_min_free_bytes == 0
+        assert state.preloads.policy.disk_max_bytes == 0
+        persisted = mongo_backend.db.settings.find_one(
+            {"_id": "performance-preferences"}
+        )["document"]
+        assert all(persisted[key] == value for key, value in limits.items())
+        assert "cache_disk_bytes" not in persisted
+        other = runtime(mongo_backend)
+        restarted = PerformanceSettings(make_settings(tmp_path), other)
+        restored = await restarted.snapshot()
+        assert all(restored[key] == value for key, value in limits.items())
+        assert restarted.settings.cache_disk_bytes == 0
+        assert restarted.settings.staging_budget_bytes == 12345
+    finally:
+        await state.preloads.close()
+        if restarted and hasattr(restarted.runtime, "preloads"):
+            await restarted.runtime.preloads.close()
+
+
+@pytest.mark.parametrize(
+    "changes",
+    [
+        {"cache_disk_limit_bytes": -1},
+        {"cache_memory_limit_bytes": True},
+        {"staging_limit_bytes": 0},
+        {"protected_free_bytes": -1},
+        {"cache_disk_limit_bytes": 2**53},
+        {"staging_limit_bytes": "100"},
+    ],
+)
+def test_resource_limit_validation_is_strict(changes):
+    from pydantic import ValidationError
+
+    with pytest.raises(ValidationError):
+        PerformancePreferences.model_validate(changes)
+
+
+async def test_governor_waiting_for_policy_lock_uses_latest_owner_ceiling(
+    tmp_path, mongo_backend, monkeypatch
+):
+    import asyncio
+
+    from tgdrive.core import governor
+
+    settings = make_settings(tmp_path)
+    state = runtime(mongo_backend)
+    service = PerformanceSettings(settings, state)
+    state.performance_settings = service
+    await service.initialize()
+    item = governor.Governor(settings, state)
+    monkeypatch.setattr(
+        governor,
+        "measure",
+        lambda *_: {
+            "memory_available": 8 * governor.GIB,
+            "cpus": 1,
+            "disk_total": 100 * governor.GIB,
+            "disk_free": 50 * governor.GIB,
+        },
+    )
+    waiting = asyncio.Event()
+
+    class ObservedLock(asyncio.Lock):
+        async def __aenter__(self):
+            waiting.set()
+            return await super().__aenter__()
+
+    service._lock = ObservedLock()
+    await service._lock.acquire()
+    tick = asyncio.create_task(item.tick())
+    try:
+        async with asyncio.timeout(2):
+            await waiting.wait()
+        # The tick has measured but must not decide/apply until the saver releases
+        # this same lock. Mimic the saver's apply before that release.
+        await service._apply(
+            service.value.model_copy(
+                update={
+                    "cache_disk_limit_bytes": 0,
+                    "cache_memory_limit_bytes": 1024,
+                    "staging_limit_bytes": 2048,
+                }
+            )
+        )
+    finally:
+        service._lock.release()
+    try:
+        await tick
+        assert settings.cache_disk_bytes == 0
+        assert settings.cache_memory_bytes <= 1024
+        assert settings.staging_budget_bytes <= 2048
+        assert item.state is not None
+        assert item.state["values"]["cache_disk_bytes"] == 0
+    finally:
+        await state.preloads.close()
+
+
+async def test_automatic_reserve_restores_each_filesystem_floor(
+    tmp_path, mongo_backend, monkeypatch
+):
+    from tgdrive.core import governor
+
+    state = runtime(mongo_backend)
+    service = PerformanceSettings(make_settings(tmp_path), state)
+    monkeypatch.setattr(
+        governor,
+        "measure",
+        lambda *_: {
+            "disk_total": 100 * governor.GIB,
+            "cache_disk_total": 20 * governor.GIB,
+        },
+    )
+    try:
+        await service.save({"protected_free_bytes": 0})
+        assert service.settings.min_free_bytes == 0
+        await service.save({"protected_free_bytes": None})
+        assert service.settings.min_free_bytes == 5 * governor.GIB
+        assert service.settings.cache_min_free_bytes == governor.GIB
+    finally:
+        await state.preloads.close()
+
+
+async def test_legacy_effective_resource_values_never_seed_owner_ceilings(
+    tmp_path, mongo_backend
+):
+    mongo_backend.write(
+        mongo_backend.db.settings,
+        "replace_one",
+        {"_id": "performance-preferences"},
+        {
+            "_id": "performance-preferences",
+            "document": {
+                "cache_disk_bytes": 400 * 1024**3,
+                "cache_memory_bytes": 2 * 1024**3,
+                "staging_budget_bytes": 400 * 1024**3,
+                "timezone": "UTC",
+            },
+        },
+        upsert=True,
+    )
+    settings = make_settings(tmp_path)
+    settings.cache_disk_bytes = 400 * 1024**3
+    state = runtime(mongo_backend)
+    service = PerformanceSettings(settings, state)
+    try:
+        snapshot = await service.snapshot()
+        assert snapshot["cache_disk_limit_bytes"] is None
+        assert snapshot["cache_memory_limit_bytes"] is None
+        assert snapshot["staging_limit_bytes"] is None
+        assert snapshot["timezone"] == "UTC"
+        assert settings.cache_disk_bytes == 10 * 1024**3
+    finally:
+        await state.preloads.close()

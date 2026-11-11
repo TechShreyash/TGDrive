@@ -96,36 +96,36 @@ def test_history_interval_hover_keyboard_poll_and_persisted_selection(server, de
 
     page.route("**/api/v1/performance/history?*", recorded)
     page.goto(server.url + "/?view=performance")
+    page.get_by_role("tab", name="Resources", exact=True).click()
     interval = page.get_by_role("combobox", name="Time range", exact=True)
     expect(interval).to_have_value("live")
-    page.get_by_role("tab", name="Resources", exact=True).click()
     cpu = page.get_by_role("region", name="Container CPU", exact=True)
     slider = cpu.get_by_role("slider", name="Inspect Container CPU samples")
     expect(slider).to_have_attribute("max", "2")
+    expect(cpu.locator(".performance-chart-heading")).to_contain_text("70.0%Now")
     interval.select_option("hour")
     expect(page.locator(".performance-history-availability")).to_contain_text(
         "Recorded interval averages"
     )
     expect(slider).to_have_attribute("max", "59")
     expect(cpu.locator("polyline.performance-plot-active")).to_have_count(2)
-    for name, tab in [("Network traffic", "Overview"), ("Container RAM", "Resources")]:
-        page.get_by_role("tab", name=tab, exact=True).click()
+    for name in ["Server network", "Container RAM"]:
         expect(
             page.get_by_role("region", name=name, exact=True).get_by_role("slider")
         ).to_have_attribute("max", "59")
-    expect(cpu.locator(".performance-chart-heading")).to_contain_text("70.0%Now")
-    page.get_by_role("tab", name="Overview", exact=True).click()
-    expect(page.locator(".performance-chart-legend")).to_contain_text(
-        "Download to server"
+    expect(cpu.locator(".performance-chart-now")).to_have_count(0)
+    network = page.get_by_role("region", name="Server network", exact=True)
+    expect(network.locator(".performance-chart-legend")).to_contain_text(
+        "Received by server"
     )
-    expect(page.locator(".performance-chart-legend")).to_contain_text(
-        "Upload from server"
+    expect(network.locator(".performance-chart-legend")).to_contain_text(
+        "Sent by server"
     )
-    page.get_by_role("tab", name="Overview", exact=True).click()
+    totals = page.locator(".performance-all-time")
     expect(page.get_by_role("heading", name="All-time totals")).to_be_visible()
-    expect(page.locator(".performance-all-time")).to_contain_text("5 GB")
-    expect(page.locator(".performance-all-time")).to_contain_text("Not available")
-    page.get_by_role("tab", name="Resources", exact=True).click()
+    totals.locator("summary").click()
+    expect(totals).to_contain_text("5 GiB")
+    expect(totals).to_contain_text("Not available")
     plot = cpu.get_by_role("img", name="Container CPU over time", exact=True)
     cpu.scroll_into_view_if_needed()
     bounds = plot.bounding_box()
@@ -168,6 +168,9 @@ def test_history_interval_hover_keyboard_poll_and_persisted_selection(server, de
     expect(interval).to_have_value("hour")
     expect(cpu).to_be_visible()
     page.get_by_role("tab", name="Overview", exact=True).click()
+    expect(interval).not_to_be_visible()
+    expect(page.locator(".performance-history-availability")).not_to_be_visible()
+    page.get_by_role("tab", name="Resources", exact=True).click()
     expect(interval).to_be_visible()
     expect(interval).to_have_value("hour")
     page.set_viewport_size({"width": 390, "height": 844})
@@ -202,6 +205,7 @@ def test_custom_history_is_absolute_utc_and_stale_fetch_cannot_replace_new_range
 
     page.route("**/api/v1/performance/history?*", recorded)
     page.goto(server.url + "/?view=performance")
+    page.get_by_role("tab", name="Resources", exact=True).click()
     interval = page.get_by_role("combobox", name="Time range", exact=True)
     interval.select_option("day")
     expect(page.get_by_text("Loading selected history…", exact=False)).to_be_visible()
@@ -253,6 +257,7 @@ def test_custom_history_is_absolute_utc_and_stale_fetch_cannot_replace_new_range
 def test_recorded_history_page_uses_real_private_history_endpoint(server, desktop):
     _, page = desktop
     login(page, server.url + "/?view=performance")
+    page.get_by_role("tab", name="Resources", exact=True).click()
     page.get_by_role("combobox", name="Time range", exact=True).select_option("hour")
     expect(page.locator(".performance-history-availability")).to_contain_text(
         "Recorded interval averages"
@@ -261,6 +266,7 @@ def test_recorded_history_page_uses_real_private_history_endpoint(server, deskto
     expect(
         page.get_by_role("heading", name="All-time totals", exact=True)
     ).to_be_visible()
+    page.locator(".performance-all-time summary").click()
     expect(page.locator(".performance-all-time")).to_contain_text(
         "independent of the time range"
     )

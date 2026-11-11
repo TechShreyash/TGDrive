@@ -16,7 +16,7 @@ from pathlib import Path, PurePath
 from fastapi import HTTPException
 
 from tgdrive.media.logical_media import PartLease, part_ranges
-from tgdrive.media.media_reader import MediaReadCache, stream_pooled_media
+from tgdrive.media.media_reader import media_cache_for, stream_pooled_media
 from tgdrive.media.previews import lease_media
 from tgdrive.media.ranges import ByteRange, plan_telegram_chunks
 from tgdrive.storage.file_parts import validate_parts
@@ -36,8 +36,7 @@ async def read_range(pool, channel, data, start, count, authorize, *, background
     def register(parts=None):
         if not callable(getattr(pool, "download_capacity", None)):
             return
-        if pool._media_read_cache is None:
-            pool._media_read_cache = MediaReadCache(pool.media_cache_dir)
+        media_cache_for(pool)
         pool._media_read_cache.register_file(
             channel_id=channel,
             message_id=data["message_id"],

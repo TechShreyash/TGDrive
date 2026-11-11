@@ -280,10 +280,10 @@ async def test_repeated_cancellation_drains_owned_files_before_releasing_slot(
         def flush(self):
             self.output.flush()
 
-    def opening(size, reserve):
+    def opening(size, reserve, **kwargs):
         if stage == "open":
             pause()
-        output, path = original_open(size, reserve)
+        output, path = original_open(size, reserve, **kwargs)
         outputs.append(output)
         paths.append(path)
         return Writer(output), path
@@ -409,8 +409,8 @@ async def test_spool_respects_configured_floor_and_space_recovery_can_retry(
     helper = CachedThumbnailRepair(tmp_path / "covers")
     free = 64 * BLOCK + metadata["size"]
     monkeypatch.setattr(
-        "tgdrive.media.generated_thumbnails.shutil.disk_usage",
-        lambda _directory: SimpleNamespace(free=free),
+        "tgdrive.storage.capacity.shutil.disk_usage",
+        lambda _directory: SimpleNamespace(total=1024**5, used=0, free=free),
     )
     calls = 0
 
@@ -599,3 +599,28 @@ async def test_only_negative_thumbnail_entries_follow_source_revision():
     assert thumbnail is not None and thumbnail.content == JPEG
     assert calls == 3
     await cache.close()
+
+
+def test_repair_source_rechecks_backing_before_growing_existing_tempfile(tmp_path):
+    probe = tmp_path / "probe"
+    probe.mkdir()
+    helper = CachedThumbnailRepair(
+        tmp_path / "covers",
+        storage_settings=SimpleNamespace(
+            cache_backing_capacity_dir=probe,
+            min_free_bytes=0,
+            resolved_cache_dir=tmp_path / "covers",
+        ),
+    )
+    output, path = helper._open_source(20, 0)
+    try:
+        output.write(b"old")
+        output.flush()
+        (probe / "unexpected").write_bytes(b"x")
+        with pytest.raises(OSError):
+            helper._write_source(output, b"next", 17, 0)
+        output.seek(0)
+        assert output.read() == b"old"
+    finally:
+        helper._cleanup_source(output, path)
+    assert not path.exists()

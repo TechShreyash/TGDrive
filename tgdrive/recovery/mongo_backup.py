@@ -139,8 +139,9 @@ def check_restore_destination(backend, *, allow_pristine=False, session=None):
 class MongoProtection:
     """Cloud commits protect normal work; Telegram copies run independently."""
 
-    def __init__(self, settings, pool, backend):
+    def __init__(self, settings, pool, backend, *, remaining_staging_bytes=None):
         self.settings, self.pool, self.backend = settings, pool, backend
+        self._remaining_staging_bytes = remaining_staging_bytes or (lambda: 0)
         self.replica: ChannelReplica | None = None
         self._stop = asyncio.Event()
         self._task = None
@@ -343,9 +344,16 @@ class MongoProtection:
                 directory = self.settings.resolved_cache_dir / "mongo-backups"
                 directory.mkdir(mode=0o700, parents=True, exist_ok=True)
                 path = directory / (identity + ".tgdb")
+                # Journals are event-loop owned; workers receive only this value.
+                outstanding_bytes = self._remaining_staging_bytes()
                 export = asyncio.create_task(
                     asyncio.to_thread(
-                        write_recovery_snapshot, backend, path, key, self.settings
+                        write_recovery_snapshot,
+                        backend,
+                        path,
+                        key,
+                        self.settings,
+                        outstanding_bytes=outstanding_bytes,
                     )
                 )
                 try:

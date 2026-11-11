@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 
+from tgdrive.core.governor import MANAGED
 from tgdrive.settings.bot_settings import BotUploadPreferences
 from tgdrive.settings.managed_settings import (
     ManagedDocument,
@@ -19,6 +20,19 @@ POLICIES = {
     "performance-preferences.json": PerformancePreferences,
     "bot-preferences.json": BotUploadPreferences,
 }
+
+
+def _performance_defaults(settings):
+    defaults = PerformanceSettings(settings, None).value.model_dump()
+    # Recovery identity follows saved policy, not changing live resource budgets.
+    defaults.update(
+        {
+            key: value
+            for key, value in PerformancePreferences().model_dump().items()
+            if key in MANAGED
+        }
+    )
+    return defaults
 
 
 def collect_credentials(settings, runtime):
@@ -55,11 +69,11 @@ def collect_credentials(settings, runtime):
         raw = row["document"] if row else None
         if raw is None:
             if model is PerformancePreferences:
-                raw = PerformanceSettings(settings, runtime).value.model_dump()
+                raw = {}
             else:
                 raw = BotUploadPreferences().model_dump()
         if model is PerformancePreferences:
-            raw = PerformanceSettings(settings, runtime).value.model_dump() | raw
+            raw = _performance_defaults(settings) | raw
         preferences[filename] = model.model_validate(raw).model_dump()
     credentials["preferences"] = preferences
     return credentials
@@ -99,9 +113,7 @@ def credentials_from_snapshot(settings, records):
         "preferences": {},
     }
     defaults = {
-        "performance-preferences.json": PerformanceSettings(
-            settings, None
-        ).value.model_dump(),
+        "performance-preferences.json": _performance_defaults(settings),
         "bot-preferences.json": BotUploadPreferences().model_dump(),
     }
     for filename, model in POLICIES.items():

@@ -6,12 +6,20 @@ import hashlib
 import math
 import os
 import secrets
-import shutil
 import threading
 import time
 from collections import OrderedDict
 from contextlib import suppress
 from pathlib import Path
+
+from tgdrive.storage.capacity import (
+    CapacityUnavailable,
+    DiskCapacity,
+    measure_capacity,
+    probe_for_directory,
+    require_headroom,
+    usable_headroom,
+)
 
 
 class DiskMediaCache:
@@ -26,8 +34,12 @@ class DiskMediaCache:
         max_entries=None,
         min_free_bytes=0,
         protected_fraction=0.75,
+        backing_capacity_dir=None,
+        storage_settings=None,
     ):
         self.directory = Path(directory)
+        self.backing_capacity_dir = backing_capacity_dir
+        self.storage_settings = storage_settings
         self.max_bytes, self.ttl = max_bytes, ttl
         self.min_free_bytes = min_free_bytes
         self.protected_fraction = protected_fraction
@@ -40,6 +52,25 @@ class DiskMediaCache:
         self._probation = OrderedDict()
         self._size = 0
         self._hits = self._misses = self._evictions = self._write_failures = 0
+
+    def _capacity(self):
+        try:
+            probe = (
+                probe_for_directory(self.storage_settings, self.directory)
+                if self.storage_settings is not None
+                else self.backing_capacity_dir
+            )
+        except CapacityUnavailable:
+            # Preserve raw guest reporting without accepting it as fallback for
+            # an ambiguous or out-of-root configured backing mapping.
+            measured = measure_capacity(self.directory)
+            return DiskCapacity(
+                measured.filesystem,
+                None,
+                True,
+                measured.filesystem_device,
+            )
+        return measure_capacity(self.directory, probe_directory=probe)
 
     @staticmethod
     def _entry_limit(budget):
@@ -170,7 +201,7 @@ class DiskMediaCache:
         except OSError:
             return None
 
-    def write(self, identity, data):
+    def write(self, identity, data, *, outstanding_bytes=0):
         if not data or len(data) + 32 > self.max_bytes:
             return False
         temporary = None
@@ -178,19 +209,29 @@ class DiskMediaCache:
             with self._lock:
                 self._prepare()
                 assert self._entries is not None
+                capacity = self._capacity()
+                # A broken configured probe is not pressure that eviction can fix.
+                require_headroom(capacity, 0)
                 key = self._key(identity)
                 self._remove(key)
                 size = len(data) + 32
                 self._trim(size, 1)
-                while (
-                    self._entries
-                    and shutil.disk_usage(self.directory).free
-                    < self.min_free_bytes + size
-                ):
+                # Removal and retention trimming may already have freed enough.
+                capacity = self._capacity()
+                room = usable_headroom(capacity, self.min_free_bytes, outstanding_bytes)
+                while self._entries and room is not None and room < size:
                     self._remove(self._victim())
                     self._evictions += 1
-                if shutil.disk_usage(self.directory).free < self.min_free_bytes + size:
-                    return False
+                    capacity = self._capacity()
+                    room = usable_headroom(
+                        capacity, self.min_free_bytes, outstanding_bytes
+                    )
+                require_headroom(
+                    capacity,
+                    size,
+                    reserve_bytes=self.min_free_bytes,
+                    outstanding_bytes=outstanding_bytes,
+                )
                 temporary = self.directory / (secrets.token_hex(16) + ".tmp")
                 fd = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
                 with os.fdopen(fd, "wb") as handle:
@@ -274,18 +315,23 @@ class DiskMediaCache:
             except OSError:
                 return []
 
-    def snapshot(self):
+    def snapshot(self, *, outstanding_bytes=0):
         with self._lock:
             available = True
             try:
                 self._prepare()
                 assert self._entries is not None
                 self._trim()
-                free = shutil.disk_usage(self.directory).free
+                capacity = self._capacity()
+                free = capacity.filesystem.free if capacity.filesystem else None
+                available = capacity.effective_free_bytes is not None
             except OSError:
+                capacity = self._capacity()
                 available, free = False, None
             return {
                 "available": available,
+                "enabled": self.max_bytes > 0,
+                "capacity": capacity.as_dict(self.min_free_bytes, outstanding_bytes),
                 "bytes": self._size,
                 "max_bytes": self.max_bytes,
                 "entries": len(self._entries or ()),

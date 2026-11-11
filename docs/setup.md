@@ -222,17 +222,12 @@ Run **one active installation and one worker per drive**. From the configured
 project folder, on any supported system:
 
 ~~~bash
-docker compose config --quiet
 docker compose up -d --build
-docker compose ps
 ~~~
 
 Compose builds the backend and website from the source in this folder, including
 local uncommitted edits. The first build can take time and needs Docker Buildx,
 which is included in Docker Desktop.
-
-`config --quiet` checks syntax, not credentials; plain
-`docker compose config` prints secrets.
 
 TGDrive initializes a new empty database or reopens an existing drive. Database
 connection/authentication failures stop startup; correct access and try again.
@@ -246,7 +241,7 @@ containers do not restart automatically by default.
 | Start | `docker compose up -d` |
 | Stop | `docker compose stop` |
 | Restart | `docker compose restart app` |
-| Apply edited `.env` | `docker compose up -d --force-recreate` |
+| Apply edited `.env` | `docker compose up -d app` |
 
 Let Stop finish its graceful shutdown (up to 60 seconds). For automatic restart
 after Docker starts, set `TGDRIVE_RESTART_POLICY=unless-stopped` and recreate.
@@ -264,12 +259,7 @@ released code, `dev` for the latest potentially unstable code, or a published
 application tag for a fixed version. A fork or local edits are built from the
 checkout on the machine running Docker; those edits need not be committed.
 
-After preparing `.env`, run from that checkout:
-
-~~~bash
-docker compose up -d --build
-docker compose ps
-~~~
+After preparing `.env`, use `docker compose up -d --build` from that checkout.
 
 On a server, keep both `-f compose.yaml -f compose.server.yaml` arguments in
 every command. Preserve `.env`, keys, volumes and the Compose project name
@@ -295,6 +285,13 @@ source on the build machine or push it to the branch that machine builds.
 You're ready to [upload files](usage.md#upload-files-or-folders). Keep originals
 until **Completed**; interrupted browser uploads may need them again.
 Before large imports, review [upload and disk budgets](configuration.md#transfer-limits).
+Review resource ceilings before heavy use on a shared host. Auto caps media-payload
+disk cache at 10 GiB, retained RAM cache at 256 MiB and temporary staging at 16 GiB;
+choose lower ceilings if needed. VM/WSL free-space readings can exceed physical
+backing-disk headroom, so also check host free space. Optional
+[backing probes](reference.md#deployment-variables-outside-application-settings)
+add measured write guards; these are not atomic quotas. Ceilings do not cap
+whole-process memory or all disk writes. [Resource scope](configuration.md#cap-tgdrive-with-docker-limits).
 
 ## Apply updates to an existing drive
 
@@ -380,9 +377,7 @@ and **`/app/cache`** volumes when redeploying.
 Prepare `.env` as above. Name **both files explicitly** to avoid the laptop override:
 
 ~~~bash
-docker compose -f compose.yaml -f compose.server.yaml config --quiet
 docker compose -f compose.yaml -f compose.server.yaml up -d --build
-docker compose -f compose.yaml -f compose.server.yaml ps
 ~~~
 
 1. Forward HTTPS to host `127.0.0.1:8000`, preserving Host and forwarding the

@@ -23,6 +23,11 @@ from tgdrive.media.media_cache import DiskMediaCache
 from tgdrive.media.media_policy import MediaCachePolicy, merge_ranges
 from tgdrive.media.media_scheduler import MediaPriorityScope
 from tgdrive.storage import pacing
+from tgdrive.storage.capacity import (
+    measure_capacity,
+    probe_for_directory,
+    require_headroom,
+)
 from tgdrive.telegram.clients import _block_identity, _BlockCache
 from tgdrive.transfers.tasks import _journalled
 
@@ -351,9 +356,52 @@ def _effective_memory(configured):
     return max(0, min(limits))
 
 
+def media_cache_for(pool, policy=None):
+    """Reuse one configured payload cache across readers and owner preloads."""
+    cache = getattr(pool, "_media_read_cache", None)
+    if cache is None:
+        cache = pool._media_read_cache = MediaReadCache(
+            pool.media_cache_dir,
+            policy,
+            storage_settings=getattr(pool, "storage_settings", None),
+            remaining_staging_bytes=getattr(pool, "remaining_staging_bytes", None),
+        )
+    else:
+        settings = getattr(pool, "storage_settings", None)
+        if settings is not None:
+            cache.storage_settings = settings
+            if cache.disk is not None:
+                cache.disk.storage_settings = settings
+        remaining = getattr(pool, "remaining_staging_bytes", None)
+        if remaining is not None:
+            cache.remaining_staging_bytes = remaining
+    return cache
+
+
+def media_capacity_options(pool):
+    """Capture CACHE-side derivative reservations on the owning event loop."""
+    settings = getattr(pool, "storage_settings", None)
+    remaining = getattr(pool, "remaining_staging_bytes", None)
+    return {
+        "storage_settings": settings,
+        "min_free_bytes": getattr(settings, "min_free_bytes", 0),
+        "outstanding_bytes": remaining() if remaining else 0,
+    }
+
+
 class MediaReadCache:
-    def __init__(self, directory=None, policy=None, *, clock=None):
+    def __init__(
+        self,
+        directory=None,
+        policy=None,
+        *,
+        clock=None,
+        storage_settings=None,
+        remaining_staging_bytes=None,
+    ):
         self.policy = policy or MediaCachePolicy()
+        self.storage_settings = storage_settings
+        self.remaining_staging_bytes = remaining_staging_bytes
         self._capacity_clock = clock or time.monotonic
         self._last_capacity_check = self._capacity_clock()
         self.deferred_writes = policy is not None
@@ -381,6 +429,7 @@ class MediaReadCache:
                 ttl=self.policy.ttl_seconds,
                 min_free_bytes=self.policy.min_free_bytes,
                 protected_fraction=self.policy.protected_fraction,
+                storage_settings=storage_settings,
             )
             if directory is not None
             else None
@@ -868,7 +917,12 @@ class MediaReadCache:
                     if self._writer is None or self._writer.done():
                         self._writer = asyncio.create_task(self._drain_writes())
                 else:
-                    await asyncio.to_thread(self.disk.write, key, payload)
+                    await asyncio.to_thread(
+                        self.disk.write,
+                        key,
+                        payload,
+                        outstanding_bytes=self._outstanding_staging(),
+                    )
                     if key in self._hot_keys:
                         await asyncio.to_thread(self.disk.promote, key)
                         self._hot_keys.discard(key)
@@ -932,7 +986,12 @@ class MediaReadCache:
             while self._pending:
                 key = next(iter(self._pending))
                 payload = self._pending[key]
-                await asyncio.to_thread(disk.write, key, payload)
+                await asyncio.to_thread(
+                    disk.write,
+                    key,
+                    payload,
+                    outstanding_bytes=self._outstanding_staging(),
+                )
                 if key in self._hot_keys:
                     await asyncio.to_thread(disk.promote, key)
                     self._hot_keys.discard(key)
@@ -976,7 +1035,11 @@ class MediaReadCache:
                     "files": [row for key, row in self._files.items() if key in owners],
                     "blocks": blocks,
                 }
-                await asyncio.to_thread(self._write_index, value)
+                await asyncio.to_thread(
+                    self._write_index,
+                    value,
+                    outstanding_bytes=self._outstanding_staging(),
+                )
                 written = True
             except OSError:
                 pass
@@ -984,16 +1047,31 @@ class MediaReadCache:
                 if not written:
                     self._index_dirty = True
 
-    def _write_index(self, value):
+    def _outstanding_staging(self):
+        return self.remaining_staging_bytes() if self.remaining_staging_bytes else 0
+
+    def _write_index(self, value, *, outstanding_bytes=0):
         if self.directory is None:
             return
         self.directory.mkdir(parents=True, exist_ok=True, mode=0o700)
+        payload = json.dumps(value, separators=(",", ":")).encode()
+        require_headroom(
+            measure_capacity(
+                self.directory,
+                probe_directory=probe_for_directory(
+                    self.storage_settings, self.directory
+                ),
+            ),
+            len(payload),
+            reserve_bytes=self.policy.min_free_bytes,
+            outstanding_bytes=outstanding_bytes,
+        )
         path = self.directory / "inventory.json"
         temporary = self.directory / (secrets.token_hex(16) + ".tmp")
         try:
             fd = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-            with os.fdopen(fd, "w") as handle:
-                json.dump(value, handle, separators=(",", ":"))
+            with os.fdopen(fd, "wb") as handle:
+                handle.write(payload)
             temporary.replace(path)
         finally:
             temporary.unlink(missing_ok=True)
@@ -1061,7 +1139,9 @@ class MediaReadCache:
         self._refresh_capacity()
         self.memory._hit(())  # Expire idle RAM entries before reporting readiness.
         disk = (
-            await asyncio.to_thread(self.disk.snapshot)
+            await asyncio.to_thread(
+                self.disk.snapshot, outstanding_bytes=self._outstanding_staging()
+            )
             if self.disk is not None
             else {"available": False, "bytes": 0, "max_bytes": 0}
         )
@@ -1164,8 +1244,7 @@ async def stream_pooled_media(
         return
 
     request_id = request_id or f"read-{secrets.token_urlsafe(12)}"
-    if pool._media_read_cache is None:
-        pool._media_read_cache = MediaReadCache(pool.media_cache_dir)
+    media_cache_for(pool)
     cache = pool._media_read_cache
     cache._refresh_capacity()
     source = getattr(message, "native", message)

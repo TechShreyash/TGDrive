@@ -236,3 +236,37 @@ def test_mongodb_uri_is_required_even_with_complete_telegram_configuration(monke
     values.pop("MONGODB_URI")
     with pytest.raises(ValidationError, match="MONGODB_URI"):
         Settings(_env_file=None, **values)
+
+
+def test_backing_probe_paths_are_deployment_only_and_excluded_from_exports(tmp_path):
+    from tgdrive.core.config import _should_restore_setting
+
+    settings = Settings(
+        _env_file=None,
+        **settings_values(
+            DATA_BACKING_CAPACITY_DIR=tmp_path / "data-probe",
+            CACHE_BACKING_CAPACITY_DIR=tmp_path / "cache-probe",
+        ),
+    )
+    assert settings.data_backing_capacity_dir == tmp_path / "data-probe"
+    assert settings.cache_backing_capacity_dir == tmp_path / "cache-probe"
+    from tgdrive.replication.replica_settings import credentials_from_snapshot
+
+    without_probes = settings.model_copy(
+        update={
+            "data_backing_capacity_dir": None,
+            "cache_backing_capacity_dir": None,
+        }
+    )
+    assert credentials_from_snapshot(settings, {"settings": []}) == (
+        credentials_from_snapshot(without_probes, {"settings": []})
+    )
+    for key in ("DATA_BACKING_CAPACITY_DIR", "CACHE_BACKING_CAPACITY_DIR"):
+        assert key not in settings.model_dump(by_alias=True)
+        assert not _should_restore_setting(key, {})
+
+
+@pytest.mark.parametrize("path", ["", "relative/probe"])
+def test_backing_probe_config_requires_absolute_paths(path):
+    with pytest.raises(ValidationError):
+        Settings(_env_file=None, **settings_values(DATA_BACKING_CAPACITY_DIR=path))

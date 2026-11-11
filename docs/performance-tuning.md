@@ -25,10 +25,10 @@ raising limits just to fill a meter can add contention and speculative reads.
 
 1. Find the slow stage in **Transfers**: device intake, URL downloading, Telegram
    waiting/uploading or publishing. A full device bar still needs server confirmation.
-2. Open **Monitor → Performance** while the problem is happening. Compare
-   server resources, network traffic, Telegram activity and queue waits over
-   the same interval. Long averages can hide short bursts; missing samples are
-   not zero activity.
+2. Open **Monitor → Performance → Overview** while the problem is happening.
+   Read **Current activity** and any reported wait. Use **Accounts** for queues
+   and cooldowns, or **Resources** for charts and the time range. Compare the
+   same interval; missing samples are not zero activity.
 3. Open the same file again. A slow first access followed by a fast cached repeat
    points toward Telegram or cache coverage. If both are slow, also inspect
    server-to-viewer delivery and the viewer's device.
@@ -37,6 +37,9 @@ raising limits just to fill a meter can add contention and speculative reads.
    Storage**. Keep unfinished upload files; they are not disposable cache.
 5. Change one thing and repeat the same workload. Keep it only if results improve.
    Respect Telegram cooldowns before trying more concurrent work.
+
+<details>
+<summary>What the measurements mean</summary>
 
 | Website measurement | How to read it |
 | --- | --- |
@@ -47,7 +50,9 @@ raising limits just to fill a meter can add contention and speculative reads.
 | Telegram accounts and queues | Look for busy upload/download slots, active and queued part requests, reduced effective limits and provider waits. A queue estimate is not a promised start time. |
 | RAM cache lookups | Hits and misses count block lookups, including preloading. A RAM miss can still hit disk; this is not a percentage of bandwidth saved. |
 | Cache filesystem / Temporary Storage | Cache and unfinished uploads can live on different volumes. Check the relevant free-space reading before changing either budget. |
-| MongoDB size | TGDrive shows `dbStats.totalSize`, indexes and filesystem capacity where available. These are not Atlas's logical quota; use the [provider's quota monitoring](https://www.mongodb.com/docs/atlas/reference/free-shared-limitations/) for plan capacity. |
+| MongoDB size | Allocated document-plus-index bytes use the reported total, or reported storage plus index sizes. Filesystem capacity appears only when available. Missing readings are unavailable; these are not Atlas's logical quota. Use the [provider's quota monitoring](https://www.mongodb.com/docs/atlas/reference/free-shared-limitations/) for plan capacity. |
+
+</details>
 
 Server-network, HTTP-file and Telegram counters overlap: **do not add their
 totals together**. For history, measurement scopes and retention, see
@@ -55,34 +60,36 @@ totals together**. For history, measurement scopes and retention, see
 
 ## Read the Performance page
 
-**Overview** starts with **Account and request status**, such as **Accounts
-ready** or **Waits or request errors observed**, with supporting detail. This
-summarizes account availability, waits and request errors; it does not establish
-whole-server health or available throughput. Insufficient recent-error history
-is shown as unavailable rather than as zero failures.
+**Overview** keeps both current HTTP rates visible and shows CPU, container RAM,
+retained disk cache and retained RAM cache beside **Current activity**. Unknown
+measurements stay unavailable; a cache set to zero is explicitly disabled. These
+scoped readings help decide whether to inspect transfers or change a limit.
 
-**Current activity** shows recent observed workload and supported waits:
+**Current activity** summarizes current work and supported waits:
 Telegram admission queues, cooldowns during queued work and stream-buffer
 admission. Several waits can appear together; expand their evidence for measured
-values. The panel distinguishes collecting samples, idle activity and stale or
-unavailable evidence. A missing measurement is not zero, and no reported wait
-does not establish spare capacity or identify a bottleneck.
+values. Follow the suggested action or open **Transfers**, **Cache limits** or
+**Upload storage limits**. Collecting, idle, stale and unavailable states remain
+explicit. An absence of reported waits does not establish spare capacity or
+locate a bottleneck. Expand **Measurements and scope** for underlying rates and
+request counts; those counts are not users.
 
-Expand **Measurements and scope** to compare Telegram inbound with
-HTTP bytes delivered and cache lookups over the observed window. In-flight
-request counts are not user counts. The live strip, **Network traffic** and
-**Resources** meters remain visible. Expand **Account capacity and cooldowns**
-for detailed account rows, **Automatic tuning** for sizing values and reasons,
-or **All-time totals** for persistent counters. The **Accounts** and
-**Resources** tabs hold further detail; chart scopes and memory/cache
-explanations are expandable there.
+**Accounts** holds **Account and request status**, account queues and cooldowns.
+This is account availability and request evidence, not a whole-server health
+assessment. Missing recent-error history is unavailable, not zero failures.
 
-**Monitor → Performance** separates server network, TGDrive HTTP file traffic
-and Telegram origin activity. They overlap: **do not add their totals**. Network
-counts include protocol/other interface traffic; Docker normally measures its
-container interface. In **Network traffic**, the solid line is **Download to
-server** and the dashed line is **Upload from server**.
-Hover or use the keyboard/touch sample scrubber. **Now** always means current.
+**Resources** holds **Charts and history** and the **Time range** selector.
+Compare server network, HTTP file traffic and Telegram origin over the same
+interval. They overlap: **do not add their totals**. Network includes protocol
+and other interface traffic; Docker normally measures its container interface.
+Hover or use the keyboard/touch sample scrubber. **Now** means current.
+Expand **Applied limits and reasons** for sizing values, **All-time totals** for
+persistent counters, or the chart and memory/cache disclosures for scope detail.
+**Data filesystem** is the guest-visible volume. If a backing probe is configured,
+**Backing filesystem free** is separate. **Free after reserve** subtracts the
+configured reserve, not outstanding upload claims; it is not a promise that the
+whole amount can be allocated. Failed required capacity is unavailable, while a
+valid measured zero remains zero.
 
 Compare measurements over the same observation window, with the same workload,
 cache coverage and container limits. Check the observation time: stale, missing

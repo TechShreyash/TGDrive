@@ -38,6 +38,11 @@ from tgdrive.settings.managed_settings import (
     credential_id,
     read_document,
 )
+from tgdrive.storage.capacity import (
+    measure_capacity,
+    probe_for_directory,
+    require_headroom,
+)
 from tgdrive.storage.mongo import DatabaseUnavailable
 from tgdrive.storage.mongo_store import MongoStore
 from tgdrive.storage.store import ROOT_ID, SCHEMA_VERSION
@@ -614,7 +619,7 @@ def _load(settings):
         ) from None
 
 
-def _write(settings, value):
+def _write(settings, value, *, outstanding_bytes=0):
     try:
         content = _raw(value)
         with io.BytesIO(content) as source:
@@ -623,10 +628,16 @@ def _write(settings, value):
         raise _resource_error(
             "New activation record exceeds provisional decoding limits"
         ) from None
-    atomic_private(_manifest_path(settings), content)
+    atomic_private(
+        _manifest_path(settings),
+        content,
+        min_free_bytes=settings.min_free_bytes,
+        probe_directory=probe_for_directory(settings, settings.resolved_data_dir),
+        outstanding_bytes=outstanding_bytes,
+    )
 
 
-def prepare_activation(settings, candidate):
+def prepare_activation(settings, candidate, *, outstanding_bytes=0):
     """Persist intent only; current catalog/configuration remain untouched."""
     checked = _candidate(settings, candidate)
     existing = _load(settings)
@@ -657,8 +668,11 @@ def prepare_activation(settings, candidate):
         atomic_private(
             settings.resolved_data_dir / "recovery-archive" / existing["id"] / MANIFEST,
             _raw(existing),
+            min_free_bytes=settings.min_free_bytes,
+            probe_directory=probe_for_directory(settings, settings.resolved_data_dir),
+            outstanding_bytes=outstanding_bytes,
         )
-    _write(settings, value)
+    _write(settings, value, outstanding_bytes=outstanding_bytes)
     return value["id"]
 
 
@@ -688,35 +702,6 @@ def effective_settings(settings):
         ) from None
 
 
-def _copy_file(source, destination):
-    if source.is_symlink() or destination.is_symlink():
-        raise ActivationError("Recovery preservation encountered an unsafe file path.")
-    if destination.exists():
-        return
-    source_fd = os.open(source, os.O_RDONLY | os.O_NOFOLLOW)
-    temporary = destination.with_name(
-        "." + destination.name + "-" + secrets.token_hex(12)
-    )
-    destination.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
-    fd = os.open(temporary, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
-    try:
-        if not stat.S_ISREG(os.fstat(source_fd).st_mode):
-            raise ActivationError("Recovery preservation requires regular files.")
-        with (
-            os.fdopen(source_fd, "rb", closefd=False) as original,
-            os.fdopen(fd, "wb") as target,
-        ):
-            while chunk := original.read(1024**2):
-                target.write(chunk)
-            target.flush()
-            os.fsync(target.fileno())
-        os.replace(temporary, destination)
-        _sync(destination.parent)
-    finally:
-        os.close(source_fd)
-        temporary.unlink(missing_ok=True)
-
-
 def _archive_dir(directory, identity):
     archive = directory
     for name in ("recovery-archive", identity):
@@ -728,7 +713,7 @@ def _archive_dir(directory, identity):
     return archive
 
 
-def _preserve_mongo(backend, archive):
+def _preserve_mongo(backend, archive, *, min_free_bytes=0, probe_directory=None):
     destination = archive / "mongodb-before.json"
     if destination.exists() or destination.is_symlink():
         # This archive was published with fsync + replace. Replaying preservation
@@ -741,16 +726,29 @@ def _preserve_mongo(backend, archive):
         finally:
             os.close(fd)
         return
+    require_headroom(
+        measure_capacity(archive, probe_directory=probe_directory),
+        1,
+        reserve_bytes=min_free_bytes,
+    )
     temporary = archive / (".mongodb-preserve-" + secrets.token_hex(12))
 
     def snapshot(session):
         backend.fence(session)
         temporary.unlink(missing_ok=True)
         fd = os.open(temporary, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
-        with os.fdopen(fd, "wb") as target:
+        with os.fdopen(fd, "wb", buffering=0) as target:
 
             def write(content):
-                target.write(content)
+                for offset in range(0, len(content), 64 * 1024):
+                    chunk = memoryview(content)[offset : offset + 64 * 1024]
+                    require_headroom(
+                        measure_capacity(archive, probe_directory=probe_directory),
+                        len(chunk),
+                        reserve_bytes=min_free_bytes,
+                    )
+                    if target.write(chunk) != len(chunk):
+                        raise OSError("Incomplete recovery preservation write")
 
             write(b"{")
             for index, name in enumerate(_MONGO_ARCHIVE):
@@ -780,8 +778,19 @@ def _preserve(settings, value, backend):
     directory = settings.resolved_data_dir
     archive = _archive_dir(directory, value["id"])
     archive.mkdir(parents=True, exist_ok=True, mode=0o700)
-    atomic_private(archive / MANIFEST, _raw(value))
-    _preserve_mongo(backend, archive)
+    probe = probe_for_directory(settings, archive)
+    atomic_private(
+        archive / MANIFEST,
+        _raw(value),
+        min_free_bytes=settings.min_free_bytes,
+        probe_directory=probe,
+    )
+    _preserve_mongo(
+        backend,
+        archive,
+        min_free_bytes=settings.min_free_bytes,
+        probe_directory=probe,
+    )
     return archive
 
 

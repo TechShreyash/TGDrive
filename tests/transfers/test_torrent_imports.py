@@ -218,7 +218,9 @@ def torrent_source(monkeypatch, *, manifest=None):
     )
     calls = []
 
-    async def download(source, directory, *, remote, cancel_event, progress, admit):
+    async def download(
+        source, directory, *, remote, cancel_event, progress, admit, check_capacity=None
+    ):
         calls.append(source)
         await admit(manifest)
         current = 0
@@ -420,8 +422,10 @@ async def test_torrent_resume_counts_retained_allocation_during_zero_hash_progre
         blocks = getattr(info, "st_blocks", None)
         allocated = min(8192, info.st_size if blocks is None else blocks * 512)
         monkeypatch.setattr(
-            "tgdrive.transfers.staging.shutil.disk_usage",
-            lambda _: SimpleNamespace(free=100 + 8192 - allocated),
+            "tgdrive.storage.capacity.shutil.disk_usage",
+            lambda _: SimpleNamespace(
+                total=100 + 8192, used=allocated, free=100 + 8192 - allocated
+            ),
         )
         manifest = TorrentManifest(
             "retained.bin", (TorrentFile("retained.bin", 8192),), 8192, False
@@ -522,7 +526,9 @@ async def test_chosen_torrent_files_are_the_only_ones_reserved_and_imported(
     )
     selections = []
 
-    async def download(source, directory, *, remote, cancel_event, progress, admit):
+    async def download(
+        source, directory, *, remote, cancel_event, progress, admit, check_capacity=None
+    ):
         selected = await admit(manifest)
         selections.append(selected)
         for index, file in enumerate(manifest.files):

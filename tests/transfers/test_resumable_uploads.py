@@ -533,7 +533,10 @@ async def test_budget_free_space_expiration_and_postrestart_release(
     assert expired.value.status == 410
     assert not restarted.path(other["id"]).exists()
     monkeypatch.undo()
-    monkeypatch.setattr(module.shutil, "disk_usage", lambda _: SimpleNamespace(free=0))
+    monkeypatch.setattr(
+        "tgdrive.storage.capacity.shutil.disk_usage",
+        lambda _: SimpleNamespace(total=100, used=100, free=0),
+    )
     with pytest.raises(UploadError) as disk:
         restarted.create("three.bin", "/", 1)
     assert disk.value.status == 507
@@ -891,3 +894,20 @@ async def test_new_folder_receipts_follow_moved_root_and_ancestor(
         uploads.close()
         manager.registry.close()
         manager.store.close()
+
+
+async def test_receipt_append_refuses_unavailable_backing_without_losing_staged_bytes(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setattr(module, "CHUNK_SIZE", 3)
+    probe = tmp_path / "probe"
+    probe.mkdir()
+    uploads, _ = make(tmp_path, min_free_bytes=0, cache_backing_capacity_dir=probe)
+    item = uploads.create("six.bin", "/", 6)
+    await uploads.append(item["id"], 0, b"one")
+    (probe / "unexpected").write_bytes(b"x")
+    with pytest.raises(UploadError) as unavailable:
+        await uploads.append(item["id"], 3, b"two")
+    assert unavailable.value.status == 503
+    assert uploads.get(item["id"])["offset"] == 3
+    assert uploads.path(item["id"]).read_bytes() == b"one"

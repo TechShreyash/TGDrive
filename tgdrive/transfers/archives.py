@@ -502,17 +502,34 @@ async def _create_zip(manager, record, directory):
             await manager.registry.update(
                 record.id, status=TransferStatus.RUNNING, phase="archiving", current=0
             )
+            check_staging(
+                manager.settings,
+                manager,
+                context["staging_size"],
+                exclude=record.id,
+                written=context["staging_written"],
+                directory=directory,
+            )
             archive = await _open(lambda: ZipFile(path, "w", compression=ZIP_STORED))
             current = 0
             try:
                 for member in context["members"]:
                     if record.cancel_event.is_set():
                         raise TransferCancelled("Transfer cancelled")
+                    check_staging(
+                        manager.settings,
+                        manager,
+                        context["staging_size"],
+                        exclude=record.id,
+                        written=context["staging_written"],
+                        directory=directory,
+                    )
                     if member["type"] == "folder":
                         manager.store.get_directory(
                             manager.store.resolve_id(member["id"])
                         )
                         await _worker(archive.writestr, member["name"] + "/", b"")
+                        context["staging_written"] = archive.fp.tell()
                         continue
                     output = await _open(
                         lambda name=member["name"]: archive.open(
@@ -528,6 +545,7 @@ async def _create_zip(manager, record, directory):
                                 context["staging_size"],
                                 exclude=record.id,
                                 written=context["staging_written"],
+                                directory=directory,
                             )
                             await _worker(output.write, chunk)
                             current += len(chunk)
@@ -549,7 +567,9 @@ async def _create_zip(manager, record, directory):
                 staging_written=path.stat().st_size,
             )
             await manager.registry.persist(record)
-    if path.stat().st_size > manager.settings.upload_limit:
+    if path.stat().st_size > max(
+        manager.settings.upload_limit, context["staging_size"]
+    ):
         raise ArchiveError("The ZIP exceeds the configured upload limit.")
     await manager._upload_path(
         record,
@@ -575,22 +595,26 @@ async def _extract_files(manager, record, directory):
                 current=0,
                 total=context["archive_source"]["size"],
             )
+            check_staging(
+                manager.settings,
+                manager,
+                context["staging_size"],
+                exclude=record.id,
+                written=context["staging_written"],
+                directory=directory,
+            )
             output = await _open(source.open, "wb")
             stream = _bytes(manager, record, context["archive_source"])
-            checked_at = -1
             try:
                 async for chunk in stream:
-                    # Reservations are rechecked every 64 MiB, not per chunk:
-                    # each check walks all jobs and stats the disk.
-                    if context["staging_written"] - checked_at >= 64 * 1024**2:
-                        checked_at = context["staging_written"]
-                        check_staging(
-                            manager.settings,
-                            manager,
-                            context["staging_size"],
-                            exclude=record.id,
-                            written=context["staging_written"],
-                        )
+                    check_staging(
+                        manager.settings,
+                        manager,
+                        context["staging_size"],
+                        exclude=record.id,
+                        written=context["staging_written"],
+                        directory=directory,
+                    )
                     await _worker(output.write, chunk)
                     context["staging_written"] = output.tell()
                     await manager.registry.update(
@@ -679,14 +703,18 @@ def _validate_plan(plan, limit, budget, directory):
 
 async def _decode_archive(manager, record, source, directory):
     context = record.context
+    # Keep the worker's validation bounds fixed. Every storage claim still goes
+    # through check_staging with the latest policy before the worker can write.
+    entry_limit = manager.settings.upload_limit
+    budget = manager.settings.staging_budget_bytes
     original = await _worker(lambda: source.stat().st_size)
     total = 0
     if archive_format(context["name"])[1][0] == "zip":
         metadata = await _worker(
             zip_manifest,
             source,
-            manager.settings.upload_limit,
-            manager.settings.staging_budget_bytes,
+            entry_limit,
+            budget,
         )
         total = metadata["size"]
 
@@ -744,8 +772,8 @@ async def _decode_archive(manager, record, source, directory):
                     "source": str(source),
                     "destination": str(directory),
                     "name": context["name"],
-                    "limit": manager.settings.upload_limit,
-                    "budget": manager.settings.staging_budget_bytes,
+                    "limit": entry_limit,
+                    "budget": budget,
                 }
             ).encode()
             + b"\n"
@@ -780,8 +808,8 @@ async def _decode_archive(manager, record, source, directory):
                 plan = await _worker(
                     _validate_plan,
                     message["result"],
-                    manager.settings.upload_limit,
-                    manager.settings.staging_budget_bytes - original,
+                    entry_limit,
+                    context["staging_size"] - original,
                     directory,
                 )
                 if plan["size"] > reserved:
@@ -798,9 +826,7 @@ async def _decode_archive(manager, record, source, directory):
                 reserved = message["reserve"]
                 if (
                     type(reserved) is not int
-                    or not current
-                    <= reserved
-                    <= manager.settings.staging_budget_bytes - original
+                    or not current <= reserved <= budget - original
                 ):
                     raise ArchiveError(
                         "The archive processor requested invalid storage."
@@ -811,6 +837,7 @@ async def _decode_archive(manager, record, source, directory):
                     original + reserved,
                     exclude=record.id,
                     written=context["staging_written"],
+                    directory=directory,
                 )
                 context["staging_size"] = original + reserved
                 await manager.registry.persist(record)
@@ -830,6 +857,7 @@ async def _decode_archive(manager, record, source, directory):
                     original + reserved,
                     exclude=record.id,
                     written=context["staging_written"],
+                    directory=directory,
                 )
             elif "progress" in message:
                 progress = message["progress"]

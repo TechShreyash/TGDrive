@@ -19,7 +19,13 @@ _BOT_TOKEN_RE = re.compile(r"^[1-9][0-9]{4,14}:[A-Za-z0-9_-]{20,}$")
 # Conservative document cap in binary MiB; new uploads use it for every account.
 _DEFAULT_BOT_LIMIT = 2000 * 1024**2
 _DEPLOYMENT_ONLY_SETTINGS = frozenset(
-    {"DEMO_MODE", "DEMO_ADMIN_PASSWORD", "DEMO_ADMIN_PASSWORD_HASH"}
+    {
+        "DEMO_MODE",
+        "DEMO_ADMIN_PASSWORD",
+        "DEMO_ADMIN_PASSWORD_HASH",
+        "DATA_BACKING_CAPACITY_DIR",
+        "CACHE_BACKING_CAPACITY_DIR",
+    }
 )
 
 
@@ -127,6 +133,23 @@ class Settings(BaseSettings):
     max_file_size: int | None = Field(default=None, alias="MAX_FILE_SIZE", gt=0)
     cache_dir: Path = Field(default=Path("cache"), alias="CACHE_DIR")
     data_dir: Path = Field(default=Path("data"), alias="DATA_DIR")
+    # Host-specific read-only probes are never captured in backup configuration.
+    data_backing_capacity_dir: Path | None = Field(
+        default=None, alias="DATA_BACKING_CAPACITY_DIR", exclude=True
+    )
+    cache_backing_capacity_dir: Path | None = Field(
+        default=None, alias="CACHE_BACKING_CAPACITY_DIR", exclude=True
+    )
+
+    @field_validator("data_backing_capacity_dir", "cache_backing_capacity_dir")
+    @classmethod
+    def absolute_capacity_probe(cls, value):
+        if value is not None and not value.is_absolute():
+            raise ValueError(
+                "Backing capacity probe must be an absolute directory path"
+            )
+        return value
+
     log_level: str = Field(default="INFO", alias="LOG_LEVEL")
 
     session_ttl_seconds: int = Field(default=86400, alias="SESSION_TTL_SECONDS", ge=300)
@@ -162,6 +185,11 @@ class Settings(BaseSettings):
     telegram_media_per_bot: int = Field(default=3, alias="TELEGRAM_MEDIA_PER_BOT", ge=1)
     telegram_max_queue: int = Field(default=256, alias="TELEGRAM_MAX_QUEUE", ge=1)
     upload_split_mib: int = Field(default=2000, alias="UPLOAD_SPLIT_MIB", ge=0, le=2000)
+    # Saved owner ceilings are separate from governor-mutated effective budgets.
+    cache_disk_limit_bytes: int | None = Field(default=None, ge=0, le=2**53 - 1)
+    cache_memory_limit_bytes: int | None = Field(default=None, ge=0, le=2**53 - 1)
+    staging_limit_bytes: int | None = Field(default=None, gt=0, le=2**53 - 1)
+    protected_free_bytes: int | None = Field(default=None, ge=0, le=2**53 - 1)
     cache_memory_bytes: int = Field(
         default=256 * 1024**2, alias="CACHE_MEMORY_BYTES", ge=0
     )

@@ -14,7 +14,7 @@ from telethon.errors import RPCError
 
 from tgdrive.media.logical_media import read_logical_prefix
 from tgdrive.media.media_metadata import get_message
-from tgdrive.media.media_reader import MediaReadCache, stream_pooled_media
+from tgdrive.media.media_reader import media_cache_for, stream_pooled_media
 from tgdrive.media.media_scheduler import media_priority
 from tgdrive.media.streaming import (
     PDF_PREVIEW_BYTES,
@@ -255,8 +255,7 @@ async def describe_preview(
             if isinstance(actual_size, int):
                 base["size"] = actual_size
             if callable(getattr(pool, "download_capacity", None)):
-                if pool._media_read_cache is None:
-                    pool._media_read_cache = MediaReadCache(pool.media_cache_dir)
+                media_cache_for(pool)
                 pool._media_read_cache.register_file(
                     channel_id=channel_id,
                     message_id=message_id,

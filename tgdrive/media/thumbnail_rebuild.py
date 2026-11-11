@@ -28,6 +28,7 @@ from tgdrive.core.errors import (
 )
 from tgdrive.media import generated_thumbnails as covers
 from tgdrive.media.books import parse_book, read_range
+from tgdrive.media.media_reader import media_capacity_options
 from tgdrive.media.media_scheduler import media_priority
 from tgdrive.media.posters import load_poster, poster_identity
 from tgdrive.media.thumbnail_worker import (
@@ -38,6 +39,11 @@ from tgdrive.media.thumbnail_worker import (
 )
 from tgdrive.media.thumbnails import ThumbnailBusy
 from tgdrive.storage import pacing
+from tgdrive.storage.capacity import (
+    measure_capacity,
+    probe_for_directory,
+    require_headroom,
+)
 
 BLOCK = 1024**2
 SOURCE_BUDGET = 64 * BLOCK
@@ -50,12 +56,32 @@ def file_identity(data):
     return data["message_id"], data["size"], data.get("parts"), poster_identity(data)
 
 
-def write_state(path, data):
+def write_state(
+    path,
+    data,
+    *,
+    backing_capacity_dir=None,
+    storage_settings=None,
+    min_free_bytes=0,
+    outstanding_bytes=0,
+):
     path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    payload = json.dumps(data, allow_nan=False).encode()
+    probe = (
+        probe_for_directory(storage_settings, path.parent)
+        if storage_settings is not None
+        else backing_capacity_dir
+    )
+    require_headroom(
+        measure_capacity(path.parent, probe_directory=probe),
+        len(payload),
+        reserve_bytes=min_free_bytes,
+        outstanding_bytes=outstanding_bytes,
+    )
     descriptor, temporary = tempfile.mkstemp(dir=path.parent, prefix=".thumbnail-job-")
     try:
-        with os.fdopen(descriptor, "w") as output:
-            json.dump(data, output, allow_nan=False)
+        with os.fdopen(descriptor, "wb") as output:
+            output.write(payload)
         os.replace(temporary, path)
     finally:
         Path(temporary).unlink(missing_ok=True)
@@ -258,7 +284,11 @@ class ThumbnailRebuild:
         self.settings, self.runtime, self.thumbnails = settings, runtime, thumbnails
         self.path = settings.resolved_data_dir / "thumbnail-rebuild.json"
         self.directory = settings.resolved_cache_dir / "thumbnails"
-        self.staging = covers.CachedThumbnailRepair(self.directory)
+        self.staging = covers.CachedThumbnailRepair(
+            self.directory,
+            storage_settings=settings,
+            remaining_staging_bytes=self._outstanding_staging,
+        )
         self.state = {
             "status": "idle",
             "phase": "Ready",
@@ -301,9 +331,21 @@ class ThumbnailRebuild:
         except OSError, ValueError:
             pass
 
+    def _outstanding_staging(self):
+        pool = getattr(self.runtime(), "pool", None)
+        remaining = getattr(pool, "remaining_staging_bytes", None)
+        return remaining() if remaining else 0
+
     async def persist(self):
         try:
-            await covers._owned_disk_call(write_state, self.path, self.snapshot())
+            await covers._owned_disk_call(
+                write_state,
+                self.path,
+                self.snapshot(),
+                storage_settings=self.settings,
+                min_free_bytes=self.settings.min_free_bytes,
+                outstanding_bytes=self._outstanding_staging(),
+            )
             self.state.pop("persistence_warning", None)
         except OSError:
             self.state["persistence_warning"] = (
@@ -529,6 +571,7 @@ class ThumbnailRebuild:
                                 data["message_id"],
                                 cover,
                                 version=source.cover_version,
+                                **media_capacity_options(self.runtime().pool),
                             )
                             stored = await asyncio.to_thread(
                                 covers.read,

@@ -11,6 +11,7 @@ from telethon.errors import RPCError
 
 from tgdrive.media import books
 from tgdrive.media.generated_thumbnails import read, save
+from tgdrive.media.media_reader import media_capacity_options
 from tgdrive.media.streaming import TelegramFileNotFound
 from tgdrive.media.thumbnails import Thumbnail, ThumbnailBusy
 from tgdrive.storage.file_parts import MAX_POSTER_BYTES, validate_poster
@@ -74,5 +75,6 @@ async def load_poster(*, pool, channel_id, poster, directory, authorize, name=""
             poster["message_id"],
             content,
             maximum=MAX_POSTER_BYTES,
+            **media_capacity_options(pool),
         )
     return Thumbnail(content, "image/jpeg")

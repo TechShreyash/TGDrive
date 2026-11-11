@@ -20,6 +20,7 @@ import { formatByteProgress, formatBytes } from "../../shared/types";
 import { useManualRefresh } from "../../shared/useManualRefresh";
 import {
     performanceApi,
+    resourceBytes,
     type CachedFile,
     type PreloadJob,
     type PreloadSnapshot,
@@ -167,8 +168,8 @@ export function CacheCapacity({
             <div className="preload-capacity-value">
                 {available ? (
                     <>
-                        <strong>{formatBytes(used)}</strong>
-                        <span>of {formatBytes(limit)}</span>
+                        <strong>{resourceBytes(used)}</strong>
+                        <span>of {resourceBytes(limit)}</span>
                         <span>{percent}%</span>
                     </>
                 ) : (
@@ -178,7 +179,7 @@ export function CacheCapacity({
             {available ? (
                 <progress
                     aria-label={label + " usage"}
-                    aria-valuetext={`${formatByteProgress(used, limit)} used (${percent}%)`}
+                    aria-valuetext={`${resourceBytes(used)} of ${resourceBytes(limit)} used (${percent}%)`}
                     max={limit}
                     value={Math.min(used, limit)}
                 />
