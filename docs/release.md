@@ -64,19 +64,25 @@ immutable: fix a release with a new version instead of moving its tag.
 User-facing GitHub documentation links point to `main`; release download links
 pin the corresponding tag. Reserve `dev` links for contributor instructions.
 
-Pushing the tag starts CI on it. The optional **Publish image** workflow accepts
-successful same-repository tag-push CI only when the annotated application tag
-identifies the tested SHA in `main` history and matches its application version.
-It verifies these conditions from trusted `main` policy before privileged builds.
+Pushing the tag starts CI on it. Source releases and the documented source-build
+installation do not depend on container-image or registry publication.
+
+<details>
+<summary>Optional container-image publisher</summary>
+
+**Publish image** accepts successful same-repository tag-push CI only when the
+annotated application tag identifies the tested SHA in `main` history and
+matches its application version. It verifies these conditions from trusted
+`main` policy before privileged builds.
 
 The workflow defines native amd64 and arm64 builds with provenance and an SBOM,
 publishing `ghcr.io/techshreyash/tgdrive:X.Y.Z`; moving tags advance only for the
-newest eligible versions. If offering this optional maintainer artifact, verify
-the publisher result, package visibility, both manifest architectures and the
-image's source revision before announcing it. The first time, set package
-visibility to **Public** under GitHub → Packages → tgdrive → Package settings.
-A source release and the documented source-build installation do not depend on
-the image or registry publication.
+newest eligible versions. Before announcing this optional artifact, verify the
+publisher result, package visibility, both manifest architectures and the
+image's source revision. The first time, set package visibility to **Public**
+under GitHub → Packages → tgdrive → Package settings.
+
+</details>
 
 The GitHub release must link its PR, exact commit and (after the first release)
 comparison with the previous tag, and explain upgrade requirements and known
@@ -94,8 +100,7 @@ pre-releases that are never marked latest; `npm ci` downloads them by locked URL
 and integrity. Publish a new viewer release before a TGDrive release that needs
 it. See [`website/vendor/`](../website/vendor/README.md).
 
-<details>
-<summary>Maintainer checklist: build, validate and publish</summary>
+**Maintainer checklist: build, validate and publish**
 
 Run these from the release checkout, with the development prerequisites from
 [Development](development.md).
@@ -144,8 +149,6 @@ git tag -a v2.3.0 -m "Release TGDrive 2.3.0"
    Tag-push CI also checks that the tag matches the metadata. Coolify users must
    select that same revision. Record changes and limitations in the release's
    description and Git commits.
-
-</details>
 
 ## Verify a downloaded source archive
 

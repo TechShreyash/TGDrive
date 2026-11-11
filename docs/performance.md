@@ -45,9 +45,10 @@ connection. [Choosing server capacity](performance-tuning.md#what-a-server-upgra
 
 The resource governor sizes budgets at startup, then re-measures the server every
 5 seconds and applies resource changes live. These are not editable dashboard preferences:
-the Configuration page and API no longer accept them, and **Performance →
-Automatic tuning** shows what was chosen and why. `GET /api/v1/performance` returns its current values, a reason
-for each value and the latest measurements under `tuning`.
+the Configuration page and API no longer accept them. Expand **Performance →
+Automatic tuning** to inspect the chosen values and reasons. The API returns
+current values, a reason for each value and the latest measurements under
+`tuning` in `GET /api/v1/performance`.
 
 | Value | Rule |
 | --- | --- |

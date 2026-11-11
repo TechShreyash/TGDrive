@@ -40,7 +40,7 @@ Accepted archive jobs continue while TGDrive runs, even with the tab closed.
 
 | Torrent import setup | Create a ZIP |
 | --- | --- |
-| ![Current torrent and magnet import dialog](assets/torrent-import.jpg) | ![Create ZIP dialog for selected drive items](assets/create-zip.jpg) |
+| ![Torrent and magnet import dialog](assets/torrent-import.jpg) | ![Create ZIP dialog for selected drive items](assets/create-zip.jpg) |
 
 <details>
 <summary>Extraction choices and the completed ZIP</summary>
@@ -56,19 +56,20 @@ dialog shows destination choices; extraction was not submitted.
 
 ## Read and preview
 
-Videos offer **Continue** from a position saved in this browser. Built-in menus
-provide available audio/subtitle tracks and playback settings; chapters and seek
+Videos offer **Continue** from saved progress: owners can continue across
+devices; anonymous viewers keep browser-local positions. Built-in menus provide
+available audio/subtitle tracks and playback settings; chapters and seek
 previews depend on the file. PDFs, EPUB and comics have dedicated readers.
 [Player controls](usage.md#open-preview-and-download) · [Reader guide](reading.md)
 
-| Continue watching | Current player settings |
+| Continue watching | Player settings |
 | --- | --- |
-| ![Continue from a saved position in the current video player](assets/video-continue.jpg) | ![Current built-in video player settings menu](assets/video-settings.jpg) |
+| ![Continue from a saved position in the video player](assets/video-continue.jpg) | ![Built-in video player settings menu](assets/video-settings.jpg) |
 
 <details>
 <summary>Video, image, audio, PDF, EPUB and comic viewers</summary>
 
-![Video open in TGDrive's current player](assets/media-preview.jpg)
+![Video open in TGDrive's player](assets/media-preview.jpg)
 
 | Image | Audio |
 | --- | --- |
@@ -91,29 +92,34 @@ database data using surviving Telegram files; an optional independent channel
 copy supports rebuilding a lost main channel.
 [Backup and recovery](backup-recovery.md) · [Connections](usage.md#settings-and-connections)
 
-![Unified recovery file and key form in a local demo](assets/recovery-file.jpg)
-
 **Obsolete local demo:** this form predates recovery with `ENCRYPTION_KEY` and
 does not show current restore steps. No recovery ran during capture. Follow the
 [current recovery guide](backup-recovery.md).
+
+<details>
+<summary>Historical recovery form</summary>
+
+![Obsolete recovery file and key form in a local demo](assets/recovery-file.jpg)
+
+</details>
 
 ## Browse and organize
 
 Use **My Files** for folders, List/Grid views and item actions.
 [Browse, search and organize](usage.md#browse-and-organize)
 
-![Current My Files grid with a disposable sample collection](assets/drive-overview.jpg)
+![My Files grid with a disposable sample collection](assets/drive-overview.jpg)
 
 <details>
 <summary>List view, file actions and mobile</summary>
 
-![Current List view](assets/drive-list.jpg)
+![List view](assets/drive-list.jpg)
 
-![Current file actions menu](assets/file-actions.jpg)
+![File actions menu](assets/file-actions.jpg)
 
 The phone view is an emulated viewport, not a physical-device check.
 
-<img src="assets/mobile-drive.jpg" alt="Current TGDrive file browser in an emulated phone viewport" width="360">
+<img src="assets/mobile-drive.jpg" alt="TGDrive file browser in an emulated phone viewport" width="360">
 
 </details>
 
@@ -124,11 +130,11 @@ tabs open until **You can close this tab** and originals until **Completed**.
 [Upload and resume](usage.md#upload-files-or-folders) · [History](usage.md#transfer-history)
 
 <details>
-<summary>Current New menu and URL import dialog</summary>
+<summary>New menu and URL import dialog</summary>
 
-![Current New menu with upload and import entry points](assets/new-menu.jpg)
+![New menu with upload and import entry points](assets/new-menu.jpg)
 
-![Current Upload from URL dialog](assets/url-import.jpg)
+![Upload from URL dialog](assets/url-import.jpg)
 
 The screenshots show entry points; the tour's running job creates a ZIP.
 [URL import guide](usage.md#import-from-a-url)

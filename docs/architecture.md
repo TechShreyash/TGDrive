@@ -596,16 +596,21 @@ The video player's [browser buffer](performance.md#browser-playback-buffer) is
 separate from server cache and decoder memory. Neither cache nor extra bots
 guarantee codec/device playback speed.
 
-The enhanced preview stores watch positions as numeric seconds in browser
-`localStorage`, under `tgdrive.video.position.v1:<file-id>`. Stable catalog IDs
-preserve positions across renames, moves and quality changes; keys never contain
-stream URLs or authorization tokens. Nothing is sent to the server or synchronized
-through the login. Writes are throttled to five seconds during playback and
-flushed on pause, settled seeks, hidden/pagehide events and preview cleanup.
-Completion removes the record; opening and closing an unused Continue offer
-preserves it. Invalid or out-of-range positions do not produce a Continue offer,
-and storage failures do not block playback. See the
-[watch-position behavior and browser-storage limits](usage.md#open-preview-and-download).
+The enhanced preview stores owner and independently authenticated demo-admin
+watch positions on the file's MongoDB node. A share token alone cannot access
+that progress. Starting playback creates an ordered writer session; a newer
+session supersedes earlier writers. Regular saves coalesce at the server's
+interval, with a best-effort closing save. Positions follow stable catalog IDs
+across renames, moves and quality changes. V2 recovery snapshots include saved
+progress, but can predate the latest position; activation invalidates writers.
+
+Anonymous share and public-demo progress stays in separate browser-local scopes,
+under `tgdrive.video.position.v2:<scope>:<file-id>`. Legacy browser keys are read
+only for local history and never imported into owner progress. Completion saves
+zero; an unused Continue offer preserves the position. Invalid positions do not
+produce a Continue offer. Progress failures do not block playback or create a
+local fallback for owner history. See the
+[watch-position behavior and storage limits](usage.md#open-preview-and-download).
 
 ## Book reader internals
 

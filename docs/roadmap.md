@@ -15,7 +15,7 @@ illustrative and do not certify the validation still listed below.
 | Resumable file/folder uploads, automatic splitting, Trash and transfer history | [Uploads](usage.md#upload-files-or-folders) · [Transfers](usage.md#transfer-history) |
 | Direct URLs, torrent/magnet imports with nested folders, and Telegram bot uploads | [URLs](usage.md#import-from-a-url) · [Torrents](usage.md#import-a-torrent-or-magnet-link) · [Bot](usage.md#upload-through-your-telegram-bot) |
 | Background ZIP creation and ZIP/7z/RAR/TAR/compressed-file extraction | [Archives](usage.md#create-zips-and-extract-archives) |
-| Video Continue with browser-local positions, track/subtitle menus, chapters and seek previews | [Player](usage.md#open-preview-and-download) |
+| Video Continue with cross-device owner positions, local anonymous positions, track/subtitle menus, chapters and seek previews | [Player](usage.md#open-preview-and-download) |
 | Photos, PDFs, text, EPUB ebooks and CBZ/CBR comics | [Previews](usage.md#open-preview-and-download) · [Readers](reading.md) |
 | Scoped read-only share links and embeddable file/folder viewers | [Sharing](usage.md#share-and-revoke) · [Embeds](usage.md#embed-a-file-or-folder-in-a-website) |
 | Preloads, monitoring and multiple Telegram accounts | [Performance](performance.md) · [Configuration](configuration.md) |
