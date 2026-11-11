@@ -121,10 +121,6 @@
         scrollbar-gutter: auto;
         border-radius: 0;
     }
-    /* Keep the last row (pagination) clear of the floating New button. */
-    .app-shell:has(#compact-new-button) .workspace.file-workspace {
-        padding-bottom: calc(84px + env(safe-area-inset-bottom));
-    }
     .file-workspace .file-browser {
         flex: 0 0 auto;
     }
@@ -133,6 +129,10 @@
         overflow: visible;
         padding-bottom: 0;
         scrollbar-gutter: auto;
+    }
+    /* Keep FAB clearance in flowing content so the phone scroller can reach it. */
+    .app-shell:has(#compact-new-button) .file-workspace .file-list-scroll {
+        padding-bottom: calc(84px + env(safe-area-inset-bottom));
     }
     .file-list-scroll .file-table th {
         position: static;
@@ -211,6 +211,27 @@
     margin: 0;
     overflow-y: auto;
     overscroll-behavior: contain;
+}
+
+.item-actions .action-menu {
+    width: 208px;
+    padding: 4px;
+}
+.item-actions .action-menu > :is(button, a) {
+    min-height: 44px;
+    gap: 8px;
+    padding: 4px 10px;
+    line-height: 1.4;
+}
+.item-actions .action-menu > hr {
+    margin: 4px 6px;
+    border: 0;
+    border-block-start: 1px solid var(--line-subtle);
+}
+@media (min-width: 721px) and (pointer: fine) {
+    .item-actions .action-menu > :is(button, a) {
+        min-height: 30px;
+    }
 }
 
 /* Keep filenames uninterrupted; optional state is separate, quiet metadata. */

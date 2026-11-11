@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 from urllib.parse import parse_qs, urlparse
 
@@ -32,6 +33,219 @@ def choose_view(page, name):
         page.get_by_role("menuitemradio", name=name, exact=True).click()
     else:
         page.get_by_role("button", name=name, exact=True).click()
+
+
+@pytest.mark.parametrize(
+    "width,height,theme,touch",
+    [
+        (1920, 1080, "dark", False),
+        (1440, 960, "light", False),
+        (390, 844, "light", True),
+        (320, 740, "dark", True),
+        (900, 400, "dark", True),
+    ],
+)
+def test_file_options_menu_density_touch_targets_and_focus(
+    server, browser, width, height, theme, touch
+):
+    context = browser.new_context(
+        viewport={"width": width, "height": height},
+        has_touch=touch,
+        is_mobile=touch,
+        reduced_motion="reduce",
+    )
+    context.add_init_script(
+        f"localStorage.setItem('tgdrive.appearance', '{theme}');"
+        "localStorage.setItem('tgdrive.file-view', 'grid');"
+    )
+    page = context.new_page()
+    errors = []
+    page.on("pageerror", lambda error: errors.append(str(error)))
+    artifact = f"file-options-menu-{width}x{height}-{theme}"
+    ARTIFACTS.mkdir(parents=True, exist_ok=True)
+    try:
+        login(page, server.url)
+        folder = page.get_by_role("button", name="Preview samples", exact=True)
+        folder.tap() if touch else folder.press("Enter")
+        row = page.locator(".file-row").filter(
+            has=page.get_by_role("button", name="sample.json", exact=True)
+        )
+        trigger = row.get_by_label("Actions for sample.json", exact=True)
+        trigger.tap() if touch else trigger.click()
+        menu = row.locator(".action-menu")
+        expect(menu).to_be_visible()
+        actions = menu.locator(":scope > button, :scope > a")
+        expect(actions).to_have_text(
+            [
+                "Open",
+                "Download",
+                "Copy Download Link",
+                "Preload file",
+                "Add to Starred",
+                "Create ZIP",
+                "Rename",
+                "Move",
+                "Share Link",
+                "Move to Trash",
+            ]
+        )
+        expect(menu.get_by_role("separator")).to_have_count(2)
+        page.evaluate("document.fonts.ready")
+        bounds = menu.bounding_box()
+        assert bounds is not None
+        assert bounds["width"] == 208
+        assert bounds["x"] >= 11 and bounds["y"] >= 11
+        assert bounds["x"] + bounds["width"] <= width - 11
+        assert bounds["y"] + bounds["height"] <= height - 11
+        targets = actions.evaluate_all(r"""nodes => nodes.map(node => ({
+          label: node.textContent.trim().replace(/\s+/g, ' '),
+          height: node.getBoundingClientRect().height,
+          width: node.getBoundingClientRect().width,
+          fits: node.scrollWidth <= node.clientWidth
+        }))""")
+        assert all(target["fits"] for target in targets), targets
+        if touch:
+            assert all(target["height"] >= 44 for target in targets), targets
+        else:
+            assert bounds["height"] <= 340
+            assert all(30 <= target["height"] <= 32 for target in targets), targets
+        assert menu.get_by_role("button", name="Move to Trash").evaluate(
+            "node => getComputedStyle(node).color"
+        ) != menu.get_by_role("button", name="Rename", exact=True).evaluate(
+            "node => getComputedStyle(node).color"
+        )
+        (ARTIFACTS / f"{artifact}.json").write_text(
+            json.dumps({"bounds": bounds, "targets": targets}, indent=2)
+        )
+        page.screenshot(path=ARTIFACTS / f"{artifact}.png", animations="disabled")
+        menu.screenshot(
+            path=ARTIFACTS / f"{artifact}-detail.png", animations="disabled"
+        )
+        last = menu.get_by_role("button", name="Move to Trash", exact=True)
+        last.scroll_into_view_if_needed()
+        expect(last).to_be_in_viewport()
+        if height == 400:
+            assert menu.evaluate("node => node.scrollHeight > node.clientHeight")
+            menu.screenshot(
+                path=ARTIFACTS / f"{artifact}-scrolled.png", animations="disabled"
+            )
+        menu.get_by_role("button", name="Open", exact=True).focus()
+        page.keyboard.press("Tab")
+        expect(menu.get_by_role("link", name="Download", exact=True)).to_be_focused()
+        page.keyboard.press("Escape")
+        expect(menu).not_to_be_visible()
+        expect(trigger).to_be_focused()
+        trigger.press("Enter")
+        rename = menu.get_by_role("button", name="Rename", exact=True)
+        rename.tap() if touch else rename.press("Enter")
+        expect(page.get_by_role("dialog", name="Rename", exact=True)).to_be_visible()
+        page.keyboard.press("Escape")
+        expect(trigger).to_be_focused()
+        trigger.press("Enter")
+        menu.get_by_role("button", name="Add to Starred", exact=True).click()
+        expect(page.get_by_text("Added to Starred.", exact=True)).to_be_visible()
+        trigger.press("Enter")
+        remove = menu.get_by_role("button", name="Remove from Starred", exact=True)
+        expect(remove).to_be_visible()
+        assert remove.evaluate("node => node.scrollWidth <= node.clientWidth")
+    finally:
+        context.close()
+    assert errors == []
+
+
+@pytest.mark.parametrize("width,height", [(390, 844), (320, 740), (900, 400)])
+def test_last_mobile_card_actions_clear_floating_new_button(
+    server, browser, width, height
+):
+    context = browser.new_context(
+        viewport={"width": width, "height": height},
+        has_touch=True,
+        is_mobile=True,
+        reduced_motion="reduce",
+    )
+    context.add_init_script("localStorage.setItem('tgdrive.file-view', 'grid')")
+    page = context.new_page()
+    errors = []
+    page.on("pageerror", lambda error: errors.append(str(error)))
+
+    def listing(route):
+        response, data = fetch_with_rows(
+            route,
+            [
+                {
+                    "id": "mobile-long-pdf",
+                    "name": "CN_Complete_Theory_Study_Book.pdf",
+                    "path": "/",
+                    "type": "file",
+                    "size": 500000,
+                },
+                {
+                    "id": "mobile-short-video",
+                    "name": "vid_720p.mp4",
+                    "path": "/",
+                    "type": "file",
+                    "size": 8000000,
+                },
+            ],
+        )
+        folders = [item for item in data["items"] if item["type"] == "folder"]
+        assert len(folders) == 3
+        folders[0]["name"] = (
+            "Cyberpunk.Edgerunners.S02.1080p.NF.WEB-DL.DUAL.DDP5.1.H.264"
+        )
+        route.fulfill(response=response, json=data)
+
+    page.route(NODES, listing)
+    try:
+        login(page, server.url)
+        long_card = page.locator('[data-item-id="mobile-long-pdf"]')
+        short_card = page.locator('[data-item-id="mobile-short-video"]')
+        expect(short_card).to_be_visible()
+        if width <= 720:
+            assert (
+                long_card.bounding_box()["height"] > short_card.bounding_box()["height"]
+            )
+        page.locator(".workspace.file-workspace").evaluate(
+            "node => node.scrollTop = node.scrollHeight"
+        )
+        page.evaluate(
+            "() => new Promise(resolve => "
+            "requestAnimationFrame(() => requestAnimationFrame(resolve)))"
+        )
+        geometry = short_card.locator("summary").evaluate("""node => {
+          const rect = element => {
+            const r = element.getBoundingClientRect();
+            return {top:r.top,bottom:r.bottom,left:r.left,right:r.right};
+          };
+          const workspace = document.querySelector('.workspace.file-workspace');
+          const target = node.getBoundingClientRect();
+          const hit = document.elementFromPoint(
+            target.x + target.width / 2, target.y + target.height / 2);
+          const fab = document.querySelector('#compact-new-button');
+          return {target:rect(node), fab:rect(fab),
+            workspace:rect(workspace), scrollTop:workspace.scrollTop,
+            maxScroll:workspace.scrollHeight-workspace.clientHeight,
+            centerHitsAction:hit?.closest('summary')===node};
+        }""")
+        assert geometry["target"]["bottom"] <= geometry["fab"]["top"] - 8, geometry
+        assert geometry["centerHitsAction"], geometry
+        assert abs(geometry["scrollTop"] - geometry["maxScroll"]) <= 1, geometry
+        ARTIFACTS.mkdir(parents=True, exist_ok=True)
+        (ARTIFACTS / f"last-card-fab-clearance-{width}x{height}.json").write_text(
+            json.dumps(geometry, indent=2)
+        )
+        page.screenshot(
+            path=ARTIFACTS / f"last-card-fab-clearance-{width}x{height}.png",
+            animations="disabled",
+        )
+        trigger = short_card.get_by_label("Actions for vid_720p.mp4", exact=True)
+        trigger.tap()
+        expect(short_card.locator(".action-menu")).to_be_visible()
+        page.keyboard.press("Escape")
+        expect(trigger).to_be_focused()
+    finally:
+        context.close()
+    assert errors == []
 
 
 @pytest.mark.parametrize("width", [1440, 390, 320])

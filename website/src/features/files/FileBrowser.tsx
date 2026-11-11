@@ -1616,6 +1616,7 @@ export default function FileBrowser({
                                                                         />{" "}
                                                                         Restore
                                                                     </button>
+                                                                    <hr />
                                                                     <button
                                                                         className="danger-text"
                                                                         onClick={() =>
@@ -1723,6 +1724,7 @@ export default function FileBrowser({
                                                                             </button>
                                                                         </>
                                                                     )}
+                                                                    <hr />
                                                                     {onLocate && (
                                                                         <button
                                                                             onClick={() => {
@@ -1873,6 +1875,7 @@ export default function FileBrowser({
                                                                         Share
                                                                         Link
                                                                     </button>
+                                                                    <hr />
                                                                     <button
                                                                         className="danger-text"
                                                                         onClick={() => {
