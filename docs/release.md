@@ -64,20 +64,19 @@ immutable: fix a release with a new version instead of moving its tag.
 User-facing GitHub documentation links point to `main`; release download links
 pin the corresponding tag. Reserve `dev` links for contributor instructions.
 
-Pushing the tag starts CI on it. **Publish image** accepts successful
-same-repository tag-push CI only when the annotated application tag identifies
-the tested SHA in `main` history and matches its application version. It verifies
-these conditions from trusted `main` policy before checking out release code for
-privileged builds.
+Pushing the tag starts CI on it. The optional **Publish image** workflow accepts
+successful same-repository tag-push CI only when the annotated application tag
+identifies the tested SHA in `main` history and matches its application version.
+It verifies these conditions from trusted `main` policy before privileged builds.
 
-The workflow defines native amd64 and arm64 builds with provenance and an SBOM.
-It publishes `ghcr.io/techshreyash/tgdrive:X.Y.Z`; `:X.Y` and `:latest` advance
-only for the newest eligible versions, so rerunning an older release cannot
-downgrade them. Before announcing pull-based setup, verify successful tag CI, the publisher
-result, public package access, both manifest architectures and the image's source revision;
-then confirm the documented Compose pull path works. These are release gates,
-not evidence of current image availability. The first time, set visibility to
-**Public** under GitHub → Packages → tgdrive → Package settings.
+The workflow defines native amd64 and arm64 builds with provenance and an SBOM,
+publishing `ghcr.io/techshreyash/tgdrive:X.Y.Z`; moving tags advance only for the
+newest eligible versions. If offering this optional maintainer artifact, verify
+the publisher result, package visibility, both manifest architectures and the
+image's source revision before announcing it. The first time, set package
+visibility to **Public** under GitHub → Packages → tgdrive → Package settings.
+A source release and the documented source-build installation do not depend on
+the image or registry publication.
 
 The GitHub release must link its PR, exact commit and (after the first release)
 comparison with the previous tag, and explain upgrade requirements and known

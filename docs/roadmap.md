@@ -43,8 +43,9 @@ action. Remaining live validation:
 - [ ] Coolify DNS/TLS, trusted forwarding and isolation of the direct app port.
 - [ ] Prolonged multi-account outages and interrupted Telegram sends.
 - [ ] Actual Premium speed, broader devices/codecs, ARM and hosting platforms.
-- [ ] Verify published image architectures/source revision and the private
-  vulnerability-reporting entry point before announcing a release.
+- [ ] Verify the private vulnerability-reporting entry point before announcing a
+  release. If offering a container image, verify its architectures and source
+  revision before announcing that optional artifact.
 
 ## Known correctness and recovery gaps
 

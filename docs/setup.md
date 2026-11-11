@@ -45,7 +45,9 @@ for access while your computer is off. [Compare self-hosting options](hosting.md
 
 ## Before you start
 
-Install Docker with **Compose 2.24 or newer**, then start it:
+Install Docker with **Compose 2.24 or newer** and Docker Buildx, then start it.
+Docker Desktop includes Buildx; on Linux, install the Docker Buildx plugin along
+with Docker Engine and the Compose plugin:
 
 | System | Install | Terminal |
 | --- | --- | --- |
@@ -71,8 +73,8 @@ the project in Ubuntu's filesystem; use the same terminal/folder consistently.
 This guide describes **2.3**. Use the setup guide and Compose files bundled with
 your chosen revision. For v2.2.0, follow its
 [versioned setup guide](https://github.com/TechShreyash/TGDrive/blob/v2.2.0/docs/setup.md):
-it uses source builds and the older backup-key model. Image-based commands below
-need the 2.3 Compose files and a matching published image; do not mix versions.
+it uses the older backup-key model. Do not mix its instructions with the
+Compose files or recovery guidance from another revision.
 
 With Git installed:
 
@@ -82,8 +84,9 @@ cd TGDrive
 ~~~
 
 Run the commands below from this folder as your normal user. **`main` is the
-stable branch; `dev` may be unstable.** Without Git, extract the
-[stable source ZIP](https://github.com/TechShreyash/TGDrive/archive/refs/heads/main.zip)
+stable released source; `dev` is the latest source and may be unstable.** To
+start from `dev`, substitute `dev` for `main` in the clone command. Without Git,
+extract the [stable source ZIP](https://github.com/TechShreyash/TGDrive/archive/refs/heads/main.zip)
 and open a terminal in `TGDrive-main`.
 
 <details>
@@ -215,17 +218,13 @@ project folder, on any supported system:
 
 ~~~bash
 docker compose config --quiet
-docker compose pull
-docker compose up -d
+docker compose up -d --build
 docker compose ps
 ~~~
 
-The pull path requires a published image for the selected release. Set
-`TGDRIVE_VERSION=X.Y.Z` in `.env` to match the checked-out application tag
-`vX.Y.Z`; the default is `latest`. Release maintainers must verify the amd64 and
-arm64 manifest before announcing image-based setup. To run a fork, `dev` or
-local changes, follow [Build from the repository](#build-from-the-repository-dev-or-local-edits)
-instead of pulling a release image.
+Compose builds the backend and website from the source in this folder, including
+local uncommitted edits. The first build can take time and needs Docker Buildx,
+which is included in Docker Desktop.
 
 `config --quiet` checks syntax, not credentials; plain
 `docker compose config` prints secrets.
@@ -255,56 +254,26 @@ after Docker starts, set `TGDRIVE_RESTART_POLICY=unless-stopped` and recreate.
 
 ### Build from the repository, dev or local edits
 
-TGDrive supports both published images and builds from source. A published image
-is a packaged copy of the code at the time it was built. Pushing a new commit to
-`dev` changes the repository; it does not update an existing release image.
-The release publisher runs for eligible application release tags, not every
-`dev` commit.
-
-| What you want to run | Source to build |
-| --- | --- |
-| A commit pushed to `dev` | Check out that branch or exact commit on the build machine. |
-| Your fork | Check out your fork and selected branch. |
-| Local application edits | Use the edited checkout; the edits need not be committed or pushed. |
+The default Compose service builds the checked-out source. Use `main` for stable
+released code, `dev` for the latest potentially unstable code, or a published
+application tag for a fixed version. A fork or local edits are built from the
+checkout on the machine running Docker; those edits need not be committed.
 
 After preparing `.env`, run from that checkout:
 
 ~~~bash
-docker compose build app
-docker compose up -d --no-build --pull never app
+docker compose up -d --build
 docker compose ps
 ~~~
 
-The first command builds the backend and website from this folder. The second
-starts that local image without replacing it with a registry download. Buildx
-is required and is included in Docker Desktop. On a server, keep both
-`-f compose.yaml -f compose.server.yaml` arguments in every command.
+On a server, keep both `-f compose.yaml -f compose.server.yaml` arguments in
+every command. Preserve `.env`, keys, volumes and the Compose project name
+when updating an existing drive, and run only one instance per drive.
 
-The Dockerfile's pinned base images and dependency lockfiles select the build
-environment; they do not prevent building changed application code. The local
-build uses the image name configured in Compose and does not publish it. A later
-`docker compose pull` can replace that local tag with the published image.
-Preserve `.env`, keys, volumes and the Compose project name when updating an
-existing drive, and run only one instance per drive.
-
-For a **Git-based Coolify source deployment**, select the wanted repository and
-branch, such as `dev`, using the [Coolify setup](#coolify). Because the supplied
-service has both `image` and `build`, explicitly select building from source:
-add `pull_policy: build` under `services.app` in that deployment's Compose file:
-
-~~~yaml
-services:
-    app:
-        pull_policy: build
-~~~
-
-This is an excerpt: add the property to the existing service, keeping its
-`image`, `build`, environment and volumes. It is a sibling of `build`, not a
-setting inside it. Redeploying then builds the checked-out source instead of
-relying on a published release image. See
-[Compose pull policy](https://docs.docker.com/reference/compose-file/services/#pull_policy).
-A remote Git deployment cannot see unpushed local edits: transfer the source or
-built image to that machine, or push the changes to the branch it builds.
+For a Git-based Coolify deployment, choose the desired repository and branch or
+tag in [Coolify setup](#coolify), then redeploy to build that revision. A
+remote Git deployment cannot see uncommitted or unpushed local edits; put the
+source on the build machine or push it to the branch that machine builds.
 
 ## 5. Open your drive
 
@@ -328,8 +297,9 @@ Follow [upgrade and rollback](operations.md#upgrade-and-rollback). Preserve the
 database, channel, `.env`, project name and volumes. Coming from 2.0–2.2, add
 `ENCRYPTION_KEY` to `.env` first; 2.3 upgrades the drive on its first start
 ([steps](operations.md#upgrade-from-22-or-earlier)). Use stable `main` or a
-published release tag; update Compose files to that same revision while
-preserving local deployment changes.
+published release tag, or `dev` for the latest potentially unstable source;
+update Compose files to that same revision while preserving local deployment
+changes.
 
 ## If setup stops
 
@@ -375,9 +345,10 @@ preparation above. For deployment choices, see [Self-hosting](hosting.md).
 on your Docker server. Its self-hosted edition is free; infrastructure costs remain.
 
 1. Create a public Git application from `https://github.com/TechShreyash/TGDrive`.
-   Select a published application tag matching this guide and its image, or
-   **`main`** once that release is merged. Use the selected revision's setup
-   guide; v2.2 uses the [older source-build procedure](https://github.com/TechShreyash/TGDrive/blob/v2.2.0/docs/setup.md#coolify).
+   Select **`main`** for stable released source, **`dev`** for the latest
+   potentially unstable source, or a published application tag for a fixed
+   version. Use the selected revision's setup guide; v2.2 uses the
+   [older source-build procedure](https://github.com/TechShreyash/TGDrive/blob/v2.2.0/docs/setup.md#coolify).
 2. Under **General → Build pipeline**, choose **Compose**, **Base Directory** `/`
    and **Docker Compose Location** `/compose.yaml`.
 3. Enter the [required variables](#3-configure-your-drive) in **Environment Variables**.
@@ -389,9 +360,9 @@ on your Docker server. Its self-hosted edition is free; infrastructure costs rem
 5. **Deploy**, wait for `app` to become healthy, then complete
    [first login and backup](#5-open-your-drive) at your domain.
 
-To deploy `dev` or a fork from source, follow
-[Build from the repository](#build-from-the-repository-dev-or-local-edits).
-Selecting a Git branch alone does not update a separately published image.
+Redeploy builds the selected repository revision. A remote Git deployment
+cannot use unpushed local edits; see
+[building from the repository](#build-from-the-repository-dev-or-local-edits).
 
 Use a domain with a valid HTTPS certificate; the default HTTP `sslip.io` address
 does not meet TGDrive's [remote browser requirements](operations.md#can-tgdrive-run-over-http).
@@ -405,8 +376,7 @@ Prepare `.env` as above. Name **both files explicitly** to avoid the laptop over
 
 ~~~bash
 docker compose -f compose.yaml -f compose.server.yaml config --quiet
-docker compose -f compose.yaml -f compose.server.yaml pull
-docker compose -f compose.yaml -f compose.server.yaml up -d
+docker compose -f compose.yaml -f compose.server.yaml up -d --build
 docker compose -f compose.yaml -f compose.server.yaml ps
 ~~~
 

@@ -11,7 +11,7 @@ body:
     id: version
     attributes:
       label: TGDrive version
-      description: The release tag or `TGDRIVE_VERSION` you run, or the commit for a source checkout.
+      description: The release tag or source commit you run; include main or dev when using a branch checkout.
       placeholder: 2.3.0
     validations:
       required: true

@@ -327,15 +327,11 @@ updates. `dev` contains ongoing work and may be unstable. Follow
 > Keep the same MongoDB, channel and volumes. On first start, 2.3 upgrades the
 > drive in place: see [what the 2.2 upgrade changes](#upgrade-from-22-or-earlier).
 2. Record the running version and source commit; review the new version's requirements.
-3. Update the source and Compose files to the selected release, preserving your
-   deployment changes. The first image-based upgrade needs the new Compose files;
-   changing `TGDRIVE_VERSION` in a 2.2 checkout is insufficient.
-   Once that release's image is published, set `TGDRIVE_VERSION` to it, then
-   run `docker compose pull && docker compose up -d`, keeping server `-f`
-   arguments, or redeploy in Coolify. Preserve volumes and start only one
+3. Update the source and Compose files to the selected branch or release tag,
+   preserving your local edits and deployment changes. Build that checkout with
+   `docker compose up -d --build`, keeping server `-f` arguments, or redeploy
+   the selected revision in Coolify. Preserve volumes and start only one
    instance. Check database status, Connections and a representative file.
-   Building from a source checkout instead? Update it as below and run
-   `docker compose up -d --build`.
 
 **Release archive:** [Verify and extract](release.md#verify-a-downloaded-source-archive)
 into a separate folder. Copy your private `.env` and reviewed Compose changes.
@@ -344,12 +340,16 @@ existing volumes. Retain the old folder for rollback. Never replace your real
 configuration with `.env.example`.
 
 **Git checkout:** Record `git rev-parse HEAD`. On `main`, use `git switch main`,
-then `git pull --ff-only origin main`. For a pinned version, use
+then `git pull --ff-only origin main`. To use the latest potentially unstable
+source, use `git switch dev` and `git pull --ff-only origin dev` if that branch
+is available locally. For a pinned version, use
 `git fetch origin --tags`, then `git switch --detach vX.Y.Z`, substituting the
 selected published application tag. If Git refuses, preserve local changes
 before continuing.
 
-**Coolify:** Select the published tag or `main`, retaining private variables and mounts.
+**Coolify:** Select `main`, `dev` or a published tag, retaining private variables
+and mounts; redeploy builds that revision. Unpushed local edits are not available
+to a remote Git deployment.
 
 Native installs need `aria2c` for torrent imports; Docker includes it.
 
