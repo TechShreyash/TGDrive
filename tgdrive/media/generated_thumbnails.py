@@ -395,7 +395,10 @@ async def _generate(
     slots = _background_slots if background else _slots
     slot = slots.setdefault(asyncio.get_running_loop(), asyncio.Semaphore(1))
     try:
-        await asyncio.wait_for(slot.acquire(), timeout=NATIVE_ADMISSION_SECONDS)
+        if background:
+            await slot.acquire()
+        else:
+            await asyncio.wait_for(slot.acquire(), timeout=NATIVE_ADMISSION_SECONDS)
     except TimeoutError as exc:
         if raise_busy:
             raise ThumbnailRendererBusy from exc

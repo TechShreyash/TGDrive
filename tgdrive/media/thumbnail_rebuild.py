@@ -63,6 +63,10 @@ class SourceLimit(Exception):
     pass
 
 
+class SourceDeferred(Exception):
+    pass
+
+
 class RebuildSource:
     """Four hot blocks and a cumulative per-file read limit, including repeat reads."""
 
@@ -70,6 +74,9 @@ class RebuildSource:
         self.owner, self.data = owner, data
         self.blocks = OrderedDict()
         self.used = 0
+        self.admitted_bytes = 0
+        self.deferred = False
+        self.failure_reason = None
         self.budget = (
             PDF_BUDGET if Path(data["name"]).suffix.lower() == ".pdf" else SOURCE_BUDGET
         )
@@ -97,9 +104,13 @@ class RebuildSource:
                 index = offset // BLOCK
                 if index not in self.blocks:
                     length = min(BLOCK, self.data["size"] - index * BLOCK)
-                    if self.used + length > self.budget:
+                    if self.admitted_bytes + length > self.budget:
                         raise SourceLimit("Source read budget reached")
-                    await self.owner.wait_turn()
+                    if self.owner.busy():
+                        self.deferred = True
+                        raise SourceDeferred
+                    # Interrupted reads still consume admission across retries.
+                    self.admitted_bytes += length
                     began = time.monotonic()
                     data = await read_range(
                         self.owner.runtime().pool,
@@ -149,7 +160,11 @@ class RebuildSource:
             partial = True
         if not 0 <= start <= end < size:
             raise web.HTTPRequestRangeNotSatisfiable()
-        await self.authorize()
+        try:
+            await self.authorize()
+        except SourceLimit as error:
+            self.failure_reason = str(error)
+            raise web.HTTPConflict() from None
         headers = {
             "Accept-Ranges": "bytes",
             "Content-Length": str(end - start + 1),
@@ -170,7 +185,10 @@ class RebuildSource:
                 start += len(data)
                 await asyncio.sleep(len(data) / RATE)
             await response.write_eof()
-        except ConnectionError, SourceLimit, asyncio.CancelledError:
+        except SourceLimit as error:
+            self.failure_reason = str(error)
+            response.force_close()
+        except ConnectionError, SourceDeferred, asyncio.CancelledError:
             response.force_close()
         return response
 
@@ -189,7 +207,8 @@ class RebuildSource:
 
     async def close(self):
         if self.runner is not None:
-            await self.runner.cleanup()
+            runner, self.runner = self.runner, None
+            await covers._owned_task(asyncio.create_task(runner.cleanup()))
 
 
 class ThumbnailRebuild:
@@ -366,11 +385,40 @@ class ThumbnailRebuild:
             await covers._owned_disk_call(output.flush)
             return await covers.generate(temporary, "cover" + suffix, background=True)
         finally:
-            await source.close()
-            if output is not None:
-                await covers._owned_disk_call(
-                    self.staging._cleanup_source, output, temporary
-                )
+            try:
+                await source.close()
+            finally:
+                if output is not None:
+                    await covers._owned_disk_call(
+                        self.staging._cleanup_source, output, temporary
+                    )
+
+    async def render_when_runnable(self, source):
+        remaining_seconds = 960.0
+        while remaining_seconds > 0:
+            source.deferred = False
+            began = time.monotonic()
+            try:
+                async with asyncio.timeout(remaining_seconds):
+                    try:
+                        cover = await self.render_file(source)
+                    except SourceDeferred:
+                        cover = None
+            except TimeoutError:
+                raise SourceLimit(
+                    source.failure_reason or "Thumbnail rendering time budget reached"
+                ) from None
+            finally:
+                remaining_seconds -= time.monotonic() - began
+            if source.failure_reason:
+                raise SourceLimit(source.failure_reason)
+            if remaining_seconds <= 0:
+                break
+            if cover or not (source.deferred or self.busy()):
+                return cover
+            # render_file has drained native work and temporary sources.
+            await self.wait_turn()
+        raise SourceLimit("Thumbnail rendering time budget reached")
 
     async def run(self):
         priority = media_priority.set("preload")
@@ -416,9 +464,7 @@ class ThumbnailRebuild:
                     await self.wait_turn()
                     source = RebuildSource(self, data)
                     try:
-                        # shortcut: just above the 15-minute remote render guard.
-                        async with asyncio.timeout(960):
-                            cover = await self.render_file(source)
+                        cover = await self.render_when_runnable(source)
                         await source.authorize()
                         if cover:
                             await asyncio.to_thread(

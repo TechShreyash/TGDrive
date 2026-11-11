@@ -15,6 +15,9 @@ For a library, use [background rebuilding](#rebuild-existing-thumbnails).
 - [Existing files and fallback](#existing-files-and-fallback)
 - [Container dependencies](#container-dependencies)
 
+<details>
+<summary>Supported cover sources by file type</summary>
+
 | File | Cover |
 | --- | --- |
 | JPEG, PNG, WebP, GIF, BMP, TIFF | Scaled image; one frame for animation |
@@ -24,6 +27,8 @@ For a library, use [background rebuilding](#rebuild-existing-thumbnails).
 | MP3, FLAC, M4A, Ogg/Opus, WAV, AAC | Embedded artwork when available to the decoder; otherwise an icon |
 | DOCX/PPTX/XLSX, ODT/ODP/ODS | Embedded raster preview when present |
 | AVIF | Image when the installed decoder supports it |
+
+</details>
 
 ## Video posters
 
@@ -91,9 +96,39 @@ counter includes cache reads, so it is not a network meter.
 predates the current navigation and does not show a completed full-library rebuild.
 
 The worker handles one file at a time and waits while transfers or media requests
-are active. Reads use the lower-priority queue, paced to 2 MiB/s before block/cache
-overhead. Already running requests cannot be preempted; rebuilding still shares
-server CPU, disk and network.
+are active. If foreground work is encountered before fetching another source
+block, it cleans up the current renderer and temporary source, waits, then retries
+the same file. This policy wait does not increment checked or skipped counts;
+you can still cancel it. Already running requests cannot be preempted, and
+rebuilding still shares server CPU, disk and network.
+
+Per-file limits remain **64 MiB of admitted source reads** (**256 MiB for PDFs**)
+and **960 seconds across attempts**, excluding deliberate foreground waits.
+Native rendering guards also still apply.
+
+<details>
+<summary>Read budgets, rendering time and progress counters</summary>
+
+Reads use the lower-priority queue, paced to 2 MiB/s before block/cache overhead.
+Each block missing from the rebuild source's small hot-block cache is
+charged before fetching, including interrupted attempts; retries do not refund
+that charge. Returned blocks can come from shared cache, not just Telegram.
+The displayed source-byte counter counts fully returned blocks, so it can be
+below an exhausted admission budget.
+
+The cumulative attempt budget covers renderer-slot waiting, source reads,
+pacing, rendering and cleanup across retries. The initial
+foreground wait and deliberate foreground waits after cleanup are excluded.
+Background renderer-slot admission waits cancellably within that budget;
+foreground preview and cached-cover repair retain their two-second admission
+wait. Other native rendering guards still apply. A time-budget exhaustion is
+reported explicitly; waiting or retrying does not guarantee a cover.
+
+Retries retain the same source identity, hot blocks and accumulated admission
+charges. Source-limit failures appear in recent issues without exposing raw
+renderer diagnostics or source URLs.
+
+</details>
 
 Successful covers replace local cached covers; originals, catalog records and
 Telegram messages stay unchanged. Failures keep old covers. Changed/removed files

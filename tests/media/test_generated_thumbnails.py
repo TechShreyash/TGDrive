@@ -13,6 +13,7 @@ from telethon import TelegramClient, types
 from telethon.errors import RPCError
 
 from tests.support.book_samples import png
+from tgdrive.media import generated_thumbnails as covers
 from tgdrive.media.generated_thumbnails import MAX_BYTES, generate, read, save
 from tgdrive.telegram.clients import Client
 
@@ -34,6 +35,57 @@ async def test_native_generation_is_small_and_preserves_original(tmp_path, name)
     assert cover and cover.startswith(b"\xff\xd8\xff") and cover.endswith(b"\xff\xd9")
     assert len(cover) <= MAX_BYTES
     assert path.read_bytes() == original
+
+
+@pytest.mark.parametrize("cancel", [False, True])
+async def test_background_admission_waits_and_cancels_without_releasing_another_slot(
+    tmp_path, monkeypatch, cancel
+):
+    if not shutil.which("ffmpeg"):
+        pytest.skip("native decoder unavailable")
+    path = tmp_path / "cover.png"
+    path.write_bytes(png())
+    slot = asyncio.Semaphore(0)
+    monkeypatch.setitem(covers._background_slots, asyncio.get_running_loop(), slot)
+    monkeypatch.setattr(covers, "NATIVE_ADMISSION_SECONDS", 0.01)
+    pending = asyncio.create_task(generate(path, path.name, background=True))
+    try:
+        with pytest.raises(TimeoutError):
+            await asyncio.wait_for(asyncio.shield(pending), 0.05)
+        assert slot.locked()
+        if cancel:
+            pending.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await pending
+            assert slot.locked()
+        slot.release()
+        cover = (
+            await generate(path, path.name, background=True)
+            if cancel
+            else await asyncio.wait_for(pending, 5)
+        )
+        assert cover and cover.startswith(b"\xff\xd8\xff")
+        assert slot._value == 1
+    finally:
+        if not pending.done():
+            pending.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await pending
+
+
+@pytest.mark.parametrize("raise_busy", [False, True])
+async def test_foreground_admission_retains_its_short_timeout(
+    tmp_path, monkeypatch, raise_busy
+):
+    slot = asyncio.Semaphore(0)
+    monkeypatch.setitem(covers._slots, asyncio.get_running_loop(), slot)
+    monkeypatch.setattr(covers, "NATIVE_ADMISSION_SECONDS", 0.01)
+    if raise_busy:
+        with pytest.raises(covers.ThumbnailRendererBusy):
+            await generate(tmp_path / "cover.png", "cover.png", raise_busy=True)
+    else:
+        assert await generate(tmp_path / "cover.png", "cover.png") is None
+    assert slot.locked()
 
 
 async def test_native_uhd_hevc_mov_has_a_cover_with_bounded_worker_memory(tmp_path):
