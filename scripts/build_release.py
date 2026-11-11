@@ -152,8 +152,10 @@ def source_files(root: Path) -> list[Path]:
         if not base.is_dir():
             raise FileNotFoundError(f"Missing required source directory: {directory}")
         for path in base.rglob("*"):
+            parts = path.relative_to(base).parts
             if (
-                EXCLUDED_PARTS.intersection(path.relative_to(base).parts)
+                EXCLUDED_PARTS.intersection(parts)
+                or any(part == ".env" or part.startswith(".env.") for part in parts)
                 or path.name in {"skills-lock.json", "request-tracker.md"}
                 or path.suffix not in suffixes
             ):

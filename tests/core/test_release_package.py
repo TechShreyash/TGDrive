@@ -198,6 +198,31 @@ def test_source_archive_excludes_local_state_and_private_documents(
     )
 
 
+@pytest.mark.parametrize(
+    "private_name",
+    [
+        "website/src/.env.json",
+        "tgdrive/core/.env.py",
+        "website/src/.env/config.json",
+        "tgdrive/.env.production/settings.py",
+    ],
+)
+def test_source_archive_excludes_env_files_and_directories(
+    tmp_path: Path, private_name: str
+) -> None:
+    source = tmp_path / "source"
+    _source_tree(source)
+    private = source / private_name
+    private.parent.mkdir(parents=True, exist_ok=True)
+    private.write_text("SYNTHETIC-PRIVATE-CONTENT", encoding="utf-8")
+
+    archive_path, _ = build_release(source, tmp_path / "output")
+
+    with zipfile.ZipFile(archive_path) as archive:
+        assert f"tgdrive-2.0.0/{private_name}" not in archive.namelist()
+        assert "tgdrive-2.0.0/.env.example" in archive.namelist()
+
+
 def test_source_archive_is_reproducible(tmp_path: Path) -> None:
     source = tmp_path / "source"
     _source_tree(source)
