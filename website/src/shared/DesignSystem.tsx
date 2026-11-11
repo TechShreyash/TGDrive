@@ -43,7 +43,7 @@ export const driveTheme = createTheme({
         NativeSelect: NativeSelect.extend({
             defaultProps: { size: "sm", radius: "md" },
         }),
-        Switch: Switch.extend({ defaultProps: { size: "md", color: "teal" } }),
+        Switch: Switch.extend({ defaultProps: { size: "md", color: "blue" } }),
         Paper: Paper.extend({
             defaultProps: { radius: "lg", withBorder: true, shadow: undefined },
         }),

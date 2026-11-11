@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 import re
 import time
@@ -21,6 +22,87 @@ from tests.browser.test_browser_e2e import (  # noqa: E402
     login,
     server,  # noqa: F401 - shared pytest fixture
 )
+
+
+@pytest.mark.parametrize("theme", ["light", "dark"])
+def test_neutral_theme_surfaces_and_monitor_layout(server, desktop, theme):
+    _, page = desktop
+    page.add_init_script(f"localStorage.setItem('tgdrive.appearance', '{theme}')")
+    page.goto(server.url)
+    expect(page.locator("#login-dialog")).to_be_visible()
+
+    contrast_readings = {}
+
+    def check_surface(selector, *, neutral=True):
+        colors = page.locator(selector).first.evaluate("""node => {
+          const style = getComputedStyle(node);
+          let parent = node;
+          while (parent.parentElement &&
+            getComputedStyle(parent).backgroundColor === 'rgba(0, 0, 0, 0)')
+            parent = parent.parentElement;
+          return {ink: style.color,
+            background: getComputedStyle(parent).backgroundColor};
+        }""")
+        ink, background = (
+            [int(value) for value in re.findall(r"\d+", colors[key])[:3]]
+            for key in ("ink", "background")
+        )
+        if neutral:
+            assert max(background) - min(background) <= 12, colors
+
+        def luminance(channels):
+            linear = [
+                value / 255 / 12.92
+                if value / 255 <= 0.04045
+                else ((value / 255 + 0.055) / 1.055) ** 2.4
+                for value in channels
+            ]
+            return sum(
+                a * b for a, b in zip(linear, (0.2126, 0.7152, 0.0722), strict=True)
+            )
+
+        bright, dark = sorted((luminance(ink), luminance(background)), reverse=True)
+        ratio = (bright + 0.05) / (dark + 0.05)
+        assert ratio >= 4.5, colors
+        contrast_readings[f"{page.url}:{selector}"] = {**colors, "ratio": ratio}
+
+    check_surface("body")
+    check_surface("#login-dialog .primary-button", neutral=False)
+    check_surface("#login-dialog > p")
+    page.screenshot(
+        path=ARTIFACTS / f"neutral-login-{theme}.png", animations="disabled"
+    )
+    login(page)
+    for view, heading in (
+        ("files", "My Files"),
+        ("preloads", "Preloads"),
+        ("settings", "Cache & preloading"),
+        ("performance", "Performance"),
+    ):
+        page.goto(server.url + f"/?view={view}")
+        expect(page.get_by_role("heading", name=heading, exact=True)).to_be_visible()
+        check_surface(".workspace")
+        assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
+        page.screenshot(
+            path=ARTIFACTS / f"neutral-{view}-{theme}.png", animations="disabled"
+        )
+    network = page.get_by_role("region", name="Network traffic", exact=True)
+    resources = page.get_by_role("region", name="Resources", exact=True)
+    network_box, resource_box = network.bounding_box(), resources.bounding_box()
+    assert abs(network_box["y"] - resource_box["y"]) < 2
+    assert network_box["width"] > resource_box["width"] * 1.5
+    assert network_box["y"] < 650
+    page.set_viewport_size({"width": 390, "height": 844})
+    assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
+    assert resources.bounding_box()["y"] > network.bounding_box()["y"]
+    page.screenshot(
+        path=ARTIFACTS / f"neutral-performance-mobile-{theme}.png",
+        full_page=True,
+        animations="disabled",
+    )
+    (ARTIFACTS / f"neutral-contrast-{theme}.json").write_text(
+        json.dumps(contrast_readings, indent=2)
+    )
 
 
 def test_performance_explanation_without_backend_support(server, desktop):
@@ -683,7 +765,8 @@ def test_network_includes_url_downloads_and_resources_use_container_limits(
         assert tip["x"] >= frame["x"]
         assert tip["x"] + tip["width"] <= frame["x"] + frame["width"] + 1
         positions.append(tip["x"])
-    assert positions[1] > positions[0] + 100
+    # Narrow charts flip the tooltip to the pointer's left to stay contained.
+    assert max(positions) - min(positions) > 10
     expect(network.locator("svg title")).to_have_count(0)
 
     expect(
@@ -706,8 +789,10 @@ def test_network_includes_url_downloads_and_resources_use_container_limits(
               summaryColor: getComputedStyle(node.querySelector('[role=status]')).color,
               animationName: getComputedStyle(node).animationName,
               theme: document.documentElement.dataset.theme,
-              drawerExpanded: document.querySelector('#navigation-toggle')?.getAttribute('aria-expanded'),
-              drawerBounds: document.querySelector('#drive-navigation')?.getBoundingClientRect()
+              drawerExpanded: document.querySelector('#navigation-toggle')
+                ?.getAttribute('aria-expanded'),
+              drawerBounds: document.querySelector('#drive-navigation')
+                ?.getBoundingClientRect()
             }, null, 2)""")
         )
 
@@ -729,7 +814,8 @@ def test_network_includes_url_downloads_and_resources_use_container_limits(
         toggle.click()
     expect(toggle).to_have_attribute("aria-expanded", "false")
     page.wait_for_function(
-        "() => document.querySelector('#drive-navigation').getBoundingClientRect().right <= 1"
+        "() => document.querySelector('#drive-navigation')"
+        ".getBoundingClientRect().right <= 1"
     )
     assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
     record_overview_style("mobile-dark")

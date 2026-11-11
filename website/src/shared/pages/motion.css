@@ -5,24 +5,10 @@
  */
 
 /* Lists and cards: opacity-only stagger, capped at 8 steps. */
-:is(
-    .settings-section,
-    .performance-section,
-    .transfer-batch,
-    .transfer-item,
-    .share-row,
-    .preload-job
-) {
+:is(.transfer-batch, .transfer-item, .share-row, .preload-job) {
     animation: refresh-fade var(--dur-3) var(--ease-out) backwards;
 }
-:is(
-    .settings-section,
-    .performance-section,
-    .transfer-batch,
-    .transfer-item,
-    .share-row,
-    .preload-job
-) {
+:is(.transfer-batch, .transfer-item, .share-row, .preload-job) {
     &:nth-child(2) {
         animation-delay: 30ms;
     }

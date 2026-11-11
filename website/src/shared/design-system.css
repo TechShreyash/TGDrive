@@ -78,11 +78,6 @@
 .configuration-group-title svg {
     color: var(--action);
 }
-.performance-setting-group:has(.configuration-auto-preload)
-    .configuration-group-title
-    svg {
-    color: var(--success);
-}
 .performance-field {
     padding-block: 16px;
     gap: 20px;
@@ -285,7 +280,7 @@
     --action: var(--violet);
 }
 .performance-metric-chart[data-metric="memory_bytes"] {
-    --action: var(--success);
+    --action: var(--hue-teal);
 }
 .performance-section-title {
     padding-bottom: 10px;
@@ -315,11 +310,11 @@
     color: var(--ink);
 }
 .performance-overview-status {
-    background: var(--success-soft);
+    background: var(--surface-subtle);
     border: 1px solid var(--line);
     border-radius: 10px;
     padding: 14px 16px;
-    color: var(--success);
+    color: var(--ink);
     margin-top: 16px;
 }
 .performance-table-wrap {

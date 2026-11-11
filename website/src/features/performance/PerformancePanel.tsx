@@ -1332,74 +1332,6 @@ export default function PerformancePanel({
                                 "."
                             }
                         />
-                        {traffic && (
-                            <section
-                                className="performance-section performance-live-traffic"
-                                aria-labelledby="http-traffic-heading"
-                            >
-                                <div className="performance-section-title">
-                                    <h3 id="http-traffic-heading">
-                                        Live file transfers
-                                    </h3>
-                                    <span className="performance-chart-now">
-                                        Now
-                                    </span>
-                                </div>
-                                <dl className="performance-live-strip">
-                                    <div data-series="out">
-                                        <dt>
-                                            <ArrowDownToLine
-                                                size={14}
-                                                aria-hidden="true"
-                                            />
-                                            To viewers
-                                        </dt>
-                                        <dd>
-                                            {typeof sendRate === "number"
-                                                ? formatBytes(sendRate) + "/s"
-                                                : "Measuring…"}
-                                        </dd>
-                                    </div>
-                                    <div data-series="in">
-                                        <dt>
-                                            <ArrowUpFromLine
-                                                size={14}
-                                                aria-hidden="true"
-                                            />
-                                            From devices
-                                        </dt>
-                                        <dd>
-                                            {typeof receiveRate === "number"
-                                                ? formatBytes(receiveRate) +
-                                                  "/s"
-                                                : "Measuring…"}
-                                        </dd>
-                                    </div>
-                                    <div>
-                                        <dt>Active requests</dt>
-                                        <dd>
-                                            {traffic.active.toLocaleString()}
-                                        </dd>
-                                    </div>
-                                    <div>
-                                        <dt>Telegram operations</dt>
-                                        <dd>
-                                            {telegram.active} active ·{" "}
-                                            {telegram.queued} waiting
-                                        </dd>
-                                    </div>
-                                </dl>
-                                <details className="performance-detail-note">
-                                    <summary>Traffic scope</summary>
-                                    <p>
-                                        Current file-body traffic, including
-                                        cached downloads. Device uploads and
-                                        viewer delivery are separate from
-                                        server-network traffic.
-                                    </p>
-                                </details>
-                            </section>
-                        )}
                         <section
                             className="performance-section performance-limits"
                             aria-labelledby="speed-limits-heading"
@@ -1525,6 +1457,74 @@ export default function PerformancePanel({
                                 )}
                             </details>
                         </section>
+                        {traffic && (
+                            <section
+                                className="performance-section performance-live-traffic"
+                                aria-labelledby="http-traffic-heading"
+                            >
+                                <div className="performance-section-title">
+                                    <h3 id="http-traffic-heading">
+                                        Live file transfers
+                                    </h3>
+                                    <span className="performance-chart-now">
+                                        Now
+                                    </span>
+                                </div>
+                                <dl className="performance-live-strip">
+                                    <div data-series="out">
+                                        <dt>
+                                            <ArrowDownToLine
+                                                size={14}
+                                                aria-hidden="true"
+                                            />
+                                            To viewers
+                                        </dt>
+                                        <dd>
+                                            {typeof sendRate === "number"
+                                                ? formatBytes(sendRate) + "/s"
+                                                : "Measuring…"}
+                                        </dd>
+                                    </div>
+                                    <div data-series="in">
+                                        <dt>
+                                            <ArrowUpFromLine
+                                                size={14}
+                                                aria-hidden="true"
+                                            />
+                                            From devices
+                                        </dt>
+                                        <dd>
+                                            {typeof receiveRate === "number"
+                                                ? formatBytes(receiveRate) +
+                                                  "/s"
+                                                : "Measuring…"}
+                                        </dd>
+                                    </div>
+                                    <div>
+                                        <dt>Active requests</dt>
+                                        <dd>
+                                            {traffic.active.toLocaleString()}
+                                        </dd>
+                                    </div>
+                                    <div>
+                                        <dt>Telegram operations</dt>
+                                        <dd>
+                                            {telegram.active} active ·{" "}
+                                            {telegram.queued} waiting
+                                        </dd>
+                                    </div>
+                                </dl>
+                                <details className="performance-detail-note">
+                                    <summary>Traffic scope</summary>
+                                    <p>
+                                        Current file-body traffic, including
+                                        cached downloads. Device uploads and
+                                        viewer delivery are separate from
+                                        server-network traffic.
+                                    </p>
+                                </details>
+                            </section>
+                        )}
                         {snapshot.tuning && (
                             <AutomaticTuning tuning={snapshot.tuning} />
                         )}

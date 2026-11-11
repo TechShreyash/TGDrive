@@ -289,6 +289,10 @@
     column-gap: 32px;
     align-items: start;
     margin-top: 0;
+    padding: 12px 20px 4px;
+    border: 1px solid var(--line);
+    border-radius: 12px;
+    background: var(--surface-raised);
 }
 .performance-explanation:not(:has(.performance-workload)) {
     grid-template-columns: 1fr;
@@ -313,7 +317,7 @@
 }
 .performance-explanation .performance-explanation-summary {
     grid-column: 1;
-    margin: 8px 0;
+    margin: 4px 0;
     font-size: 14px;
     line-height: 1.5;
     color: var(--ink);
@@ -342,17 +346,19 @@
 }
 .performance-workload > div {
     min-width: 0;
+    padding-inline-start: 12px;
+    border-inline-start: 1px solid var(--line);
 }
 .performance-workload dt {
     color: var(--muted);
     font-size: 12px;
-    margin-bottom: 6px;
+    margin-bottom: 2px;
 }
 .performance-workload dd {
     margin: 0;
     color: var(--ink);
     font-size: 24px;
-    font-weight: 500;
+    font-weight: 650;
     font-variant-numeric: tabular-nums;
 }
 .performance-waits {
@@ -399,6 +405,7 @@
 }
 .performance-explanation > .performance-detail-note {
     grid-column: 1 / -1;
+    margin-top: 0;
 }
 .performance-overview-grid .performance-facts {
     grid-template-columns: 1fr;
@@ -1525,11 +1532,12 @@
     .performance-explanation {
         grid-template-columns: 1fr;
         gap: 0;
+        padding-inline: 16px;
     }
     .performance-workload-scope {
         grid-column: 1;
         grid-row: auto;
-        margin-top: 16px;
+        margin-top: 8px;
     }
     .performance-workload {
         grid-column: 1;

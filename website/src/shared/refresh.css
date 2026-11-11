@@ -4,17 +4,6 @@
  * Loaded last so it can retune tokens and shell styles in one place.
  */
 :root:is([data-theme], :not([data-theme])) {
-    --canvas: light-dark(#f7f3ea, #141713);
-    --surface: light-dark(#fdfbf7, #191d18);
-    --surface-raised: light-dark(#ffffff, #1e241d);
-    --surface-subtle: light-dark(#f1ebdf, #161a15);
-    --line: light-dark(rgba(28, 31, 26, 0.12), rgba(236, 231, 218, 0.13));
-    --line-subtle: light-dark(rgba(28, 31, 26, 0.08), rgba(236, 231, 218, 0.08));
-    --hover: light-dark(rgba(28, 31, 26, 0.05), rgba(236, 231, 218, 0.06));
-    --search: light-dark(#f1ebdf, #1a1e19);
-    --selected: light-dark(#dfe9e0, #243329);
-    --selected-hover: light-dark(#d2e2d4, #2d3f33);
-    --action-soft: light-dark(#dfe9e0, #243329);
     --menu-shadow:
         0 16px 40px -12px light-dark(#141a2340, #000c),
         0 2px 8px light-dark(#141a2312, #0006);

@@ -291,8 +291,8 @@
     .configuration-auto-preload
     input:checked
     + .mantine-Switch-track {
-    border-color: var(--success);
-    background: var(--success);
+    border-color: var(--action);
+    background: var(--action);
 }
 .performance-settings .configuration-auto-preload .mantine-Switch-label {
     font-size: 14px;
