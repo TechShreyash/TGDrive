@@ -191,13 +191,13 @@ def test_preload_inventory_cancel_and_scoped_eviction(
         name="Evict cached bytes for A long shared movie filename.mkv",
         exact=True,
     ).click()
-    page.get_by_role("button", name="Clear Cached File", exact=True).click()
+    page.get_by_role("button", name="Clear Cached Entry", exact=True).click()
     expect(
         page.get_by_text("A long shared movie filename.mkv", exact=True)
     ).to_have_count(0)
     page.get_by_role("button", name="Clear Cache", exact=True).click()
     page.get_by_role("button", name="Clear All Cache", exact=True).click()
-    expect(page.get_by_text("No files cached yet", exact=True)).to_be_visible()
+    expect(page.get_by_text("No cache entries yet", exact=True)).to_be_visible()
     assert actions == [
         ("/preparing-job/cancel", {}),
         ("/clear", {"file_id": "movie-cache"}),

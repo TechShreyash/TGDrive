@@ -262,6 +262,7 @@ async def describe_preview(
                     message_id=message_id,
                     size=base["size"],
                     name=file_name,
+                    purpose="original",
                 )
             # A preview shares the bounded prefix cache, without qualifying as
             # playback or asking the preparation manager to fetch anything else.

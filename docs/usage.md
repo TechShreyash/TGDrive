@@ -366,10 +366,18 @@ cancelling and starting again, keeping earlier outputs.
 ## Preload a file for smoother playback and downloads
 
 1. Choose **My Files → file ⋯ → Preload file**.
-2. Follow **Monitor → Preloads**. **Ready** with full coverage means the original
-   is fully cached on the server; **Partial** rows show a small coverage bar.
-   Files cached without a name show as **Unnamed file · message N**.
+2. Follow **Monitor → Preloads**. Look for **Fully cached** with full coverage
+   on the original file's row; **Partial** rows show a small coverage bar.
+   A row such as **Poster for Movie.mkv** identifies a preview image.
+   **Poster cached** means only that image is complete, not the original video.
 3. Play, download or share normally. Recheck coverage before relying on it.
+
+The **Cached entries** list includes originals and posters. Older entries can
+acquire names from matching catalog records in the background; this is not
+instant. Missing or ambiguous catalog matches can leave an entry labelled
+**Cached data · message 123** rather than guessing a filename.
+Labels describe one cache entry. A legacy multipart entry can contain only one
+stored part; use **Preload file** to prepare and verify the whole logical file.
 
 Preloading uses server disk/bandwidth and continues with the tab closed while
 TGDrive runs. Foreground playback/downloads take priority. **Cancel** keeps

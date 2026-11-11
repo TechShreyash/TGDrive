@@ -89,6 +89,7 @@ def test_manual_preload_api_caches_entire_original_for_download_and_seek(
             state = client.get("/api/v1/preloads").json()
             assert state["jobs"][0]["state"] == "ready", state
             cached = state["cache"]["files"][0]
+            assert cached["name"] == "movie.mp4" and cached["purpose"] == "original"
             assert cached["complete"]
             assert cached["ready_ranges"] == [[0, len(payload)]]
             reads = telegram.native.requests.copy()

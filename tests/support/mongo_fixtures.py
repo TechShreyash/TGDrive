@@ -157,6 +157,9 @@ class Cursor:
     def batch_size(self, _count):
         return self
 
+    def close(self):
+        pass
+
 
 class Collection:
     database: Database

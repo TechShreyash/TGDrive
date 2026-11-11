@@ -394,11 +394,20 @@
         padding-right: 92px;
     }
     .preloads-page .cached-file-heading strong {
-        display: block;
+        display: -webkit-box;
+        -webkit-line-clamp: 3;
+        -webkit-box-orient: vertical;
         max-width: 100%;
+        max-height: 63px;
         white-space: normal;
         overflow-wrap: anywhere;
         line-height: 21px;
+    }
+    .preloads-page .cached-file .cache-coverage[data-complete] {
+        grid-template-columns: minmax(0, 1fr);
+    }
+    .preloads-page .cached-file .cache-ready-state {
+        justify-self: start;
     }
     .preloads-page .cache-ready-state {
         margin-top: 4px;

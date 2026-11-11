@@ -171,6 +171,7 @@ class RebuildSource:
                 poster=poster,
                 directory=self.owner.settings.resolved_cache_dir / "posters",
                 authorize=self.authorize,
+                name=self.data["name"],
             )
         except ThumbnailBusy:
             return None

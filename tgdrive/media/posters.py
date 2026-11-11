@@ -24,7 +24,7 @@ def poster_identity(data):
     return tuple(sorted(poster.items())) if poster is not None else None
 
 
-async def load_poster(*, pool, channel_id, poster, directory, authorize):
+async def load_poster(*, pool, channel_id, poster, directory, authorize, name=""):
     def valid(content) -> TypeGuard[bytes]:
         return (
             isinstance(content, bytes)
@@ -47,6 +47,8 @@ async def load_poster(*, pool, channel_id, poster, directory, authorize):
         "size": poster["size"],
         "parts": [{"index": 0, "offset": 0, **poster}],
     }
+    if name:
+        source.update(name=name, purpose="poster")
     try:
         content = await books.read_range(
             pool,

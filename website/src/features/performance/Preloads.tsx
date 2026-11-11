@@ -69,18 +69,25 @@ export function CacheCoverage({
         file.size > 0
             ? Math.min(100, Math.floor((ready / file.size) * 100))
             : 0;
-    const state = complete ? "Ready" : status || "Partial";
+    const state = complete
+        ? file.purpose === "poster"
+            ? "Poster cached"
+            : "Fully cached"
+        : status || "Partial";
+    const label = cachedFileLabel(file);
     return (
         <div className="cache-coverage" data-complete={complete}>
             <div className="cached-file-heading">
-                {showName &&
-                    (file.name ? (
-                        <strong title={file.name}>{file.name}</strong>
-                    ) : (
-                        <strong className="cached-file-unnamed" title={file.id}>
-                            {cachedFileLabel(file)}
-                        </strong>
-                    ))}
+                {showName && (
+                    <strong
+                        className={
+                            file.name ? undefined : "cached-file-unnamed"
+                        }
+                        title={label}
+                    >
+                        {label}
+                    </strong>
+                )}
                 <span className="cached-file-meta">
                     {complete
                         ? formatBytes(file.size)
@@ -120,13 +127,14 @@ export function CacheCoverage({
         </div>
     );
 }
-/** Files cached by a raw stream before a named request have no name; show where they came from. */
 export function cachedFileLabel(file: CachedFile): string {
+    if (file.name)
+        return file.purpose === "poster"
+            ? "Poster for " + file.name
+            : file.name;
     return (
-        file.name ||
-        (file.message_id
-            ? "Unnamed file · message " + file.message_id
-            : "Unnamed file · " + file.id.slice(0, 8))
+        "Cached data · " +
+        (file.message_id ? "message " + file.message_id : file.id.slice(0, 8))
     );
 }
 export function CacheCapacity({
@@ -339,7 +347,7 @@ export default function Preloads({
     );
     const filters = [
         ["all", "All", files.length],
-        ["ready", "Ready", readyCount],
+        ["ready", "Fully cached", readyCount],
         ["partial", "Partial", files.length - readyCount],
     ] as const;
     const renderJob = (job: PreloadJob) => (
@@ -458,12 +466,12 @@ export default function Preloads({
                         className="preload-inventory"
                         aria-labelledby="cached-files-heading"
                     >
-                        <h3 id="cached-files-heading">Cached files</h3>
+                        <h3 id="cached-files-heading">Cached entries</h3>
                         <div className="preload-inventory-toolbar">
                             <div
                                 className="preload-filters"
                                 role="group"
-                                aria-label="Filter cached files"
+                                aria-label="Filter cached entries"
                             >
                                 {filters.map(([key, label, count]) => (
                                     <button
@@ -478,7 +486,7 @@ export default function Preloads({
                             </div>
                             <select
                                 className="preload-filter-select"
-                                aria-label="Filter cached files"
+                                aria-label="Filter cached entries"
                                 value={filter}
                                 onChange={(event) =>
                                     setFilter(
@@ -489,7 +497,9 @@ export default function Preloads({
                             >
                                 {filters.map(([key, label, count]) => (
                                     <option key={key} value={key}>
-                                        {label === "All" ? "All files" : label}{" "}
+                                        {label === "All"
+                                            ? "All entries"
+                                            : label}{" "}
                                         ({count})
                                     </option>
                                 ))}
@@ -524,7 +534,7 @@ export default function Preloads({
                                     }
                                     onClick={() => setClearing({})}
                                     aria-label="Clear Cache"
-                                    title="Clear all cached files"
+                                    title="Clear all cached entries"
                                 >
                                     {busy === "clear" ? (
                                         <Spinner />
@@ -543,7 +553,7 @@ export default function Preloads({
                             <>
                                 <ul
                                     className="cached-file-list"
-                                    aria-label="Cached files"
+                                    aria-label="Cached entries"
                                 >
                                     {visibleFiles.map((file) => {
                                         const job = pending.find(
@@ -668,7 +678,7 @@ export default function Preloads({
                             </>
                         ) : (
                             <div className="preload-empty">
-                                <p>No files cached yet</p>
+                                <p>No cache entries yet</p>
                                 <span>
                                     In My Files, choose{" "}
                                     <strong>Preload file</strong> from a file’s
@@ -678,7 +688,7 @@ export default function Preloads({
                         )}
                         {!!files.length && !visibleFiles.length && (
                             <p className="performance-empty">
-                                No cached files match this filter. Try another
+                                No cached entries match this filter. Try another
                                 search or choose All.
                             </p>
                         )}
@@ -717,8 +727,11 @@ export default function Preloads({
                     <p>
                         Choose <strong>Preload file</strong> from a file’s menu
                         in My Files to cache the whole file on the server.
-                        Follow its progress here; <strong>Ready</strong> means
-                        every byte is currently cached.
+                        Follow its progress here. <strong>Fully cached</strong>{" "}
+                        means every byte of that entry is currently cached.
+                        Entries labelled <strong>Poster for</strong> contain a
+                        file’s preview image; <strong>Poster cached</strong>{" "}
+                        does not mean the original file is preloaded.
                     </p>
                     <p>
                         Media playback fetches requested chunks with bounded
@@ -746,8 +759,8 @@ export default function Preloads({
                 <Modal
                     title={
                         clearing.id
-                            ? "Clear cached file?"
-                            : "Clear all cached files?"
+                            ? "Clear cached entry?"
+                            : "Clear all cached entries?"
                     }
                     onClose={() => setClearing(null)}
                     initialFocus=".preload-keep-cache"
@@ -783,7 +796,7 @@ export default function Preloads({
                             }}
                         >
                             {clearing.id
-                                ? "Clear Cached File"
+                                ? "Clear Cached Entry"
                                 : "Clear All Cache"}
                         </button>
                     </div>

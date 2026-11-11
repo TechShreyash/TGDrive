@@ -141,7 +141,9 @@ metadata checks still apply, so even cached access can make Telegram requests.
   including overhead/reservations. Adding their budgets overstates capacity:
   both may hold the same bytes.
 - Ordinary playback may cache only part of a file. Before a busy share, choose
-  **Preload file** and wait for **Ready** with full coverage in **Monitor → Preloads**.
+  **Preload file** and wait for **Fully cached** with full coverage on the
+  original's row in **Monitor → Preloads**. **Poster cached** covers only the
+  preview image, not the original video.
 
 Expiry, capacity pressure, disk loss or a failed integrity check can remove
 cached data; missing bytes need Telegram again. Cache is not a backup and does

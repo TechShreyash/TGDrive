@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import logging
 import math
 import os
 import secrets
@@ -21,11 +22,14 @@ from tgdrive.core import encryption
 from tgdrive.media.media_cache import DiskMediaCache
 from tgdrive.media.media_policy import MediaCachePolicy, merge_ranges
 from tgdrive.media.media_scheduler import MediaPriorityScope
+from tgdrive.storage import pacing
 from tgdrive.telegram.clients import _block_identity, _BlockCache
+from tgdrive.transfers.tasks import _journalled
 
 BLOCK = 1024**2
 READ_AHEAD = 32  # MiB per response, including currently requested windows.
 HEAD_WAIT_SECONDS = 30
+logger = logging.getLogger(__name__)
 
 
 class CachedSourceUnavailable(Exception):
@@ -401,6 +405,8 @@ class MediaReadCache:
         self._prune_lock = asyncio.Lock()
         self._hits = self._misses = 0
         self._index_dirty = False
+        self._metadata_task = None
+        self._metadata_seen = set()
         self._load_index()
         self._data_revision = max(
             (row.get("_data_revision", 0) for row in self._files.values()), default=0
@@ -458,6 +464,12 @@ class MediaReadCache:
                 row["_data_revision"] = (
                     revision if type(revision) is int and revision >= 0 else 0
                 )
+                if not isinstance(row.get("purpose"), str) or row["purpose"] not in {
+                    "original",
+                    "poster",
+                    "unknown",
+                }:
+                    row["purpose"] = "unknown"
                 self._files[row["id"]] = row
             for row in value.get("blocks", []):
                 key = tuple(row["key"])
@@ -514,8 +526,22 @@ class MediaReadCache:
         return hashlib.sha256(repr(value).encode()).hexdigest()[:24]
 
     def register_file(
-        self, *, channel_id, message_id, size, name="", parts=None, representation=None
+        self,
+        *,
+        channel_id,
+        message_id,
+        size,
+        name="",
+        parts=None,
+        representation=None,
+        purpose="unknown",
     ):
+        if not isinstance(purpose, str) or purpose not in {
+            "original",
+            "poster",
+            "unknown",
+        }:
+            raise ValueError("Invalid cached source purpose")
         identity = self._file_identity(
             channel_id, message_id, size, parts, representation
         )
@@ -523,6 +549,9 @@ class MediaReadCache:
         self._files[identity] = {
             "id": identity,
             "name": name or row.get("name", ""),
+            "purpose": purpose
+            if purpose != "unknown"
+            else row.get("purpose", "unknown"),
             "channel_id": channel_id,
             "message_id": message_id,
             "size": size,
@@ -544,6 +573,76 @@ class MediaReadCache:
             }
         self._index_dirty = True
         return identity
+
+    def backfill_metadata(self, store, channel_id):
+        if self._closed or not callable(getattr(store, "cache_metadata_page", None)):
+            return
+        if self._metadata_task is not None and not self._metadata_task.done():
+            return
+        self._metadata_seen.intersection_update(self._files)
+        pending = {
+            identity: row
+            for identity, row in self._files.items()
+            if row["channel_id"] == channel_id
+            and identity not in self._metadata_seen
+            and (not row["name"] or row.get("purpose", "unknown") == "unknown")
+        }
+        if not pending:
+            return
+        self._metadata_seen.update(pending)
+        self._metadata_task = asyncio.create_task(
+            self._backfill_metadata(store, pending, self._generation),
+            name="tgdrive-cache-labels",
+        )
+
+    async def _backfill_metadata(self, store, pending, generation):
+        wanted = {(row["message_id"], row["size"]) for row in pending.values()}
+        candidates, after_id = {}, None
+        try:
+            while not self._closed and generation == self._generation:
+                # One find and up to 64 single-document cursor batches.
+                await pacing.background.wait(65)
+                last_id, matches = await _journalled(asyncio.to_thread)(
+                    store.cache_metadata_page, after_id, wanted
+                )
+                if last_id is None:
+                    break
+                for key, label in matches.items():
+                    if key not in wanted:
+                        continue
+                    candidates[key] = (
+                        label
+                        if key not in candidates or candidates[key] == label
+                        else None
+                    )
+                after_id = last_id
+                await asyncio.sleep(0)
+            if self._closed or generation != self._generation:
+                return
+            for identity, row in pending.items():
+                if self._files.get(identity) is not row:
+                    continue
+                key = row["message_id"], row["size"]
+                if key not in candidates:
+                    continue
+                name, purpose = candidates[key] or ("", "unknown")
+                if (row["name"], row.get("purpose", "unknown")) != (name, purpose):
+                    row.update(name=name, purpose=purpose)
+                    self._index_dirty = True
+            await _journalled(self._persist_index)()
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            # Labels are optional; failures must neither expose queries nor retry
+            # a catalog scan on every UI poll. Future reads register fresh labels.
+            logger.warning("Cached source labels could not be recovered")
+
+    async def _stop_metadata(self):
+        task, self._metadata_task = self._metadata_task, None
+        if task is not None:
+            task.cancel()
+            with suppress(asyncio.CancelledError):
+                await task
 
     def cached_source_version(self, *, channel_id, message_id, size, parts=None):
         identity = self._file_identity(channel_id, message_id, size, parts)
@@ -681,6 +780,7 @@ class MediaReadCache:
                     size=key[-2],
                     name=owner["name"],
                     representation=representation,
+                    purpose=owner.get("purpose", "unknown"),
                 )
                 owner, logical_offset = self._files[identity], 0
         if owner is None:
@@ -915,6 +1015,8 @@ class MediaReadCache:
 
     async def clear(self, file_id=None):
         self._generation += 1
+        await self._stop_metadata()
+        self._metadata_seen.clear()
         await self.flush()
         keys = [
             key
@@ -1022,6 +1124,7 @@ class MediaReadCache:
 
     async def close(self):
         self._closed = True
+        await self._stop_metadata()
         await self.flush()
 
 

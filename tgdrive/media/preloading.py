@@ -62,6 +62,7 @@ class PreloadManager:
         pool._preload_manager = self
 
     def register_file(self, **kwargs):
+        kwargs.setdefault("purpose", "original")
         return self.cache.register_file(**kwargs)
 
     def observe(

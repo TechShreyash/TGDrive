@@ -210,8 +210,9 @@ does not establish a server-cache miss.
 ## Prepare a file before sharing
 
 [Preload file](usage.md#preload-a-file-for-smoother-playback-and-downloads) prepares
-the whole original on the server, including multipart files. Wait for **Ready**
-and full coverage in **Monitor → Preloads** before relying on it.
+the whole original on the server, including multipart files. Wait for
+**Fully cached** and full coverage on the original's row in **Monitor → Preloads**
+before relying on it; **Poster cached** covers only the preview image.
 
 Preloading starts only when the whole file fits the effective RAM or disk cache
 budget. Concurrent preparations reserve capacity and verify retained ranges

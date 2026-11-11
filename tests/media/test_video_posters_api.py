@@ -196,6 +196,8 @@ def test_poster_owner_cache_and_conditional_response_always_require_access(
         "message_id": 201,
         "size": len(JPEG),
         "parts": [{"index": 0, "offset": 0, **POSTER}],
+        "name": "video.mkv",
+        "purpose": "poster",
     }
     assert (start, count, background) == (0, len(JPEG), True)
     headers = {"If-None-Match": response.headers["etag"]}
@@ -380,6 +382,46 @@ async def test_poster_document_identity_is_checked_before_payload_read(tmp_path)
         assert client.fetches == [101]
         assert client.reads == []
         assert (await pool.health()).active_leases == 0
+    finally:
+        await pool.stop()
+
+
+async def test_poster_common_reader_registers_its_authoritative_owner_name(tmp_path):
+    from tests.media.test_telegram_cache import message
+
+    client = MultipartClient([JPEG])
+
+    async def fetch(_channel, *, message_ids):
+        native = message(9001, len(JPEG))
+        native.id = message_ids
+        return SimpleNamespace(
+            id=message_ids,
+            native=native,
+            document=SimpleNamespace(id=9001, file_size=len(JPEG)),
+        )
+
+    client.get_messages = fetch
+    pool = ClientPool([client])
+    await pool.start()
+
+    async def authorize():
+        pass
+
+    try:
+        result = await load_poster(
+            pool=pool,
+            channel_id=-1000000000123,
+            poster={**POSTER, "message_id": 101},
+            directory=tmp_path / "posters",
+            authorize=authorize,
+            name="Dr Stone.mkv",
+        )
+        assert result is not None
+        snapshot = await pool._media_read_cache.snapshot()
+        assert len(snapshot["files"]) == 1
+        row = snapshot["files"][0]
+        assert (row["name"], row["purpose"]) == ("Dr Stone.mkv", "poster")
+        assert row["size"] == len(JPEG) and row["complete"]
     finally:
         await pool.stop()
 

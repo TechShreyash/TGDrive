@@ -115,6 +115,7 @@ export interface CachedFile {
     id: string;
     last_download?: number;
     name: string;
+    purpose?: "original" | "poster" | "unknown";
     message_id?: number;
     size: number;
     ready_bytes: number;

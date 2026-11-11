@@ -16,7 +16,7 @@ from pathlib import Path, PurePath
 from fastapi import HTTPException
 
 from tgdrive.media.logical_media import PartLease, part_ranges
-from tgdrive.media.media_reader import stream_pooled_media
+from tgdrive.media.media_reader import MediaReadCache, stream_pooled_media
 from tgdrive.media.previews import lease_media
 from tgdrive.media.ranges import ByteRange, plan_telegram_chunks
 from tgdrive.storage.file_parts import validate_parts
@@ -32,12 +32,28 @@ PROJECT_ROOT = str(Path(__file__).resolve().parents[2])
 
 async def read_range(pool, channel, data, start, count, authorize, *, background=False):
     await authorize()
+
+    def register(parts=None):
+        if not callable(getattr(pool, "download_capacity", None)):
+            return
+        if pool._media_read_cache is None:
+            pool._media_read_cache = MediaReadCache(pool.media_cache_dir)
+        pool._media_read_cache.register_file(
+            channel_id=channel,
+            message_id=data["message_id"],
+            size=data["size"],
+            name=data.get("name", ""),
+            parts=parts,
+            purpose=data.get("purpose", "original" if data.get("name") else "unknown"),
+        )
+
     selection = ByteRange(start, start + count - 1, data["size"], is_partial=True)
     result = bytearray()
     if data.get("parts") is not None:
         parts = validate_parts(
             data["parts"], size=data["size"], message_id=data["message_id"]
         )
+        register(parts)
         for part, interval in part_ranges(parts, selection):
             lease = await PartLease(
                 pool, channel, part, authorize=authorize, background=background
@@ -59,6 +75,7 @@ async def read_range(pool, channel, data, start, count, authorize, *, background
         ):
             if media.file_size != data["size"]:
                 raise HTTPException(409, "The stored book changed. Reopen it.")
+            register()
             plan = plan_telegram_chunks(selection)
             stream = stream_pooled_media(
                 pool,

@@ -93,7 +93,9 @@ def test_file_menu_preloads_whole_file_and_reuses_cached_bytes(server, desktop, 
     expect(help_panel).to_contain_text("downloads fetch their requested ranges")
     help_panel.get_by_text("About preloading", exact=True).click()
     cached = page.locator(".cached-file").filter(has_text="archive.bin")
-    expect(cached.locator(".cache-ready-state")).to_have_text("Ready", timeout=15000)
+    expect(cached.locator(".cache-ready-state")).to_have_text(
+        "Fully cached", timeout=15000
+    )
     expect(cached.locator(".cache-coverage")).to_contain_text("256 B")
     expect(cached.locator(".cache-coverage-ready")).to_have_attribute("width", "1000")
     page.screenshot(path=ARTIFACTS / f"preload-file-ready-{width}.png")
@@ -105,7 +107,7 @@ def test_file_menu_preloads_whole_file_and_reuses_cached_bytes(server, desktop, 
     ).to_be_visible()
     expect(dialog).not_to_be_visible()
     page.goto(server.url + "/?view=preloads")
-    expect(cached.locator(".cache-ready-state")).to_have_text("Ready")
+    expect(cached.locator(".cache-ready-state")).to_have_text("Fully cached")
 
 
 def test_preload_capacity_error_keeps_dialog_open_and_allows_retry(server, desktop):

@@ -508,6 +508,85 @@ class MongoStore:
 
     # --------------------------------------------------------------- reads
 
+    def cache_metadata_page(self, after_id, source_keys):
+        """One small catalog page; return display labels, never access grants."""
+        if after_id is not None:
+            _validate_id(after_id)
+        wanted = {
+            (_strict_int(message_id, "message_id", 1), _strict_int(size, "size", 0))
+            for message_id, size in source_keys
+        }
+        if not wanted:
+            return None, {}
+        message_ids = sorted({message_id for message_id, _ in wanted})
+        projection = {
+            "_id": 1,
+            "kind": 1,
+            "name": 1,
+            "message_id": 1,
+            "size": 1,
+            "poster.message_id": 1,
+            "poster.size": 1,
+            "parts": {
+                "$map": {
+                    "input": {
+                        "$filter": {
+                            "input": {"$ifNull": ["$parts", []]},
+                            "as": "part",
+                            "cond": {"$in": ["$$part.message_id", message_ids]},
+                        }
+                    },
+                    "as": "part",
+                    "in": {"message_id": "$$part.message_id", "size": "$$part.size"},
+                }
+            },
+        }
+        matches = {}
+
+        def add(message_id, size, name, purpose):
+            if type(message_id) is not int or type(size) is not int:
+                return
+            key, label = (message_id, size), (name, purpose)
+            if key not in wanted:
+                return
+            matches[key] = (
+                label if key not in matches or matches[key] == label else None
+            )
+
+        last_id = None
+        with self._transaction():
+            cursor = (
+                self._find(
+                    "nodes",
+                    {"_id": {"$gt": after_id}} if after_id is not None else {},
+                    projection,
+                    max_time_ms=2000,
+                )
+                .sort("_id", ASCENDING)
+                .limit(64)
+                .batch_size(1)
+            )
+            try:
+                for row in cursor:
+                    last_id = row["_id"]
+                    name = row.get("name")
+                    if (
+                        row.get("kind") != "file"
+                        or not isinstance(name, str)
+                        or not 0 < len(name) <= MAX_NAME_LENGTH
+                    ):
+                        continue
+                    add(row.get("message_id"), row.get("size"), name, "original")
+                    for part in row.get("parts") or []:
+                        add(part.get("message_id"), part.get("size"), name, "original")
+                    if poster := row.get("poster"):
+                        add(
+                            poster.get("message_id"), poster.get("size"), name, "poster"
+                        )
+            finally:
+                cursor.close()
+        return last_id, matches
+
     def _current(self) -> dict[str, Any]:
         metadata = (
             self._one("catalog", {"_id": "catalog"})

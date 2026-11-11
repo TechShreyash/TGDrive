@@ -1283,6 +1283,7 @@ def create_app(
                         poster=file_data["poster"],
                         directory=settings.resolved_cache_dir / "posters",
                         authorize=recheck,
+                        name=file_data["name"],
                     )
                     if image is not None:
                         content = await app.state.thumbnail_repair.render_image(
@@ -1402,6 +1403,7 @@ def create_app(
                 poster=poster,
                 directory=settings.resolved_cache_dir / "posters",
                 authorize=authorize,
+                name=file_data["name"],
             )
 
         try:

@@ -315,6 +315,7 @@ def _observe_media_request(
             size=size,
             name=name,
             parts=parts,
+            purpose="original",
         )
 
 

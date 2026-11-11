@@ -6,6 +6,7 @@ import {
     CacheCapacity,
     coverageRanges,
     cachedFileComplete,
+    cachedFileLabel,
     currentPreloadJobs,
 } from "./Preloads";
 import {
@@ -171,6 +172,43 @@ describe("performance settings and HTTP boundaries", () => {
 });
 
 describe("cache coverage and observed queue estimates", () => {
+    it("uses authoritative names and purpose without inferring from identifiers", () => {
+        const file = {
+            id: "cache-key",
+            message_id: 17,
+            name: "Episode <1>.mkv",
+            size: 100,
+            ready_bytes: 100,
+            complete: true,
+            ready_ranges: [[0, 100]] as [number, number][],
+        };
+        expect(cachedFileLabel(file)).toBe("Episode <1>.mkv");
+        expect(cachedFileLabel({ ...file, purpose: "original" })).toBe(
+            "Episode <1>.mkv",
+        );
+        expect(cachedFileLabel({ ...file, purpose: "poster" })).toBe(
+            "Poster for Episode <1>.mkv",
+        );
+        expect(cachedFileLabel({ ...file, name: "", purpose: "unknown" })).toBe(
+            "Cached data · message 17",
+        );
+        expect(
+            cachedFileLabel({ ...file, name: "", message_id: undefined }),
+        ).toBe("Cached data · cache-ke");
+        const poster = renderToStaticMarkup(
+            <CacheCoverage file={{ ...file, purpose: "poster" }} showName />,
+        );
+        expect(poster).toContain("Poster for Episode &lt;1&gt;.mkv");
+        expect(poster).toContain("100% · Poster cached");
+        expect(poster).not.toContain("Fully cached");
+        const partial = renderToStaticMarkup(
+            <CacheCoverage
+                file={{ ...file, purpose: "poster", ready_ranges: [[0, 20]] }}
+            />,
+        );
+        expect(partial).toContain("20% · Partial");
+        expect(partial).not.toContain("Poster cached");
+    });
     it("shows actual tier usage and distinguishes zero capacity from unavailable memory", () => {
         const usage = renderToStaticMarkup(
             <CacheCapacity
@@ -487,7 +525,7 @@ describe("cache coverage and observed queue estimates", () => {
         expect(complete).toContain(
             'width="1000" height="8" class="cache-coverage-ready"',
         );
-        expect(complete).toContain("100% · Ready");
+        expect(complete).toContain("100% · Fully cached");
     });
     it("does not turn missing queue samples into a zero wait promise", () => {
         expect(queueWait(null)).toBe("Estimating…");

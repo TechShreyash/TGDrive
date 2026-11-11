@@ -266,6 +266,113 @@ def test_missing_request_history_does_not_imply_zero_errors(server, desktop):
     ).to_be_visible()
 
 
+def test_cache_entry_names_purposes_search_and_scoped_eviction(server, desktop):
+    _, page = desktop
+    login(page, server.url)
+    snapshot = page.request.get(server.url + "/api/v1/preloads").json()
+    snapshot["jobs"] = []
+    snapshot["active_jobs"] = 0
+    filename = (
+        "Cyberpunk.Edgerunners.S02E01.Last.Chance.for.a.Slow.Dance.1080p."
+        "NF.WEB-DL.DUAL.DDP5.1.H.264-VARYG.mkv"
+    )
+    files = [
+        {
+            "id": identity,
+            "name": name,
+            "message_id": 17 + index,
+            "size": 100,
+            "ready_bytes": ready,
+            "complete": ready == 100,
+            "ready_ranges": [[0, ready]],
+            **({"purpose": purpose} if purpose else {}),
+        }
+        for index, (identity, name, purpose, ready) in enumerate(
+            (
+                ("original-key", filename, "original", 20),
+                ("poster-key", filename, "poster", 100),
+                ("unknown-key", "", "unknown", 100),
+                ("legacy-key", "Old download.mp4", None, 100),
+            )
+        )
+    ]
+    snapshot["cache"]["files"] = files.copy()
+    cleared = []
+
+    def inventory(route):
+        if route.request.method == "POST":
+            body = route.request.post_data_json
+            cleared.append(body)
+            snapshot["cache"]["files"] = [
+                file
+                for file in snapshot["cache"]["files"]
+                if file["id"] != body["file_id"]
+            ]
+            route.fulfill(json={"status": "ok"})
+        else:
+            route.fulfill(json=snapshot)
+
+    page.route("**/api/v1/preloads**", inventory)
+    page.goto(server.url + "/?view=preloads")
+    expect(page.get_by_role("heading", name="Cached entries")).to_be_visible()
+    rows = page.locator(".cached-file")
+    expect(rows).to_have_count(4)
+    original = rows.filter(has=page.get_by_text(filename, exact=True))
+    expect(original.locator(".cache-ready-state")).to_have_text("Partial")
+    expect(original).to_contain_text("20 / 100 B cached")
+    poster = rows.filter(has_text="Poster for " + filename)
+    expect(poster.locator(".cache-ready-state")).to_have_text("Poster cached")
+    expect(rows.filter(has_text="Cached data · message 19")).to_contain_text(
+        "Fully cached"
+    )
+    expect(rows.filter(has_text="Old download.mp4")).to_contain_text("Fully cached")
+    page.get_by_role("button", name="Fully cached 3", exact=True).click()
+    expect(rows).to_have_count(3)
+    search = page.get_by_role("searchbox", name="Search cached files", exact=True)
+    search.fill("poster for cyberpunk")
+    expect(rows).to_have_count(1)
+    expect(rows).to_contain_text("Poster cached")
+    search.fill("cached data")
+    expect(rows).to_have_count(1)
+    expect(rows).to_contain_text("message 19")
+    search.fill("")
+    page.get_by_role("button", name="All 4", exact=True).click()
+    page.screenshot(
+        path=ARTIFACTS / "cache-entry-purposes-desktop.png", animations="disabled"
+    )
+    page.set_viewport_size({"width": 390, "height": 844})
+    page.get_by_role("button", name="Change Appearance", exact=True).click()
+    page.get_by_role("menuitemradio", name="Dark", exact=True).click()
+    for width in (390, 320):
+        page.set_viewport_size({"width": width, "height": 844})
+        poster.scroll_into_view_if_needed()
+        assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
+        title = poster.locator("strong")
+        expect(title).to_have_attribute("title", "Poster for " + filename)
+        assert title.evaluate("node => node.clientHeight <= 63")
+        assert title.evaluate("node => getComputedStyle(node).webkitLineClamp") == "3"
+        assert title.bounding_box()["width"] >= 180
+        assert poster.bounding_box()["height"] <= 160
+        state = poster.locator(".cache-ready-state").bounding_box()
+        heading = poster.locator(".cached-file-heading").bounding_box()
+        assert state["y"] >= heading["y"] + heading["height"]
+        page.screenshot(
+            path=ARTIFACTS / f"cache-entry-long-names-{width}-dark.png",
+            animations="disabled",
+        )
+    poster.get_by_role(
+        "button", name="Evict cached bytes for Poster for " + filename, exact=True
+    ).click()
+    dialog = page.get_by_role("dialog", name="Clear cached entry?", exact=True)
+    expect(dialog).to_contain_text("Poster for " + filename)
+    expect(dialog.get_by_role("button", name="Keep Cache")).to_be_focused()
+    dialog.get_by_role("button", name="Clear Cached Entry", exact=True).click()
+    expect(rows).to_have_count(3)
+    assert cleared == [{"file_id": "poster-key"}]
+    assert snapshot["cache"]["files"] == [files[0], files[2], files[3]]
+    expect(original).to_contain_text("20 / 100 B cached")
+
+
 def test_cache_inventory_filters_verified_coverage_and_clear_actions(server, desktop):
     _, page = desktop
     login(page, server.url)
@@ -335,7 +442,7 @@ def test_cache_inventory_filters_verified_coverage_and_clear_actions(server, des
     expect(ready.locator("svg[role=img]")).to_be_hidden()
     expect(ready.locator(".cache-coverage-ready")).to_have_attribute("x", "0")
     expect(ready.locator(".cache-coverage-ready")).to_have_attribute("width", "1000")
-    expect(ready.locator(".cache-ready-state")).to_have_text("Ready")
+    expect(ready.locator(".cache-ready-state")).to_have_text("Fully cached")
     segments = partial.locator(".cache-coverage-ready")
     expect(segments).to_have_count(2)
     assert [segments.nth(i).get_attribute("x") for i in range(2)] == ["0", "900"]
@@ -350,7 +457,7 @@ def test_cache_inventory_filters_verified_coverage_and_clear_actions(server, des
     expect(
         page.get_by_text("Telegram is temporarily unavailable", exact=True)
     ).to_be_visible()
-    page.get_by_role("button", name="Ready 1", exact=True).click()
+    page.get_by_role("button", name="Fully cached 1", exact=True).click()
     expect(page.locator(".cached-file")).to_have_count(1)
     expect(page.locator(".cached-file")).to_contain_text("Prepared movie")
     page.get_by_role("button", name="Partial 1", exact=True).click()
@@ -360,7 +467,7 @@ def test_cache_inventory_filters_verified_coverage_and_clear_actions(server, des
         "missing"
     )
     expect(
-        page.get_by_text("No cached files match this filter.", exact=False)
+        page.get_by_text("No cached entries match this filter.", exact=False)
     ).to_be_visible()
     page.get_by_role("searchbox", name="Search cached files", exact=True).fill("")
     page.get_by_role("button", name="All 2", exact=True).click()
@@ -388,13 +495,13 @@ def test_cache_inventory_filters_verified_coverage_and_clear_actions(server, des
     )
     page.screenshot(path=ARTIFACTS / "owner-preloads-desktop.png", full_page=True)
     page.get_by_role("button", name="Evict cached bytes for Interview.mkv").click()
-    dialog = page.get_by_role("dialog", name="Clear cached file?", exact=True)
+    dialog = page.get_by_role("dialog", name="Clear cached entry?", exact=True)
     expect(dialog.get_by_role("button", name="Keep Cache")).to_be_focused()
     assert cleared == []
     dialog.get_by_role("button", name="Keep Cache").click()
     expect(dialog).not_to_be_visible()
     page.get_by_role("button", name="Evict cached bytes for Interview.mkv").click()
-    dialog.get_by_role("button", name="Clear Cached File", exact=True).click()
+    dialog.get_by_role("button", name="Clear Cached Entry", exact=True).click()
     feedback = page.get_by_text(
         "Cached bytes evicted. The original is unchanged.", exact=True
     )
@@ -426,7 +533,7 @@ def test_cache_inventory_filters_verified_coverage_and_clear_actions(server, des
             expect(brand.locator(".brand-logo-dark")).not_to_be_visible()
             expect(brand.locator(".brand-logo-icon")).to_be_visible()
         if width <= 640:
-            selector = page.get_by_role("combobox", name="Filter cached files")
+            selector = page.get_by_role("combobox", name="Filter cached entries")
             selector.select_option("ready")
             expect(page.locator(".cached-file")).to_have_count(1)
             expect(page.locator(".cached-file")).to_contain_text("Prepared movie")
@@ -472,7 +579,9 @@ def test_cache_inventory_filters_verified_coverage_and_clear_actions(server, des
     expect(partial.locator(".cache-ready-state")).to_have_text("Partial")
 
     page.get_by_role("button", name="Clear Cache", exact=True).click()
-    all_dialog = page.get_by_role("dialog", name="Clear all cached files?", exact=True)
+    all_dialog = page.get_by_role(
+        "dialog", name="Clear all cached entries?", exact=True
+    )
     expect(all_dialog.get_by_role("button", name="Keep Cache")).to_be_focused()
     assert cleared == [{"file_id": "partial-file"}]
     all_dialog.get_by_role("button", name="Keep Cache").click()
@@ -490,7 +599,7 @@ def test_cache_inventory_filters_verified_coverage_and_clear_actions(server, des
     snapshot["cache"]["memory"].update(max_bytes=256 * 1024**2, effective_max_bytes=0)
     snapshot["cache"]["disk"]["available"] = False
     page.get_by_role("button", name="Refresh Cache Inventory").click()
-    expect(page.get_by_text("No files cached yet", exact=True)).to_be_visible()
+    expect(page.get_by_text("No cache entries yet", exact=True)).to_be_visible()
     expect(page.get_by_role("button", name="Clear Cache", exact=True)).to_be_disabled()
     expect(page.get_by_role("group", name="Server cache usage")).to_contain_text(
         "Unavailable"

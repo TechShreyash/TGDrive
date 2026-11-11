@@ -155,7 +155,8 @@ cover. For a missing cover:
 1. Return to the folder in List or Grid view. If the file has a usable saved poster,
    TGDrive can generate a small cover from it without preloading the original.
 2. If no usable poster or provider cover is available, choose **Preload file**
-   and wait for full **Ready** coverage in **Preloads**, then reopen the folder.
+   and wait for **Fully cached** with full coverage on the original's row in
+   **Preloads**, then reopen the folder.
 
 Cached-original repair needs a complete original no larger than **128 MiB**. It
 creates a disposable local JPEG, without changing the catalog or uploading a

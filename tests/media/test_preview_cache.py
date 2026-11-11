@@ -83,6 +83,7 @@ async def test_preview_prefix_appears_in_shared_inventory_without_preload(tmp_pa
         assert len(state["files"]) == 1
         row = state["files"][0]
         assert row["name"] == "server.log"
+        assert row["purpose"] == "original"
         assert row["size"] == len(payload)
         assert row["ready_ranges"] == [[0, BLOCK]]
         assert row["disk_ranges"] == [[0, BLOCK]]

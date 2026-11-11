@@ -134,7 +134,9 @@ def register_performance_routes(
     @app.get("/api/v1/preloads", dependencies=admin)
     async def preloads(request: Request):
         await service(request)
-        return response(await media_manager(request).snapshot())
+        manager = media_manager(request)
+        manager.cache.backfill_metadata(get_store(request), settings.storage_channel)
+        return response(await manager.snapshot())
 
     @app.post("/api/v1/preloads", dependencies=admin, status_code=202)
     async def prepare(payload: PrepareFile, request: Request):
@@ -196,6 +198,8 @@ def register_performance_routes(
         pool = getattr(runtime, "pool", None)
         snapshot = getattr(pool, "performance_snapshot", None)
         cache = getattr(pool, "_media_read_cache", None)
+        if cache is not None:
+            cache.backfill_metadata(store, settings.storage_channel)
         statistics = getattr(store, "statistics", None)
         drive = await asyncio.to_thread(statistics) if callable(statistics) else {}
         governor = getattr(runtime, "governor", None)
