@@ -242,3 +242,5 @@ test("stats render file-controlled language and diagnostic keys as inert text", 
     assert.ok(!/<input|<img/i.test(html));
     assert.ok(html.includes("123"));
 });
+
+await import("./check-movi-duration.js");

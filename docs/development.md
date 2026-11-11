@@ -539,6 +539,16 @@ holes and partial responses never become invented media, and identity checks,
 byte/entry limits, close cleanup and the per-image requested-range budget hold.
 Reused bytes must not increase network delivery counters or throughput samples.
 
+The duration-rescan correction is an additional in-memory Vite transform of the
+pinned ESM slim entry, shared by development and production builds. It uses the
+unchanged historical `patchMoviSource` recipe, then the separate
+`patchDurationRescan` build overlay, with exact version/source guards. Normal
+commands do not rewrite `node_modules` or change the published viewer archive.
+HTTP(S), including loopback, uses network duration-scan limits; active secondary
+scan sources belong to preview teardown. Keep callback lifetime/generation checks
+and held-read cleanup when changing the recipe. The installed `tgdrive.3`
+manifest identifies the input artifact, not a newly published patched package.
+
 `test_browser_player_hardening.py` covers real AAC-only MP4 playback/seeking,
 malicious MKV metadata and repeated playing-close cleanup. The preview tests in
 `test_browser_player_previews.py` check decoded image pixels, visible chapter
