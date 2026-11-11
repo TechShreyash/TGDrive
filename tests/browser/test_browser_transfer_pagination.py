@@ -18,6 +18,7 @@ from tests.browser.test_browser_e2e import (  # noqa: E402
     expect,
     login,
     server,  # noqa: F401 - shared pytest fixture
+    set_appearance,
 )
 
 
@@ -147,7 +148,7 @@ def test_finished_history_cursor_pages_keep_live_sections_and_reset_filters(
         finished.get_by_role("heading", name="No Cancelled Transfers")
     ).to_be_visible()
     page.set_viewport_size({"width": 390, "height": 844})
-    page.evaluate("document.documentElement.dataset.theme = 'dark'")
+    set_appearance(page, "dark")
     assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
     expect(pager).to_have_count(0)
     page.screenshot(

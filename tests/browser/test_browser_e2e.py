@@ -9,6 +9,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 import socket
 import subprocess
 import sys
@@ -2709,20 +2710,43 @@ def assert_single_appearance(page: Any) -> None:
         ).to_be_visible()
 
 
+def set_appearance(page: Any, theme: str) -> None:
+    page.evaluate(
+        """theme => {
+          localStorage.setItem('tgdrive.appearance', theme);
+          window.dispatchEvent(new CustomEvent(
+            'tgdrive:appearance-changed', {detail: theme}
+          ));
+        }""",
+        theme,
+    )
+    root = page.locator("html")
+    expect(root).to_have_attribute("data-theme", theme)
+    expect(root).to_have_css("color-scheme", theme)
+    expect(root).to_have_attribute("data-mantine-color-scheme", theme)
+
+
 def assert_theme_contrast(page: Any) -> None:
     values = page.evaluate("""() => {
-      const s=getComputedStyle(document.documentElement);
-      return Object.fromEntries(['--surface','--ink','--muted','--action',
-        '--on-action','--action-soft','--on-action-soft','--danger','--on-danger']
-        .map(k=>[k,s.getPropertyValue(k).trim()]));
+      const probe=document.createElement('span');
+      document.body.append(probe);
+      try {
+        return Object.fromEntries(['--surface','--ink','--muted','--action',
+          '--on-action','--action-soft','--on-action-soft','--danger','--on-danger']
+          .map(key=>{
+            probe.style.color=`var(${key})`;
+            return [key,getComputedStyle(probe).color];
+          }));
+      } finally {
+        probe.remove();
+      }
     }""")
 
     def luminance(value: str) -> float:
-        value = value.lstrip("#")
-        if len(value) == 3:
-            value = "".join(channel * 2 for channel in value)
-        assert len(value) == 6
-        channels = [int(value[index : index + 2], 16) / 255 for index in (0, 2, 4)]
+        assert value.startswith("rgb("), value
+        channels = [float(channel) / 255 for channel in re.findall(r"[\d.]+", value)]
+        assert len(channels) == 3, value
+        assert all(0 <= channel <= 1 for channel in channels), value
         linear = [
             channel / 12.92
             if channel <= 0.04045
@@ -2767,7 +2791,7 @@ def test_light_dark_theme_preference_persists_and_preserves_sort_keyboard(
       injected: document.querySelectorAll('style[data-mantine-styles]').length
     })""")
     assert "InterVariable" in baseline["font"]
-    assert baseline["background"] == "rgb(236, 239, 243)"
+    assert baseline["background"] == "rgb(245, 246, 248)"
     assert baseline["injected"] == 0
     login(page)
     page.reload()
@@ -4135,10 +4159,10 @@ def test_shared_links_compact_views_copy_location_and_indicators(server, desktop
         data={"path": folder_path, "expires_in_days": None},
     ).json()
     page.reload()
-    expect(page.get_by_label("Shared by Link", exact=True)).to_have_count(1)
+    expect(page.get_by_title("Shared by Link", exact=True)).to_have_count(1)
     page.get_by_role("button", name="資料", exact=True).dblclick()
     expect(
-        page.get_by_label("Shared Through Parent Folder", exact=True).first
+        page.get_by_title("Shared Through Parent Folder", exact=True).first
     ).to_be_visible()
     page.get_by_role("link", name="Shared Links", exact=True).click()
     current = page.request.get(server.url + "/api/v1/shares").json()["shares"][0]
@@ -4224,11 +4248,7 @@ def test_shared_links_compact_views_copy_location_and_indicators(server, desktop
     expect(page.locator(".share-row")).to_have_count(3)
     ARTIFACTS.mkdir(parents=True, exist_ok=True)
     for theme in ("light", "dark"):
-        page.evaluate(
-            "(theme) => { localStorage.setItem('tgdrive.appearance', theme);"
-            "document.documentElement.dataset.theme = theme; }",
-            theme,
-        )
+        set_appearance(page, theme)
         for width in (1440, 390, 320):
             page.set_viewport_size(
                 {"width": width, "height": 960 if width > 600 else 844}

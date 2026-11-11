@@ -21,6 +21,7 @@ from tests.browser.test_browser_e2e import (  # noqa: E402
     expect,
     login,
     server,  # noqa: F401 - shared pytest fixture
+    set_appearance,
 )
 
 
@@ -510,7 +511,7 @@ def test_cache_inventory_filters_verified_coverage_and_clear_actions(server, des
     assert cleared == [{"file_id": "partial-file"}]
     page.get_by_role("button", name="Dismiss Notification").click()
     page.set_viewport_size({"width": 390, "height": 844})
-    page.evaluate("document.documentElement.dataset.theme = 'dark'")
+    set_appearance(page, "dark")
     assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
     expect(
         page.get_by_role("searchbox", name="Search cached files", exact=True)
@@ -526,7 +527,7 @@ def test_cache_inventory_filters_verified_coverage_and_clear_actions(server, des
         (320, "dark"),
     ]:
         page.set_viewport_size({"width": width, "height": 900})
-        page.evaluate("theme => document.documentElement.dataset.theme = theme", theme)
+        set_appearance(page, theme)
         if width == 320 and theme == "dark":
             brand = page.locator(".mobile-brand .brand-logo")
             expect(brand.locator("img:visible")).to_have_count(1)
@@ -742,7 +743,7 @@ def test_performance_views_keyboard_navigation_and_settings_groups(server, deskt
         animations="disabled",
     )
     page.set_viewport_size({"width": 390, "height": 844})
-    page.evaluate("document.documentElement.dataset.theme = 'dark'")
+    set_appearance(page, "dark")
     assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
     page.screenshot(
         path=ARTIFACTS / "owner-performance-mobile-dark.png",
@@ -917,7 +918,7 @@ def test_network_includes_url_downloads_and_resources_use_container_limits(
         animations="disabled",
     )
     page.set_viewport_size({"width": 390, "height": 844})
-    page.evaluate("document.documentElement.dataset.theme = 'dark'")
+    set_appearance(page, "dark")
     toggle = page.get_by_role("button", name="Toggle Navigation", exact=True)
     if toggle.get_attribute("aria-expanded") == "true":
         toggle.click()
@@ -934,7 +935,7 @@ def test_network_includes_url_downloads_and_resources_use_container_limits(
         animations="disabled",
     )
     page.set_viewport_size({"width": 1440, "height": 1100})
-    page.evaluate("document.documentElement.dataset.theme = 'light'")
+    set_appearance(page, "light")
     page.get_by_role("tab", name="Resources", exact=True).click()
     cpu = page.get_by_role("region", name="Container CPU", exact=True)
     expect(cpu.locator(".performance-chart-axis")).to_contain_text("100.0%")
