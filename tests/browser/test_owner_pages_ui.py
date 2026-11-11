@@ -42,7 +42,7 @@ def test_owner_documentation_and_backup_recovery_links_open_safe_new_tabs(
             body="Documentation destination", content_type="text/plain"
         ),
     )
-    guide = page.get_by_role("link", name="Backup & recovery guide", exact=True)
+    guide = page.get_by_role("link", name="Backup and recovery guide", exact=True)
     expect(guide).to_have_attribute(
         "href",
         "https://github.com/TechShreyash/TGDrive/blob/main/docs/backup-recovery.md",

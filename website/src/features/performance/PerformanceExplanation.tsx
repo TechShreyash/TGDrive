@@ -163,7 +163,7 @@ export default function PerformanceExplanation({
                     <div>
                         <dt>
                             <ArrowDown size={18} aria-hidden="true" />
-                            <span>Streaming &amp; downloads</span>
+                            <span>Streaming and downloads</span>
                         </dt>
                         <dd data-unavailable={deliveryRate === "Unavailable"}>
                             {deliveryRate}

@@ -132,6 +132,12 @@
     font-size: 13px;
     line-height: 1.5;
 }
+.performance-settings
+    .performance-setting-group
+    legend:not(:has(svg))
+    + .settings-help {
+    margin-inline: 0;
+}
 .performance-settings .preference-heading .settings-help {
     margin: 2px 0 0;
 }

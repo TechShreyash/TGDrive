@@ -77,7 +77,7 @@ def test_neutral_theme_surfaces_and_monitor_layout(server, desktop, theme):
     for view, heading in (
         ("files", "My Files"),
         ("preloads", "Preloads"),
-        ("settings", "Cache & preloading"),
+        ("settings", "Cache and preloading"),
         ("performance", "Performance"),
     ):
         page.goto(server.url + f"/?view={view}")
@@ -788,7 +788,7 @@ def test_cache_inventory_filters_verified_coverage_and_clear_actions(server, des
     ) != segments.first.evaluate("node => getComputedStyle(node).fill")
     expect(partial.locator(".cache-ready-state")).to_contain_text("Partial")
     expect(page.get_by_text("Cached ranges", exact=False)).to_have_count(0)
-    expect(page.get_by_text("Cache details & recent preparations")).to_have_count(0)
+    expect(page.get_by_text("Cache details and recent preparations")).to_have_count(0)
     expect(page.get_by_role("heading", name="Preload queue")).to_be_visible()
     expect(
         page.get_by_text("Telegram is temporarily unavailable", exact=True)
@@ -1061,7 +1061,7 @@ def test_performance_views_keyboard_navigation_and_settings_groups(server, deskt
         page.get_by_role("region", name="Container RAM", exact=True)
     ).not_to_be_visible()
     expect(
-        page.get_by_role("heading", name="Storage & cache", exact=True)
+        page.get_by_role("heading", name="Storage and cache", exact=True)
     ).not_to_be_visible()
     overview.focus()
     page.keyboard.press("ArrowRight")
@@ -1074,13 +1074,13 @@ def test_performance_views_keyboard_navigation_and_settings_groups(server, deskt
     page.keyboard.press("End")
     page.keyboard.press("Enter")
     expect(
-        page.get_by_role("heading", name="Storage & cache", exact=True)
+        page.get_by_role("heading", name="Storage and cache", exact=True)
     ).to_be_visible()
     expect(
         page.get_by_role("progressbar", name="Data filesystem", exact=True)
     ).to_be_visible()
     assert (
-        page.get_by_role("heading", name="Storage & cache")
+        page.get_by_role("heading", name="Storage and cache")
         .locator("xpath=ancestor::details")
         .count()
         == 0
@@ -1115,6 +1115,27 @@ def test_performance_views_keyboard_navigation_and_settings_groups(server, deskt
             full_page=True,
         )
     page.goto(server.url + "/?view=settings&section=cache")
+    expect(
+        page.get_by_role("heading", name="Cache and preloading", exact=True)
+    ).to_be_visible()
+    limits = page.get_by_role("group", name="Media cache limits", exact=True)
+    automatic = page.get_by_role("group", name="Automatic preloading", exact=True)
+    for settings_width in (1440, 390):
+        page.set_viewport_size({"width": settings_width, "height": 900})
+        page.evaluate("document.fonts.ready")
+        legend = limits.locator(":scope > legend").bounding_box()
+        help_line = limits.locator(":scope > .settings-help").first.bounding_box()
+        assert help_line["x"] == pytest.approx(legend["x"], abs=1)
+        icon = automatic.locator("legend svg").bounding_box()
+        help_line = automatic.locator(":scope > .settings-help").first.bounding_box()
+        assert help_line["x"] == pytest.approx(icon["x"] + icon["width"] + 12, abs=1)
+        assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
+        page.screenshot(
+            path=ARTIFACTS / f"cache-heading-alignment-{settings_width}.png",
+            full_page=True,
+            animations="disabled",
+        )
+    page.set_viewport_size({"width": 390, "height": 844})
     # Owner ceilings are distinct from the governor effective budgets.
     expect(page.get_by_role("group", name="Cache storage", exact=True)).to_have_count(0)
     expect(page.get_by_label("Media disk cache mode", exact=True)).to_be_visible()

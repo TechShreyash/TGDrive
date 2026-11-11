@@ -275,7 +275,7 @@ source on the build machine or push it to the branch that machine builds.
 1. Open [http://127.0.0.1:8000](http://127.0.0.1:8000) and sign in with your web password.
 2. Open **Connections → Refresh** and check your bot.
 3. Upload and download a small sample; stop/start TGDrive and confirm it still opens.
-4. Under **Storage & Backups**, choose **Back Up Now**.
+4. Under **Storage and Backups**, choose **Back Up Now**.
    Check **Last Confirmed Telegram Backup** and verify that the newest recovery file is actually
    pinned in Telegram. Fix pin permissions before relying on automatic discovery.
    Choose **Download backup** and keep the file outside Telegram with the
@@ -405,7 +405,7 @@ Start with [Using TGDrive](usage.md) for uploads, sharing and bot imports.
 
 ## Optional independent channel protection
 
-Under **Storage & Backups → Backups & recovery → Set up backup channel**, add
+Under **Storage and Backups → Backups and recovery → Set up backup channel**, add
 a separate private channel and backup bot. Wait for **Backup confirmed**, then
 download the updated recovery file and retain the original `ENCRYPTION_KEY`.
 Follow

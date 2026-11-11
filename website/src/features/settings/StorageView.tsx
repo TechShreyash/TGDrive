@@ -273,7 +273,7 @@ export default function StorageView({
                     target="_blank"
                     rel="noopener noreferrer"
                 >
-                    Backup &amp; recovery guide
+                    Backup and recovery guide
                 </a>
             </section>
             <ChannelBackup demoMode={demoMode} onNotice={onNotice} />

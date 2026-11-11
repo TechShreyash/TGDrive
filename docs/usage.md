@@ -116,7 +116,7 @@ help some workloads but do not bypass Telegram waits or guarantee more speed.
 | Create a folder | **New → New folder** |
 | Rename, move or trash | Item menu or selection actions |
 | Sort/change view | Name, Date Added or File Size; List/Grid; **View and sort** on phones |
-| Filter by type | Chips above the list: **All**, **Photos & videos**, **Documents**, **Audio**, **Other** |
+| Filter by type | Chips above the list: **All**, **Photos and videos**, **Documents**, **Audio**, **Other** |
 
 Folders stay first when sorting; click an active column to reverse order. Large
 folders load 200 items first and more as you page. Sort and type filters apply
@@ -511,7 +511,7 @@ links when they need only selected files. For access while your laptop is off,
 | **My Files / Recent / Starred / Trash** | Browse, reopen, bookmark or restore files |
 | **Transfers / Shared Links** | Follow work or manage access |
 | **Monitor → Performance / Preloads** | Inspect resources or prepare cached files |
-| **Management → Connections / Storage & Backups** | Manage accounts, saved data and recovery |
+| **Management → Connections / Storage and Backups** | Manage accounts, saved data and recovery |
 | **Configuration** | Cache, transfer limits, timezone and bot upload destination |
 
 Choose Light, Dark or System in the appearance menu. **Refresh / Check Again**
@@ -541,7 +541,7 @@ settings service is admitted.
 
 ### Storage and backup
 
-**Storage & Backups → Saved to MongoDB** confirms the catalog is saved, not that
+**Storage and Backups → Saved to MongoDB** confirms the catalog is saved, not that
 unfinished uploads are complete. **Temporary storage** holds unfinished work on
 server disk, not your total Telegram storage.
 

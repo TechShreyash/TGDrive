@@ -156,8 +156,8 @@ function folderDirectory(pages: FolderPages): Directory {
     };
 }
 const ADMIN_SETTING_TITLES: Record<string, string> = {
-    cache: "Cache & preloading",
-    transfers: "Uploads & Telegram",
+    cache: "Cache and preloading",
+    transfers: "Uploads and Telegram",
     regional: "Regional settings",
 };
 function searchHistoryOffset() {
@@ -1127,7 +1127,7 @@ export default function App() {
                         : view === "connections"
                           ? "Connections"
                           : view === "storage"
-                            ? "Storage & Backups"
+                            ? "Storage and Backups"
                             : view === "settings"
                               ? ADMIN_SETTING_TITLES[
                                     location.settingsSection
@@ -1846,7 +1846,7 @@ export default function App() {
                                     size={19}
                                     aria-hidden="true"
                                 />
-                                <span>Tools & settings</span>
+                                <span>Tools and settings</span>
                                 <ChevronRight
                                     className="nav-disclosure"
                                     size={16}
@@ -1920,7 +1920,7 @@ export default function App() {
                                     })}
                                     {navigationLink({
                                         view: "storage",
-                                        label: "Storage & Backups",
+                                        label: "Storage and Backups",
                                         icon: ShieldCheck,
                                     })}
                                 </div>
@@ -1930,7 +1930,7 @@ export default function App() {
                     <div className="sidebar-bottom">
                         {config.demo_data && (
                             <small className="demo-data-label">
-                                Local demo · sample content & metrics
+                                Local demo · sample content and metrics
                             </small>
                         )}
                         <div className="sidebar-support">

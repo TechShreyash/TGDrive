@@ -44,8 +44,8 @@ def keep_console_errors(desktop, request):
 
 def open_storage(page):
     open_admin(page)
-    page.get_by_role("link", name="Storage & Backups", exact=True).click()
-    section = page.get_by_role("region", name="Backups & recovery", exact=True)
+    page.get_by_role("link", name="Storage and Backups", exact=True).click()
+    section = page.get_by_role("region", name="Backups and recovery", exact=True)
     expect(section).to_be_visible()
     return section
 
@@ -204,7 +204,7 @@ def test_channel_backup_setup_progress_pause_errors_and_private_exports(
     expect(section.get_by_text("Project archive.zip", exact=True)).to_be_visible()
     expect(setup.get_by_label("Backup bot token", exact=True)).to_have_count(0)
     expect(
-        section.get_by_role("heading", name="Backups & recovery", exact=True)
+        section.get_by_role("heading", name="Backups and recovery", exact=True)
     ).to_be_focused()
     section.scroll_into_view_if_needed()
     capture(page, f"channel-backup-progress-{theme}-{width}.png")

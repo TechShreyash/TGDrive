@@ -33,7 +33,7 @@ raising limits just to fill a meter can add contention and speculative reads.
    points toward Telegram or cache coverage. If both are slow, also inspect
    server-to-viewer delivery and the viewer's device.
 4. Open **Monitor → Preloads** to inspect actual retained coverage. For upload
-   space problems, also check **Management → Storage & Backups → Temporary
+   space problems, also check **Management → Storage and Backups → Temporary
    Storage**. Keep unfinished upload files; they are not disposable cache.
 5. Change one thing and repeat the same workload. Keep it only if results improve.
    Respect Telegram cooldowns before trying more concurrent work.

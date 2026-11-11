@@ -29,7 +29,7 @@ Server deployments add `-f compose.yaml -f compose.server.yaml` after
 `docker compose` in every command. In Coolify, use Stop, Restart, Logs and Redeploy.
 Keep Docker running while TGDrive is in use.
 
-Check **Connections** for Telegram access, **Storage & Backups** for database,
+Check **Connections** for Telegram access, **Storage and Backups** for database,
 disk and backups, and **Performance** for queues, caches and cooldowns.
 Queue times are estimates. `/health/ready` does not test a full file or public domain.
 
@@ -74,7 +74,7 @@ The laptop override leaves TGDrive stopped after reboot. Server restart policy h
 
 ## After a shutdown, crash or network loss
 
-Start the **same deployment**, then check **Transfers**, **Connections** and **Storage & Backups**. Reopen interrupted videos/downloads.
+Start the **same deployment**, then check **Transfers**, **Connections** and **Storage and Backups**. Reopen interrupted videos/downloads.
 
 | Interrupted work | Next step |
 | --- | --- |
@@ -367,7 +367,7 @@ Do not run an older app against an incompatible database format. Restore a compa
    `TGDrive 2.2 catalog upgrade finished`.
 4. Check a few files, folders, shares and **Connections**.
 5. If 2.2 had an independent backup channel, set it up again in
-   [Storage & Backups](backup-recovery.md#add-a-backup-channel).
+   [Storage and Backups](backup-recovery.md#add-a-backup-channel).
 
 | What happens | Detail |
 | --- | --- |

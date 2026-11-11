@@ -166,7 +166,7 @@ def test_sidebar_keeps_rare_tools_collapsed_and_exposes_project_link(
     summary.focus()
     page.keyboard.press("Enter")
     expect(tools).to_have_attribute("open", "")
-    children = page.get_by_role("group", name="Tools & settings", exact=True)
+    children = page.get_by_role("group", name="Tools and settings", exact=True)
     for category in ("Monitor", "Configuration", "Management"):
         expect(children.get_by_role("group", name=category, exact=True)).to_be_visible()
     assert children.evaluate("""e => {

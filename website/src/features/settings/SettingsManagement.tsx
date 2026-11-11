@@ -704,7 +704,7 @@ export default function SettingsManagement({
                             aria-hidden="true"
                         >
                             <span>Account</span>
-                            <span>Connection & activity</span>
+                            <span>Connection and activity</span>
                             <span />
                         </div>
                         <ul

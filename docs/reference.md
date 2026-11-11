@@ -432,7 +432,7 @@ owns the version compatibility baseline.
 Configure the environment, deploy and sign in. First initialization is automatic;
 TGDrive has no maintenance CLI or terminal setup wizard. Use **Connections** for
 Telegram login and repairs, **Transfers** for retries and cancellations, and
-**Storage & Backups** for protection and archive/channel recovery. Deployment
+**Storage and Backups** for protection and archive/channel recovery. Deployment
 credentials and service restarts remain in Docker Compose or Coolify; failures
 that prevent startup are explained in container logs. See
 [recovery](backup-recovery.md) and [password reset](operations.md#forgotten-login-password).

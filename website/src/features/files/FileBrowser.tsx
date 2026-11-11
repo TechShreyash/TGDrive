@@ -104,7 +104,7 @@ export type FileFilter = "all" | NodeType;
 const FILE_FILTERS: [FileFilter, string, typeof Folder | null][] = [
     ["all", "All", null],
     ["folder", "Folders", Folder],
-    ["media", "Photos & videos", Image],
+    ["media", "Photos and videos", Image],
     ["docs", "Documents", FileText],
     ["audio", "Audio", Music],
     ["other", "Other", Archive],

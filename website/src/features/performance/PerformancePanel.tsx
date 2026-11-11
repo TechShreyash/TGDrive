@@ -1891,7 +1891,7 @@ export default function PerformancePanel({
                         >
                             <div className="performance-section-title">
                                 <h3 id="server-resource-heading">
-                                    Storage &amp; cache
+                                    Storage and cache
                                 </h3>
                                 <span className="performance-chart-now">
                                     Now
@@ -2100,7 +2100,7 @@ export default function PerformancePanel({
                                         className="inline-link"
                                         href="/?view=storage"
                                     >
-                                        Storage &amp; Backups
+                                        Storage and Backups
                                     </a>
                                 </p>
                             </details>

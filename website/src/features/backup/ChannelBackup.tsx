@@ -523,7 +523,7 @@ export default function ChannelBackup({
                     <h2 id="channel-backup-title" tabIndex={-1}>
                         {recoveryOnly
                             ? "Recover your drive"
-                            : "Backups & recovery"}
+                            : "Backups and recovery"}
                     </h2>
                     <p>
                         {recoveryOnly

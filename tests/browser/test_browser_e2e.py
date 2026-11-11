@@ -2398,7 +2398,7 @@ def test_settings_backup_status_never_claims_unconfirmed_protection(
     _, page = desktop
     login(page, server.url)
     open_admin(page)
-    page.get_by_role("link", name="Storage & Backups", exact=True).click()
+    page.get_by_role("link", name="Storage and Backups", exact=True).click()
     section = page.get_by_role("region", name="Cloud Database", exact=True)
     status = section.get_by_role("status")
     expect(page.locator(".drive-protection")).to_have_count(0)
@@ -2433,7 +2433,7 @@ def test_settings_backup_status_never_claims_unconfirmed_protection(
         assert offset.ok and offset.headers["upload-offset"] == "0"
         assert server.control()["started"] == []
         open_admin(page)
-        page.get_by_role("link", name="Storage & Backups", exact=True).click()
+        page.get_by_role("link", name="Storage and Backups", exact=True).click()
         expect(status).to_have_text("Uploads Still in Progress", timeout=10000)
         assert_not_protected()
         with page.expect_response("**/api/v1/backup") as catalog_backup:
@@ -2507,7 +2507,7 @@ def test_settings_backup_status_never_claims_unconfirmed_protection(
     assert recovery["protected_revision"] >= recovery["metadata_revision"]
     expect(status).to_have_text("Saved to MongoDB", timeout=8000)
     assert server.control("/backup")["calls"] == baseline_calls + 2
-    restore = page.get_by_role("region", name="Backups & recovery", exact=True)
+    restore = page.get_by_role("region", name="Backups and recovery", exact=True)
     restore.get_by_text("Restore backup", exact=True).click()
     expect(restore.get_by_label("Recovery file (required)", exact=True)).to_be_visible()
     expect(
@@ -3337,7 +3337,7 @@ def test_ui_polish_batched_visual_states(
         assert_single_appearance(page)
         for route, heading in (
             ("connections", "Connections"),
-            ("storage", "Storage & Backups"),
+            ("storage", "Storage and Backups"),
         ):
             page.goto(server.url + "/?view=" + route)
             expect(
@@ -3380,7 +3380,7 @@ def test_ui_polish_batched_visual_states(
                 footer_box = footer.bounding_box()
                 assert footer_box and footer_box["y"] + footer_box["height"] <= 844
                 storage_link = page.get_by_role(
-                    "link", name="Storage & Backups", exact=True
+                    "link", name="Storage and Backups", exact=True
                 )
                 if page.locator(".sidebar").get_attribute("inert") is not None:
                     page.get_by_role(
@@ -3388,7 +3388,7 @@ def test_ui_polish_batched_visual_states(
                     ).click()
                 storage_link.click()
                 expect(
-                    page.get_by_role("heading", name="Storage & Backups", exact=True)
+                    page.get_by_role("heading", name="Storage and Backups", exact=True)
                 ).to_be_in_viewport()
                 page.go_back()
                 expect(

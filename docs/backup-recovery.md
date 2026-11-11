@@ -63,7 +63,7 @@ Preserve an intact downloaded/local copy. TGDrive does not automatically repin a
 old point; repair access and publish a fresh backup through the normal controls.
 
 - TGDrive saves a backup once a day (`MONGODB_BACKUP_SECONDS`) and when you choose
-  **Storage & Backups → Back Up Now**. Scheduled standalone backups do not skip
+  **Storage and Backups → Back Up Now**. Scheduled standalone backups do not skip
   unchanged catalogs. Manual backup requests an immediate point; recovery or
   paused independent protection can still block it.
 - Each backup is one file: supported durable MongoDB collections, compressed and
@@ -218,7 +218,7 @@ point if the main channel is lost. Both channels still depend on Telegram.
    account**. Keep independent access to that account. Add the bot as an
    administrator in **both channels** with post,
    edit, delete and pin rights.
-2. Choose **Storage & Backups → Set up backup channel**, enter the channel ID and
+2. Choose **Storage and Backups → Set up backup channel**, enter the channel ID and
    bot token, confirm, then **Verify and start backup**.
 3. Leave TGDrive running until **Backup confirmed**. The browser can close.
 

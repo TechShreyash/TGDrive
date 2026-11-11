@@ -353,7 +353,7 @@ def test_compact_fixed_directory_controls_leave_room_for_files(
         documentation.scroll_into_view_if_needed()
         expect(documentation).to_be_in_viewport()
         sidebar.locator(".sidebar-tools > summary").click()
-        page.get_by_role("link", name="Storage & Backups", exact=True).focus()
+        page.get_by_role("link", name="Storage and Backups", exact=True).focus()
         expect(
-            page.get_by_role("link", name="Storage & Backups", exact=True)
+            page.get_by_role("link", name="Storage and Backups", exact=True)
         ).to_be_in_viewport()

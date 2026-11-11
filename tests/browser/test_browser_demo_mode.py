@@ -133,7 +133,7 @@ def test_demo_pages_lock_changes_keep_navigation_and_file_features(
     for control in page.get_by_role("button", name=re.compile(r"^Manage ")).all():
         expect(control).to_be_disabled()
 
-    navigate("Storage & Backups")
+    navigate("Storage and Backups")
     expect(page.get_by_role("button", name="Back Up Now", exact=True)).to_be_disabled()
     expect(page.get_by_role("button", name="Check Again", exact=True)).to_be_enabled()
     expect(

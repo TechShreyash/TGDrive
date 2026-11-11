@@ -112,7 +112,12 @@ def test_admin_navigation_separates_categories_preserves_drafts_and_supports_key
     page.get_by_role("link", name="Preloads", exact=True).focus()
     page.keyboard.press("Tab")
     expect(page.get_by_role("link", name="Cache settings", exact=True)).to_be_focused()
-    for label in ["Storage & Backups", "Cache settings", "Transfer limits", "Timezone"]:
+    for label in [
+        "Storage and Backups",
+        "Cache settings",
+        "Transfer limits",
+        "Timezone",
+    ]:
         link = page.get_by_role("link", name=label, exact=True)
         assert link.evaluate("node => node.scrollWidth <= node.clientWidth")
         assert (
@@ -121,7 +126,7 @@ def test_admin_navigation_separates_categories_preserves_drafts_and_supports_key
         )
     navigate("Cache settings")
     expect(
-        page.get_by_role("heading", name="Cache & preloading", exact=True)
+        page.get_by_role("heading", name="Cache and preloading", exact=True)
     ).to_be_visible()
     preload = page.get_by_role("switch", name=PRELOAD)
     expect(preload).to_be_checked()
@@ -155,7 +160,7 @@ def test_cache_settings_deep_link_opens_cache_category(server, desktop):
     _, page = desktop
     login(page, server.url + "/?view=settings&section=cache")
     expect(
-        page.get_by_role("heading", name="Cache & preloading", exact=True)
+        page.get_by_role("heading", name="Cache and preloading", exact=True)
     ).to_be_visible()
     expect(
         page.get_by_role("link", name="Cache settings", exact=True)
@@ -216,7 +221,7 @@ def test_missing_or_unknown_settings_section_uses_cache_without_url_rewrite(
     _, page = desktop
     login(page, server.url + "/" + query)
     expect(
-        page.get_by_role("heading", name="Cache & preloading", exact=True)
+        page.get_by_role("heading", name="Cache and preloading", exact=True)
     ).to_be_visible()
     assert page.url == server.url + "/" + query
     expect(page.get_by_role("link", name="Settings", exact=True)).to_have_count(0)
