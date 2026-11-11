@@ -315,6 +315,121 @@ def test_same_item_links_keep_their_copy_edit_and_revoke_scope(server, desktop, 
         assert response.status == expected_status
 
 
+@pytest.mark.parametrize("action", ["edit", "revoke"])
+@pytest.mark.parametrize("late_result", ["snapshot", "error"])
+def test_share_mutation_supersedes_pending_manual_refresh(
+    server, desktop, action, late_result
+):
+    _, page = desktop
+    login(page, server.url)
+    path = server.control()["seed"]["file"]
+    created = page.request.post(
+        server.url + "/api/v1/shares",
+        data={"path": path, "label": "Review", "expires_in_days": 7},
+    )
+    assert created.ok, created.text()
+    share = created.json()
+    page.goto(server.url + "/?view=shares")
+    row = page.locator(f'[data-share-id="{share["id"]}"]')
+    expect(row).to_contain_text("Review")
+    snapshot = page.request.get(server.url + "/api/v1/shares").json()
+    held = []
+    reads = []
+
+    def hold_first_read(route):
+        if route.request.method != "GET":
+            route.continue_()
+            return
+        reads.append(route.request)
+        if len(reads) == 1:
+            held.append(route)
+        else:
+            route.continue_()
+
+    page.route("**/api/v1/shares", hold_first_read)
+    refresh = page.get_by_role("button", name="Refresh Shared Links", exact=True)
+    with page.expect_request(
+        lambda request: (
+            request.url.endswith("/api/v1/shares") and request.method == "GET"
+        )
+    ):
+        refresh.click()
+    expect(refresh).to_be_disabled()
+    assert len(held) == 1
+    try:
+        if action == "edit":
+            row.get_by_role("button", name="Edit link Review", exact=True).click()
+            page.get_by_label("Link label", exact=True).fill("Review updated")
+            dialog = page.get_by_role("dialog", name="Edit share link", exact=True)
+            submit = dialog.get_by_role("button", name="Save changes", exact=True)
+            method = "PATCH"
+        else:
+            row.get_by_role(
+                "button", name=__import__("re").compile("^Revoke Link for ")
+            ).click()
+            dialog = page.get_by_role("dialog", name="Revoke This Link?", exact=True)
+            submit = dialog.get_by_role("button", name="Revoke Link", exact=True)
+            method = "DELETE"
+        with page.expect_response(
+            lambda response: (
+                response.url.endswith("/api/v1/shares")
+                and response.request.method == method
+            )
+        ) as mutation:
+            submit.click()
+        assert mutation.value.ok, mutation.value.text()
+        expect(dialog).to_have_count(0)
+        # The mutation must load fresh state while the older snapshot is held.
+        if action == "edit":
+            expect(row).to_contain_text("Review updated")
+        else:
+            expect(row).to_have_count(0)
+        assert len(reads) == 2
+        expect(refresh).to_be_disabled()
+
+        if late_result == "snapshot":
+            held.pop().fulfill(json=snapshot)
+        else:
+            held.pop().fulfill(
+                status=503, json={"detail": "Superseded share refresh failed"}
+            )
+        expect(refresh).to_be_enabled()
+        if action == "edit":
+            expect(row).to_contain_text("Review updated")
+        else:
+            expect(row).to_have_count(0)
+        expect(page.locator(".page-load-error")).to_have_count(0)
+        expect(page.locator(".toast")).to_have_count(0)
+
+        if late_result == "error":
+            page.unroute("**/api/v1/shares", hold_first_read)
+            page.route(
+                "**/api/v1/shares",
+                lambda route: route.fulfill(
+                    status=503, json={"detail": "Current share refresh failed"}
+                ),
+            )
+            refresh.click()
+            expect(page.locator(".page-load-error")).to_contain_text(
+                "Current share refresh failed"
+            )
+            expect(page.locator(".toast-error")).to_contain_text(
+                "Current share refresh failed"
+            )
+            retry = page.get_by_role("button", name="Try Again", exact=True)
+            expect(retry).to_be_enabled()
+            page.unroute("**/api/v1/shares")
+            retry.click()
+            expect(page.locator(".page-load-error")).to_have_count(0)
+            expect(page.locator(".toast:not(.toast-error)")).to_contain_text(
+                "Shared links refreshed."
+            )
+    finally:
+        for route in held:
+            route.fulfill(json=snapshot)
+        page.unroute_all(behavior="ignoreErrors")
+
+
 def test_comic_image_error_details_and_automatic_recovery(server, desktop):
     _, page = desktop
     login(page, server.url)

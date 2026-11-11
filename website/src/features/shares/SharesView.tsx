@@ -96,7 +96,6 @@ export default function SharesView({
         "active",
     );
     const generation = useRef(0);
-    const manualPending = useRef(false);
     const { refreshing, run } = useManualRefresh(onNotice);
     const [busy, setBusy] = useState<{
         id: string;
@@ -117,7 +116,6 @@ export default function SharesView({
         return () => clearInterval(timer);
     }, []);
     useEffect(() => {
-        if (manualPending.current) return;
         const controller = new AbortController();
         const requestId = ++generation.current;
         setLoading(true);
@@ -151,7 +149,6 @@ export default function SharesView({
     }, [refresh]);
     const refreshShares = () =>
         run(async (signal) => {
-            manualPending.current = true;
             const requestId = ++generation.current;
             try {
                 const result = await request<{ shares: Share[] }>(
@@ -168,11 +165,10 @@ export default function SharesView({
                 setLoading(false);
                 return true;
             } catch (cause) {
-                if (!signal.aborted && requestId === generation.current)
-                    setError(errorMessage(cause));
+                if (signal.aborted || requestId !== generation.current)
+                    return false;
+                setError(errorMessage(cause));
                 throw cause;
-            } finally {
-                manualPending.current = false;
             }
         }, "Shared links refreshed.");
     useEffect(() => {
