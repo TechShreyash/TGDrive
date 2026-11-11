@@ -1117,6 +1117,75 @@ def test_v1_move_to_shared_folder_requires_confirmed_exposure(app_client):
     assert client.post("/api/v1/nodes/move", json=move).status_code == 200
 
 
+@pytest.mark.parametrize("shared_ancestor", [False, True])
+def test_v1_move_to_nested_shared_destination_by_short_id_requires_consent(
+    app_client, shared_ancestor
+):
+    client, store, _, _ = app_client
+    parent = store.create_folder("/", "Parent")
+    parent_path = "/" + parent["id"]
+    shared = store.create_folder(parent_path, "Shared")
+    shared_path = parent_path + "/" + shared["id"]
+    destination = (
+        store.create_folder(shared_path, "Destination") if shared_ancestor else shared
+    )
+    destination_path = store.resolve_id(destination["id"])
+    token = store.create_share(shared_path)
+    source = store.add_file("/", "private.txt", 9120, 4)
+    source_path = "/" + source["id"]
+    payload = {"paths": [source_path], "destination": "/" + destination["id"]}
+    snapshot = store.export()
+    login(client)
+
+    rejected = client.post("/api/v1/nodes/move", json=payload)
+
+    assert rejected.status_code == 409
+    assert rejected.json()["code"] == "PUBLIC_EXPOSURE_CONFIRMATION_REQUIRED"
+    assert store.export() == snapshot
+    payload["allow_public_exposure"] = True
+    accepted = client.post("/api/v1/nodes/move", json=payload)
+    assert accepted.status_code == 200
+    result = accepted.json()["results"][0]
+    assert result["path"] == source_path
+    assert result["status"] == "moved"
+    assert result["item"]["id"] == source["id"]
+    assert result["item"]["path"] == destination_path
+    assert store.authorize_file(destination_path + source_path, token)
+
+
+def test_v1_restore_short_id_under_shared_ancestor_requires_consent(app_client):
+    client, store, _, _ = app_client
+    parent = store.create_folder("/", "Parent")
+    parent_path = "/" + parent["id"]
+    shared = store.create_folder(parent_path, "Shared")
+    shared_path = parent_path + "/" + shared["id"]
+    folder = store.create_folder(shared_path, "Nested")
+    folder_path = shared_path + "/" + folder["id"]
+    token = store.create_share(shared_path)
+    private = store.add_file("/", "private.txt", 9121, 4)
+    public = store.add_file(folder_path, "public.txt", 9122, 5)
+    paths = ["/" + private["id"], "/" + public["id"]]
+    store.set_trashed_many(paths, True)
+    snapshot = store.export()
+    payload = {"paths": paths, "action": "restore"}
+    login(client)
+
+    rejected = client.post("/api/v1/nodes/bulk", json=payload)
+
+    assert rejected.status_code == 409
+    assert rejected.json()["code"] == "PUBLIC_EXPOSURE_CONFIRMATION_REQUIRED"
+    assert store.export() == snapshot
+    payload["allow_public_exposure"] = True
+    accepted = client.post("/api/v1/nodes/bulk", json=payload)
+    assert accepted.status_code == 200
+    assert accepted.json() == {
+        "results": [{"path": path, "status": "restored"} for path in paths]
+    }
+    assert store.get_file(paths[0])["path"] == "/"
+    assert store.get_file(paths[1])["path"] == folder_path
+    assert store.authorize_file(folder_path + paths[1], token)
+
+
 def test_explicit_item_share_survives_move_but_inherited_share_does_not(
     app_client,
     monkeypatch,

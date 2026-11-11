@@ -887,7 +887,7 @@ def register_routes(
         return {"status": "ok"}
 
     def public_destination(store: Any, path: str) -> bool:
-        destination = path.rstrip("/") or "/"
+        destination = store.upload_destination(path)["path"]
         return any(
             destination == share["path"].rstrip("/")
             or destination.startswith(share["path"].rstrip("/") + "/")
@@ -964,7 +964,11 @@ def register_routes(
                         and not payload.allow_public_exposure
                     ):
                         for path in selected:
-                            if public_destination(store, path.rsplit("/", 1)[0] or "/"):
+                            current = store.resolve_id(
+                                ROOT_ID if path == "/" else path.rsplit("/", 1)[-1]
+                            )
+                            parent = current.rsplit("/", 1)[0] or "/"
+                            if public_destination(store, parent):
                                 return JSONResponse(
                                     {
                                         "detail": (
