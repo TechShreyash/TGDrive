@@ -568,7 +568,11 @@ export default function App() {
         ) => {
             clearTimeout(searchTimer.current);
             const params = new URLSearchParams();
-            if (path !== "/") params.set("path", itemLink(path));
+            if (path !== "/")
+                params.set(
+                    "path",
+                    path.startsWith("/search_") ? path : itemLink(path),
+                );
             if (view !== "files" && view !== "trash") params.set("view", view);
             if (view === "settings") params.set("section", settingsSection);
             if (auth) params.set("auth", auth);

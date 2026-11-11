@@ -4,12 +4,14 @@
 from __future__ import annotations
 
 import os
+from urllib.parse import parse_qs, urlsplit
 
 import pytest
 
 if os.environ.get("TGDRIVE_E2E") != "1":
     pytest.skip("Set TGDRIVE_E2E=1 for Chromium checks", allow_module_level=True)
 
+from tests.browser.node_pages import is_listing, node_query
 from tests.browser.test_browser_e2e import (
     ARTIFACTS,
     browser,  # noqa: F401
@@ -21,6 +23,56 @@ from tests.browser.test_browser_e2e import (
 )
 
 pytestmark = pytest.mark.e2e
+
+
+def test_slash_search_preserves_query_reload_back_and_clear(server, desktop):
+    _, page = desktop
+    login(page, server.url)
+    page.get_by_role("button", name="資料", exact=True).dblclick()
+    origin = page.url
+    queries, folders = [], []
+    page.on(
+        "request",
+        lambda request: (
+            folders.append(node_query(request)["parent_id"])
+            if is_listing(request)
+            else None
+        ),
+    )
+
+    def search_results(route):
+        queries.append(parse_qs(urlsplit(route.request.url).query)["q"][0])
+        route.fulfill(json={"items": [], "total": 0, "offset": 0, "has_more": False})
+
+    page.route("**/api/v1/search?**", search_results)
+    search = page.get_by_role("searchbox", name="Search Files and Folders", exact=True)
+    for index, term in enumerate(("2026/11", "資料/é?# + %")):
+        search.fill(term)
+        expect(
+            page.get_by_role("heading", name="Search Results", exact=True)
+        ).to_be_visible()
+        assert parse_qs(urlsplit(page.url).query)["path"] == ["/search_" + term]
+        assert queries[-1] == term
+        expect(search).to_have_value(term)
+        if index == 0:
+            page.reload()
+            expect(search).to_have_value(term)
+            expect(
+                page.get_by_role("heading", name="Search Results", exact=True)
+            ).to_be_visible()
+            assert queries[-1] == term
+            page.go_back()
+            expect(page).to_have_url(origin)
+            expect(search).to_have_value("")
+            search.fill(term)
+            expect(
+                page.get_by_role("heading", name="Search Results", exact=True)
+            ).to_be_visible()
+        page.get_by_role("button", name="Clear Search", exact=True).click()
+        expect(page).to_have_url(origin)
+        expect(search).to_have_value("")
+    assert "11" not in folders and "/11" not in folders
+    page.screenshot(path=ARTIFACTS / "slash-search-restored-origin.png")
 
 
 def test_context_switch_trash_shares_and_preloads_keep_search_scoped(server, desktop):
